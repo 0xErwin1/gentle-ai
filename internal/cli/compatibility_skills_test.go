@@ -63,6 +63,38 @@ func TestCompatibilitySkillsRefreshStepRefreshesExistingOrdinaryAndSDDAssets(t *
 	}
 }
 
+func TestRunSyncWithSelectionRefreshesCompatibilityAndOpenCodeAssetsOnWindows(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("Windows-only sync regression")
+	}
+	home := t.TempDir()
+	compatibilityFiles := []string{
+		filepath.Join(home, ".agents", "skills", "go-testing", "SKILL.md"),
+		filepath.Join(home, ".agents", "skills", "go-testing", "references", "examples.md"),
+	}
+	for _, path := range compatibilityFiles {
+		writeStale(t, path)
+	}
+	pluginPath := filepath.Join(home, ".config", "opencode", "plugins", "model-variants.ts")
+	writeStale(t, pluginPath)
+
+	selection := model.Selection{
+		Agents:     []model.AgentID{model.AgentOpenCode},
+		Components: []model.ComponentID{model.ComponentSkills},
+		Skills:     []model.SkillID{model.SkillGoTesting},
+		Persona:    model.PersonaNeutral,
+	}
+	if _, err := RunSyncWithSelection(home, selection); err != nil {
+		t.Fatalf("RunSyncWithSelection() error = %v", err)
+	}
+	for _, path := range append(compatibilityFiles, pluginPath) {
+		content, err := os.ReadFile(path)
+		if err != nil || string(content) == "stale" {
+			t.Fatalf("managed asset %q was not refreshed: content=%q error=%v", path, content, err)
+		}
+	}
+}
+
 func TestRunSyncDryRunMatchesZeroAgentCompatibilityRefresh(t *testing.T) {
 	home := t.TempDir()
 	setSyncTestHome(t, home)

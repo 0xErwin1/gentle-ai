@@ -123,12 +123,12 @@ func validateCompatibilityDestinations(root string, destinations []string) error
 			if err != nil {
 				return fmt.Errorf("stat compatibility destination ancestor %q: %w", current, err)
 			}
-			if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+			if compatibilityDestinationUnsafe(current, info) || !info.IsDir() {
 				return fmt.Errorf("compatibility destination ancestor %q must be a physical directory; replace it with a physical directory, then rerun gentle-ai install or gentle-ai sync", current)
 			}
 		}
 		info, err := lstatCompatibilityDestination(destination)
-		if err == nil && (info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular()) {
+		if err == nil && (compatibilityDestinationUnsafe(destination, info) || !info.Mode().IsRegular()) {
 			return fmt.Errorf("compatibility destination %q must be a regular file; replace it with a regular file or remove it, then rerun gentle-ai install or gentle-ai sync", destination)
 		}
 		if err != nil && !os.IsNotExist(err) {
@@ -136,6 +136,15 @@ func validateCompatibilityDestinations(root string, destinations []string) error
 		}
 	}
 	return nil
+}
+
+func compatibilityPathParts(root, path string) ([]string, error) {
+	relative, err := filepath.Rel(root, path)
+	if err != nil || relative == "." || filepath.IsAbs(relative) || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
+		// refusal:by-design operator-knowledge: embedded compatibility destinations must stay below the anchored skills root.
+		return nil, fmt.Errorf("compatibility destination %q escapes %q", path, root)
+	}
+	return strings.Split(relative, string(filepath.Separator)), nil
 }
 
 func (s compatibilitySkillsRefreshStep) Run() error {

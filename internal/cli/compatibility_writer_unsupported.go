@@ -1,9 +1,10 @@
-//go:build !(aix || android || darwin || dragonfly || freebsd || linux || netbsd || openbsd || solaris)
+//go:build !(aix || android || darwin || dragonfly || freebsd || linux || netbsd || openbsd || solaris || windows)
 
 package cli
 
 import (
 	"fmt"
+	"os"
 	"runtime"
 )
 
@@ -13,4 +14,8 @@ import (
 func newCompatibilityDirectoryWriter(homeDir, skillDir string) (compatibilityDirectoryWriter, error) {
 	// refusal:by-design world-action: this platform cannot enforce the compatibility route's physical-directory contract.
 	return nil, fmt.Errorf("compatibility skills refresh is disabled on %s: physical-directory containment is unavailable", runtime.GOOS)
+}
+
+func compatibilityDestinationUnsafe(_ string, info os.FileInfo) bool {
+	return info.Mode()&os.ModeSymlink != 0
 }

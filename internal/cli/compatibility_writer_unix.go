@@ -11,8 +11,6 @@ import (
 	"io"
 	"io/fs"
 	"os"
-	"path/filepath"
-	"strings"
 
 	"github.com/gentleman-programming/gentle-ai/v2/internal/components/filemerge"
 	"golang.org/x/sys/unix"
@@ -126,15 +124,6 @@ func (w *unixCompatibilityDirectoryWriter) Write(path string, content []byte, pe
 	return result, nil
 }
 
-func compatibilityPathParts(root, path string) ([]string, error) {
-	relative, err := filepath.Rel(root, path)
-	if err != nil || relative == "." || filepath.IsAbs(relative) || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
-		// refusal:by-design operator-knowledge: embedded compatibility destinations must stay below the anchored skills root.
-		return nil, fmt.Errorf("compatibility destination %q escapes %q", path, root)
-	}
-	return strings.Split(relative, string(filepath.Separator)), nil
-}
-
 func (w *unixCompatibilityDirectoryWriter) openParent(parts []string) (int, error) {
 	currentFD := w.rootFD
 	for _, part := range parts {
@@ -219,4 +208,8 @@ func createCompatibilityTempFile(dirFD int, perm fs.FileMode) (string, *os.File,
 	}
 	// refusal:by-design world-action: repeated random-name collisions prevent a safe temporary file publication.
 	return "", nil, fmt.Errorf("create compatibility temp file: exhausted unique names")
+}
+
+func compatibilityDestinationUnsafe(_ string, info os.FileInfo) bool {
+	return info.Mode()&os.ModeSymlink != 0
 }
