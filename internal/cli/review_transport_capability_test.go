@@ -3,7 +3,6 @@ package cli
 import (
 	"bytes"
 	"context"
-	"strings"
 	"testing"
 
 	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
@@ -18,8 +17,8 @@ func TestImmutableReviewRuntimeMatrix(t *testing.T) {
 		transport reviewImmutableTransport
 		supported bool
 	}{
-		{name: "Claude prompt carried", runtime: string(model.AgentClaudeCode), eligible: true, transport: reviewImmutableTransportClaudePromptCarried, supported: true},
-		{name: "OpenCode provider injected", runtime: string(model.AgentOpenCode), eligible: true, transport: reviewImmutableTransportOpenCodeProviderInjected, supported: true},
+		{name: "Claude prompt carried lacks a proven fresh executor", runtime: string(model.AgentClaudeCode), eligible: true, transport: reviewImmutableTransportUnsupported},
+		{name: "OpenCode provider injection lacks a pre-START boundary", runtime: string(model.AgentOpenCode), eligible: true, transport: reviewImmutableTransportUnsupported},
 		{name: "Codex is pending #2208", runtime: string(model.AgentCodex), eligible: true, transport: reviewImmutableTransportUnsupported},
 		{name: "Pi", runtime: string(model.AgentPi), transport: reviewImmutableTransportUnsupported},
 		{name: "Kilo", runtime: string(model.AgentKilocode), transport: reviewImmutableTransportUnsupported},
@@ -64,10 +63,8 @@ func TestUnsupportedImmutableReviewTransportStopsBeforeRepositoryOrAuthority(t *
 		// stays reviewImmutableTransportUnsupportedCode for every runtime.
 		startCode string
 	}{
-		// OpenCode is no longer in this table: issue #2417 restored genuine
-		// transport, so `--agent opencode` now proceeds past this narrower
-		// immutable-transport check instead of stopping here (see
-		// TestSupportedImmutableReviewRuntimeIsCarriedIntoV2Start).
+		{name: "Claude", runtime: string(model.AgentClaudeCode), startCode: reviewImmutableTransportUnsupportedCode},
+		{name: "OpenCode", runtime: string(model.AgentOpenCode), startCode: reviewImmutableTransportUnsupportedCode},
 		{name: "Codex", runtime: string(model.AgentCodex), startCode: reviewImmutableTransportUnsupportedCode},
 		{name: "Pi", runtime: string(model.AgentPi), startCode: reviewTransportCapabilityUnsupportedCode},
 		{name: "Kilo", runtime: string(model.AgentKilocode), startCode: reviewImmutableTransportUnsupportedCode},
@@ -124,6 +121,10 @@ func TestUnsupportedImmutableReviewTransportStopsBeforeRepositoryOrAuthority(t *
 
 	repo := initReviewCLIRepo(t)
 	for _, args := range [][]string{
+		{"status", "--contract", ReviewIntegrationContractV2, "--agent", string(model.AgentClaudeCode), "--next-transition", "--cwd", repo},
+		{"start", "--contract", ReviewIntegrationContractV2, "--agent", string(model.AgentClaudeCode), "--target", target, "--projection", "workspace", "--cwd", repo},
+		{"status", "--contract", ReviewIntegrationContractV2, "--agent", string(model.AgentOpenCode), "--next-transition", "--cwd", repo},
+		{"start", "--contract", ReviewIntegrationContractV2, "--agent", string(model.AgentOpenCode), "--target", target, "--projection", "workspace", "--cwd", repo},
 		{"status", "--contract", ReviewIntegrationContractV2, "--agent", string(model.AgentKilocode), "--next-transition", "--cwd", repo},
 		{"start", "--contract", ReviewIntegrationContractV2, "--agent", string(model.AgentCodex), "--target", target, "--projection", "workspace", "--cwd", repo},
 	} {
@@ -153,30 +154,5 @@ func TestV21RejectsDuplicateRuntimeAgentsBeforeRepositoryAccess(t *testing.T) {
 	if failure.Code != reviewImmutableTransportUnsupportedCode || failure.Operation != "review.status" ||
 		failure.MutationOutcome != ReviewMutationNotStarted || failure.AuthorityApplicability != "not_evaluated" {
 		t.Fatalf("duplicate runtime failure = %#v", failure)
-	}
-}
-
-func TestSupportedImmutableReviewRuntimeIsCarriedIntoV2Start(t *testing.T) {
-	for _, runtime := range []string{string(model.AgentClaudeCode), string(model.AgentOpenCode)} {
-		t.Run(runtime, func(t *testing.T) {
-			repo := initReviewCLIRepo(t)
-			writeReviewStartCandidate(t, repo, "candidate.go", "package candidate\n", 0o644)
-			var output bytes.Buffer
-			if err := RunReview([]string{
-				"status", "--contract", ReviewIntegrationContractV2, "--agent", runtime,
-				"--next-transition", "--cwd", repo,
-			}, &output); err != nil {
-				t.Fatal(err)
-			}
-			var status ReviewTargetStatusResult
-			decodeStrictReviewJSON(t, output.Bytes(), &status)
-			if err := status.Validate(); err != nil {
-				t.Fatal(err)
-			}
-			if status.NextTransition == nil || status.NextTransition.Execute == nil ||
-				!strings.Contains(status.NextTransition.Execute.Command, "--agent="+runtime) {
-				t.Fatalf("runtime-bound START transition = %#v", status.NextTransition)
-			}
-		})
 	}
 }
