@@ -1489,15 +1489,32 @@ func dispositionRepairArgs(reason string) func(*Sandbox) ([]string, error) {
 	}
 }
 
-func dispositionRepairWithSelectorArgs(reason string) func(*Sandbox) ([]string, error) {
+func dispositionRepairWithSelectorArgs(reason string, replacementRevision ...string) func(*Sandbox) ([]string, error) {
 	return func(sandbox *Sandbox) ([]string, error) {
 		args, err := dispositionRepairArgs(reason)(sandbox)
 		if err != nil {
 			return nil, err
 		}
 		selector, err := dispositionSelectorArgs(sandbox)
+		if len(replacementRevision) > 0 {
+			selector[len(selector)-1] = replacementRevision[0]
+		}
 		return append(args, selector...), err
 	}
+}
+
+func requireWrongDispositionSelectorRefusal(sandbox *Sandbox, observation Observation) error {
+	if observation.ExitCode == 0 || !strings.Contains(observation.Stderr, "review transaction changed concurrently: exact content-mismatch selector no longer matches the inspected graph") {
+		return fmt.Errorf("altered emitted selector did not produce the typed preflight refusal; rerun `gentle-ai review repair --preflight`")
+	}
+	base, err := reviewTransactionsBase(sandbox)
+	if err != nil {
+		return err
+	}
+	if _, err := os.Stat(filepath.Join(base, "quarantine")); !os.IsNotExist(err) {
+		return fmt.Errorf("altered emitted selector changed quarantine state; rerun `gentle-ai review repair --preflight`")
+	}
+	return requireInvalidEdges(sandbox, 2, theExactBindingProblem)
 }
 
 // forgedDispositionRepairArgs is dispositionRepairArgs with the CORRECT
@@ -1920,6 +1937,8 @@ func damagedStoreJourneys() []Journey {
 					Args: productArgs("review", "repair", "--preflight=true"), After: requireNoDispositionPlanSurfaced},
 				{Name: "select the emitted leaf and derive its exact plan", Requires: repairPreflightCapability,
 					Args: dispositionSelectorPreflightArgs, After: requireDispositionPlanEligible},
+				{Name: "a wrong emitted selector revision is rejected", Requires: repairDispositionExecuteCapability,
+					Args: dispositionRepairWithSelectorArgs("reject the altered emitted selector", "sha256:"+strings.Repeat("f", 64)), After: requireWrongDispositionSelectorRefusal},
 				{Name: "repair only the selected leaf", Requires: repairDispositionExecuteCapability,
 					Args: dispositionRepairWithSelectorArgs("quarantine the selected content-mismatched leaf"), After: requireDispositionQuarantineCommitted},
 				{Name: "the unselected edge remains for the next preflight", Requires: inspectAuthorityCapability,

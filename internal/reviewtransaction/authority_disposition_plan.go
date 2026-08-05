@@ -99,10 +99,7 @@ func authorityDispositionSelectors(report CompactRecoveryInspectionReport, recor
 		})
 	}
 	slices.SortFunc(selectors, func(left, right AuthorityDispositionSelector) int {
-		if left.PredecessorLineageID == right.PredecessorLineageID {
-			return cmp.Compare(left.SuccessorLineageID, right.SuccessorLineageID)
-		}
-		return cmp.Compare(left.PredecessorLineageID, right.PredecessorLineageID)
+		return cmp.Or(cmp.Compare(left.PredecessorLineageID, right.PredecessorLineageID), cmp.Compare(left.SuccessorLineageID, right.SuccessorLineageID))
 	})
 	return selectors, nil
 }
@@ -124,11 +121,8 @@ func deriveAuthorityDispositionPlan(report CompactRecoveryInspectionReport, reco
 	}
 	var selector *AuthorityDispositionSelector
 	if len(requested) == 1 {
-		for index := range selectors {
-			if selectors[index] == requested[0] {
-				selector = &selectors[index]
-				break
-			}
+		if index := slices.Index(selectors, requested[0]); index >= 0 {
+			selector = &selectors[index]
 		}
 		if selector == nil {
 			return AuthorityDispositionPlan{}, fmt.Errorf("%w: exact content-mismatch selector no longer matches the inspected graph", ErrConcurrentUpdate)
@@ -384,8 +378,7 @@ func DeriveAuthorityDispositionPlanAtRepo(ctx context.Context, repo, actor, reas
 	return deriveAuthorityDispositionPlanAtRepo(ctx, repo, actor, reason, requested...)
 }
 
-// ListAuthorityDispositionSelectorsAtRepo exposes deterministic exact choices
-// when more than one damaged content-mismatch edge prevents implicit planning.
+// ListAuthorityDispositionSelectorsAtRepo exposes exact choices for multi-edge content mismatch.
 func ListAuthorityDispositionSelectorsAtRepo(ctx context.Context, repo string) ([]AuthorityDispositionSelector, error) {
 	root, err := (SnapshotBuilder{Repo: repo}).ResolveRepositoryRoot(ctx)
 	if err != nil {

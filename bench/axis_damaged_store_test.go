@@ -109,16 +109,3 @@ func TestDamagedStoreAxisDeclaresItIsNotBlackBox(t *testing.T) {
 		t.Fatal("the damaged-store axis is not registered")
 	}
 }
-
-func TestDS07PreflightRejectsWrongEmittedSelectorRevision(t *testing.T) {
-	first, second, wrong := "sha256:"+strings.Repeat("a", 64), "sha256:"+strings.Repeat("b", 64), "sha256:"+strings.Repeat("c", 64)
-	sandbox := &Sandbox{Scratch: map[string]string{
-		scratchPredecessor: "review-damaged-predecessor", scratchPredecessorRevision: first,
-		scratchMiddle: "review-damaged-middle", scratchMiddleRevision: second,
-		scratchSuccessor: "review-damaged-successor", scratchSuccessorRevision: wrong,
-	}}
-	stdout := `{"disposition_selectors":[{"predecessor_lineage_id":"review-damaged-predecessor","predecessor_expected_revision":"` + first + `","successor_lineage_id":"review-damaged-middle","successor_expected_revision":"` + second + `"},{"predecessor_lineage_id":"review-damaged-middle","predecessor_expected_revision":"` + second + `","successor_lineage_id":"review-damaged-successor","successor_expected_revision":"` + first + `"}]}`
-	if err := requireNoDispositionPlanSurfaced(sandbox, Observation{Stdout: stdout}); err == nil {
-		t.Fatal("ds07 accepted a selector revision that does not match the fixture's live edge")
-	}
-}

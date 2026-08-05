@@ -24,7 +24,6 @@ const (
 )
 
 var errInvalidReviewRepairDispositionSelectors = errors.New("review repair preflight disposition selectors are invalid") // refusal:by-design human-authority: this internal projection is built from a freshly inspected authority graph; a malformed shape requires a producer fix, not operator input
-
 type ReviewRepairProviderInputs struct {
 	Class               reviewtransaction.AuthorityRepairClass       `json:"class"`
 	LineageID           string                                       `json:"lineage_id"`
