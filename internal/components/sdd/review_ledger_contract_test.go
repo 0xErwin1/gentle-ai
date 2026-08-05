@@ -485,11 +485,10 @@ func TestOpenCodeRenderedReviewProtocolCost(t *testing.T) {
 		// moves with it (21,200 -> 22,200) to restore the ~15% margin below;
 		// full-4R still has headroom and is unchanged.
 		//
-		// #2207 separates host routing from immutable reviewer execution. The
-		// declarative contract makes no availability claim until a later
-		// pre-START activation supplies a proven provider boundary.
-		{name: "standard", agents: []string{"review-reliability"}, beforeChars: 42_301, wantChars: 19_657, maxCharacters: 23_300},
-		{name: "full-4R", agents: []string{"review-risk", "review-resilience", "review-readability", "review-reliability"}, beforeChars: 106_998, wantChars: 30_058, maxCharacters: 36_000},
+		// #2207 advertises only Claude Code and OpenCode after their fresh-reviewer
+		// constraints are made explicit in the shared contract.
+		{name: "standard", agents: []string{"review-reliability"}, beforeChars: 42_301, wantChars: 19_569, maxCharacters: 23_300},
+		{name: "full-4R", agents: []string{"review-risk", "review-resilience", "review-readability", "review-reliability"}, beforeChars: 106_998, wantChars: 29_970, maxCharacters: 36_000},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
