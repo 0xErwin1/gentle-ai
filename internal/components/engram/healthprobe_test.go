@@ -301,6 +301,81 @@ func TestProbeStdio_UsesExactPersistedCommand(t *testing.T) {
 	}
 }
 
+func TestReadTOMLEngramCommand(t *testing.T) {
+	tests := []struct {
+		name        string
+		raw         string
+		wantCommand string
+		wantArgs    []string
+		wantErr     bool
+	}{
+		{
+			name: "inline comments",
+			raw: `# Codex MCP configuration
+[mcp_servers.engram] # persisted Engram transport
+command = "/configured/codex-engram" # do not resolve through PATH
+args = ["mcp", "--tools=codex"] # exact persisted arguments
+`,
+			wantCommand: "/configured/codex-engram",
+			wantArgs:    []string{"mcp", "--tools=codex"},
+		},
+		{
+			name: "literal strings",
+			raw: `[mcp_servers.engram]
+command = '/configured/codex-engram'
+args = ['mcp', '--tools=codex']
+`,
+			wantCommand: "/configured/codex-engram",
+			wantArgs:    []string{"mcp", "--tools=codex"},
+		},
+		{
+			name: "escaped basic strings",
+			raw: `[mcp_servers.engram]
+command = "C:\\Program Files\\Engram\\engram.exe"
+args = [
+  "mcp",
+  "--label=\"codex\"", # preserve the escaped quote
+]
+`,
+			wantCommand: `C:\Program Files\Engram\engram.exe`,
+			wantArgs:    []string{"mcp", `--label="codex"`},
+		},
+		{
+			name: "malformed TOML fails closed",
+			raw: `[mcp_servers.engram]
+command = "engram"
+args = ["mcp", "--tools=codex"]
+unclosed = [
+`,
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, found, err := readTOMLEngramCommand(tt.raw)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatal("readTOMLEngramCommand() error = nil, want malformed TOML rejection")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("readTOMLEngramCommand() error = %v", err)
+			}
+			if !found {
+				t.Fatal("readTOMLEngramCommand() found = false, want persisted Engram command")
+			}
+			if got.Command != tt.wantCommand {
+				t.Errorf("command = %q, want %q", got.Command, tt.wantCommand)
+			}
+			if strings.Join(got.Args, "\x00") != strings.Join(tt.wantArgs, "\x00") {
+				t.Errorf("args = %q, want %q", got.Args, tt.wantArgs)
+			}
+		})
+	}
+}
+
 func TestReadPersistedStdioCommands_PreservesConfiguredCommandAndArguments(t *testing.T) {
 	homeDir := t.TempDir()
 	cases := []struct {

@@ -11,10 +11,10 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"time"
 
+	"github.com/BurntSushi/toml"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/agents"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/claude"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/components/filemerge"
@@ -353,44 +353,24 @@ func nestedJSONObject(value any) map[string]any {
 }
 
 func readTOMLEngramCommand(raw string) (StdioCommand, bool, error) {
-	inEngramTable := false
-	var commandValue, argsValue string
-	for _, line := range strings.Split(strings.ReplaceAll(raw, "\r\n", "\n"), "\n") {
-		trimmed := strings.TrimSpace(line)
-		if strings.HasPrefix(trimmed, "[") && strings.HasSuffix(trimmed, "]") {
-			if inEngramTable {
-				break
-			}
-			inEngramTable = trimmed == "[mcp_servers.engram]"
-			continue
-		}
-		if !inEngramTable {
-			continue
-		}
-		key, value, ok := strings.Cut(trimmed, "=")
-		if !ok {
-			continue
-		}
-		switch strings.TrimSpace(key) {
-		case "command":
-			commandValue = strings.TrimSpace(value)
-		case "args":
-			argsValue = strings.TrimSpace(value)
-		}
+	var config struct {
+		MCPServers map[string]struct {
+			Command string   `toml:"command"`
+			Args    []string `toml:"args"`
+		} `toml:"mcp_servers"`
 	}
-	if !inEngramTable {
-		return StdioCommand{}, false, nil
+	if _, err := toml.Decode(raw, &config); err != nil {
+		return StdioCommand{}, false, err
 	}
 
-	command, err := strconv.Unquote(commandValue)
-	if err != nil || strings.TrimSpace(command) == "" {
-		return StdioCommand{}, true, errors.New("command must be a non-empty quoted string")
+	server, found := config.MCPServers["engram"]
+	if !found {
+		return StdioCommand{}, false, nil
 	}
-	args := []string(nil)
-	if argsValue != "" && json.Unmarshal([]byte(argsValue), &args) != nil {
-		return StdioCommand{}, true, errors.New("args must be a string array")
+	if strings.TrimSpace(server.Command) == "" {
+		return StdioCommand{}, true, errors.New("command must be a non-empty string")
 	}
-	return StdioCommand{Command: command, Args: args}, true, nil
+	return StdioCommand{Command: server.Command, Args: server.Args}, true, nil
 }
 
 func readYAMLEngramCommand(raw []byte) (StdioCommand, bool, error) {
