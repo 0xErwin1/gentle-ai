@@ -366,6 +366,11 @@ type GrantRootsRequest struct {
 	Roots            []string `json:"roots"`
 	Reason           string   `json:"reason"`
 	Actor            string   `json:"actor"`
+	// ChangeInstance is filled by Grant from the store's own ForInstance
+	// identity (#2540 S5) so the request digest binds the exact instance the
+	// grant belongs to. A caller-supplied value must equal the store's; Grant
+	// refuses a mismatch rather than silently rebinding authority.
+	ChangeInstance string `json:"change_instance"`
 }
 
 // BindReviewRequest performs a binding-only compare-and-swap. The expected
@@ -402,6 +407,36 @@ type RuntimeStore struct {
 	// switch is not a disabled switch and resolves to false.
 	ReviewDisabled bool
 	commonDir      string
+	// instance is the change-instance identity this store session serves
+	// (#2540 S5). The ledger directory is keyed by change name alone and
+	// archive never touches it, so a future change reusing an archived name
+	// reopens the SAME chain: without an instance boundary, the archived
+	// change's grants would resurrect as workspace-permanent authority. The
+	// chain itself cannot observe that boundary — the genesis revision
+	// survives name reuse and a recreated change's first Begin is
+	// indistinguishable from a legitimate next-work-unit advance — so the
+	// identity is caller-owned and opaque here: ForInstance sets it, Grant
+	// binds it into each grant record's digest, and replay projects a grant
+	// into GrantedRoots only when the record's identity equals this one. The
+	// zero value is the conservative containment: a store opened without an
+	// instance identity projects no granted roots at all.
+	instance string
+}
+
+// ForInstance derives a store bound to one change-instance identity. The
+// value is opaque to the ledger; the caller (the status layer that also
+// derives the consent envelope) owns its meaning, which must be stable
+// across one change instance's life and distinct across recreations of the
+// same change name.
+func (store RuntimeStore) ForInstance(instance string) (RuntimeStore, error) {
+	if instance == "" {
+		return RuntimeStore{}, errors.New("change-instance identity must not be empty") // refusal:by-design operator-knowledge: only the caller knows the change instance this session serves; retry with the instance identity the status layer derived
+	}
+	if err := validateRuntimeText(instance, 128); err != nil {
+		return RuntimeStore{}, fmt.Errorf("invalid change-instance identity: %w", err)
+	}
+	store.instance = instance
+	return store, nil
 }
 
 type runtimeRecord struct {
@@ -437,6 +472,17 @@ type runtimeGrantEvent struct {
 	Actor     string   `json:"actor"`
 	Reason    string   `json:"reason"`
 	GrantedAt string   `json:"granted_at"`
+	// Instance is the change-instance identity this grant belongs to (#2540
+	// S5), digest-bound like Roots/Actor/Reason: a record whose identity was
+	// altered, stripped, or forged after publication no longer matches the
+	// bound RequestDigest, so replay refuses the chain. Replay projects the
+	// grant into GrantedRoots only for a store bound to the same identity,
+	// which is what makes an archived name's reuse unable to resurrect the
+	// archived change's authority. Required: no released writer ever emitted
+	// an instance-less grant record (RuntimeStore.Grant was unreachable
+	// between #2553 and this slice), so an empty value is a mutated record,
+	// not a legacy one.
+	Instance string `json:"instance"`
 }
 
 // runtimeAdvanceEvent accompanies the successor's begin event in one atomic
@@ -535,6 +581,10 @@ type runtimeReplay struct {
 	Status        RuntimeStatus
 	Requests      map[string]runtimeRequestReceipt
 	AttemptTokens map[int]string
+	// Instance carries the store's ForInstance identity into replay (#2540
+	// S5): applyRuntimeGrantEvent projects a grant into GrantedRoots only
+	// when the record's identity equals this one. Empty projects nothing.
+	Instance string
 }
 
 func OpenRuntimeStore(ctx context.Context, repo, change string) (RuntimeStore, error) {
@@ -765,14 +815,20 @@ func (store RuntimeStore) Finish(ctx context.Context, request FinishAttemptReque
 				return runtimeRecord{}, fmt.Errorf("failed evidence revision %q does not match native runtime evidence %q", request.RemediatesEvidenceRevision, status.EvidenceRevision)
 			}
 		}
+		// #1974 slice 2: the unmanaged-remediation binding derives from the
+		// immutable attempt chain, never from status.EvidenceRevision -- the
+		// live pointer Reset, Rescope, and Advance wipe. An audited reset or an
+		// honest interrupted settlement between the failure and its correction
+		// is an audit record, not a semantic successor, so neither severs the
+		// binding; the first passed settlement after the failure does.
+		chainFailedEvidence, chainHasFailedEvidence := runtimeChainFailedEvidence(status.Attempts)
 		if unmanagedRemediation {
 			if !store.ReviewDisabled || currentBinding != nil {
 				// refusal:by-design human-authority: unmanaged remediation is valid only while receipt authority is absent and explicitly disabled.
 				return runtimeRecord{}, errors.New("unmanaged remediation requires disabled delivery without a review binding")
 			}
-			if len(status.Attempts) < 2 || status.EvidenceRevision != request.RemediatesEvidenceRevision ||
-				status.Attempts[len(status.Attempts)-2].Outcome != AttemptFailed {
-				// refusal:by-design operator-knowledge: the native ledger admits one final correction only for its current failed evidence.
+			if !chainHasFailedEvidence || chainFailedEvidence != request.RemediatesEvidenceRevision {
+				// refusal:by-design operator-knowledge: the native ledger admits one final correction only for the chain's unremediated failed evidence.
 				return runtimeRecord{}, errors.New("unmanaged remediation requires the current failed evidence and a direct correction attempt")
 			}
 		}
@@ -808,9 +864,8 @@ func (store RuntimeStore) Finish(ctx context.Context, request FinishAttemptReque
 				return runtimeRecord{}, fmt.Errorf("validate unchanged bound SDD candidate: %w", validateErr)
 			}
 		}
-		previousAttemptFailed := len(status.Attempts) >= 2 && status.Attempts[len(status.Attempts)-2].Outcome == AttemptFailed
-		if store.ReviewDisabled && currentBinding == nil && request.Outcome == AttemptPassed && previousAttemptFailed && !unmanagedRemediation {
-			return runtimeRecord{}, fmt.Errorf("disabled failed verification requires --remediates-evidence-revision %q on the correction settle; rerun `gentle-ai sdd-attempt settle` with that flag", status.EvidenceRevision)
+		if store.ReviewDisabled && currentBinding == nil && request.Outcome == AttemptPassed && chainHasFailedEvidence && !unmanagedRemediation {
+			return runtimeRecord{}, fmt.Errorf("disabled failed verification requires --remediates-evidence-revision %q on the correction settle; rerun `gentle-ai sdd-attempt settle` with that flag", chainFailedEvidence)
 		}
 		if unmanagedRemediation {
 			if snapshot.Identity == active.BeginCandidateIdentity || snapshot.CandidateTree == active.BeginCandidateTree {
@@ -1120,6 +1175,13 @@ var runtimeGrantClock = func() string { return time.Now().UTC().Format(time.RFC3
 // the CLI verb are later slices. A grant has no structural precondition,
 // because authorizing roots is orthogonal to attempt state.
 func (store RuntimeStore) Grant(ctx context.Context, request GrantRootsRequest) (RuntimeStatus, error) {
+	if store.instance == "" {
+		return RuntimeStatus{}, errors.New("grant requires a change-instance identity; derive the store with ForInstance first") // refusal:by-design operator-knowledge: only the caller knows which change instance this grant authorizes; derive the store with ForInstance and retry
+	}
+	if request.ChangeInstance != "" && request.ChangeInstance != store.instance {
+		return RuntimeStatus{}, errors.New("grant request change-instance does not equal the store's instance identity") // refusal:by-design operator-knowledge: the request and the store name different change instances; retry with one coherent instance identity
+	}
+	request.ChangeInstance = store.instance
 	request, err := normalizeGrantRootsRequest(request)
 	if err != nil {
 		return RuntimeStatus{}, err
@@ -1129,6 +1191,7 @@ func (store RuntimeStore) Grant(ctx context.Context, request GrantRootsRequest) 
 	return store.mutate(ctx, request.ExpectedRevision, request.RequestID, digest, func(runtimeReplay) (runtimeRecord, error) {
 		return runtimeRecord{Operation: runtimeOperationGrant, Grant: &runtimeGrantEvent{
 			Roots: request.Roots, Actor: request.Actor, Reason: request.Reason, GrantedAt: grantedAt,
+			Instance: request.ChangeInstance,
 		}}, nil
 	})
 }
@@ -1518,6 +1581,7 @@ func (store RuntimeStore) load() (runtimeReplay, error) {
 		},
 		Requests:      map[string]runtimeRequestReceipt{},
 		AttemptTokens: map[int]string{},
+		Instance:      store.instance,
 	}
 	head, exists, err := readRuntimeHead(filepath.Join(store.Dir, "HEAD"))
 	if err != nil || !exists {
@@ -1857,9 +1921,13 @@ func applyRuntimeFinishEvent(replay *runtimeReplay, event *runtimeFinishEvent, u
 		return errors.New("finish record changed-line budget decision does not match replay state")
 	}
 	if unmanagedRemediation {
-		if replay.Status.Binding != nil || len(replay.Status.Attempts) < 2 || event.Outcome != AttemptPassed ||
-			replay.Status.EvidenceRevision != event.RemediatesEvidenceRevision ||
-			replay.Status.Attempts[len(replay.Status.Attempts)-2].Outcome != AttemptFailed ||
+		// Lockstep twin of the write-time guard in Finish: the binding derives
+		// from the immutable chain, so replayed corrections recorded across an
+		// audited reset stay valid. The chain walk requires a settled failed
+		// predecessor, which subsumes the former len(Attempts) < 2 conjunct.
+		chainFailedEvidence, chainHasFailedEvidence := runtimeChainFailedEvidence(replay.Status.Attempts)
+		if replay.Status.Binding != nil || event.Outcome != AttemptPassed ||
+			!chainHasFailedEvidence || chainFailedEvidence != event.RemediatesEvidenceRevision ||
 			event.FinishCandidateIdentity == active.BeginCandidateIdentity || event.FinishCandidateTree == active.BeginCandidateTree ||
 			event.EvidenceRevision == event.RemediatesEvidenceRevision {
 			// refusal:by-design world-action: a replayed event that breaks immutable evidence/candidate binding can only be repaired by restoring the authority.
@@ -1900,8 +1968,17 @@ func applyRuntimeFinishEvent(replay *runtimeReplay, event *runtimeFinishEvent, u
 // identities. It has no structural precondition and returns no error: every
 // integrity guard a grant needs already ran in validateRuntimeRecordShape,
 // and a chain with no grant records never reaches it, so legacy chains
-// replay unchanged.
+// replay unchanged. A grant projects only into a replay bound to its own
+// change-instance identity (#2540 S5): the chain outlives the change it
+// served, so a recreated change reusing an archived name replays the same
+// records under a different identity and inherits none of its authority. A
+// replay without an identity — every reader that has not called ForInstance,
+// including the status.go embedding until S4b threads one — projects no
+// granted roots at all.
 func applyRuntimeGrantEvent(replay *runtimeReplay, event *runtimeGrantEvent) {
+	if replay.Instance == "" || event.Instance != replay.Instance {
+		return
+	}
 	for _, root := range event.Roots {
 		duplicate := false
 		for _, granted := range replay.Status.GrantedRoots {
@@ -2158,6 +2235,9 @@ func validateRuntimeRecordShape(record runtimeRecord) error {
 			validateRuntimeText(event.Reason, 500) != nil || validateRuntimeText(event.Actor, 128) != nil {
 			return errors.New("invalid SDD runtime grant event") // refusal:by-design world-action: bounds and audit fields are enforced before publication, so a violation is a mutated record and the exit is restoring the store
 		}
+		if event.Instance == "" || validateRuntimeText(event.Instance, 128) != nil {
+			return errors.New("invalid SDD runtime grant change-instance identity") // refusal:by-design world-action: every writer binds the store's ForInstance identity before publication and no released writer ever emitted an instance-less grant, so a violation is a mutated record and the exit is restoring the store
+		}
 		seen := make(map[string]struct{}, len(event.Roots))
 		for _, root := range event.Roots {
 			if validateRuntimeText(root, 4096) != nil || !filepath.IsAbs(root) {
@@ -2177,6 +2257,7 @@ func validateRuntimeRecordShape(record runtimeRecord) error {
 		request := GrantRootsRequest{
 			ExpectedRevision: record.PreviousRevision, RequestID: record.RequestID,
 			Roots: event.Roots, Reason: event.Reason, Actor: event.Actor,
+			ChangeInstance: event.Instance,
 		}
 		if runtimeValueHash("gentle-ai.sdd-runtime-grant-request/v1", request) != record.RequestDigest {
 			return errors.New("SDD runtime grant request digest does not match record") // refusal:by-design world-action: the digest binds the granted roots at write time, so a widened or altered record fails this recompute and the exit is restoring the store
@@ -2375,6 +2456,12 @@ func normalizeGrantRootsRequest(request GrantRootsRequest) (GrantRootsRequest, e
 	if err := validateRuntimeText(request.Actor, 128); err != nil {
 		return GrantRootsRequest{}, fmt.Errorf("invalid grant actor: %w", err)
 	}
+	if request.ChangeInstance == "" {
+		return GrantRootsRequest{}, errors.New("grant requires a change-instance identity") // refusal:by-design operator-knowledge: only the caller knows which change instance this grant authorizes; derive the store with ForInstance and retry
+	}
+	if err := validateRuntimeText(request.ChangeInstance, 128); err != nil {
+		return GrantRootsRequest{}, fmt.Errorf("invalid grant change-instance identity: %w", err)
+	}
 	return request, nil
 }
 
@@ -2517,6 +2604,31 @@ func runtimeResetStructurallyPermitted(status RuntimeStatus) bool {
 	}
 	last := status.Attempts[len(status.Attempts)-1]
 	return last.Outcome == AttemptFailed || last.Outcome == AttemptInterrupted
+}
+
+// runtimeChainFailedEvidence derives the unmanaged-remediation binding from
+// the immutable attempt chain (#1974 slice 2): the most recent settled
+// AttemptFailed attempt's EvidenceRevision, provided no AttemptPassed
+// settlement follows it. Running and interrupted attempts between the failure
+// and its correction are honest audit records, not semantic successors, and
+// audited resets, rescopes, and advances never appear in the chain at all, so
+// none of them sever the binding. The first passed settlement after the
+// failure DOES sever it: that pass is the one correction the failed evidence
+// admits, so a later correction claiming the same revision finds no failed
+// evidence in the chain and is refused -- the same anti-laundering budget the
+// live evidence pointer used to enforce, now immune to that pointer being
+// wiped. Evaluated by RuntimeStore.Finish and applyRuntimeFinishEvent in
+// lockstep, so a committed correction always replays deterministically.
+func runtimeChainFailedEvidence(attempts []RuntimeAttempt) (string, bool) {
+	for index := len(attempts) - 1; index >= 0; index-- {
+		switch attempts[index].Outcome {
+		case AttemptPassed:
+			return "", false
+		case AttemptFailed:
+			return attempts[index].EvidenceRevision, true
+		}
+	}
+	return "", false
 }
 
 func runtimeObjectiveID(change, workUnit, evidenceGoal, candidateIdentity string, generation int) string {

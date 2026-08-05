@@ -25,6 +25,7 @@ func journeySources() []journeySource {
 		{"journeys.go", coreJourneys()},
 		{"journeys_edge.go", edgeJourneys()},
 		{"journeys_sdd.go", sddJourneys()},
+		{"journeys_sdd_chain.go", sddChainJourneys()},
 		{"journeys_wave1.go", waveOneJourneys()},
 		{"journeys_wave3.go", waveThreeJourneys()},
 		{"journeys_wave5.go", waveFiveJourneys()},
