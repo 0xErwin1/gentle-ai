@@ -473,6 +473,7 @@ func Resolve(options ResolveOptions) (Status, error) {
 	coreReady := artifacts["proposal"] == ArtifactDone && artifacts["specs"] == ArtifactDone && artifacts["design"] == ArtifactDone && artifacts["tasks"] == ArtifactDone && taskProgress.Total > 0
 	applyState := resolveApplyState(coreReady, taskProgress)
 	blockedReasons := artifactBlockedReasons(artifacts, taskProgress)
+	applyState = applyEditAuthorityBlock(applyState, &blockedReasons, readText(firstPath(artifactPaths.Tasks)), workspaceRoot, []string{workspaceRoot})
 	var governingRef *reviewtransaction.SDDReceiptRef
 	if runtimeStatusErr == nil {
 		var refErr error
@@ -859,6 +860,7 @@ func resolveEngramStatus(workspaceRoot string, requestedChange string, includeIn
 	coreReady := artifacts["proposal"] == ArtifactDone && artifacts["specs"] == ArtifactDone && artifacts["design"] == ArtifactDone && artifacts["tasks"] == ArtifactDone && taskProgress.Total > 0
 	applyState := resolveApplyState(coreReady, taskProgress)
 	blockedReasons := artifactBlockedReasons(artifacts, taskProgress)
+	applyState = applyEditAuthorityBlock(applyState, &blockedReasons, artifactsByType["tasks"].Content, workspaceRoot, []string{workspaceRoot})
 	var governingRef *reviewtransaction.SDDReceiptRef
 	if runtimeStatusErr == nil {
 		var refErr error
