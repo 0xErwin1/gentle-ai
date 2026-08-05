@@ -749,6 +749,113 @@ func TestComponentSyncStepRunsPersonaInjectForSync(t *testing.T) {
 	}
 }
 
+func TestComponentSyncStepWritesPiPersonaToWorkspaceAndReportsChangedFile(t *testing.T) {
+	home := t.TempDir()
+	workspace := t.TempDir()
+	path := filepath.Join(workspace, ".pi", "gentle-ai", "persona.json")
+	var changed []string
+	step := componentSyncStep{
+		id:           "sync:persona",
+		component:    model.ComponentPersona,
+		homeDir:      home,
+		workspaceDir: workspace,
+		agents:       []model.AgentID{model.AgentPi},
+		selection:    model.Selection{Persona: model.PersonaNeutral},
+		changedFiles: &changed,
+	}
+
+	if err := step.Run(); err != nil {
+		t.Fatalf("first Pi persona sync error = %v", err)
+	}
+	if !containsPath(changed, path) {
+		t.Fatalf("first Pi persona sync changed files = %v, missing %q", changed, path)
+	}
+	if _, err := os.Stat(filepath.Join(home, ".pi", "gentle-ai", "persona.json")); !os.IsNotExist(err) {
+		t.Fatalf("Pi sync wrote a home-scoped persona config; stat err = %v", err)
+	}
+	if got := readTextFile(t, path); got != "{\n  \"mode\": \"neutral\"\n}\n" {
+		t.Fatalf("Pi persona config = %q, want neutral mode", got)
+	}
+
+	changed = nil
+	if err := step.Run(); err != nil {
+		t.Fatalf("second Pi persona sync error = %v", err)
+	}
+	if len(changed) != 0 {
+		t.Fatalf("second Pi persona sync changed files = %v, want none", changed)
+	}
+}
+
+func TestSyncPersonaPathsAndBackupTargetsTrackOnlyPiWorkspaceConfig(t *testing.T) {
+	home := t.TempDir()
+	workspace := t.TempDir()
+	selection := model.Selection{
+		Agents:     []model.AgentID{model.AgentPi},
+		Components: []model.ComponentID{model.ComponentPersona},
+		Persona:    model.PersonaNeutral,
+	}
+	adapters := resolveAdapters(selection.Agents)
+	want := filepath.Join(workspace, ".pi", "gentle-ai", "persona.json")
+	unwanted := filepath.Join(home, ".pi", "gentle-ai", "persona.json")
+
+	paths := syncPersonaPathsWithWorkspace(home, workspace, selection, adapters)
+	if !containsPath(paths, want) || containsPath(paths, unwanted) {
+		t.Fatalf("sync persona paths = %v, want only workspace Pi config %q", paths, want)
+	}
+	targets, err := syncBackupTargets(home, workspace, selection, adapters)
+	if err != nil {
+		t.Fatalf("syncBackupTargets() error = %v", err)
+	}
+	if !containsPath(targets, want) || containsPath(targets, unwanted) {
+		t.Fatalf("sync backup targets = %v, want only workspace Pi config %q", targets, want)
+	}
+
+	selection.Persona = model.PersonaCustom
+	if paths := syncPersonaPathsWithWorkspace(home, workspace, selection, adapters); len(paths) != 0 {
+		t.Fatalf("custom sync persona paths = %v, want none", paths)
+	}
+}
+
+func TestPiPersonaSyncSnapshotRestoresWorkspaceConfig(t *testing.T) {
+	home := t.TempDir()
+	workspace := t.TempDir()
+	path := filepath.Join(workspace, ".pi", "gentle-ai", "persona.json")
+	mustWriteFile(t, path, []byte("{\n  \"mode\": \"gentleman\"\n}\n"))
+
+	selection := model.Selection{
+		Agents:     []model.AgentID{model.AgentPi},
+		Components: []model.ComponentID{model.ComponentPersona},
+		Persona:    model.PersonaNeutral,
+	}
+	targets, err := syncBackupTargets(home, workspace, selection, resolveAdapters(selection.Agents))
+	if err != nil {
+		t.Fatalf("syncBackupTargets() error = %v", err)
+	}
+	before, err := snapshotSyncFiles(targets)
+	if err != nil {
+		t.Fatalf("snapshotSyncFiles() error = %v", err)
+	}
+	step := componentSyncStep{
+		component:    model.ComponentPersona,
+		homeDir:      home,
+		workspaceDir: workspace,
+		agents:       selection.Agents,
+		selection:    selection,
+	}
+	if err := step.Run(); err != nil {
+		t.Fatalf("Pi persona sync error = %v", err)
+	}
+	if got := readTextFile(t, path); got == "{\n  \"mode\": \"gentleman\"\n}\n" {
+		t.Fatal("Pi persona sync did not change the workspace config before rollback")
+	}
+	if err := restoreSyncFiles(before); err != nil {
+		t.Fatalf("restoreSyncFiles() error = %v", err)
+	}
+	if got, want := readTextFile(t, path), "{\n  \"mode\": \"gentleman\"\n}\n"; got != want {
+		t.Fatalf("restored Pi persona config = %q, want %q", got, want)
+	}
+}
+
 func TestComponentSyncStepRunsSDDInject(t *testing.T) {
 	home := t.TempDir()
 

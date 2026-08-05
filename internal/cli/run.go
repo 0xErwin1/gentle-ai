@@ -1526,6 +1526,14 @@ func (s componentApplyStep) Run() error {
 		return nil
 	case model.ComponentPersona:
 		for _, adapter := range adapters {
+			if adapter.Agent() == model.AgentPi {
+				for _, rootDir := range piPersonaConfigRoots(s.homeDir, s.workspaceDir, s.scope) {
+					if _, err := persona.InjectPiPersona(rootDir, s.selection.Persona); err != nil {
+						return fmt.Errorf("inject persona for %q: %w", adapter.Agent(), err)
+					}
+				}
+				continue
+			}
 			targetDir := componentInjectionDirScoped(s.homeDir, s.workspaceDir, s.scope, adapter)
 			if _, err := persona.Inject(targetDir, adapter, s.selection.Persona); err != nil {
 				return fmt.Errorf("inject persona for %q: %w", adapter.Agent(), err)
@@ -2100,6 +2108,10 @@ func componentPathsWithWorkspaceScoped(homeDir, workspaceDir string, scope Insta
 			if selection.Persona == model.PersonaCustom {
 				break
 			}
+			if adapter.Agent() == model.AgentPi {
+				paths = append(paths, piPersonaConfigPaths(homeDir, workspaceDir, scope)...)
+				break
+			}
 			if adapter.Agent() == model.AgentOpenClaw {
 				paths = append(paths, filepath.Join(targetDir, "SOUL.md"))
 				break
@@ -2179,6 +2191,27 @@ func componentInjectionDirScoped(homeDir, workspaceDir string, scope InstallScop
 		return workspaceDir
 	}
 	return ResolveAgentConfigDir(scope, homeDir, workspaceDir)
+}
+
+// piPersonaConfigRoots returns the roots whose Pi persona state is managed by
+// install. Global install keeps its global fallback and seeds the active
+// workspace so Pi sees the selected persona immediately; workspace install is
+// limited to the workspace root like every other scoped component.
+func piPersonaConfigRoots(homeDir, workspaceDir string, scope InstallScope) []string {
+	roots := []string{ResolveAgentConfigDir(scope, homeDir, workspaceDir)}
+	if scope == ScopeGlobal && strings.TrimSpace(workspaceDir) != "" && filepath.Clean(workspaceDir) != filepath.Clean(homeDir) {
+		roots = append(roots, workspaceDir)
+	}
+	return roots
+}
+
+func piPersonaConfigPaths(homeDir, workspaceDir string, scope InstallScope) []string {
+	roots := piPersonaConfigRoots(homeDir, workspaceDir, scope)
+	paths := make([]string, 0, len(roots))
+	for _, root := range roots {
+		paths = append(paths, persona.PiPersonaConfigPath(root))
+	}
+	return paths
 }
 
 func codeGraphGuidanceMarkdownForSDD(homeDir string, selected []model.CommunityToolID) string {

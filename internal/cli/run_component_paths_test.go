@@ -130,6 +130,81 @@ func TestComponentPathsWorkspaceScopedOpenCodeSDDUsesWorkspaceManagedPaths(t *te
 	}
 }
 
+func TestComponentPersonaPiUsesResolvedScopePath(t *testing.T) {
+	home := t.TempDir()
+	workspace := t.TempDir()
+	adapters := resolveAdapters([]model.AgentID{model.AgentPi})
+	selection := model.Selection{Persona: model.PersonaNeutral}
+
+	global := componentPathsWithWorkspaceScoped(home, workspace, ScopeGlobal, selection, adapters, model.ComponentPersona)
+	if !containsPath(global, filepath.Join(home, ".pi", "gentle-ai", "persona.json")) {
+		t.Fatalf("global Pi persona paths = %v, missing home-scoped config", global)
+	}
+	if !containsPath(global, filepath.Join(workspace, ".pi", "gentle-ai", "persona.json")) {
+		t.Fatalf("global Pi persona paths = %v, missing active workspace config", global)
+	}
+
+	workspacePaths := componentPathsWithWorkspaceScoped(home, workspace, ScopeWorkspace, selection, adapters, model.ComponentPersona)
+	if !containsPath(workspacePaths, filepath.Join(workspace, ".pi", "gentle-ai", "persona.json")) {
+		t.Fatalf("workspace Pi persona paths = %v, missing workspace-scoped config", workspacePaths)
+	}
+	if containsPath(workspacePaths, filepath.Join(home, ".pi", "gentle-ai", "persona.json")) {
+		t.Fatalf("workspace Pi persona paths = %v, unexpectedly contains home config", workspacePaths)
+	}
+
+	custom := componentPathsWithWorkspaceScoped(home, workspace, ScopeWorkspace, model.Selection{Persona: model.PersonaCustom}, adapters, model.ComponentPersona)
+	if len(custom) != 0 {
+		t.Fatalf("custom Pi persona paths = %v, want none", custom)
+	}
+}
+
+func TestInstallPiPersonaWritesManagedScopePaths(t *testing.T) {
+	for _, tt := range []struct {
+		name  string
+		scope InstallScope
+	}{
+		{name: "global", scope: ScopeGlobal},
+		{name: "workspace", scope: ScopeWorkspace},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			home := t.TempDir()
+			workspace := t.TempDir()
+			root, other := home, workspace
+			if tt.scope == ScopeWorkspace {
+				root, other = workspace, home
+			}
+
+			step := componentApplyStep{
+				component:    model.ComponentPersona,
+				homeDir:      home,
+				workspaceDir: workspace,
+				scope:        tt.scope,
+				agents:       []model.AgentID{model.AgentPi},
+				selection:    model.Selection{Persona: model.PersonaNeutral},
+			}
+			if err := step.Run(); err != nil {
+				t.Fatalf("componentApplyStep.Run() error = %v", err)
+			}
+
+			want := filepath.Join(root, ".pi", "gentle-ai", "persona.json")
+			if _, err := os.Stat(want); err != nil {
+				t.Fatalf("Pi persona config %q was not written: %v", want, err)
+			}
+			if tt.scope == ScopeGlobal {
+				workspacePath := filepath.Join(workspace, ".pi", "gentle-ai", "persona.json")
+				if _, err := os.Stat(workspacePath); err != nil {
+					t.Fatalf("global Pi persona config %q was not seeded: %v", workspacePath, err)
+				}
+				return
+			}
+			unwanted := filepath.Join(other, ".pi", "gentle-ai", "persona.json")
+			if _, err := os.Stat(unwanted); !os.IsNotExist(err) {
+				t.Fatalf("workspace-scoped Pi persona config %q was written outside scope; stat err = %v", unwanted, err)
+			}
+		})
+	}
+}
+
 func TestLegacyOpenCodeBackgroundAgentsPluginRequiresConfigOpenCodePluginsPath(t *testing.T) {
 	home := t.TempDir()
 
