@@ -227,10 +227,17 @@ type Status struct {
 	// otherwise. Structural absence (nil, omitempty) is the same guard
 	// pattern ReviewOffer already established. See
 	// applyTargetedReVerifyRouting in review_reverify.go.
-	ReVerify          *ReVerifyBlock     `json:"reVerify,omitempty"`
-	PhaseInstructions *PhaseInstructions `json:"phaseInstructions,omitempty"`
-	NextRecommended   string             `json:"nextRecommended"`
-	BlockedReasons    []string           `json:"blockedReasons"`
+	ReVerify *ReVerifyBlock `json:"reVerify,omitempty"`
+	// Consent is #2563's (S4b of #2540) edit-authority consent question:
+	// present exactly when the status reports blocked(edit_authority_missing),
+	// carrying the typed gentle-ai.sdd-integration.consent/v1 envelope whose
+	// granted choice names the exact runnable grant invocation. Structural
+	// absence (nil, omitempty) everywhere else — the same optional-block
+	// discipline ReviewOffer established.
+	Consent           *SDDIntegrationConsentResult `json:"consent,omitempty"`
+	PhaseInstructions *PhaseInstructions           `json:"phaseInstructions,omitempty"`
+	NextRecommended   string                       `json:"nextRecommended"`
+	BlockedReasons    []string                     `json:"blockedReasons"`
 	// runtimeAttemptTokens carries the ledger's live attempt tokens alongside
 	// RuntimeStatus so status can ask the one readiness predicate the same
 	// question compact acquire asks, and name the same continuation acquire
@@ -468,12 +475,43 @@ func Resolve(options ResolveOptions) (Status, error) {
 	if err != nil {
 		return Status{}, err
 	}
-	runtimeStatus, runtimeAttemptTokens, runtimeStatusErr := loadNativeRuntimeStatus(context.Background(), workspaceRoot, changeName)
+	// The change-instance identity (#2563, S4b of #2540) binds the runtime
+	// read so persisted grants project only for THIS instance of the change
+	// name; without a marker the replay conservatively projects no granted
+	// roots at all (#2557's containment).
+	instance, err := readChangeInstanceMarker(changeRoot)
+	if err != nil {
+		return Status{}, err
+	}
+	runtimeStatus, runtimeAttemptTokens, runtimeStatusErr := loadNativeRuntimeStatus(context.Background(), workspaceRoot, changeName, instance)
+	var grantedRoots []string
+	if runtimeStatus != nil {
+		grantedRoots = runtimeStatus.GrantedRoots
+	}
 	reviewState, reviewStateReason := readReviewTransaction(firstPath(artifactPaths.ReviewState), "")
 	coreReady := artifacts["proposal"] == ArtifactDone && artifacts["specs"] == ArtifactDone && artifacts["design"] == ArtifactDone && artifacts["tasks"] == ArtifactDone && taskProgress.Total > 0
 	applyState := resolveApplyState(coreReady, taskProgress)
 	blockedReasons := artifactBlockedReasons(artifacts, taskProgress)
-	applyState = applyEditAuthorityBlock(applyState, &blockedReasons, readText(firstPath(artifactPaths.Tasks)), workspaceRoot, []string{workspaceRoot})
+	applyState, unauthorizedRoots := applyEditAuthorityBlock(applyState, &blockedReasons, readText(firstPath(artifactPaths.Tasks)), workspaceRoot, append([]string{workspaceRoot}, grantedRoots...))
+	var consent *SDDIntegrationConsentResult
+	if len(unauthorizedRoots) != 0 {
+		// The envelope must name an invocation the agent executes verbatim,
+		// so the instance token is minted (once) and persisted here; a
+		// covering grant later projects through the same token and detection
+		// finds nothing, so no envelope and no mint happen on ordinary
+		// statuses.
+		if instance == "" {
+			if instance, err = ensureChangeInstanceMarker(changeRoot); err != nil {
+				return Status{}, err
+			}
+		}
+		expectedRevision := ""
+		if runtimeStatus != nil {
+			expectedRevision = runtimeStatus.Revision
+		}
+		envelope := newEditAuthorityConsent(changeName, workspaceRoot, unauthorizedRoots, instance, expectedRevision)
+		consent = &envelope
+	}
 	var governingRef *reviewtransaction.SDDReceiptRef
 	if runtimeStatusErr == nil {
 		var refErr error
@@ -596,7 +634,8 @@ func Resolve(options ResolveOptions) (Status, error) {
 	if remediationState.Reason != "" {
 		blockedReasons.genuine = append(blockedReasons.genuine, remediationState.Reason)
 	}
-	status := baseStatus(ArtifactStoreOpenSpec, workspaceRoot, &changeName, &changeRoot, nextRecommended, append([]string{}, blockedReasons.genuine...))
+	status := baseStatus(ArtifactStoreOpenSpec, workspaceRoot, grantedRoots, &changeName, &changeRoot, nextRecommended, append([]string{}, blockedReasons.genuine...))
+	status.Consent = consent
 	status.ArtifactPaths = artifactPaths
 	status.ContextFiles = artifactPaths
 	status.Artifacts = artifacts
@@ -644,8 +683,11 @@ func Resolve(options ResolveOptions) (Status, error) {
 // loadNativeRuntimeStatus returns the runtime status together with the ledger's
 // attempt tokens. Status needs the tokens because it now reports what compact
 // acquire would return, and acquire's answer for a live attempt names that
-// attempt's own token as the caller's continuation (#2463).
-func loadNativeRuntimeStatus(ctx context.Context, workspaceRoot, changeName string) (*RuntimeStatus, map[int]string, error) {
+// attempt's own token as the caller's continuation (#2463). A non-empty
+// instance binds the read to one change-instance identity (#2563, S4b of
+// #2540) so replay projects that instance's granted roots; an empty instance
+// keeps #2557's conservative containment and projects none.
+func loadNativeRuntimeStatus(ctx context.Context, workspaceRoot, changeName, instance string) (*RuntimeStatus, map[int]string, error) {
 	// SDD status remains useful for non-Git planning fixtures and repositories.
 	// A native runtime chain cannot exist without a Git common-dir, so the
 	// absence of a repository means there is no runtime authority to embed.
@@ -658,6 +700,11 @@ func loadNativeRuntimeStatus(ctx context.Context, workspaceRoot, changeName stri
 	store, err := OpenRuntimeStore(ctx, workspaceRoot, changeName)
 	if err != nil {
 		return nil, nil, fmt.Errorf("open native SDD runtime authority: %w", err)
+	}
+	if instance != "" {
+		if store, err = store.ForInstance(instance); err != nil {
+			return nil, nil, fmt.Errorf("bind native SDD runtime authority to the change instance: %w", err)
+		}
 	}
 	replay, err := store.load()
 	if err != nil {
@@ -855,12 +902,19 @@ func resolveEngramStatus(workspaceRoot string, requestedChange string, includeIn
 	taskProgress := countTaskProgressText(artifactsByType["tasks"].Content)
 	specCounts := countSpecRequirementsAndScenarios([]string{artifactsByType["spec"].Content})
 	verifyResult := parseVerifyResult(artifactsByType["verify-report"].Content, specCounts)
-	runtimeStatus, runtimeAttemptTokens, runtimeStatusErr := loadNativeRuntimeStatus(context.Background(), workspaceRoot, changeName)
+	// The Engram store keeps the change's SDD state in Engram, not in a
+	// change directory the archive flow moves, so the status layer has no
+	// archive-coupled home for a change-instance marker there: persisting one
+	// anywhere keyed by change name alone would recreate the #2557
+	// resurrection hazard. The Engram path therefore keeps S1's honest block
+	// (naming both exits) without a consent envelope, and its runtime read
+	// stays instance-less, projecting no granted roots (#2563).
+	runtimeStatus, runtimeAttemptTokens, runtimeStatusErr := loadNativeRuntimeStatus(context.Background(), workspaceRoot, changeName, "")
 	reviewState, reviewStateReason := readReviewTransaction("", artifactsByType["review/transaction"].Content)
 	coreReady := artifacts["proposal"] == ArtifactDone && artifacts["specs"] == ArtifactDone && artifacts["design"] == ArtifactDone && artifacts["tasks"] == ArtifactDone && taskProgress.Total > 0
 	applyState := resolveApplyState(coreReady, taskProgress)
 	blockedReasons := artifactBlockedReasons(artifacts, taskProgress)
-	applyState = applyEditAuthorityBlock(applyState, &blockedReasons, artifactsByType["tasks"].Content, workspaceRoot, []string{workspaceRoot})
+	applyState, _ = applyEditAuthorityBlock(applyState, &blockedReasons, artifactsByType["tasks"].Content, workspaceRoot, []string{workspaceRoot})
 	var governingRef *reviewtransaction.SDDReceiptRef
 	if runtimeStatusErr == nil {
 		var refErr error
@@ -944,7 +998,7 @@ func resolveEngramStatus(workspaceRoot string, requestedChange string, includeIn
 	}
 
 	changeRoot := fmt.Sprintf("engram:sdd/%s", changeName)
-	status := baseStatus(ArtifactStoreEngram, workspaceRoot, &changeName, &changeRoot, nextRecommended, append([]string{}, blockedReasons.genuine...))
+	status := baseStatus(ArtifactStoreEngram, workspaceRoot, nil, &changeName, &changeRoot, nextRecommended, append([]string{}, blockedReasons.genuine...))
 	status.PlanningHome = PlanningHome{Mode: ActionModeRepoLocal, Path: "engram:sdd"}
 	status.ArtifactPaths = artifactPaths
 	status.ContextFiles = artifactPaths
@@ -1356,7 +1410,7 @@ func absOrCWD(path string) (string, error) {
 }
 
 func blockedStatus(store ArtifactStore, workspaceRoot string, changeName *string, changeRoot *string, next string, reasons []string, includeInstructions bool) Status {
-	status := baseStatus(store, workspaceRoot, changeName, changeRoot, next, reasons)
+	status := baseStatus(store, workspaceRoot, nil, changeName, changeRoot, next, reasons)
 	if includeInstructions {
 		instructions := renderPhaseInstructions(status)
 		status.PhaseInstructions = &instructions
@@ -1368,7 +1422,11 @@ func blockedStatus(store ArtifactStore, workspaceRoot string, changeName *string
 // for the store the status actually reports. Issue #2346: it used to hardcode
 // ArtifactStoreOpenSpec and leave callers to relabel the store afterwards,
 // which produced an Engram status carrying an OpenSpec-shaped map.
-func baseStatus(store ArtifactStore, workspaceRoot string, changeName *string, changeRoot *string, next string, reasons []string) Status {
+// grantedRoots extends AllowedEditRoots with the per-change grants the caller
+// projected for the current change instance (#2563, S4b of #2540); this is
+// the single assignment site for edit authority, and it stays outside the
+// #2515 readiness triple.
+func baseStatus(store ArtifactStore, workspaceRoot string, grantedRoots []string, changeName *string, changeRoot *string, next string, reasons []string) Status {
 	emptyPaths := emptyArtifactPaths()
 	if reasons == nil {
 		reasons = []string{}
@@ -1400,7 +1458,7 @@ func baseStatus(store ArtifactStore, workspaceRoot string, changeName *string, c
 		ActionContext: ActionContext{
 			Mode:             ActionModeRepoLocal,
 			WorkspaceRoot:    workspaceRoot,
-			AllowedEditRoots: []string{workspaceRoot},
+			AllowedEditRoots: append([]string{workspaceRoot}, grantedRoots...),
 		},
 		Relationships: Relationships{
 			DependsOn:               []string{},

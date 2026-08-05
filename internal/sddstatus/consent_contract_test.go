@@ -11,17 +11,16 @@ import (
 	"testing"
 )
 
-// sddConsentGrantInvocationShape is the PROVISIONAL grant invocation pin
-// (#2540 phase 1, S4a). S3 does not exist yet; this exact flag set, in this
-// exact order, is what the future `sdd-attempt grant` verb must implement:
+// sddConsentGrantInvocationShape pins the REAL grant invocation as shipped by
+// S3 (#2558) plus S5's reconciliation (#2559), the conscious contract change
+// S4a's provisional pin announced: #2563 updated this pin, the schema, and
+// the fixture together, adding --request-id (found by S3) and
+// --change-instance (added by S5) and admitting the optional
+// --expected-revision a widening grant chains on:
 //
-//	gentle-ai sdd-attempt grant --cwd <repo> --change <name> --root <path>... --actor <actor> --reason <reason>
-//
-// If S3 lands with a different flag set, that is a conscious contract change:
-// update this pin, the schema, and the fixture together, and say so in the
-// PR. It never drifts silently.
+//	gentle-ai sdd-attempt grant --cwd <repo> --change <name> [--expected-revision <rev>] --root <path>... --actor <actor> --reason <reason> --request-id <id> --change-instance <token>
 var sddConsentGrantInvocationShape = regexp.MustCompile(
-	`^gentle-ai sdd-attempt grant --cwd \S+ --change \S+( --root \S+)+ --actor \S+ --reason .+$`)
+	`^gentle-ai sdd-attempt grant --cwd \S+ --change \S+( --expected-revision \S+)?( --root \S+)+ --actor \S+ --reason \S+ --request-id \S+ --change-instance \S+$`)
 
 // sddConsentDeclineInvocationShape pins the decline re-entry: declining
 // persists nothing, so the runnable follow-up is native SDD status for the
@@ -32,8 +31,8 @@ var sddConsentDeclineInvocationShape = regexp.MustCompile(
 func TestSDDIntegrationConsentContractsArePinned(t *testing.T) {
 	root := filepath.Join("..", "..", "contracts", "sdd-integration", "v1")
 	want := map[string]string{
-		"fixtures/consent.fixture.json": "e594f43bad5c35cb70027ef2d36750bb8f0e66d6cf9d6e9e367042a412868596",
-		"schemas/consent.schema.json":   "a71be755920825643e0e7697f370c8a477815be41472dde10eb1100925ae8553",
+		"fixtures/consent.fixture.json": "aecd0f4d3ae85527a33ebc708a7a49d7f9fda99b13ccabd1fbe9b89bbf2c41e9",
+		"schemas/consent.schema.json":   "249e415c09223e75983abf6c55caa0eea57bd3389c23115a123e09da2ce07efb",
 	}
 	for name, expected := range want {
 		payload, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(name)))
@@ -143,10 +142,16 @@ func TestSDDIntegrationConsentValidateRejectsIncompleteEnvelopes(t *testing.T) {
 			result.Choices[0].Answer, result.Choices[1].Answer = result.Choices[1].Answer, result.Choices[0].Answer
 		}},
 		{name: "grant invocation missing a root", mutate: func(result *SDDIntegrationConsentResult) {
-			result.Choices[0].Invocation = "gentle-ai sdd-attempt grant --cwd /workspace/planning --change multi-repo-rollout --root /workspace/service-a --actor maintainer --reason 'rollout'"
+			result.Choices[0].Invocation = "gentle-ai sdd-attempt grant --cwd /workspace/planning --change multi-repo-rollout --root /workspace/service-a --actor maintainer --reason rollout --request-id grant-1 --change-instance sdd-1"
 		}},
 		{name: "grant invocation missing actor", mutate: func(result *SDDIntegrationConsentResult) {
-			result.Choices[0].Invocation = "gentle-ai sdd-attempt grant --cwd /workspace/planning --change multi-repo-rollout --root /workspace/service-a --root /workspace/service-b --reason 'rollout'"
+			result.Choices[0].Invocation = "gentle-ai sdd-attempt grant --cwd /workspace/planning --change multi-repo-rollout --root /workspace/service-a --root /workspace/service-b --reason rollout --request-id grant-1 --change-instance sdd-1"
+		}},
+		{name: "grant invocation missing request-id", mutate: func(result *SDDIntegrationConsentResult) {
+			result.Choices[0].Invocation = "gentle-ai sdd-attempt grant --cwd /workspace/planning --change multi-repo-rollout --root /workspace/service-a --root /workspace/service-b --actor maintainer --reason rollout --change-instance sdd-1"
+		}},
+		{name: "grant invocation missing change-instance", mutate: func(result *SDDIntegrationConsentResult) {
+			result.Choices[0].Invocation = "gentle-ai sdd-attempt grant --cwd /workspace/planning --change multi-repo-rollout --root /workspace/service-a --root /workspace/service-b --actor maintainer --reason rollout --request-id grant-1"
 		}},
 		{name: "decline invocation is not status re-entry", mutate: func(result *SDDIntegrationConsentResult) {
 			result.Choices[1].Invocation = "gentle-ai review status"
@@ -175,4 +180,30 @@ func validSDDConsentResult() SDDIntegrationConsentResult {
 		panic(err)
 	}
 	return consent
+}
+
+// TestEditAuthorityConsentBuilderMatchesFixture pins the shipped fixture to
+// the EXACT envelope the status layer builds (#2563): the fixture is not a
+// hand-maintained example that merely validates, it is the builder's own
+// output for the canonical two-sibling scenario, so contract bytes and
+// production bytes can never drift apart silently. The empty expected
+// revision is the fresh-ledger case the consent flow grants against; a
+// widening grant embeds the committed revision, covered by the shape pin.
+func TestEditAuthorityConsentBuilderMatchesFixture(t *testing.T) {
+	built := newEditAuthorityConsent(
+		"multi-repo-rollout", "/workspace/planning",
+		[]string{"/workspace/service-a", "/workspace/service-b"},
+		"sdd-b2f4c0a1d8e64953a7c15b9d3e0f2a68", "")
+	payload, err := json.MarshalIndent(built, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload = append(payload, '\n')
+	fixture, err := os.ReadFile(filepath.Join("..", "..", "contracts", "sdd-integration", "v1", "fixtures", "consent.fixture.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(payload, fixture) {
+		t.Fatalf("builder output no longer matches the shipped fixture\n--- built ---\n%s\n--- fixture ---\n%s", payload, fixture)
+	}
 }

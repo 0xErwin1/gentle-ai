@@ -1,8 +1,12 @@
 package sddstatus
 
 import (
+	"bytes"
+	"context"
 	"encoding/json"
+	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -182,5 +186,179 @@ func TestEngramTasksTextBlocksApplyOnUnauthorizedTargets(t *testing.T) {
 	}
 	if !strings.Contains(reasons, "blocked(edit_authority_missing)") || !strings.Contains(reasons, wantA) {
 		t.Fatalf("blocked reasons must carry the reason code and name %q: %s", wantA, reasons)
+	}
+}
+
+// TestBlockedEditAuthorityStatusCarriesConsentEnvelope is #2563's (S4b of
+// #2540) end-to-end fixture at the status layer: when a multi-repository
+// change reports blocked(edit_authority_missing), the projected v1 status
+// carries the typed gentle-ai.sdd-integration.consent/v1 envelope whose
+// granted choice names the EXACT runnable grant invocation — including the
+// change-instance token that the status layer itself derives, persists in the
+// change's own directory (so it dies with archive and a recreated change
+// mints a fresh one), and will later use to project the granted roots back.
+func TestBlockedEditAuthorityStatusCarriesConsentEnvelope(t *testing.T) {
+	workspace := t.TempDir() // the workspace itself is NOT a Git repository
+	planning := filepath.Join(workspace, "planning")
+	serviceA := filepath.Join(workspace, "service-a")
+	serviceB := filepath.Join(workspace, "service-b")
+	initEditAuthorityGitRepo(t, planning, true)
+	initEditAuthorityGitRepo(t, serviceA, false)
+	initEditAuthorityGitRepo(t, serviceB, false)
+	changeRoot := seedReadyChange(t, planning, "multi-repo-rollout", strings.Join([]string{
+		"- [ ] 1.1 Update `../service-a/internal/api/handler.go` to accept the new header",
+		"- [ ] 1.2 Update `../service-b/internal/worker/consume.go` to forward the header",
+		"",
+	}, "\n"))
+
+	status, err := Resolve(ResolveOptions{CWD: planning, ChangeName: "multi-repo-rollout"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	projected, err := ProjectStatusV1(status)
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload, err := json.Marshal(projected)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var document map[string]json.RawMessage
+	if err := json.Unmarshal(payload, &document); err != nil {
+		t.Fatal(err)
+	}
+	raw, ok := document["consent"]
+	if !ok {
+		t.Fatalf("blocked(edit_authority_missing) status carries no consent envelope: %s", payload)
+	}
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	var consent SDDIntegrationConsentResult
+	if err := decoder.Decode(&consent); err != nil {
+		t.Fatalf("consent block does not decode into the S4a contract type: %v", err)
+	}
+	if err := consent.Validate(); err != nil {
+		t.Fatalf("emitted consent envelope fails its own contract validation: %v", err)
+	}
+
+	wantA := realPath(t, serviceA)
+	wantB := realPath(t, serviceB)
+	if !reflect.DeepEqual(consent.MissingRoots, []string{wantA, wantB}) {
+		t.Fatalf("consent.MissingRoots = %v, want [%s %s]", consent.MissingRoots, wantA, wantB)
+	}
+	granted := consent.Choices[0].Invocation
+	if !sddConsentGrantInvocationShape.MatchString(granted) {
+		t.Fatalf("granted invocation does not match the real grant verb shape: %q", granted)
+	}
+
+	// The derivation rule: the embedded change-instance token IS the marker
+	// persisted in the change's own directory, so the grant the human
+	// consents to binds exactly the identity a later status read projects.
+	marker, err := os.ReadFile(filepath.Join(changeRoot, ".gentle-ai-instance"))
+	if err != nil {
+		t.Fatalf("blocked status persisted no change-instance marker: %v", err)
+	}
+	token := strings.TrimSpace(string(marker))
+	if token == "" || !strings.Contains(granted, " --change-instance "+token) {
+		t.Fatalf("granted invocation %q does not carry the persisted instance token %q", granted, token)
+	}
+
+	// Stability within the change lifecycle: a second status resolves the
+	// SAME token and renders the same invocation, so a retried conversation
+	// never mints a rival identity for one change instance.
+	again, err := Resolve(ResolveOptions{CWD: planning, ChangeName: "multi-repo-rollout"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	againProjected, err := ProjectStatusV1(again)
+	if err != nil {
+		t.Fatal(err)
+	}
+	againPayload, err := json.Marshal(againProjected)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(againPayload), " --change-instance "+token) {
+		t.Fatalf("second status did not reuse the persisted instance token %q: %s", token, againPayload)
+	}
+}
+
+// TestRecreatedChangeNameDoesNotInheritGrantedRoots proves the S5 containment
+// through S4b's wiring: a covering grant expands AllowedEditRoots and readies
+// apply for THIS change instance, but recreating the change under the same
+// archived name (a fresh change directory, hence a fresh minted marker)
+// projects none of the old grants — the recreated change is blocked again
+// with a new instance token and planning-only edit authority.
+func TestRecreatedChangeNameDoesNotInheritGrantedRoots(t *testing.T) {
+	workspace := t.TempDir() // the workspace itself is NOT a Git repository
+	planning := filepath.Join(workspace, "planning")
+	serviceA := filepath.Join(workspace, "service-a")
+	initEditAuthorityGitRepo(t, planning, true)
+	initEditAuthorityGitRepo(t, serviceA, false)
+	tasks := strings.Join([]string{
+		"- [ ] 1.1 Update `../service-a/internal/api/handler.go` to accept the new header",
+		"",
+	}, "\n")
+	changeRoot := seedReadyChange(t, planning, "multi-repo-rollout", tasks)
+
+	// Blocked status mints the marker; grant against exactly that identity.
+	if _, err := Resolve(ResolveOptions{CWD: planning, ChangeName: "multi-repo-rollout"}); err != nil {
+		t.Fatal(err)
+	}
+	token, err := readChangeInstanceMarker(changeRoot)
+	if err != nil || token == "" {
+		t.Fatalf("blocked status persisted no instance marker: %q, %v", token, err)
+	}
+	wantA := realPath(t, serviceA)
+	opened, err := OpenRuntimeStore(context.Background(), planning, "multi-repo-rollout")
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := opened.ForInstance(token)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Grant(context.Background(), GrantRootsRequest{
+		RequestID: "grant-recreation-fixture", Roots: []string{wantA},
+		Reason: "maintainer authorized the sibling repository", Actor: "maintainer",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// The covering grant clears detection and expands the single assignment
+	// site: AllowedEditRoots = planning + granted roots, apply is ready.
+	granted, err := Resolve(ResolveOptions{CWD: planning, ChangeName: "multi-repo-rollout"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if granted.ApplyState != ApplyReady || granted.NextRecommended != "apply" {
+		t.Fatalf("post-grant status = %q/%q with reasons %v, want ready/apply",
+			granted.ApplyState, granted.NextRecommended, granted.BlockedReasons)
+	}
+	if !reflect.DeepEqual(granted.ActionContext.AllowedEditRoots, []string{planning, wantA}) {
+		t.Fatalf("AllowedEditRoots = %v, want [%s %s]", granted.ActionContext.AllowedEditRoots, planning, wantA)
+	}
+
+	// Archive moves the change directory away; a recreated change under the
+	// same name starts from a fresh directory. The old grants must not
+	// resurrect: fresh marker, planning-only authority, blocked again.
+	if err := os.RemoveAll(changeRoot); err != nil {
+		t.Fatal(err)
+	}
+	seedReadyChange(t, planning, "multi-repo-rollout", tasks)
+	recreated, err := Resolve(ResolveOptions{CWD: planning, ChangeName: "multi-repo-rollout"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if recreated.ApplyState != ApplyBlocked {
+		t.Fatalf("recreated change inherited the archived grant: %q with roots %v",
+			recreated.ApplyState, recreated.ActionContext.AllowedEditRoots)
+	}
+	if !reflect.DeepEqual(recreated.ActionContext.AllowedEditRoots, []string{planning}) {
+		t.Fatalf("recreated AllowedEditRoots = %v, want [%s]", recreated.ActionContext.AllowedEditRoots, planning)
+	}
+	fresh, err := readChangeInstanceMarker(changeRoot)
+	if err != nil || fresh == "" || fresh == token {
+		t.Fatalf("recreated change did not mint a fresh instance token: %q vs %q (%v)", fresh, token, err)
 	}
 }
