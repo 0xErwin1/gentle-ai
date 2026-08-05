@@ -17,8 +17,8 @@ func TestImmutableReviewRuntimeMatrix(t *testing.T) {
 		transport reviewImmutableTransport
 		supported bool
 	}{
-		{name: "Claude prompt carried lacks a proven fresh executor", runtime: string(model.AgentClaudeCode), eligible: true, transport: reviewImmutableTransportUnsupported},
-		{name: "OpenCode provider injection lacks a pre-START boundary", runtime: string(model.AgentOpenCode), eligible: true, transport: reviewImmutableTransportUnsupported},
+		{name: "Claude prompt carried fresh executor", runtime: string(model.AgentClaudeCode), eligible: true, transport: reviewImmutableTransportClaudePromptCarried, supported: true},
+		{name: "OpenCode provider injected fresh executor", runtime: string(model.AgentOpenCode), eligible: true, transport: reviewImmutableTransportOpenCodeProviderInjected, supported: true},
 		{name: "Codex is pending #2208", runtime: string(model.AgentCodex), eligible: true, transport: reviewImmutableTransportUnsupported},
 		{name: "Pi", runtime: string(model.AgentPi), transport: reviewImmutableTransportUnsupported},
 		{name: "Kilo", runtime: string(model.AgentKilocode), transport: reviewImmutableTransportUnsupported},
@@ -63,8 +63,6 @@ func TestUnsupportedImmutableReviewTransportStopsBeforeRepositoryOrAuthority(t *
 		// stays reviewImmutableTransportUnsupportedCode for every runtime.
 		startCode string
 	}{
-		{name: "Claude", runtime: string(model.AgentClaudeCode), startCode: reviewImmutableTransportUnsupportedCode},
-		{name: "OpenCode", runtime: string(model.AgentOpenCode), startCode: reviewImmutableTransportUnsupportedCode},
 		{name: "Codex", runtime: string(model.AgentCodex), startCode: reviewImmutableTransportUnsupportedCode},
 		{name: "Pi", runtime: string(model.AgentPi), startCode: reviewTransportCapabilityUnsupportedCode},
 		{name: "Kilo", runtime: string(model.AgentKilocode), startCode: reviewImmutableTransportUnsupportedCode},
@@ -121,10 +119,6 @@ func TestUnsupportedImmutableReviewTransportStopsBeforeRepositoryOrAuthority(t *
 
 	repo := initReviewCLIRepo(t)
 	for _, args := range [][]string{
-		{"status", "--contract", ReviewIntegrationContractV2, "--agent", string(model.AgentClaudeCode), "--next-transition", "--cwd", repo},
-		{"start", "--contract", ReviewIntegrationContractV2, "--agent", string(model.AgentClaudeCode), "--target", target, "--projection", "workspace", "--cwd", repo},
-		{"status", "--contract", ReviewIntegrationContractV2, "--agent", string(model.AgentOpenCode), "--next-transition", "--cwd", repo},
-		{"start", "--contract", ReviewIntegrationContractV2, "--agent", string(model.AgentOpenCode), "--target", target, "--projection", "workspace", "--cwd", repo},
 		{"status", "--contract", ReviewIntegrationContractV2, "--agent", string(model.AgentKilocode), "--next-transition", "--cwd", repo},
 		{"start", "--contract", ReviewIntegrationContractV2, "--agent", string(model.AgentCodex), "--target", target, "--projection", "workspace", "--cwd", repo},
 	} {
