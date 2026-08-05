@@ -182,6 +182,7 @@ func RunInstall(args []string, detection system.DetectionResult) (InstallResult,
 	orchestrator := pipeline.NewOrchestrator(pipeline.DefaultRollbackPolicy())
 	result.Execution = orchestrator.Execute(stagePlan)
 	runtime.state.cleanupRollbackSnapshot()
+	runtime.state.cleanupCompatibilityTransaction()
 	if result.Execution.Err != nil {
 		return result, fmt.Errorf("execute install pipeline: %w", result.Execution.Err)
 	}
@@ -555,9 +556,10 @@ type installRuntime struct {
 }
 
 type runtimeState struct {
-	manifest            backup.Manifest
-	rollbackSnapshotDir string
-	piCodeGraph         *communitytool.PiCodeGraphResult
+	manifest                 backup.Manifest
+	rollbackSnapshotDir      string
+	piCodeGraph              *communitytool.PiCodeGraphResult
+	compatibilityTransaction compatibilityRefreshTransaction
 
 	// engramVersionResolved, engramVersion, and engramVersionErr cache the
 	// single `engram version` invocation performed by componentApplyStep.Run
@@ -580,9 +582,32 @@ func (s *runtimeState) cleanupRollbackSnapshot() {
 	s.rollbackSnapshotDir = ""
 }
 
+func (s *runtimeState) cleanupCompatibilityTransaction() {
+	if s == nil || s.compatibilityTransaction == nil {
+		return
+	}
+	if err := s.compatibilityTransaction.Close(); err != nil {
+		log.Printf("compatibility: close transaction: %v", err)
+	}
+	s.compatibilityTransaction = nil
+}
+
+func (s *runtimeState) compatibilityChangedFiles() []string {
+	if s == nil || s.compatibilityTransaction == nil {
+		return nil
+	}
+	return s.compatibilityTransaction.ChangedFiles()
+}
+
 func newInstallRuntime(homeDir string, scope InstallScope, channel InstallChannel, selection model.Selection, resolved planner.ResolvedPlan, profile system.PlatformProfile) (*installRuntime, error) {
 	backupRoot := filepath.Join(homeDir, ".gentle-ai", "backups")
+	compatibilityTransaction, err := newCompatibilityRefreshTransaction(homeDir, resolved.OrderedComponents, selection)
+	if err != nil {
+		return nil, err
+	}
+	state := &runtimeState{compatibilityTransaction: compatibilityTransaction}
 	if err := os.MkdirAll(backupRoot, 0o755); err != nil {
+		state.cleanupCompatibilityTransaction()
 		return nil, fmt.Errorf("create backup root directory %q: %w", backupRoot, err)
 	}
 
@@ -598,7 +623,7 @@ func newInstallRuntime(homeDir string, scope InstallScope, channel InstallChanne
 		profile:      profile,
 		channel:      channel,
 		backupRoot:   backupRoot,
-		state:        &runtimeState{},
+		state:        state,
 	}, nil
 }
 
@@ -677,10 +702,12 @@ func (r *installRuntime) stagePlan() pipeline.StagePlan {
 
 	if needsCompatibilitySkillsRefresh(r.resolved.OrderedComponents) {
 		apply = append(apply, compatibilitySkillsRefreshStep{
-			id:         "component:compatibility-skills-refresh",
-			homeDir:    r.homeDir,
-			components: r.resolved.OrderedComponents,
-			selection:  r.selection,
+			id:          "component:compatibility-skills-refresh",
+			homeDir:     r.homeDir,
+			components:  r.resolved.OrderedComponents,
+			selection:   r.selection,
+			transaction: r.state.compatibilityTransaction,
+			anchored:    usesAnchoredCompatibilityTransaction(),
 		})
 	}
 	if containsAgent(r.resolved.Agents, model.AgentPi) {
@@ -1824,7 +1851,7 @@ func backupTargets(homeDir, workspaceDir string, scope InstallScope, selection m
 	for _, path := range adapterSkillPaths {
 		paths[path] = struct{}{}
 	}
-	if needsCompatibilitySkillsRefresh(resolved.OrderedComponents) {
+	if !usesAnchoredCompatibilityTransaction() && needsCompatibilitySkillsRefresh(resolved.OrderedComponents) {
 		skillDir, ok, err := compatibilitySkillsDir(homeDir)
 		if err != nil {
 			return nil, err
