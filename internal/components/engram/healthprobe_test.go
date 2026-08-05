@@ -42,7 +42,7 @@ func TestHelperEngramMCPProcess(t *testing.T) {
 	defer os.Exit(0)
 
 	switch mode {
-	case "healthy", "rpc-error", "null-result", "scalar-result", "missing-protocol-version", "invalid-capabilities", "missing-server-info", "invalid-server-info":
+	case "healthy", "rpc-error", "null-result", "scalar-result", "missing-protocol-version", "invalid-capabilities", "missing-server-info", "invalid-server-info", "missing-jsonrpc", "wrong-jsonrpc", "null-jsonrpc", "request-shaped-result", "missing-result", "malformed-result", "early-exit", "stray-stdout-then-healthy", "mismatched-id-then-healthy", "trailing-stdout-after-healthy":
 		reader := bufio.NewReader(os.Stdin)
 		line, err := reader.ReadString('\n')
 		if err != nil {
@@ -59,6 +59,42 @@ func TestHelperEngramMCPProcess(t *testing.T) {
 			fmt.Printf("{\"jsonrpc\":\"2.0\",\"id\":%s,\"error\":{\"code\":-32603,\"message\":\"store locked\"}}\n", req.ID.String())
 			return
 		}
+		if mode == "early-exit" {
+			return
+		}
+		healthyResponse := fmt.Sprintf("{\"jsonrpc\":\"2.0\",\"id\":%s,\"result\":{\"protocolVersion\":\"2024-11-05\",\"capabilities\":{},\"serverInfo\":{\"name\":\"fake-engram\",\"version\":\"0\"}}}", req.ID.String())
+		switch mode {
+		case "missing-jsonrpc":
+			fmt.Printf("{\"id\":%s,\"result\":{\"protocolVersion\":\"2024-11-05\",\"capabilities\":{},\"serverInfo\":{\"name\":\"fake-engram\",\"version\":\"0\"}}}\n", req.ID.String())
+			return
+		case "wrong-jsonrpc":
+			fmt.Printf("{\"jsonrpc\":\"1.0\",\"id\":%s,\"result\":{\"protocolVersion\":\"2024-11-05\",\"capabilities\":{},\"serverInfo\":{\"name\":\"fake-engram\",\"version\":\"0\"}}}\n", req.ID.String())
+			return
+		case "null-jsonrpc":
+			fmt.Printf("{\"jsonrpc\":null,\"id\":%s,\"result\":{\"protocolVersion\":\"2024-11-05\",\"capabilities\":{},\"serverInfo\":{\"name\":\"fake-engram\",\"version\":\"0\"}}}\n", req.ID.String())
+			return
+		case "request-shaped-result":
+			fmt.Printf("{\"jsonrpc\":\"2.0\",\"id\":%s,\"method\":\"notifications/test\",\"result\":{\"protocolVersion\":\"2024-11-05\",\"capabilities\":{},\"serverInfo\":{\"name\":\"fake-engram\",\"version\":\"0\"}}}\n", req.ID.String())
+			return
+		case "missing-result":
+			fmt.Printf("{\"jsonrpc\":\"2.0\",\"id\":%s}\n", req.ID.String())
+			return
+		case "malformed-result":
+			fmt.Printf("{\"jsonrpc\":\"2.0\",\"id\":%s,\"result\":\n", req.ID.String())
+			return
+		case "stray-stdout-then-healthy":
+			fmt.Println("engram mcp starting")
+			fmt.Println(healthyResponse)
+			return
+		case "mismatched-id-then-healthy":
+			fmt.Println(strings.Replace(healthyResponse, `"id":1`, `"id":2`, 1))
+			fmt.Println(healthyResponse)
+			return
+		case "trailing-stdout-after-healthy":
+			fmt.Println(healthyResponse)
+			fmt.Println("engram mcp stopped")
+			return
+		}
 		result := map[string]string{
 			"healthy":                  `{"protocolVersion":"2024-11-05","capabilities":{},"serverInfo":{"name":"fake-engram","version":"0"}}`,
 			"null-result":              `null`,
@@ -69,8 +105,8 @@ func TestHelperEngramMCPProcess(t *testing.T) {
 			"invalid-server-info":      `{"protocolVersion":"2024-11-05","capabilities":{},"serverInfo":{"name":"","version":0}}`,
 		}[mode]
 		if mode == "healthy" {
-			// A stray log line first proves non-JSON output is tolerated.
-			fmt.Println("engram mcp starting")
+			// MCP diagnostics are not protocol frames and therefore belong on stderr.
+			fmt.Fprintln(os.Stderr, "engram mcp starting")
 		}
 		fmt.Printf("{\"jsonrpc\":\"2.0\",\"id\":%s,\"result\":%s}\n", req.ID.String(), result)
 		if mode == "healthy" {
@@ -112,6 +148,7 @@ func TestStdioHandshake_RejectsInvalidInitializeResult(t *testing.T) {
 		{name: "invalid capabilities", mode: "invalid-capabilities"},
 		{name: "missing server info", mode: "missing-server-info"},
 		{name: "invalid server info", mode: "invalid-server-info"},
+		{name: "missing result", mode: "missing-result"},
 	}
 
 	for _, tt := range tests {
@@ -126,12 +163,49 @@ func TestStdioHandshake_RejectsInvalidInitializeResult(t *testing.T) {
 	}
 }
 
+func TestStdioHandshake_EarlyExit(t *testing.T) {
+	setStdioHelperProcess(t, "early-exit")
+
+	err := stdioHandshake(context.Background(), "engram", "mcp", "--tools=agent")
+	if err == nil || !strings.Contains(err.Error(), "exited without answering initialize") {
+		t.Fatalf("stdioHandshake() error = %v, want early-exit error", err)
+	}
+}
+
 func TestStdioHandshake_GarbageOutput(t *testing.T) {
 	setStdioHelperProcess(t, "garbage")
 
 	err := stdioHandshake(context.Background(), "engram", "mcp", "--tools=agent")
-	if err == nil || !strings.Contains(err.Error(), "without answering initialize") {
-		t.Fatalf("stdioHandshake() error = %v, want exited-without-answering error", err)
+	if err == nil || !strings.Contains(err.Error(), "invalid MCP stdout") {
+		t.Fatalf("stdioHandshake() error = %v, want invalid stdout error", err)
+	}
+}
+
+func TestStdioHandshake_RejectsInvalidResponseEnvelope(t *testing.T) {
+	tests := []struct {
+		name string
+		mode string
+		want string
+	}{
+		{name: "missing jsonrpc", mode: "missing-jsonrpc", want: "jsonrpc must be \"2.0\""},
+		{name: "wrong jsonrpc", mode: "wrong-jsonrpc", want: "jsonrpc must be \"2.0\""},
+		{name: "null jsonrpc", mode: "null-jsonrpc", want: "jsonrpc must be \"2.0\""},
+		{name: "request-shaped result", mode: "request-shaped-result", want: "must not include method"},
+		{name: "malformed result", mode: "malformed-result", want: "invalid MCP stdout"},
+		{name: "stray stdout before healthy response", mode: "stray-stdout-then-healthy", want: "invalid MCP stdout"},
+		{name: "mismatched id before healthy response", mode: "mismatched-id-then-healthy", want: "unexpected response id"},
+		{name: "stray stdout after healthy response", mode: "trailing-stdout-after-healthy", want: "invalid MCP stdout"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			setStdioHelperProcess(t, tt.mode)
+
+			err := stdioHandshake(context.Background(), "engram", "mcp", "--tools=agent")
+			if err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("stdioHandshake() error = %v, want %q", err, tt.want)
+			}
+		})
 	}
 }
 
