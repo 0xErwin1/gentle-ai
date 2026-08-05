@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/BurntSushi/toml"
@@ -66,7 +67,7 @@ func stdioHandshake(ctx context.Context, name string, args ...string) error {
 	probeCtx, cancel := context.WithTimeout(ctx, stdioProbeTimeout)
 	defer cancel()
 
-	cmd := execCommandContext(probeCtx, name, args...)
+	cmd := execCommandContext(context.Background(), name, args...)
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		return fmt.Errorf("open engram mcp stdin: %w", err)
@@ -75,13 +76,34 @@ func stdioHandshake(ctx context.Context, name string, args ...string) error {
 	if err != nil {
 		return fmt.Errorf("open engram mcp stdout: %w", err)
 	}
-	if err := cmd.Start(); err != nil {
+	terminateTree, err := startProbeProcessTree(cmd)
+	if err != nil {
 		return fmt.Errorf("start %s: %w", name, err)
 	}
+	var terminateOnce sync.Once
+	var terminateErr error
+	terminate := func() error {
+		terminateOnce.Do(func() { terminateErr = terminateTree() })
+		return terminateErr
+	}
+	stopWatcher := make(chan struct{})
+	watcherDone := make(chan struct{})
+	go func() {
+		defer close(watcherDone)
+		select {
+		case <-probeCtx.Done():
+			_ = terminate()
+			_ = stdout.Close()
+		case <-stopWatcher:
+		}
+	}()
 	waited := false
 	defer func() {
+		close(stopWatcher)
+		<-watcherDone
 		_ = stdin.Close()
-		_ = cmd.Process.Kill()
+		_ = terminate()
+		_ = stdout.Close()
 		if !waited {
 			_ = cmd.Wait()
 		}
@@ -102,7 +124,7 @@ func stdioHandshake(ctx context.Context, name string, args ...string) error {
 		if err := stdin.Close(); err != nil {
 			return fmt.Errorf("close engram mcp stdin: %w", err)
 		}
-		if err := terminateProbeChild(cmd); err != nil {
+		if err := terminate(); err != nil {
 			return err
 		}
 		// Drain before Wait: os/exec closes pipe descriptors when reaping the child.
@@ -111,6 +133,9 @@ func stdioHandshake(ctx context.Context, name string, args ...string) error {
 				return err
 			}
 			return errors.New("engram mcp wrote an unexpected stdout frame after initialize response")
+		}
+		if err := handshakeContextError(ctx, probeCtx); err != nil {
+			return err
 		}
 		if err := scanner.Err(); err != nil {
 			return fmt.Errorf("read engram mcp output: %w", err)
@@ -132,13 +157,6 @@ func stdioHandshake(ctx context.Context, name string, args ...string) error {
 		return fmt.Errorf("read engram mcp output: %w", err)
 	}
 	return errors.New("engram mcp exited without answering initialize")
-}
-
-func terminateProbeChild(cmd *exec.Cmd) error {
-	if err := cmd.Process.Kill(); err != nil && !errors.Is(err, os.ErrProcessDone) {
-		return fmt.Errorf("terminate engram mcp process: %w", err)
-	}
-	return nil
 }
 
 func expectedProbeTermination(err error) bool {

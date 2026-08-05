@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -18,16 +19,20 @@ import (
 // binary re-executing TestHelperEngramMCPProcess in the given mode, so the
 // handshake runs against a real child process speaking real stdio (#2078
 // matrix cell b).
-func setStdioHelperProcess(t *testing.T, mode string) {
+func setStdioHelperProcess(t *testing.T, mode string, env ...string) func() *exec.Cmd {
 	t.Helper()
 	orig := execCommandContext
+	var helper *exec.Cmd
 	execCommandContext = func(ctx context.Context, name string, args ...string) *exec.Cmd {
 		cs := append([]string{"-test.run=TestHelperEngramMCPProcess", "--", name}, args...)
 		cmd := exec.CommandContext(ctx, os.Args[0], cs...)
 		cmd.Env = append(os.Environ(), "GO_ENGRAM_HELPER_MODE="+mode)
+		cmd.Env = append(cmd.Env, env...)
+		helper = cmd
 		return cmd
 	}
 	t.Cleanup(func() { execCommandContext = orig })
+	return func() *exec.Cmd { return helper }
 }
 
 // TestHelperEngramMCPProcess is not a real test: it is the fake engram
@@ -42,7 +47,7 @@ func TestHelperEngramMCPProcess(t *testing.T) {
 	defer os.Exit(0)
 
 	switch mode {
-	case "healthy", "rpc-error", "null-result", "scalar-result", "missing-protocol-version", "invalid-capabilities", "missing-server-info", "invalid-server-info", "missing-jsonrpc", "wrong-jsonrpc", "null-jsonrpc", "request-shaped-result", "missing-result", "malformed-result", "early-exit", "stray-stdout-then-healthy", "mismatched-id-then-healthy", "trailing-stdout-after-healthy":
+	case "healthy", "rpc-error", "null-result", "scalar-result", "missing-protocol-version", "invalid-capabilities", "missing-server-info", "invalid-server-info", "missing-jsonrpc", "wrong-jsonrpc", "null-jsonrpc", "request-shaped-result", "missing-result", "malformed-result", "early-exit", "stray-stdout-then-healthy", "mismatched-id-then-healthy", "trailing-stdout-after-healthy", "descendant-holds-stdout", "descendant-holds-stdout-before-response":
 		reader := bufio.NewReader(os.Stdin)
 		line, err := reader.ReadString('\n')
 		if err != nil {
@@ -95,6 +100,22 @@ func TestHelperEngramMCPProcess(t *testing.T) {
 			// parent can terminate this helper.
 			_, _ = os.Stdout.WriteString(healthyResponse + "\nengram mcp stopped\n")
 			return
+		case "descendant-holds-stdout", "descendant-holds-stdout-before-response":
+			descendant := exec.Command(os.Args[0], "-test.run=TestHelperEngramMCPProcess", "--", "descendant")
+			descendant.Env = append(os.Environ(), "GO_ENGRAM_HELPER_MODE=hold-stdout")
+			descendant.Stdout = os.Stdout
+			descendant.Stderr = os.Stderr
+			if err := descendant.Start(); err != nil {
+				return
+			}
+			if path := os.Getenv("GO_ENGRAM_DESCENDANT_PID_FILE"); path != "" {
+				_ = os.WriteFile(path, []byte(strconv.Itoa(descendant.Process.Pid)), 0o600)
+			}
+			if mode == "descendant-holds-stdout-before-response" {
+				select {}
+			}
+			fmt.Println(healthyResponse)
+			select {}
 		}
 		result := map[string]string{
 			"healthy":                  `{"protocolVersion":"2024-11-05","capabilities":{},"serverInfo":{"name":"fake-engram","version":"0"}}`,
@@ -118,6 +139,141 @@ func TestHelperEngramMCPProcess(t *testing.T) {
 		fmt.Println("this is not a JSON-RPC message")
 	case "silent":
 		select {}
+	case "hold-stdout":
+		select {}
+	}
+}
+
+func TestStdioHandshake_TerminatesDescendantHoldingStdout(t *testing.T) {
+	pidPath := filepath.Join(t.TempDir(), "descendant.pid")
+	helperCommand := setStdioHelperProcess(t, "descendant-holds-stdout", "GO_ENGRAM_DESCENDANT_PID_FILE="+pidPath)
+	result := make(chan error, 1)
+	finished := make(chan struct{})
+	go func() {
+		defer close(finished)
+		result <- stdioHandshake(context.Background(), "engram", "mcp", "--tools=agent")
+	}()
+
+	pid := waitForHelperPID(t, pidPath)
+	t.Cleanup(func() {
+		terminateTestProcess(pid)
+		select {
+		case <-finished:
+		case <-time.After(time.Second):
+			t.Error("stdioHandshake() goroutine did not exit after descendant cleanup")
+		}
+	})
+
+	select {
+	case err := <-result:
+		if err != nil {
+			t.Fatalf("stdioHandshake() error = %v, want nil", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("stdioHandshake() waited for a descendant that inherited stdout")
+	}
+
+	command := helperCommand()
+	if command == nil {
+		t.Fatal("stdioHandshake() did not start its helper child")
+	}
+	if command.ProcessState == nil {
+		t.Fatalf("stdioHandshake() did not reap its direct child: state=%#v", command.ProcessState)
+	}
+	assertTestProcessExited(t, pid)
+}
+
+func TestStdioHandshake_TerminatesDescendantOnContextEnd(t *testing.T) {
+	tests := []struct {
+		name       string
+		newContext func() (context.Context, context.CancelFunc)
+		cancel     bool
+		want       error
+	}{
+		{
+			name: "deadline",
+			newContext: func() (context.Context, context.CancelFunc) {
+				return context.WithTimeout(context.Background(), 300*time.Millisecond)
+			},
+			want: context.DeadlineExceeded,
+		},
+		{
+			name: "cancellation",
+			newContext: func() (context.Context, context.CancelFunc) {
+				return context.WithCancel(context.Background())
+			},
+			cancel: true,
+			want:   context.Canceled,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			pidPath := filepath.Join(t.TempDir(), "descendant.pid")
+			helperCommand := setStdioHelperProcess(t, "descendant-holds-stdout-before-response", "GO_ENGRAM_DESCENDANT_PID_FILE="+pidPath)
+			ctx, cancel := tt.newContext()
+			defer cancel()
+			result := make(chan error, 1)
+			finished := make(chan struct{})
+			go func() {
+				defer close(finished)
+				result <- stdioHandshake(ctx, "engram", "mcp", "--tools=agent")
+			}()
+
+			pid := waitForHelperPID(t, pidPath)
+			t.Cleanup(func() {
+				terminateTestProcess(pid)
+				select {
+				case <-finished:
+				case <-time.After(time.Second):
+					t.Error("stdioHandshake() goroutine did not exit after descendant cleanup")
+				}
+			})
+			if tt.cancel {
+				cancel()
+			}
+
+			select {
+			case err := <-result:
+				if !errors.Is(err, tt.want) {
+					t.Fatalf("stdioHandshake() error = %v, want %v", err, tt.want)
+				}
+			case <-time.After(time.Second):
+				t.Fatalf("stdioHandshake() did not return after context %v", tt.want)
+			}
+
+			command := helperCommand()
+			if command == nil || command.ProcessState == nil {
+				t.Fatal("stdioHandshake() did not reap its direct child")
+			}
+			assertTestProcessExited(t, pid)
+		})
+	}
+}
+
+func waitForHelperPID(t *testing.T, path string) int {
+	t.Helper()
+	deadline := time.Now().Add(time.Second)
+	for {
+		raw, err := os.ReadFile(path)
+		if err == nil {
+			pid, parseErr := strconv.Atoi(string(raw))
+			if parseErr != nil || pid <= 0 {
+				t.Fatalf("descendant pid = %q, parse error = %v", raw, parseErr)
+			}
+			return pid
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("wait for descendant pid: %v", err)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+func terminateTestProcess(pid int) {
+	process, err := os.FindProcess(pid)
+	if err == nil {
+		_ = process.Kill()
 	}
 }
 
