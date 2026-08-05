@@ -17,6 +17,13 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v2/internal/update"
 )
 
+// runStrategy preserves the boolean assertion seam used by legacy strategy
+// tests. Production callers use runStrategyWithOutcome directly.
+func runStrategy(ctx context.Context, r update.UpdateResult, profile system.PlatformProfile, preflightDestination ...string) (bool, error) {
+	outcome, err := runStrategyWithOutcome(ctx, r, profile, preflightDestination...)
+	return outcome.exitRequested, err
+}
+
 func TestMain(m *testing.M) {
 	if err := os.Unsetenv("GENTLE_AI_CHANNEL"); err != nil {
 		panic(err)
@@ -600,7 +607,7 @@ func TestRunStrategyOpenCodePluginUpgradesMaterializedPackage(t *testing.T) {
 			NpmPackage:    pkg,
 		},
 		InstalledVersion: "0.1.0",
-		LatestVersion:    "0.2.0",
+		LatestVersion:    " 0.2.0 ",
 	}, system.PlatformProfile{PackageManager: "brew"})
 	if err != nil {
 		t.Fatalf("runStrategy OpenCode plugin: unexpected error: %v", err)
@@ -612,7 +619,7 @@ func TestRunStrategyOpenCodePluginUpgradesMaterializedPackage(t *testing.T) {
 	if gotName != "bun" {
 		t.Fatalf("exec name = %q, want bun", gotName)
 	}
-	wantArgs := []string{"add", pkg + "@latest", "@opencode-ai/plugin@latest"}
+	wantArgs := []string{"add", pkg + "@0.2.0", "@opencode-ai/plugin@latest"}
 	if strings.Join(gotArgs, " ") != strings.Join(wantArgs, " ") {
 		t.Fatalf("exec args = %v, want %v", gotArgs, wantArgs)
 	}
@@ -638,6 +645,56 @@ func TestRunStrategyOpenCodePluginUpgradesMaterializedPackage(t *testing.T) {
 	}
 	if gotCwd != wantCwd {
 		t.Fatalf("command cwd = %q, want %q", gotCwd, wantCwd)
+	}
+}
+
+func TestRunStrategyOpenCodePluginRejectsEmptyExpectedVersion(t *testing.T) {
+	origHomeDir, origLookPath, origExecCommand := openCodeHomeDir, lookPathCommand, execCommand
+	t.Cleanup(func() {
+		openCodeHomeDir, lookPathCommand, execCommand = origHomeDir, origLookPath, origExecCommand
+	})
+
+	home := t.TempDir()
+	opencodeDir := filepath.Join(home, ".config", "opencode")
+	pkg := "opencode-subagent-statusline"
+	pkgDir := filepath.Join(opencodeDir, "node_modules", pkg)
+	if err := os.MkdirAll(pkgDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(pkgDir, "package.json"), []byte(`{"version":"0.7.1"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	openCodeHomeDir = func() (string, error) { return home, nil }
+	lookPathCommand = func(file string) (string, error) {
+		if file == "bun" {
+			return "/usr/bin/bun", nil
+		}
+		return "", errors.New("not found")
+	}
+	execCalled := false
+	execCommand = func(name string, args ...string) *exec.Cmd {
+		execCalled = true
+		return mockCmd("true")
+	}
+
+	_, err := runStrategyWithOutcome(context.Background(), update.UpdateResult{
+		Tool: update.ToolInfo{
+			Name:          pkg,
+			InstallMethod: update.InstallOpenCodePlugin,
+			NpmPackage:    pkg,
+		},
+		LatestVersion: "  ",
+		Status:        update.UpdateAvailable,
+	}, system.PlatformProfile{})
+	if err == nil {
+		t.Fatal("expected empty expected version to be rejected")
+	}
+	hint, ok := AsManualFallback(err)
+	if !ok || !strings.Contains(hint, "expected version is empty") {
+		t.Fatalf("error = %T %v, want an actionable empty-version fallback", err, err)
+	}
+	if execCalled {
+		t.Fatal("package manager must not run without a pinned expected version")
 	}
 }
 
@@ -787,7 +844,7 @@ func TestRunStrategyOpenCodePluginRegisteredPendingRunsPackageManager(t *testing
 	if gotName != "npm" {
 		t.Fatalf("exec name = %q, want npm", gotName)
 	}
-	wantArgs := []string{"install", "--save", "--no-audit", "--no-fund", pkg + "@latest", "@opencode-ai/plugin@latest"}
+	wantArgs := []string{"install", "--save", "--no-audit", "--no-fund", pkg + "@1.2.0", "@opencode-ai/plugin@latest"}
 	if strings.Join(gotArgs, " ") != strings.Join(wantArgs, " ") {
 		t.Fatalf("exec args = %v, want %v", gotArgs, wantArgs)
 	}
@@ -832,7 +889,7 @@ func TestRunStrategyOpenCodePluginNpmERESOLVERetriesWithLegacyPeerDeps(t *testin
 	if len(callHistory) != 2 {
 		t.Fatalf("expected 2 exec calls (initial + retry), got %d", len(callHistory))
 	}
-	wantRetry := []string{"npm", "install", "--save", "--no-audit", "--no-fund", "--legacy-peer-deps", "opencode-sdd-engram-manage@latest", "@opencode-ai/plugin@latest"}
+	wantRetry := []string{"npm", "install", "--save", "--no-audit", "--no-fund", "--legacy-peer-deps", "opencode-sdd-engram-manage@1.2.0", "@opencode-ai/plugin@latest"}
 	if strings.Join(callHistory[1], " ") != strings.Join(wantRetry, " ") {
 		t.Fatalf("retry command = %v, want %v", callHistory[1], wantRetry)
 	}

@@ -60,9 +60,9 @@ type strategyOutcome struct {
 	observedVersion string
 }
 
-// runStrategy executes the upgrade for a single tool using the appropriate strategy
-// for the given platform profile. It preserves the historical return contract
-// for callers that only need the exit-request flag.
+// runStrategyWithOutcome executes the upgrade for a single tool using the
+// appropriate strategy for the given platform profile. It returns both the
+// exit-request flag and any version observed after the strategy completes.
 //
 // Strategy routing:
 //   - brew profile → brewUpgrade (regardless of tool's declared method)
@@ -74,11 +74,6 @@ type strategyOutcome struct {
 //   - script method + windows → manualFallback
 //   - OpenCode plugin method → update materialized package in ~/.config/opencode when possible
 //   - unknown method → manualFallback with explicit message
-func runStrategy(ctx context.Context, r update.UpdateResult, profile system.PlatformProfile, preflightDestination ...string) (bool, error) {
-	outcome, err := runStrategyWithOutcome(ctx, r, profile, preflightDestination...)
-	return outcome.exitRequested, err
-}
-
 func runStrategyWithOutcome(ctx context.Context, r update.UpdateResult, profile system.PlatformProfile, preflightDestination ...string) (strategyOutcome, error) {
 	ownership := update.HomebrewNone
 	if profile.PackageManager == "brew" && r.Tool.InstallMethod != update.InstallOpenCodePlugin {
@@ -161,7 +156,11 @@ func opencodePluginUpgrade(ctx context.Context, r update.UpdateResult) (string, 
 	default:
 	}
 
-	targets := []string{pkg + "@latest", "@opencode-ai/plugin@latest"}
+	expectedVersion := strings.TrimSpace(r.LatestVersion)
+	if expectedVersion == "" {
+		return "", &ManualFallbackError{Hint: fmt.Sprintf("OpenCode plugin %s upgrade cannot be pinned because the expected version is empty; rerun the update check and try again.", pkg)}
+	}
+	targets := []string{pkg + "@" + expectedVersion, "@opencode-ai/plugin@latest"}
 	var cmd *exec.Cmd
 	switch pm {
 	case "bun":
@@ -199,7 +198,7 @@ func opencodePluginUpgrade(ctx context.Context, r update.UpdateResult) (string, 
 	}
 
 	observedVersion, err := inspectOpenCodePluginVersion(opencodeDir, pkg)
-	if err != nil || observedVersion != strings.TrimSpace(r.LatestVersion) {
+	if err != nil || observedVersion != expectedVersion {
 		return "", &ManualFallbackError{Hint: openCodePluginVerificationHint(r, pkg, opencodeDir, observedVersion, err)}
 	}
 	return observedVersion, nil
