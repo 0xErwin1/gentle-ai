@@ -343,6 +343,9 @@ type reviewAuthorityEvaluation struct {
 	Result       reviewtransaction.GateResult
 	Reason       string
 	CompactState *reviewtransaction.CompactState
+	// Blocking distinguishes a discovered non-allow authority from an absent
+	// governing receipt, so stale verification can preserve its resolution path.
+	Blocking bool
 	// Absent reports that no review authority GOVERNS this change: the change
 	// supplied no review artifact, and discovery found either no terminal native
 	// receipt or only receipts whose terminal evaluation cannot govern the
@@ -486,6 +489,10 @@ func applyReviewGateEvaluation(status *Status, evaluation reviewAuthorityEvaluat
 	if evaluation.Missing {
 		return
 	}
+	if status.Dependencies.Verify != DependencyAllDone {
+		status.ReviewGate = &ReviewGateState{Result: evaluation.Result, Reason: evaluation.Reason}
+		return
+	}
 	blockReviewGate(status, evaluation.Result, evaluation.Reason)
 }
 
@@ -559,6 +566,7 @@ func resolveReviewAuthority(ctx context.Context, repo, receiptPath, receiptConte
 	if len(blockers) > 0 {
 		selected := blockers[0]
 		selected.Absent = !explicit
+		selected.Blocking = true
 		return selected
 	}
 	selected := stale[0]
