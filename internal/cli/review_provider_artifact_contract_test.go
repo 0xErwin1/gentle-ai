@@ -17,7 +17,7 @@ func TestReviewProviderArtifactV1ContractsArePinned(t *testing.T) {
 	want := map[string]string{
 		"fixtures/capabilities-v1.4.fixture.json": "84e0db457b76b97b35c2be772dfc647f9eab66810ea98f64fed85645c3c266ba",
 		"fixtures/start.fixture.json":             "334c8f94d4e1e6b8abed986f404cd48c76439c8379609fd50d0b015a0d6c9423",
-		"fixtures/start-v2.fixture.json":          "563593f2c49602d69550093255f2044cddbbb71d10b2e28869641bea7e9ff38b",
+		"fixtures/start-v2.fixture.json":          "aff6852b98d38296ca0b2d407af10c484ab6e6a86b1c5ac5475d661bf3e548d4",
 		"fixtures/status.fixture.json":            "f3325ee044cca46e7cdd3d440c2deafecf98db2d0076e150be51c07bc1e1a7ae",
 		"fixtures/status-v2.fixture.json":         "2187532ffa63c74e86ee96ea341ca8ded52e769a96e52eed8fd6c1b59f44815b",
 		"fixtures/status-ambiguous.fixture.json":  "ee695fd58ba72adfb3b51dfd16432a177498173a45bfcb594d6bdc53bfa32e6e",
