@@ -91,24 +91,24 @@ func TestBoundedReviewConsentLocalizationPreservesMachineDomain(t *testing.T) {
 func TestBoundedReviewContractRequiresRuntimeBoundReviewerContext(t *testing.T) {
 	content := boundedReviewContract()
 	for _, want := range []string{
+		"The active host/orchestrator and fresh reviewer executor are distinct roles",
+		"Prompt prose coordinates launch; it never proves isolation",
+		"Claude Code and OpenCode advertise immutable reviewer execution",
+		"Claude's generated reviewer has no live tools",
+		"OpenCode's provider plugin replaces the task prompt",
+		"Prompt prose alone never proves either boundary",
+		"Codex and Kilo remain dormant",
+		"compiled capability is authoritative before repository, target, authority, collection, or process work",
+		"normal SDD and ordinary agent support remain available",
 		"Never hand candidate bytes through `/tmp`",
 		"another external file",
 		"a repository scratch file",
 		"`GENTLE_AI_FROZEN_CANDIDATE_CONTEXT`",
-		"Claude Code carries immutable candidate evidence directly in the reviewer task prompt",
-		"path evidence for every manifest index in exact order",
-		"gentle-ai review inspect-candidate --repository-context <repository_context> --expected-revision <revision> --lineage <lineage> --target <target> --lens <lens> --order <order> --operation <operation>",
-		"its lens agents expose no shell outside prompt-carried context",
-		"Claude Code is the only supported immutable receipt-review runtime",
-		"OpenCode and Codex are eligible but transport-disabled",
-		"Pi, Kilo, and unknown identities are ineligible",
-		"before repository, target, authority, collection, or process work",
 		"read-only native Git commands against those exact immutable trees",
 		"compact `--name-status`/`--numstat` discovery",
 		"replacement objects, external diff and textconv, forces `--text`",
 		"literal pathspecs",
 		"Never pass `--binary`",
-		"Claude Code carries immutable candidate evidence only in its provider-built prompt",
 		"read live worktree/index/HEAD",
 	} {
 		if !strings.Contains(content, want) {
