@@ -2,10 +2,12 @@ package cli
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -63,7 +65,7 @@ func TestOpaqueRepositoryContextResolutionNamesDistinctCauses(t *testing.T) {
 					t.Fatal(err)
 				}
 			},
-			want: "no such file or directory",
+			want: opaqueNativeCause("no such file or directory", "The system cannot find the file specified."),
 		},
 		{
 			name: "authority-record-unparsable",
@@ -91,7 +93,13 @@ func TestOpaqueRepositoryContextResolutionNamesDistinctCauses(t *testing.T) {
 			messages[tt.name] = message
 		})
 	}
-	assertPairwiseDistinct(t, messages, len(cases))
+	wantMessages := len(cases)
+	if runtime.GOOS == "windows" {
+		// The Git shim is a POSIX shell script, so Windows exercises the two
+		// native filesystem roots while retaining their distinct-cause proof.
+		wantMessages -= 2
+	}
+	assertPairwiseDistinct(t, messages, wantMessages)
 }
 
 // TestOpaqueRepositoryContextCaptureNamesDistinctCauses covers the collapse
@@ -122,7 +130,7 @@ func TestOpaqueRepositoryContextCaptureNamesDistinctCauses(t *testing.T) {
 					t.Fatal(err)
 				}
 			},
-			want: "not a directory",
+			want: opaqueNativeCause("not a directory", "unsafe RAR authority path"),
 		},
 	}
 	messages := make(map[string]string, len(cases))
@@ -166,7 +174,7 @@ func TestOpaqueRepositoryContextCauseIsScrubbed(t *testing.T) {
 	if strings.Contains(message, repo) || strings.Contains(message, lineage+"/review-state.json") {
 		t.Fatalf("forwarded cause leaked an absolute path: %s", message)
 	}
-	if !strings.Contains(message, "no such file or directory") {
+	if !strings.Contains(message, opaqueNativeCause("no such file or directory", "The system cannot find the file specified.")) {
 		t.Fatalf("scrubbing removed the cause along with the path: %s", message)
 	}
 	if scrubbed := reviewScrubDefectReportField(message); scrubbed != message {
@@ -185,6 +193,13 @@ func assertOpaqueFailureNamesCause(t *testing.T, message, code, wantCause, repo 
 	if strings.Contains(message, repo) {
 		t.Fatalf("failure leaked a private path: %s", message)
 	}
+}
+
+func opaqueNativeCause(unix, windows string) string {
+	if runtime.GOOS == "windows" {
+		return windows
+	}
+	return unix
 }
 
 // assertPairwiseDistinct is the whole point of these tests: every root that
@@ -249,32 +264,35 @@ func admissibleOpaqueReviewerResult(t *testing.T, binding []string, evidence str
 func TestOpaqueRepositoryContextPreserveNamesDistinctCauses(t *testing.T) {
 	cases := []struct {
 		name    string
-		arrange func(t *testing.T, incidents string)
+		arrange func(t *testing.T, repo, lineage string)
 		want    string
 	}{
 		{
 			name: "incidents-path-is-a-file",
-			arrange: func(t *testing.T, incidents string) {
-				if err := os.MkdirAll(filepath.Dir(incidents), 0o700); err != nil {
+			arrange: func(t *testing.T, repo, lineage string) {
+				incidents, err := reviewtransaction.EnsureCompactIncidentsDir(context.Background(), repo, lineage)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Remove(incidents); err != nil {
 					t.Fatal(err)
 				}
 				if err := os.WriteFile(incidents, []byte("not a directory\n"), 0o600); err != nil {
 					t.Fatal(err)
 				}
 			},
-			want: "not a directory",
+			want: "unsafe RAR authority path",
 		},
 		{
 			name: "incidents-directory-is-shared",
-			arrange: func(t *testing.T, incidents string) {
-				if err := os.MkdirAll(incidents, 0o777); err != nil {
+			arrange: func(t *testing.T, repo, lineage string) {
+				incidents, err := reviewtransaction.EnsureCompactIncidentsDir(context.Background(), repo, lineage)
+				if err != nil {
 					t.Fatal(err)
 				}
-				if err := os.Chmod(incidents, 0o777); err != nil {
-					t.Fatal(err)
-				}
+				makeOpaqueSharedDirectory(t, filepath.Dir(incidents))
 			},
-			want: "not a private native directory",
+			want: "unsafe RAR authority path",
 		},
 	}
 	messages := make(map[string]string, len(cases))
@@ -282,7 +300,7 @@ func TestOpaqueRepositoryContextPreserveNamesDistinctCauses(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			lineage := "opaque-preserve-" + tt.name
 			args, input, repo := startedOpaqueCaptureBinding(t, lineage)
-			tt.arrange(t, filepath.Join(repo, ".git", "gentle-ai", "review-transactions", "incidents", lineage))
+			tt.arrange(t, repo, lineage)
 
 			err := RunReviewPreserveResult(append(append([]string{}, args...), "--input", input), io.Discard)
 			if err == nil {
