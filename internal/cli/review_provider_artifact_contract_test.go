@@ -88,6 +88,24 @@ func TestReviewProviderArtifactV21ContractsArePinned(t *testing.T) {
 	}
 }
 
+func TestReviewProviderArtifactV25StatusContractsArePinned(t *testing.T) {
+	root := filepath.Join("..", "..", "contracts", "review-integration", "v2")
+	want := map[string]string{
+		"fixtures/status-v5.fixture.json": "905ad204feb2b69d0361cf5b420ddb8b143e21896b74bde9f65df85e1ebb1541",
+		"schemas/status-v5.schema.json":   "2eb135187074df16a34c8b792cfff16993d580b0132faec607ac3ceb890a4291",
+	}
+	for name, expected := range want {
+		payload, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(name)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		digest := sha256.Sum256(payload)
+		if actual := hex.EncodeToString(digest[:]); actual != expected {
+			t.Fatalf("%s digest = %s, want %s", name, actual, expected)
+		}
+	}
+}
+
 func TestReviewProviderArtifactSchemasAreStrictAndBound(t *testing.T) {
 	root := filepath.Join("..", "..", "contracts", "review-integration", "v1", "schemas")
 	tests := []struct {
@@ -186,7 +204,8 @@ func TestReviewProviderArtifactSchemasAreStrictAndBound(t *testing.T) {
 		{name: "admitted-result.schema.json", id: "https://gentle-ai.dev/contracts/review-integration/v2/schemas/admitted-result.schema.json"},
 		{name: "start.schema.json", id: ReviewIntegrationStartSchemaID},
 		{name: "status.schema.json", id: ReviewIntegrationStatusSchemaIDV3},
-		{name: "status-v4.schema.json", id: ReviewIntegrationStatusSchemaID},
+		{name: "status-v4.schema.json", id: ReviewIntegrationStatusSchemaIDV4},
+		{name: "status-v5.schema.json", id: ReviewIntegrationStatusSchemaIDV5},
 		{name: "capabilities.schema.json", id: ReviewIntegrationCapabilitiesSchemaIDV2},
 		{name: "capabilities-v2.1.schema.json", id: ReviewIntegrationCapabilitiesSchemaIDV21},
 		{name: "capabilities-v2.2.schema.json", id: ReviewIntegrationCapabilitiesSchemaIDV22},
@@ -247,6 +266,17 @@ func TestReviewProviderArtifactV2FixturesValidate(t *testing.T) {
 	}
 	if err := status.Validate(); err != nil {
 		t.Fatalf("v2 STATUS fixture: %v", err)
+	}
+	v5StatusPayload, err := os.ReadFile(filepath.Join(root, "status-v5.fixture.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var v5Status ReviewTargetStatusResult
+	if err := json.Unmarshal(v5StatusPayload, &v5Status); err != nil {
+		t.Fatal(err)
+	}
+	if err := v5Status.Validate(); err != nil {
+		t.Fatalf("v5 STATUS fixture: %v", err)
 	}
 	consentPayload, err := os.ReadFile(filepath.Join(root, "consent.fixture.json"))
 	if err != nil {

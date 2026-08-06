@@ -772,6 +772,85 @@ func (builder SnapshotBuilder) HasDirtyTrackedChanges(ctx context.Context) (bool
 	return len(output) != 0, nil
 }
 
+func (builder SnapshotBuilder) WorktreeClean(ctx context.Context) (bool, error) {
+	root, err := builder.ResolveRepositoryRoot(ctx)
+	if err != nil {
+		return false, err
+	}
+	output, err := runGit(ctx, root, nil, nil, "status", "--porcelain=v1", "-z", "--untracked-files=all")
+	if err != nil {
+		return false, err
+	}
+	return len(output) == 0, nil
+}
+
+// RebuildCommittedBaseDiffCorrectionCandidate derives a committed correction
+// from the immutable initial boundary, never from the mutable original ref.
+func RebuildCommittedBaseDiffCorrectionCandidate(ctx context.Context, repo string, state CompactState) (Snapshot, error) {
+	if err := state.Validate(); err != nil {
+		return Snapshot{}, fmt.Errorf("validate committed correction authority: %w", err)
+	}
+	initial := state.InitialSnapshot
+	if state.State != StateCorrectionRequired || state.ProposedCorrectionLines == nil || state.CorrectionAttemptConsumed() || initial.Kind != TargetBaseDiff {
+		return Snapshot{}, errors.New("committed correction reconstruction is not eligible") // refusal:by-design world-action: only an open committed correction can rebuild its frozen boundary
+	}
+	builder := SnapshotBuilder{Repo: repo}
+	clean, err := builder.WorktreeClean(ctx)
+	if err != nil {
+		return Snapshot{}, err
+	}
+	if !clean {
+		return Snapshot{}, errors.New("committed correction reconstruction requires a clean worktree") // refusal:by-design world-action: commit or discard workspace changes before recovering a committed-only correction
+	}
+	projection, err := canonicalProjection(initial.Projection)
+	if err != nil {
+		return Snapshot{}, err
+	}
+	live, err := builder.BuildStoredSnapshot(ctx, Target{
+		Kind: TargetBaseDiff, Projection: projection, BaseRef: initial.BaseTree,
+		IntendedUntracked: append([]string(nil), initial.IntendedUntracked...),
+	})
+	if err != nil {
+		return Snapshot{}, err
+	}
+	if err := builder.ValidateEvidence(ctx, live); err != nil {
+		return Snapshot{}, fmt.Errorf("validate rebuilt committed correction: %w", err)
+	}
+	if live.UnbornHead != initial.UnbornHead || live.BaseTree != initial.BaseTree || live.Projection != projection ||
+		!equalStrings(live.IntendedUntracked, initial.IntendedUntracked) || live.IntendedUntrackedProof != initial.IntendedUntrackedProof {
+		return Snapshot{}, errors.New("committed correction reconstruction does not match frozen authority") // refusal:by-design world-action: repository history must match the immutable authority before correction routing can continue
+	}
+	if err := pathsAreSubset(live.Paths, state.GenesisPaths); err != nil {
+		return Snapshot{}, fmt.Errorf("committed correction exceeds frozen genesis paths: %w", err)
+	}
+	intended := append([]string(nil), initial.IntendedUntracked...)
+	if intended == nil {
+		intended = []string{}
+	}
+	fix, err := builder.Build(ctx, Target{
+		Kind: TargetFixDiff, Projection: projection, BaseRef: state.CurrentSnapshot.CandidateTree,
+		IntendedUntracked: intended, LedgerIDs: append([]string(nil), state.FixFindingIDs...),
+	})
+	if err != nil {
+		return Snapshot{}, fmt.Errorf("rebuild committed correction delta: %w", err)
+	}
+	if fix.CandidateTree != live.CandidateTree {
+		return Snapshot{}, fmt.Errorf("%w: rebuilt committed correction candidate changed while measuring", ErrConcurrentUpdate)
+	}
+	remaining, err := compactCorrectionRemainingBudget(state)
+	if err != nil {
+		return Snapshot{}, fmt.Errorf("derive rebuilt committed correction remaining budget: %w", err)
+	}
+	actual, err := builder.ChangedLines(ctx, fix)
+	if err != nil {
+		return Snapshot{}, fmt.Errorf("measure rebuilt committed correction: %w", err)
+	}
+	if actual > remaining {
+		return Snapshot{}, fmt.Errorf("rebuild committed correction: %w", &CorrectionBudgetExceededError{Actual: actual, Remaining: remaining})
+	}
+	return live, nil
+}
+
 func canonicalRepositoryPath(path string) (string, error) {
 	abs, err := filepath.Abs(path)
 	if err != nil {
