@@ -402,7 +402,7 @@ func (result ReviewTargetStatusResult) validateWithCompactAuthority(authority *r
 			if authority != nil {
 				budget, budgetErr := reviewtransaction.CompactExpectedBudget(authority.OriginalChangedLines, authority.CorrectionBudgetPolicy)
 				if budgetErr != nil || budget != authority.CorrectionBudget {
-					return errors.New("native compact status budget is invalid")
+					return errors.New("native compact status budget is invalid") // refusal:by-design world-action: provider-generated status and persisted compact authority budget require a code fix when they disagree
 				}
 				expectedBudget = authority.CorrectionBudget
 			}
