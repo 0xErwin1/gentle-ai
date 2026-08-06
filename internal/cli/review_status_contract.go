@@ -22,8 +22,8 @@ const ReviewIntegrationStatusSchemaV4 = "gentle-ai.review-integration.status/v4"
 const ReviewIntegrationStatusSchemaIDV4 = "https://gentle-ai.dev/contracts/review-integration/v2/schemas/status-v4.schema.json"
 const ReviewIntegrationStatusSchemaV5 = "gentle-ai.review-integration.status/v5"
 const ReviewIntegrationStatusSchemaIDV5 = "https://gentle-ai.dev/contracts/review-integration/v2/schemas/status-v5.schema.json"
-const ReviewIntegrationStatusSchema = ReviewIntegrationStatusSchemaV4
-const ReviewIntegrationStatusSchemaID = ReviewIntegrationStatusSchemaIDV4
+const ReviewIntegrationStatusSchema = ReviewIntegrationStatusSchemaV5
+const ReviewIntegrationStatusSchemaID = ReviewIntegrationStatusSchemaIDV5
 const ReviewIntegrationProjectionSchema = "gentle-ai.review-integration.projection/v1"
 const ReviewIntegrationProjectionSchemaID = "https://gentle-ai.dev/contracts/review-integration/v1/schemas/projection.schema.json"
 
@@ -540,15 +540,7 @@ func (result ReviewTargetStatusResult) validateSubmissionDescriptors() error {
 		}
 		return nil
 	}
-	if result.Schema == ReviewIntegrationStatusSchemaV5 {
-		for _, input := range transition.Collect.Inputs {
-			if input.Submission != nil {
-				return errors.New("v5 negotiated status contains an unsupported submission descriptor") // refusal:by-design world-action: only a provider code fix can emit a v5 descriptor the current runtime understands
-			}
-		}
-		return nil
-	}
-	if result.Schema != ReviewIntegrationStatusSchemaV4 {
+	if result.Schema != ReviewIntegrationStatusSchemaV4 && result.Schema != ReviewIntegrationStatusSchemaV5 {
 		return errors.New("submission descriptor status schema is unsupported") // refusal:by-design world-action: only a provider code fix can select a supported descriptor schema
 	}
 	switch transition.ReasonCode {
@@ -589,6 +581,35 @@ func (result ReviewTargetStatusResult) validateSubmissionDescriptors() error {
 		}, *result.ValidationRequest)
 		if want == nil || !reflect.DeepEqual(*input.Submission, *want) {
 			return errors.New("targeted validation submission descriptor is not provider-bound") // refusal:by-design world-action: only a provider code fix can bind descriptor tokens to its request
+		}
+	case "verification_evidence_required", "correction_repository_verification_required":
+		if result.Schema == ReviewIntegrationStatusSchemaV4 {
+			for _, input := range transition.Collect.Inputs {
+				if input.Submission != nil {
+					return errors.New("v4 verification evidence transition contains a submission descriptor") // refusal:by-design world-action: only a provider code fix can preserve the v4 wire contract
+				}
+			}
+			return nil
+		}
+		if len(transition.Collect.Inputs) != 1 || result.Authority == nil {
+			return errors.New("verification evidence submission transition is incomplete") // refusal:by-design world-action: only a provider code fix can produce the required single input
+		}
+		input := transition.Collect.Inputs[0]
+		arguments, err := reviewTransitionArgumentMap(input.Arguments)
+		if err != nil || input.CaptureOperation != "review.capture-evidence" || input.Schema != reviewVerificationEvidenceSchemaID || input.Submission == nil {
+			return errors.New("verification evidence submission descriptor has no provider binding") // refusal:by-design world-action: only a provider code fix can bind the capture operation
+		}
+		target := reviewAuthorityTargetIdentity(result)
+		if result.Authority.State == reviewtransaction.StateCorrectionRequired && result.ValidationRequest != nil {
+			target = result.ValidationRequest.CorrectionTargetIdentity
+		}
+		binding := ReviewTransitionBinding{
+			LineageID: result.Authority.LineageID, Revision: result.Authority.Revision,
+			TargetIdentity: target, RepositoryContext: arguments["repository-context"],
+		}
+		want := reviewCaptureEvidenceSubmission(result.Contract, binding)
+		if want == nil || !reflect.DeepEqual(*input.Submission, *want) {
+			return errors.New("verification evidence submission descriptor is not provider-bound") // refusal:by-design world-action: only a provider code fix can bind descriptor tokens to its authority
 		}
 	default:
 		for _, input := range transition.Collect.Inputs {
@@ -924,7 +945,7 @@ func (transition ReviewNextTransition) Validate() error {
 			if err != nil {
 				return err
 			}
-			submissionAllowed := input.CaptureOperation == "external.plan_correction" || input.CaptureOperation == "external.run_targeted_validation"
+			submissionAllowed := input.CaptureOperation == "external.plan_correction" || input.CaptureOperation == "external.run_targeted_validation" || input.CaptureOperation == "review.capture-evidence"
 			if input.Submission != nil && !submissionAllowed {
 				return errors.New("collection transition submission placement is invalid") // refusal:by-design world-action: only a provider code fix can place a descriptor on a supported input
 			}
@@ -971,7 +992,9 @@ func (transition ReviewNextTransition) Validate() error {
 				return errors.New("non-reviewer collection transition contains frozen reviewer context")
 			}
 			if input.CaptureOperation == "review.capture-evidence" &&
-				(input.Schema != reviewtransaction.VerificationEvidenceRecordSchema || len(arguments) != 3 ||
+				((input.Schema != reviewtransaction.VerificationEvidenceRecordSchema || len(arguments) != 3) &&
+					(input.Schema != reviewVerificationEvidenceSchemaID || len(arguments) != 4 ||
+						reviewtransaction.ValidateReviewRepositoryContextHandle(arguments["repository-context"]) != nil) ||
 					strings.TrimSpace(arguments["lineage"]) == "" || !validReviewCapabilitySHA256(arguments["expected-revision"]) ||
 					!validReviewCapabilitySHA256(arguments["target"])) {
 				return errors.New("verification evidence capture transition lacks an exact authority and candidate binding") // refusal:by-design world-action: only a producer-code repair can make a malformed machine transition trustworthy
@@ -1035,7 +1058,43 @@ func (input ReviewTransitionInput) submissionRepositoryContext() (string, error)
 }
 
 func (submission ReviewTransitionSubmission) Validate() error {
-	if submission.OperationToken != "finalize" || submission.Value.SubstitutionLocation != 6 {
+	if submission.Value != nil {
+		return submission.validateFinalize()
+	}
+	if submission.OperationToken != "capture-evidence" || len(submission.Values) != 2 {
+		return errors.New("submission descriptor identity is incomplete") // refusal:by-design world-action: only a provider code fix can restore descriptor identity
+	}
+	for _, token := range submission.ArgumentTokens {
+		if strings.TrimSpace(token) == "" || !strings.HasPrefix(token, "--") || strings.ContainsAny(token, " \t\r\n") || strings.HasPrefix(token, "--cwd=") {
+			return errors.New("submission descriptor contains an unsafe argument token") // refusal:by-design world-action: only a provider code fix can emit safe argv tokens
+		}
+	}
+	if len(submission.ArgumentTokens) != 6 || len(submission.Values) != 2 {
+		return errors.New("submission descriptor value substitution is malformed") // refusal:by-design world-action: only a provider code fix can restore the single value slot
+	}
+	if !strings.HasPrefix(submission.ArgumentTokens[0], "--lineage=") || !validReviewIntegrationLineage(strings.TrimPrefix(submission.ArgumentTokens[0], "--lineage=")) ||
+		!strings.HasPrefix(submission.ArgumentTokens[1], "--expected-revision=") || !validReviewCapabilitySHA256(strings.TrimPrefix(submission.ArgumentTokens[1], "--expected-revision=")) ||
+		!strings.HasPrefix(submission.ArgumentTokens[2], "--target=") || !validReviewCapabilitySHA256(strings.TrimPrefix(submission.ArgumentTokens[2], "--target=")) ||
+		!strings.HasPrefix(submission.ArgumentTokens[3], "--repository-context=") ||
+		reviewtransaction.ValidateReviewRepositoryContextHandle(strings.TrimPrefix(submission.ArgumentTokens[3], "--repository-context=")) != nil ||
+		submission.ArgumentTokens[4] != "--outcome={{outcome}}" || submission.ArgumentTokens[5] != "--input={{input}}" {
+		return errors.New("submission descriptor bindings are invalid") // refusal:by-design world-action: only a provider code fix can restore authority bindings
+	}
+	outcome, input := submission.Values[0], submission.Values[1]
+	if outcome.Slot != "outcome" || outcome.Domain != "verification_outcome" || outcome.Schema != "" || outcome.Minimum != 0 || outcome.Maximum != 0 ||
+		outcome.SubstitutionLocation != 4 || !reflect.DeepEqual(outcome.AllowedValues, []string{
+		string(reviewtransaction.VerificationOutcomePassed),
+		string(reviewtransaction.VerificationOutcomeFailed),
+		string(reviewtransaction.VerificationOutcomeProceduralFailure),
+	}) || input.Slot != "input" || input.Domain != "artifact_path_or_stdin" || input.Schema != reviewVerificationEvidenceSchemaID ||
+		input.Minimum != 0 || input.Maximum != 0 || len(input.AllowedValues) != 0 || input.SubstitutionLocation != 5 {
+		return errors.New("verification evidence submission descriptor values are invalid") // refusal:by-design world-action: only a provider code fix can restore the capture value domains
+	}
+	return nil
+}
+
+func (submission ReviewTransitionSubmission) validateFinalize() error {
+	if submission.OperationToken != "finalize" || len(submission.Values) != 0 || submission.Value.SubstitutionLocation != 6 {
 		return errors.New("submission descriptor identity is incomplete") // refusal:by-design world-action: only a provider code fix can restore descriptor identity
 	}
 	for _, token := range submission.ArgumentTokens {
@@ -1062,13 +1121,13 @@ func (submission ReviewTransitionSubmission) Validate() error {
 		if len(submission.ArgumentTokens) != 7 || submission.ArgumentTokens[6] != "--correction-lines="+reviewSubmissionValuePlaceholder ||
 			submission.Value.Domain != "positive_correction_lines" || submission.Value.Schema != "" ||
 			submission.Value.Minimum != 1 || submission.Value.Maximum < submission.Value.Minimum ||
-			submission.Value.Maximum > reviewtransaction.MaxCorrectionChangedLines {
+			submission.Value.Maximum > reviewtransaction.MaxCorrectionChangedLines || len(submission.Value.AllowedValues) != 0 {
 			return errors.New("correction submission descriptor value domain is invalid") // refusal:by-design world-action: only a provider code fix can restore the correction domain
 		}
 	case "validation":
 		if len(submission.ArgumentTokens) != 8 || submission.ArgumentTokens[6] != "--validation="+reviewSubmissionValuePlaceholder ||
 			submission.ArgumentTokens[7] != "--captured-evidence=true" || submission.Value.Domain != "artifact_path_or_stdin" ||
-			submission.Value.Schema != reviewValidatorSchemaID || submission.Value.Minimum != 0 || submission.Value.Maximum != 0 {
+			submission.Value.Schema != reviewValidatorSchemaID || submission.Value.Minimum != 0 || submission.Value.Maximum != 0 || len(submission.Value.AllowedValues) != 0 {
 			return errors.New("validation submission descriptor value domain is invalid") // refusal:by-design world-action: only a provider code fix can restore the validation domain
 		}
 	default:
