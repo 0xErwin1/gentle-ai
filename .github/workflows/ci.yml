@@ -286,9 +286,17 @@ jobs:
       - name: Verify OpenCode reviewer support E2E is registered
         shell: pwsh
         run: |
-          $tests = go test -list '^TestRealOpenCodeReviewerLensCannotSeeLiveState$' ./e2e/organicruntime
-          if ($LASTEXITCODE -ne 0 -or $tests -notcontains 'TestRealOpenCodeReviewerLensCannotSeeLiveState') {
+          $tests = go test -list '^TestRealOpenCodeReviewerOrdinarySessionInjectsFrozenContextAndAdmitsRawOutput$' ./e2e/organicruntime
+          if ($LASTEXITCODE -ne 0 -or $tests -notcontains 'TestRealOpenCodeReviewerOrdinarySessionInjectsFrozenContextAndAdmitsRawOutput') {
             throw 'OpenCode reviewer support E2E is missing'
+          }
+
+      - name: Verify Codex reviewer support E2E is registered
+        shell: pwsh
+        run: |
+          $tests = go test -list '^TestRealCodexReviewerOrdinarySessionAdmitsRawOutput$' ./e2e/organicruntime
+          if ($LASTEXITCODE -ne 0 -or $tests -notcontains 'TestRealCodexReviewerOrdinarySessionAdmitsRawOutput') {
+            throw 'Codex reviewer support E2E is missing'
           }
 
       - name: Verify real-agent detection E2E is registered
