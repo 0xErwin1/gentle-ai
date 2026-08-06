@@ -1566,13 +1566,25 @@ func runReviewFacadeStart(ctx context.Context, args []string, stdout io.Writer) 
 		return reviewPreflightRefusal(reviewPreflightStaleTargetReason,
 			errors.New("review start target does not match the freshly built snapshot"))
 	}
-	// A negotiated TargetCurrentChanges candidate with zero changed paths
-	// (a clean, fully-committed worktree) would otherwise freeze as an empty
-	// candidate, pass risk assessment and consent, and only fail late and
-	// misleadingly at pre-push. Refuse it here, before any authority is
-	// created, and name --base-ref as the way to review committed work
-	// instead of silently deriving one.
-	if negotiated && snapshot.Kind == reviewtransaction.TargetCurrentChanges && len(snapshot.Paths) == 0 {
+	// Issue #2586: a TargetCurrentChanges candidate with zero changed paths
+	// (a clean, fully-committed worktree) or a TargetBaseDiff candidate
+	// whose named base nets zero changed paths (a mode-only or truly-empty
+	// diff) would otherwise freeze as an empty candidate, pass risk
+	// assessment, and mint an approved receipt that inspected nothing. Left
+	// alive on ANY route, that receipt's base_tree/final_candidate_tree can
+	// coincide with a genuinely unreviewed candidate's tree and get
+	// discovered ahead of it. This guard used to fire only on the negotiated
+	// route and only for TargetCurrentChanges, so a plain (non-negotiated)
+	// `review start` on a clean worktree minted exactly this receipt
+	// (reported in #2586) and a `--base-ref` netting no manifest entries was
+	// unguarded on either route. Refusing here, before any authority is
+	// created, for both routes and both target kinds, and naming --base-ref
+	// as the way to name a real comparison base instead of silently deriving
+	// one, is cheaper and safer than the two narrower guards it replaces.
+	// This refusal already spells out its own runnable resolution
+	// (reviewStartEmptyCandidateHint), exactly as it did before this change,
+	// so no additional exemption marker is needed here.
+	if len(snapshot.Paths) == 0 && (snapshot.Kind == reviewtransaction.TargetCurrentChanges || snapshot.Kind == reviewtransaction.TargetBaseDiff) {
 		return reviewPreflightRefusal(reviewPreflightEmptyCandidateReason,
 			errors.New(reviewStartEmptyCandidateHint))
 	}

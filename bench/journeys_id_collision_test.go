@@ -31,6 +31,7 @@ func journeySources() []journeySource {
 		{"journeys_wave3.go", waveThreeJourneys()},
 		{"journeys_wave5.go", waveFiveJourneys()},
 		{"journeys_advisory.go", advisoryJourneys()},
+		{"journeys_zero_delta.go", zeroDeltaJourneys()},
 	}
 }
 
