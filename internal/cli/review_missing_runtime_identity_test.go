@@ -126,23 +126,19 @@ func TestDeclaredUnsupportedRuntimeStillRefusesNegotiatedStatus(t *testing.T) {
 }
 
 // TestDeclaredBuiltInRuntimeUsesProvenExecutorBoundary prevents the capability
-// declaration from drifting from the supported fresh reviewer paths. Claude
-// uses its tool-free fresh agent; OpenCode additionally requires its host
-// isolation controls before negotiated routing can inspect a repository.
+// declaration from drifting from the supported fresh reviewer paths. Both
+// Claude and OpenCode use their tool-free fresh agent in an ordinary session:
+// neither depends on OPENCODE_DISABLE_PROJECT_CONFIG or
+// OPENCODE_DISABLE_EXTERNAL_SKILLS, which this test deliberately leaves unset.
 func TestDeclaredBuiltInRuntimeUsesProvenExecutorBoundary(t *testing.T) {
 	repo := initReviewCLIRepo(t)
 	for _, test := range []struct {
-		runtime  string
-		isolated bool
+		runtime string
 	}{
 		{runtime: string(model.AgentClaudeCode)},
-		{runtime: string(model.AgentOpenCode), isolated: true},
+		{runtime: string(model.AgentOpenCode)},
 	} {
 		t.Run(test.runtime, func(t *testing.T) {
-			if test.isolated {
-				t.Setenv("OPENCODE_DISABLE_PROJECT_CONFIG", "1")
-				t.Setenv("OPENCODE_DISABLE_EXTERNAL_SKILLS", "1")
-			}
 			var output bytes.Buffer
 			err := RunReview([]string{
 				"status", "--cwd", repo, "--contract", ReviewIntegrationContractV2, "--agent", test.runtime, "--next-transition",
