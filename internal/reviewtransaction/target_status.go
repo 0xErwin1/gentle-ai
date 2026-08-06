@@ -168,15 +168,19 @@ func selectorlessCommittedBaseDiffCorrections(ctx context.Context, repo string) 
 	for _, store := range stores {
 		record, loadErr := store.LoadContext(ctx)
 		if loadErr != nil {
-			if compactAuthorityOperationalFailure(loadErr) {
+			if IsCompactAuthorityOperationalFailure(loadErr) {
 				return nil, loadErr
 			}
 			continue
 		}
 		live, rebuildErr := RebuildCommittedBaseDiffCorrectionCandidate(ctx, repo, record.State)
-		if rebuildErr == nil {
-			candidates = append(candidates, selectorlessCommittedBaseDiffCorrection{lineage: record.State.LineageID, snapshot: live})
+		if rebuildErr != nil {
+			if IsCompactAuthorityOperationalFailure(rebuildErr) {
+				return nil, rebuildErr
+			}
+			continue
 		}
+		candidates = append(candidates, selectorlessCommittedBaseDiffCorrection{lineage: record.State.LineageID, snapshot: live})
 	}
 	sort.Slice(candidates, func(i, j int) bool { return candidates[i].lineage < candidates[j].lineage })
 	return candidates, nil
