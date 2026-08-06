@@ -24,12 +24,23 @@ type compatibilitySkillsRefreshStep struct {
 	components   []model.ComponentID
 	selection    model.Selection
 	changedFiles *[]string
+	transaction  compatibilityRefreshTransaction
+	anchored     bool
 }
 
 var lstatCompatibilityDestination = os.Lstat
 
 type compatibilityDirectoryWriter interface {
 	Write(string, []byte, fs.FileMode) (filemerge.WriteResult, error)
+	Close() error
+}
+
+// compatibilityRefreshTransaction owns the Windows compatibility tree for an
+// entire pipeline run. The generic snapshotter must never inspect these paths.
+type compatibilityRefreshTransaction interface {
+	Run() error
+	Rollback() error
+	ChangedFiles() []string
 	Close() error
 }
 
@@ -74,6 +85,19 @@ func compatibilitySkillsRefreshable(homeDir string, selection model.Selection) (
 }
 
 func compatibilitySkillFiles(skillDir string, components []model.ComponentID, selection model.Selection) ([]string, error) {
+	files, err := compatibilitySkillPaths(skillDir, components, selection)
+	if err != nil {
+		return nil, err
+	}
+	if err := validateCompatibilityDestinations(skillDir, files); err != nil {
+		return nil, err
+	}
+	return files, nil
+}
+
+// compatibilitySkillPaths lists the paths that the embedded asset injectors
+// will target without inspecting the destination filesystem.
+func compatibilitySkillPaths(skillDir string, components []model.ComponentID, selection model.Selection) ([]string, error) {
 	paths := map[string]struct{}{}
 	if slices.Contains(components, model.ComponentSkills) {
 		prospective, err := skills.DirectoryPaths(skillDir, selectedSkillIDs(selection), "")
@@ -98,9 +122,6 @@ func compatibilitySkillFiles(skillDir string, components []model.ComponentID, se
 		files = append(files, path)
 	}
 	sort.Strings(files)
-	if err := validateCompatibilityDestinations(skillDir, files); err != nil {
-		return nil, err
-	}
 	return files, nil
 }
 
@@ -139,6 +160,16 @@ func validateCompatibilityDestinations(root string, destinations []string) error
 }
 
 func (s compatibilitySkillsRefreshStep) Run() error {
+	if s.anchored {
+		if s.transaction == nil {
+			return nil
+		}
+		if err := s.transaction.Run(); err != nil {
+			return err
+		}
+		return nil
+	}
+
 	skillDir, ok, err := compatibilitySkillsDir(s.homeDir)
 	if err != nil {
 		return err
@@ -186,4 +217,11 @@ func (s compatibilitySkillsRefreshStep) Run() error {
 		*s.changedFiles = append(*s.changedFiles, changed...)
 	}
 	return nil
+}
+
+func (s compatibilitySkillsRefreshStep) Rollback() error {
+	if !s.anchored || s.transaction == nil {
+		return nil
+	}
+	return s.transaction.Rollback()
 }
