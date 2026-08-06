@@ -774,6 +774,11 @@ func validateAgainstPublishedNextTransitionSchemaV4(t *testing.T, payload []byte
 	validateAgainstPublishedStatusNextTransitionSchema(t, "v2", "status-v4.schema.json", payload)
 }
 
+func validateAgainstPublishedNextTransitionSchemaV5(t *testing.T, payload []byte) {
+	t.Helper()
+	validateAgainstPublishedStatusNextTransitionSchema(t, "v2", "status-v5.schema.json", payload)
+}
+
 // validateAgainstPublishedStatusNextTransitionSchema is the shared engine
 // behind both the v1 and v2 published-schema validators above. It registers
 // every schema file that either version's $defs/next_transition subtree can
