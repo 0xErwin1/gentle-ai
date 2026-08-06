@@ -2,10 +2,13 @@ package cli
 
 import (
 	"bytes"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/gentleman-programming/gentle-ai/v2/internal/sddstatus"
 )
 
 func TestRunSDDVerifyValidate(t *testing.T) {
@@ -43,4 +46,65 @@ func TestRunSDDVerifyValidate(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestRunSDDVerifyValidateHelpIsSuccessfulAndInputFree(t *testing.T) {
+	stdin := &sddVerifyValidateReadSpy{}
+	var output bytes.Buffer
+	err := runSDDVerifyValidate([]string{
+		"--input", filepath.Join(t.TempDir(), "missing.md"), "--requirements", "-1", "--help", "--scenarios", "-1",
+	}, stdin, &output)
+	if err != nil {
+		t.Fatalf("runSDDVerifyValidate(--help): %v", err)
+	}
+	if stdin.reads != 0 {
+		t.Fatalf("help read stdin %d times", stdin.reads)
+	}
+	for _, want := range []string{"Usage: gentle-ai sdd-verify-validate", "--input <path|->", "--requirements <n>", "--scenarios <n>"} {
+		if !strings.Contains(output.String(), want) {
+			t.Fatalf("help missing %q:\n%s", want, output.String())
+		}
+	}
+}
+
+func TestRunSDDVerifyValidateHelpRendersAuthorityOnlyContract(t *testing.T) {
+	var output bytes.Buffer
+	if err := runSDDVerifyValidate([]string{"-h"}, strings.NewReader("must not be read"), &output); err != nil {
+		t.Fatalf("runSDDVerifyValidate(-h): %v", err)
+	}
+	contract := sddstatus.VerifyReportValidationContract()
+	for _, want := range append(append([]string{contract.Schema, contract.EmptyOutputHash}, contract.RequiredFields...), append(contract.Verdicts, contract.AuthorityOnlyFields...)...) {
+		if !strings.Contains(output.String(), want) {
+			t.Fatalf("help missing contract value %q:\n%s", want, output.String())
+		}
+	}
+	if !strings.Contains(output.String(), "maximum report size: 1048576 bytes (1 MiB)") ||
+		!strings.Contains(output.String(), "test_exit_code 125") || !strings.Contains(output.String(), "build_exit_code 125") {
+		t.Fatalf("help omits authority-only limits:\n%s", output.String())
+	}
+}
+
+func TestRunSDDVerifyValidateRequiredFlagsRemainRequired(t *testing.T) {
+	tests := []struct {
+		args []string
+		want string
+	}{
+		{nil, "requires --input"},
+		{[]string{"--input", "-"}, "requires --requirements"},
+		{[]string{"--input", "-", "--requirements", "1"}, "requires --scenarios"},
+	}
+	for _, tt := range tests {
+		var output bytes.Buffer
+		err := runSDDVerifyValidate(tt.args, strings.NewReader(""), &output)
+		if err == nil || !strings.Contains(err.Error(), tt.want) {
+			t.Fatalf("runSDDVerifyValidate(%v) = %v, want %q", tt.args, err, tt.want)
+		}
+	}
+}
+
+type sddVerifyValidateReadSpy struct{ reads int }
+
+func (spy *sddVerifyValidateReadSpy) Read([]byte) (int, error) {
+	spy.reads++
+	return 0, errors.New("help must not read stdin")
 }
