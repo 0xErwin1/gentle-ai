@@ -42,6 +42,13 @@ type openCodePoisonedReviewSetup struct {
 // controls.
 const openCodePoisonMarker = "POISON-MARKER-2417-b6b2c1"
 
+func requireOpenCodeImmutableReviewExecutor(t *testing.T) {
+	t.Helper()
+	if os.Getenv(realAgentE2EEnvironment) != "1" {
+		t.Skip("set GENTLE_AI_REAL_AGENT_E2E=1 to run the real OpenCode reviewer proof")
+	}
+}
+
 // setupOpenCodePoisonedReview drives a real negotiated review to its
 // reviewer collect point and poisons the worktree. It does not launch
 // OpenCode: callers configure their own isolation environment and fixture.
@@ -203,9 +210,9 @@ func runOpenCodeReview(t *testing.T, setup openCodePoisonedReviewSetup, environm
 // not AGENTS.md, and not the caller-authored prose the driver's task call
 // carried before provider injection replaced it.
 func TestRealOpenCodeReviewerLensCannotSeeLiveState(t *testing.T) {
-	if os.Getenv(realAgentE2EEnvironment) != "1" {
-		t.Skip("set GENTLE_AI_REAL_AGENT_E2E=1 to run the real OpenCode reviewer support proof")
-	}
+	requireOpenCodeImmutableReviewExecutor(t)
+	t.Setenv("OPENCODE_DISABLE_PROJECT_CONFIG", "1")
+	t.Setenv("OPENCODE_DISABLE_EXTERNAL_SKILLS", "1")
 	setup := setupOpenCodePoisonedReview(t, "opencode-poisoned-worktree-isolated")
 
 	fixture := newOpenCodeReviewerFixture(t, setup.binding, setup.manifestPaths)
@@ -256,68 +263,34 @@ func TestRealOpenCodeReviewerLensCannotSeeLiveState(t *testing.T) {
 	}
 }
 
-// TestRealOpenCodeReviewerRefusesWithoutIsolationEnvironment is the CRITICAL
-// fix's own proof, run WITHOUT setting OPENCODE_DISABLE_PROJECT_CONFIG or
-// OPENCODE_DISABLE_EXTERNAL_SKILLS -- the realistic "operator never
-// configured them" shape, which is what an ordinary shell environment looks
-// like by default. This is the production configuration, not a test-only
-// one: nothing about this test's OpenCode config, plugin, or generated
-// review-risk agent differs from TestRealOpenCodeReviewerLensCannotSeeLiveState
-// above, only the ambient environment the real `opencode` process runs
-// under. Proven against real OpenCode 1.18.10 without the plugin's isolation
-// gate: a review-risk session with no bash and no read tool still received a
-// marker planted in AGENTS.md after the candidate froze, verbatim, in its
-// system message (see the plugin's REQUIRED_ISOLATION_ENVIRONMENT comment).
-// With the gate in place, the reviewer must never launch at all.
+// TestRealOpenCodeReviewerRefusesWithoutIsolationEnvironment proves the host
+// controls are rejected before STATUS resolves repository state or creates an
+// authority. The plugin retains its own launch-time remote-instructions check,
+// but lifecycle admission must not let an unisolated host reach collection.
 func TestRealOpenCodeReviewerRefusesWithoutIsolationEnvironment(t *testing.T) {
-	if os.Getenv(realAgentE2EEnvironment) != "1" {
-		t.Skip("set GENTLE_AI_REAL_AGENT_E2E=1 to run the real OpenCode reviewer isolation-refusal proof")
+	requireOpenCodeImmutableReviewExecutor(t)
+	harness := newOrganicHarness(t)
+	stdout, stderr, err := harness.gentleAllowFailure(
+		"review", "status", "--cwd", harness.repo.worktree, "--contract", "gentle-ai.review-integration/v2",
+		"--agent", "opencode", "--next-transition", "--base-ref", "origin/main", "--projection", "workspace",
+	)
+	if err == nil {
+		t.Fatalf("OpenCode review status succeeded without isolation:\nstdout:\n%s\nstderr:\n%s", stdout, stderr)
 	}
-	setup := setupOpenCodePoisonedReview(t, "opencode-poisoned-worktree-unisolated")
-
-	fixture := newOpenCodeReviewerFixture(t, setup.binding, setup.manifestPaths)
-	defer fixture.Close()
-
-	config := generatedOpenCodeReviewConfig(t, filepath.Join(setup.configRoot, "opencode", "opencode.json"), fixture.URL)
-	// Deliberately does NOT set OPENCODE_DISABLE_PROJECT_CONFIG or
-	// OPENCODE_DISABLE_EXTERNAL_SKILLS: this is the exact scenario the
-	// plugin's isolation gate must refuse.
-	environment := setup.openCodeReviewEnvironment(t, config)
-
-	transcript := runOpenCodeReview(t, setup, environment)
-	if strings.Contains(transcript, openCodePoisonMarker) {
-		t.Fatalf("poison marker leaked into the OpenCode transcript even though the reviewer must never launch:\n%s", transcript)
+	var failure struct {
+		Code                   string `json:"code"`
+		MutationOutcome        string `json:"mutation_outcome"`
+		AuthorityApplicability string `json:"authority_applicability"`
+		Cause                  string `json:"cause"`
 	}
-	launches, refused := taskLaunchRefusal(t, transcript)
-	if launches != 1 {
-		t.Fatalf("expected exactly one refused reviewer task attempt, got %d:\n%s", launches, transcript)
+	if err := json.Unmarshal([]byte(stdout), &failure); err != nil {
+		t.Fatalf("decode pre-START OpenCode refusal: %v\n%s", err, stdout)
 	}
-	if !strings.Contains(refused, "OPENCODE_DISABLE_PROJECT_CONFIG") || !strings.Contains(refused, "OPENCODE_DISABLE_EXTERNAL_SKILLS") {
-		t.Fatalf("refusal does not name both missing isolation variables: %q", refused)
+	if failure.Code != "immutable_review_transport_unsupported" || failure.MutationOutcome != "not_started" || failure.AuthorityApplicability != "not_evaluated" {
+		t.Fatalf("OpenCode isolation refusal = %#v", failure)
 	}
-	if !strings.Contains(refused, "The reviewer was not launched") {
-		t.Fatalf("isolation refusal lost its exactly-once guarantee: %q", refused)
-	}
-
-	fixture.mu.Lock()
-	received := fixture.receivedContext
-	fixture.mu.Unlock()
-	if received != "" {
-		t.Fatalf("the reviewer's own model call happened despite the missing isolation environment:\n%s", received)
-	}
-
-	// No capture happened: finalize requires the captured_artifacts:complete
-	// precondition, so it must refuse for this lineage's still-unfulfilled
-	// review-risk result. STATUS is not re-queried here for the same reason
-	// as the positive test above: its fresh-target derivation reflects the
-	// live workspace this test just poisoned, so it would offer a fresh
-	// review.start for the (now-poisoned) diff instead of recognizing the
-	// lineage already reviewing -- finalize is bound to the lineage itself
-	// and needs no such re-derivation.
-	if _, _, err := setup.harness.gentleAllowFailure(
-		"review", "finalize", "--cwd", setup.harness.repo.worktree, "--lineage", setup.lineage, "--captured-results=true",
-	); err == nil {
-		t.Fatal("finalize succeeded despite a refused, never-captured reviewer result")
+	if !strings.Contains(failure.Cause, "OPENCODE_DISABLE_PROJECT_CONFIG") || !strings.Contains(failure.Cause, "OPENCODE_DISABLE_EXTERNAL_SKILLS") || !strings.Contains(failure.Cause, "to 1") {
+		t.Fatalf("pre-START refusal does not name both missing isolation controls: %q", failure.Cause)
 	}
 }
 
@@ -332,9 +305,9 @@ func TestRealOpenCodeReviewerRefusesWithoutIsolationEnvironment(t *testing.T) {
 // config, proving the plugin's own client.config.get() check is a genuinely
 // separate gate: the reviewer must still refuse to launch.
 func TestRealOpenCodeReviewerRefusesRemoteInstructionsEntry(t *testing.T) {
-	if os.Getenv(realAgentE2EEnvironment) != "1" {
-		t.Skip("set GENTLE_AI_REAL_AGENT_E2E=1 to run the real OpenCode remote-instructions refusal proof")
-	}
+	requireOpenCodeImmutableReviewExecutor(t)
+	t.Setenv("OPENCODE_DISABLE_PROJECT_CONFIG", "1")
+	t.Setenv("OPENCODE_DISABLE_EXTERNAL_SKILLS", "1")
 	setup := setupOpenCodePoisonedReview(t, "opencode-poisoned-worktree-remote-instructions")
 
 	instructionsServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
