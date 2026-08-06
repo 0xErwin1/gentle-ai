@@ -313,6 +313,35 @@ func TestRunSDDAttemptHelpAliasesArePositionIndependentAndRepositoryFree(t *test
 	}
 }
 
+func TestRunSDDAttemptHelpDoesNotSelectOperationLikeFlagValues(t *testing.T) {
+	tests := []struct {
+		name  string
+		args  []string
+		value string
+	}{
+		{"path", []string{"--help", "--cwd", "status"}, "status"},
+		{"change", []string{"--help", "--change", "begin"}, "begin"},
+		{"revision", []string{"--help", "--expected-revision", "finish"}, "finish"},
+		{"request ID", []string{"--help", "--request-id", "reset"}, "reset"},
+		{"work unit", []string{"--help", "--work-unit", "rescope"}, "rescope"},
+		{"reason", []string{"--help", "--reason", "acquire"}, "acquire"},
+		{"actor", []string{"--help", "--actor", "settle"}, "settle"},
+		{"outcome", []string{"--help", "--outcome", "grant"}, "grant"},
+		{"missing value before help", []string{"--change", "--help", "begin"}, "begin"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var output bytes.Buffer
+			if err := RunSDDAttempt(tt.args, &output); err != nil {
+				t.Fatalf("RunSDDAttempt(%v): %v", tt.args, err)
+			}
+			if !strings.Contains(output.String(), "Usage: gentle-ai sdd-attempt <") {
+				t.Fatalf("operation-like value %q selected operation help:\n%s", tt.value, output.String())
+			}
+		})
+	}
+}
+
 func sddAttemptHelpFlagNames(output string) []string {
 	flags := []string{}
 	for _, line := range strings.Split(output, "\n") {

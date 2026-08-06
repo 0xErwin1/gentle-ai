@@ -312,17 +312,65 @@ func sddAttemptOperationNames() []string {
 func sddAttemptHelpOperation(args []string) (string, bool) {
 	operation := ""
 	requested := false
-	for _, argument := range args {
-		for _, alias := range sddAttemptHelpAliases {
-			if argument == alias {
-				requested = true
+	for index := 0; index < len(args); index++ {
+		argument := args[index]
+		if sddAttemptHelpAlias(argument) {
+			requested = true
+			continue
+		}
+		if hasInlineValue, known := sddAttemptKnownHelpFlag(argument); known {
+			if hasInlineValue {
+				continue
 			}
+			// Keep help position-independent while ensuring a following operation
+			// name remains the missing flag's value rather than a help target.
+			for index+1 < len(args) && sddAttemptHelpAlias(args[index+1]) {
+				requested = true
+				index++
+			}
+			if index+1 < len(args) {
+				_, nextIsKnownFlag := sddAttemptKnownHelpFlag(args[index+1])
+				if !nextIsKnownFlag {
+					index++
+				}
+			}
+			continue
 		}
 		if validSDDAttemptOperation(argument) {
 			operation = argument
 		}
 	}
 	return operation, requested
+}
+
+func sddAttemptHelpAlias(argument string) bool {
+	for _, alias := range sddAttemptHelpAliases {
+		if argument == alias {
+			return true
+		}
+	}
+	return false
+}
+
+// sddAttemptKnownHelpFlag derives its vocabulary from the same operation
+// contracts used for registration and validation; all current flags take values.
+func sddAttemptKnownHelpFlag(argument string) (hasInlineValue, known bool) {
+	if !strings.HasPrefix(argument, "--") {
+		return false, false
+	}
+	name := strings.TrimPrefix(argument, "--")
+	if separator := strings.IndexByte(name, '='); separator >= 0 {
+		name = name[:separator]
+		hasInlineValue = true
+	}
+	for _, definition := range sddAttemptOperationDefinitions {
+		for _, flagDefinition := range definition.flags {
+			if flagDefinition.name == name {
+				return hasInlineValue, true
+			}
+		}
+	}
+	return false, false
 }
 
 func renderSDDAttemptHelp(operation string, stdout io.Writer) error {
