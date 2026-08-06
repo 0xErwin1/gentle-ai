@@ -125,30 +125,34 @@ func TestDeclaredUnsupportedRuntimeStillRefusesNegotiatedStatus(t *testing.T) {
 	}
 }
 
-// TestDeclaredSupportedRuntimeIsAnsweredByNegotiatedStatus is the positive
-// twin the arm above lost when OpenCode stopped being an unsupported runtime,
-// and it is what keeps that swap honest. Deleting a row from a refusal matrix
-// proves nothing on its own: the same red would go green if the transport
-// check had simply been relaxed for everyone. This asserts the two halves
-// together on one repository -- every declared supported runtime is answered,
-// and the refusals above still stop -- so a gate that widened for everyone
-// fails the arm above, and a gate that never opened fails this one.
-func TestDeclaredSupportedRuntimeIsAnsweredByNegotiatedStatus(t *testing.T) {
+// TestDeclaredBuiltInRuntimeUsesProvenExecutorBoundary prevents the capability
+// declaration from drifting from the supported fresh reviewer paths. Claude
+// uses its tool-free fresh agent; OpenCode additionally requires its host
+// isolation controls before negotiated routing can inspect a repository.
+func TestDeclaredBuiltInRuntimeUsesProvenExecutorBoundary(t *testing.T) {
 	repo := initReviewCLIRepo(t)
-	for _, runtime := range []string{string(model.AgentClaudeCode), string(model.AgentOpenCode)} {
-		t.Run(runtime, func(t *testing.T) {
+	for _, test := range []struct {
+		runtime  string
+		isolated bool
+	}{
+		{runtime: string(model.AgentClaudeCode)},
+		{runtime: string(model.AgentOpenCode), isolated: true},
+	} {
+		t.Run(test.runtime, func(t *testing.T) {
+			if test.isolated {
+				t.Setenv("OPENCODE_DISABLE_PROJECT_CONFIG", "1")
+				t.Setenv("OPENCODE_DISABLE_EXTERNAL_SKILLS", "1")
+			}
 			var output bytes.Buffer
 			err := RunReview([]string{
-				"status", "--cwd", repo, "--contract", ReviewIntegrationContractV2, "--agent", runtime, "--next-transition",
+				"status", "--cwd", repo, "--contract", ReviewIntegrationContractV2, "--agent", test.runtime, "--next-transition",
 			}, &output)
-			if err == nil {
-				return
+			if err != nil {
+				t.Fatalf("declared built-in runtime %q did not reach negotiated STATUS: %v\n%s", test.runtime, err, output.String())
 			}
-			failure := decodeReviewIntegrationFailure(t, output.Bytes())
-			if failure.Code == reviewImmutableTransportUnsupportedCode {
-				t.Fatalf("declared supported runtime %q was refused for transport: %#v", runtime, failure)
+			if strings.Contains(output.String(), reviewImmutableTransportUnsupportedCode) {
+				t.Fatalf("declared built-in runtime %q was rejected by the executor boundary: %s", test.runtime, output.String())
 			}
-			t.Fatalf("negotiated STATUS failed for %q: %v %#v", runtime, err, failure)
 		})
 	}
 }
