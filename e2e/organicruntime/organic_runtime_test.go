@@ -707,6 +707,12 @@ func TestOrganicKillSwitchStopsAtTheDeliveryBoundary(t *testing.T) {
 		t.Fatal("the kill-switch journey never reached a committed candidate")
 	}
 
+	// The universal empty-candidate guard (issue #2586) refuses a clean tree
+	// before the kill switch can name itself, so the disabled attempt carries
+	// a real pending candidate: the refusal under test here is the kill
+	// switch's, and it must name its deciding source.
+	harness.writeFiles(map[string]string{"docs/disabled-attempt.md": organicLines("pending while disabled", 3)})
+	harness.git("add", "--", "docs/disabled-attempt.md")
 	_, stderr, err := harness.gentleAllowFailure("review", "start", "--cwd", harness.repo.worktree, "--lineage", "organic-killed")
 	if err == nil {
 		t.Fatal("review start succeeded while receipt-driven development was disabled")
@@ -714,6 +720,7 @@ func TestOrganicKillSwitchStopsAtTheDeliveryBoundary(t *testing.T) {
 	if !strings.Contains(stderr, "receipt-driven development is disabled") || !strings.Contains(stderr, "clone_local") {
 		t.Fatalf("disabled start was refused without naming the deciding source: %s", stderr)
 	}
+	harness.git("rm", "-f", "-q", "--", "docs/disabled-attempt.md")
 
 	// The delivery boundary reports an unmanaged, receiptless candidate instead of
 	// inventing an approval.
@@ -939,37 +946,38 @@ func TestOrganicKillSwitchReEnableLandsOnTheFreshFullReview(t *testing.T) {
 	}
 	tokens := organicNamedContinuation(t, blocked.ReviewGate.Reason)
 
-	// Run exactly what it names. The tree is clean, so the start freezes an
-	// empty candidate and its hint names the --base-ref rerun.
-	emptyStart := harness.runNamedReviewStart(tokens)
-	if emptyStart.ChangedFiles != 0 {
-		t.Fatalf("clean-tree start froze %d files, fixture is wrong", emptyStart.ChangedFiles)
+	// Run exactly what it names. The tree is clean, so the universal
+	// empty-candidate guard (issue #2586) refuses before any authority is
+	// created, and its refusal names the --base-ref rerun. The zero-byte
+	// receipt this journey used to fabricate here can no longer exist on any
+	// route: the not-coverage defense moved from the archive stop to the
+	// start itself.
+	if len(tokens) < 2 || tokens[0] != "review" || tokens[1] != "start" {
+		t.Fatalf("named continuation is %v, want gentle-ai review start", tokens)
 	}
-	if !strings.Contains(emptyStart.Hint, "--base-ref") {
-		t.Fatalf("empty start hint does not name the committed-work rerun: %q", emptyStart.Hint)
+	_, emptyStderr, emptyErr := harness.gentleAllowFailure(tokens...)
+	if emptyErr == nil {
+		t.Fatal("a clean-tree start froze an empty candidate instead of refusing")
 	}
-	if finalized := harness.finalize(emptyStart.LineageID); finalized.State != organicStateApproved {
-		t.Fatalf("empty-candidate finalize = %#v, want approved", finalized)
+	if !strings.Contains(emptyStderr, "no pending changes") || !strings.Contains(emptyStderr, "--base-ref") {
+		t.Fatalf("empty-candidate refusal does not name the committed-work rerun: %q", emptyStderr)
 	}
 
-	// The approved zero-byte receipt is not coverage: the stop stays blocked
-	// and keeps naming the fresh review with its base-ref selector.
+	// The refused start recorded nothing: the stop stays blocked and keeps
+	// naming the fresh review with its base-ref selector.
 	stillBlocked := harness.sddStatus(change)
 	if stillBlocked.Dependencies.Archive != "blocked" || stillBlocked.ReviewGate == nil ||
 		stillBlocked.ReviewGate.Result == organicGateAllow {
-		t.Fatalf("a review of zero bytes was recorded as coverage: %#v", stillBlocked)
+		t.Fatalf("a refused empty start unblocked the archive stop: %#v", stillBlocked)
 	}
+	// The stop keeps naming the fresh full review; the --base-ref rerun for
+	// committed work now travels in the refusal's own hint (asserted above),
+	// because the zero-byte receipt that used to teach the stop that detail
+	// can no longer exist. The operator supplies the one placeholder value —
+	// the boundary to re-govern from — and the fresh full review freezes the
+	// delivered range.
 	tokens = organicNamedContinuation(t, stillBlocked.ReviewGate.Reason)
-	if !strings.Contains(stillBlocked.ReviewGate.Reason, "--base-ref") {
-		t.Fatalf("empty-receipt stop does not name the base-ref rerun: %q", stillBlocked.ReviewGate.Reason)
-	}
-
-	// The operator supplies the one placeholder value — the boundary to
-	// re-govern from — and the fresh full review freezes the delivered range.
-	if tokens[len(tokens)-1] != "--base-ref" {
-		t.Fatalf("empty-receipt continuation = %v, want it to end at the operator's --base-ref value", tokens)
-	}
-	freshStart := harness.runNamedReviewStart(tokens, baselineCommit)
+	freshStart := harness.runNamedReviewStart(tokens, "--base-ref", baselineCommit)
 	if freshStart.ChangedFiles == 0 {
 		t.Fatalf("the fresh full review froze no content: %#v", freshStart)
 	}
