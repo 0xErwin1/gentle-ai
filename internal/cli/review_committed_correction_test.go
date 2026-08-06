@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -107,6 +108,29 @@ func TestStagedCorrectionContinuesToReceipt(t *testing.T) {
 	record, err := store.Load()
 	if err != nil || record.State.State != reviewtransaction.StateApproved || record.State.EvidenceTargetIdentity != request.CorrectionTargetIdentity {
 		t.Fatalf("staged correction receipt state = %#v, %v", record.State, err)
+	}
+}
+
+func TestSelectorlessCommittedCorrectionFailsClosedForUnreadableAuthority(t *testing.T) {
+	repo, base, _ := forecastCommittedCorrection(t)
+	writeCommittedCorrection(t, repo, false)
+	runReviewCLIGit(t, repo, "branch", "-f", base, "HEAD")
+
+	statePath := filepath.Join(reviewCLICompactStoreDir(repo, "unreadable-authority"), "review-state.json")
+	if err := os.MkdirAll(statePath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	var output bytes.Buffer
+	err := RunReview([]string{
+		"status", "--cwd", repo, "--contract", ReviewIntegrationContractV1, "--next-transition",
+	}, &output)
+	if err == nil {
+		t.Fatalf("selector-less status selected a recoverable lineage despite unreadable authority: %s", output.String())
+	}
+	var pathErr *os.PathError
+	if !errors.As(err, &pathErr) {
+		t.Fatalf("selector-less status error = %T %[1]v, want operational path error", err)
 	}
 }
 
