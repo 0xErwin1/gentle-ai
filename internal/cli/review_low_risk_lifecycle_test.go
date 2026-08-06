@@ -179,6 +179,7 @@ func TestLowRiskExternalEvidenceRemainsBackwardCompatible(t *testing.T) {
 	if err := os.WriteFile(path, []byte("ordinary documentation\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	runReviewCLIGit(t, repo, "add", "docs/guide.md")
 	started := startReviewOperationFixture(t, repo, "review-low-external-evidence")
 	evidence := []byte("external focused tests pass\n")
 	evidencePath := filepath.Join(t.TempDir(), "evidence.txt")

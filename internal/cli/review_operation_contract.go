@@ -278,14 +278,18 @@ var reviewPreflightDirectRouteUncompletableReason = reviewPreflightReason{
 	NextAction: "review.start",
 }
 
-// reviewPreflightEmptyCandidateReason classifies a negotiated START whose
-// frozen TargetCurrentChanges candidate has zero changed paths (a clean,
-// fully-committed worktree). Left unguarded, this candidate would freeze as
-// base_tree == candidate_tree == HEAD, pass risk assessment and pre-commit,
-// then fail late and misleadingly at pre-push. `base_ref` is already in the
-// published required_inputs enum, and `next_action: correct_request` is
-// honest because the caller genuinely must supply it: the system never
-// auto-derives a base ref (e.g. HEAD~1) on the caller's behalf.
+// reviewPreflightEmptyCandidateReason classifies a START -- negotiated or
+// direct -- whose frozen candidate has zero changed paths: a TargetCurrentChanges
+// candidate on a clean, fully-committed worktree (base_tree == candidate_tree
+// == HEAD), or a TargetBaseDiff candidate whose named base nets no manifest
+// entries (a mode-only or truly-empty diff). Left unguarded, either shape
+// would freeze, pass risk assessment, and mint an approved receipt that
+// inspected nothing -- issue #2586 (a stale zero-delta receipt discovered
+// as "governing" a later, genuinely unreviewed candidate that happens to
+// share its final tree). `base_ref` is already in the published
+// required_inputs enum, and `next_action: correct_request` is honest because
+// the caller genuinely must supply it: the system never auto-derives a base
+// ref (e.g. HEAD~1) on the caller's behalf.
 var reviewPreflightEmptyCandidateReason = reviewPreflightReason{
 	Code:           "empty_candidate_scope",
 	Message:        "The review candidate has no pending changes to freeze; name the base to compare against before retrying.",
