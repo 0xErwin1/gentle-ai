@@ -12,6 +12,7 @@ const (
 	captureEvidenceDescriptorCorrectionLineage = "capture-evidence-v5-correction"
 	statusSchemaV5                             = "gentle-ai.review-integration.status/v5"
 	verificationEvidenceSchemaV1               = "https://gentle-ai.dev/schema/review/verification-evidence/v1"
+	verificationEvidenceRecordSchemaV2         = "gentle-ai.review-verification-evidence/v2"
 )
 
 var captureEvidenceDescriptorCapability = &Capability{Verb: []string{"review", "capture-evidence"},
@@ -126,6 +127,27 @@ func executeV5CaptureEvidenceDescriptor(r *journeyRun, lineage, evidenceName str
 	observation := r.runAt(r.sandbox.Root, arguments, false)
 	if observation.ExitCode != 0 {
 		return waveCorrectionStatus{}, fmt.Errorf("execute v5 capture-evidence descriptor: %s", firstLine(observation.Stderr))
+	}
+	var captured struct {
+		Schema            string `json:"schema"`
+		Version           int    `json:"version"`
+		LineageID         string `json:"lineage_id"`
+		AuthorityRevision string `json:"authority_revision"`
+		TargetIdentity    string `json:"target_identity"`
+		Outcome           string `json:"outcome"`
+		RawPayloadSHA256  string `json:"raw_payload_sha256"`
+		RawPayloadBytes   int64  `json:"raw_payload_bytes"`
+		RecordDigest      string `json:"record_digest"`
+	}
+	if err := json.Unmarshal([]byte(strings.TrimSpace(observation.Stdout)), &captured); err != nil {
+		return waveCorrectionStatus{}, fmt.Errorf("decode captured verification-evidence record: %w", err)
+	}
+	target := strings.TrimPrefix(status.NextTransition.Collect.Inputs[0].Submission.ArgumentTokens[2], "--target=")
+	if captured.Schema != verificationEvidenceRecordSchemaV2 || captured.Version != 2 ||
+		captured.LineageID != status.Authority.LineageID || captured.AuthorityRevision != status.Authority.Revision ||
+		captured.TargetIdentity != target || captured.Outcome != "passed" || captured.RawPayloadSHA256 == "" ||
+		captured.RawPayloadBytes <= 0 || captured.RecordDigest == "" {
+		return waveCorrectionStatus{}, fmt.Errorf("capture-evidence did not publish a bound v2 record: %+v", captured)
 	}
 	return readCorrectionStatusForContract(r, lineage, reviewContractV2)
 }
