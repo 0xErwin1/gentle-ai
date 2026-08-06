@@ -46,6 +46,7 @@ type waveOperationResult struct {
 }
 
 type waveCorrectionStatus struct {
+	Schema         string `json:"schema"`
 	TargetIdentity string `json:"target_identity"`
 	Authority      *struct {
 		LineageID string `json:"lineage_id"`
@@ -76,20 +77,30 @@ type waveCorrectionStatus struct {
 		ReasonCode string `json:"reason_code"`
 		Collect    *struct {
 			Inputs []struct {
-				Name       string                    `json:"name"`
-				Submission *waveSubmissionDescriptor `json:"submission"`
+				Name             string                    `json:"name"`
+				CaptureOperation string                    `json:"capture_operation"`
+				Submission       *waveSubmissionDescriptor `json:"submission"`
 			} `json:"inputs"`
 		} `json:"collect"`
+		Execute *struct {
+			Operation string `json:"operation"`
+		} `json:"execute"`
 	} `json:"next_transition"`
 }
 
 type waveSubmissionDescriptor struct {
-	OperationToken string   `json:"operation_token"`
-	ArgumentTokens []string `json:"argument_tokens"`
-	Value          struct {
-		Slot                 string `json:"slot"`
-		SubstitutionLocation int    `json:"substitution_location"`
-	} `json:"value"`
+	OperationToken string                `json:"operation_token"`
+	ArgumentTokens []string              `json:"argument_tokens"`
+	Value          *waveSubmissionValue  `json:"value,omitempty"`
+	Values         []waveSubmissionValue `json:"values,omitempty"`
+}
+
+type waveSubmissionValue struct {
+	Slot                 string   `json:"slot"`
+	Domain               string   `json:"domain"`
+	Schema               string   `json:"schema,omitempty"`
+	AllowedValues        []string `json:"allowed_values,omitempty"`
+	SubstitutionLocation int      `json:"substitution_location"`
 }
 
 type waveRetryStatus struct {
@@ -503,7 +514,7 @@ func correctionSubmissionArguments(r *journeyRun, status waveCorrectionStatus, r
 		return nil, fmt.Errorf("submission descriptor transition = %+v", status.NextTransition)
 	}
 	descriptor := status.NextTransition.Collect.Inputs[0].Submission
-	if descriptor == nil || descriptor.OperationToken != "finalize" || descriptor.Value.Slot != slot ||
+	if descriptor == nil || descriptor.OperationToken != "finalize" || descriptor.Value == nil || descriptor.Value.Slot != slot ||
 		descriptor.Value.SubstitutionLocation < 0 || descriptor.Value.SubstitutionLocation >= len(descriptor.ArgumentTokens) {
 		return nil, fmt.Errorf("submission descriptor = %+v", descriptor)
 	}
