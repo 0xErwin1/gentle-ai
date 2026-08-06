@@ -823,6 +823,13 @@ func RebuildCommittedBaseDiffCorrectionCandidate(ctx context.Context, repo strin
 	if err := pathsAreSubset(live.Paths, state.GenesisPaths); err != nil {
 		return Snapshot{}, fmt.Errorf("committed correction exceeds frozen genesis paths: %w", err)
 	}
+	actual, err := builder.ChangedLines(ctx, live)
+	if err != nil {
+		return Snapshot{}, fmt.Errorf("measure rebuilt committed correction: %w", err)
+	}
+	if actual > state.CorrectionBudget {
+		return Snapshot{}, fmt.Errorf("rebuild committed correction: %w", &CorrectionBudgetExceededError{Actual: actual, Budget: state.CorrectionBudget})
+	}
 	return live, nil
 }
 

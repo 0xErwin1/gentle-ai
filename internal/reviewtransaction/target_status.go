@@ -175,7 +175,7 @@ func selectorlessCommittedBaseDiffCorrections(ctx context.Context, repo string) 
 		}
 		live, rebuildErr := RebuildCommittedBaseDiffCorrectionCandidate(ctx, repo, record.State)
 		if rebuildErr != nil {
-			if IsCompactAuthorityOperationalFailure(rebuildErr) {
+			if IsCompactAuthorityOperationalFailure(rebuildErr) || IsCorrectionBudgetExceeded(rebuildErr) {
 				return nil, rebuildErr
 			}
 			continue

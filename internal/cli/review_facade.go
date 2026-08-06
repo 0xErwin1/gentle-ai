@@ -3829,7 +3829,7 @@ func discoverCompactFacadeFinalize(ctx context.Context, repo, lineage string) (r
 			matches := validationErr == nil
 			if !matches {
 				_, rebuildErr := reviewtransaction.RebuildCommittedBaseDiffCorrectionCandidate(ctx, repo, candidate.record.State)
-				if rebuildErr != nil && reviewtransaction.IsCompactAuthorityOperationalFailure(rebuildErr) {
+				if rebuildErr != nil && (reviewtransaction.IsCompactAuthorityOperationalFailure(rebuildErr) || reviewtransaction.IsCorrectionBudgetExceeded(rebuildErr)) {
 					return reviewtransaction.CompactStore{}, reviewtransaction.CompactRecord{}, rebuildErr
 				}
 				matches = rebuildErr == nil

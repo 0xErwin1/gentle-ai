@@ -107,6 +107,22 @@ type CompactState struct {
 	ReviewerContextLevel         ReviewerContextLevel         `json:"reviewer_context_level,omitempty"`
 }
 
+// CorrectionBudgetExceededError identifies a repository-derived correction
+// whose changed lines exceed the authority's frozen correction budget.
+type CorrectionBudgetExceededError struct {
+	Actual int
+	Budget int
+}
+
+func (err *CorrectionBudgetExceededError) Error() string {
+	return fmt.Sprintf("actual correction is %d changed lines, exceeding the frozen budget of %d", err.Actual, err.Budget)
+}
+
+func IsCorrectionBudgetExceeded(err error) bool {
+	var budgetErr *CorrectionBudgetExceededError
+	return errors.As(err, &budgetErr)
+}
+
 // CompactResultReopenSlot binds one selected lens artifact at the exact
 // validating revision from which results were reopened. Quarantined slots may
 // be historical unadmitted artifacts and therefore omit subject metadata;
