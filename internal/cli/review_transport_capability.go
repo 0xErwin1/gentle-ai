@@ -4,6 +4,7 @@ import (
 	"errors"
 	"strings"
 
+	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/capabilitymanifest"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
 )
 
@@ -50,21 +51,28 @@ type reviewImmutableRuntimePolicy struct {
 // reviewImmutableRuntimeCapability is the compiled receipt-review boundary.
 // Generic adapter features and caller-supplied claims cannot expand it.
 func reviewImmutableRuntimeCapability(agent model.AgentID) reviewImmutableRuntimePolicy {
+	policy := reviewImmutableRuntimePolicy{Transport: reviewImmutableTransportUnsupported}
 	switch agent {
 	case model.AgentClaudeCode:
-		return reviewImmutableRuntimePolicy{Eligible: true, Transport: reviewImmutableTransportClaudePromptCarried}
+		policy.Eligible = true
 	case model.AgentCodex:
-		return reviewImmutableRuntimePolicy{Eligible: true, Transport: reviewImmutableTransportUnsupported}
+		policy.Eligible = true
 	case model.AgentOpenCode:
-		// #2417 restored genuine support through the provider-injected
-		// shell-less channel; #2076 (per-session exact-value Bash-permission
-		// binding) remains structurally impossible because OpenCode reads
-		// its config only at process startup, before review.start mints any
-		// dynamic value, and is no longer needed for support.
-		return reviewImmutableRuntimePolicy{Eligible: true, Transport: reviewImmutableTransportOpenCodeProviderInjected}
+		policy.Eligible = true
 	default:
-		return reviewImmutableRuntimePolicy{Transport: reviewImmutableTransportUnsupported}
+		return policy
 	}
+	manifest, err := capabilitymanifest.ForAgent(agent)
+	if err != nil || !manifest.Advertises(capabilitymanifest.ContractImmutableReviewExecutorV1) {
+		return policy
+	}
+	switch agent {
+	case model.AgentClaudeCode:
+		policy.Transport = reviewImmutableTransportClaudePromptCarried
+	case model.AgentOpenCode:
+		policy.Transport = reviewImmutableTransportOpenCodeProviderInjected
+	}
+	return policy
 }
 
 func (capability reviewImmutableRuntimePolicy) supportsImmutableReceiptReview() bool {

@@ -42,6 +42,14 @@ type openCodePoisonedReviewSetup struct {
 // controls.
 const openCodePoisonMarker = "POISON-MARKER-2417-b6b2c1"
 
+func requireOpenCodeImmutableReviewExecutor(t *testing.T) {
+	t.Helper()
+	if os.Getenv(realAgentE2EEnvironment) != "1" {
+		t.Skip("set GENTLE_AI_REAL_AGENT_E2E=1 to run the real OpenCode reviewer proof")
+	}
+	t.Skip("OpenCode immutable review execution is unavailable until its provider proves the pre-START reviewer boundary; CLI preflight is covered deterministically")
+}
+
 // setupOpenCodePoisonedReview drives a real negotiated review to its
 // reviewer collect point and poisons the worktree. It does not launch
 // OpenCode: callers configure their own isolation environment and fixture.
@@ -203,9 +211,7 @@ func runOpenCodeReview(t *testing.T, setup openCodePoisonedReviewSetup, environm
 // not AGENTS.md, and not the caller-authored prose the driver's task call
 // carried before provider injection replaced it.
 func TestRealOpenCodeReviewerLensCannotSeeLiveState(t *testing.T) {
-	if os.Getenv(realAgentE2EEnvironment) != "1" {
-		t.Skip("set GENTLE_AI_REAL_AGENT_E2E=1 to run the real OpenCode reviewer support proof")
-	}
+	requireOpenCodeImmutableReviewExecutor(t)
 	setup := setupOpenCodePoisonedReview(t, "opencode-poisoned-worktree-isolated")
 
 	fixture := newOpenCodeReviewerFixture(t, setup.binding, setup.manifestPaths)
@@ -270,9 +276,7 @@ func TestRealOpenCodeReviewerLensCannotSeeLiveState(t *testing.T) {
 // system message (see the plugin's REQUIRED_ISOLATION_ENVIRONMENT comment).
 // With the gate in place, the reviewer must never launch at all.
 func TestRealOpenCodeReviewerRefusesWithoutIsolationEnvironment(t *testing.T) {
-	if os.Getenv(realAgentE2EEnvironment) != "1" {
-		t.Skip("set GENTLE_AI_REAL_AGENT_E2E=1 to run the real OpenCode reviewer isolation-refusal proof")
-	}
+	requireOpenCodeImmutableReviewExecutor(t)
 	setup := setupOpenCodePoisonedReview(t, "opencode-poisoned-worktree-unisolated")
 
 	fixture := newOpenCodeReviewerFixture(t, setup.binding, setup.manifestPaths)
@@ -332,9 +336,7 @@ func TestRealOpenCodeReviewerRefusesWithoutIsolationEnvironment(t *testing.T) {
 // config, proving the plugin's own client.config.get() check is a genuinely
 // separate gate: the reviewer must still refuse to launch.
 func TestRealOpenCodeReviewerRefusesRemoteInstructionsEntry(t *testing.T) {
-	if os.Getenv(realAgentE2EEnvironment) != "1" {
-		t.Skip("set GENTLE_AI_REAL_AGENT_E2E=1 to run the real OpenCode remote-instructions refusal proof")
-	}
+	requireOpenCodeImmutableReviewExecutor(t)
 	setup := setupOpenCodePoisonedReview(t, "opencode-poisoned-worktree-remote-instructions")
 
 	instructionsServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
