@@ -895,6 +895,7 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 		if *actionEligibility {
 			result.Eligibility = newReviewActionEligibility(result)
 		}
+		var compactAuthority *reviewStatusCompactAuthority
 		if *nextTransition {
 			artifacts := []ReviewTransitionArtifact{}
 			var capturedEvidence *reviewtransaction.VerificationEvidenceRecord
@@ -914,6 +915,11 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 					if loadErr != nil {
 						artifactErr = loadErr
 					} else {
+						compactAuthority = &reviewStatusCompactAuthority{
+							OriginalChangedLines:   record.State.OriginalChangedLines,
+							CorrectionBudget:       record.State.CorrectionBudget,
+							CorrectionBudgetPolicy: record.State.CorrectionBudgetPolicy,
+						}
 						correctionForecasted = record.State.State == reviewtransaction.StateCorrectionRequired && record.State.ProposedCorrectionLines != nil
 						if record.State.State == reviewtransaction.StateCorrectionRequired && !record.State.CorrectionAttemptConsumed() {
 							request, requestErr := reviewtransaction.BuildCorrectionPlanRequest(record.State, record.Revision)
@@ -1019,8 +1025,14 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 				reviewNarrateStopReason(transition.ReasonCode, runtime)
 			}
 		}
-		if err := result.Validate(); err != nil {
-			return fmt.Errorf("validate negotiated review status: %w", err)
+		var validationErr error
+		if compactAuthority != nil {
+			validationErr = result.validateWithCompactAuthority(compactAuthority)
+		} else {
+			validationErr = result.Validate()
+		}
+		if validationErr != nil {
+			return fmt.Errorf("validate negotiated review status: %w", validationErr)
 		}
 		return encodeReviewJSON(stdout, result)
 	}
