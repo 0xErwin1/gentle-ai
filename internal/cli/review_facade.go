@@ -951,7 +951,7 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 								result.ValidationRequest = validationRequest
 							}
 						}
-						if *contract == ReviewIntegrationContractV2 && record.State.State == reviewtransaction.StateCorrectionRequired {
+						if *contract == ReviewIntegrationContractV2 && (record.State.State == reviewtransaction.StateCorrectionRequired || record.State.State == reviewtransaction.StateValidating) {
 							contextTarget := record.State.CurrentSnapshot.Identity
 							if validationRequest != nil {
 								contextTarget = validationRequest.CorrectionTargetIdentity
@@ -1563,6 +1563,16 @@ func runReviewFacadeStart(ctx context.Context, args []string, stdout io.Writer) 
 	if negotiated && snapshot.Identity != *targetIdentity {
 		return reviewPreflightRefusal(reviewPreflightStaleTargetReason,
 			errors.New("review start target does not match the freshly built snapshot"))
+	}
+	// A negotiated TargetCurrentChanges candidate with zero changed paths
+	// (a clean, fully-committed worktree) would otherwise freeze as an empty
+	// candidate, pass risk assessment and consent, and only fail late and
+	// misleadingly at pre-push. Refuse it here, before any authority is
+	// created, and name --base-ref as the way to review committed work
+	// instead of silently deriving one.
+	if negotiated && snapshot.Kind == reviewtransaction.TargetCurrentChanges && len(snapshot.Paths) == 0 {
+		return reviewPreflightRefusal(reviewPreflightEmptyCandidateReason,
+			errors.New(reviewStartEmptyCandidateHint))
 	}
 	assessment, err := (reviewtransaction.SnapshotBuilder{Repo: root}).AssessSnapshotRisk(ctx, snapshot)
 	if err != nil {
@@ -2780,6 +2790,9 @@ func validateReviewFinalizeSubmission(ctx context.Context, repo string, state re
 	if submission == nil {
 		return errors.New("review finalize submission is unavailable") // refusal:by-design world-action: the provider must issue a complete descriptor before a submission can be executed
 	}
+	if submission.Value == nil {
+		return errors.New("review finalize submission has no value slot") // refusal:by-design world-action: a finalize request cannot execute a capture-evidence descriptor
+	}
 	expected := append([]string{}, submission.ArgumentTokens...)
 	slot := submission.Value.SubstitutionLocation
 	expected[slot] = strings.Replace(expected[slot], reviewSubmissionValuePlaceholder, value, 1)
@@ -3812,7 +3825,19 @@ func discoverCompactFacadeFinalize(ctx context.Context, repo, lineage string) (r
 	if len(candidates) > 1 {
 		exact := candidates[:0]
 		for _, candidate := range candidates {
-			if (reviewtransaction.SnapshotBuilder{Repo: repo}).ValidateLiveSnapshot(ctx, candidate.record.State.CurrentSnapshot) == nil {
+			validationErr := (reviewtransaction.SnapshotBuilder{Repo: repo}).ValidateLiveSnapshot(ctx, candidate.record.State.CurrentSnapshot)
+			if validationErr != nil && reviewtransaction.IsCompactAuthorityOperationalFailure(validationErr) {
+				return reviewtransaction.CompactStore{}, reviewtransaction.CompactRecord{}, validationErr
+			}
+			matches := validationErr == nil
+			if !matches {
+				_, rebuildErr := reviewtransaction.RebuildCommittedBaseDiffCorrectionCandidate(ctx, repo, candidate.record.State)
+				if rebuildErr != nil && (reviewtransaction.IsCompactAuthorityOperationalFailure(rebuildErr) || reviewtransaction.IsCorrectionBudgetExceeded(rebuildErr)) {
+					return reviewtransaction.CompactStore{}, reviewtransaction.CompactRecord{}, rebuildErr
+				}
+				matches = rebuildErr == nil
+			}
+			if matches {
 				exact = append(exact, candidate)
 			}
 		}
@@ -4049,7 +4074,7 @@ func encodeCompactFacadeFinalize(stdout io.Writer, negotiated bool, contract str
 				}
 			}
 		}
-		if nextTransition && contract == ReviewIntegrationContractV2 && state.State == reviewtransaction.StateCorrectionRequired {
+		if nextTransition && contract == ReviewIntegrationContractV2 && (state.State == reviewtransaction.StateCorrectionRequired || state.State == reviewtransaction.StateValidating) {
 			contextTarget := state.CurrentSnapshot.Identity
 			if validationRequest != nil {
 				contextTarget = validationRequest.CorrectionTargetIdentity

@@ -27,7 +27,8 @@ func TestBoundedReviewContractLeavesCanonicalizationToNativeGo(t *testing.T) {
 	for _, want := range []string{
 		"Native Go owns validation, canonicalization, persistence, hashing, reopening, and binding",
 		"Only candidate-caused severe findings block",
-		"Claude Code carries immutable candidate evidence directly in the reviewer task prompt",
+		"Claude Code and OpenCode advertise immutable reviewer execution",
+		"Codex and Kilo remain dormant",
 		"read-only native Git commands",
 	} {
 		if !strings.Contains(content, want) {
@@ -82,6 +83,9 @@ func TestDedicatedReviewersAndRefutersAreStructurallyReadOnly(t *testing.T) {
 		"claude/agents/review-reliability.md", "claude/agents/review-resilience.md",
 	} {
 		frontmatter := markdownFrontmatter(t, path)
+		if !strings.Contains(frontmatter, "tools: []") {
+			t.Errorf("%s grants live reviewer tools: %s", path, frontmatter)
+		}
 		if strings.Contains(frontmatter, "Bash") {
 			t.Errorf("%s grants unrestricted Bash without a per-command policy", path)
 		}
@@ -288,10 +292,15 @@ func TestKilocodeReviewSettingsMatchCurrentMainBaseline(t *testing.T) {
 	// new assistant-visible native delegation status lines move this hash too.
 	// Deliberate, not drift.
 	//
+	// Empty SDD task results now carry a versioned terminal handoff and the
+	// orchestrator must run its supplied sdd-status continuation exactly once.
+	// Kilocode embeds the shared orchestrator contract, so its rendered settings
+	// hash moves with that required fail-closed protocol. Deliberate, not drift.
+	//
 	// This baseline combines #2485's answer-validation contract, #2417's
-	// provider-injected reviewer shape, and #2440's runtime-bound identity.
-	// It is recomputed from the merged tree.
-	const want = "c99e8c54abf04d3bf495e48c169196cc2c7cdfcc6e78a93f7a030c521111fc98"
+	// provider-injected reviewer shape, #2440's runtime-bound identity, and
+	// #2207's executor-boundary wording. It is recomputed from the merged tree.
+	const want = "c7356719d6d509156e2c6eb7051761d31d3dd70a51e6d393645c9b5611f75e0b"
 	if got != want {
 		t.Fatalf("Kilocode settings SHA-256 = %s, want current-main baseline %s", got, want)
 	}
@@ -481,23 +490,10 @@ func TestOpenCodeRenderedReviewProtocolCost(t *testing.T) {
 		// moves with it (21,200 -> 22,200) to restore the ~15% margin below;
 		// full-4R still has headroom and is unchanged.
 		//
-		// wantChars grew again when issue #2417 restored genuine OpenCode
-		// immutable receipt-review. The disabled unsupported-capability refusal
-		// prompt is gone; OpenCode (and Kilocode, which shares the same
-		// generated shape and has no transport of its own) now render
-		// openCodeProviderInjectedReviewerPrompt, which is longer because it
-		// actually describes the provider-injected GENTLE_AI_REVIEW_CONTEXT
-		// block, its no-bash/no-read guarantee, and its completeness
-		// preconditions, instead of one short refusal sentence. The shared
-		// contract text itself is untouched by that issue, so only the per-lens
-		// agent prompts move. This is a deliberate contract restoration, not
-		// drift. The standard ceiling moves with it (22,200 -> 23,300) to
-		// restore the ~15% margin the guard below requires; full-4R already had
-		// enough headroom and is unchanged.
-		// #2440 then replaces five literal claude-code identities with the
-		// executing runtime. The combined pins are recomputed from this merge.
-		{name: "standard", agents: []string{"review-reliability"}, beforeChars: 42_301, wantChars: 20_142, maxCharacters: 23_300},
-		{name: "full-4R", agents: []string{"review-risk", "review-resilience", "review-readability", "review-reliability"}, beforeChars: 106_998, wantChars: 30_543, maxCharacters: 36_000},
+		// #2207 advertises only Claude Code and OpenCode after their fresh-reviewer
+		// constraints are made explicit in the shared contract.
+		{name: "standard", agents: []string{"review-reliability"}, beforeChars: 42_301, wantChars: 19_569, maxCharacters: 23_300},
+		{name: "full-4R", agents: []string{"review-risk", "review-resilience", "review-readability", "review-reliability"}, beforeChars: 106_998, wantChars: 29_970, maxCharacters: 36_000},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

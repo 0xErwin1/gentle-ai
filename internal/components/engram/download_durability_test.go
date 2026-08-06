@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -57,7 +58,7 @@ func TestEngramDownloadDigestDescribesTheFileOnDisk(t *testing.T) {
 	if err != nil {
 		t.Fatalf("stat parent: %v", err)
 	}
-	if parent.Mode().Perm() != 0o755 {
+	if runtime.GOOS != "windows" && parent.Mode().Perm() != 0o755 {
 		t.Errorf("parent directory mode = %v, want 0755", parent.Mode().Perm())
 	}
 }
@@ -149,7 +150,7 @@ func TestEngramWriteExecutablePublishesAnExecutable(t *testing.T) {
 	if err != nil {
 		t.Fatalf("stat: %v", err)
 	}
-	if info.Mode().Perm()&0o111 == 0 {
+	if runtime.GOOS != "windows" && info.Mode().Perm()&0o111 == 0 {
 		t.Errorf("mode = %v, want the executable bits set", info.Mode().Perm())
 	}
 	onDisk, err := os.ReadFile(outPath)

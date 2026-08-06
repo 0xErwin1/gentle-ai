@@ -22,7 +22,6 @@ internal/cli/review_narration.go	reviewNarrationStripCodeSpans
 internal/cli/review_operation_contract.go	reviewNamedArgument
 internal/cli/review_printed_command.go	ReviewOperationFlagSurface
 internal/cli/review_printed_command.go	SplitPrintedCommandWords
-internal/cli/run.go	BuildRealStagePlan
 internal/cli/run.go	componentPathDir
 internal/cli/run.go	componentPaths
 internal/cli/run.go	ensureGoAvailableAfterInstall
@@ -42,7 +41,6 @@ internal/components/engram/inject.go	ensureAntigravitySettings
 internal/components/engram/inject.go	isAbsoluteEngramPath
 internal/components/engram/verify.go	CountVersionCallsForTest
 internal/components/engram/verify.go	SetVersionForTest
-internal/components/engram/verify.go	VerifyHealth
 internal/components/filemerge/toml.go	RemoveTOMLTableKeys
 internal/components/filemerge/toml.go	UpsertCodexMCPServerBlock
 internal/components/gga/config.go	InjectionResult.FilesWritten

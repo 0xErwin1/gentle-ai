@@ -770,7 +770,7 @@ func scanCompactAuthority(ctx context.Context, repo string) (compactAuthoritySca
 			// the entry's content, and quarantining them would turn a
 			// transient or environmental problem into a permanent verdict
 			// about somebody's authority. Those still propagate.
-			if compactAuthorityOperationalFailure(loadErr) {
+			if IsCompactAuthorityOperationalFailure(loadErr) {
 				return compactAuthorityScan{}, loadErr
 			}
 			scan.unreadable[store.lineageID] = loadErr
@@ -1074,6 +1074,16 @@ func compactMaintenanceLockPath(authorityRoot string) string {
 // so incident preservation still works when capture was attempted from a
 // repository that does not own the reviewing lineage.
 func CompactIncidentsDir(ctx context.Context, repo, lineageID string) (string, error) {
+	return compactIncidentsDir(ctx, repo, lineageID, false)
+}
+
+// EnsureCompactIncidentsDir creates the durable raw-result incident directory
+// with the same owner-only safety boundary as compact authority artifacts.
+func EnsureCompactIncidentsDir(ctx context.Context, repo, lineageID string) (string, error) {
+	return compactIncidentsDir(ctx, repo, lineageID, true)
+}
+
+func compactIncidentsDir(ctx context.Context, repo, lineageID string, create bool) (string, error) {
 	if err := validateLineageID(lineageID); err != nil {
 		return "", err
 	}
@@ -1081,7 +1091,23 @@ func CompactIncidentsDir(ctx context.Context, repo, lineageID string) (string, e
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(base, "incidents", lineageID), nil
+	dir := filepath.Join(base, "incidents", lineageID)
+	if create {
+		if err := ensureCompactIncidentsDir(dir); err != nil {
+			return "", fmt.Errorf("ensure private incident preservation directory: %w", err)
+		}
+	}
+	return dir, nil
+}
+
+func ensureCompactIncidentsDir(dir string) error {
+	if _, err := createPrivateRARDirectory(filepath.Dir(dir)); err != nil {
+		return fmt.Errorf("create private incident root: %w", err)
+	}
+	if _, err := createPrivateRARDirectory(dir); err != nil {
+		return fmt.Errorf("create private incident lineage directory: %w", err)
+	}
+	return nil
 }
 
 func DiscoverCompactStores(ctx context.Context, repo string) ([]CompactStore, error) {
@@ -1547,7 +1573,7 @@ func classifyCompactCorrectionTarget(ctx context.Context, repo string, existing,
 	}
 	if !liveAlreadyValidated {
 		if err := (SnapshotBuilder{Repo: repo}).ValidateEvidence(ctx, live); err != nil {
-			if compactAuthorityOperationalFailure(err) {
+			if IsCompactAuthorityOperationalFailure(err) {
 				return compactCorrectionTargetUnclaimed, err
 			}
 			return compactCorrectionTargetUnclaimed, nil
@@ -1571,7 +1597,7 @@ func classifyCompactCorrectionTarget(ctx context.Context, repo string, existing,
 		}
 		matches, err := compactCorrectionCandidateMatches(ctx, repo, existing, requested)
 		if err != nil {
-			if compactAuthorityOperationalFailure(err) {
+			if IsCompactAuthorityOperationalFailure(err) {
 				return compactCorrectionTargetUnclaimed, err
 			}
 		} else if matches {
@@ -1584,7 +1610,9 @@ func classifyCompactCorrectionTarget(ctx context.Context, repo string, existing,
 	return compactCorrectionTargetBlocked, nil
 }
 
-func compactAuthorityOperationalFailure(err error) bool {
+// IsCompactAuthorityOperationalFailure reports errors that prevent observing
+// authority at all rather than describing a quarantinable authority record.
+func IsCompactAuthorityOperationalFailure(err error) bool {
 	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, ErrConcurrentUpdate) {
 		return true
 	}
@@ -1650,7 +1678,18 @@ func compactCorrectionCandidateMatches(ctx context.Context, repo string, existin
 	if err != nil {
 		return false, err
 	}
-	return lines <= existing.CorrectionBudget-existing.CumulativeCorrectionLines, nil
+	remaining, err := compactCorrectionRemainingBudget(existing)
+	if err != nil {
+		return false, err
+	}
+	return lines <= remaining, nil
+}
+
+func compactCorrectionRemainingBudget(state CompactState) (int, error) {
+	if state.CorrectionBudget < 0 || state.CumulativeCorrectionLines < 0 || state.CumulativeCorrectionLines > state.CorrectionBudget {
+		return 0, errors.New("compact correction accounting cannot derive a remaining budget") // refusal:by-design world-action: invalid persisted correction accounting cannot authorize another correction candidate
+	}
+	return state.CorrectionBudget - state.CumulativeCorrectionLines, nil
 }
 
 func compactStartLiveTargetMatches(ctx context.Context, repo string, existing, requested CompactState, requireCurrentCandidate bool) bool {

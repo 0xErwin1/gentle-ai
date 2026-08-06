@@ -314,7 +314,7 @@ func TestNegotiatedRestartStatusSuppliesFrozenContextForEveryMissingReviewer(t *
 	repo, started, _, record := newArtifactReview(t, true)
 	var output bytes.Buffer
 	if err := RunReview([]string{
-		"status", "--contract", ReviewIntegrationContractV2, "--agent", "claude-code", "--next-transition",
+		"status", "--contract", ReviewIntegrationContractV2, "--next-transition",
 		"--cwd", repo, "--lineage", started.LineageID,
 	}, &output); err != nil {
 		t.Fatal(err)
@@ -772,6 +772,11 @@ func validateAgainstPublishedNextTransitionSchemaV2(t *testing.T, payload []byte
 func validateAgainstPublishedNextTransitionSchemaV4(t *testing.T, payload []byte) {
 	t.Helper()
 	validateAgainstPublishedStatusNextTransitionSchema(t, "v2", "status-v4.schema.json", payload)
+}
+
+func validateAgainstPublishedNextTransitionSchemaV5(t *testing.T, payload []byte) {
+	t.Helper()
+	validateAgainstPublishedStatusNextTransitionSchema(t, "v2", "status-v5.schema.json", payload)
 }
 
 // validateAgainstPublishedStatusNextTransitionSchema is the shared engine
