@@ -51,7 +51,7 @@ func RunReviewCaptureEvidence(args []string, stdout io.Writer) error {
 		return nil
 	}
 	if flags.NArg() != 0 || strings.TrimSpace(*lineage) == "" || strings.TrimSpace(*target) == "" || strings.TrimSpace(*revision) == "" || strings.TrimSpace(*outcome) == "" || strings.TrimSpace(*input) == "" {
-		return reviewPreflightError(errors.New("review capture-evidence requires an exact repository context, --lineage, --target, --expected-revision, --outcome, and --input")) // refusal:by-design operator-knowledge: the current STATUS transition supplies the authority-bound values and the verifier supplies the outcome and input
+		return reviewPreflightError(errors.New("review capture-evidence requires one exact repository resolver: --repository-context or --cwd, plus --lineage, --target, --expected-revision, --outcome, and --input")) // refusal:by-design operator-knowledge: the current STATUS transition supplies the authority-bound values and the verifier supplies the outcome and input
 	}
 	ctx := context.Background()
 	contextHandle := strings.TrimSpace(*repositoryContext)
