@@ -337,7 +337,7 @@ func commitStagedRecoveryCandidate(sandbox *Sandbox) error {
 		return err
 	}
 	sandbox.Scratch["staged-recovery-base"] = base
-	if err := sandbox.write(filepath.Join(sandbox.Repo, "candidate.go"), "package candidate\n\nfunc value() int {\n\treturn 1\n}\n"); err != nil {
+	if err := sandbox.write(filepath.Join(sandbox.Repo, "candidate.go"), "package candidate\nfunc value() int {\n\treturn 1\n}\n"); err != nil {
 		return err
 	}
 	if err := sandbox.git(sandbox.Repo, "add", "candidate.go"); err != nil {
@@ -657,7 +657,7 @@ func startCommittedCorrection(r *journeyRun) error {
 }
 
 func commitCorrectedCandidate(sandbox *Sandbox) error {
-	if err := sandbox.write(filepath.Join(sandbox.Repo, "candidate.go"), "package candidate\n\nfunc value() int {\n\treturn 2\n}\n"); err != nil {
+	if err := sandbox.write(filepath.Join(sandbox.Repo, "candidate.go"), "package candidate\nfunc value() int {\n\treturn 2\n}\n"); err != nil {
 		return err
 	}
 	if err := sandbox.git(sandbox.Repo, "add", "candidate.go"); err != nil {

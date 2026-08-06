@@ -20,6 +20,17 @@ func TestSelectorlessCommittedCorrectionContinuesToReceipt(t *testing.T) {
 			writeCommittedCorrection(t, repo, amend)
 			// The mutable ref must not influence the frozen correction boundary.
 			runReviewCLIGit(t, repo, "branch", "-f", base, "HEAD")
+			authorityStore, err := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, lineage)
+			if err != nil {
+				t.Fatal(err)
+			}
+			authorityRecord, err := authorityStore.Load()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := reviewtransaction.RebuildCommittedBaseDiffCorrectionCandidate(context.Background(), repo, authorityRecord.State); err != nil {
+				t.Fatalf("rebuild committed correction: %v", err)
+			}
 
 			status := committedCorrectionStatus(t, repo)
 			if status.Authority == nil || status.Authority.LineageID != lineage || status.NextTransition == nil ||
@@ -250,8 +261,8 @@ func assertOperationalReconstructionFailure(t *testing.T, err error, output stri
 func assertReconstructedBudgetFailure(t *testing.T, err error, output string) {
 	t.Helper()
 	var budgetErr *reviewtransaction.CorrectionBudgetExceededError
-	if !errors.As(err, &budgetErr) || budgetErr.Actual != 4 || budgetErr.Budget != 2 {
-		t.Fatalf("selector-less correction error = %T %[1]v, want rebuilt 4/2 budget failure", err)
+	if !errors.As(err, &budgetErr) || budgetErr.Actual != 3 || budgetErr.Remaining != 2 {
+		t.Fatalf("selector-less correction error = %T %[1]v, want rebuilt 3/2 budget failure", err)
 	}
 	if strings.Contains(output, "committed-correction") || strings.Contains(output, "healthy-reconstruction") {
 		t.Fatalf("selector-less correction exposed a lineage before budget refusal: %s", output)
@@ -261,8 +272,8 @@ func assertReconstructedBudgetFailure(t *testing.T, err error, output string) {
 func committedCorrectionWithOverBudgetReconstructionAuthority(t *testing.T) string {
 	t.Helper()
 	repo, base, lineage := forecastCommittedCorrection(t)
-	writeReviewStartCandidate(t, repo, "tracked.txt", "base\none\ntwo\nthree\nfixed\nfour\nfive\nsix\nseven\n", 0o644)
-	runReviewCLIGit(t, repo, "add", "tracked.txt")
+	writeReviewStartCandidate(t, repo, "candidate.go", "package candidate\nfunc value() int {\n\treturn 2\n}\nvar repaired = true\nvar extraOne = 1\nvar extraTwo = 2\nvar extraThree = 3\nvar extraFour = 4\nvar extraFive = 5\n", 0o644)
+	runReviewCLIGit(t, repo, "add", "candidate.go")
 	runReviewCLIGit(t, repo, "commit", "-qm", "large candidate")
 	healthySnapshot, err := (reviewtransaction.SnapshotBuilder{Repo: repo}).BuildStoredSnapshot(context.Background(), reviewtransaction.Target{
 		Kind: reviewtransaction.TargetBaseDiff, Projection: reviewtransaction.ProjectionWorkspace,
@@ -283,8 +294,8 @@ func committedCorrectionWithOverBudgetReconstructionAuthority(t *testing.T) stri
 	healthy.LineageID = "healthy-reconstruction"
 	healthy.InitialSnapshot, healthy.CurrentSnapshot = healthySnapshot, healthySnapshot
 	healthy.GenesisPaths = append([]string(nil), healthySnapshot.Paths...)
-	healthy.OriginalChangedLines, healthy.CorrectionBudget = 8, 4
-	forecast := 4
+	healthy.OriginalChangedLines, healthy.CorrectionBudget = 10, 5
+	forecast := 5
 	healthy.ProposedCorrectionLines = &forecast
 	if err := healthy.Validate(); err != nil {
 		t.Fatal(err)
@@ -318,8 +329,8 @@ func forecastCommittedCorrection(t *testing.T) (string, string, string) {
 	repo := initReviewCLIRepo(t)
 	base := "frozen-base"
 	runReviewCLIGit(t, repo, "branch", base, "HEAD")
-	writeReviewStartCandidate(t, repo, "tracked.txt", "base\none\ntwo\nthree\nwrong\n", 0o644)
-	runReviewCLIGit(t, repo, "add", "tracked.txt")
+	writeReviewStartCandidate(t, repo, "candidate.go", "package candidate\nfunc value() int {\n\treturn 1\n}\n", 0o644)
+	runReviewCLIGit(t, repo, "add", "candidate.go")
 	runReviewCLIGit(t, repo, "commit", "-qm", "wrong candidate")
 
 	const lineage = "committed-correction"
@@ -331,8 +342,8 @@ func forecastCommittedCorrection(t *testing.T) (string, string, string) {
 	result := filepath.Join(t.TempDir(), "reviewer.json")
 	writeReviewCLIJSON(t, result, facadeReviewerResult{
 		Lens: started.SelectedLenses[0], Findings: []facadeFinding{{
-			Location: "tracked.txt:5", Severity: "CRITICAL", Claim: "candidate is wrong",
-			ProofRefs: []string{"tracked.txt:5 changed hunk"}, EvidenceClass: reviewtransaction.EvidenceDeterministic,
+			Location: "candidate.go:3", Severity: "CRITICAL", Claim: "candidate is wrong",
+			ProofRefs: []string{"candidate.go:3 changed hunk"}, EvidenceClass: reviewtransaction.EvidenceDeterministic,
 			CausalDisposition: reviewtransaction.CausalIntroduced,
 		}}, Evidence: []string{"reviewed frozen committed candidate"},
 	})
@@ -347,8 +358,8 @@ func forecastCommittedCorrection(t *testing.T) (string, string, string) {
 
 func writeCommittedCorrection(t *testing.T, repo string, amend bool) {
 	t.Helper()
-	writeReviewStartCandidate(t, repo, "tracked.txt", "base\none\ntwo\n", 0o644)
-	runReviewCLIGit(t, repo, "add", "tracked.txt")
+	writeReviewStartCandidate(t, repo, "candidate.go", "package candidate\nfunc value() int {\n\treturn 2\n}\n", 0o644)
+	runReviewCLIGit(t, repo, "add", "candidate.go")
 	if amend {
 		runReviewCLIGit(t, repo, "commit", "--amend", "--no-edit")
 		return
@@ -358,8 +369,8 @@ func writeCommittedCorrection(t *testing.T, repo string, amend bool) {
 
 func writeOverBudgetCommittedCorrection(t *testing.T, repo string) {
 	t.Helper()
-	writeReviewStartCandidate(t, repo, "tracked.txt", "base\none\ntwo\nthree\nfixed\n", 0o644)
-	runReviewCLIGit(t, repo, "add", "tracked.txt")
+	writeReviewStartCandidate(t, repo, "candidate.go", "package candidate\nfunc value() int {\n\treturn 2\n}\nvar repaired = true\n", 0o644)
+	runReviewCLIGit(t, repo, "add", "candidate.go")
 	runReviewCLIGit(t, repo, "commit", "-qm", "over-budget correct candidate")
 }
 
