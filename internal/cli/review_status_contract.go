@@ -377,6 +377,19 @@ func (result ReviewTargetStatusResult) Validate() error {
 			return errors.New("negotiated status validation request copies differ")
 		}
 	}
+	if result.Forecast != nil {
+		if result.NextTransition == nil {
+			return errors.New("forecast without next_transition is invalid")
+		}
+		if len(result.Forecast.Steps) == 0 {
+			return errors.New("forecast steps must not be empty")
+		}
+		head := result.Forecast.Steps[0]
+		if head.Kind != result.NextTransition.Kind || head.ReasonCode != result.NextTransition.ReasonCode {
+			return fmt.Errorf("forecast head (%s/%s) diverges from next_transition (%s/%s)",
+				head.Kind, head.ReasonCode, result.NextTransition.Kind, result.NextTransition.ReasonCode)
+		}
+	}
 	switch result.Applicability {
 	case reviewtransaction.TargetApplicabilityCurrent:
 		if result.Authority == nil || result.Authority.Generation < 1 ||
