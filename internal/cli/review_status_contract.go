@@ -27,6 +27,26 @@ const (
 	ReviewReceiptNotApplicable      ReviewReceiptStatus = "not_applicable"
 )
 
+type ReviewForecastHorizon string
+
+const (
+	ForecastHorizonComplete ReviewForecastHorizon = "complete"
+	ForecastHorizonPartial  ReviewForecastHorizon = "partial"
+	ForecastHorizonTerminal ReviewForecastHorizon = "terminal"
+)
+
+type ReviewForecastItem struct {
+	Step        int    `json:"step"`
+	Kind        string `json:"kind"`
+	ReasonCode  string `json:"reason_code"`
+	Description string `json:"description"`
+}
+
+type ReviewForecast struct {
+	Horizon ReviewForecastHorizon `json:"horizon"`
+	Steps   []ReviewForecastItem  `json:"steps"`
+}
+
 type ReviewTargetStatusResult struct {
 	Schema        string                                `json:"schema"`
 	Contract      string                                `json:"contract"`
@@ -48,6 +68,7 @@ type ReviewTargetStatusResult struct {
 	Candidates              []string                                             `json:"candidates"`
 	Reconciliation          *ReviewFinalizeReconciliation                        `json:"reconciliation,omitempty"`
 	Eligibility             *ReviewActionEligibility                             `json:"eligibility,omitempty"`
+	Forecast                *ReviewForecast                                      `json:"forecast,omitempty"`
 	NextTransition          *ReviewNextTransition                                `json:"next_transition,omitempty"`
 	ValidationRequest       *reviewtransaction.TargetedValidationRequest         `json:"validation_request,omitempty"`
 	FinalVerificationRetry  *reviewtransaction.FinalVerificationRetryEligibility `json:"final_verification_retry,omitempty"`
