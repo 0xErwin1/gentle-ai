@@ -56,7 +56,6 @@
     "changed_files": {"type": "integer", "minimum": 0},
     "changed_lines": {"type": "integer", "minimum": 0},
     "correction_budget": {"type": "integer", "minimum": 0, "maximum": 200},
-    "correction_budget_policy": {"type": "string", "enum": ["floor_two"]},
     "risk_reasons": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"$ref": "#/$defs/risk_reason"}},
     "artifact_subjects": {"type": "array", "maxItems": 4, "items": {"$ref": "artifact-subject.schema.json"}},
     "changed_path_manifest": {"type": "array", "uniqueItems": true, "items": {"$ref": "#/$defs/changed_path"}},

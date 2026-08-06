@@ -90,7 +90,6 @@
     "changed_files": {"type": "integer", "minimum": 0},
     "changed_lines": {"type": "integer", "minimum": 0},
     "correction_budget": {"type": "integer", "minimum": 0, "maximum": 200},
-    "correction_budget_policy": {"type": "string", "enum": ["floor_two"]},
     "risk_reasons": {
       "type": "array",
       "minItems": 1,

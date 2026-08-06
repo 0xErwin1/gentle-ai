@@ -635,15 +635,10 @@ func TestReviewFacadeStartProvableShellAndModeRiskSelectsCanonical4R(t *testing.
 	}
 }
 
-// TestReviewFacadeStartUnnegotiatedJSONFieldSetRemainsCompatible proves the
-// unnegotiated response never gains a negotiated field (changed_path_manifest,
-// changed_path_manifest, artifact_subjects, ...); it stays a strict compatible
-// subset. It does NOT promise the field set is frozen forever: "hint" is an
-// existing additive field (see reviewStartEmptyCandidateHint) and now also
-// appears here because this fixture's tracked.txt change requires lenses, so
-// the response names the exact negotiated rerun that returns the frozen
-// payload this lens selection needs (see
-// TestReviewFacadeStartLensesRequiredHintsNegotiatedContract).
+// TestReviewFacadeStartUnnegotiatedJSONFieldSetRemainsCompatible pins the
+// actual pre-change unnegotiated field set. Negotiated-only transport fields
+// and the internal compact budget policy must remain absent, while the
+// established hint remains part of this exact legacy shape.
 func TestReviewFacadeStartUnnegotiatedJSONFieldSetRemainsCompatible(t *testing.T) {
 	repo := initReviewCLIRepo(t)
 	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("candidate\n"), 0o644); err != nil {
@@ -657,7 +652,7 @@ func TestReviewFacadeStartUnnegotiatedJSONFieldSetRemainsCompatible(t *testing.T
 	if err := json.Unmarshal(output.Bytes(), &fields); err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"action", "changed_files", "changed_lines", "correction_budget", "correction_budget_policy", "hint", "lens_bindings", "lenses_required", "lineage_id", "operation", "projection", "risk_evidence", "risk_level", "selected_lenses", "state", "target_identity"}
+	want := []string{"action", "changed_files", "changed_lines", "correction_budget", "hint", "lens_bindings", "lenses_required", "lineage_id", "operation", "projection", "risk_evidence", "risk_level", "selected_lenses", "state", "target_identity"}
 	got := make([]string, 0, len(fields))
 	for field := range fields {
 		got = append(got, field)
@@ -666,7 +661,7 @@ func TestReviewFacadeStartUnnegotiatedJSONFieldSetRemainsCompatible(t *testing.T
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("unnegotiated start fields = %v, want %v", got, want)
 	}
-	for _, negotiatedOnly := range []string{"changed_path_manifest", "artifact_subjects", "schema", "contract"} {
+	for _, negotiatedOnly := range []string{"changed_path_manifest", "artifact_subjects", "correction_budget_policy", "schema", "contract"} {
 		if _, ok := fields[negotiatedOnly]; ok {
 			t.Fatalf("unnegotiated start leaked negotiated-only field %q: %s", negotiatedOnly, output.String())
 		}

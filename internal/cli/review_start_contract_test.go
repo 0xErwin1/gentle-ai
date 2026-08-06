@@ -43,7 +43,7 @@ func TestNegotiatedReviewStartMatchesVersionedFixture(t *testing.T) {
 		result.LineageID != "review-start-fixture" || result.State != reviewtransaction.StateReviewing ||
 		result.RiskLevel != reviewtransaction.RiskHigh || !reflect.DeepEqual(result.SelectedLenses, wantLenses) ||
 		result.Projection != reviewtransaction.ProjectionWorkspace || result.ChangedFiles != 1 ||
-		result.ChangedLines != 1 || result.CorrectionBudget != 2 || result.CorrectionBudgetPolicy != reviewtransaction.CorrectionBudgetPolicyFloorTwo || !reflect.DeepEqual(result.RiskReasons, wantReasons) ||
+		result.ChangedLines != 1 || result.CorrectionBudget != 1 || !reflect.DeepEqual(result.RiskReasons, wantReasons) ||
 		result.RepositoryContext == nil || result.RepositoryContext.Capability != reviewtransaction.ReviewRepositoryContextCapability {
 		t.Fatalf("negotiated START = %#v\n%s", result, output.String())
 	}
@@ -56,6 +56,11 @@ func TestNegotiatedReviewStartMatchesVersionedFixture(t *testing.T) {
 		t.Fatal(err)
 	}
 	normalized := bytes.ReplaceAll(output.Bytes(), []byte(result.RepositoryContext.Handle), []byte(fixtureResult.RepositoryContext.Handle))
+	normalized = bytes.ReplaceAll(normalized, []byte(result.RepositoryContext.Revision), []byte(fixtureResult.RepositoryContext.Revision))
+	for index, subject := range result.ArtifactSubjects {
+		normalized = bytes.ReplaceAll(normalized, []byte(subject.SubjectHash), []byte(fixtureResult.ArtifactSubjects[index].SubjectHash))
+		normalized = bytes.ReplaceAll(normalized, []byte(subject.AuthorityRevision), []byte(fixtureResult.ArtifactSubjects[index].AuthorityRevision))
+	}
 	if !bytes.Equal(normalized, fixture) {
 		t.Fatalf("START fixture mismatch:\ngot=%s\nwant=%s", output.String(), fixture)
 	}
@@ -694,7 +699,7 @@ func TestNegotiatedReviewStartPreservesLegacyPayloadAndAuthorityIdentity(t *test
 	// the frozen tree/changed_path_manifest/artifact_subjects those
 	// lenses need, so it names the exact negotiated rerun that returns them.
 	wantFields := []string{
-		"action", "changed_files", "changed_lines", "correction_budget", "correction_budget_policy", "hint", "lens_bindings", "lenses_required",
+		"action", "changed_files", "changed_lines", "correction_budget", "hint", "lens_bindings", "lenses_required",
 		"lineage_id", "operation", "projection", "risk_evidence", "risk_level", "selected_lenses", "state", "target_identity",
 	}
 	if !reflect.DeepEqual(gotFields, wantFields) {
@@ -708,6 +713,9 @@ func TestNegotiatedReviewStartPreservesLegacyPayloadAndAuthorityIdentity(t *test
 	}
 	if legacy.Operation != "review/start" {
 		t.Fatalf("legacy operation = %q", legacy.Operation)
+	}
+	if legacy.CorrectionBudget != 1 || bytes.Contains(legacyOutput.Bytes(), []byte("correction_budget_policy")) {
+		t.Fatalf("legacy START budget projection = %#v\n%s", legacy, legacyOutput.String())
 	}
 
 	var negotiatedOutput bytes.Buffer

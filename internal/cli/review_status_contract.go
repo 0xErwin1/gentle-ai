@@ -161,10 +161,9 @@ type ReviewTargetStatusReceipt struct {
 }
 
 type ReviewTargetStatusFrozen struct {
-	Tier                   reviewtransaction.RiskLevel `json:"tier"`
-	OriginalChangedLines   int                         `json:"original_changed_lines"`
-	CorrectionBudget       int                         `json:"correction_budget"`
-	CorrectionBudgetPolicy string                      `json:"correction_budget_policy,omitempty"`
+	Tier                 reviewtransaction.RiskLevel `json:"tier"`
+	OriginalChangedLines int                         `json:"original_changed_lines"`
+	CorrectionBudget     int                         `json:"correction_budget"`
 }
 
 type ReviewTargetStatusProjection struct {
@@ -223,9 +222,9 @@ func newReviewTargetStatusResultForContract(native reviewtransaction.TargetStatu
 		Generation: native.Generation, Revision: native.Revision,
 	}
 	if native.AuthorityVersion == reviewtransaction.AuthorityVersionCompact {
+		correctionBudget, _ := reviewtransaction.CorrectionBudget(native.OriginalChangedLines)
 		result.Frozen = &ReviewTargetStatusFrozen{
-			Tier: native.Tier, OriginalChangedLines: native.OriginalChangedLines, CorrectionBudget: native.CorrectionBudget,
-			CorrectionBudgetPolicy: native.CorrectionBudgetPolicy,
+			Tier: native.Tier, OriginalChangedLines: native.OriginalChangedLines, CorrectionBudget: correctionBudget,
 		}
 	}
 	if native.ReceiptIdentity != "" {
@@ -408,8 +407,7 @@ func (result ReviewTargetStatusResult) Validate() error {
 			if result.Frozen.Tier != reviewtransaction.RiskLow && result.Frozen.Tier != reviewtransaction.RiskMedium && result.Frozen.Tier != reviewtransaction.RiskHigh {
 				return errors.New("current-target frozen tier is invalid")
 			}
-			budget, err := reviewtransaction.CompactExpectedBudget(result.Frozen.OriginalChangedLines, result.Frozen.CorrectionBudgetPolicy)
-			if err != nil || budget != result.Frozen.CorrectionBudget {
+			if !reviewContractCorrectionBudgetValid(result.Frozen.OriginalChangedLines, result.Frozen.CorrectionBudget) {
 				return errors.New("current-target frozen budget is invalid")
 			}
 		case reviewtransaction.AuthorityVersionLegacy:

@@ -1,7 +1,10 @@
 package reviewtransaction
 
 import (
+	"bytes"
 	"context"
+	"errors"
+	"os"
 	"strings"
 	"testing"
 )
@@ -48,6 +51,26 @@ func TestCompactFloorTwoBudgetGrantsAtomicReplacementForOneLineCandidate(t *test
 	}
 	if err := state.Validate(); err != nil {
 		t.Fatalf("floor-two state validation: %v", err)
+	}
+	store, err := CompactAuthoritativeStore(context.Background(), repo, state.LineageID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	revision, err := store.Replace("", "review/start", state)
+	if err != nil {
+		t.Fatalf("persist floor-two state: %v", err)
+	}
+	payload, err := os.ReadFile(store.StatePath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.Revision != revision || loaded.State.CorrectionBudgetPolicy != CorrectionBudgetPolicyFloorTwo ||
+		!bytes.Contains(payload, []byte(`"correction_budget_policy": "floor_two"`)) {
+		t.Fatalf("persisted floor-two state = %#v", loaded)
 	}
 }
 
@@ -108,6 +131,71 @@ func TestCompactFloorTwoBudgetRejectsUnknownPolicy(t *testing.T) {
 	}
 	if err := state.Validate(); err == nil || !strings.Contains(err.Error(), "policy") {
 		t.Fatalf("unknown policy validation error = %v, want a policy error", err)
+	}
+}
+
+func TestCompactSuccessorRejectsBudgetPolicyDriftWhenNumericBudgetCoincides(t *testing.T) {
+	snapshot := validCompactSnapshot(t, 4)
+	legacyBudget, err := CorrectionBudget(4)
+	if err != nil {
+		t.Fatal(err)
+	}
+	compactBudget, err := CompactCorrectionBudget(4)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if legacyBudget != compactBudget {
+		t.Fatalf("test setup budgets differ: legacy=%d compact=%d", legacyBudget, compactBudget)
+	}
+	previous := CompactState{
+		Schema: CompactStateSchema, LineageID: "policy-immutable", Generation: 1, State: StateReviewing,
+		InitialSnapshot: snapshot, CurrentSnapshot: snapshot, GenesisPaths: append([]string{}, snapshot.Paths...),
+		PolicyHash: hash("policy-immutable"), RiskLevel: RiskHigh, SelectedLenses: supportedLenses,
+		OriginalChangedLines: 4, CorrectionBudget: compactBudget, CorrectionBudgetPolicy: CorrectionBudgetPolicyFloorTwo,
+		LensResults: []LensResult{}, Findings: []Finding{}, Classifications: map[string]FindingEvidence{},
+		Outcomes: map[string]EvidenceOutcome{}, FixFindingIDs: []string{}, FollowUps: []FollowUp{}, FixDeltaHash: EmptyFixDeltaHash,
+	}
+	for _, policy := range []string{"", "floor_three"} {
+		next := previous
+		next.State = StateCorrectionRequired
+		next.CorrectionBudgetPolicy = policy
+		if err := validateCompactSuccessor("sha256:"+strings.Repeat("a", 64), previous, next, "review/complete-review"); !errors.Is(err, ErrInvalidSuccessor) {
+			t.Fatalf("successor policy %q error = %v, want ErrInvalidSuccessor", policy, err)
+		}
+	}
+}
+
+func TestCompactHistoricalPolicylessPersistencePreservesBytesAndRevision(t *testing.T) {
+	repo := initSnapshotRepo(t)
+	writeSnapshotFile(t, repo, "tracked.txt", "candidate\n")
+	state := newCompactTestState(t, repo, "historical-policyless-round-trip")
+	state.CorrectionBudget, _ = CorrectionBudget(state.OriginalChangedLines)
+	state.CorrectionBudgetPolicy = ""
+	if err := state.Validate(); err != nil {
+		t.Fatalf("historical policy-less state validation: %v", err)
+	}
+	store, err := CompactAuthoritativeStore(context.Background(), repo, state.LineageID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	revision, err := store.Replace("", "review/start", state)
+	if err != nil {
+		t.Fatalf("persist historical policy-less state: %v", err)
+	}
+	before, err := os.ReadFile(store.StatePath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	after, err := os.ReadFile(store.StatePath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.Revision != revision || loaded.State.CorrectionBudgetPolicy != "" || !bytes.Equal(before, after) {
+		t.Fatalf("historical policy-less persistence changed: revision=%s/%s policy=%q bytes_equal=%v", loaded.Revision, revision, loaded.State.CorrectionBudgetPolicy, bytes.Equal(before, after))
 	}
 }
 
