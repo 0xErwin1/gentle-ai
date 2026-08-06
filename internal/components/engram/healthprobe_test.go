@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"testing"
@@ -235,7 +236,7 @@ func TestStdioHandshake_TerminatesDescendantOnContextEnd(t *testing.T) {
 
 			select {
 			case err := <-result:
-				if !errors.Is(err, tt.want) {
+				if err != tt.want {
 					t.Fatalf("stdioHandshake() error = %v, want %v", err, tt.want)
 				}
 			case <-time.After(time.Second):
@@ -381,27 +382,96 @@ func TestStdioHandshake_PreservesEarlierDeadline(t *testing.T) {
 	defer cancel()
 
 	err := stdioHandshake(ctx, "engram", "mcp", "--tools=agent")
-	if !errors.Is(err, context.DeadlineExceeded) {
+	if err != context.DeadlineExceeded {
 		t.Fatalf("stdioHandshake() error = %v, want earlier caller deadline", err)
-	}
-	if strings.Contains(err.Error(), "timed out after 5s") {
-		t.Fatalf("stdioHandshake() error = %v, must not misreport the caller deadline as the internal timeout", err)
 	}
 }
 
 func TestStdioHandshake_PreservesCallerCancellation(t *testing.T) {
 	setStdioHelperProcess(t, "silent")
 
-	ctx, cancel := context.WithCancel(context.Background())
-	time.AfterFunc(300*time.Millisecond, cancel)
-	defer cancel()
+	cause := errors.New("caller stopped the engram probe")
+	ctx, cancel := context.WithCancelCause(context.Background())
+	timer := time.AfterFunc(300*time.Millisecond, func() { cancel(cause) })
+	defer timer.Stop()
+	defer cancel(nil)
 
 	err := stdioHandshake(ctx, "engram", "mcp", "--tools=agent")
-	if !errors.Is(err, context.Canceled) {
+	if err != cause {
 		t.Fatalf("stdioHandshake() error = %v, want caller cancellation", err)
 	}
-	if strings.Contains(err.Error(), "timed out after 5s") {
-		t.Fatalf("stdioHandshake() error = %v, must not misreport caller cancellation as the internal timeout", err)
+}
+
+func TestStdioHandshake_TerminalOutcomes(t *testing.T) {
+	tests := []struct {
+		name            string
+		mode            string
+		newContext      func() (context.Context, context.CancelFunc)
+		cancelAfter     time.Duration
+		probeTimeout    time.Duration
+		want            error
+		wantContains    string
+		wantLiveContext bool
+	}{
+		{
+			name: "caller cancellation",
+			mode: "silent",
+			newContext: func() (context.Context, context.CancelFunc) {
+				return context.WithCancel(context.Background())
+			},
+			cancelAfter: 50 * time.Millisecond,
+			want:        context.Canceled,
+		},
+		{
+			name: "earlier caller deadline",
+			mode: "silent",
+			newContext: func() (context.Context, context.CancelFunc) {
+				return context.WithTimeout(context.Background(), 50*time.Millisecond)
+			},
+			want: context.DeadlineExceeded,
+		},
+		{
+			name:         "internal timeout",
+			mode:         "silent",
+			newContext:   func() (context.Context, context.CancelFunc) { return context.WithCancel(context.Background()) },
+			probeTimeout: 50 * time.Millisecond,
+			want:         context.DeadlineExceeded,
+		},
+		{
+			name:            "genuine child exit while context is live",
+			mode:            "early-exit",
+			newContext:      func() (context.Context, context.CancelFunc) { return context.WithCancel(context.Background()) },
+			wantContains:    "exited without answering initialize",
+			wantLiveContext: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			setStdioHelperProcess(t, tt.mode)
+			if tt.probeTimeout != 0 {
+				originalTimeout := stdioProbeTimeout
+				stdioProbeTimeout = tt.probeTimeout
+				t.Cleanup(func() { stdioProbeTimeout = originalTimeout })
+			}
+
+			ctx, cancel := tt.newContext()
+			defer cancel()
+			if tt.cancelAfter != 0 {
+				timer := time.AfterFunc(tt.cancelAfter, cancel)
+				defer timer.Stop()
+			}
+			err := stdioHandshake(ctx, "engram", "mcp", "--tools=agent")
+			if tt.want != nil && err != tt.want {
+				t.Fatalf("stdioHandshake() error = %v, want %v", err, tt.want)
+			}
+			if tt.wantContains != "" && (err == nil || !strings.Contains(err.Error(), tt.wantContains)) {
+				t.Fatalf("stdioHandshake() error = %v, want %q", err, tt.wantContains)
+			}
+			if tt.wantLiveContext && ctx.Err() != nil {
+				t.Fatalf("caller context = %v, want live while child exits", ctx.Err())
+			}
+		})
 	}
 }
 
@@ -432,6 +502,46 @@ func TestProbeStdio_MissingAbsoluteConfiguredCommandFails(t *testing.T) {
 	}
 	if errors.Is(err, ErrNotInstalled) {
 		t.Fatalf("ProbeStdio() error = %v, must not hide a missing absolute configured command", err)
+	}
+}
+
+func TestProbeStdio_ClassifiesCommandNotFound(t *testing.T) {
+	orig := stdioHandshakeFn
+	stdioHandshakeFn = func(context.Context, string, ...string) error { return exec.ErrNotFound }
+	t.Cleanup(func() { stdioHandshakeFn = orig })
+
+	tests := []struct {
+		name             string
+		command          string
+		wantNotInstalled bool
+	}{
+		{name: "bare Engram name", command: "engram", wantNotInstalled: true},
+		{name: "Windows bare executable", command: "engram.exe", wantNotInstalled: runtime.GOOS == "windows"},
+		{name: "Windows case-insensitive bare executable", command: "EnGrAm.ExE", wantNotInstalled: runtime.GOOS == "windows"},
+		{name: "relative path", command: `./engram`},
+		{name: "nested relative path", command: `bin/engram`},
+		{name: "Windows drive path", command: `C:\Engram\engram.exe`},
+		{name: "Windows drive-relative path", command: `C:Engram\engram.exe`},
+		{name: "Windows UNC path", command: `\\server\share\engram.exe`},
+		{name: "custom command", command: "custom-engram"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := ProbeStdio(context.Background(), tt.command, "mcp", "--tools=agent")
+			if tt.wantNotInstalled {
+				if !errors.Is(err, ErrNotInstalled) {
+					t.Fatalf("ProbeStdio() error = %v, want ErrNotInstalled", err)
+				}
+				return
+			}
+			if !errors.Is(err, exec.ErrNotFound) {
+				t.Fatalf("ProbeStdio() error = %v, want configured command error", err)
+			}
+			if errors.Is(err, ErrNotInstalled) {
+				t.Fatalf("ProbeStdio() error = %v, must preserve configured command error", err)
+			}
+		})
 	}
 }
 
