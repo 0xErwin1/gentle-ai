@@ -521,7 +521,8 @@ func Journeys() []Journey {
 	journeys = append(journeys, waveThreeJourneys()...)
 	journeys = append(journeys, waveFiveJourneys()...)
 	journeys = append(journeys, advisoryJourneys()...)
-	return append(journeys, zeroDeltaJourneys()...)
+	journeys = append(journeys, zeroDeltaJourneys()...)
+	return append(journeys, localGateBaseAdvanceJourneys()...)
 }
 
 func coreJourneys() []Journey {
