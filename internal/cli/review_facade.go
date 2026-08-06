@@ -951,7 +951,7 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 								result.ValidationRequest = validationRequest
 							}
 						}
-						if *contract == ReviewIntegrationContractV2 && record.State.State == reviewtransaction.StateCorrectionRequired {
+						if *contract == ReviewIntegrationContractV2 && (record.State.State == reviewtransaction.StateCorrectionRequired || record.State.State == reviewtransaction.StateValidating) {
 							contextTarget := record.State.CurrentSnapshot.Identity
 							if validationRequest != nil {
 								contextTarget = validationRequest.CorrectionTargetIdentity
@@ -2790,6 +2790,9 @@ func validateReviewFinalizeSubmission(ctx context.Context, repo string, state re
 	if submission == nil {
 		return errors.New("review finalize submission is unavailable") // refusal:by-design world-action: the provider must issue a complete descriptor before a submission can be executed
 	}
+	if submission.Value == nil {
+		return errors.New("review finalize submission has no value slot") // refusal:by-design world-action: a finalize request cannot execute a capture-evidence descriptor
+	}
 	expected := append([]string{}, submission.ArgumentTokens...)
 	slot := submission.Value.SubstitutionLocation
 	expected[slot] = strings.Replace(expected[slot], reviewSubmissionValuePlaceholder, value, 1)
@@ -4059,7 +4062,7 @@ func encodeCompactFacadeFinalize(stdout io.Writer, negotiated bool, contract str
 				}
 			}
 		}
-		if nextTransition && contract == ReviewIntegrationContractV2 && state.State == reviewtransaction.StateCorrectionRequired {
+		if nextTransition && contract == ReviewIntegrationContractV2 && (state.State == reviewtransaction.StateCorrectionRequired || state.State == reviewtransaction.StateValidating) {
 			contextTarget := state.CurrentSnapshot.Identity
 			if validationRequest != nil {
 				contextTarget = validationRequest.CorrectionTargetIdentity
