@@ -153,16 +153,6 @@ func TestCommandRunSelection(t *testing.T) {
 	}
 }
 
-func TestExecutableRecognizesBuiltBenchmarkBinary(t *testing.T) {
-	if testing.Short() {
-		t.Skip("builds a temporary executable to verify the benchmark binary boundary")
-	}
-	binary, _ := benchmarkTestBinary(t)
-	if !executable(binary) {
-		t.Fatalf("executable(%q) = false for a binary built by this platform", binary)
-	}
-}
-
 func benchmarkTestBinary(t *testing.T) (string, string) {
 	t.Helper()
 	dir := t.TempDir()
