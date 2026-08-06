@@ -300,6 +300,21 @@ func TestRunArgsSDDVerifyValidateIsDispatchedBeforePlatformValidation(t *testing
 	}
 }
 
+func TestRunArgsSDDVerifyValidateHelpIsInputFree(t *testing.T) {
+	var output bytes.Buffer
+	err := RunArgs([]string{
+		"sdd-verify-validate", "--input", filepath.Join(t.TempDir(), "missing"), "--requirements", "-1", "--help", "--scenarios", "-1",
+	}, &output)
+	if err != nil {
+		t.Fatalf("RunArgs(sdd-verify-validate --help): %v", err)
+	}
+	for _, want := range []string{"Usage: gentle-ai sdd-verify-validate", "Authority-only fail extension", "maximum report size: 1048576 bytes (1 MiB)"} {
+		if !strings.Contains(output.String(), want) {
+			t.Fatalf("sdd-verify-validate help missing %q:\n%s", want, output.String())
+		}
+	}
+}
+
 func TestRunArgsSDDAttemptIsDispatchedBeforePlatformValidation(t *testing.T) {
 	origEnsure := ensureCurrentOSSupported
 	t.Cleanup(func() { ensureCurrentOSSupported = origEnsure })
