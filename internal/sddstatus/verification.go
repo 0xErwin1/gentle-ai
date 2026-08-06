@@ -217,7 +217,7 @@ func parseVerifyReport(text string) (verifyReport, string) {
 		}
 	}
 	if extensionCount != 0 && extensionCount != len(verifyReportAuthorityOnlyFields) {
-		return report, "authority-only extension must contain exactly five fields"
+		return report, fmt.Sprintf("authority-only extension must contain exactly %d fields", len(verifyReportAuthorityOnlyFields))
 	}
 	if fields["schema"] != VerifyResultSchema {
 		return report, fmt.Sprintf("unsupported verify result schema %s", fields["schema"])
