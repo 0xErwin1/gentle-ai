@@ -72,8 +72,8 @@
       "properties": { "required": { "const": true } }
     },
     "eligibility": { "$ref": "#/$defs/action_eligibility" },
-    "next_transition": { "$ref": "#/$defs/next_transition" },
     "forecast": { "$ref": "#/$defs/forecast" },
+    "next_transition": { "$ref": "#/$defs/next_transition" },
     "validation_request": { "$ref": "targeted-validation-request.schema.json" },
     "final_verification_retry": {
       "type": "object",
