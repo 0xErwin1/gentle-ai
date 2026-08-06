@@ -1,12 +1,8 @@
-// Package reviewtransaction — the unwired Wave-4 offer API (design decision
-// 8, Wave 3 Slice 5, task 6.5). OfferReviewAfterVerify is the exact shape
-// Wave 4's post-verify sequence change will call; nothing in this wave calls
-// it. Shipping the shape a wave early — rather than a temporary call site or
-// deferring the API itself to Wave 4 — was decision 8's own explicit choice:
-// a call site would be Wave 4's sequence change happening early, and the
-// ratchet cannot see tests (it analyses reachability from ./cmd/gentle-ai
-// only), so an honest baselined `.deadcode-baseline.txt` entry is the
-// documented cost of shipping the shape now (task 6.6).
+// Package reviewtransaction — the Wave-4 offer API (design decision 8, Wave
+// 3 Slice 5, task 6.5; wired Wave 4 S3b/S5b). OfferReviewAfterVerify is
+// design decision 8's literal signature, now called from internal/sddstatus
+// (S3b's applyReviewOfferRouting, through review_door.go's
+// reviewOfferForVerify).
 package reviewtransaction
 
 import (
@@ -19,11 +15,15 @@ import (
 )
 
 // OfferRequest names the one candidate an offer decision would be made for.
-// It is deliberately minimal: Wave 4 composes the real decision (lens/tier
-// selection, receipt discovery) and will widen this request shape then, not
-// here — an unwired API must not pre-guess fields no caller yet needs.
+// Receipt is Wave 4 S5b's closed loop: the caller's own-looked-up terminal
+// receipt for this candidate, read from SDD's own runtime ledger
+// (sddstatus.RuntimeStatus.Receipt) and passed in. reviewtransaction never
+// looks this up itself — internal/sddstatus already imports
+// internal/reviewtransaction, so the reverse import would cycle; the
+// package boundary is why the caller resolves it, not this function.
 type OfferRequest struct {
 	LineageID string
+	Receipt   *SDDReceiptRef
 }
 
 // Offer is OfferReviewAfterVerify's exact result shape. Available false
@@ -36,37 +36,55 @@ type Offer struct {
 
 // OfferReviewAfterVerify is Wave 4's post-verify offer point (design decision
 // 8's literal signature): after a candidate's independent verification
-// evidence exists, this is where a future caller will ask whether receipt-
-// driven development should now offer a review for it. It is unwired: no
-// production call site in this wave reaches it.
+// evidence exists, this asks whether receipt-driven development should now
+// offer a review for it.
 //
-// The one behavior this unwired shape is REQUIRED to get right (design
-// decision 8, task 6.5): the user-owned kill switch, when recorded off at the
-// GLOBAL scope, must return Offer{Available: false}, nil BEFORE any
-// repository read. That ordering is provable here specifically because the
-// clone-local override is off-only (SetCloneLocalRDDMode's own
-// ErrRDDModeRepositoryForcedOn invariant) — a clone can never override a
-// global-off switch back to on — so a global-only reading is on its own a
-// complete, honest answer for the disabled case, with nothing left for a
-// repository read to add. Every other case (global on, global unset)
-// conservatively reports unavailable too: Wave 4 is what composes the real
-// decision (receipt discovery, lens/tier composition) that could turn this
-// into a genuine offer; this shape never fabricates one early.
+// The kill switch is evaluated at its EFFECTIVE scope — global mode combined
+// with this clone's off-only local override, through the exact same
+// ResolveRDDMode path every other gate uses (internal/cli's review-validate
+// gates, AuthorizeRDDCandidate, AuthorizeRDDOperation) — never the global
+// scope alone. A clone can disable reviews locally without touching the
+// global switch (`gentle-ai review mode disable --scope clone`), and that
+// clone-local disable must be just as invisible to the offer as a global
+// disable: reading only the global scope missed exactly this case (a
+// reproduced regression, CRITICAL-3 of the corrective verify cycle).
+// Resolving the effective mode necessarily reads the clone-local override
+// file under the repository's Git common directory, but that read has no
+// side effect — it never writes, so the "zero side effects while disabled"
+// property this function must uphold is unaffected.
+//
+// Wave 4 S5b closes the loop design decision 8 left open: when the switch is
+// on, the real decision is receipt discovery, not a fabricated fixed
+// answer. request.Receipt (the caller's own-looked-up terminal receipt, if
+// the runtime ledger has one for this lineage) is re-validated through
+// ValidateSDDReceiptRef — the same one native validation entry point every
+// other consumer uses, never a re-derivation. A receipt that still resolves
+// GateAllow already governs this exact candidate: nothing to offer.
+// Anything else (no receipt recorded yet, or one that no longer resolves
+// allow) is a genuine invitation to start a review.
 func OfferReviewAfterVerify(ctx context.Context, repo string, request OfferRequest) (Offer, error) {
 	if err := ctx.Err(); err != nil {
 		return Offer{}, err
 	}
-	// repo is deliberately unread on every path below: the disabled-kill-
-	// switch behavior this shape must prove never touches it, and no other
-	// path in this wave composes a repository-dependent decision either.
 	global, err := readGlobalRDDModeForOffer()
 	if err != nil {
 		return Offer{}, err
 	}
-	if mode, modeErr := normalizeRDDMode(global.Value); modeErr == nil && mode == RDDModeOff {
+	status, resolveErr := ResolveRDDMode(ctx, repo, global)
+	if resolveErr != nil {
+		return Offer{}, resolveErr
+	}
+	if !status.Enabled() {
 		return Offer{Available: false, LineageID: request.LineageID}, nil
 	}
-	return Offer{Available: false, LineageID: request.LineageID}, nil
+	available := true
+	if request.Receipt != nil {
+		result, _, validateErr := ValidateSDDReceiptRef(ctx, repo, *request.Receipt)
+		if validateErr == nil && result == GateAllow {
+			available = false
+		}
+	}
+	return Offer{Available: available, LineageID: request.LineageID}, nil
 }
 
 // readGlobalRDDModeForOffer reads only the uncommitted global kill-switch

@@ -388,11 +388,20 @@ func writeJSON(path string, value any) error {
 }
 
 func executable(path string) bool {
+	return executableForGOOS(path, runtime.GOOS)
+}
+
+func executableForGOOS(path, goos string) bool {
 	info, err := os.Stat(path)
-	if runtime.GOOS == "windows" {
-		return err == nil && !info.IsDir() && strings.EqualFold(filepath.Ext(path), ".exe")
+	if err != nil || info.IsDir() {
+		return false
 	}
-	return err == nil && !info.IsDir() && info.Mode()&0o111 != 0
+	return executableMode(info.Mode(), goos)
+}
+
+func executableMode(mode os.FileMode, goos string) bool {
+	// Windows does not preserve Unix executable bits for native binaries.
+	return goos == "windows" || mode&0o111 != 0
 }
 
 func binaryVersion(path string) string {

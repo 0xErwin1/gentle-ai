@@ -96,6 +96,79 @@ type NewLineageAuthority struct {
 	AdmittedFindingIDs    []string          `json:"admitted_finding_ids,omitempty"`
 	ReplayIdentity        string            `json:"replay_identity,omitempty"`
 	LastTransition        json.RawMessage   `json:"last_transition,omitempty"`
+	// CapturedResults is C-A's minimal capture primitive (Wave 5 fix cycle 2,
+	// coordinator decision: not a rebuilt v2-shaped admission pipeline --
+	// ArtifactSubject/FrozenCandidateContext/reopen machinery is Wave 7
+	// deletion scope). Written only through AuthorityStore.CaptureLensResult
+	// (new_lineage_capture.go), never directly: one entry per captured lens,
+	// one-shot (no reopen), each bound to its own provider-owned subject hash
+	// and (C-E, fix cycle 3) its own validated findings.
+	CapturedResults []NewLineageCapturedResult `json:"captured_results,omitempty"`
+}
+
+// NewLineageCapturedResult is one captured reviewer result's persisted
+// binding: which lens, at which frozen selected-lens order, under which
+// provider-owned subject hash (NewLineageArtifactSubjectHash), carrying the
+// reviewer's OWN validated findings (C-E, Wave 5 fix cycle 3). Cycle 2
+// deliberately omitted Findings ("no findings/evidence/admission-decision
+// richness"); cycle 3's verify (CRITICAL-E) found that omission was a
+// fail-open, not a scope boundary -- capture-result already required and
+// validated findings/evidence were present, so silently discarding them let
+// a candidate-causal BLOCKER approve unadmitted. It still carries no
+// evidence/admission-DECISION richness (no re-derivable ArtifactSubject,
+// no reopen) -- only the findings themselves, fed into the existing
+// AdmitCandidateCausalFindings at finalize time.
+type NewLineageCapturedResult struct {
+	Lens        string            `json:"lens"`
+	Order       int               `json:"order"`
+	SubjectHash string            `json:"subject_hash"`
+	Findings    []FindingEvidence `json:"findings,omitempty"`
+}
+
+// CapturedLensNames returns the plain lens-name list
+// FinalizeAdvanceRequest.CapturedLensResults (and hasCapturedAllSelectedLenses)
+// need, derived from the richer CapturedResults slice rather than storing
+// the same names twice.
+func (authority NewLineageAuthority) CapturedLensNames() []string {
+	names := make([]string, len(authority.CapturedResults))
+	for index, captured := range authority.CapturedResults {
+		names[index] = captured.Lens
+	}
+	return names
+}
+
+// MissingCapturedLensNames returns the frozen SelectedLenses not yet present
+// in CapturedLensNames, in SelectedLenses' own order (W-8, Wave 5 fix cycle
+// 3, verify-report #10186 cycle 2): a partial capture is an ORDINARY
+// incomplete state, not a fault, and naming exactly which lenses remain is
+// what makes the continuation runnable rather than a bare "capture more".
+func (authority NewLineageAuthority) MissingCapturedLensNames() []string {
+	captured := make(map[string]bool, len(authority.CapturedResults))
+	for _, result := range authority.CapturedResults {
+		captured[result.Lens] = true
+	}
+	var missing []string
+	for _, lens := range authority.SelectedLenses {
+		if !captured[lens] {
+			missing = append(missing, lens)
+		}
+	}
+	return missing
+}
+
+// CapturedFindingEvidence flattens every captured lens's own Findings into
+// the single []FindingEvidence AdmitCandidateCausalFindings consumes (C-E) --
+// the exact shape --admission-findings already reads from a caller-supplied
+// file, sourced here from the reviewer channel's own persisted captures
+// instead. Order matches CapturedResults' own append order (capture order),
+// which AdmitCandidateCausalFindings does not depend on (it partitions by
+// Causality alone).
+func (authority NewLineageAuthority) CapturedFindingEvidence() []FindingEvidence {
+	var findings []FindingEvidence
+	for _, captured := range authority.CapturedResults {
+		findings = append(findings, captured.Findings...)
+	}
+	return findings
 }
 
 // Validate enforces the structural half of the two-artifact contract this
@@ -135,6 +208,21 @@ func (authority NewLineageAuthority) Validate() error {
 	for _, id := range authority.AdmittedFindingIDs {
 		if strings.TrimSpace(id) != id || id == "" {
 			return errors.New("new-lineage authority admitted finding ids must be canonical non-empty strings") // refusal:by-design world-action: AdmittedFindingIDs is set by ReviewCore's causal-admission logic; malformed entries are a caller bug, not an operator-fixable state
+		}
+	}
+	seenCapturedLenses := make(map[string]bool, len(authority.CapturedResults))
+	for _, captured := range authority.CapturedResults {
+		if strings.TrimSpace(captured.Lens) == "" || captured.Order < 0 || !validSHA256(captured.SubjectHash) {
+			return errors.New("new-lineage authority captured results must carry a non-empty lens, a non-negative order, and a canonical subject hash") // refusal:by-design world-action: captured results are only ever written by AuthorityStore.CaptureLensResult after validating them; malformed entries here mean in-process corruption, not something an operator command repairs
+		}
+		if seenCapturedLenses[captured.Lens] {
+			return errors.New("new-lineage authority captured results must name each lens at most once") // refusal:by-design world-action: CaptureLensResult enforces one-shot-per-lens before ever appending; a duplicate here means in-process corruption, not something an operator command repairs
+		}
+		seenCapturedLenses[captured.Lens] = true
+		for _, finding := range captured.Findings {
+			if strings.TrimSpace(finding.FindingID) == "" {
+				return errors.New("new-lineage authority captured findings must carry a non-empty finding id") // refusal:by-design world-action: captured findings are only ever written by AuthorityStore.CaptureLensResult from an already-decoded reviewer result; a malformed entry here means in-process corruption, not something an operator command repairs
+			}
 		}
 	}
 	if authority.ReplayIdentity != "" && !validSHA256(authority.ReplayIdentity) {
