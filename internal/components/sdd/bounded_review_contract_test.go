@@ -252,7 +252,15 @@ func TestRenderedReviewersAreReadOnlyAndSingleResult(t *testing.T) {
 					}
 				}
 				if family == "claude" {
-					for _, want := range []string{"GENTLE_AI_CLAUDE_REVIEW_CONTEXT", "prompt-carried immutable context", "path evidence for every manifest index", "Missing, partial, reordered, mismatched, or unavailable evidence", "no execution tools"} {
+					// "provider-injected context" replaced the Claude-only
+					// "prompt-carried immutable context" wording when
+					// claudeReviewerPrompt and openCodeProviderInjectedReviewerPrompt
+					// were unified into one shared template
+					// (runtimeReviewerPrompt): the two runtimes now render
+					// identical wording and differ only in which process
+					// supplies the block, so the reviewer input contract no
+					// longer names a Claude-specific nature for the context.
+					for _, want := range []string{"GENTLE_AI_CLAUDE_REVIEW_CONTEXT", "provider-injected context", "path evidence for every manifest index", "Missing, partial, reordered, mismatched, or unavailable evidence", "no execution tools"} {
 						if !strings.Contains(content, want) {
 							t.Errorf("%s missing Claude transport clause %q", path, want)
 						}
