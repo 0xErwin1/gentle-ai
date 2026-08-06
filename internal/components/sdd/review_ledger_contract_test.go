@@ -300,7 +300,14 @@ func TestKilocodeReviewSettingsMatchCurrentMainBaseline(t *testing.T) {
 	// This baseline combines #2485's answer-validation contract, #2417's
 	// provider-injected reviewer shape, #2440's runtime-bound identity, and
 	// #2207's executor-boundary wording. It is recomputed from the merged tree.
-	const want = "c7356719d6d509156e2c6eb7051761d31d3dd70a51e6d393645c9b5611f75e0b"
+	//
+	// RDD shared advisory transport, Slice B: claudeReviewerPrompt and
+	// openCodeProviderInjectedReviewerPrompt were unified into one shared
+	// template (runtimeReviewerPrompt) so the reviewer input contract exists
+	// exactly once instead of once per runtime. Kilocode embeds the unified
+	// OpenCode-shaped reviewer prompt, so the hash moved again. Deliberate,
+	// not drift.
+	const want = "eb52aea796bc261d387e22e2f3464a021879a497a3481d147f601ba72467235c"
 	if got != want {
 		t.Fatalf("Kilocode settings SHA-256 = %s, want current-main baseline %s", got, want)
 	}
@@ -492,8 +499,18 @@ func TestOpenCodeRenderedReviewProtocolCost(t *testing.T) {
 		//
 		// #2207 advertises only Claude Code and OpenCode after their fresh-reviewer
 		// constraints are made explicit in the shared contract.
-		{name: "standard", agents: []string{"review-reliability"}, beforeChars: 42_301, wantChars: 19_569, maxCharacters: 23_300},
-		{name: "full-4R", agents: []string{"review-risk", "review-resilience", "review-readability", "review-reliability"}, beforeChars: 106_998, wantChars: 29_970, maxCharacters: 36_000},
+		//
+		// wantChars grew by 59 per lens (19,569 -> 19,628 / 29,970 -> 30,206)
+		// when claudeReviewerPrompt and openCodeProviderInjectedReviewerPrompt
+		// were unified into runtimeReviewerPrompt, one shared template whose
+		// only runtime-specific input is the context marker and the supplying
+		// process. The union of both runtimes' forbidden-tool wording ("Bash,
+		// Git, Read") and the "Never read the live worktree" clause now render
+		// identically for every runtime; this is a deliberate contract
+		// unification, not drift. Ceilings are unchanged: both rows keep more
+		// than 15% headroom.
+		{name: "standard", agents: []string{"review-reliability"}, beforeChars: 42_301, wantChars: 19_628, maxCharacters: 23_300},
+		{name: "full-4R", agents: []string{"review-risk", "review-resilience", "review-readability", "review-reliability"}, beforeChars: 106_998, wantChars: 30_206, maxCharacters: 36_000},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
