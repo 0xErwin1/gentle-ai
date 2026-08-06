@@ -292,6 +292,13 @@ jobs:
           }
 
       - name: Verify Codex reviewer support E2E is registered
+        # Unlike the OpenCode step above, this only proves the organic proof
+        # is still registered by name -- it does not install a codex binary
+        # or an authenticated account, so TestRealCodexReviewerOrdinarySessionAdmitsRawOutput
+        # itself skips in "Run organic journeys" below rather than actually
+        # executing. Codex's activation proof is maintainer-executed locally
+        # today; continuous CI execution of the real Codex proof is tracked
+        # in https://github.com/Gentleman-Programming/gentle-ai/issues/2662.
         shell: pwsh
         run: |
           $tests = go test -list '^TestRealCodexReviewerOrdinarySessionAdmitsRawOutput$' ./e2e/organicruntime

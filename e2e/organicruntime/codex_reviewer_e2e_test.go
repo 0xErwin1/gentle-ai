@@ -1,9 +1,12 @@
 package organicruntime_test
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -24,7 +27,20 @@ func requireCodexOrganicReviewer(t *testing.T) {
 	if os.Getenv(realAgentE2EEnvironment) != "1" {
 		t.Skip("set GENTLE_AI_REAL_AGENT_E2E=1 to run the real Codex reviewer proof")
 	}
-	requireOrganicExecutable(t, "codex")
+	// Codex-specific and deliberately not requireOrganicExecutable (shared
+	// with npm and, via requireOrganicExecutableVersion, OpenCode): CI's
+	// organic-runtime-e2e job sets GENTLE_AI_REAL_AGENT_E2E=1 but does not
+	// install a codex binary or an authenticated account (issue #2662), so
+	// an absent binary here is an expected, known gap, never a hard failure
+	// -- unlike OpenCode and npm, which CI always provisions and for which a
+	// missing binary would be a genuine environment defect. Any other
+	// LookPath error still fails loudly.
+	if _, err := exec.LookPath("codex"); err != nil {
+		if errors.Is(err, exec.ErrNotFound) {
+			t.Skipf("codex binary not installed; continuous CI execution tracked in #2662: %v", err)
+		}
+		t.Fatalf("required executable codex: %v", err)
+	}
 }
 
 // codexNegotiatedStatus is organicNegotiatedStatus bound to the codex runtime
@@ -180,10 +196,17 @@ func TestRealCodexReviewerOrdinarySessionAdmitsRawOutput(t *testing.T) {
 	// extracts one complete JSON object from surrounding prose but rejects an
 	// unterminated one (docs/review-integration.md), so this must genuinely
 	// fail to parse rather than merely carry ignorable trailing garbage.
-	if len(raw) < 20 {
-		t.Fatalf("real codex raw output too short to truncate meaningfully: %q", raw)
+	closingBrace := bytes.LastIndexByte(raw, '}')
+	if closingBrace < 0 {
+		t.Fatalf("real codex raw output has no closing brace to truncate before: %q", raw)
 	}
-	malformed := raw[:len(raw)-15]
+	// Cut strictly before the final '}' rather than a fixed byte count: a
+	// fixed-width truncation only stays unterminated by coincidence, since
+	// trailing prose length varies run to run and could leave the cut point
+	// past the object's own close, producing an accidentally well-formed
+	// negative case. Cutting at the last '}' keeps the JSON object itself
+	// genuinely unterminated regardless of how much trailing prose codex adds.
+	malformed := raw[:closingBrace]
 	malformedPath := setup.harness.writeJSON("codex-malformed.json", json.RawMessage("null"))
 	if err := os.WriteFile(malformedPath, malformed, 0o600); err != nil {
 		t.Fatal(err)
@@ -285,6 +308,9 @@ func TestRealCodexReviewerTransportFailureStrandsNothing(t *testing.T) {
 	after := codexNegotiatedStatus(t, setup.harness, setup.lineage)
 	if after.NextTransition == nil || after.NextTransition.Kind != "collect" {
 		t.Fatalf("transport failure mutated the negotiated transition: before=%#v after=%#v", before.NextTransition, after.NextTransition)
+	}
+	if after.NextTransition.Collect == nil || len(after.NextTransition.Collect.Inputs) == 0 {
+		t.Fatalf("collect transition carried no collect inputs to index: %#v", after.NextTransition)
 	}
 	afterBinding := organicCollectBindingFields(t, after.NextTransition.Collect.Inputs[0])
 	beforeBinding := organicCollectBindingFields(t, before.NextTransition.Collect.Inputs[0])

@@ -84,9 +84,10 @@ func SupportedRuntimes() []Runtime {
 
 // PromptFor returns the same canonical prompt for every supported runtime.
 // Runtime adapters transport this string and return text; they do not own
-// evidence assembly, result schema, or validation policy. An unadvertised
-// runtime (currently Codex) always receives a typed unavailable error here,
-// never a prompt.
+// evidence assembly, result schema, or validation policy. Claude Code,
+// OpenCode, and Codex are all advertised (Runtime.Supports()); any other
+// runtime name always receives a typed unavailable error here, never a
+// prompt.
 func PromptFor(runtime Runtime, request Request) (string, error) {
 	if !runtime.Supports() {
 		// refusal:by-design operator-knowledge: unsupported adapters have no advertised prompt/text transport yet
