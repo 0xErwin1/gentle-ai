@@ -1150,6 +1150,11 @@ func organicEnvironment(home string) []string {
 	if value := os.Getenv("TMPDIR"); value != "" {
 		environment = append(environment, "TMPDIR="+value)
 	}
+	for _, name := range []string{"OPENCODE_DISABLE_PROJECT_CONFIG", "OPENCODE_DISABLE_EXTERNAL_SKILLS"} {
+		if value := os.Getenv(name); value != "" {
+			environment = append(environment, name+"="+value)
+		}
+	}
 	return environment
 }
 

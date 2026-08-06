@@ -485,10 +485,9 @@ func readCorrectionStatusFor(r *journeyRun, lineage string) (waveCorrectionStatu
 }
 
 func readCorrectionStatusForContract(r *journeyRun, lineage, contract string) (waveCorrectionStatus, error) {
+	// These journeys create their authority through the manual compatibility
+	// path, so they must not invent a runtime identity for a later STATUS read.
 	arguments := []string{"review", "status", "--contract", contract, "--next-transition", "--lineage", lineage}
-	if contract == reviewContractV2 {
-		arguments = append(arguments, "--agent", "claude-code")
-	}
 	observation := r.run(productArgsFor(r, arguments...), false)
 	var status waveCorrectionStatus
 	return status, decodeWaveObservation(observation, &status, "corrected review status")
@@ -1107,7 +1106,7 @@ func prepareDeclinedCandidate(sandbox *Sandbox) error {
 
 func declineCandidateFromStatus(r *journeyRun) error {
 	statusObservation := r.run(productArgsFor(r, "review", "status", "--contract", reviewContractV2,
-		"--agent", "claude-code", "--next-transition", "--lineage", declineCandidateLineage), false)
+		"--next-transition", "--lineage", declineCandidateLineage), false)
 	var status statusEnvelope
 	if err := decodeWaveObservation(statusObservation, &status, "candidate decline status"); err != nil {
 		return err
@@ -1189,7 +1188,7 @@ func waveOneJourneys() []Journey {
 				{Name: "capture passed repository evidence for the provider correction target", Requires: captureOutcomeEvidenceCapability, Composite: capturePassedCorrectionEvidence},
 				{Name: "execute the targeted validation submission descriptor and approve the corrected receipt", Requires: finalizeValidationCapability, Composite: completeCorrectedReview},
 				{Name: "corrected receipt and advanced current snapshot are proven", Requires: statusCapability,
-					Args: productArgs("review", "status", "--contract", reviewContractV2, "--agent", "claude-code", "--lineage", correctedDeliveryLineage), After: proveCorrectedReceipt},
+					Args: productArgs("review", "status", "--contract", reviewContractV2, "--lineage", correctedDeliveryLineage), After: proveCorrectedReceipt},
 				{Name: "fixture: corrected candidate staged tree matches the receipt", Fixture: stageCorrectedTree},
 				{Name: "gate pre-commit on the corrected receipt", Requires: validateCapability,
 					Args: productArgs("review", "validate", "--gate", "pre-commit"),

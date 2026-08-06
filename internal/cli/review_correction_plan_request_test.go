@@ -90,7 +90,7 @@ func TestNegotiatedCorrectionPlanningExposesProviderOwnedFindings(t *testing.T) 
 			}
 
 			args := []string{
-				"status", "--cwd", repo, "--contract", ReviewIntegrationContractV2, "--agent", "claude-code",
+				"status", "--cwd", repo, "--contract", ReviewIntegrationContractV2,
 				"--next-transition", "--lineage", started.LineageID,
 			}
 			var first, restarted bytes.Buffer
