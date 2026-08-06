@@ -93,11 +93,12 @@ func TestBoundedReviewContractRequiresRuntimeBoundReviewerContext(t *testing.T) 
 	for _, want := range []string{
 		"The active host/orchestrator and fresh reviewer executor are distinct roles",
 		"Prompt prose coordinates launch; it never proves isolation",
-		"Claude Code and OpenCode advertise immutable reviewer execution",
+		"Claude Code, OpenCode, and Codex advertise immutable reviewer execution",
 		"Claude's generated reviewer has no live tools",
 		"OpenCode's provider plugin replaces the task prompt",
-		"Prompt prose alone never proves either boundary",
-		"Codex and Kilo remain dormant",
+		"Codex's shared advisory adapter launches a brand-new `codex exec` process",
+		"Prompt prose alone never proves any of these boundaries",
+		"Kilo remains dormant",
 		"compiled capability is authoritative before repository, target, authority, collection, or process work",
 		"normal SDD and ordinary agent support remain available",
 		"Never hand candidate bytes through `/tmp`",
@@ -252,7 +253,15 @@ func TestRenderedReviewersAreReadOnlyAndSingleResult(t *testing.T) {
 					}
 				}
 				if family == "claude" {
-					for _, want := range []string{"GENTLE_AI_CLAUDE_REVIEW_CONTEXT", "prompt-carried immutable context", "path evidence for every manifest index", "Missing, partial, reordered, mismatched, or unavailable evidence", "no execution tools"} {
+					// "provider-injected context" replaced the Claude-only
+					// "prompt-carried immutable context" wording when
+					// claudeReviewerPrompt and openCodeProviderInjectedReviewerPrompt
+					// were unified into one shared template
+					// (runtimeReviewerPrompt): the two runtimes now render
+					// identical wording and differ only in which process
+					// supplies the block, so the reviewer input contract no
+					// longer names a Claude-specific nature for the context.
+					for _, want := range []string{"GENTLE_AI_CLAUDE_REVIEW_CONTEXT", "provider-injected context", "path evidence for every manifest index", "Missing, partial, reordered, mismatched, or unavailable evidence", "no execution tools"} {
 						if !strings.Contains(content, want) {
 							t.Errorf("%s missing Claude transport clause %q", path, want)
 						}

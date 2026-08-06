@@ -103,13 +103,19 @@ func TestNegotiatedRouteWithoutRuntimeIdentityReachesStart(t *testing.T) {
 // refuses would assert the defect rather than the property. Kilocode replaces
 // it and keeps this arm's coverage exact: it is eligible, has no transport,
 // and fails with the same reviewImmutableTransportUnsupportedCode, unlike Pi,
-// which fails earlier with reviewTransportCapabilityUnsupportedCode. Codex and
-// the unknown identity are unchanged, so the property this test exists to
-// protect -- a declared identity is validated exactly as before, and every
-// unsupported one still stops -- is still proven by three runtimes.
+// which fails earlier with reviewTransportCapabilityUnsupportedCode.
+//
+// Codex used to stand here too. Its organic runtime proof
+// (TestRealCodexReviewerOrdinarySessionAdmitsRawOutput, e2e/organicruntime)
+// gave it a genuine immutable transport as well (its CodexAdapter's empty
+// scratch-directory boundary), so it is no longer an instance of the class
+// this test is about either. The unknown identity is unchanged, so the
+// property this test exists to protect -- a declared identity is validated
+// exactly as before, and every unsupported one still stops -- is still
+// proven by two runtimes.
 func TestDeclaredUnsupportedRuntimeStillRefusesNegotiatedStatus(t *testing.T) {
 	repo := initReviewCLIRepo(t)
-	for _, runtime := range []string{string(model.AgentKilocode), string(model.AgentCodex), "unknown-runtime"} {
+	for _, runtime := range []string{string(model.AgentKilocode), "unknown-runtime"} {
 		t.Run(runtime, func(t *testing.T) {
 			var output bytes.Buffer
 			if err := RunReview([]string{
@@ -127,22 +133,21 @@ func TestDeclaredUnsupportedRuntimeStillRefusesNegotiatedStatus(t *testing.T) {
 
 // TestDeclaredBuiltInRuntimeUsesProvenExecutorBoundary prevents the capability
 // declaration from drifting from the supported fresh reviewer paths. Claude
-// uses its tool-free fresh agent; OpenCode additionally requires its host
-// isolation controls before negotiated routing can inspect a repository.
+// and OpenCode use their tool-free fresh agent in an ordinary session, neither
+// depending on OPENCODE_DISABLE_PROJECT_CONFIG or OPENCODE_DISABLE_EXTERNAL_SKILLS
+// (deliberately left unset); Codex uses CodexAdapter's empty scratch-directory
+// process, proven organically by
+// TestRealCodexReviewerOrdinarySessionAdmitsRawOutput (e2e/organicruntime).
 func TestDeclaredBuiltInRuntimeUsesProvenExecutorBoundary(t *testing.T) {
 	repo := initReviewCLIRepo(t)
 	for _, test := range []struct {
-		runtime  string
-		isolated bool
+		runtime string
 	}{
 		{runtime: string(model.AgentClaudeCode)},
-		{runtime: string(model.AgentOpenCode), isolated: true},
+		{runtime: string(model.AgentOpenCode)},
+		{runtime: string(model.AgentCodex)},
 	} {
 		t.Run(test.runtime, func(t *testing.T) {
-			if test.isolated {
-				t.Setenv("OPENCODE_DISABLE_PROJECT_CONFIG", "1")
-				t.Setenv("OPENCODE_DISABLE_EXTERNAL_SKILLS", "1")
-			}
 			var output bytes.Buffer
 			err := RunReview([]string{
 				"status", "--cwd", repo, "--contract", ReviewIntegrationContractV2, "--agent", test.runtime, "--next-transition",

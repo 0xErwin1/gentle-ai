@@ -3,7 +3,6 @@ package cli
 import (
 	"errors"
 	"fmt"
-	"os"
 	"strings"
 
 	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/capabilitymanifest"
@@ -24,26 +23,35 @@ type reviewImmutableTransport string
 const (
 	reviewImmutableTransportUnsupported         reviewImmutableTransport = "unsupported"
 	reviewImmutableTransportClaudePromptCarried reviewImmutableTransport = "claude_prompt_carried"
-	// reviewImmutableTransportOpenCodeProviderInjected is issue #2417's
-	// restored transport: the OpenCode plugin (review-result-artifacts.ts)
-	// asks `review lens-context` for the finished reviewer context through
-	// its shell-less runNative channel and injects those exact bytes into
-	// the reviewer task's prompt before the reviewer ever launches. The
-	// provider materializes the evidence, applies the budget, and resolves
-	// every refusal; the plugin assembles nothing. The generated lens holds no
-	// bash and no read tool. OpenCode itself concatenates live project
-	// instructions (AGENTS.md/CLAUDE.md/CONTEXT.md, local `instructions`
-	// glob entries) and the skill catalog into every session's system
-	// prompt regardless of tools, so the plugin also refuses to launch the
-	// reviewer unless OPENCODE_DISABLE_PROJECT_CONFIG and
-	// OPENCODE_DISABLE_EXTERNAL_SKILLS are both set. OpenCode also fetches
-	// any remote (http/https) `instructions` entry unconditionally, from
-	// any config layer, regardless of either variable, so the plugin
-	// separately reads the effective configuration through its own OpenCode
-	// client (client.config.get) and refuses to launch the reviewer if one
-	// is present, naming the offending entry. Only then is the injected
-	// block provably the reviewer's only byte source.
+	// reviewImmutableTransportOpenCodeProviderInjected is the shared advisory
+	// transport (rdd-advisory-transport SKILL.md): the OpenCode plugin
+	// (review-result-artifacts.ts) asks `review lens-context` for the
+	// finished reviewer context through its shell-less runNative channel and
+	// injects those exact bytes into the reviewer task's prompt before the
+	// reviewer ever launches. The provider materializes the evidence, applies
+	// the budget, and resolves every refusal; the plugin assembles nothing,
+	// interprets no binding field, and captures no result -- it hands the
+	// model's raw final text back for native admission. The generated lens
+	// holds no bash and no read tool. An ordinary already-running OpenCode
+	// session is sufficient: no restart, no child process, no special
+	// user-visible session, and no OPENCODE_DISABLE_* variable, because the
+	// runtime's output is advisory and cannot mint authority until Go admits
+	// it.
 	reviewImmutableTransportOpenCodeProviderInjected reviewImmutableTransport = "opencode_provider_injected"
+	// reviewImmutableTransportCodexAdvisoryScratchProcess is the shared
+	// advisory transport's Codex boundary (rdd-advisory-transport SKILL.md):
+	// internal/advisoryreview's CodexAdapter launches a brand-new `codex
+	// exec` process in an empty scratch directory it creates and deletes
+	// itself, handing it only the canonical provider-rendered prompt
+	// (advisoryreview.PromptFor). Codex's own shell tool stays permitted even
+	// under --sandbox read-only (that flag bounds writes and network, not
+	// reads), so the enforced boundary is the empty directory, not a
+	// no-tool agent config this CLI does not have for Codex. Proven
+	// organically by TestRealCodexReviewerOrdinarySessionAdmitsRawOutput and
+	// its fail-closed companions in e2e/organicruntime: the reviewer's raw
+	// output reached native admission and a terminal receipt while a
+	// poisoned live worktree never did.
+	reviewImmutableTransportCodexAdvisoryScratchProcess reviewImmutableTransport = "codex_advisory_scratch_process"
 )
 
 type reviewImmutableRuntimePolicy struct {
@@ -76,13 +84,16 @@ func reviewImmutableRuntimeCapability(agent model.AgentID) reviewImmutableRuntim
 		policy.Transport = reviewImmutableTransportClaudePromptCarried
 	case model.AgentOpenCode:
 		policy.Transport = reviewImmutableTransportOpenCodeProviderInjected
+	case model.AgentCodex:
+		policy.Transport = reviewImmutableTransportCodexAdvisoryScratchProcess
 	}
 	return policy
 }
 
 func (capability reviewImmutableRuntimePolicy) supportsImmutableReceiptReview() bool {
 	return capability.Transport == reviewImmutableTransportClaudePromptCarried ||
-		capability.Transport == reviewImmutableTransportOpenCodeProviderInjected
+		capability.Transport == reviewImmutableTransportOpenCodeProviderInjected ||
+		capability.Transport == reviewImmutableTransportCodexAdvisoryScratchProcess
 }
 
 // reviewTransportSupportedRuntimeIDs derives the actionable runtime list from
@@ -102,20 +113,6 @@ func reviewTransportRefusalExitGuidance() string {
 		strings.Join(reviewTransportSupportedRuntimeIDs(), ", ")
 }
 
-func reviewOpenCodeIsolationPreflight() error {
-	missing := make([]string, 0, 2)
-	for _, name := range []string{"OPENCODE_DISABLE_PROJECT_CONFIG", "OPENCODE_DISABLE_EXTERNAL_SKILLS"} {
-		if os.Getenv(name) != "1" {
-			missing = append(missing, name)
-		}
-	}
-	if len(missing) == 0 {
-		return nil
-	}
-	// refusal:by-design world-action: OpenCode cannot launch a fresh reviewer safely until its host disables every local instruction channel
-	return fmt.Errorf("OpenCode immutable review requires its host process to set %s to 1 before review start%s", strings.Join(missing, " and "), reviewTransportRefusalExitGuidance())
-}
-
 // reviewRuntimeWithImmutableTransport accepts only the exact compiled runtime
 // identities. It never selects a substitute transport for an unsupported one.
 func reviewRuntimeWithImmutableTransport(agent string) (model.AgentID, error) {
@@ -132,11 +129,6 @@ func reviewRuntimeWithImmutableTransport(agent string) (model.AgentID, error) {
 	if !capability.supportsImmutableReceiptReview() {
 		// refusal:by-design world-action: unsupported transport cannot bind immutable evidence or capture an admissible result
 		return "", fmt.Errorf("the active runtime lacks immutable receipt-review transport%s", reviewTransportRefusalExitGuidance())
-	}
-	if identity == model.AgentOpenCode {
-		if err := reviewOpenCodeIsolationPreflight(); err != nil {
-			return "", err
-		}
 	}
 	return identity, nil
 }

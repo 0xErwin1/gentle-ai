@@ -1,7 +1,10 @@
 package reviewtransaction
 
 import (
+	"bytes"
 	"encoding/json"
+	"fmt"
+	"io"
 	"sort"
 	"strings"
 )
@@ -31,6 +34,142 @@ type ReviewerResultEnvelope struct {
 	// sorted. Each one names the lens agent whose prompt must state this
 	// envelope.
 	LensAgentNames []string
+}
+
+// ReviewerResult is the JSON result shape a reviewer submits before native
+// admission binds it to a frozen candidate.
+type ReviewerResult struct {
+	SubjectHash string             `json:"subject_hash"`
+	Inspection  ArtifactInspection `json:"inspection"`
+	// Lens is a required self-reported binding, not an optional hint: it must
+	// equal the exact lens the subject was constructed for. ValidateReviewerResult
+	// refuses an empty or mismatched Lens instead of treating an omitted value
+	// as "the selected lens by default" -- an unchecked field is indistinguishable
+	// from a reviewer that never bound to its charge at all.
+	Lens     string    `json:"lens,omitempty"`
+	Findings []Finding `json:"findings"`
+	Evidence []string  `json:"evidence"`
+}
+
+type reviewerResultShapeError struct {
+	decision ArtifactAdmissionDecision
+	message  string
+}
+
+func (err *reviewerResultShapeError) Error() string {
+	return err.message
+}
+
+// ValidateReviewerResultBinding verifies the provider-owned binding that a
+// reviewer result must echo. It does not inspect repository contents.
+func ValidateReviewerResultBinding(subject ArtifactSubject, manifest []ChangedPathManifestEntry) error {
+	if err := ValidateArtifactSubject(subject); err != nil {
+		return err
+	}
+	manifestDigest, err := ChangedPathManifestDigest(manifest)
+	if err != nil || manifestDigest != subject.ChangedPathManifestSHA256 {
+		// refusal:by-design world-action: the caller must rebuild the subject and manifest from current frozen authority, not run a command
+		return fmt.Errorf("frozen changed-path manifest does not match the artifact subject")
+	}
+	return nil
+}
+
+// ValidateReviewerResult strictly decodes one reviewer result and verifies the
+// native schema, signed subject, selected lens, and complete frozen manifest.
+// Repository-derived causality remains the responsibility of AdmitArtifact.
+func ValidateReviewerResult(payload []byte, subject ArtifactSubject, manifest []ChangedPathManifestEntry) (ReviewerResult, error) {
+	if err := ValidateReviewerResultBinding(subject, manifest); err != nil {
+		return ReviewerResult{}, err
+	}
+
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(payload, &fields); err != nil || !requiredReviewerResultFields(fields) {
+		// refusal:by-design world-action: the reviewer must resubmit a schema-conformant result, not run a command
+		return ReviewerResult{}, fmt.Errorf("reviewer result does not match the required schema fields")
+	}
+	decoder := json.NewDecoder(bytes.NewReader(payload))
+	decoder.DisallowUnknownFields()
+	var result ReviewerResult
+	if err := decoder.Decode(&result); err != nil {
+		return ReviewerResult{}, fmt.Errorf("decode reviewer result: %w", err)
+	}
+	var extra any
+	if err := decoder.Decode(&extra); err != io.EOF {
+		// refusal:by-design world-action: the reviewer must return exactly one JSON object, not run a command
+		return ReviewerResult{}, fmt.Errorf("reviewer result must contain exactly one JSON object")
+	}
+	if result.Findings == nil || result.Evidence == nil {
+		// refusal:by-design world-action: the reviewer must resubmit explicit findings and evidence arrays, not run a command
+		return ReviewerResult{}, fmt.Errorf("reviewer result requires explicit findings and evidence arrays")
+	}
+	if result.SubjectHash != subject.SubjectHash {
+		// refusal:by-design world-action: the reviewer must bind to the exact requested subject, not run a command
+		return ReviewerResult{}, fmt.Errorf("reviewer result does not match the requested subject")
+	}
+	if result.Lens == "" || result.Lens != subject.Lens {
+		// refusal:by-design world-action: the reviewer must self-report the exact selected lens, not run a command
+		return ReviewerResult{}, fmt.Errorf("reviewer result does not report the required selected-lens binding")
+	}
+	wantPaths := make([]string, len(manifest))
+	for index, entry := range manifest {
+		wantPaths[index] = entry.Path
+	}
+	if result.Inspection.Status != ArtifactInspectionCompleted || !equalStrings(result.Inspection.Paths, wantPaths) {
+		// refusal:by-design world-action: the reviewer must complete inspection of the full frozen manifest, not run a command
+		return ReviewerResult{}, fmt.Errorf("reviewer result does not report completed inspection of the frozen candidate")
+	}
+	if _, err := canonicalReviewerResult(LensResult{
+		Lens: subject.Lens, Findings: result.Findings, Evidence: result.Evidence,
+	}, subject.Lens); err != nil {
+		return ReviewerResult{}, err
+	}
+	return result, nil
+}
+
+func requiredReviewerResultFields(fields map[string]json.RawMessage) bool {
+	for _, name := range []string{"subject_hash", "inspection", "findings", "evidence"} {
+		if _, found := fields[name]; !found {
+			return false
+		}
+	}
+	return true
+}
+
+// canonicalReviewerResult contains the result-shape checks shared by native
+// admission and read-only advisory transport validation.
+func canonicalReviewerResult(result LensResult, expectedLens string) (LensResult, error) {
+	canonical, err := CanonicalCompactLensResult(result)
+	if err != nil {
+		return LensResult{}, err
+	}
+	if canonical.Lens != expectedLens {
+		return LensResult{}, &reviewerResultShapeError{
+			decision: ArtifactAdmissionBindingMismatch,
+			message:  "reviewer result is not bound to the selected lens",
+		}
+	}
+	wantPrefix := map[string]string{LensRisk: "R1-", LensReadability: "R2-", LensReliability: "R3-", LensResilience: "R4-"}[canonical.Lens]
+	for _, finding := range canonical.Findings {
+		if !artifactFindingID.MatchString(finding.ID) {
+			return LensResult{}, &reviewerResultShapeError{
+				decision: ArtifactAdmissionBindingMismatch,
+				message:  "reviewer finding ID does not match the native ASCII schema",
+			}
+		}
+		if !strings.HasPrefix(finding.ID, wantPrefix) {
+			return LensResult{}, &reviewerResultShapeError{
+				decision: ArtifactAdmissionBindingMismatch,
+				message:  "reviewer finding ID is not bound to the selected lens",
+			}
+		}
+		if isSevereSeverity(finding.Severity) && (!isSupportedEvidenceClass(finding.EvidenceClass) || !isSupportedCausalDisposition(finding.CausalDisposition)) {
+			return LensResult{}, &reviewerResultShapeError{
+				decision: ArtifactAdmissionIncomplete,
+				message:  "severe reviewer finding requires supported evidence_class and causal_disposition",
+			}
+		}
+	}
+	return canonical, nil
 }
 
 // NewReviewerResultEnvelope derives the envelope from the published schema.

@@ -10,6 +10,10 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
 )
 
+// TestImmutableReviewRuntimeMatrix runs with no OPENCODE_DISABLE_* variable
+// set: OpenCode's shared advisory transport (rdd-advisory-transport
+// SKILL.md) does not depend on host isolation controls, so an ordinary
+// session must resolve identically to Claude's.
 func TestImmutableReviewRuntimeMatrix(t *testing.T) {
 	for _, test := range []struct {
 		name      string
@@ -17,11 +21,10 @@ func TestImmutableReviewRuntimeMatrix(t *testing.T) {
 		eligible  bool
 		transport reviewImmutableTransport
 		supported bool
-		isolated  bool
 	}{
 		{name: "Claude prompt carried fresh executor", runtime: string(model.AgentClaudeCode), eligible: true, transport: reviewImmutableTransportClaudePromptCarried, supported: true},
-		{name: "OpenCode provider injected fresh executor", runtime: string(model.AgentOpenCode), eligible: true, transport: reviewImmutableTransportOpenCodeProviderInjected, supported: true, isolated: true},
-		{name: "Codex is pending #2208", runtime: string(model.AgentCodex), eligible: true, transport: reviewImmutableTransportUnsupported},
+		{name: "OpenCode provider injected fresh executor", runtime: string(model.AgentOpenCode), eligible: true, transport: reviewImmutableTransportOpenCodeProviderInjected, supported: true},
+		{name: "Codex advisory scratch process", runtime: string(model.AgentCodex), eligible: true, transport: reviewImmutableTransportCodexAdvisoryScratchProcess, supported: true},
 		{name: "Kilo has no native executor", runtime: string(model.AgentKilocode), eligible: true, transport: reviewImmutableTransportUnsupported},
 		{name: "Pi", runtime: string(model.AgentPi), transport: reviewImmutableTransportUnsupported},
 		{name: "unknown", runtime: "unknown-runtime", transport: reviewImmutableTransportUnsupported},
@@ -29,10 +32,6 @@ func TestImmutableReviewRuntimeMatrix(t *testing.T) {
 		{name: "casing", runtime: "OpenCode", transport: reviewImmutableTransportUnsupported},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			if test.isolated {
-				t.Setenv("OPENCODE_DISABLE_PROJECT_CONFIG", "1")
-				t.Setenv("OPENCODE_DISABLE_EXTERNAL_SKILLS", "1")
-			}
 			capability := reviewImmutableRuntimeCapability(model.AgentID(test.runtime))
 			if capability.Eligible != test.eligible || capability.Transport != test.transport || capability.supportsImmutableReceiptReview() != test.supported {
 				t.Fatalf("runtime %q capability = %#v, supported %t", test.runtime, capability, capability.supportsImmutableReceiptReview())
@@ -69,11 +68,24 @@ func TestUnsupportedImmutableReviewTransportStopsBeforeRepositoryOrAuthority(t *
 		// stays reviewImmutableTransportUnsupportedCode for every runtime.
 		startCode string
 	}{
-		{name: "Codex", runtime: string(model.AgentCodex), startCode: reviewImmutableTransportUnsupportedCode},
 		{name: "Kilo", runtime: string(model.AgentKilocode), startCode: reviewImmutableTransportUnsupportedCode},
-		{name: "OpenCode without required host isolation", runtime: string(model.AgentOpenCode), startCode: reviewImmutableTransportUnsupportedCode},
 		{name: "Pi", runtime: string(model.AgentPi), startCode: reviewTransportCapabilityUnsupportedCode},
 		{name: "unknown", runtime: "unknown-runtime", startCode: reviewTransportCapabilityUnsupportedCode},
+		// OpenCode used to stand here, refused for lacking its host isolation
+		// controls. The shared advisory transport (rdd-advisory-transport
+		// SKILL.md) retired that requirement: OpenCode's output is advisory
+		// until native Go admits it, so an ordinary already-running session
+		// is sufficient and OpenCode is a genuinely supported runtime now,
+		// exercised instead by TestSupportedImmutableReviewTransportReachesRepositoryValidation.
+		//
+		// Codex used to stand here too, refused for lacking an enforceable
+		// fresh-reviewer boundary (#2208). The shared advisory transport's
+		// CodexAdapter (internal/advisoryreview) supplies that boundary --
+		// organically proven by TestRealCodexReviewerOrdinarySessionAdmitsRawOutput
+		// in e2e/organicruntime -- so Codex is a genuinely supported runtime
+		// now too, exercised by the same
+		// TestSupportedImmutableReviewTransportReachesRepositoryValidation.
+		//
 		// An undeclared runtime identity is deliberately absent from this
 		// matrix: it makes no transport claim to refuse, so it stays on the
 		// manual/non-agent compatibility path. See
@@ -127,7 +139,7 @@ func TestUnsupportedImmutableReviewTransportStopsBeforeRepositoryOrAuthority(t *
 	repo := initReviewCLIRepo(t)
 	for _, args := range [][]string{
 		{"status", "--contract", ReviewIntegrationContractV2, "--agent", string(model.AgentKilocode), "--next-transition", "--cwd", repo},
-		{"start", "--contract", ReviewIntegrationContractV2, "--agent", string(model.AgentCodex), "--target", target, "--projection", "workspace", "--cwd", repo},
+		{"start", "--contract", ReviewIntegrationContractV2, "--agent", string(model.AgentPi), "--target", target, "--projection", "workspace", "--cwd", repo},
 	} {
 		if err := RunReview(args, &bytes.Buffer{}); err == nil {
 			t.Fatalf("unsupported invocation succeeded: %v", args)
@@ -142,20 +154,20 @@ func TestUnsupportedImmutableReviewTransportStopsBeforeRepositoryOrAuthority(t *
 	}
 }
 
+// TestSupportedImmutableReviewTransportReachesRepositoryValidation proves
+// both supported runtimes reach repository validation in an ordinary session:
+// neither depends on OPENCODE_DISABLE_PROJECT_CONFIG or
+// OPENCODE_DISABLE_EXTERNAL_SKILLS, which this test deliberately leaves unset.
 func TestSupportedImmutableReviewTransportReachesRepositoryValidation(t *testing.T) {
 	for _, test := range []struct {
-		name     string
-		runtime  string
-		isolated bool
+		name    string
+		runtime string
 	}{
 		{name: "Claude", runtime: string(model.AgentClaudeCode)},
-		{name: "OpenCode", runtime: string(model.AgentOpenCode), isolated: true},
+		{name: "OpenCode", runtime: string(model.AgentOpenCode)},
+		{name: "Codex", runtime: string(model.AgentCodex)},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			if test.isolated {
-				t.Setenv("OPENCODE_DISABLE_PROJECT_CONFIG", "1")
-				t.Setenv("OPENCODE_DISABLE_EXTERNAL_SKILLS", "1")
-			}
 			var output bytes.Buffer
 			err := RunReview([]string{
 				"status", "--contract", ReviewIntegrationContractV2, "--agent", test.runtime,
@@ -173,7 +185,7 @@ func TestSupportedImmutableReviewTransportReachesRepositoryValidation(t *testing
 }
 
 func TestImmutableReviewTransportRefusalNamesWorkingExits(t *testing.T) {
-	for _, runtime := range []model.AgentID{model.AgentCodex, model.AgentKilocode, model.AgentPi} {
+	for _, runtime := range []model.AgentID{model.AgentKilocode, model.AgentPi} {
 		t.Run(string(runtime), func(t *testing.T) {
 			_, err := reviewRuntimeWithImmutableTransport(string(runtime))
 			if err == nil {
