@@ -7,6 +7,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
@@ -152,6 +153,31 @@ func TestSelectorlessCommittedCorrectionFinalizeFailsClosedForOperationalReconst
 	assertOperationalReconstructionFailure(t, err, output.String())
 }
 
+func TestSelectorlessCommittedCorrectionFailsClosedForOverBudgetReconstruction(t *testing.T) {
+	repo := committedCorrectionWithOverBudgetReconstructionAuthority(t)
+
+	var output bytes.Buffer
+	err := RunReview([]string{
+		"status", "--cwd", repo, "--contract", ReviewIntegrationContractV1, "--next-transition",
+	}, &output)
+	assertReconstructedBudgetFailure(t, err, output.String())
+}
+
+func TestSelectorlessCommittedCorrectionFinalizeFailsClosedForOverBudgetReconstruction(t *testing.T) {
+	repo := committedCorrectionWithOverBudgetReconstructionAuthority(t)
+
+	var output bytes.Buffer
+	err := RunReviewFacadeFinalize([]string{"--cwd", repo}, &output)
+	assertReconstructedBudgetFailure(t, err, output.String())
+	store, storeErr := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, "committed-correction")
+	if storeErr != nil {
+		t.Fatal(storeErr)
+	}
+	if _, statErr := os.Stat(store.ReceiptPath()); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("selector-less finalize published a receipt before budget refusal: %v", statErr)
+	}
+}
+
 func committedCorrectionWithOperationalReconstructionAuthority(t *testing.T) string {
 	t.Helper()
 	repo, base, lineage := forecastCommittedCorrection(t)
@@ -221,6 +247,72 @@ func assertOperationalReconstructionFailure(t *testing.T, err error, output stri
 	}
 }
 
+func assertReconstructedBudgetFailure(t *testing.T, err error, output string) {
+	t.Helper()
+	var budgetErr *reviewtransaction.CorrectionBudgetExceededError
+	if !errors.As(err, &budgetErr) || budgetErr.Actual != 4 || budgetErr.Budget != 2 {
+		t.Fatalf("selector-less correction error = %T %[1]v, want rebuilt 4/2 budget failure", err)
+	}
+	if strings.Contains(output, "committed-correction") || strings.Contains(output, "healthy-reconstruction") {
+		t.Fatalf("selector-less correction exposed a lineage before budget refusal: %s", output)
+	}
+}
+
+func committedCorrectionWithOverBudgetReconstructionAuthority(t *testing.T) string {
+	t.Helper()
+	repo, base, lineage := forecastCommittedCorrection(t)
+	writeReviewStartCandidate(t, repo, "tracked.txt", "base\none\ntwo\nthree\nfixed\nfour\nfive\nsix\nseven\n", 0o644)
+	runReviewCLIGit(t, repo, "add", "tracked.txt")
+	runReviewCLIGit(t, repo, "commit", "-qm", "large candidate")
+	healthySnapshot, err := (reviewtransaction.SnapshotBuilder{Repo: repo}).BuildStoredSnapshot(context.Background(), reviewtransaction.Target{
+		Kind: reviewtransaction.TargetBaseDiff, Projection: reviewtransaction.ProjectionWorkspace,
+		BaseRef: base, IntendedUntracked: []string{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, lineage)
+	if err != nil {
+		t.Fatal(err)
+	}
+	record, err := store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	healthy := record.State
+	healthy.LineageID = "healthy-reconstruction"
+	healthy.InitialSnapshot, healthy.CurrentSnapshot = healthySnapshot, healthySnapshot
+	healthy.GenesisPaths = append([]string(nil), healthySnapshot.Paths...)
+	healthy.OriginalChangedLines, healthy.CorrectionBudget = 8, 4
+	forecast := 4
+	healthy.ProposedCorrectionLines = &forecast
+	if err := healthy.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	record.State = healthy
+	record.Revision, err = reviewtransaction.CompactRevisionForState(healthy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload, err := json.MarshalIndent(record, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	healthyStore, err := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, healthy.LineageID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(healthyStore.Dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(healthyStore.StatePath(), append(payload, '\n'), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	writeOverBudgetCommittedCorrection(t, repo)
+	runReviewCLIGit(t, repo, "branch", "-f", base, "HEAD")
+	return repo
+}
+
 func forecastCommittedCorrection(t *testing.T) (string, string, string) {
 	t.Helper()
 	repo := initReviewCLIRepo(t)
@@ -255,13 +347,20 @@ func forecastCommittedCorrection(t *testing.T) (string, string, string) {
 
 func writeCommittedCorrection(t *testing.T, repo string, amend bool) {
 	t.Helper()
-	writeReviewStartCandidate(t, repo, "tracked.txt", "base\none\ntwo\nthree\nfixed\n", 0o644)
+	writeReviewStartCandidate(t, repo, "tracked.txt", "base\none\ntwo\n", 0o644)
 	runReviewCLIGit(t, repo, "add", "tracked.txt")
 	if amend {
 		runReviewCLIGit(t, repo, "commit", "--amend", "--no-edit")
 		return
 	}
 	runReviewCLIGit(t, repo, "commit", "-qm", "correct candidate")
+}
+
+func writeOverBudgetCommittedCorrection(t *testing.T, repo string) {
+	t.Helper()
+	writeReviewStartCandidate(t, repo, "tracked.txt", "base\none\ntwo\nthree\nfixed\n", 0o644)
+	runReviewCLIGit(t, repo, "add", "tracked.txt")
+	runReviewCLIGit(t, repo, "commit", "-qm", "over-budget correct candidate")
 }
 
 func committedCorrectionStatus(t *testing.T, repo string) ReviewTargetStatusResult {
