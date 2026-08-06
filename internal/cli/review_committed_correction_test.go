@@ -134,6 +134,93 @@ func TestSelectorlessCommittedCorrectionFailsClosedForUnreadableAuthority(t *tes
 	}
 }
 
+func TestSelectorlessCommittedCorrectionFailsClosedForOperationalReconstruction(t *testing.T) {
+	repo := committedCorrectionWithOperationalReconstructionAuthority(t)
+
+	var output bytes.Buffer
+	err := RunReview([]string{
+		"status", "--cwd", repo, "--contract", ReviewIntegrationContractV1, "--next-transition",
+	}, &output)
+	assertOperationalReconstructionFailure(t, err, output.String())
+}
+
+func TestSelectorlessCommittedCorrectionFinalizeFailsClosedForOperationalReconstruction(t *testing.T) {
+	repo := committedCorrectionWithOperationalReconstructionAuthority(t)
+
+	var output bytes.Buffer
+	err := RunReviewFacadeFinalize([]string{"--cwd", repo}, &output)
+	assertOperationalReconstructionFailure(t, err, output.String())
+}
+
+func committedCorrectionWithOperationalReconstructionAuthority(t *testing.T) string {
+	t.Helper()
+	repo, base, lineage := forecastCommittedCorrection(t)
+	writeCommittedCorrection(t, repo, false)
+	runReviewCLIGit(t, repo, "branch", "-f", base, "HEAD")
+
+	source, err := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, lineage)
+	if err != nil {
+		t.Fatal(err)
+	}
+	record, err := source.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	const missingPath = "missing-reconstruction.txt"
+	if err := os.WriteFile(filepath.Join(repo, missingPath), []byte("reconstruction fixture\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := (reviewtransaction.SnapshotBuilder{Repo: repo}).BuildStoredSnapshot(context.Background(), reviewtransaction.Target{
+		Kind: reviewtransaction.TargetBaseDiff, Projection: reviewtransaction.ProjectionWorkspace,
+		BaseRef: record.State.InitialSnapshot.BaseTree, IntendedUntracked: []string{missingPath},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(filepath.Join(repo, missingPath)); err != nil {
+		t.Fatal(err)
+	}
+
+	state := record.State
+	state.LineageID = "operational-reconstruction"
+	state.InitialSnapshot, state.CurrentSnapshot = snapshot, snapshot
+	state.GenesisPaths = append([]string(nil), snapshot.Paths...)
+	if err := state.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	record.State = state
+	record.Revision, err = reviewtransaction.CompactRevisionForState(state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload, err := json.MarshalIndent(record, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, state.LineageID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(store.Dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(store.StatePath(), append(payload, '\n'), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return repo
+}
+
+func assertOperationalReconstructionFailure(t *testing.T, err error, output string) {
+	t.Helper()
+	if err == nil {
+		t.Fatalf("selector-less correction selected an authority despite operational reconstruction failure: %s", output)
+	}
+	var gitErr *reviewtransaction.GitCommandError
+	if !errors.As(err, &gitErr) {
+		t.Fatalf("selector-less correction error = %T %[1]v, want operational Git command error", err)
+	}
+}
+
 func forecastCommittedCorrection(t *testing.T) (string, string, string) {
 	t.Helper()
 	repo := initReviewCLIRepo(t)
