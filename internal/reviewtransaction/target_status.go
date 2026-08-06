@@ -168,6 +168,9 @@ func selectorlessCommittedBaseDiffCorrections(ctx context.Context, repo string) 
 	for _, store := range stores {
 		record, loadErr := store.LoadContext(ctx)
 		if loadErr != nil {
+			if compactAuthorityOperationalFailure(loadErr) {
+				return nil, loadErr
+			}
 			continue
 		}
 		live, rebuildErr := RebuildCommittedBaseDiffCorrectionCandidate(ctx, repo, record.State)
