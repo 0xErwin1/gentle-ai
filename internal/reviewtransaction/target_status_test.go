@@ -973,7 +973,7 @@ func TestCompactAuthorityLockFailuresAreOperational(t *testing.T) {
 		&AuthorityLockTimeoutError{Timeout: 2 * time.Second},
 		&AuthorityLockCancelledError{Cause: context.Canceled},
 	} {
-		if !compactAuthorityOperationalFailure(err) {
+		if !IsCompactAuthorityOperationalFailure(err) {
 			t.Fatalf("authority lock failure classified as semantic corruption: %T", err)
 		}
 	}
