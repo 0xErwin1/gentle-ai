@@ -18,8 +18,12 @@ const ReviewIntegrationStatusSchemaV2 = "gentle-ai.review-integration.status/v2"
 const ReviewIntegrationStatusSchemaIDV2 = "https://gentle-ai.dev/contracts/review-integration/v1/schemas/status-v2.schema.json"
 const ReviewIntegrationStatusSchemaV3 = "gentle-ai.review-integration.status/v3"
 const ReviewIntegrationStatusSchemaIDV3 = "https://gentle-ai.dev/contracts/review-integration/v2/schemas/status.schema.json"
-const ReviewIntegrationStatusSchema = "gentle-ai.review-integration.status/v4"
-const ReviewIntegrationStatusSchemaID = "https://gentle-ai.dev/contracts/review-integration/v2/schemas/status-v4.schema.json"
+const ReviewIntegrationStatusSchemaV4 = "gentle-ai.review-integration.status/v4"
+const ReviewIntegrationStatusSchemaIDV4 = "https://gentle-ai.dev/contracts/review-integration/v2/schemas/status-v4.schema.json"
+const ReviewIntegrationStatusSchemaV5 = "gentle-ai.review-integration.status/v5"
+const ReviewIntegrationStatusSchemaIDV5 = "https://gentle-ai.dev/contracts/review-integration/v2/schemas/status-v5.schema.json"
+const ReviewIntegrationStatusSchema = ReviewIntegrationStatusSchemaV4
+const ReviewIntegrationStatusSchemaID = ReviewIntegrationStatusSchemaIDV4
 const ReviewIntegrationProjectionSchema = "gentle-ai.review-integration.projection/v1"
 const ReviewIntegrationProjectionSchemaID = "https://gentle-ai.dev/contracts/review-integration/v1/schemas/projection.schema.json"
 
@@ -325,7 +329,7 @@ func reviewStopEligibility(reason string, requiredInputs []string) *ReviewAction
 
 func (result ReviewTargetStatusResult) Validate() error {
 	legacyTransport := result.Schema == ReviewIntegrationStatusSchemaV2 && result.Contract == ReviewIntegrationContractV1
-	nativeGitTransport := (result.Schema == ReviewIntegrationStatusSchemaV3 || result.Schema == ReviewIntegrationStatusSchema) && result.Contract == ReviewIntegrationContractV2
+	nativeGitTransport := (result.Schema == ReviewIntegrationStatusSchemaV3 || result.Schema == ReviewIntegrationStatusSchemaV4 || result.Schema == ReviewIntegrationStatusSchemaV5) && result.Contract == ReviewIntegrationContractV2
 	if (!legacyTransport && !nativeGitTransport) || result.Operation != "review.status" {
 		return errors.New("invalid negotiated review status identity")
 	}
@@ -536,7 +540,15 @@ func (result ReviewTargetStatusResult) validateSubmissionDescriptors() error {
 		}
 		return nil
 	}
-	if result.Schema != ReviewIntegrationStatusSchema {
+	if result.Schema == ReviewIntegrationStatusSchemaV5 {
+		for _, input := range transition.Collect.Inputs {
+			if input.Submission != nil {
+				return errors.New("v5 negotiated status contains an unsupported submission descriptor") // refusal:by-design world-action: only a provider code fix can emit a v5 descriptor the current runtime understands
+			}
+		}
+		return nil
+	}
+	if result.Schema != ReviewIntegrationStatusSchemaV4 {
 		return errors.New("submission descriptor status schema is unsupported") // refusal:by-design world-action: only a provider code fix can select a supported descriptor schema
 	}
 	switch transition.ReasonCode {
