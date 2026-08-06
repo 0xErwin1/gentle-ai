@@ -12,17 +12,18 @@ import (
 )
 
 const (
-	correctedDeliveryLineage = "wave-one-corrected-delivery"
-	retrySourceLineage       = "wave-one-final-verification-source"
-	retrySuccessorLineage    = "wave-one-final-verification-successor"
-	stagedRecoveryLineage    = "wave-one-staged-recovery-source"
-	stagedSuccessorLineage   = "wave-one-staged-recovery-successor"
-	fullScopeLineage         = "wave-one-full-scope-source"
-	fullScopeSuccessor       = "wave-one-full-scope-successor"
-	declineCandidateLineage  = "wave-one-candidate-decline"
-	declineCandidatePath     = "scripts/deploy.sh"
-	declineCandidateContents = "#!/bin/sh\necho deploy\n"
-	reviewContractV2         = "gentle-ai.review-integration/v2"
+	correctedDeliveryLineage   = "wave-one-corrected-delivery"
+	retrySourceLineage         = "wave-one-final-verification-source"
+	retrySuccessorLineage      = "wave-one-final-verification-successor"
+	stagedRecoveryLineage      = "wave-one-staged-recovery-source"
+	stagedSuccessorLineage     = "wave-one-staged-recovery-successor"
+	fullScopeLineage           = "wave-one-full-scope-source"
+	fullScopeSuccessor         = "wave-one-full-scope-successor"
+	committedCorrectionLineage = "wave-one-committed-correction"
+	declineCandidateLineage    = "wave-one-candidate-decline"
+	declineCandidatePath       = "scripts/deploy.sh"
+	declineCandidateContents   = "#!/bin/sh\necho deploy\n"
+	reviewContractV2           = "gentle-ai.review-integration/v2"
 )
 
 var startNamedCapability = &Capability{Verb: []string{"review", "start"}, Flags: []string{"--cwd", "--lineage"}}
@@ -487,7 +488,10 @@ func readCorrectionStatusFor(r *journeyRun, lineage string) (waveCorrectionStatu
 func readCorrectionStatusForContract(r *journeyRun, lineage, contract string) (waveCorrectionStatus, error) {
 	// These journeys create their authority through the manual compatibility
 	// path, so they must not invent a runtime identity for a later STATUS read.
-	arguments := []string{"review", "status", "--contract", contract, "--next-transition", "--lineage", lineage}
+	arguments := []string{"review", "status", "--contract", contract, "--next-transition"}
+	if lineage != "" {
+		arguments = append(arguments, "--lineage", lineage)
+	}
 	observation := r.run(productArgsFor(r, arguments...), false)
 	var status waveCorrectionStatus
 	return status, decodeWaveObservation(observation, &status, "corrected review status")
@@ -620,16 +624,46 @@ func completeCorrectedReviewForContract(r *journeyRun, lineage, contract string)
 		}
 		return nil
 	}
-	observation := r.run(productArgsFor(r, "review", "finalize", "--lineage", lineage,
-		"--validation", path, "--captured-evidence=true"), false)
+	arguments := []string{"review", "finalize"}
+	if lineage != "" {
+		arguments = append(arguments, "--lineage", lineage)
+	}
+	arguments = append(arguments, "--validation", path, "--captured-evidence=true")
+	observation := r.run(productArgsFor(r, arguments...), false)
 	result, err := decodeWaveOperation(observation, "corrected review finalize")
 	if err != nil {
 		return err
 	}
-	if result.State != "approved" || result.LineageID != lineage {
+	if result.State != "approved" || lineage != "" && result.LineageID != lineage {
 		return fmt.Errorf("corrected review finalized as %+v", result)
 	}
 	return nil
+}
+
+func startCommittedCorrection(r *journeyRun) error {
+	status, err := readStatusFor(r, "--lineage", committedCorrectionLineage, "--base-ref", r.sandbox.Scratch["staged-recovery-base"])
+	if err != nil || status.NextTransition.Kind != "execute" {
+		return fmt.Errorf("committed correction start = %+v, %v", status.NextTransition, err)
+	}
+	result, err := runPrintedTransition(r, status)
+	if err != nil {
+		return err
+	}
+	operation, err := decodeWaveOperation(result, "committed correction start")
+	if err != nil || operation.LineageID != committedCorrectionLineage || operation.State != "reviewing" {
+		return fmt.Errorf("committed correction start result = %+v, %v", operation, err)
+	}
+	return nil
+}
+
+func commitCorrectedCandidate(sandbox *Sandbox) error {
+	if err := sandbox.write(filepath.Join(sandbox.Repo, "candidate.go"), "package candidate\n\nfunc value() int {\n\treturn 2\n}\n"); err != nil {
+		return err
+	}
+	if err := sandbox.git(sandbox.Repo, "add", "candidate.go"); err != nil {
+		return err
+	}
+	return sandbox.git(sandbox.Repo, "commit", "-qm", "fix: correct reviewed candidate")
 }
 
 func proveCorrectedReceipt(sandbox *Sandbox, observation Observation) error {
@@ -1410,6 +1444,24 @@ func waveOneJourneys() []Journey {
 				{Name: "fixture: corrected candidate proven to change only the reviewed path", Fixture: writeCorrectedCandidate},
 				{Name: "post-correction status requests repository evidence", Requires: captureOutcomeEvidenceCapability, Composite: capturePassedCorrectionEvidence},
 				{Name: "post-correction status requests targeted validation", Requires: finalizeValidationCapability, Composite: completeCorrectedReview},
+			},
+		},
+		{
+			ID:     "j65-selectorless-committed-correction-continuation",
+			Title:  "Committed-only correction: selector-less status and finalize rebuild the frozen base boundary",
+			Source: "issue #1925",
+			Steps: []Step{
+				{Name: "fixture: repository", Fixture: baseRepo},
+				{Name: "fixture: committed base-diff candidate", Fixture: commitStagedRecoveryCandidate},
+				{Name: "start committed-only review", Requires: statusCapability, Composite: startCommittedCorrection},
+				{Name: "capture one blocking finding and finish the lens set", Requires: captureResultCapability, Composite: func(r *journeyRun) error {
+					return captureCorrectableFindingFor(r, "--lineage", committedCorrectionLineage, "--base-ref", r.sandbox.Scratch["staged-recovery-base"])
+				}},
+				{Name: "enter correction-required", Requires: finalizeResultsCapability, Args: productArgs("review", "finalize", "--lineage", committedCorrectionLineage, "--captured-results=true")},
+				{Name: "forecast the bounded correction", Requires: finalizeCorrectionCapability, Args: productArgs("review", "finalize", "--lineage", committedCorrectionLineage, "--correction-lines", "2")},
+				{Name: "fixture: commit the in-budget correction", Fixture: commitCorrectedCandidate},
+				{Name: "selector-less status requests and captures repository evidence", Requires: captureOutcomeEvidenceCapability, Composite: func(r *journeyRun) error { return capturePassedCorrectionEvidenceFor(r, "") }},
+				{Name: "selector-less status submits targeted validation and mints receipt", Requires: finalizeValidationCapability, Composite: func(r *journeyRun) error { return completeCorrectedReviewFor(r, "") }},
 			},
 		},
 	}
