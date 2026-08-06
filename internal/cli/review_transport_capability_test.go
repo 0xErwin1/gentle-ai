@@ -24,7 +24,7 @@ func TestImmutableReviewRuntimeMatrix(t *testing.T) {
 	}{
 		{name: "Claude prompt carried fresh executor", runtime: string(model.AgentClaudeCode), eligible: true, transport: reviewImmutableTransportClaudePromptCarried, supported: true},
 		{name: "OpenCode provider injected fresh executor", runtime: string(model.AgentOpenCode), eligible: true, transport: reviewImmutableTransportOpenCodeProviderInjected, supported: true},
-		{name: "Codex is pending #2208", runtime: string(model.AgentCodex), eligible: true, transport: reviewImmutableTransportUnsupported},
+		{name: "Codex advisory scratch process", runtime: string(model.AgentCodex), eligible: true, transport: reviewImmutableTransportCodexAdvisoryScratchProcess, supported: true},
 		{name: "Kilo has no native executor", runtime: string(model.AgentKilocode), eligible: true, transport: reviewImmutableTransportUnsupported},
 		{name: "Pi", runtime: string(model.AgentPi), transport: reviewImmutableTransportUnsupported},
 		{name: "unknown", runtime: "unknown-runtime", transport: reviewImmutableTransportUnsupported},
@@ -68,7 +68,6 @@ func TestUnsupportedImmutableReviewTransportStopsBeforeRepositoryOrAuthority(t *
 		// stays reviewImmutableTransportUnsupportedCode for every runtime.
 		startCode string
 	}{
-		{name: "Codex", runtime: string(model.AgentCodex), startCode: reviewImmutableTransportUnsupportedCode},
 		{name: "Kilo", runtime: string(model.AgentKilocode), startCode: reviewImmutableTransportUnsupportedCode},
 		{name: "Pi", runtime: string(model.AgentPi), startCode: reviewTransportCapabilityUnsupportedCode},
 		{name: "unknown", runtime: "unknown-runtime", startCode: reviewTransportCapabilityUnsupportedCode},
@@ -78,6 +77,14 @@ func TestUnsupportedImmutableReviewTransportStopsBeforeRepositoryOrAuthority(t *
 		// until native Go admits it, so an ordinary already-running session
 		// is sufficient and OpenCode is a genuinely supported runtime now,
 		// exercised instead by TestSupportedImmutableReviewTransportReachesRepositoryValidation.
+		//
+		// Codex used to stand here too, refused for lacking an enforceable
+		// fresh-reviewer boundary (#2208). The shared advisory transport's
+		// CodexAdapter (internal/advisoryreview) supplies that boundary --
+		// organically proven by TestRealCodexReviewerOrdinarySessionAdmitsRawOutput
+		// in e2e/organicruntime -- so Codex is a genuinely supported runtime
+		// now too, exercised by the same
+		// TestSupportedImmutableReviewTransportReachesRepositoryValidation.
 		//
 		// An undeclared runtime identity is deliberately absent from this
 		// matrix: it makes no transport claim to refuse, so it stays on the
@@ -132,7 +139,7 @@ func TestUnsupportedImmutableReviewTransportStopsBeforeRepositoryOrAuthority(t *
 	repo := initReviewCLIRepo(t)
 	for _, args := range [][]string{
 		{"status", "--contract", ReviewIntegrationContractV2, "--agent", string(model.AgentKilocode), "--next-transition", "--cwd", repo},
-		{"start", "--contract", ReviewIntegrationContractV2, "--agent", string(model.AgentCodex), "--target", target, "--projection", "workspace", "--cwd", repo},
+		{"start", "--contract", ReviewIntegrationContractV2, "--agent", string(model.AgentPi), "--target", target, "--projection", "workspace", "--cwd", repo},
 	} {
 		if err := RunReview(args, &bytes.Buffer{}); err == nil {
 			t.Fatalf("unsupported invocation succeeded: %v", args)
@@ -158,6 +165,7 @@ func TestSupportedImmutableReviewTransportReachesRepositoryValidation(t *testing
 	}{
 		{name: "Claude", runtime: string(model.AgentClaudeCode)},
 		{name: "OpenCode", runtime: string(model.AgentOpenCode)},
+		{name: "Codex", runtime: string(model.AgentCodex)},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			var output bytes.Buffer
@@ -177,7 +185,7 @@ func TestSupportedImmutableReviewTransportReachesRepositoryValidation(t *testing
 }
 
 func TestImmutableReviewTransportRefusalNamesWorkingExits(t *testing.T) {
-	for _, runtime := range []model.AgentID{model.AgentCodex, model.AgentKilocode, model.AgentPi} {
+	for _, runtime := range []model.AgentID{model.AgentKilocode, model.AgentPi} {
 		t.Run(string(runtime), func(t *testing.T) {
 			_, err := reviewRuntimeWithImmutableTransport(string(runtime))
 			if err == nil {

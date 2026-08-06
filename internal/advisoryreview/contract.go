@@ -61,15 +61,17 @@ type ValidatedResult struct {
 const OutputSchema = reviewtransaction.ReviewerResultSchema
 
 // Supports reports whether an adapter can use the generic prompt/text result
-// seam today. Codex stays unadvertised until it passes the shared contract's
-// organic positive and negative runtime proof (SKILL.md: "Capability
-// advertisement requires shared-contract conformance plus organic runtime
-// proof. Codex stays unadvertised until both positive and fail-closed proofs
-// pass."). RuntimeCodex remains a defined constant so a future adapter has a
-// name to prove itself against; it is never in the advertised set until then.
+// seam today. Codex was activated once its organic positive and negative
+// runtime proof passed (SKILL.md: "Capability advertisement requires
+// shared-contract conformance plus organic runtime proof."):
+// TestRealCodexReviewerOrdinarySessionAdmitsRawOutput and its fail-closed
+// companions in e2e/organicruntime drove a real `codex exec` process through
+// CodexAdapter, receiving only the canonical Prompt() text in a directory it
+// could prove was empty, and its raw output reached native admission and a
+// terminal receipt.
 func (runtime Runtime) Supports() bool {
 	switch runtime {
-	case RuntimeClaudeCode, RuntimeOpenCode:
+	case RuntimeClaudeCode, RuntimeOpenCode, RuntimeCodex:
 		return true
 	default:
 		return false
@@ -77,7 +79,7 @@ func (runtime Runtime) Supports() bool {
 }
 
 func SupportedRuntimes() []Runtime {
-	return []Runtime{RuntimeClaudeCode, RuntimeOpenCode}
+	return []Runtime{RuntimeClaudeCode, RuntimeOpenCode, RuntimeCodex}
 }
 
 // PromptFor returns the same canonical prompt for every supported runtime.

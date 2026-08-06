@@ -27,8 +27,8 @@ func TestBoundedReviewContractLeavesCanonicalizationToNativeGo(t *testing.T) {
 	for _, want := range []string{
 		"Native Go owns validation, canonicalization, persistence, hashing, reopening, and binding",
 		"Only candidate-caused severe findings block",
-		"Claude Code and OpenCode advertise immutable reviewer execution",
-		"Codex and Kilo remain dormant",
+		"Claude Code, OpenCode, and Codex advertise immutable reviewer execution",
+		"Kilo remains dormant",
 		"read-only native Git commands",
 	} {
 		if !strings.Contains(content, want) {
@@ -307,7 +307,14 @@ func TestKilocodeReviewSettingsMatchCurrentMainBaseline(t *testing.T) {
 	// exactly once instead of once per runtime. Kilocode embeds the unified
 	// OpenCode-shaped reviewer prompt, so the hash moved again. Deliberate,
 	// not drift.
-	const want = "eb52aea796bc261d387e22e2f3464a021879a497a3481d147f601ba72467235c"
+	//
+	// RDD shared advisory transport, Slice E: Codex was activated as an
+	// advertised immutable-reviewer-execution runtime once its organic proof
+	// passed (TestRealCodexReviewerOrdinarySessionAdmitsRawOutput,
+	// e2e/organicruntime). Kilocode embeds the shared orchestrator contract's
+	// executor-boundary paragraph, which now names Codex's CodexAdapter
+	// boundary too, so the hash moved again. Deliberate, not drift.
+	const want = "e8c2919686b06cb3a487ff54f576cb989ef2936bf59482301f6c1a877c740375"
 	if got != want {
 		t.Fatalf("Kilocode settings SHA-256 = %s, want current-main baseline %s", got, want)
 	}
@@ -509,8 +516,17 @@ func TestOpenCodeRenderedReviewProtocolCost(t *testing.T) {
 		// identically for every runtime; this is a deliberate contract
 		// unification, not drift. Ceilings are unchanged: both rows keep more
 		// than 15% headroom.
-		{name: "standard", agents: []string{"review-reliability"}, beforeChars: 42_301, wantChars: 19_628, maxCharacters: 23_300},
-		{name: "full-4R", agents: []string{"review-risk", "review-resilience", "review-readability", "review-reliability"}, beforeChars: 106_998, wantChars: 30_206, maxCharacters: 36_000},
+		//
+		// RDD shared advisory transport, Slice E: wantChars grew by 291 per
+		// row (19,628 -> 19,919 / 30,206 -> 30,497) when the shared
+		// executor-boundary paragraph was extended to describe Codex's
+		// CodexAdapter boundary alongside Claude's and OpenCode's, once
+		// Codex's organic proof passed
+		// (TestRealCodexReviewerOrdinarySessionAdmitsRawOutput,
+		// e2e/organicruntime). Ceilings are unchanged: both rows keep more
+		// than 15% headroom.
+		{name: "standard", agents: []string{"review-reliability"}, beforeChars: 42_301, wantChars: 19_919, maxCharacters: 23_300},
+		{name: "full-4R", agents: []string{"review-risk", "review-resilience", "review-readability", "review-reliability"}, beforeChars: 106_998, wantChars: 30_497, maxCharacters: 36_000},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
