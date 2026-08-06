@@ -131,6 +131,9 @@ type sddStatusV1 struct {
 		Completed   int  `json:"completed"`
 		AllComplete bool `json:"allComplete"`
 	} `json:"taskProgress"`
+	RemediationState struct {
+		Required bool `json:"required"`
+	} `json:"remediationState"`
 }
 
 // gateResult is the subset of a lifecycle gate envelope the proofs read.
@@ -850,6 +853,43 @@ const sddFailedVerifyReport = "```yaml\n" +
 	"build_exit_code: 0\n" +
 	"build_output_hash: sha256:3333333333333333333333333333333333333333333333333333333333333333\n" +
 	"```\n"
+
+const sddHistoricalStalePassReport = "```yaml\n" +
+	"schema: gentle-ai.verify-result/v1\n" +
+	"evidence_revision: sha256:1111111111111111111111111111111111111111111111111111111111111111\n" +
+	"verdict: pass\n" +
+	"blockers: 0\n" +
+	"critical_findings: 0\n" +
+	"requirements: 0/0\n" +
+	"scenarios: 1/1\n" +
+	"test_command: go test ./internal/example\n" +
+	"test_exit_code: 0\n" +
+	"test_output_hash: sha256:2222222222222222222222222222222222222222222222222222222222222222\n" +
+	"build_command: go test ./cmd/gentle-ai\n" +
+	"build_exit_code: 0\n" +
+	"build_output_hash: sha256:3333333333333333333333333333333333333333333333333333333333333333\n" +
+	"```\n"
+
+// sddHistoricalStalePass creates a first-time component whose change-local
+// delta spec uses the valid historical requirement heading. The all-green report
+// predates that count and must re-enter fresh review routing, never remediation.
+func sddHistoricalStalePass(sandbox *Sandbox) error {
+	if err := sddPlanningArtifacts("")(sandbox); err != nil {
+		return err
+	}
+	root := sddChangeRoot(sandbox)
+	if err := sandbox.write(filepath.Join(root, "specs", "prose", "spec.md"),
+		"### REQ-1: prose exists\n#### Scenario: prose is present\n"); err != nil {
+		return err
+	}
+	if err := sandbox.write(filepath.Join(root, "verify-report.md"), sddHistoricalStalePassReport); err != nil {
+		return err
+	}
+	if err := sandbox.git(sandbox.Repo, "add", "openspec"); err != nil {
+		return err
+	}
+	return sandbox.git(sandbox.Repo, "commit", "-qm", "historical SDD verification evidence")
+}
 
 // ---------------------------------------------------------------------------
 // Counted operator work
@@ -2023,6 +2063,35 @@ func sddJourneys() []Journey {
 				{Name: "fixture: change the candidate, which is what all three asked for", Fixture: stageProse("", "changed")},
 				{Name: "recover, following exactly what the gate then names",
 					Requires: recoverCapability, Composite: recoverScopeChangeRoundTrip("review-guardrail-successor")},
+			},
+		},
+		{
+			ID:     "j44-sdd-historical-requirement-stale-pass",
+			Title:  "Historical change-local requirement heading: stale PASS restarts verification instead of failed remediation",
+			Source: "issue #2137 (historical OpenSpec requirement compatibility and stale verification routing)",
+			Steps: []Step{
+				{Name: "fixture: first-time component with historical requirement evidence", Fixture: sddHistoricalStalePass},
+				// Wave 4 S3 removed pre-verify review supervision: this fixture
+				// carries no review artifacts anywhere, so absent authority is
+				// decline-by-absence and the stale PASS re-enters verification
+				// directly (never review, never remediation). Archive stays
+				// blocked until that fresh verification lands. Mirrors
+				// TestEnabledStaleEvidenceWithNoReceiptRestartsVerification.
+				{Name: "sdd-status routes stale PASS to fresh verification", Requires: sddStatusCapability,
+					Args: productArgs("sdd-status", sddChange, "--json"), After: sddStatusAssertion("historical stale PASS routing", func(status sddStatusV1) error {
+						if status.NextRecommended != "verify" || status.Dependencies.Verify != "ready" || status.Dependencies.Archive != "blocked" {
+							return fmt.Errorf("nextRecommended=%q verify=%q archive=%q, want fresh verification before archive", status.NextRecommended, status.Dependencies.Verify, status.Dependencies.Archive)
+						}
+						if status.RemediationState.Required {
+							return errors.New("stale PASS entered failed-verification remediation")
+						}
+						for _, reason := range status.BlockedReasons {
+							if strings.Contains(reason, "bounded review transaction is missing") || strings.Contains(reason, "remediation") {
+								return fmt.Errorf("stale PASS exposed failed-evidence routing: %q", reason)
+							}
+						}
+						return nil
+					})},
 			},
 		},
 	}

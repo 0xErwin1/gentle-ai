@@ -142,7 +142,7 @@ func artifactMapsFromEveryBuilder(t *testing.T) []builtArtifactMap {
 	collected := []builtArtifactMap{}
 
 	for _, store := range []ArtifactStore{ArtifactStoreOpenSpec, ArtifactStoreEngram, ArtifactStoreNone} {
-		status := baseStatus(store, "/repo", nil, nil, "sdd-new", nil)
+		status := baseStatus(store, "/repo", nil, nil, nil, "sdd-new", nil)
 		if status.ArtifactStore != store {
 			t.Fatalf("baseStatus(%q) produced store %q", store, status.ArtifactStore)
 		}
