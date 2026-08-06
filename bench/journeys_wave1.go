@@ -337,7 +337,7 @@ func commitStagedRecoveryCandidate(sandbox *Sandbox) error {
 		return err
 	}
 	sandbox.Scratch["staged-recovery-base"] = base
-	if err := sandbox.write(filepath.Join(sandbox.Repo, "candidate.go"), "package candidate\nfunc value() int {\n\treturn 1\n}\n"); err != nil {
+	if err := sandbox.write(filepath.Join(sandbox.Repo, "candidate.go"), "package candidate\n\nfunc value() int {\n\treturn 1\n}\n"); err != nil {
 		return err
 	}
 	if err := sandbox.git(sandbox.Repo, "add", "candidate.go"); err != nil {
@@ -657,13 +657,38 @@ func startCommittedCorrection(r *journeyRun) error {
 }
 
 func commitCorrectedCandidate(sandbox *Sandbox) error {
-	if err := sandbox.write(filepath.Join(sandbox.Repo, "candidate.go"), "package candidate\nfunc value() int {\n\treturn 2\n}\n"); err != nil {
+	if err := sandbox.write(filepath.Join(sandbox.Repo, "candidate.go"), "package candidate\n\nfunc value() int {\n\treturn 2\n}\n"); err != nil {
 		return err
 	}
 	if err := sandbox.git(sandbox.Repo, "add", "candidate.go"); err != nil {
 		return err
 	}
 	return sandbox.git(sandbox.Repo, "commit", "-qm", "fix: correct reviewed candidate")
+}
+
+func commitSelectorlessCorrectionCandidate(sandbox *Sandbox) error {
+	base, err := gitOut(sandbox, sandbox.Repo, "rev-parse", "HEAD")
+	if err != nil {
+		return err
+	}
+	sandbox.Scratch["staged-recovery-base"] = base
+	if err := sandbox.write(filepath.Join(sandbox.Repo, "candidate.go"), "package candidate\nfunc value() int {\n\treturn 1\n}\n"); err != nil {
+		return err
+	}
+	if err := sandbox.git(sandbox.Repo, "add", "candidate.go"); err != nil {
+		return err
+	}
+	return sandbox.git(sandbox.Repo, "commit", "-qm", "feat: add selectorless candidate")
+}
+
+func commitSelectorlessCorrectedCandidate(sandbox *Sandbox) error {
+	if err := sandbox.write(filepath.Join(sandbox.Repo, "candidate.go"), "package candidate\nfunc value() int {\n\treturn 2\n}\n"); err != nil {
+		return err
+	}
+	if err := sandbox.git(sandbox.Repo, "add", "candidate.go"); err != nil {
+		return err
+	}
+	return sandbox.git(sandbox.Repo, "commit", "-qm", "fix: correct selectorless candidate")
 }
 
 func proveCorrectedReceipt(sandbox *Sandbox, observation Observation) error {
@@ -1452,14 +1477,14 @@ func waveOneJourneys() []Journey {
 			Source: "issue #1925",
 			Steps: []Step{
 				{Name: "fixture: repository", Fixture: baseRepo},
-				{Name: "fixture: committed base-diff candidate", Fixture: commitStagedRecoveryCandidate},
+				{Name: "fixture: committed four-line base-diff candidate", Fixture: commitSelectorlessCorrectionCandidate},
 				{Name: "start committed-only review", Requires: statusCapability, Composite: startCommittedCorrection},
 				{Name: "capture one blocking finding and finish the lens set", Requires: captureResultCapability, Composite: func(r *journeyRun) error {
 					return captureCorrectableFindingFor(r, "--lineage", committedCorrectionLineage, "--base-ref", r.sandbox.Scratch["staged-recovery-base"])
 				}},
 				{Name: "enter correction-required", Requires: finalizeResultsCapability, Args: productArgs("review", "finalize", "--lineage", committedCorrectionLineage, "--captured-results=true")},
 				{Name: "forecast the bounded correction", Requires: finalizeCorrectionCapability, Args: productArgs("review", "finalize", "--lineage", committedCorrectionLineage, "--correction-lines", "2")},
-				{Name: "fixture: commit the in-budget correction", Fixture: commitCorrectedCandidate},
+				{Name: "fixture: commit the two-line in-budget correction", Fixture: commitSelectorlessCorrectedCandidate},
 				{Name: "selector-less status requests and captures repository evidence", Requires: captureOutcomeEvidenceCapability, Composite: func(r *journeyRun) error { return capturePassedCorrectionEvidenceFor(r, "") }},
 				{Name: "selector-less status submits targeted validation and mints receipt", Requires: finalizeValidationCapability, Composite: func(r *journeyRun) error { return completeCorrectedReviewFor(r, "") }},
 			},
