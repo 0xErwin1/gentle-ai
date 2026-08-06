@@ -2744,6 +2744,39 @@ func newCompactStartStateForTarget(t *testing.T, repo, lineage string, target Ta
 	return state
 }
 
+func TestCompactCorrectionRemainingBudget(t *testing.T) {
+	tests := []struct {
+		name       string
+		budget     int
+		cumulative int
+		want       int
+		wantErr    bool
+	}{
+		{name: "unspent", budget: 2, want: 2},
+		{name: "partially spent", budget: 5, cumulative: 2, want: 3},
+		{name: "exhausted", budget: 2, cumulative: 2},
+		{name: "cumulative exceeds budget", budget: 2, cumulative: 3, wantErr: true},
+		{name: "negative cumulative", budget: 2, cumulative: -1, wantErr: true},
+		{name: "negative budget", budget: -1, wantErr: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			remaining, err := compactCorrectionRemainingBudget(CompactState{
+				CorrectionBudget: test.budget, CumulativeCorrectionLines: test.cumulative,
+			})
+			if test.wantErr {
+				if err == nil {
+					t.Fatal("remaining budget accepted invalid accounting")
+				}
+				return
+			}
+			if err != nil || remaining != test.want {
+				t.Fatalf("remaining budget = %d, %v; want %d, nil", remaining, err, test.want)
+			}
+		})
+	}
+}
+
 func newCompactTestState(t *testing.T, repo, lineage string) CompactState {
 	return newCompactTestStateWithIntended(t, repo, lineage, []string{})
 }
