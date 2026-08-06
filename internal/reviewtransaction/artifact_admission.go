@@ -267,8 +267,12 @@ func AdmitArtifact(ctx context.Context, request ArtifactAdmissionRequest) (LensR
 	if !equalStrings(inspectionPaths, wantPaths) {
 		return fail(ArtifactAdmissionIncomplete, "reviewer inspection did not cover the complete frozen path manifest")
 	}
-	canonical, err := CanonicalCompactLensResult(request.Result)
+	canonical, err := canonicalReviewerResult(request.Result, request.ExpectedSubject.Lens)
 	if err != nil {
+		var shapeErr *reviewerResultShapeError
+		if errors.As(err, &shapeErr) {
+			return fail(shapeErr.decision, shapeErr.message)
+		}
 		return fail(ArtifactAdmissionIncomplete, err.Error())
 	}
 	repository, cleanup, err := newFrozenRepositoryPathLookup(ctx, request.FrozenContext)
@@ -276,7 +280,6 @@ func AdmitArtifact(ctx context.Context, request ArtifactAdmissionRequest) (LensR
 		return fail(ArtifactAdmissionBindingMismatch, "frozen repository path lookup is unavailable")
 	}
 	defer cleanup()
-	wantPrefix := map[string]string{LensRisk: "R1-", LensReadability: "R2-", LensReliability: "R3-", LensResilience: "R4-"}[canonical.Lens]
 	seenFindingIDs := make(map[string]struct{}, len(canonical.Findings))
 	wantCandidateCausalIDs := make([]string, 0)
 	for _, evidence := range canonical.Evidence {
@@ -292,12 +295,6 @@ func AdmitArtifact(ctx context.Context, request ArtifactAdmissionRequest) (LensR
 		}
 	}
 	for _, finding := range canonical.Findings {
-		if !artifactFindingID.MatchString(finding.ID) {
-			return fail(ArtifactAdmissionBindingMismatch, "reviewer finding ID does not match the native ASCII schema")
-		}
-		if !strings.HasPrefix(finding.ID, wantPrefix) {
-			return fail(ArtifactAdmissionBindingMismatch, "reviewer finding ID is not bound to the selected lens")
-		}
 		if _, duplicate := seenFindingIDs[finding.ID]; duplicate {
 			return fail(ArtifactAdmissionAmbiguous, "reviewer result repeats a finding ID")
 		}
@@ -326,9 +323,6 @@ func AdmitArtifact(ctx context.Context, request ArtifactAdmissionRequest) (LensR
 		}
 		if !isSevereSeverity(finding.Severity) {
 			continue
-		}
-		if !isSupportedEvidenceClass(finding.EvidenceClass) || !isSupportedCausalDisposition(finding.CausalDisposition) {
-			return fail(ArtifactAdmissionIncomplete, "severe reviewer finding requires supported evidence_class and causal_disposition")
 		}
 		switch finding.CausalDisposition {
 		case CausalIntroduced, CausalBehaviorActivated, CausalWorsened:

@@ -160,48 +160,13 @@ func runReviewLensContext(args []string, help io.Writer, deps reviewLensContextD
 		return nil, reviewPreflightError(fmt.Errorf("unknown reviewer context delivery %q; run `gentle-ai review lens-context --help` for the closed command form", *delivery))
 	}
 
-	root, binding, err := deps.resolve(ctx, strings.TrimSpace(*repositoryContext))
-	if err != nil {
-		// The deadline is checked before classification: an expired aggregate
-		// deadline is not evidence that the repository context is unavailable,
-		// and reporting it as such would send a caller to refresh a transition
-		// that was never the problem.
-		if expired := reviewLensContextDeadline(ctx, err); expired != nil {
-			return nil, expired
-		}
-		return nil, reviewRepositoryContextResolutionFailure(err)
-	}
-	store, record, err := deps.discover(ctx, root, binding.LineageID, false)
-	if err != nil {
-		if expired := reviewLensContextDeadline(ctx, err); expired != nil {
-			return nil, expired
-		}
-		return nil, reviewLensContextRefusal("lens_context_authority_unavailable", reviewLensContextRefreshAction)
-	}
-	state := record.State
-	if state.State != reviewtransaction.StateReviewing || state.InitialSnapshot.Identity != binding.TargetIdentity ||
-		record.Revision != binding.Revision {
-		return nil, reviewLensContextRefusal("lens_context_binding_stale", reviewLensContextRefreshAction)
-	}
-	order, err := reviewLensContextSelectedOrder(state.SelectedLenses, strings.TrimSpace(*lens))
+	authority, err := resolveReviewLensAuthority(ctx, deps, strings.TrimSpace(*repositoryContext), strings.TrimSpace(*lens))
 	if err != nil {
 		return nil, err
 	}
 
-	builder := reviewtransaction.SnapshotBuilder{Repo: root}
-	frozen, err := builder.FrozenCandidateContext(ctx, state.InitialSnapshot)
-	if err != nil {
-		return nil, reviewLensContextInspectionFailure(ctx, err)
-	}
-	subject, err := reviewtransaction.NewArtifactSubject(state, record.Revision, frozen, state.SelectedLenses[order], order, "")
-	if err != nil {
-		return nil, reviewLensContextInspectionFailure(ctx, err)
-	}
-
-	block, err := reviewLensContextBlock(ctx, deps, builder, state, reviewLensContextBinding{
-		Lineage: binding.LineageID, Target: binding.TargetIdentity, Lens: state.SelectedLenses[order], Order: order,
-		Revision: binding.Revision, RepositoryContext: strings.TrimSpace(*repositoryContext), SubjectHash: subject.SubjectHash,
-	}, subject, frozen)
+	block, err := reviewLensContextBlock(ctx, deps, reviewtransaction.SnapshotBuilder{Repo: authority.Root}, authority.State,
+		authority.Binding, authority.Subject, authority.Frozen)
 	if err != nil {
 		return nil, err
 	}
@@ -212,10 +177,10 @@ func runReviewLensContext(args []string, help io.Writer, deps reviewLensContextD
 	// was produced for. This is an append-only audit note beside the captured
 	// reviewer results: it costs no authority revision, so the revision the
 	// caller is still holding for its capture stays valid.
-	if err := deps.record(store.Dir, reviewtransaction.LensContextEmission{
-		Schema: reviewtransaction.LensContextEmissionSchema, LineageID: binding.LineageID,
-		TargetIdentity: binding.TargetIdentity, AuthorityRevision: binding.Revision,
-		Lens: state.SelectedLenses[order], SelectedOrder: order, SubjectHash: subject.SubjectHash, Level: level,
+	if err := deps.record(authority.Store.Dir, reviewtransaction.LensContextEmission{
+		Schema: reviewtransaction.LensContextEmissionSchema, LineageID: authority.Binding.Lineage,
+		TargetIdentity: authority.Binding.Target, AuthorityRevision: authority.Binding.Revision,
+		Lens: authority.Binding.Lens, SelectedOrder: authority.Binding.Order, SubjectHash: authority.Binding.SubjectHash, Level: level,
 	}); err != nil {
 		if errors.Is(err, reviewtransaction.ErrLensContextEmissionConflict) {
 			return nil, reviewLensContextRefusal("lens_context_emission_conflict", reviewLensContextConflictAction)
@@ -223,6 +188,75 @@ func runReviewLensContext(args []string, help io.Writer, deps reviewLensContextD
 		return nil, reviewLensContextRefusal("lens_context_emission_unavailable", reviewLensContextRefreshAction)
 	}
 	return block, nil
+}
+
+// reviewLensAuthority is the resolved provider-owned binding, subject, and
+// frozen candidate context for one selected lens slot: the common prefix
+// every surface that needs frozen-candidate reviewer input shares. `review
+// lens-context` and `review advisory` both resolve through
+// resolveReviewLensAuthority so there is exactly one place that turns an
+// opaque repository context and a lens name into native authority -- never
+// two independent copies of that resolution.
+type reviewLensAuthority struct {
+	Root    string
+	Store   reviewtransaction.CompactStore
+	State   reviewtransaction.CompactState
+	Binding reviewLensContextBinding
+	Subject reviewtransaction.ArtifactSubject
+	Frozen  reviewtransaction.FrozenCandidateContext
+}
+
+// resolveReviewLensAuthority recovers the exact lineage, target, revision,
+// order, subject, and frozen candidate context from the two opaque tokens a
+// caller supplies: the provider-issued repository context and the selected
+// lens. Both repositoryContext and lens must already be trimmed.
+func resolveReviewLensAuthority(ctx context.Context, deps reviewLensContextDeps, repositoryContext, lens string) (reviewLensAuthority, error) {
+	root, binding, err := deps.resolve(ctx, repositoryContext)
+	if err != nil {
+		// The deadline is checked before classification: an expired aggregate
+		// deadline is not evidence that the repository context is unavailable,
+		// and reporting it as such would send a caller to refresh a transition
+		// that was never the problem.
+		if expired := reviewLensContextDeadline(ctx, err); expired != nil {
+			return reviewLensAuthority{}, expired
+		}
+		return reviewLensAuthority{}, reviewRepositoryContextResolutionFailure(err)
+	}
+	store, record, err := deps.discover(ctx, root, binding.LineageID, false)
+	if err != nil {
+		if expired := reviewLensContextDeadline(ctx, err); expired != nil {
+			return reviewLensAuthority{}, expired
+		}
+		return reviewLensAuthority{}, reviewLensContextRefusal("lens_context_authority_unavailable", reviewLensContextRefreshAction)
+	}
+	state := record.State
+	if state.State != reviewtransaction.StateReviewing || state.InitialSnapshot.Identity != binding.TargetIdentity ||
+		record.Revision != binding.Revision {
+		return reviewLensAuthority{}, reviewLensContextRefusal("lens_context_binding_stale", reviewLensContextRefreshAction)
+	}
+	order, err := reviewLensContextSelectedOrder(state.SelectedLenses, lens)
+	if err != nil {
+		return reviewLensAuthority{}, err
+	}
+
+	builder := reviewtransaction.SnapshotBuilder{Repo: root}
+	frozen, err := builder.FrozenCandidateContext(ctx, state.InitialSnapshot)
+	if err != nil {
+		return reviewLensAuthority{}, reviewLensContextInspectionFailure(ctx, err)
+	}
+	subject, err := reviewtransaction.NewArtifactSubject(state, record.Revision, frozen, state.SelectedLenses[order], order, "")
+	if err != nil {
+		return reviewLensAuthority{}, reviewLensContextInspectionFailure(ctx, err)
+	}
+
+	return reviewLensAuthority{
+		Root: root, Store: store, State: state,
+		Binding: reviewLensContextBinding{
+			Lineage: binding.LineageID, Target: binding.TargetIdentity, Lens: state.SelectedLenses[order], Order: order,
+			Revision: binding.Revision, RepositoryContext: repositoryContext, SubjectHash: subject.SubjectHash,
+		},
+		Subject: subject, Frozen: frozen,
+	}, nil
 }
 
 // reviewLensContextSelectedOrder recovers the frozen selected order from the
