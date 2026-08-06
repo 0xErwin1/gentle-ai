@@ -121,13 +121,17 @@ func TestEveryManifestKeepsWorkRoutingDormantAndHashesCanonically(t *testing.T) 
 	t.Parallel()
 
 	const wantRoutingDigest = "sha256:ed03b86f20c9449a6e4c018f51d1e05619e1070b1076287a0792a74c458762b2"
-	// Digests pin the two providers with an enforceable fresh-reviewer boundary:
-	// Claude Code's generated reviewer has no live tools, and OpenCode replaces
-	// the task prompt with provider-bound evidence under its isolation controls.
+	// Digests pin the three providers with an enforceable fresh-reviewer
+	// boundary: Claude Code's generated reviewer has no live tools, OpenCode
+	// replaces the task prompt with provider-bound evidence under its
+	// isolation controls, and Codex's CodexAdapter launches a brand-new
+	// `codex exec` process in an empty scratch directory (organic proof:
+	// TestRealCodexReviewerOrdinarySessionAdmitsRawOutput,
+	// e2e/organicruntime).
 	wantManifestDigests := map[model.AgentID]string{
 		model.AgentAntigravity:   "sha256:962eb63dc7f59a0b4c9c011dbb890aca1b40ecbfd3800c3e69b08f8b1639332c",
 		model.AgentClaudeCode:    "sha256:132b9219b222d35b0e4eafce3dae965c56eb8d79f07dff6d45c42c137e36fd9b",
-		model.AgentCodex:         "sha256:069a41cffd85ff25189f76b2e2b7b5158b7b3044868360b38e6d8b69b21e2be6",
+		model.AgentCodex:         "sha256:dbf94a3b7815cf68ccd6299c634f3e17be9abc305b3849adee382c65055c5ed9",
 		model.AgentCursor:        "sha256:2cf80b9bd4cdc9a9d3586e6d02dc2207f326841bba935c6f11f257a20756d821",
 		model.AgentGeminiCLI:     "sha256:463fdc93ad387c9b107c5f031f806dece9da3e2d47300b88d7640174bcb22a1e",
 		model.AgentHermes:        "sha256:ec03506bc4cb0d4850542412630ada103c882d61fa372075f5f8db209a301127",
@@ -159,7 +163,7 @@ func TestEveryManifestKeepsWorkRoutingDormantAndHashesCanonically(t *testing.T) 
 			if manifest.Advertises(ContractWorkRoutingV1) {
 				t.Fatal("work-routing must remain unadvertised before final activation")
 			}
-			wantImmutableExecutor := agent == model.AgentClaudeCode || agent == model.AgentOpenCode
+			wantImmutableExecutor := agent == model.AgentClaudeCode || agent == model.AgentOpenCode || agent == model.AgentCodex
 			if got := manifest.Advertises(ContractImmutableReviewExecutorV1); got != wantImmutableExecutor {
 				t.Fatalf("immutable reviewer execution advertised = %t, want %t", got, wantImmutableExecutor)
 			}

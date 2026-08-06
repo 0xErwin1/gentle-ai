@@ -91,6 +91,34 @@ func TestReviewAdvisoryPromptDerivesRequestFromFrozenAuthority(t *testing.T) {
 	}
 }
 
+// TestReviewAdvisoryPromptSupportsCodexRuntime proves Codex reached the same
+// generic prompt/text seam as Claude Code and OpenCode at the CLI surface,
+// once its organic runtime proof
+// (TestRealCodexReviewerOrdinarySessionAdmitsRawOutput and its fail-closed
+// companions, e2e/organicruntime) passed: the exact same closed form that
+// used to return "unavailable for runtime" for codex now returns the
+// canonical advisory prompt, byte-identical to the one every other supported
+// runtime receives.
+func TestReviewAdvisoryPromptSupportsCodexRuntime(t *testing.T) {
+	_, args, _, _ := newCandidateInspectionReview(t, "candidate\n", true)
+	handle := args[slices.Index(args, "--repository-context")+1]
+	lens := args[slices.Index(args, "--lens")+1]
+
+	var codex, claude bytes.Buffer
+	if err := RunReview([]string{"advisory", "prompt", "--repository-context", handle, "--lens", lens, "--runtime", "codex"}, &codex); err != nil {
+		t.Fatal(err)
+	}
+	if err := RunReview([]string{"advisory", "prompt", "--repository-context", handle, "--lens", lens, "--runtime", "claude-code"}, &claude); err != nil {
+		t.Fatal(err)
+	}
+	if codex.String() != claude.String() {
+		t.Fatalf("codex received a runtime-specific prompt:\ncodex:\n%s\nclaude-code:\n%s", codex.String(), claude.String())
+	}
+	if !strings.Contains(codex.String(), "advisory model output for native Go admission") {
+		t.Fatalf("codex advisory prompt = %q", codex.String())
+	}
+}
+
 // TestReviewAdvisoryRejectsCallerAuthoredRequestForm proves the retired
 // caller-JSON request path is gone: an unknown --request flag is refused the
 // same way any other unrecognized flag is.
@@ -215,7 +243,7 @@ func TestReviewAdvisoryRefusesUnboundInput(t *testing.T) {
 		{name: "missing context", argv: []string{"advisory", "prompt", "--lens", lens, "--runtime", "opencode"}, want: "requires the exact provider-issued"},
 		{name: "missing runtime", argv: []string{"advisory", "prompt", "--repository-context", handle, "--lens", lens}, want: "requires the exact provider-issued"},
 		{name: "unselected lens", argv: []string{"advisory", "prompt", "--repository-context", handle, "--lens", "review-nonexistent", "--runtime", "opencode"}, want: "lens_context_lens_not_selected"},
-		{name: "unadvertised codex runtime", argv: []string{"advisory", "prompt", "--repository-context", handle, "--lens", lens, "--runtime", "codex"}, want: "unavailable for runtime"},
+		{name: "genuinely unknown runtime", argv: []string{"advisory", "prompt", "--repository-context", handle, "--lens", lens, "--runtime", "unknown-runtime"}, want: "unavailable for runtime"},
 		{name: "unknown advisory command", argv: []string{"advisory", "unknown"}, want: "unknown review advisory command"},
 	}
 	for _, test := range tests {

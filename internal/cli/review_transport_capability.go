@@ -38,6 +38,20 @@ const (
 	// runtime's output is advisory and cannot mint authority until Go admits
 	// it.
 	reviewImmutableTransportOpenCodeProviderInjected reviewImmutableTransport = "opencode_provider_injected"
+	// reviewImmutableTransportCodexAdvisoryScratchProcess is the shared
+	// advisory transport's Codex boundary (rdd-advisory-transport SKILL.md):
+	// internal/advisoryreview's CodexAdapter launches a brand-new `codex
+	// exec` process in an empty scratch directory it creates and deletes
+	// itself, handing it only the canonical provider-rendered prompt
+	// (advisoryreview.PromptFor). Codex's own shell tool stays permitted even
+	// under --sandbox read-only (that flag bounds writes and network, not
+	// reads), so the enforced boundary is the empty directory, not a
+	// no-tool agent config this CLI does not have for Codex. Proven
+	// organically by TestRealCodexReviewerOrdinarySessionAdmitsRawOutput and
+	// its fail-closed companions in e2e/organicruntime: the reviewer's raw
+	// output reached native admission and a terminal receipt while a
+	// poisoned live worktree never did.
+	reviewImmutableTransportCodexAdvisoryScratchProcess reviewImmutableTransport = "codex_advisory_scratch_process"
 )
 
 type reviewImmutableRuntimePolicy struct {
@@ -70,13 +84,16 @@ func reviewImmutableRuntimeCapability(agent model.AgentID) reviewImmutableRuntim
 		policy.Transport = reviewImmutableTransportClaudePromptCarried
 	case model.AgentOpenCode:
 		policy.Transport = reviewImmutableTransportOpenCodeProviderInjected
+	case model.AgentCodex:
+		policy.Transport = reviewImmutableTransportCodexAdvisoryScratchProcess
 	}
 	return policy
 }
 
 func (capability reviewImmutableRuntimePolicy) supportsImmutableReceiptReview() bool {
 	return capability.Transport == reviewImmutableTransportClaudePromptCarried ||
-		capability.Transport == reviewImmutableTransportOpenCodeProviderInjected
+		capability.Transport == reviewImmutableTransportOpenCodeProviderInjected ||
+		capability.Transport == reviewImmutableTransportCodexAdvisoryScratchProcess
 }
 
 // reviewTransportSupportedRuntimeIDs derives the actionable runtime list from

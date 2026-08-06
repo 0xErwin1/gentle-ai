@@ -163,9 +163,14 @@ var reviewTransportExposureByAgent = func() map[model.AgentID]ContractExposure {
 // enforceable fresh-reviewer boundary. Claude launches a generated subagent
 // with no live tools and receives only the native prompt-carried evidence;
 // OpenCode replaces the task prompt through its provider plugin and requires
-// its process-isolation controls before the reviewer launches. Codex, Kilo,
-// and every other runtime remain explicitly dormant until they own an
-// equivalent native boundary.
+// its process-isolation controls before the reviewer launches. Codex's
+// boundary is the shared advisory transport's CodexAdapter
+// (internal/advisoryreview): a brand-new `codex exec` process, launched in an
+// empty scratch directory the adapter creates and deletes itself, receiving
+// only the canonical provider-rendered prompt -- proven organically by
+// TestRealCodexReviewerOrdinarySessionAdmitsRawOutput and its fail-closed
+// companions in e2e/organicruntime. Kilo and every other runtime remain
+// explicitly dormant until they own an equivalent native boundary.
 var immutableReviewExecutorExposureByAgent = func() map[model.AgentID]ContractExposure {
 	exposure := make(map[model.AgentID]ContractExposure, len(featureClaimsByAgent))
 	for agent := range featureClaimsByAgent {
@@ -173,6 +178,7 @@ var immutableReviewExecutorExposureByAgent = func() map[model.AgentID]ContractEx
 	}
 	exposure[model.AgentClaudeCode] = ContractExposureAdvertised
 	exposure[model.AgentOpenCode] = ContractExposureAdvertised
+	exposure[model.AgentCodex] = ContractExposureAdvertised
 	return exposure
 }()
 

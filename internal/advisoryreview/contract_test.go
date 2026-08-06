@@ -51,7 +51,7 @@ func TestPromptForUsesOneCanonicalContractForSupportedRuntimes(t *testing.T) {
 		t.Fatal("test request lens has no canonical mandate")
 	}
 	var canonical string
-	for _, runtime := range []Runtime{RuntimeClaudeCode, RuntimeOpenCode} {
+	for _, runtime := range []Runtime{RuntimeClaudeCode, RuntimeOpenCode, RuntimeCodex} {
 		t.Run(string(runtime), func(t *testing.T) {
 			prompt, err := PromptFor(runtime, request)
 			if err != nil {
@@ -70,24 +70,48 @@ func TestPromptForUsesOneCanonicalContractForSupportedRuntimes(t *testing.T) {
 			}
 		})
 	}
-	if got, want := strings.Join(RuntimeNames(), ","), "claude-code,opencode"; got != want {
+	if got, want := strings.Join(RuntimeNames(), ","), "claude-code,codex,opencode"; got != want {
 		t.Fatalf("runtime projection = %q, want %q", got, want)
 	}
 }
 
-// TestPromptForRefusesUnadvertisedCodexRuntime proves Codex stays unadvertised
-// until it passes the shared contract's organic runtime proof: it must never
-// receive a prompt, only the typed unavailable refusal every other
-// unsupported runtime gets.
-func TestPromptForRefusesUnadvertisedCodexRuntime(t *testing.T) {
-	if RuntimeCodex.Supports() {
-		t.Fatal("Codex must remain unadvertised until organic runtime proof passes")
+// TestPromptForSupportsCodexRuntimeAfterOrganicProof is the activation-backed
+// successor to the former TestPromptForRefusesUnadvertisedCodexRuntime: once
+// TestRealCodexReviewerOrdinarySessionAdmitsRawOutput and its fail-closed
+// companions (e2e/organicruntime) proved a real codex exec process could
+// carry the canonical prompt and reach native admission, Codex stopped being
+// refused here and became a genuinely advertised runtime like Claude and
+// OpenCode.
+func TestPromptForSupportsCodexRuntimeAfterOrganicProof(t *testing.T) {
+	if !RuntimeCodex.Supports() {
+		t.Fatal("Codex should be advertised once its organic runtime proof passed")
 	}
-	if got := RuntimeNames(); slicesContain(got, string(RuntimeCodex)) {
-		t.Fatalf("RuntimeNames() advertises codex: %v", got)
+	if got := RuntimeNames(); !slicesContain(got, string(RuntimeCodex)) {
+		t.Fatalf("RuntimeNames() does not advertise codex: %v", got)
 	}
-	if prompt, err := PromptFor(RuntimeCodex, testRequest(t)); err == nil {
-		t.Fatalf("PromptFor(codex) = %q, nil, want a typed unavailable refusal", prompt)
+	prompt, err := PromptFor(RuntimeCodex, testRequest(t))
+	if err != nil {
+		t.Fatalf("PromptFor(codex) = %q, %v, want the canonical prompt", prompt, err)
+	}
+	if !strings.Contains(prompt, OutputSchema) {
+		t.Fatalf("PromptFor(codex) omits the published output schema: %q", prompt)
+	}
+}
+
+// TestPromptForRefusesGenuinelyUnknownRuntime keeps the typed-unavailable
+// refusal path covered with a runtime name that has never been, and will
+// never legitimately become, a recognized identity -- distinct from Codex,
+// which is now a proven and advertised runtime.
+func TestPromptForRefusesGenuinelyUnknownRuntime(t *testing.T) {
+	const unknown Runtime = "unknown-runtime"
+	if unknown.Supports() {
+		t.Fatal("an unrecognized runtime name must never be advertised")
+	}
+	if got := RuntimeNames(); slicesContain(got, string(unknown)) {
+		t.Fatalf("RuntimeNames() advertises the unknown runtime: %v", got)
+	}
+	if prompt, err := PromptFor(unknown, testRequest(t)); err == nil {
+		t.Fatalf("PromptFor(%q) = %q, nil, want a typed unavailable refusal", unknown, prompt)
 	}
 }
 
