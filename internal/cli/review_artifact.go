@@ -38,6 +38,7 @@ var errCapturedFinalEvidenceMissing = errors.New("captured final evidence is una
 func RunReviewCaptureEvidence(args []string, stdout io.Writer) error {
 	flags := newReviewFlagSet("review capture-evidence", stdout, "Capture outcome-bearing verification evidence bound to one compact authority and candidate.")
 	cwd := flags.String("cwd", ".", "repository path")
+	repositoryContext := flags.String("repository-context", "", "opaque provider-issued repository context; supplied by the collect transition and mutually exclusive with --cwd, pass one or the other and not both")
 	lineage := flags.String("lineage", "", "exact review lineage identifier")
 	target := flags.String("target", "", "exact frozen target identity")
 	revision := flags.String("expected-revision", "", "exact validating or correction authority revision")
@@ -50,15 +51,30 @@ func RunReviewCaptureEvidence(args []string, stdout io.Writer) error {
 		return nil
 	}
 	if flags.NArg() != 0 || strings.TrimSpace(*lineage) == "" || strings.TrimSpace(*target) == "" || strings.TrimSpace(*revision) == "" || strings.TrimSpace(*outcome) == "" || strings.TrimSpace(*input) == "" {
-		return reviewPreflightError(errors.New("review capture-evidence requires exact --cwd, --lineage, --target, --expected-revision, --outcome, and --input")) // refusal:by-design operator-knowledge: the current STATUS transition supplies the authority-bound values and the verifier supplies the outcome and input
+		return reviewPreflightError(errors.New("review capture-evidence requires one exact repository resolver: --repository-context or --cwd, plus --lineage, --target, --expected-revision, --outcome, and --input")) // refusal:by-design operator-knowledge: the current STATUS transition supplies the authority-bound values and the verifier supplies the outcome and input
 	}
 	ctx := context.Background()
-	root, err := resolveReviewMutationRoot(ctx, *cwd)
+	contextHandle := strings.TrimSpace(*repositoryContext)
+	if contextHandle != "" && reviewFlagWasProvided(flags, "cwd") {
+		return reviewPreflightError(errors.New("review capture-evidence accepts either --repository-context or --cwd, not both")) // refusal:by-design operator-knowledge: the provider-issued transition chooses the opaque context, while direct callers retain --cwd
+	}
+	var root string
+	var err error
+	if contextHandle != "" {
+		root, err = resolveOpaqueReviewRepositoryRoot(ctx, contextHandle, reviewtransaction.ReviewRepositoryContextBinding{
+			LineageID: *lineage, TargetIdentity: *target, Revision: *revision,
+		})
+	} else {
+		root, err = resolveReviewMutationRoot(ctx, *cwd)
+	}
 	if err != nil {
 		return err
 	}
 	store, record, err := discoverCompactFacadeReview(ctx, root, *lineage, false)
 	if err != nil {
+		if contextHandle != "" {
+			return reviewOpaqueContextCause("repository_context_authority_unavailable", "refresh the exact native next_transition before retrying", err)
+		}
 		return reviewPreflightError(err)
 	}
 	state := record.State
