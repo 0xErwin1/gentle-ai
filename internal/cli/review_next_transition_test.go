@@ -846,3 +846,34 @@ func TestReviewNextTransitionRefusesTargetDriftAndUnverifiableCaptures(t *testin
 		t.Fatalf("target drift transition = %#v", got)
 	}
 }
+
+func TestReviewForecastHeadMatchesNextTransitionAndTailIsDescriptive(t *testing.T) {
+	statusStop := ReviewTargetStatusResult{
+		Applicability: reviewtransaction.TargetApplicabilityCorrupted,
+	}
+	forecastStop := newReviewForecast(statusStop, nil, nil, false, nil, reviewNextTransitionInput{})
+	if forecastStop.Horizon != ForecastHorizonTerminal {
+		t.Fatalf("expected terminal horizon for stop transition, got %q", forecastStop.Horizon)
+	}
+	if len(forecastStop.Steps) != 1 || forecastStop.Steps[0].ReasonCode != "corrupted_or_unverifiable_authority" {
+		t.Fatalf("expected 1 stop step, got %#v", forecastStop.Steps)
+	}
+
+	statusFresh := ReviewTargetStatusResult{
+		Applicability:  reviewtransaction.TargetApplicabilityUnrelated,
+		TargetIdentity: "sha256:" + strings.Repeat("a", 64),
+	}
+	forecastFresh := newReviewForecast(statusFresh, nil, nil, false, nil, reviewNextTransitionInput{})
+	if forecastFresh.Horizon != ForecastHorizonPartial {
+		t.Fatalf("expected partial horizon for multi-step fresh target, got %q", forecastFresh.Horizon)
+	}
+	if len(forecastFresh.Steps) < 2 {
+		t.Fatalf("expected multi-step forecast for fresh target, got %#v", forecastFresh.Steps)
+	}
+	if forecastFresh.Steps[0].Step != 1 || forecastFresh.Steps[0].ReasonCode != "fresh_target_ready" {
+		t.Fatalf("unexpected step 1: %#v", forecastFresh.Steps[0])
+	}
+	if forecastFresh.Steps[1].Step != 2 || forecastFresh.Steps[1].ReasonCode != "reviewer_results_required" {
+		t.Fatalf("unexpected step 2: %#v", forecastFresh.Steps[1])
+	}
+}

@@ -711,3 +711,141 @@ func reviewCollectTransition(reason string, inputs ...ReviewTransitionInput) Rev
 func reviewStopTransition(reason string) ReviewNextTransition {
 	return ReviewNextTransition{Kind: reviewNextTransitionStop, ReasonCode: reason}
 }
+
+func reviewReasonDescription(reason string) string {
+	switch reason {
+	case "fresh_target_ready":
+		return "Target is unreviewed and ready for initial review start"
+	case "captured_results_ready":
+		return "Captured reviewer results are complete and ready for finalization"
+	case "captured_verification_evidence_ready":
+		return "Verification evidence captured and ready for finalization"
+	case "native_low_risk_verification":
+		return "Low risk candidate eligible for native verification"
+	case "approved_receipt_ready":
+		return "Review is approved and receipt is ready for gate validation"
+	case "exact_receipt_replay":
+		return "Exact receipt replay safe for finalization"
+	case "lineage_selection_required":
+		return "Multiple lineages match target; select an explicit lineage"
+	case "reviewer_results_required":
+		return "Reviewer lens artifacts required for current revision"
+	case "targeted_validation_required":
+		return "Targeted validation run required for correction plan"
+	case "correction_plan_required":
+		return "Correction plan required to resolve review findings"
+	case "verification_evidence_required":
+		return "Verification evidence required prior to finalization"
+	case "delivery_gate_required":
+		return "Delivery gate selection required before validation"
+	case "staged_workspace_overlay_recovery_unavailable":
+		return "Staged workspace overlay recovery is unavailable"
+	case "corrupted_or_unverifiable_authority":
+		return "Review authority is corrupted or unverifiable"
+	case "missing_authority_binding":
+		return "Target authority binding is missing"
+	case "original_finalize_request_required":
+		return "Original finalize request is required to reconcile"
+	case "unchanged_or_unverified_authority":
+		return "Authority requires a changed or verified candidate"
+	case "native_stop_required":
+		return "Native stop transition required by authority"
+	case "captured_artifacts_unverifiable":
+		return "Captured artifacts failed verification or are missing"
+	case "corrected_candidate_unavailable":
+		return "Corrected candidate is unavailable for forecasted correction"
+	case "pre_pr_selector_unrepresentable":
+		return "Selected base-ref cannot be represented for pre-PR gate"
+	case "manual_intervention_required":
+		return "Manual intervention is required to proceed"
+	default:
+		return strings.ReplaceAll(reason, "_", " ")
+	}
+}
+
+func newReviewForecast(status ReviewTargetStatusResult, selectedLenses []string, artifacts []ReviewTransitionArtifact, evidenceAvailable bool, artifactErr error, input reviewNextTransitionInput) ReviewForecast {
+	head := newReviewNextTransition(status, selectedLenses, artifacts, evidenceAvailable, artifactErr, input)
+
+	headItem := ReviewForecastItem{
+		Step:        1,
+		Kind:        head.Kind,
+		ReasonCode:  head.ReasonCode,
+		Description: reviewReasonDescription(head.ReasonCode),
+	}
+
+	steps := []ReviewForecastItem{headItem}
+	horizon := ForecastHorizonComplete
+
+	if head.Kind == reviewNextTransitionStop {
+		horizon = ForecastHorizonTerminal
+		return ReviewForecast{
+			Horizon: horizon,
+			Steps:   steps,
+		}
+	}
+
+	// Tail projection for known multi-step flows
+	switch head.ReasonCode {
+	case "fresh_target_ready":
+		horizon = ForecastHorizonPartial
+		steps = append(steps, ReviewForecastItem{
+			Step:        2,
+			Kind:        reviewNextTransitionCollect,
+			ReasonCode:  "reviewer_results_required",
+			Description: reviewReasonDescription("reviewer_results_required"),
+		})
+	case "reviewer_results_required":
+		horizon = ForecastHorizonPartial
+		steps = append(steps, ReviewForecastItem{
+			Step:        2,
+			Kind:        reviewNextTransitionExecute,
+			ReasonCode:  "captured_results_ready",
+			Description: reviewReasonDescription("captured_results_ready"),
+		})
+	case "captured_results_ready":
+		horizon = ForecastHorizonPartial
+		steps = append(steps, ReviewForecastItem{
+			Step:        2,
+			Kind:        reviewNextTransitionCollect,
+			ReasonCode:  "delivery_gate_required",
+			Description: reviewReasonDescription("delivery_gate_required"),
+		})
+	case "correction_plan_required":
+		horizon = ForecastHorizonPartial
+		steps = append(steps, ReviewForecastItem{
+			Step:        2,
+			Kind:        reviewNextTransitionCollect,
+			ReasonCode:  "targeted_validation_required",
+			Description: reviewReasonDescription("targeted_validation_required"),
+		})
+	case "targeted_validation_required":
+		horizon = ForecastHorizonPartial
+		steps = append(steps, ReviewForecastItem{
+			Step:        2,
+			Kind:        reviewNextTransitionCollect,
+			ReasonCode:  "verification_evidence_required",
+			Description: reviewReasonDescription("verification_evidence_required"),
+		})
+	case "verification_evidence_required":
+		horizon = ForecastHorizonPartial
+		steps = append(steps, ReviewForecastItem{
+			Step:        2,
+			Kind:        reviewNextTransitionExecute,
+			ReasonCode:  "captured_verification_evidence_ready",
+			Description: reviewReasonDescription("captured_verification_evidence_ready"),
+		})
+	case "delivery_gate_required":
+		horizon = ForecastHorizonPartial
+		steps = append(steps, ReviewForecastItem{
+			Step:        2,
+			Kind:        reviewNextTransitionExecute,
+			ReasonCode:  "approved_receipt_ready",
+			Description: reviewReasonDescription("approved_receipt_ready"),
+		})
+	}
+
+	return ReviewForecast{
+		Horizon: horizon,
+		Steps:   steps,
+	}
+}
