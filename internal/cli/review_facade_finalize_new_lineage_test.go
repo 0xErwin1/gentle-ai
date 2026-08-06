@@ -32,6 +32,7 @@ func startNewLineageForFinalizeTest(t *testing.T, repo, lineage string) {
 	if err := os.WriteFile(path, []byte(joinReviewCLILines(lines)), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	runReviewCLIGit(t, repo, "add", "docs/"+lineage+".md")
 	var out bytes.Buffer
 	if err := RunReviewFacadeStart([]string{"--cwd", repo, "--lineage", lineage}, &out); err != nil {
 		t.Fatalf("new-lineage start: %v\n%s", err, out.String())

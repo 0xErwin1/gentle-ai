@@ -520,7 +520,8 @@ func Journeys() []Journey {
 	journeys = append(journeys, waveOneJourneys()...)
 	journeys = append(journeys, waveThreeJourneys()...)
 	journeys = append(journeys, waveFiveJourneys()...)
-	return append(journeys, advisoryJourneys()...)
+	journeys = append(journeys, advisoryJourneys()...)
+	return append(journeys, zeroDeltaJourneys()...)
 }
 
 func coreJourneys() []Journey {
