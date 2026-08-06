@@ -604,7 +604,14 @@ func (result ReviewTargetStatusResult) validateNextTransitionTargets() error {
 		// caller must choose instead, so requiring an executable START here
 		// would only relocate the contradiction.
 		if result.Projection.Kind == reviewtransaction.TargetCurrentChanges && len(result.Projection.Paths) == 0 {
-			if result.NextTransition.Kind != reviewNextTransitionCollect || result.NextTransition.ReasonCode != "empty_candidate_base_ref_required" {
+			if result.NextTransition.Kind != reviewNextTransitionCollect || result.NextTransition.ReasonCode != "empty_candidate_base_ref_required" ||
+				result.NextTransition.Collect == nil || len(result.NextTransition.Collect.Inputs) != 1 {
+				return errors.New("fresh empty workspace target lacks a base-ref collection transition") // refusal:by-design world-action: only a provider code fix can emit the base-ref collection this classification requires
+			}
+			input := result.NextTransition.Collect.Inputs[0]
+			if input.Name != "base_ref" || input.Schema != "gentle-ai.review-base-ref-selection/v1" ||
+				input.CaptureOperation != "external.select_base_ref" || input.Submission != nil ||
+				!reflect.DeepEqual(input.Arguments, reviewTargetArguments(result)) {
 				return errors.New("fresh empty workspace target lacks a base-ref collection transition") // refusal:by-design world-action: only a provider code fix can emit the base-ref collection this classification requires
 			}
 			return nil
