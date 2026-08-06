@@ -3,6 +3,7 @@ package assets
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -17,6 +18,9 @@ import (
 
 // TestReviewPluginNamesDistinctNativeCauses is the two-distinct-causes proof.
 func TestReviewPluginNamesDistinctNativeCauses(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("review plugin scenario harness requires a POSIX shell")
+	}
 	cases := []struct {
 		name   string
 		native string
@@ -86,6 +90,9 @@ func TestReviewPluginScrubsForwardedNativeCause(t *testing.T) {
 // selected lens", which names none of them. #2461 reported all four lenses
 // rejected with exactly that sentence.
 func TestReviewPluginNamesRejectedBindingField(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("review plugin scenario harness requires a POSIX shell")
+	}
 	cases := []struct {
 		name     string
 		scenario string
