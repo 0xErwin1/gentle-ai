@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
@@ -16,17 +17,22 @@ func TestImmutableReviewRuntimeMatrix(t *testing.T) {
 		eligible  bool
 		transport reviewImmutableTransport
 		supported bool
+		isolated  bool
 	}{
 		{name: "Claude prompt carried fresh executor", runtime: string(model.AgentClaudeCode), eligible: true, transport: reviewImmutableTransportClaudePromptCarried, supported: true},
-		{name: "OpenCode provider injected fresh executor", runtime: string(model.AgentOpenCode), eligible: true, transport: reviewImmutableTransportOpenCodeProviderInjected, supported: true},
+		{name: "OpenCode provider injected fresh executor", runtime: string(model.AgentOpenCode), eligible: true, transport: reviewImmutableTransportOpenCodeProviderInjected, supported: true, isolated: true},
 		{name: "Codex is pending #2208", runtime: string(model.AgentCodex), eligible: true, transport: reviewImmutableTransportUnsupported},
+		{name: "Kilo has no native executor", runtime: string(model.AgentKilocode), eligible: true, transport: reviewImmutableTransportUnsupported},
 		{name: "Pi", runtime: string(model.AgentPi), transport: reviewImmutableTransportUnsupported},
-		{name: "Kilo", runtime: string(model.AgentKilocode), transport: reviewImmutableTransportUnsupported},
 		{name: "unknown", runtime: "unknown-runtime", transport: reviewImmutableTransportUnsupported},
 		{name: "alias", runtime: "open-code", transport: reviewImmutableTransportUnsupported},
 		{name: "casing", runtime: "OpenCode", transport: reviewImmutableTransportUnsupported},
 	} {
 		t.Run(test.name, func(t *testing.T) {
+			if test.isolated {
+				t.Setenv("OPENCODE_DISABLE_PROJECT_CONFIG", "1")
+				t.Setenv("OPENCODE_DISABLE_EXTERNAL_SKILLS", "1")
+			}
 			capability := reviewImmutableRuntimeCapability(model.AgentID(test.runtime))
 			if capability.Eligible != test.eligible || capability.Transport != test.transport || capability.supportsImmutableReceiptReview() != test.supported {
 				t.Fatalf("runtime %q capability = %#v, supported %t", test.runtime, capability, capability.supportsImmutableReceiptReview())
@@ -64,8 +70,9 @@ func TestUnsupportedImmutableReviewTransportStopsBeforeRepositoryOrAuthority(t *
 		startCode string
 	}{
 		{name: "Codex", runtime: string(model.AgentCodex), startCode: reviewImmutableTransportUnsupportedCode},
-		{name: "Pi", runtime: string(model.AgentPi), startCode: reviewTransportCapabilityUnsupportedCode},
 		{name: "Kilo", runtime: string(model.AgentKilocode), startCode: reviewImmutableTransportUnsupportedCode},
+		{name: "OpenCode without required host isolation", runtime: string(model.AgentOpenCode), startCode: reviewImmutableTransportUnsupportedCode},
+		{name: "Pi", runtime: string(model.AgentPi), startCode: reviewTransportCapabilityUnsupportedCode},
 		{name: "unknown", runtime: "unknown-runtime", startCode: reviewTransportCapabilityUnsupportedCode},
 		// An undeclared runtime identity is deliberately absent from this
 		// matrix: it makes no transport claim to refuse, so it stays on the
@@ -132,6 +139,57 @@ func TestUnsupportedImmutableReviewTransportStopsBeforeRepositoryOrAuthority(t *
 	}
 	if len(stores) != 0 {
 		t.Fatalf("unsupported runtime created review authority: %#v", stores)
+	}
+}
+
+func TestSupportedImmutableReviewTransportReachesRepositoryValidation(t *testing.T) {
+	for _, test := range []struct {
+		name     string
+		runtime  string
+		isolated bool
+	}{
+		{name: "Claude", runtime: string(model.AgentClaudeCode)},
+		{name: "OpenCode", runtime: string(model.AgentOpenCode), isolated: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if test.isolated {
+				t.Setenv("OPENCODE_DISABLE_PROJECT_CONFIG", "1")
+				t.Setenv("OPENCODE_DISABLE_EXTERNAL_SKILLS", "1")
+			}
+			var output bytes.Buffer
+			err := RunReview([]string{
+				"status", "--contract", ReviewIntegrationContractV2, "--agent", test.runtime,
+				"--next-transition", "--cwd", t.TempDir() + "/missing",
+			}, &output)
+			if err == nil {
+				t.Fatal("missing repository unexpectedly succeeded")
+			}
+			failure := decodeReviewIntegrationFailure(t, output.Bytes())
+			if failure.Code == reviewImmutableTransportUnsupportedCode || failure.Code == reviewTransportCapabilityUnsupportedCode {
+				t.Fatalf("supported runtime was rejected before repository validation: %#v", failure)
+			}
+		})
+	}
+}
+
+func TestImmutableReviewTransportRefusalNamesWorkingExits(t *testing.T) {
+	for _, runtime := range []model.AgentID{model.AgentCodex, model.AgentKilocode, model.AgentPi} {
+		t.Run(string(runtime), func(t *testing.T) {
+			_, err := reviewRuntimeWithImmutableTransport(string(runtime))
+			if err == nil {
+				t.Fatal("want a refusal")
+			}
+			const exit = "gentle-ai review mode disable --scope clone --cwd <repo>"
+			if !strings.Contains(err.Error(), exit) {
+				t.Fatalf("refusal does not name the clone-scoped kill switch: %v", err)
+			}
+			if !strings.Contains(err.Error(), string(model.AgentClaudeCode)) || !strings.Contains(err.Error(), string(model.AgentOpenCode)) {
+				t.Fatalf("refusal does not name both supported runtimes: %v", err)
+			}
+			if strings.Contains(err.Error(), "supported immutable review runtimes: "+string(runtime)) {
+				t.Fatalf("refusal lists itself as supported: %v", err)
+			}
+		})
 	}
 }
 
