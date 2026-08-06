@@ -15,7 +15,8 @@ import (
 // review plugin exactly as OpenCode does and reports the message of whichever
 // error the selected hook throws. It exists so the plugin's recovery paths are
 // proven by execution, not by reading the source for substrings.
-const reviewPluginHarness = `import plugin from "./plugin.mts"
+const reviewPluginHarness = `import { readFile, writeFile } from "node:fs/promises"
+import plugin from "./plugin.mts"
 
 const scenario = process.argv[2]
 const cwd = process.argv[3]
@@ -70,7 +71,30 @@ const capture = async (activeHooks: typeof hooks, sessionID: string, marker: str
 }
 
 try {
-  if (scenario.startsWith("before")) {
+  if (scenario.startsWith("sdd-")) {
+    const phase = scenario.startsWith("sdd-profile-") ? "sdd-propose-cheap" : scenario === "sdd-unrelated" ? "sdd-custom" : "sdd-propose"
+    const result = scenario.includes("malformed") ? "<task_result>broken" : scenario.includes("empty") ? "<task id=\"phase\" state=\"completed\">\n<task_result>\n\n</task_result>\n</task>" : ""
+    const artifact = cwd + "/proposal.md"
+    await writeFile(artifact, "existing artifact")
+    const input = { tool: "task", sessionID: "sdd-session", callID: "call-sdd", args: { subagent_type: phase, prompt: "phase work" } }
+    const output = { title: "", output: result, metadata: {} }
+    let failure = "NO_ERROR"
+    try { await hooks["tool.execute.after"](input, output) } catch (cause: unknown) { failure = cause instanceof Error ? cause.message : String(cause) }
+    if (scenario === "sdd-lifecycle") {
+      let beforeDispose = "NO_ERROR"
+      try { await hooks["tool.execute.before"]({ ...input, callID: "call-before-dispose" }, { args: { subagent_type: phase, prompt: "retry" } }) } catch (cause: unknown) { beforeDispose = cause instanceof Error ? cause.message : String(cause) }
+      await hooks.dispose?.()
+      let afterDispose = "NO_ERROR"
+      try { await hooks["tool.execute.before"]({ ...input, callID: "call-after-dispose" }, { args: { subagent_type: phase, prompt: "reuse" } }) } catch (cause: unknown) { afterDispose = cause instanceof Error ? cause.message : String(cause) }
+      console.log([failure, beforeDispose, afterDispose, await readFile(artifact, "utf8")].join("\n---\n"))
+    } else {
+      let downstream = "NOT_ATTEMPTED"
+      if (scenario !== "sdd-unrelated") {
+        try { await hooks["tool.execute.before"]({ ...input, callID: "call-next", args: { subagent_type: "sdd-apply", prompt: "downstream" } }, { args: { subagent_type: "sdd-apply", prompt: "downstream" } }) } catch (cause: unknown) { downstream = cause instanceof Error ? cause.message : String(cause) }
+      }
+      console.log([failure, downstream, await readFile(artifact, "utf8")].join("\n---\n"))
+    }
+  } else if (scenario.startsWith("before")) {
     const output = { args: { subagent_type: "review-risk", prompt } }
     await hooks["tool.execute.before"]({ tool: "task", sessionID: "session-a", callID: "call-before" }, output)
     console.log(scenario === "before-valid" || scenario === "before-substitute" ? output.args.prompt : "NO_ERROR")
@@ -306,6 +330,87 @@ func TestReviewPluginRejectsInvalidBindingBeforeReviewerLaunch(t *testing.T) {
 				t.Fatalf("invalid binding result = %q, want %q", message, tt.wantErr)
 			}
 		})
+	}
+}
+
+func TestSDDTaskResultFailuresAreTerminalAndScoped(t *testing.T) {
+	tests := []struct {
+		name        string
+		scenario    string
+		wantCode    string
+		wantPhase   string
+		wantBlocked bool
+	}{
+		{name: "empty unsuffixed phase", scenario: "sdd-empty", wantCode: "sdd_task_result_empty", wantPhase: "sdd-propose", wantBlocked: true},
+		{name: "malformed profile-suffixed phase", scenario: "sdd-profile-malformed", wantCode: "sdd_task_result_malformed", wantPhase: "sdd-propose-cheap", wantBlocked: true},
+		{name: "unrelated sdd-prefixed agent", scenario: "sdd-unrelated", wantCode: "NO_ERROR"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			parts := strings.Split(runReviewPluginScenario(t, tt.scenario, "unused"), "\n---\n")
+			if len(parts) != 3 {
+				t.Fatalf("scenario output = %q", parts)
+			}
+			if !strings.Contains(parts[0], tt.wantCode) {
+				t.Fatalf("failure = %q, want typed code %q", parts[0], tt.wantCode)
+			}
+			if tt.wantPhase != "" && !strings.Contains(parts[0], tt.wantPhase) {
+				t.Fatalf("failure = %q, want phase %q", parts[0], tt.wantPhase)
+			}
+			if tt.wantBlocked && (!strings.Contains(parts[1], tt.wantCode) || !strings.Contains(parts[1], "Do not retry or advance SDD")) {
+				t.Fatalf("downstream SDD launch was not terminally blocked: %q", parts[1])
+			}
+			if tt.wantBlocked {
+				assertSDDTaskResultHandoff(t, parts[0], tt.wantCode, tt.wantPhase)
+				assertSDDTaskResultHandoff(t, parts[1], tt.wantCode, tt.wantPhase)
+			}
+			if !tt.wantBlocked && parts[1] != "NOT_ATTEMPTED" {
+				t.Fatalf("unrelated agent unexpectedly entered SDD routing: %q", parts[1])
+			}
+			if parts[2] != "existing artifact" {
+				t.Fatalf("task-result handling mutated the existing artifact: %q", parts[2])
+			}
+		})
+	}
+}
+
+func assertSDDTaskResultHandoff(t *testing.T, message, code, phase string) {
+	t.Helper()
+	const prefix = "GENTLE_AI_SDD_FAILURE "
+	if !strings.HasPrefix(message, prefix) {
+		t.Fatalf("failure lacks a machine-readable handoff: %q", message)
+	}
+	var handoff struct {
+		SchemaName   string `json:"schemaName"`
+		Status       string `json:"status"`
+		Code         string `json:"code"`
+		Phase        string `json:"phase"`
+		Continuation string `json:"continuation"`
+	}
+	if err := json.Unmarshal([]byte(strings.TrimPrefix(message, prefix)), &handoff); err != nil {
+		t.Fatalf("failure handoff is not JSON: %v: %q", err, message)
+	}
+	if handoff.SchemaName != "gentle-ai.sdd-task-result-failure/v1" || handoff.Status != "blocked" || handoff.Code != code || handoff.Phase != phase {
+		t.Fatalf("failure handoff = %#v", handoff)
+	}
+	if !strings.HasPrefix(handoff.Continuation, "gentle-ai sdd-status --cwd '") || !strings.HasSuffix(handoff.Continuation, "' --json") {
+		t.Fatalf("failure handoff names no runnable sdd-status continuation: %#v", handoff)
+	}
+}
+
+func TestReviewPluginDisposeClearsSDDSessionFailure(t *testing.T) {
+	parts := strings.Split(runReviewPluginScenario(t, "sdd-lifecycle", "unused"), "\n---\n")
+	if len(parts) != 4 {
+		t.Fatalf("SDD lifecycle outcomes = %q", parts)
+	}
+	if !strings.Contains(parts[0], "sdd_task_result_empty") || !strings.Contains(parts[1], "sdd_task_result_empty") {
+		t.Fatalf("SDD failure was not retained before dispose: %q", parts[:2])
+	}
+	if parts[2] != "NO_ERROR" {
+		t.Fatalf("dispose retained a failed SDD session for its reused ID: %q", parts[2])
+	}
+	if parts[3] != "existing artifact" {
+		t.Fatalf("SDD lifecycle handling mutated the existing artifact: %q", parts[3])
 	}
 }
 
