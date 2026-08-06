@@ -162,9 +162,11 @@ var reviewTransportExposureByAgent = func() map[model.AgentID]ContractExposure {
 // immutableReviewExecutorExposureByAgent declares only providers with an
 // enforceable fresh-reviewer boundary. Claude launches a generated subagent
 // with no live tools and receives only the native prompt-carried evidence;
-// OpenCode replaces the task prompt through its provider plugin and requires
-// its process-isolation controls before the reviewer launches. Codex's
-// boundary is the shared advisory transport's CodexAdapter
+// OpenCode replaces the task prompt through its provider plugin from an
+// ordinary already-running session -- no restart, child process, special
+// user-visible session, or `OPENCODE_DISABLE_*` variable (rdd-advisory-
+// transport SKILL.md). Codex's boundary is the shared advisory transport's
+// CodexAdapter
 // (internal/advisoryreview): a brand-new `codex exec` process, launched in an
 // empty scratch directory the adapter creates and deletes itself, receiving
 // only the canonical provider-rendered prompt -- proven organically by

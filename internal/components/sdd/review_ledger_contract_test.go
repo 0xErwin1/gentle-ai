@@ -314,7 +314,17 @@ func TestKilocodeReviewSettingsMatchCurrentMainBaseline(t *testing.T) {
 	// e2e/organicruntime). Kilocode embeds the shared orchestrator contract's
 	// executor-boundary paragraph, which now names Codex's CodexAdapter
 	// boundary too, so the hash moved again. Deliberate, not drift.
-	const want = "e8c2919686b06cb3a487ff54f576cb989ef2936bf59482301f6c1a877c740375"
+	//
+	// RDD shared advisory transport, Slice D (retirement pass): the
+	// executor-boundary paragraph's OpenCode clause used to claim OpenCode's
+	// provider plugin "requires process-isolation controls before launch",
+	// which the shared advisory transport made false the moment slices A-C
+	// landed (rdd-advisory-transport SKILL.md: "No OpenCode restart, child
+	// isolation, special session, or OPENCODE_DISABLE_* variables. An
+	// ordinary running session is sufficient."). It now names that ordinary-
+	// session boundary explicitly. Kilocode embeds the same paragraph, so the
+	// hash moved again. Deliberate, not drift.
+	const want = "76140e795ccdf306b5a8d80082bbb9f70dac43db1715523dee7f088238dd1b65"
 	if got != want {
 		t.Fatalf("Kilocode settings SHA-256 = %s, want current-main baseline %s", got, want)
 	}
@@ -525,8 +535,17 @@ func TestOpenCodeRenderedReviewProtocolCost(t *testing.T) {
 		// (TestRealCodexReviewerOrdinarySessionAdmitsRawOutput,
 		// e2e/organicruntime). Ceilings are unchanged: both rows keep more
 		// than 15% headroom.
-		{name: "standard", agents: []string{"review-reliability"}, beforeChars: 42_301, wantChars: 19_919, maxCharacters: 23_300},
-		{name: "full-4R", agents: []string{"review-risk", "review-resilience", "review-readability", "review-reliability"}, beforeChars: 106_998, wantChars: 30_497, maxCharacters: 36_000},
+		//
+		// RDD shared advisory transport, Slice D (retirement pass): wantChars
+		// grew by 143 per row (19,919 -> 20,062 / 30,497 -> 30,640) when the
+		// same paragraph's OpenCode clause was corrected from claiming its
+		// provider plugin "requires process-isolation controls before launch"
+		// (false since slices A-C landed) to naming the actual ordinary-
+		// session boundary: no restart, child process, special session, or
+		// OPENCODE_DISABLE_* variable. Ceilings are unchanged: both rows keep
+		// more than 15% headroom.
+		{name: "standard", agents: []string{"review-reliability"}, beforeChars: 42_301, wantChars: 20_062, maxCharacters: 23_300},
+		{name: "full-4R", agents: []string{"review-risk", "review-resilience", "review-readability", "review-reliability"}, beforeChars: 106_998, wantChars: 30_640, maxCharacters: 36_000},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
