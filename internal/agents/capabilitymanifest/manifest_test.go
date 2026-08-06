@@ -123,10 +123,11 @@ func TestEveryManifestKeepsWorkRoutingDormantAndHashesCanonically(t *testing.T) 
 	const wantRoutingDigest = "sha256:ed03b86f20c9449a6e4c018f51d1e05619e1070b1076287a0792a74c458762b2"
 	// Digests pin the three providers with an enforceable fresh-reviewer
 	// boundary: Claude Code's generated reviewer has no live tools, OpenCode
-	// replaces the task prompt with provider-bound evidence under its
-	// isolation controls, and Codex's CodexAdapter launches a brand-new
-	// `codex exec` process in an empty scratch directory (organic proof:
-	// TestRealCodexReviewerOrdinarySessionAdmitsRawOutput,
+	// replaces the task prompt with provider-bound evidence from an ordinary
+	// already-running session (no restart, child process, special session,
+	// or OPENCODE_DISABLE_* variable), and Codex's CodexAdapter launches a
+	// brand-new `codex exec` process in an empty scratch directory (organic
+	// proof: TestRealCodexReviewerOrdinarySessionAdmitsRawOutput,
 	// e2e/organicruntime).
 	wantManifestDigests := map[model.AgentID]string{
 		model.AgentAntigravity:   "sha256:962eb63dc7f59a0b4c9c011dbb890aca1b40ecbfd3800c3e69b08f8b1639332c",

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 )
 
 // CodexAdapter is the thin invocation wiring for the Codex runtime
@@ -75,6 +76,20 @@ func (adapter *CodexAdapter) Review(ctx context.Context, prompt string) ([]byte,
 	// scratch directory rather than trusting the child process alone to
 	// honor -C.
 	command.Dir = scratch
+	// Env is an explicit allowlist, not a security boundary: authority over
+	// what a runtime may do lives in Go admission (candidate-causality
+	// checks, evidence bounds, the terminal receipt), never in what
+	// environment variables happen to reach a transport subprocess. This is
+	// quality hardening of the documented scratch-process boundary above --
+	// command.Dir already stops codex from reading the caller's repository,
+	// and command.Env stops it from inheriting unrelated ambient state (most
+	// notably PWD, which without this would still point at the real
+	// worktree despite Dir/-C both naming the empty scratch directory).
+	// codexAdvisoryEnvironment carries only PATH (so codex can find the
+	// bubblewrap sandbox helper the same way it would from a normal shell)
+	// and CODEX_HOME (so it can still read its own ~/.codex auth/config),
+	// nothing else.
+	command.Env = codexAdvisoryEnvironment()
 	command.Stdin = bytes.NewReader(nil)
 	var stderr bytes.Buffer
 	command.Stderr = &stderr
@@ -87,4 +102,31 @@ func (adapter *CodexAdapter) Review(ctx context.Context, prompt string) ([]byte,
 		return nil, fmt.Errorf("codex advisory transport produced no final message: %w", err)
 	}
 	return raw, nil
+}
+
+// codexAdvisoryEnvironment returns the minimal explicit environment allowlist
+// for the codex child process: PATH and CODEX_HOME, nothing else. Everything
+// the parent process happens to carry -- PWD in particular, which would
+// otherwise still name the real worktree even though Dir/-C both point codex
+// at an empty scratch directory -- is dropped by construction, since
+// exec.Cmd.Env, once non-nil, replaces rather than extends the inherited
+// environment.
+//
+// Verified empirically against codex-cli 0.146.1 (env -i PATH=... CODEX_HOME=...
+// codex exec --skip-git-repo-check --sandbox read-only ...): CODEX_HOME alone
+// is sufficient for codex to locate and read its own auth.json, so HOME is
+// not required and is deliberately left out; PATH is kept so codex finds the
+// real bubblewrap sandbox helper instead of silently falling back to its own
+// bundled copy.
+func codexAdvisoryEnvironment() []string {
+	env := make([]string, 0, 2)
+	if path, ok := os.LookupEnv("PATH"); ok {
+		env = append(env, "PATH="+path)
+	}
+	if codexHome, ok := os.LookupEnv("CODEX_HOME"); ok {
+		env = append(env, "CODEX_HOME="+codexHome)
+	} else if home, err := os.UserHomeDir(); err == nil {
+		env = append(env, "CODEX_HOME="+filepath.Join(home, ".codex"))
+	}
+	return env
 }

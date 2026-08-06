@@ -4,8 +4,10 @@ import (
 	"context"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -162,6 +164,111 @@ func TestCodexAdapterReturnsTransportErrorOnNonZeroExit(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "codex advisory transport failed") || !strings.Contains(err.Error(), "boom failure") {
 		t.Fatalf("Review() error = %v, want the transport failure to carry the process's stderr", err)
+	}
+}
+
+// buildEnvDumpingFakeCodex compiles a tiny real binary standing in for codex,
+// deliberately NOT a POSIX shell script like fakeCodexScript above: `sh`
+// (dash on Debian/Ubuntu, this repo's CI base) unconditionally overwrites
+// PWD with its own getcwd() result on every invocation, even when PWD is
+// entirely absent from the environment it was launched with, which would
+// silently defeat an assertion that PWD is absent. A plain Go binary just
+// reports os.Environ() as received, with nothing rewritten in between. The
+// dump path is baked into the generated source as a literal, exactly like
+// fakeCodexScript bakes its own log paths into the shell script text, so no
+// runtime coordination channel (env var or extra argument) is needed.
+func buildEnvDumpingFakeCodex(t *testing.T, dumpPath string) (path string) {
+	t.Helper()
+	dir := t.TempDir()
+	source := filepath.Join(dir, "main.go")
+	program := "package main\n\n" +
+		"import (\n\t\"os\"\n\t\"strings\"\n)\n\n" +
+		"func main() {\n" +
+		"\t_ = os.WriteFile(" + strconv.Quote(dumpPath) + ", []byte(strings.Join(os.Environ(), \"\\n\")), 0o644)\n" +
+		"\toutput := \"\"\n" +
+		"\tfor index, arg := range os.Args {\n" +
+		"\t\tif arg == \"--output-last-message\" && index+1 < len(os.Args) {\n" +
+		"\t\t\toutput = os.Args[index+1]\n" +
+		"\t\t}\n" +
+		"\t}\n" +
+		"\tif output != \"\" {\n" +
+		"\t\t_ = os.WriteFile(output, []byte(`{\"ok\":true}`), 0o644)\n" +
+		"\t}\n" +
+		"}\n"
+	if err := os.WriteFile(source, []byte(program), 0o644); err != nil {
+		t.Fatalf("write fake codex helper source: %v", err)
+	}
+	binaryName := "codex"
+	if runtime.GOOS == "windows" {
+		binaryName = "codex.exe"
+	}
+	binary := filepath.Join(dir, binaryName)
+	build := exec.Command("go", "build", "-o", binary, source)
+	if output, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("build fake codex helper: %v\n%s", err, output)
+	}
+	return binary
+}
+
+// TestCodexAdapterScrubsChildEnvironmentToPathAndCodexHome proves the
+// hardened boundary this adapter now owns in addition to Dir/-C: the child
+// process receives an explicit two-variable allowlist (PATH, CODEX_HOME),
+// never the full ambient environment Review()'s own process happens to
+// carry. PWD is the motivating case -- Dir and -C both point codex at the
+// empty scratch directory, but without an explicit Env, the OS-level PWD the
+// child inherits still names wherever this test process itself started,
+// which for a real reviewer invocation is the caller's live worktree, not
+// the empty scratch directory the rest of the boundary comment above
+// promises. A sentinel variable set on the test process itself proves the
+// exclusion is general, not special-cased to PWD alone.
+func TestCodexAdapterScrubsChildEnvironmentToPathAndCodexHome(t *testing.T) {
+	dumpDir := t.TempDir()
+	dumpPath := filepath.Join(dumpDir, "env-dump.log")
+	binary := buildEnvDumpingFakeCodex(t, dumpPath)
+
+	t.Setenv("PWD", "/leaked/real/worktree/should-never-reach-codex")
+	const sentinelName = "GENTLE_AI_CODEX_ADAPTER_TEST_SENTINEL"
+	t.Setenv(sentinelName, "sentinel-value-must-not-leak")
+
+	adapter := &CodexAdapter{LookPath: func(string) (string, error) { return binary, nil }}
+	raw, err := adapter.Review(context.Background(), "prompt")
+	if err != nil {
+		t.Fatalf("Review() error = %v", err)
+	}
+	if string(raw) != `{"ok":true}` {
+		t.Fatalf("Review() = %q, want the fake codex's fixed raw output unmodified", raw)
+	}
+
+	dumped, err := os.ReadFile(dumpPath)
+	if err != nil {
+		t.Fatalf("read fake codex environment dump: %v", err)
+	}
+	entries := map[string]string{}
+	for _, line := range strings.Split(strings.TrimRight(string(dumped), "\n"), "\n") {
+		if line == "" {
+			continue
+		}
+		key, value, ok := strings.Cut(line, "=")
+		if !ok {
+			t.Fatalf("malformed dumped environment entry: %q", line)
+		}
+		entries[key] = value
+	}
+
+	if _, present := entries["PWD"]; present {
+		t.Fatalf("codex child environment carried PWD=%q, want it absent", entries["PWD"])
+	}
+	if _, present := entries[sentinelName]; present {
+		t.Fatalf("codex child environment carried the test sentinel %s, want it absent", sentinelName)
+	}
+	if value, present := entries["PATH"]; !present || value == "" {
+		t.Fatalf("codex child environment PATH = %q, present=%v, want the allowlisted PATH", value, present)
+	}
+	if value, present := entries["CODEX_HOME"]; !present || value == "" {
+		t.Fatalf("codex child environment CODEX_HOME = %q, present=%v, want the allowlisted CODEX_HOME", value, present)
+	}
+	if len(entries) != 2 {
+		t.Fatalf("codex child environment = %v, want exactly PATH and CODEX_HOME", entries)
 	}
 }
 
