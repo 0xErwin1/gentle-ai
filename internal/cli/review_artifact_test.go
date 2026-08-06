@@ -20,6 +20,20 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
 )
 
+func TestReviewCaptureEvidenceRepositoryResolverDiagnostics(t *testing.T) {
+	if err := RunReviewCaptureEvidence(nil, io.Discard); err == nil || err.Error() != "review capture-evidence requires one exact repository resolver: --repository-context or --cwd, plus --lineage, --target, --expected-revision, --outcome, and --input" {
+		t.Fatalf("missing capture-evidence inputs = %v", err)
+	}
+	args := []string{
+		"--repository-context", "rctx1_" + strings.Repeat("a", 64), "--cwd", t.TempDir(),
+		"--lineage", "lineage", "--target", "sha256:" + strings.Repeat("b", 64),
+		"--expected-revision", "sha256:" + strings.Repeat("c", 64), "--outcome", "passed", "--input", "-",
+	}
+	if err := RunReviewCaptureEvidence(args, io.Discard); err == nil || err.Error() != "review capture-evidence accepts either --repository-context or --cwd, not both" {
+		t.Fatalf("ambiguous capture-evidence resolver = %v", err)
+	}
+}
+
 func TestReviewCaptureResultStrictBindingReplayAndFinalize(t *testing.T) {
 	repo, started, _, record := newArtifactReview(t, false)
 	input := filepath.Join(t.TempDir(), "result.json")
