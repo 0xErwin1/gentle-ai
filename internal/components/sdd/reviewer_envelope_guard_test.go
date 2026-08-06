@@ -207,7 +207,7 @@ func TestLensAgentPromptsStateWhereTheirInputComesFrom(t *testing.T) {
 	// The orchestrator contract is the source for the current immutable
 	// inspection route that rendered reviewer prompts must preserve.
 	contract := assets.MustRead(boundedReviewContractAsset)
-	if !strings.Contains(contract, "Claude Code carries immutable candidate evidence only in its provider-built prompt") ||
+	if !strings.Contains(contract, "Claude Code and OpenCode advertise immutable reviewer execution") ||
 		!strings.Contains(contract, "read-only native Git commands") {
 		t.Fatalf("%s no longer requires native-Git frozen-tree inspection; update the guard's derivation", boundedReviewContractAsset)
 	}
@@ -239,9 +239,8 @@ func TestLensAgentPromptsStateWhereTheirInputComesFrom(t *testing.T) {
 
 // TestJudgmentDayPromptsDoNotClaimTheLensEnvelope pins the resolution of the
 // contradiction between the two documents: a judgment-day judge result is a
-// different artifact (Transaction mode judgment_day records judge proofs and
-// selects no lenses), so it must NOT carry the capture-result envelope, and it
-// must say so rather than leaving a reader to infer which shape wins.
+// separate standalone artifact, so it must NOT carry the capture-result
+// envelope and must say so rather than leaving a reader to infer which shape wins.
 func TestJudgmentDayPromptsDoNotClaimTheLensEnvelope(t *testing.T) {
 	envelope := reviewtransaction.NewReviewerResultEnvelope()
 	judgePaths := []string{}

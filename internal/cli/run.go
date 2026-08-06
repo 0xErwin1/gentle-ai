@@ -167,6 +167,7 @@ func RunInstall(args []string, detection system.DetectionResult) (InstallResult,
 	if err != nil {
 		return result, err
 	}
+	defer runtime.state.cleanupCompatibilityTransaction()
 
 	// Print dependency warnings before the pipeline starts (CLI only).
 	// The TUI surfaces these on the complete screen instead.
@@ -555,9 +556,10 @@ type installRuntime struct {
 }
 
 type runtimeState struct {
-	manifest            backup.Manifest
-	rollbackSnapshotDir string
-	piCodeGraph         *communitytool.PiCodeGraphResult
+	manifest                 backup.Manifest
+	rollbackSnapshotDir      string
+	piCodeGraph              *communitytool.PiCodeGraphResult
+	compatibilityTransaction compatibilityRefreshTransaction
 
 	// engramVersionResolved, engramVersion, and engramVersionErr cache the
 	// single `engram version` invocation performed by componentApplyStep.Run
@@ -580,9 +582,33 @@ func (s *runtimeState) cleanupRollbackSnapshot() {
 	s.rollbackSnapshotDir = ""
 }
 
+func (s *runtimeState) cleanupCompatibilityTransaction() {
+	if s == nil || s.compatibilityTransaction == nil {
+		return
+	}
+	transaction := s.compatibilityTransaction
+	s.compatibilityTransaction = nil
+	if err := transaction.Close(); err != nil {
+		log.Printf("compatibility: close transaction: %v", err)
+	}
+}
+
+func (s *runtimeState) compatibilityChangedFiles() []string {
+	if s == nil || s.compatibilityTransaction == nil {
+		return nil
+	}
+	return s.compatibilityTransaction.ChangedFiles()
+}
+
 func newInstallRuntime(homeDir string, scope InstallScope, channel InstallChannel, selection model.Selection, resolved planner.ResolvedPlan, profile system.PlatformProfile) (*installRuntime, error) {
 	backupRoot := filepath.Join(homeDir, ".gentle-ai", "backups")
+	compatibilityTransaction, err := newCompatibilityRefreshTransaction(homeDir, resolved.OrderedComponents, selection)
+	if err != nil {
+		return nil, err
+	}
+	state := &runtimeState{compatibilityTransaction: compatibilityTransaction}
 	if err := os.MkdirAll(backupRoot, 0o755); err != nil {
+		state.cleanupCompatibilityTransaction()
 		return nil, fmt.Errorf("create backup root directory %q: %w", backupRoot, err)
 	}
 
@@ -598,7 +624,7 @@ func newInstallRuntime(homeDir string, scope InstallScope, channel InstallChanne
 		profile:      profile,
 		channel:      channel,
 		backupRoot:   backupRoot,
-		state:        &runtimeState{},
+		state:        state,
 	}, nil
 }
 
@@ -677,10 +703,12 @@ func (r *installRuntime) stagePlan() pipeline.StagePlan {
 
 	if needsCompatibilitySkillsRefresh(r.resolved.OrderedComponents) {
 		apply = append(apply, compatibilitySkillsRefreshStep{
-			id:         "component:compatibility-skills-refresh",
-			homeDir:    r.homeDir,
-			components: r.resolved.OrderedComponents,
-			selection:  r.selection,
+			id:          "component:compatibility-skills-refresh",
+			homeDir:     r.homeDir,
+			components:  r.resolved.OrderedComponents,
+			selection:   r.selection,
+			transaction: r.state.compatibilityTransaction,
+			anchored:    usesAnchoredCompatibilityTransaction(),
 		})
 	}
 	if containsAgent(r.resolved.Agents, model.AgentPi) {
@@ -1643,37 +1671,22 @@ func windowsGoCandidates() []string {
 	}
 }
 
-// BuildRealStagePlan creates a StagePlan with real backup, agent install, and component apply steps.
-// It is used by both the CLI and TUI paths.
-// scope controls where agent config files are written (ScopeGlobal writes to homeDir, ScopeWorkspace writes to cwd).
-func BuildRealStagePlan(homeDir string, scope InstallScope, selection model.Selection, resolved planner.ResolvedPlan, profile system.PlatformProfile) (pipeline.StagePlan, error) {
-	backupRoot := filepath.Join(homeDir, ".gentle-ai", "backups")
-	if err := os.MkdirAll(backupRoot, 0o755); err != nil {
-		return pipeline.StagePlan{}, fmt.Errorf("create backup root directory %q: %w", backupRoot, err)
-	}
-
-	channel, err := ResolveInstallChannel("")
-	if err != nil {
-		return pipeline.StagePlan{}, err
-	}
-
-	runtime, err := newInstallRuntime(homeDir, scope, channel, selection, resolved, profile)
-	if err != nil {
-		return pipeline.StagePlan{}, err
-	}
-
-	return runtime.stagePlan(), nil
-}
-
 // ExecuteTUIInstall runs the same install runtime as the CLI and carries
 // non-fatal Pi CodeGraph manual actions into the TUI completion result.
+// The seam lets native tests add a post-publication failure while still using
+// the public TUI execution boundary and the real compatibility writer.
+var tuiInstallStagePlan = func(runtime *installRuntime) pipeline.StagePlan {
+	return runtime.stagePlan()
+}
+
 func ExecuteTUIInstall(homeDir string, selection model.Selection, resolved planner.ResolvedPlan, profile system.PlatformProfile, onProgress pipeline.ProgressFunc) pipeline.ExecutionResult {
 	runtime, err := newInstallRuntime(homeDir, ScopeGlobal, ChannelStable, selection, resolved, profile)
 	if err != nil {
 		return pipeline.ExecutionResult{Err: err}
 	}
+	defer runtime.state.cleanupCompatibilityTransaction()
 	orchestrator := pipeline.NewOrchestrator(pipeline.DefaultRollbackPolicy(), pipeline.WithFailurePolicy(pipeline.ContinueOnError), pipeline.WithProgressFunc(onProgress))
-	result := orchestrator.Execute(runtime.stagePlan())
+	result := orchestrator.Execute(tuiInstallStagePlan(runtime))
 	runtime.state.cleanupRollbackSnapshot()
 	if runtime.state.piCodeGraph != nil {
 		result.ManualActions = append(result.ManualActions, runtime.state.piCodeGraph.ManualActions...)
@@ -1824,7 +1837,7 @@ func backupTargets(homeDir, workspaceDir string, scope InstallScope, selection m
 	for _, path := range adapterSkillPaths {
 		paths[path] = struct{}{}
 	}
-	if needsCompatibilitySkillsRefresh(resolved.OrderedComponents) {
+	if !usesAnchoredCompatibilityTransaction() && needsCompatibilitySkillsRefresh(resolved.OrderedComponents) {
 		skillDir, ok, err := compatibilitySkillsDir(homeDir)
 		if err != nil {
 			return nil, err

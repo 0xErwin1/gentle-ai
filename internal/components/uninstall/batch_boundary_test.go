@@ -2,6 +2,7 @@ package uninstall
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -39,8 +40,8 @@ func TestPartialUninstallCommitsSucceededAgentsWhenAnotherAgentFails(t *testing.
 	if err == nil {
 		t.Fatal("PartialUninstall() error = nil, want the hermes cleanup failure surfaced")
 	}
-	if !strings.Contains(err.Error(), hermesConfig) {
-		t.Fatalf("PartialUninstall() error = %v, want it to name %q", err, hermesConfig)
+	if want := fmt.Sprintf("%q", hermesConfig); !strings.Contains(err.Error(), want) {
+		t.Fatalf("PartialUninstall() error = %v, want it to name the representation %s", err, want)
 	}
 
 	if !slices.Equal(result.FailedAgents, []model.AgentID{model.AgentHermes}) {

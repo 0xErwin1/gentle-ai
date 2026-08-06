@@ -8,6 +8,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -94,9 +95,6 @@ func TestWriteStreamAtomicReportsTheDigestOfTheFileOnDisk(t *testing.T) {
 // TestWriteStreamAtomicPreservesRequestedMode covers the executable case the
 // binary installers rely on.
 func TestWriteStreamAtomicPreservesRequestedMode(t *testing.T) {
-	if os.Getenv("GOOS") == "windows" {
-		t.Skip("mode bits are not meaningful on Windows")
-	}
 	path := filepath.Join(t.TempDir(), "gentle-ai")
 
 	if _, err := WriteStreamAtomic(path, strings.NewReader("#!/bin/sh\n"), 0o755); err != nil {
@@ -106,7 +104,7 @@ func TestWriteStreamAtomicPreservesRequestedMode(t *testing.T) {
 	if err != nil {
 		t.Fatalf("stat: %v", err)
 	}
-	if info.Mode().Perm() != 0o755 {
+	if runtime.GOOS != "windows" && info.Mode().Perm() != 0o755 {
 		t.Errorf("mode = %v, want 0755", info.Mode().Perm())
 	}
 }
