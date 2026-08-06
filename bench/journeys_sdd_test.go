@@ -34,8 +34,8 @@ func TestPortableSDDFailClosedAuthorityJourneysAreRegistered(t *testing.T) {
 			want[journey.ID] = true
 		}
 	}
-	if got := len(seen); got != 71 {
-		t.Errorf("core journey count = %d, want 71", got)
+	if got := len(seen); got != 72 {
+		t.Errorf("core journey count = %d, want 72", got)
 	}
 	for id, found := range want {
 		if !found {
