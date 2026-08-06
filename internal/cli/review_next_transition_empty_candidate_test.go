@@ -101,6 +101,63 @@ func TestNegotiatedEmptyCandidateCollectionSatisfiesStatusTargetValidation(t *te
 	}
 }
 
+func TestNegotiatedEmptyCandidateCollectionRejectsMalformedStatusTarget(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(*ReviewNextTransition)
+	}{
+		{
+			name: "missing collection",
+			mutate: func(transition *ReviewNextTransition) {
+				transition.Collect = nil
+			},
+		},
+		{
+			name: "wrong input name",
+			mutate: func(transition *ReviewNextTransition) {
+				transition.Collect.Inputs[0].Name = "lineage_selection"
+			},
+		},
+		{
+			name: "wrong target arguments",
+			mutate: func(transition *ReviewNextTransition) {
+				transition.Collect.Inputs[0].Arguments[0].Value = "sha256:" + strings.Repeat("a", 64)
+			},
+		},
+		{
+			name: "missing target arguments",
+			mutate: func(transition *ReviewNextTransition) {
+				transition.Collect.Inputs[0].Arguments = nil
+			},
+		},
+		{
+			name: "multiple inputs",
+			mutate: func(transition *ReviewNextTransition) {
+				transition.Collect.Inputs = append(transition.Collect.Inputs, transition.Collect.Inputs[0])
+			},
+		},
+		{
+			name: "unexpected submission descriptor",
+			mutate: func(transition *ReviewNextTransition) {
+				transition.Collect.Inputs[0].Submission = &ReviewTransitionSubmission{}
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := emptyWorkspaceCandidateStatus()
+			result.NextTransition = &ReviewNextTransition{}
+			*result.NextTransition = newReviewNextTransition(result, nil, nil, nil, nil, reviewNextTransitionInput{StartLineage: "review-empty-candidate"})
+			tt.mutate(result.NextTransition)
+
+			if err := result.validateNextTransitionTargets(); err == nil {
+				t.Fatal("malformed empty workspace candidate transition passed status-target validation")
+			}
+		})
+	}
+}
+
 // Regression: a fresh candidate that really has changed paths keeps the
 // executable START it always returned.
 func TestNegotiatedStatusKeepsStartForNonEmptyWorkspaceCandidate(t *testing.T) {
