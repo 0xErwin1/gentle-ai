@@ -32,6 +32,7 @@ func journeySources() []journeySource {
 		{"journeys_wave5.go", waveFiveJourneys()},
 		{"journeys_advisory.go", advisoryJourneys()},
 		{"journeys_zero_delta.go", zeroDeltaJourneys()},
+		{"journeys_local_gate_advance.go", localGateBaseAdvanceJourneys()},
 	}
 }
 
