@@ -13,7 +13,7 @@ Gentle AI releases only when the protected `release` environment provides a real
      -x checksums.txt.minisig \
      -P "$GENTLE_AI_MINISIGN_PUBLIC_KEY"
    # Must print exactly:
-   # repo=Gentleman-Programming/gentle-ai;tag=vMAJOR.MINOR.PATCH
+   # repo=Gentleman-Programming/gentle-ai;tag=vMAJOR.MINOR.PATCH[-PRERELEASE]
 
    sha256sum --check --strict --ignore-missing checksums.txt
    ```
@@ -31,8 +31,8 @@ The public key is not secret, but its provenance is security-critical. A key fet
    ```
 
 2. Extract the base64 payload from line 2 of `gentle-ai-release.pub`. Publish that payload and a separately computed fingerprint through the project website or another maintainer-authenticated channel **before** publishing the first signed release.
-3. Create or protect the GitHub Actions environment named `release`. Require appropriate reviewers and restrict it to protected canonical release tags.
-4. Configure the public trust anchor as a repository Actions variable so the read-only preflight job can validate it. Configure the private key only inside the protected `release` environment:
+3. Create or protect the GitHub Actions environment named `release`. Require appropriate reviewers and restrict it to protected canonical release tags. Environment approval remains required for stable and prerelease releases; where GitHub permits an administrator bypass, using it is an explicit maintainer decision, not a recommended default.
+4. Configure the public trust anchor as a repository Actions variable so the read-only preflight job can validate it. The intended steady state configures the active private key only inside the protected `release` environment; the current bridge exception is documented below:
 
    | Name | Kind | Exact value |
    |---|---|---|
@@ -58,13 +58,14 @@ Binaries released before authenticated manifests cannot retroactively authentica
 
 ## Rotate without a trust gap
 
-The runtime accepts at most two distinct keys to provide a bounded overlap:
+The runtime accepts at most two distinct keys to provide a bounded overlap. The current repository-level `MINISIGN_PUBLIC_KEYS` value is the canonical `old,new` overlap:
 
 1. Generate and publish the new public key and fingerprint out of band.
-2. Publish a bridge release signed by the **old** private key with `MINISIGN_PUBLIC_KEYS=old,new`. Clients authenticate the bridge with the old key and receive both trust anchors.
-3. Change the protected signing secret to the new private key. Publish subsequent releases with the same `old,new` overlap; signing preflight requires the new derived public key to be in that set.
-4. After the supported upgrade window has passed, publish a release embedding only `new` and remove access to the old private key.
-5. Revoke and securely destroy the old private key according to the maintainer incident process. Never reuse the isolated key under `internal/update/upgrade/testdata/`.
+2. Use the existing repository-level private signer for both `v2.3.0-rc.2` and stable `v2.3.0`. Both releases embed the `old,new` anchors, so clients can authenticate the bridge with the old key and receive both trust anchors.
+3. Do not activate the new private key or reduce the overlap after `v2.3.0-rc.2`; stable `v2.3.0` remains part of the bridge.
+4. Only after stable `v2.3.0` is published and remote verification succeeds, activate the new private key in the protected `release` environment, switch signing to it, and delete the old repository-level secret.
+5. Preserve the old public key through an independently authenticated historical-key channel so old releases remain verifiable. A later decision to embed only `new` must not remove that historical verification path.
+6. Revoke and securely destroy the old private key according to the maintainer incident process once it is no longer needed. Never reuse the isolated key under `internal/update/upgrade/testdata/`.
 
 If a key may be compromised, stop releases. Do not silently replace a trust anchor or bypass the matching preflight; use an independently authenticated incident channel and require manual bootstrap when the old key can no longer sign a safe bridge.
 
