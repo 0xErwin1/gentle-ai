@@ -292,10 +292,15 @@ func TestKilocodeReviewSettingsMatchCurrentMainBaseline(t *testing.T) {
 	// new assistant-visible native delegation status lines move this hash too.
 	// Deliberate, not drift.
 	//
+	// Empty SDD task results now carry a versioned terminal handoff and the
+	// orchestrator must run its supplied sdd-status continuation exactly once.
+	// Kilocode embeds the shared orchestrator contract, so its rendered settings
+	// hash moves with that required fail-closed protocol. Deliberate, not drift.
+	//
 	// This baseline combines #2485's answer-validation contract, #2417's
 	// provider-injected reviewer shape, #2440's runtime-bound identity, and
 	// #2207's executor-boundary wording. It is recomputed from the merged tree.
-	const want = "43571ab818458326b3bd71c58e8a66032b446472b60be6c6c6c2e5be03d64db4"
+	const want = "c7356719d6d509156e2c6eb7051761d31d3dd70a51e6d393645c9b5611f75e0b"
 	if got != want {
 		t.Fatalf("Kilocode settings SHA-256 = %s, want current-main baseline %s", got, want)
 	}
