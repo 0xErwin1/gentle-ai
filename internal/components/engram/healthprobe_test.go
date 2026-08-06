@@ -25,10 +25,17 @@ func setStdioHelperProcess(t *testing.T, mode string, env ...string) func() *exe
 	orig := execCommandContext
 	var helper *exec.Cmd
 	execCommandContext = func(ctx context.Context, name string, args ...string) *exec.Cmd {
-		cs := append([]string{"-test.run=TestHelperEngramMCPProcess", "--", name}, args...)
+		// -test.timeout keeps a pending runtime timer alive in the helper. An
+		// idle helper parked only in select{} has no syscall-blocked goroutine,
+		// so on Windows the child runtime declares "all goroutines are asleep",
+		// exits before the probe context ends, and the parent reads a clean
+		// stdout EOF instead of the context cause.
+		cs := append([]string{"-test.run=TestHelperEngramMCPProcess", "-test.timeout=1m", "--", name}, args...)
 		cmd := exec.CommandContext(ctx, os.Args[0], cs...)
 		cmd.Env = append(os.Environ(), "GO_ENGRAM_HELPER_MODE="+mode)
 		cmd.Env = append(cmd.Env, env...)
+		// The probe discards child stderr; surface helper crashes in test output.
+		cmd.Stderr = os.Stderr
 		helper = cmd
 		return cmd
 	}
@@ -102,7 +109,8 @@ func TestHelperEngramMCPProcess(t *testing.T) {
 			_, _ = os.Stdout.WriteString(healthyResponse + "\nengram mcp stopped\n")
 			return
 		case "descendant-holds-stdout", "descendant-holds-stdout-before-response":
-			descendant := exec.Command(os.Args[0], "-test.run=TestHelperEngramMCPProcess", "--", "descendant")
+			// -test.timeout: same pending-timer lifeline as setStdioHelperProcess.
+			descendant := exec.Command(os.Args[0], "-test.run=TestHelperEngramMCPProcess", "-test.timeout=1m", "--", "descendant")
 			descendant.Env = append(os.Environ(), "GO_ENGRAM_HELPER_MODE=hold-stdout")
 			descendant.Stdout = os.Stdout
 			descendant.Stderr = os.Stderr
