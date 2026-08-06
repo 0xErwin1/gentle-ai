@@ -108,14 +108,14 @@ type CompactState struct {
 }
 
 // CorrectionBudgetExceededError identifies a repository-derived correction
-// whose changed lines exceed the authority's frozen correction budget.
+// whose changed lines exceed the authority's remaining correction budget.
 type CorrectionBudgetExceededError struct {
-	Actual int
-	Budget int
+	Actual    int
+	Remaining int
 }
 
 func (err *CorrectionBudgetExceededError) Error() string {
-	return fmt.Sprintf("actual correction is %d changed lines, exceeding the frozen budget of %d", err.Actual, err.Budget)
+	return fmt.Sprintf("actual correction is %d changed lines, exceeding the remaining budget of %d", err.Actual, err.Remaining)
 }
 
 func IsCorrectionBudgetExceeded(err error) bool {

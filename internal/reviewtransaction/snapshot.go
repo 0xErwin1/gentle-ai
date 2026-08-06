@@ -823,12 +823,30 @@ func RebuildCommittedBaseDiffCorrectionCandidate(ctx context.Context, repo strin
 	if err := pathsAreSubset(live.Paths, state.GenesisPaths); err != nil {
 		return Snapshot{}, fmt.Errorf("committed correction exceeds frozen genesis paths: %w", err)
 	}
-	actual, err := builder.ChangedLines(ctx, live)
+	intended := append([]string(nil), initial.IntendedUntracked...)
+	if intended == nil {
+		intended = []string{}
+	}
+	fix, err := builder.Build(ctx, Target{
+		Kind: TargetFixDiff, Projection: projection, BaseRef: state.CurrentSnapshot.CandidateTree,
+		IntendedUntracked: intended, LedgerIDs: append([]string(nil), state.FixFindingIDs...),
+	})
+	if err != nil {
+		return Snapshot{}, fmt.Errorf("rebuild committed correction delta: %w", err)
+	}
+	if fix.CandidateTree != live.CandidateTree {
+		return Snapshot{}, fmt.Errorf("%w: rebuilt committed correction candidate changed while measuring", ErrConcurrentUpdate)
+	}
+	remaining, err := compactCorrectionRemainingBudget(state)
+	if err != nil {
+		return Snapshot{}, fmt.Errorf("derive rebuilt committed correction remaining budget: %w", err)
+	}
+	actual, err := builder.ChangedLines(ctx, fix)
 	if err != nil {
 		return Snapshot{}, fmt.Errorf("measure rebuilt committed correction: %w", err)
 	}
-	if actual > state.CorrectionBudget {
-		return Snapshot{}, fmt.Errorf("rebuild committed correction: %w", &CorrectionBudgetExceededError{Actual: actual, Budget: state.CorrectionBudget})
+	if actual > remaining {
+		return Snapshot{}, fmt.Errorf("rebuild committed correction: %w", &CorrectionBudgetExceededError{Actual: actual, Remaining: remaining})
 	}
 	return live, nil
 }
