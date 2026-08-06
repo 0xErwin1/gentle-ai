@@ -265,14 +265,30 @@ function extractionClass(cause: unknown, property = "reviewClass"): string | und
 function isSDDPhase(agent: string): boolean {
   return SDD_PHASES.some((phase) => agent === phase || agent.startsWith(phase + "-"))
 }
-type SDDTaskFailure = { phase: string, code: string }
+const SDD_TASK_FAILURE_PREFIX = "GENTLE_AI_SDD_FAILURE "
+type SDDTaskFailure = { phase: string, code: string, handoff: string }
 type SDDTaskFailureError = Error & { sddFailure: SDDTaskFailure }
-function sddTaskFailure(phase: string, cause: unknown): SDDTaskFailureError {
+function shellQuote(value: string): string {
+  return `'${value.replace(/'/g, "'\\''")}'`
+}
+function sddTaskFailure(phase: string, cwd: string, cause: unknown): SDDTaskFailureError {
   const classification = extractionClass(cause, "sddClass")
   const code = classification === "empty_result" ? "sdd_task_result_empty" : "sdd_task_result_malformed"
+  const failure: SDDTaskFailure = {
+    phase,
+    code,
+    handoff: SDD_TASK_FAILURE_PREFIX + JSON.stringify({
+      schemaName: "gentle-ai.sdd-task-result-failure/v1",
+      status: "blocked",
+      code,
+      phase,
+      summary: `${phase} returned no valid task result. Do not retry or advance SDD; inspect the existing artifact state and surface the terminal failure to the user.`,
+      continuation: `gentle-ai sdd-status --cwd ${shellQuote(cwd)} --json`,
+    }),
+  }
   return Object.assign(
-    new Error(`${code}: ${phase} returned no valid task result. Do not retry this phase automatically or launch a downstream SDD phase; inspect the artifact state and surface this terminal failure to the user.`),
-    { sddFailure: { phase, code } },
+    new Error(failure.handoff),
+    { sddFailure: failure },
   ) as SDDTaskFailureError
 }
 
@@ -670,7 +686,7 @@ const ReviewResultArtifactsPlugin: Plugin = async ({ client, directory, worktree
     if (isSDDPhase(subagent)) {
       const failure = failedSDDSessions.get(input.sessionID)
       if (failure) {
-        throw new Error(`${failure.code}: ${failure.phase} already failed in this session. Do not retry or advance SDD; inspect the artifact state and surface the terminal failure to the user.`)
+        throw new Error(failure.handoff)
       }
       return
     }
@@ -729,7 +745,7 @@ const ReviewResultArtifactsPlugin: Plugin = async ({ client, directory, worktree
       try {
         taskResult(output.output, "SDD phase", "sddClass")
       } catch (cause) {
-        const failure = sddTaskFailure(subagent, cause)
+        const failure = sddTaskFailure(subagent, captureCwd(worktree, directory), cause)
         failedSDDSessions.set(input.sessionID, failure.sddFailure)
         throw failure
       }

@@ -543,6 +543,8 @@ func TestReviewResultArtifactsPluginContract(t *testing.T) {
 		`"reviewer task result is empty"`,
 		`"reviewer task result contains a nested task envelope"`,
 		`const SDD_PHASES`,
+		`const SDD_TASK_FAILURE_PREFIX`,
+		`"gentle-ai.sdd-task-result-failure/v1"`,
 		`"sdd_task_result_empty"`,
 		`"sdd_task_result_malformed"`,
 		`failedSDDSessions`,

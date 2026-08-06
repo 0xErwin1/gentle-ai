@@ -360,6 +360,10 @@ func TestSDDTaskResultFailuresAreTerminalAndScoped(t *testing.T) {
 			if tt.wantBlocked && (!strings.Contains(parts[1], tt.wantCode) || !strings.Contains(parts[1], "Do not retry or advance SDD")) {
 				t.Fatalf("downstream SDD launch was not terminally blocked: %q", parts[1])
 			}
+			if tt.wantBlocked {
+				assertSDDTaskResultHandoff(t, parts[0], tt.wantCode, tt.wantPhase)
+				assertSDDTaskResultHandoff(t, parts[1], tt.wantCode, tt.wantPhase)
+			}
 			if !tt.wantBlocked && parts[1] != "NOT_ATTEMPTED" {
 				t.Fatalf("unrelated agent unexpectedly entered SDD routing: %q", parts[1])
 			}
@@ -367,6 +371,30 @@ func TestSDDTaskResultFailuresAreTerminalAndScoped(t *testing.T) {
 				t.Fatalf("task-result handling mutated the existing artifact: %q", parts[2])
 			}
 		})
+	}
+}
+
+func assertSDDTaskResultHandoff(t *testing.T, message, code, phase string) {
+	t.Helper()
+	const prefix = "GENTLE_AI_SDD_FAILURE "
+	if !strings.HasPrefix(message, prefix) {
+		t.Fatalf("failure lacks a machine-readable handoff: %q", message)
+	}
+	var handoff struct {
+		SchemaName   string `json:"schemaName"`
+		Status       string `json:"status"`
+		Code         string `json:"code"`
+		Phase        string `json:"phase"`
+		Continuation string `json:"continuation"`
+	}
+	if err := json.Unmarshal([]byte(strings.TrimPrefix(message, prefix)), &handoff); err != nil {
+		t.Fatalf("failure handoff is not JSON: %v: %q", err, message)
+	}
+	if handoff.SchemaName != "gentle-ai.sdd-task-result-failure/v1" || handoff.Status != "blocked" || handoff.Code != code || handoff.Phase != phase {
+		t.Fatalf("failure handoff = %#v", handoff)
+	}
+	if !strings.HasPrefix(handoff.Continuation, "gentle-ai sdd-status --cwd '") || !strings.HasSuffix(handoff.Continuation, "' --json") {
+		t.Fatalf("failure handoff names no runnable sdd-status continuation: %#v", handoff)
 	}
 }
 
