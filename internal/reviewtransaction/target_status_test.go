@@ -1280,12 +1280,12 @@ func TestAssessTargetStatusPropagatesOperationalAuthorityFailures(t *testing.T) 
 
 	t.Run("git timeout", func(t *testing.T) {
 		repo := targetStatusOperationalFailureFixture(t, "status-git-timeout")
-		originalCommand, originalTimeout, originalWait := gitCommandContext, localGitCommandTimeout, gitCommandWaitDelay
+		originalCommand, originalTimeout, originalWait := gitCommandContext, LocalGitCommandTimeout, gitCommandWaitDelay
 		t.Cleanup(func() {
-			gitCommandContext, localGitCommandTimeout, gitCommandWaitDelay = originalCommand, originalTimeout, originalWait
+			gitCommandContext, LocalGitCommandTimeout, gitCommandWaitDelay = originalCommand, originalTimeout, originalWait
 		})
 		t.Setenv("GENTLE_AI_TARGET_STATUS_GIT_HELPER", "sleep")
-		localGitCommandTimeout, gitCommandWaitDelay = 25*time.Millisecond, 10*time.Millisecond
+		LocalGitCommandTimeout, gitCommandWaitDelay = 25*time.Millisecond, 10*time.Millisecond
 		gitCommandContext = func(ctx context.Context, name string, args ...string) *exec.Cmd {
 			if gitInvocationContains(args, "--git-common-dir") {
 				return exec.CommandContext(ctx, os.Args[0], "-test.run=^TestTargetStatusGitHelperProcess$", "--")

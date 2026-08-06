@@ -10,6 +10,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
+	"sort"
 	"strings"
 	"time"
 
@@ -165,6 +167,7 @@ func RunInstall(args []string, detection system.DetectionResult) (InstallResult,
 	if err != nil {
 		return result, err
 	}
+	defer runtime.state.cleanupCompatibilityTransaction()
 
 	// Print dependency warnings before the pipeline starts (CLI only).
 	// The TUI surfaces these on the complete screen instead.
@@ -553,9 +556,10 @@ type installRuntime struct {
 }
 
 type runtimeState struct {
-	manifest            backup.Manifest
-	rollbackSnapshotDir string
-	piCodeGraph         *communitytool.PiCodeGraphResult
+	manifest                 backup.Manifest
+	rollbackSnapshotDir      string
+	piCodeGraph              *communitytool.PiCodeGraphResult
+	compatibilityTransaction compatibilityRefreshTransaction
 
 	// engramVersionResolved, engramVersion, and engramVersionErr cache the
 	// single `engram version` invocation performed by componentApplyStep.Run
@@ -578,9 +582,33 @@ func (s *runtimeState) cleanupRollbackSnapshot() {
 	s.rollbackSnapshotDir = ""
 }
 
+func (s *runtimeState) cleanupCompatibilityTransaction() {
+	if s == nil || s.compatibilityTransaction == nil {
+		return
+	}
+	transaction := s.compatibilityTransaction
+	s.compatibilityTransaction = nil
+	if err := transaction.Close(); err != nil {
+		log.Printf("compatibility: close transaction: %v", err)
+	}
+}
+
+func (s *runtimeState) compatibilityChangedFiles() []string {
+	if s == nil || s.compatibilityTransaction == nil {
+		return nil
+	}
+	return s.compatibilityTransaction.ChangedFiles()
+}
+
 func newInstallRuntime(homeDir string, scope InstallScope, channel InstallChannel, selection model.Selection, resolved planner.ResolvedPlan, profile system.PlatformProfile) (*installRuntime, error) {
 	backupRoot := filepath.Join(homeDir, ".gentle-ai", "backups")
+	compatibilityTransaction, err := newCompatibilityRefreshTransaction(homeDir, resolved.OrderedComponents, selection)
+	if err != nil {
+		return nil, err
+	}
+	state := &runtimeState{compatibilityTransaction: compatibilityTransaction}
 	if err := os.MkdirAll(backupRoot, 0o755); err != nil {
+		state.cleanupCompatibilityTransaction()
 		return nil, fmt.Errorf("create backup root directory %q: %w", backupRoot, err)
 	}
 
@@ -596,12 +624,12 @@ func newInstallRuntime(homeDir string, scope InstallScope, channel InstallChanne
 		profile:      profile,
 		channel:      channel,
 		backupRoot:   backupRoot,
-		state:        &runtimeState{},
+		state:        state,
 	}, nil
 }
 
 func (r *installRuntime) stagePlan() pipeline.StagePlan {
-	targets := backupTargets(r.homeDir, r.workspaceDir, r.scope, r.selection, r.resolved)
+	targets, targetErr := backupTargets(r.homeDir, r.workspaceDir, r.scope, r.selection, r.resolved)
 	prepare := []pipeline.Step{
 		checkDependenciesStep{id: "prepare:check-dependencies", profile: r.profile, homeDir: r.homeDir, selection: r.selection},
 		prepareBackupStep{
@@ -609,6 +637,7 @@ func (r *installRuntime) stagePlan() pipeline.StagePlan {
 			snapshotter: backup.NewSnapshotter(),
 			snapshotDir: filepath.Join(r.backupRoot, time.Now().UTC().Format("20060102150405.000000000")),
 			targets:     targets,
+			targetErr:   targetErr,
 			state:       r.state,
 			backupRoot:  r.backupRoot,
 			source:      backup.BackupSourceInstall,
@@ -657,7 +686,6 @@ func (r *installRuntime) stagePlan() pipeline.StagePlan {
 			state:        r.state,
 		})
 	}
-
 	// Routing guidance is scheduled per agent and outside the component loop:
 	// an agent that cannot choose between direct, delegated, and proposed work is
 	// unusable, so guidance must never depend on the optional SDD component being
@@ -673,6 +701,16 @@ func (r *installRuntime) stagePlan() pipeline.StagePlan {
 		})
 	}
 
+	if needsCompatibilitySkillsRefresh(r.resolved.OrderedComponents) {
+		apply = append(apply, compatibilitySkillsRefreshStep{
+			id:          "component:compatibility-skills-refresh",
+			homeDir:     r.homeDir,
+			components:  r.resolved.OrderedComponents,
+			selection:   r.selection,
+			transaction: r.state.compatibilityTransaction,
+			anchored:    usesAnchoredCompatibilityTransaction(),
+		})
+	}
 	if containsAgent(r.resolved.Agents, model.AgentPi) {
 		selected := r.selection.HasCommunityTool(model.CommunityToolCodeGraph)
 		stepID := "community-tool:pi-codegraph-reconcile"
@@ -900,10 +938,11 @@ type prepareBackupStep struct {
 	snapshotter backup.Snapshotter
 	snapshotDir string
 	targets     []string
+	targetErr   error
 	state       *runtimeState
 
 	// backupRoot is the parent directory of all backup snapshots.
-	// When set, deduplication (IsDuplicate) and retention pruning (Prune) are
+	// When set, deduplication (DuplicateManifest) and retention pruning (Prune) are
 	// enabled. When empty, both are skipped (backward-compatible default).
 	backupRoot string
 
@@ -921,15 +960,38 @@ func (s prepareBackupStep) ID() string {
 	return s.id
 }
 
+func manifestTargetsMatch(manifest backup.Manifest, targets []string) bool {
+	current := make(map[string]struct{}, len(targets))
+	for _, target := range targets {
+		current[filepath.Clean(target)] = struct{}{}
+	}
+	historical := make(map[string]struct{}, len(manifest.Entries))
+	for _, entry := range manifest.Entries {
+		historical[entry.OriginalPath] = struct{}{}
+	}
+	if len(current) != len(historical) {
+		return false
+	}
+	for target := range current {
+		if _, ok := historical[target]; !ok {
+			return false
+		}
+	}
+	return true
+}
+
 func (s prepareBackupStep) Run() error {
+	if s.targetErr != nil {
+		return fmt.Errorf("resolve backup targets: %w", s.targetErr)
+	}
 	// Deduplication: skip snapshot creation when content is identical to the
 	// most recent backup. Only active when backupRoot is set.
 	if s.backupRoot != "" {
 		checksum, err := backup.ComputeChecksum(s.targets)
 		if err == nil && checksum != "" {
-			if dup, dupErr := backup.IsDuplicate(s.backupRoot, checksum); dupErr != nil {
+			if manifest, duplicate, dupErr := backup.DuplicateManifest(s.backupRoot, checksum); dupErr != nil {
 				log.Printf("backup: check duplicate: %v", dupErr)
-			} else if dup {
+			} else if duplicate && manifestTargetsMatch(manifest, s.targets) {
 				rollbackDir, err := os.MkdirTemp("", "gentle-ai-rollback-*")
 				if err != nil {
 					return fmt.Errorf("create transaction snapshot directory: %w", err)
@@ -1609,37 +1671,22 @@ func windowsGoCandidates() []string {
 	}
 }
 
-// BuildRealStagePlan creates a StagePlan with real backup, agent install, and component apply steps.
-// It is used by both the CLI and TUI paths.
-// scope controls where agent config files are written (ScopeGlobal writes to homeDir, ScopeWorkspace writes to cwd).
-func BuildRealStagePlan(homeDir string, scope InstallScope, selection model.Selection, resolved planner.ResolvedPlan, profile system.PlatformProfile) (pipeline.StagePlan, error) {
-	backupRoot := filepath.Join(homeDir, ".gentle-ai", "backups")
-	if err := os.MkdirAll(backupRoot, 0o755); err != nil {
-		return pipeline.StagePlan{}, fmt.Errorf("create backup root directory %q: %w", backupRoot, err)
-	}
-
-	channel, err := ResolveInstallChannel("")
-	if err != nil {
-		return pipeline.StagePlan{}, err
-	}
-
-	runtime, err := newInstallRuntime(homeDir, scope, channel, selection, resolved, profile)
-	if err != nil {
-		return pipeline.StagePlan{}, err
-	}
-
-	return runtime.stagePlan(), nil
-}
-
 // ExecuteTUIInstall runs the same install runtime as the CLI and carries
 // non-fatal Pi CodeGraph manual actions into the TUI completion result.
+// The seam lets native tests add a post-publication failure while still using
+// the public TUI execution boundary and the real compatibility writer.
+var tuiInstallStagePlan = func(runtime *installRuntime) pipeline.StagePlan {
+	return runtime.stagePlan()
+}
+
 func ExecuteTUIInstall(homeDir string, selection model.Selection, resolved planner.ResolvedPlan, profile system.PlatformProfile, onProgress pipeline.ProgressFunc) pipeline.ExecutionResult {
 	runtime, err := newInstallRuntime(homeDir, ScopeGlobal, ChannelStable, selection, resolved, profile)
 	if err != nil {
 		return pipeline.ExecutionResult{Err: err}
 	}
+	defer runtime.state.cleanupCompatibilityTransaction()
 	orchestrator := pipeline.NewOrchestrator(pipeline.DefaultRollbackPolicy(), pipeline.WithFailurePolicy(pipeline.ContinueOnError), pipeline.WithProgressFunc(onProgress))
-	result := orchestrator.Execute(runtime.stagePlan())
+	result := orchestrator.Execute(tuiInstallStagePlan(runtime))
 	runtime.state.cleanupRollbackSnapshot()
 	if runtime.state.piCodeGraph != nil {
 		result.ManualActions = append(result.ManualActions, runtime.state.piCodeGraph.ManualActions...)
@@ -1761,7 +1808,7 @@ func selectedSkillIDs(selection model.Selection) []model.SkillID {
 	return skills.SkillsForPreset(selection.Preset)
 }
 
-func backupTargets(homeDir, workspaceDir string, scope InstallScope, selection model.Selection, resolved planner.ResolvedPlan) []string {
+func backupTargets(homeDir, workspaceDir string, scope InstallScope, selection model.Selection, resolved planner.ResolvedPlan) ([]string, error) {
 	paths := map[string]struct{}{}
 	adapters := resolveAdapters(resolved.Agents)
 
@@ -1783,6 +1830,28 @@ func backupTargets(homeDir, workspaceDir string, scope InstallScope, selection m
 	for _, path := range routingGuidancePaths(homeDir, workspaceDir, scope, adapters) {
 		paths[path] = struct{}{}
 	}
+	adapterSkillPaths, err := adapterSkillBackupTargets(homeDir, workspaceDir, scope, selection, adapters)
+	if err != nil {
+		return nil, err
+	}
+	for _, path := range adapterSkillPaths {
+		paths[path] = struct{}{}
+	}
+	if !usesAnchoredCompatibilityTransaction() && needsCompatibilitySkillsRefresh(resolved.OrderedComponents) {
+		skillDir, ok, err := compatibilitySkillsDir(homeDir)
+		if err != nil {
+			return nil, err
+		}
+		if ok {
+			compatibilityPaths, err := compatibilitySkillFiles(skillDir, resolved.OrderedComponents, selection)
+			if err != nil {
+				return nil, err
+			}
+			for _, path := range compatibilityPaths {
+				paths[path] = struct{}{}
+			}
+		}
+	}
 	if containsAgent(resolved.Agents, model.AgentPi) {
 		for _, path := range communitytool.PiCodeGraphPaths(homeDir, workspaceDir) {
 			paths[path] = struct{}{}
@@ -1798,8 +1867,36 @@ func backupTargets(homeDir, workspaceDir string, scope InstallScope, selection m
 	for path := range paths {
 		targets = append(targets, path)
 	}
+	sort.Strings(targets)
+	return targets, nil
+}
 
-	return targets
+func adapterSkillBackupTargets(homeDir, workspaceDir string, scope InstallScope, selection model.Selection, adapters []agents.Adapter) ([]string, error) {
+	var paths []string
+	for _, adapter := range adapters {
+		if !adapter.SupportsSkills() {
+			continue
+		}
+		skillDir := adapter.SkillsDir(componentInjectionDirScoped(homeDir, workspaceDir, scope, adapter))
+		if skillDir == "" {
+			continue
+		}
+		if slices.Contains(selection.Components, model.ComponentSkills) {
+			ordinary, err := skills.DirectoryPaths(skillDir, selectedSkillIDs(selection), "")
+			if err != nil {
+				return nil, fmt.Errorf("enumerate %s skill backup targets: %w", adapter.Agent(), err)
+			}
+			paths = append(paths, ordinary...)
+		}
+		if slices.Contains(selection.Components, model.ComponentSDD) {
+			sddPaths, err := sdd.SkillDirectoryPaths(skillDir, "")
+			if err != nil {
+				return nil, fmt.Errorf("enumerate %s SDD backup targets: %w", adapter.Agent(), err)
+			}
+			paths = append(paths, sddPaths...)
+		}
+	}
+	return paths, nil
 }
 
 // routingGuidancePaths declares the files agentRoutingGuidanceStep rewrites for

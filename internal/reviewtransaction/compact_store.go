@@ -1074,6 +1074,16 @@ func compactMaintenanceLockPath(authorityRoot string) string {
 // so incident preservation still works when capture was attempted from a
 // repository that does not own the reviewing lineage.
 func CompactIncidentsDir(ctx context.Context, repo, lineageID string) (string, error) {
+	return compactIncidentsDir(ctx, repo, lineageID, false)
+}
+
+// EnsureCompactIncidentsDir creates the durable raw-result incident directory
+// with the same owner-only safety boundary as compact authority artifacts.
+func EnsureCompactIncidentsDir(ctx context.Context, repo, lineageID string) (string, error) {
+	return compactIncidentsDir(ctx, repo, lineageID, true)
+}
+
+func compactIncidentsDir(ctx context.Context, repo, lineageID string, create bool) (string, error) {
 	if err := validateLineageID(lineageID); err != nil {
 		return "", err
 	}
@@ -1081,7 +1091,23 @@ func CompactIncidentsDir(ctx context.Context, repo, lineageID string) (string, e
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(base, "incidents", lineageID), nil
+	dir := filepath.Join(base, "incidents", lineageID)
+	if create {
+		if err := ensureCompactIncidentsDir(dir); err != nil {
+			return "", fmt.Errorf("ensure private incident preservation directory: %w", err)
+		}
+	}
+	return dir, nil
+}
+
+func ensureCompactIncidentsDir(dir string) error {
+	if _, err := createPrivateRARDirectory(filepath.Dir(dir)); err != nil {
+		return fmt.Errorf("create private incident root: %w", err)
+	}
+	if _, err := createPrivateRARDirectory(dir); err != nil {
+		return fmt.Errorf("create private incident lineage directory: %w", err)
+	}
+	return nil
 }
 
 func DiscoverCompactStores(ctx context.Context, repo string) ([]CompactStore, error) {
