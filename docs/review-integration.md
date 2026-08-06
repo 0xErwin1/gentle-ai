@@ -4,6 +4,20 @@
 
 Gentle AI exposes two negotiated review contracts. `gentle-ai.review-integration/v1` preserves the published Base64 candidate-diff transport byte for byte. `gentle-ai.review-integration/v2` is the native-Git contract: it carries immutable base/candidate tree IDs and an ordered changed-path manifest, never an inline patch. Its current minor is v2.1, which selects the immutable review runtime explicitly. Both let a consumer reconstruct one target after restart, drive explicit review operations, and validate the resulting receipt without reading provider-private authority files.
 
+## Advisory Model Review
+
+`gentle-ai review advisory` is the provider-owned prompt/text seam for Claude Code and OpenCode. Codex is not yet advertised: `PromptFor` returns a typed unavailable error for it until it passes the shared contract's organic positive and negative runtime proof.
+
+Its binding form is closed and identical to `review lens-context`: `gentle-ai review advisory prompt --repository-context <handle> --lens <lens> --runtime <runtime>` and `gentle-ai review advisory validate --repository-context <handle> --lens <lens> --input <result.json>`. The repository context and lens are the only caller-supplied tokens; lineage, target, revision, order, the signed artifact subject, and every path's evidence are all derived from frozen native authority, exactly as `review lens-context` derives them. There is no caller-authored request file.
+
+It exports one bounded canonical prompt -- rendered with the same lens mandate (title and inspection focus) `review lens-context` renders from `reviewtransaction.LensMandate` -- and validates one strict native reviewer-result shape against the signed artifact subject and its ordered frozen path manifest, including a required self-reported lens binding. The transport validation records its raw hash and preserves findings, including `BLOCKER`/`CRITICAL`, evidence class, and causal disposition. A model never directly emits PASS, a receipt, a gate result, or delivery authorization.
+
+Native Go then performs the existing admission and RDD pipeline unchanged: candidate-causality checks, deterministic/inferential handling, refutation, bounded correction, verification, terminal receipt issuance, and delivery gates decide the consequence of an admitted finding.
+
+`advisory` is a model-transport trust label, not a non-blocking severity or delivery disposition.
+
+OpenCode advisory review runs from the normal session. It does not require a restart, a special terminal, or global `OPENCODE_DISABLE_PROJECT_CONFIG` / `OPENCODE_DISABLE_EXTERNAL_SKILLS` variables. Runtime adapters only transport the prompt and return text; Go owns evidence bounds, schema, and validation.
+
 ## Negotiate the provider first
 
 Resolve the exact `gentle-ai` executable that will perform review operations, then query it outside a repository:
