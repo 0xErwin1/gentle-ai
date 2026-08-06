@@ -17,9 +17,11 @@ Define `ReviewCore` as the sole transition owner for new-lineage reviews: `start
 - THEN it is performed exclusively through `ReviewCore.start`, `.finalize`, or `.validate`
 - AND no gate or adapter writes new-lineage state directly
 
-### Requirement: Consent-Gated Freeze With Immutable Tier, Lenses, and Budget
+### Requirement: Consent-Gated Freeze With Immutable Tier, Lenses, and Budget, Preceded by Capability Admission
 
-`start` MUST freeze candidate identity, tier (0|1|4, reusing existing threshold logic — adopted default), lens set, and correction budget only after consent is granted via the reused `gentle-ai.review-integration.consent/v2` envelope (adopted default) for tier 1|4; tier 0 proceeds without a consent question. Once frozen, tier, lenses, and budget MUST NOT be recomputed later in the same lineage.
+`start` MUST freeze candidate identity, tier (0|1|4, reusing existing threshold logic — adopted default), lens set, and correction budget only after (1) transport capability admission has succeeded (Issue #1247) and (2) consent is granted via the reused `gentle-ai.review-integration.consent/v2` envelope (adopted default) for tier 1|4; tier 0 proceeds without a consent question. Capability admission MUST run before consent is even requested — an unsupported transport MUST deny before any consent prompt exists. Once frozen, tier, lenses, and budget MUST NOT be recomputed later in the same lineage.
+
+(Previously: freeze depended only on consent gating; capability was not a precondition of `start`.)
 
 #### Scenario: Tier 1 candidate freezes only after consent
 
@@ -32,6 +34,13 @@ Define `ReviewCore` as the sole transition owner for new-lineage reviews: `start
 - GIVEN a frozen tier-4 lineage mid-review
 - WHEN a later transition re-evaluates risk inputs
 - THEN the persisted tier, lens set, and budget remain exactly as frozen at `start`
+
+#### Scenario: Capability admission precedes candidate freeze
+
+- GIVEN an adapter whose transport capability is unsupported
+- WHEN `start` is invoked
+- THEN capability admission denies before any consent prompt, tier assignment, lens selection, or budget freeze occurs
+- AND no partial candidate state is created
 
 ### Requirement: Candidate-Causal Admission Only
 
@@ -74,3 +83,36 @@ A lineage MUST permit at most one correction transaction. A second correction at
 - GIVEN an approved or escalated lineage ready to finalize
 - WHEN `finalize` runs
 - THEN exactly one immutable receipt is written and the lineage cannot finalize a second time
+
+### Requirement: Offer Transition Reachable From a Real Call Site
+
+`ReviewCore`'s post-verify offer transition MUST be invoked from SDD's post-verify, pre-archive call site (`OfferReviewAfterVerify`, Wave 4). It MUST NOT remain unwired or left in a deadcode-baselined state once Wave 4 lands. (Issue #1209)
+
+#### Scenario: Offer transition is wired to a live caller
+
+- GIVEN Wave 4 has landed
+- WHEN SDD reaches the post-verify, pre-archive point
+- THEN it calls `ReviewCore`'s offer transition through `OfferReviewAfterVerify`
+- AND the offer transition has at least one live, non-test caller: `internal/sddstatus`'s `Resolve()`/`resolveEngramStatus()`, through `applyReviewOfferRouting` and `review_door.go`'s `reviewOfferForVerify` (call-site amendment, 2026-08-03, superseding the originally-named `internal/cli` verify-success exit — see design.md's "Amendment (orchestrator-resolved): decision 3 call site"); `RunSDDVerifyValidate` stays context-free and is not the caller
+
+#### Scenario: Offer transition is absent from pre-verify code paths
+
+- GIVEN Wave 4 has landed
+- WHEN the SDD apply or pre-verify path is inspected
+- THEN no call into the offer transition exists on that path
+
+### Requirement: `validate` Is The Single Governing Path For Legacy Lineages
+
+`validate` — the read-only evaluation transition — MUST become the sole governing path invoked by all five gates for legacy lineages, replacing bespoke per-gate or per-lineage discovery functions.
+
+#### Scenario: Legacy lineage invokes the same transition as a new lineage
+
+- GIVEN a legacy-lineage candidate and a new-lineage candidate at the same gate
+- WHEN each is evaluated
+- THEN both invoke `validate`; no gate calls a lineage-specific discovery function that bypasses it
+
+#### Scenario: No bespoke discovery fork remains
+
+- GIVEN the cutover has landed
+- WHEN a gate's code path is inspected
+- THEN it contains no per-lineage-kind discovery branch outside `validate`
