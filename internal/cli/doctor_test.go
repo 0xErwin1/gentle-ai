@@ -504,6 +504,25 @@ func TestCheckEngramReachable_BinaryAbsent_Warns(t *testing.T) {
 	}
 }
 
+// TestCheckEngramReachable_MissingRelativeWindowsExecutableWarns proves the
+// persisted Windows executable spelling remains advisory when ProbeStdio maps
+// its missing-path error to ErrNotInstalled.
+func TestCheckEngramReachable_MissingRelativeWindowsExecutableWarns(t *testing.T) {
+	t.Setenv(engramHealthEnvVar, "")
+	setStdioProbeForTest(t, engram.ErrNotInstalled)
+	homeDir := t.TempDir()
+	configPath := writeDoctorEngramConfig(t, homeDir, "engram.exe", []string{"mcp", "--tools=agent"})
+
+	got := checkEngramReachable(context.Background(), homeDir, []string{"claude-code"})
+
+	if got.Status != CheckStatusWarn {
+		t.Fatalf("engram:reachable status = %q, detail = %q; want not-probed warning for missing relative engram.exe", got.Status, got.Detail)
+	}
+	if !strings.Contains(got.Detail, "not probed") || !strings.Contains(got.Detail, configPath) {
+		t.Fatalf("engram:reachable detail = %q, want documented not-probed warning for %q", got.Detail, configPath)
+	}
+}
+
 // TestCheckEngramReachable_StdioDefault_NoHTTPListener is matrix cell (a) of
 // #2078: a default install. gentle-ai only ever configures Engram as a stdio
 // MCP server (engram mcp --tools=agent, written by

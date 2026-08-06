@@ -23,8 +23,8 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// ErrNotInstalled reports that a persisted relative "engram" command could
-// not be resolved. Callers (the doctor) map this to "not probed" instead of a
+// ErrNotInstalled reports that a persisted relative Engram command could not
+// be resolved. Callers (the doctor) map this to "not probed" instead of a
 // transport failure, because binary presence is already covered by the
 // tool:engram check.
 var ErrNotInstalled = errors.New("engram binary not found on PATH")
@@ -49,11 +49,11 @@ type StdioCommand struct {
 // ProbeStdio verifies the exact command and arguments persisted in an agent
 // configuration. It deliberately does not resolve a replacement through the
 // doctor's PATH: an absolute command in the config must be the process that is
-// checked. A missing relative "engram" command maps to ErrNotInstalled; a
-// missing absolute or custom command is a broken configured transport.
+// checked. A missing relative Engram command maps to ErrNotInstalled; a missing
+// absolute or custom command is a broken configured transport.
 func ProbeStdio(ctx context.Context, command string, args ...string) error {
 	err := stdioHandshakeFn(ctx, command, args...)
-	if command == "engram" && errors.Is(err, exec.ErrNotFound) {
+	if !filepath.IsAbs(command) && isEngramCommand(command) && errors.Is(err, exec.ErrNotFound) {
 		return ErrNotInstalled
 	}
 	return err
