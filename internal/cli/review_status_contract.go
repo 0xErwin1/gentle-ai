@@ -381,8 +381,29 @@ func (result ReviewTargetStatusResult) Validate() error {
 		if result.NextTransition == nil {
 			return errors.New("forecast without next_transition is invalid")
 		}
+		switch result.Forecast.Horizon {
+		case ForecastHorizonComplete, ForecastHorizonPartial, ForecastHorizonTerminal:
+		default:
+			return fmt.Errorf("invalid forecast horizon %q", result.Forecast.Horizon)
+		}
 		if len(result.Forecast.Steps) == 0 {
 			return errors.New("forecast steps must not be empty")
+		}
+		for i, step := range result.Forecast.Steps {
+			if step.Step != i+1 {
+				return fmt.Errorf("forecast step %d has non-sequential number %d", i+1, step.Step)
+			}
+			switch step.Kind {
+			case reviewNextTransitionExecute, reviewNextTransitionCollect, reviewNextTransitionStop:
+			default:
+				return fmt.Errorf("forecast step %d has invalid kind %q", step.Step, step.Kind)
+			}
+			if strings.TrimSpace(step.ReasonCode) == "" {
+				return fmt.Errorf("forecast step %d has empty reason_code", step.Step)
+			}
+			if strings.TrimSpace(step.Description) == "" {
+				return fmt.Errorf("forecast step %d has empty description", step.Step)
+			}
 		}
 		head := result.Forecast.Steps[0]
 		if head.Kind != result.NextTransition.Kind || head.ReasonCode != result.NextTransition.ReasonCode {
