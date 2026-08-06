@@ -770,7 +770,7 @@ func scanCompactAuthority(ctx context.Context, repo string) (compactAuthoritySca
 			// the entry's content, and quarantining them would turn a
 			// transient or environmental problem into a permanent verdict
 			// about somebody's authority. Those still propagate.
-			if compactAuthorityOperationalFailure(loadErr) {
+			if IsCompactAuthorityOperationalFailure(loadErr) {
 				return compactAuthorityScan{}, loadErr
 			}
 			scan.unreadable[store.lineageID] = loadErr
@@ -1573,7 +1573,7 @@ func classifyCompactCorrectionTarget(ctx context.Context, repo string, existing,
 	}
 	if !liveAlreadyValidated {
 		if err := (SnapshotBuilder{Repo: repo}).ValidateEvidence(ctx, live); err != nil {
-			if compactAuthorityOperationalFailure(err) {
+			if IsCompactAuthorityOperationalFailure(err) {
 				return compactCorrectionTargetUnclaimed, err
 			}
 			return compactCorrectionTargetUnclaimed, nil
@@ -1597,7 +1597,7 @@ func classifyCompactCorrectionTarget(ctx context.Context, repo string, existing,
 		}
 		matches, err := compactCorrectionCandidateMatches(ctx, repo, existing, requested)
 		if err != nil {
-			if compactAuthorityOperationalFailure(err) {
+			if IsCompactAuthorityOperationalFailure(err) {
 				return compactCorrectionTargetUnclaimed, err
 			}
 		} else if matches {
@@ -1610,7 +1610,9 @@ func classifyCompactCorrectionTarget(ctx context.Context, repo string, existing,
 	return compactCorrectionTargetBlocked, nil
 }
 
-func compactAuthorityOperationalFailure(err error) bool {
+// IsCompactAuthorityOperationalFailure reports errors that prevent observing
+// authority at all rather than describing a quarantinable authority record.
+func IsCompactAuthorityOperationalFailure(err error) bool {
 	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, ErrConcurrentUpdate) {
 		return true
 	}
@@ -1676,7 +1678,18 @@ func compactCorrectionCandidateMatches(ctx context.Context, repo string, existin
 	if err != nil {
 		return false, err
 	}
-	return lines <= existing.CorrectionBudget-existing.CumulativeCorrectionLines, nil
+	remaining, err := compactCorrectionRemainingBudget(existing)
+	if err != nil {
+		return false, err
+	}
+	return lines <= remaining, nil
+}
+
+func compactCorrectionRemainingBudget(state CompactState) (int, error) {
+	if state.CorrectionBudget < 0 || state.CumulativeCorrectionLines < 0 || state.CumulativeCorrectionLines > state.CorrectionBudget {
+		return 0, errors.New("compact correction accounting cannot derive a remaining budget") // refusal:by-design world-action: invalid persisted correction accounting cannot authorize another correction candidate
+	}
+	return state.CorrectionBudget - state.CumulativeCorrectionLines, nil
 }
 
 func compactStartLiveTargetMatches(ctx context.Context, repo string, existing, requested CompactState, requireCurrentCandidate bool) bool {

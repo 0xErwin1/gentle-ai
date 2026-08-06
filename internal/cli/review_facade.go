@@ -3822,7 +3822,19 @@ func discoverCompactFacadeFinalize(ctx context.Context, repo, lineage string) (r
 	if len(candidates) > 1 {
 		exact := candidates[:0]
 		for _, candidate := range candidates {
-			if (reviewtransaction.SnapshotBuilder{Repo: repo}).ValidateLiveSnapshot(ctx, candidate.record.State.CurrentSnapshot) == nil {
+			validationErr := (reviewtransaction.SnapshotBuilder{Repo: repo}).ValidateLiveSnapshot(ctx, candidate.record.State.CurrentSnapshot)
+			if validationErr != nil && reviewtransaction.IsCompactAuthorityOperationalFailure(validationErr) {
+				return reviewtransaction.CompactStore{}, reviewtransaction.CompactRecord{}, validationErr
+			}
+			matches := validationErr == nil
+			if !matches {
+				_, rebuildErr := reviewtransaction.RebuildCommittedBaseDiffCorrectionCandidate(ctx, repo, candidate.record.State)
+				if rebuildErr != nil && (reviewtransaction.IsCompactAuthorityOperationalFailure(rebuildErr) || reviewtransaction.IsCorrectionBudgetExceeded(rebuildErr)) {
+					return reviewtransaction.CompactStore{}, reviewtransaction.CompactRecord{}, rebuildErr
+				}
+				matches = rebuildErr == nil
+			}
+			if matches {
 				exact = append(exact, candidate)
 			}
 		}
