@@ -69,7 +69,7 @@ func loadCompactTargetStatusCandidates(ctx context.Context, repo, lineageID stri
 				// Only content failures quarantine. Not being able to READ the
 				// store is a different fact from an entry being damaged, and
 				// status has to keep saying so.
-				if compactAuthorityOperationalFailure(loadErr) {
+				if IsCompactAuthorityOperationalFailure(loadErr) {
 					return nil, loadErr
 				}
 				continue
@@ -148,14 +148,14 @@ func loadStableCompactTargetStatusCandidate(ctx context.Context, store CompactSt
 			continue
 		}
 
-		if firstErr != nil && compactAuthorityOperationalFailure(firstErr) {
+		if firstErr != nil && IsCompactAuthorityOperationalFailure(firstErr) {
 			return targetStatusCandidate{}, firstErr
 		}
 		second, secondErr := inspectCompactTargetArtifacts(ctx, store, observed.State, "second", attempt)
 		if err := ctx.Err(); err != nil {
 			return targetStatusCandidate{}, err
 		}
-		if secondErr != nil && compactAuthorityOperationalFailure(secondErr) {
+		if secondErr != nil && IsCompactAuthorityOperationalFailure(secondErr) {
 			return targetStatusCandidate{}, secondErr
 		}
 		// The first receipt/journal pair precedes the second state observation,
@@ -352,7 +352,7 @@ func classifyCompactCorrectionTargetForStatus(ctx context.Context, repo string, 
 }
 
 func targetStatusFailure(base TargetStatusResult, err error) (TargetStatusResult, error) {
-	if compactAuthorityOperationalFailure(err) {
+	if IsCompactAuthorityOperationalFailure(err) {
 		return TargetStatusResult{}, err
 	}
 	return corruptedTargetStatus(base), nil

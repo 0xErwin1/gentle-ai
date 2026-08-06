@@ -351,6 +351,21 @@ func TestRunArgsSDDAttemptHelpBypassesPlatformAndRepositoryValidation(t *testing
 	}
 }
 
+func TestRunArgsSDDAttemptParentHelpDoesNotSelectChangeValueAsOperation(t *testing.T) {
+	origEnsure := ensureCurrentOSSupported
+	t.Cleanup(func() { ensureCurrentOSSupported = origEnsure })
+	ensureCurrentOSSupported = func() error { return fmt.Errorf("platform validation should not run for sdd-attempt help") }
+
+	var output bytes.Buffer
+	err := RunArgs([]string{"sdd-attempt", "--help", "--cwd", "/definitely/not/a/repository", "--change", "begin"}, &output)
+	if err != nil {
+		t.Fatalf("RunArgs(sdd-attempt --help --cwd /definitely/not/a/repository --change begin): %v", err)
+	}
+	if !strings.Contains(output.String(), "Usage: gentle-ai sdd-attempt <") || strings.Contains(output.String(), "Usage: gentle-ai sdd-attempt begin [flags]") {
+		t.Fatalf("sdd-attempt parent help =\n%s", output.String())
+	}
+}
+
 func TestRunArgsSDDContinueIsDispatchedBeforePlatformValidation(t *testing.T) {
 	origEnsure := ensureCurrentOSSupported
 	t.Cleanup(func() { ensureCurrentOSSupported = origEnsure })
