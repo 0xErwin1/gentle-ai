@@ -1,18 +1,19 @@
 package cli
 
-// Issue: negotiated `review.start` with TargetCurrentChanges on a clean,
-// fully-committed worktree freezes an EMPTY candidate (base_tree ==
-// candidate_tree == HEAD, paths: []), passes risk assessment and
-// pre-commit, then fails late and misleadingly at pre-push ("reviewed
-// delivery is not exactly one commit from its reviewed base"). These tests
-// pin a typed preflight refusal that stops this flow before any authority
-// is created, naming --base-ref as the resolution instead of silently
-// deriving one.
+// Issue #2586: `review start` with a TargetCurrentChanges candidate on a
+// clean, fully-committed worktree, or a TargetBaseDiff candidate whose named
+// base nets zero changed paths, freezes an EMPTY candidate (paths: []) that
+// would pass risk assessment and mint an approved receipt inspecting
+// nothing -- discoverable afterward as "governing" a later, genuinely
+// unreviewed candidate sharing its final tree. The guard used to fire only
+// on the negotiated route and only for TargetCurrentChanges; these tests pin
+// the unified refusal that now fires on both routes and both target kinds,
+// before any authority is created, naming --base-ref as the resolution
+// instead of silently deriving one.
 
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"strings"
 	"testing"
 
@@ -122,25 +123,93 @@ func TestNegotiatedStartWithPendingChangesIsUnaffected(t *testing.T) {
 	}
 }
 
-// TestUnnegotiatedEmptyCandidateStartKeepsItsHint is a regression pin: the
-// plain (non-negotiated) review start path on a clean tree must keep
-// emitting its existing hint unchanged by the negotiated-only guard added
-// by this change.
-func TestUnnegotiatedEmptyCandidateStartKeepsItsHint(t *testing.T) {
+// TestDirectReviewStartRefusesEmptyCandidateWithoutAuthority is the direct-
+// route repro from issue #2586: before this fix, a plain (non-negotiated)
+// `review start` (no --contract) on a clean, fully-committed worktree
+// created a lineage and finalized it to an approved receipt that inspected
+// nothing (base_tree == candidate_tree == HEAD) -- exactly the zero-delta
+// receipt the issue reports being discovered as "governing" a later,
+// genuinely unreviewed candidate that happens to share its final tree. The
+// guard that used to fire only on the negotiated route now fires here too,
+// before any authority is created.
+func TestDirectReviewStartRefusesEmptyCandidateWithoutAuthority(t *testing.T) {
 	repo := initReviewCLIRepo(t)
 
 	var output bytes.Buffer
-	if err := RunReviewFacadeStart([]string{"--cwd", repo, "--lineage", "unnegotiated-empty"}, &output); err != nil {
-		t.Fatalf("unnegotiated review start on a clean worktree: %v\n%s", err, output.String())
+	err := RunReviewFacadeStart([]string{"--cwd", repo, "--lineage", "unnegotiated-empty"}, &output)
+	if err == nil {
+		t.Fatalf("direct review start admitted an empty candidate:\n%s", output.String())
 	}
-	var started ReviewFacadeStartResult
-	if err := json.Unmarshal(output.Bytes(), &started); err != nil {
-		t.Fatal(err)
+	if !strings.Contains(err.Error(), reviewStartEmptyCandidateHint) {
+		t.Fatalf("direct empty-candidate refusal = %q, want it to contain %q", err.Error(), reviewStartEmptyCandidateHint)
 	}
-	if started.ChangedFiles != 0 {
-		t.Fatalf("unnegotiated clean-worktree start changed_files = %d, want 0", started.ChangedFiles)
+	if !strings.Contains(err.Error(), "--base-ref") {
+		t.Fatalf("direct empty-candidate refusal = %q, want it to name --base-ref", err.Error())
 	}
-	if started.Hint != reviewStartEmptyCandidateHint {
-		t.Fatalf("unnegotiated empty-candidate start hint = %q, want %q", started.Hint, reviewStartEmptyCandidateHint)
+
+	stores, discoverErr := reviewtransaction.DiscoverCompactStores(context.Background(), repo)
+	if discoverErr != nil {
+		t.Fatal(discoverErr)
+	}
+	if len(stores) != 0 {
+		t.Fatalf("refused direct-route empty-candidate START created authority: %#v", stores)
+	}
+}
+
+// TestNegotiatedReviewStartRefusesEmptyBaseDiffCandidate proves the guard's
+// #2586 extension: a TargetBaseDiff candidate whose named base nets zero
+// changed paths (here, the named base IS the current HEAD -- a truly-empty
+// diff) refuses identically to a clean TargetCurrentChanges candidate, on
+// the negotiated route.
+func TestNegotiatedReviewStartRefusesEmptyBaseDiffCandidate(t *testing.T) {
+	repo := initReviewCLIRepo(t)
+
+	var output bytes.Buffer
+	err := RunReview(boundNegotiatedStartArgs(t, []string{
+		"start", "--contract", ReviewIntegrationContractV1, "--cwd", repo, "--lineage", "empty-base-diff",
+		"--base-ref", "HEAD",
+	}), &output)
+	if err == nil {
+		t.Fatalf("negotiated review start admitted a zero-delta base-diff candidate:\n%s", output.String())
+	}
+
+	failure := decodeReviewIntegrationFailure(t, output.Bytes())
+	if failure.Code != "empty_candidate_scope" {
+		t.Fatalf("negotiated base-diff failure code = %q, want empty_candidate_scope\n%s", failure.Code, output.String())
+	}
+	if failure.Phase != "preflight" {
+		t.Fatalf("negotiated base-diff failure phase = %q, want preflight\n%s", failure.Phase, output.String())
+	}
+
+	stores, discoverErr := reviewtransaction.DiscoverCompactStores(context.Background(), repo)
+	if discoverErr != nil {
+		t.Fatal(discoverErr)
+	}
+	if len(stores) != 0 {
+		t.Fatalf("refused zero-delta base-diff START created authority: %#v", stores)
+	}
+}
+
+// TestDirectReviewStartRefusesEmptyBaseDiffCandidate is the same proof on the
+// direct (non-negotiated) route: issue #2586's guard extension applies to
+// both target kinds on both routes, not only the negotiated one.
+func TestDirectReviewStartRefusesEmptyBaseDiffCandidate(t *testing.T) {
+	repo := initReviewCLIRepo(t)
+
+	var output bytes.Buffer
+	err := RunReviewFacadeStart([]string{"--cwd", repo, "--lineage", "unnegotiated-empty-base-diff", "--base-ref", "HEAD"}, &output)
+	if err == nil {
+		t.Fatalf("direct review start admitted a zero-delta base-diff candidate:\n%s", output.String())
+	}
+	if !strings.Contains(err.Error(), reviewStartEmptyCandidateHint) {
+		t.Fatalf("direct base-diff refusal = %q, want it to contain %q", err.Error(), reviewStartEmptyCandidateHint)
+	}
+
+	stores, discoverErr := reviewtransaction.DiscoverCompactStores(context.Background(), repo)
+	if discoverErr != nil {
+		t.Fatal(discoverErr)
+	}
+	if len(stores) != 0 {
+		t.Fatalf("refused direct-route zero-delta base-diff START created authority: %#v", stores)
 	}
 }
