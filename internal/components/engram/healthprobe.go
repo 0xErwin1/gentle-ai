@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -23,15 +24,15 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// ErrNotInstalled reports that a persisted relative Engram command could not
-// be resolved. Callers (the doctor) map this to "not probed" instead of a
-// transport failure, because binary presence is already covered by the
+// ErrNotInstalled reports that the supported bare Engram command could not be
+// resolved through PATH. Callers (the doctor) map this to "not probed" instead
+// of a transport failure, because binary presence is already covered by the
 // tool:engram check.
 var ErrNotInstalled = errors.New("engram binary not found on PATH")
 
 // stdioProbeTimeout is the hard deadline for the whole stdio probe: spawning
 // the engram MCP process plus the initialize handshake round-trip.
-const stdioProbeTimeout = 5 * time.Second
+var stdioProbeTimeout = 5 * time.Second
 
 // stdioHandshakeFn is a package-level seam over the real handshake (built on
 // the execCommandContext precedent) so internal/cli doctor tests can pin the
@@ -49,14 +50,24 @@ type StdioCommand struct {
 // ProbeStdio verifies the exact command and arguments persisted in an agent
 // configuration. It deliberately does not resolve a replacement through the
 // doctor's PATH: an absolute command in the config must be the process that is
-// checked. A missing relative Engram command maps to ErrNotInstalled; a missing
-// absolute or custom command is a broken configured transport.
+// checked. Only a bare Engram command maps to ErrNotInstalled; a missing path
+// or custom command is a broken configured transport.
 func ProbeStdio(ctx context.Context, command string, args ...string) error {
 	err := stdioHandshakeFn(ctx, command, args...)
-	if !filepath.IsAbs(command) && isEngramCommand(command) && errors.Is(err, exec.ErrNotFound) {
+	if isBareEngramCommand(command) && errors.Is(err, exec.ErrNotFound) {
 		return ErrNotInstalled
 	}
 	return err
+}
+
+func isBareEngramCommand(command string) bool {
+	if strings.ContainsAny(command, `/\\:`) {
+		return false
+	}
+	if runtime.GOOS == "windows" {
+		return strings.EqualFold(command, "engram") || strings.EqualFold(command, "engram.exe")
+	}
+	return command == "engram"
 }
 
 // stdioHandshake spawns name with args and performs a minimal MCP initialize
@@ -86,12 +97,33 @@ func stdioHandshake(ctx context.Context, name string, args ...string) error {
 		terminateOnce.Do(func() { terminateErr = terminateTree() })
 		return terminateErr
 	}
+	var terminalCause struct {
+		sync.Mutex
+		err error
+	}
+	recordTerminalCause := func() {
+		terminalCause.Lock()
+		defer terminalCause.Unlock()
+		terminalCause.err = handshakeContextCause(ctx, probeCtx)
+	}
+	contextCause := func() error {
+		terminalCause.Lock()
+		defer terminalCause.Unlock()
+		return terminalCause.err
+	}
 	stopWatcher := make(chan struct{})
 	watcherDone := make(chan struct{})
 	go func() {
 		defer close(watcherDone)
 		select {
 		case <-probeCtx.Done():
+			// Prefer a completed I/O result when it won before context cleanup.
+			select {
+			case <-stopWatcher:
+				return
+			default:
+			}
+			recordTerminalCause()
 			_ = terminate()
 			_ = stdout.Close()
 		case <-stopWatcher:
@@ -118,23 +150,35 @@ func stdioHandshake(ctx context.Context, name string, args ...string) error {
 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 	for scanner.Scan() {
 		if err := validateInitializeResponse(scanner.Bytes()); err != nil {
+			if cause := contextCause(); cause != nil {
+				return cause
+			}
 			return err
 		}
 
 		if err := stdin.Close(); err != nil {
+			if cause := contextCause(); cause != nil {
+				return cause
+			}
 			return fmt.Errorf("close engram mcp stdin: %w", err)
 		}
 		if err := terminate(); err != nil {
+			if cause := contextCause(); cause != nil {
+				return cause
+			}
 			return err
 		}
 		// Drain before Wait: os/exec closes pipe descriptors when reaping the child.
 		for scanner.Scan() {
 			if err := validateInitializeResponse(scanner.Bytes()); err != nil {
+				if cause := contextCause(); cause != nil {
+					return cause
+				}
 				return err
 			}
 			return errors.New("engram mcp wrote an unexpected stdout frame after initialize response")
 		}
-		if err := handshakeContextError(ctx, probeCtx); err != nil {
+		if err := contextCause(); err != nil {
 			return err
 		}
 		if err := scanner.Err(); err != nil {
@@ -142,7 +186,7 @@ func stdioHandshake(ctx context.Context, name string, args ...string) error {
 		}
 		waitErr := cmd.Wait()
 		waited = true
-		if err := handshakeContextError(ctx, probeCtx); err != nil {
+		if err := contextCause(); err != nil {
 			return err
 		}
 		if !expectedProbeTermination(waitErr) {
@@ -150,7 +194,7 @@ func stdioHandshake(ctx context.Context, name string, args ...string) error {
 		}
 		return nil
 	}
-	if err := handshakeContextError(ctx, probeCtx); err != nil {
+	if err := contextCause(); err != nil {
 		return err
 	}
 	if err := scanner.Err(); err != nil {
@@ -167,14 +211,11 @@ func expectedProbeTermination(err error) bool {
 	return errors.As(err, &exitErr)
 }
 
-func handshakeContextError(ctx, probeCtx context.Context) error {
-	if err := ctx.Err(); err != nil {
-		return fmt.Errorf("engram mcp initialize handshake stopped by caller context: %w", err)
+func handshakeContextCause(ctx, probeCtx context.Context) error {
+	if cause := context.Cause(ctx); cause != nil {
+		return cause
 	}
-	if probeCtx.Err() != nil {
-		return fmt.Errorf("engram mcp initialize handshake timed out after %s", stdioProbeTimeout)
-	}
-	return nil
+	return context.Cause(probeCtx)
 }
 
 func validateInitializeResponse(line []byte) error {
