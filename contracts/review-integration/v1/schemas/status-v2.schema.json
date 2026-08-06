@@ -89,6 +89,9 @@
       }
     }
   },
+  "dependentRequired": {
+    "forecast": ["next_transition"]
+  },
   "$defs": {
     "forecast": {
       "type": "object",
