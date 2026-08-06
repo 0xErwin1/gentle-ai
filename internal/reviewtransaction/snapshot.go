@@ -1431,23 +1431,36 @@ func snapshotIdentity(kind TargetKind, baseTree, candidateTree, pathsDigest, pro
 	return snapshotIdentityForProjection(kind, "", baseTree, candidateTree, pathsDigest, proof, intended, ledgerIDs)
 }
 
+// snapshotIdentityForProjection mints the purified, content-addressed
+// identity domain (issue #2659, root 21 of #2471): a domain-separation tag
+// for kind/projection, then baseTree, candidateTree, pathsDigest, and
+// ledgerIDs. proof and intended are deliberately NOT part of this hash: they
+// describe HOW the candidate bytes were declared (a staged path vs. a
+// declared intended-untracked path), not WHAT those bytes are, so folding
+// them into identity let two byte-identical candidates carry different
+// identities. Maintainer decision D1 (recorded in #2471) keeps the
+// untracked-replay proof alive as SIDE-BAND evidence only -- still consumed
+// by BuildStagedWorkspaceOverlayRecovery and BuildCorrectedCandidate for
+// replay validation -- so the parameters stay for call-site compatibility
+// but are intentionally unused here.
+//
+// kind and projection stay in the hash domain on purpose: they are the
+// load-bearing separation that keeps a current-changes receipt from being
+// recognized as a base-workspace-overlay review of identical bytes.
 func snapshotIdentityForProjection(kind TargetKind, projection Projection, baseTree, candidateTree, pathsDigest, proof string, intended, ledgerIDs []string) string {
 	hash := sha256.New()
 	if kind == TargetBaseWorkspaceOverlay {
-		hash.Write([]byte("gentle-ai.review-snapshot/base-workspace-overlay/v1\x00"))
+		hash.Write([]byte("gentle-ai.review-snapshot/base-workspace-overlay/v2\x00"))
 	} else if projection == ProjectionStaged {
-		hash.Write([]byte("gentle-ai.review-snapshot/v2\x00"))
+		hash.Write([]byte("gentle-ai.review-snapshot/v4\x00"))
 	} else {
-		hash.Write([]byte("gentle-ai.review-snapshot/v1\x00"))
+		hash.Write([]byte("gentle-ai.review-snapshot/v3\x00"))
 	}
-	values := []string{string(kind), baseTree, candidateTree, pathsDigest, proof}
+	values := []string{string(kind), baseTree, candidateTree, pathsDigest}
 	if projection == ProjectionStaged {
-		values = []string{string(kind), string(projection), baseTree, candidateTree, pathsDigest, proof}
+		values = []string{string(kind), string(projection), baseTree, candidateTree, pathsDigest}
 	}
 	for _, value := range values {
-		writeLengthPrefixed(hash, []byte(value))
-	}
-	for _, value := range intended {
 		writeLengthPrefixed(hash, []byte(value))
 	}
 	for _, value := range ledgerIDs {
