@@ -130,6 +130,20 @@ func newReviewNextTransition(status ReviewTargetStatusResult, selectedLenses []s
 				input.Selector.Projection == reviewtransaction.ProjectionStaged {
 				return reviewStopTransition("staged_workspace_overlay_recovery_unavailable")
 			}
+			// A workspace candidate that froze zero paths is the one fresh
+			// target whose START cannot succeed: the facade refuses it in
+			// preflight with empty_candidate_scope and names base_ref as the
+			// input it needs. Returning that START anyway made status and
+			// preflight disagree forever, since the refusal has no way back
+			// into this classification (issue #2584). Collect the base
+			// instead, and — exactly like the refusal it replaces — name it
+			// without deriving it, so the caller keeps choosing the scope.
+			if status.Projection.Kind == reviewtransaction.TargetCurrentChanges && len(status.Projection.Paths) == 0 {
+				return reviewCollectTransition("empty_candidate_base_ref_required", ReviewTransitionInput{
+					Name: "base_ref", Schema: "gentle-ai.review-base-ref-selection/v1", CaptureOperation: "external.select_base_ref",
+					Arguments: reviewTargetArguments(status),
+				})
+			}
 			return reviewExecuteTransition("fresh_target_ready", "review.start", reviewStartArguments(status, input.StartLineage, input.RuntimeAgent), []ReviewTransitionArgument{{Name: "target_identity", Value: status.TargetIdentity}}, ReviewTransitionBinding{LineageID: input.StartLineage, TargetIdentity: status.TargetIdentity}, nil)
 		case reviewtransaction.TargetApplicabilityAmbiguous:
 			return reviewCollectTransition("lineage_selection_required", ReviewTransitionInput{
