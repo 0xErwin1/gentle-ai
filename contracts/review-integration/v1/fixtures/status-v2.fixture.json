@@ -8,7 +8,7 @@
     "lineage_id": "review-status-fixture",
     "state": "reviewing",
     "generation": 1,
-    "revision": "sha256:84ebf817723c27d52dc15c6bd7ebb873fc7162c6d2494654c447112677278f07"
+    "revision": "sha256:81cdad8f3182d4919147d3c4fe8f614814068e5ef68417e3dcbd5e326dd3e390"
   },
   "receipt": {
     "status": "expected_missing"
@@ -18,8 +18,7 @@
   "frozen": {
     "tier": "medium",
     "original_changed_lines": 2,
-    "correction_budget": 2,
-    "correction_budget_policy": "floor_two"
+    "correction_budget": 1
   },
   "target_identity": "sha256:e6faad1cb9ceb2db170e0ec9ea5394b44c3991dff6cbd02fb6787539715968f6",
   "projection": {
@@ -134,8 +133,8 @@
             },
             {
               "name": "expected-revision",
-              "value": "sha256:84ebf817723c27d52dc15c6bd7ebb873fc7162c6d2494654c447112677278f07",
-              "token": "--expected-revision=sha256:84ebf817723c27d52dc15c6bd7ebb873fc7162c6d2494654c447112677278f07"
+              "value": "sha256:81cdad8f3182d4919147d3c4fe8f614814068e5ef68417e3dcbd5e326dd3e390",
+              "token": "--expected-revision=sha256:81cdad8f3182d4919147d3c4fe8f614814068e5ef68417e3dcbd5e326dd3e390"
             },
             {
               "name": "target",
@@ -160,9 +159,9 @@
           ],
           "artifact_subject": {
             "schema": "gentle-ai.review-artifact-subject/v1",
-            "subject_hash": "sha256:a9a5a3499f62a5c529a5eef2efbd37e6d2e8214a9832ff12724fa101fcde1677",
+            "subject_hash": "sha256:fe57db2ea45a33c7e852d039e8af3291c3bc31911f0c92a710b5fef547b1999d",
             "lineage_id": "review-status-fixture",
-            "authority_revision": "sha256:84ebf817723c27d52dc15c6bd7ebb873fc7162c6d2494654c447112677278f07",
+            "authority_revision": "sha256:81cdad8f3182d4919147d3c4fe8f614814068e5ef68417e3dcbd5e326dd3e390",
             "target_identity": "sha256:e6faad1cb9ceb2db170e0ec9ea5394b44c3991dff6cbd02fb6787539715968f6",
             "candidate_diff_sha256": "sha256:8ed4bd24d5beb3f73f6026355f6755f5aef7feebcd76447be820860c22bc47c6",
             "changed_path_manifest_sha256": "sha256:64d028ff676fb4ef10f2d4a3488d568854b364b4cc4399578b5932d144d2347b",
