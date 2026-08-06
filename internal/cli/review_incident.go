@@ -307,8 +307,7 @@ func RunReviewPreserveResult(args []string, stdout io.Writer) error {
 		}
 		return reviewPreflightError(errors.New("preserve-result binding does not match the current reviewing authority"))
 	}
-	dir, err := reviewtransaction.CompactIncidentsDir(ctx, repo, *lineage)
-	if err != nil {
+	if _, err := reviewtransaction.CompactIncidentsDir(ctx, repo, *lineage); err != nil {
 		if contextHandle != "" {
 			return reviewOpaqueContextCause("repository_context_preserve_unavailable", "retry preserve-result with the same exact binding", err)
 		}
@@ -321,7 +320,7 @@ func RunReviewPreserveResult(args []string, stdout io.Writer) error {
 	if len(payload) == 0 || len(payload) > reviewResultArtifactLimit {
 		return reviewPreflightError(errors.New("raw reviewer result must be non-empty and within the native result size limit"))
 	}
-	artifact, err := preserveIncidentArtifact(dir, *lineage, *target, *lens, *order, payload, reviewtransaction.ResultIncidentClass(*class))
+	artifact, err := preserveIncidentArtifact(ctx, repo, *lineage, *target, *lens, *order, payload, reviewtransaction.ResultIncidentClass(*class))
 	if err != nil {
 		if contextHandle != "" {
 			return reviewOpaqueContextCause("repository_context_preserve_failed", "retry preserve-result with the same exact binding", err)
@@ -348,8 +347,9 @@ func reviewIncidentReference(artifact reviewIncidentArtifact) string {
 	return reviewIncidentReferencePrefix + strings.TrimPrefix(facadePayloadHash(payload), "sha256:")
 }
 
-func preserveIncidentArtifact(dir, lineage, target, lens string, order int, payload []byte, class reviewtransaction.ResultIncidentClass) (reviewIncidentArtifact, error) {
-	if err := os.MkdirAll(dir, 0o700); err != nil {
+func preserveIncidentArtifact(ctx context.Context, repo, lineage, target, lens string, order int, payload []byte, class reviewtransaction.ResultIncidentClass) (reviewIncidentArtifact, error) {
+	dir, err := reviewtransaction.EnsureCompactIncidentsDir(ctx, repo, lineage)
+	if err != nil {
 		return reviewIncidentArtifact{}, fmt.Errorf("create incident preservation directory: %w", err)
 	}
 	info, err := os.Lstat(dir)
