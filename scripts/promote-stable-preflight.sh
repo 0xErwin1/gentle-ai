@@ -53,12 +53,31 @@ jq -e --arg tag "$source_tag" \
   die "source prerelease release must be immutable, published, and prerelease"
 
 # shellcheck disable=SC2016 # GraphQL receives its own $tag variable.
-stable_ref=$(gh api graphql -f 'query=query($tag: String!) { repository(owner: "Gentleman-Programming", name: "gentle-ai") { ref(qualifiedName: $tag) { target { oid } } } }' -f "tag=refs/tags/$stable_tag" --jq '.data.repository.ref.target.oid // empty')
-[[ -z "$stable_ref" ]] || die "stable tag already exists"
-# shellcheck disable=SC2016 # GraphQL receives its own $tag variable.
 stable_release=$(gh api graphql -f 'query=query($tag: String!) { repository(owner: "Gentleman-Programming", name: "gentle-ai") { release(tagName: $tag) { id } } }' -f "tag=$stable_tag" --jq '.data.repository.release.id // empty')
-[[ -z "$stable_release" ]] || die "stable release already exists"
+stable_ref=$(git ls-remote origin "refs/tags/$stable_tag" | awk 'NR == 1 { print $1 }')
+stable_peeled=$(git ls-remote origin "refs/tags/$stable_tag^{}" | awk 'NR == 1 { print $1 }')
+recovery_state=fresh
+if [[ -z "$stable_ref" ]]; then
+  [[ -z "$stable_release" ]] || die "stable release exists without its tag"
+else
+  [[ -n "$stable_peeled" && "$stable_peeled" == "$source_sha" ]] || die "stable tag is incompatible with the admitted source"
+  if [[ -z "$stable_release" ]]; then
+    recovery_state=resume-tag
+  else
+    release=$(gh api "repos/$GITHUB_REPOSITORY/releases/$stable_release") || die "stable release is unavailable"
+    version=${stable_tag#v}
+    if jq -e '.draft == true and (.assets | length) == 0' <<<"$release" >/dev/null; then
+      recovery_state=reset-empty-draft
+    elif jq -e '.draft == false and .prerelease == false and .immutable == true' <<<"$release" >/dev/null &&
+      diff -u <(printf '%s\n' "gentle-ai_${version}_darwin_amd64.tar.gz" "gentle-ai_${version}_darwin_arm64.tar.gz" "gentle-ai_${version}_linux_amd64.tar.gz" "gentle-ai_${version}_linux_arm64.tar.gz" checksums.txt checksums.txt.minisig | LC_ALL=C sort) <(jq -r '.assets[].name' <<<"$release" | LC_ALL=C sort); then
+      recovery_state=verify-existing
+    else
+      die "stable release state is incompatible with safe recovery"
+    fi
+  fi
+fi
 
 GITHUB_SHA=$source_sha ./scripts/require-ci-success.sh
 printf 'source_sha=%s\n' "$source_sha" >>"$GITHUB_OUTPUT"
-printf 'stable promotion preflight: %s promotes %s\n' "$stable_tag" "$source_sha"
+printf 'recovery_state=%s\n' "$recovery_state" >>"$GITHUB_OUTPUT"
+printf 'stable promotion preflight: %s promotes %s (%s)\n' "$stable_tag" "$source_sha" "$recovery_state"
