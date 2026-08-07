@@ -324,7 +324,12 @@ func TestKilocodeReviewSettingsMatchCurrentMainBaseline(t *testing.T) {
 	// ordinary running session is sufficient."). It now names that ordinary-
 	// session boundary explicitly. Kilocode embeds the same paragraph, so the
 	// hash moved again. Deliberate, not drift.
-	const want = "76140e795ccdf306b5a8d80082bbb9f70dac43db1715523dee7f088238dd1b65"
+	//
+	// Provider defect handoff recovery fix: an installed published fix remains
+	// valid, but an explicit maintainer-authorized native recovery or reset that
+	// the runtime supports is no longer overridden. Kilocode renders that shared
+	// orchestrator contract, so the hash moved again. Deliberate, not drift.
+	const want = "1b1a9791c53f815245ea4f94768132df17ab565283bb88b81dba22632f3469c1"
 	if got != want {
 		t.Fatalf("Kilocode settings SHA-256 = %s, want current-main baseline %s", got, want)
 	}
