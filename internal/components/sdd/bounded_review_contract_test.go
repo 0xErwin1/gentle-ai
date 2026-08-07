@@ -19,6 +19,10 @@ func boundedReviewRequiredClausesFor(agent model.AgentID) []string {
 		"Parent orchestrator and native CLI only",
 		"gentle-ai review status --cwd <repo> --contract gentle-ai.review-integration/v2 --agent " + string(agent) + " --next-transition",
 		"route only from the returned `next_transition`",
+		"relay it losslessly in the user's language",
+		"preserve every step's order and fields",
+		"Never route or execute from forecast; route only from `next_transition`",
+		"re-query STATUS after completing it",
 		"exact operation and ordered argument tokens unchanged",
 		"exact `review.capture-result` collection input once per provider-returned collection attempt",
 		"After empty, malformed, schema-invalid, access/provider failure, or incomplete inspection, query negotiated STATUS again",
@@ -356,6 +360,11 @@ func TestAuthorityFirstLifecycleRendersIdenticallyForEverySupportedAgent(t *test
 			content := renderSDDOrchestratorAsset(agent.ID)
 			if strings.Count(content, procedure) != 1 {
 				t.Fatal("rendered orchestrator does not contain exactly one canonical terminal procedure")
+			}
+			for _, want := range []string{"relay it losslessly in the user's language", "preserve every step's order and fields", "Never route or execute from forecast; route only from `next_transition`", "re-query STATUS after completing it"} {
+				if !strings.Contains(content, want) {
+					t.Errorf("rendered orchestrator missing forecast contract %q", want)
+				}
 			}
 		})
 	}

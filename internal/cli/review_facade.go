@@ -1009,9 +1009,12 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 			}
 			input := reviewNextTransitionInput{Gate: reviewtransaction.GateKind(*gate), Successor: *recoverySuccessor, Reason: *recoveryReason, Actor: *recoveryActor, Authorization: *recoveryAuthorization, RepairActor: *repairActor, RepairReason: *repairReason, RepairAuthorization: *repairAuthorization, StartLineage: startLineage, RuntimeAgent: runtime, Contract: *contract, RepositoryContext: repositoryContext, ValidationRequest: validationRequest, CorrectionRequest: correctionRequest, EvidenceErr: evidenceErr, CorrectionForecasted: correctionForecasted, CaptureContext: captureContext, Selector: selector}
 			transition := newReviewNextTransition(result, native.SelectedLenses, artifacts, capturedEvidence, artifactErr, input)
-			forecast := newReviewForecast(result, native.SelectedLenses, artifacts, capturedEvidence, artifactErr, input)
 			result.NextTransition = &transition
-			result.Forecast = &forecast
+			if *contract == ReviewIntegrationContractV2 {
+				forecast := newReviewForecast(transition)
+				result.Forecast = &forecast
+				reviewNarrateForecast(forecast)
+			}
 			if reviewTransitionValidationRequest(&transition) == nil && transition.ReasonCode != "correction_repository_verification_required" &&
 				transition.ReasonCode != "correction_repository_tooling_failed" {
 				result.ValidationRequest = nil
