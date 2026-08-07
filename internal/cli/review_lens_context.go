@@ -78,13 +78,13 @@ const (
 	reviewLensContextRefreshAction = "ask the parent orchestrator to refresh the exact native next transition by running " +
 		reviewNextTransitionRefreshCommandV21 + ", then run this operation again with the tokens it returns"
 	reviewLensContextBudgetAction = "immutable candidate evidence is never truncated and retrying this candidate cannot succeed; " +
-		"split the candidate into a chained sequence of smaller reviewable commits, each under the budget, then start a review " +
-		"for the reduced scope by running " + reviewNextTransitionRefreshCommandV21
+		"split the candidate into a chained sequence of smaller reviewable commits, each under the budget, then refresh the exact native next transition by running " +
+		reviewNextTransitionRefreshCommandV21 + " and execute the returned transition for the reduced scope"
 	reviewLensContextEmptyPatchAction = "one content-changing path produced no patch bytes at all, which no legitimate candidate does; " +
 		"refresh the exact native next transition by running " + reviewNextTransitionRefreshCommandV21 +
 		" and run this operation again, and if the same path keeps producing no patch treat it as a native inspection defect and stop retrying"
 	reviewLensContextDeadlineAction = "refresh the exact native next transition by running " + reviewNextTransitionRefreshCommandV21 +
-		", then retry this operation once with the tokens it returns; if the same lens slot reaches the same deadline again, an identical retry cannot change its frozen scope or deadline, so split the candidate into a chained sequence of smaller reviewable commits, then start a review for the reduced scope by running " + reviewNextTransitionRefreshCommandV21
+		", then execute the returned transition once; if the same lens slot reaches the same deadline again, an identical retry cannot change its frozen scope or deadline, so split the candidate into a chained sequence of smaller reviewable commits, then refresh the exact native next transition by running " + reviewNextTransitionRefreshCommandV21 + " and execute the returned transition for the reduced scope"
 	reviewLensContextConflictAction = "this frozen lens slot already recorded a reviewer context produced by a different mechanism, and audit history is never rewritten; " +
 		"produce this lens context by the same mechanism that already recorded one, or start a review for a fresh candidate by running " +
 		reviewNextTransitionRefreshCommandV21
@@ -427,7 +427,7 @@ func reviewLensContextInspectionFailure(ctx context.Context, err error) error {
 	return reviewLensContextRefusal("lens_context_inspection_failed", reviewLensContextRefreshAction)
 }
 
-func reviewLensContextCleanup[T any](ctx context.Context, result T, operationErr error, close func() error) (T, error) {
+func reviewLensContextCleanup[T any](_ context.Context, result T, operationErr error, close func() error) (T, error) {
 	cleanupErr := close()
 	if cleanupErr == nil {
 		return result, operationErr
@@ -436,7 +436,9 @@ func reviewLensContextCleanup[T any](ctx context.Context, result T, operationErr
 	if operationErr != nil {
 		return zero, errors.Join(operationErr, cleanupErr)
 	}
-	return zero, reviewLensContextInspectionFailure(ctx, cleanupErr)
+	// Cleanup is outside the bounded operation, so its error cannot inherit the
+	// operation context's cancellation or deadline classification.
+	return zero, reviewLensContextRefusal("lens_context_inspection_failed", reviewLensContextRefreshAction)
 }
 
 // reviewLensContextDeadline reports the aggregate-deadline refusal when either
@@ -454,5 +456,5 @@ func reviewLensContextDeadline(ctx context.Context, err error) error {
 }
 
 func reviewLensContextCapacityAction(entries int) string {
-	return fmt.Sprintf("immutable candidate evidence has %d paths but provider-owned reviewer context accepts at most %d evidence entries; retrying this candidate cannot succeed; split the candidate into a chained sequence of smaller reviewable commits, then start a review for the reduced scope by running %s", entries, advisoryreview.MaxEvidenceEntries, reviewNextTransitionRefreshCommandV21)
+	return fmt.Sprintf("immutable candidate evidence has %d paths but provider-owned reviewer context accepts at most %d evidence entries; retrying this candidate cannot succeed; split the candidate into a chained sequence of smaller reviewable commits, then refresh the exact native next transition by running %s and execute the returned transition for the reduced scope", entries, advisoryreview.MaxEvidenceEntries, reviewNextTransitionRefreshCommandV21)
 }

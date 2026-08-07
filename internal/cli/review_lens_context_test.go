@@ -13,6 +13,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/gentleman-programming/gentle-ai/v2/internal/advisoryreview"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
 )
 
@@ -239,9 +240,9 @@ func TestReviewLensContextCarriesAggregateDeadline(t *testing.T) {
 	if err.Error() != want {
 		t.Fatalf("deadline guidance = %q, want %q", err, want)
 	}
-	if !strings.Contains(err.Error(), "retry this operation once") || !strings.Contains(err.Error(), "if the same lens slot reaches the same deadline again") ||
+	if !strings.Contains(err.Error(), "execute the returned transition once") || !strings.Contains(err.Error(), "if the same lens slot reaches the same deadline again") ||
 		!strings.Contains(err.Error(), "split the candidate into a chained sequence of smaller reviewable commits") || !strings.Contains(err.Error(), reviewNextTransitionRefreshCommandV21) {
-		t.Fatalf("deadline guidance is not a single retry followed by a runnable reduced-scope exit: %q", err)
+		t.Fatalf("deadline guidance is not a single transition execution followed by a runnable reduced-scope exit: %q", err)
 	}
 }
 
@@ -278,6 +279,60 @@ func TestReviewLensContextRefusesManifestOverAdvisoryCapacityBeforePatchInspecti
 	}
 	if len(block) != 0 {
 		t.Fatalf("entry-capacity refusal emitted %d bytes of reviewer context", len(block))
+	}
+}
+
+func TestReviewLensContextRecoveryGuidanceRefreshesThenExecutesNextTransition(t *testing.T) {
+	tests := []struct {
+		name   string
+		action string
+	}{
+		{name: "evidence capacity", action: reviewLensContextBudgetAction},
+		{name: "entry capacity", action: reviewLensContextCapacityAction(advisoryreview.MaxEvidenceEntries + 1)},
+		{name: "deadline", action: reviewLensContextDeadlineAction},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if !strings.Contains(test.action, reviewNextTransitionRefreshCommandV21) ||
+				!strings.Contains(test.action, "refresh the exact native next transition") ||
+				!strings.Contains(test.action, "execute the returned transition") {
+				t.Fatalf("recovery guidance = %q, want STATUS to refresh the exact transition and the caller to execute it", test.action)
+			}
+			if strings.Contains(test.action, "start a review") {
+				t.Fatalf("recovery guidance = %q, must not claim STATUS itself starts a review", test.action)
+			}
+		})
+	}
+}
+
+func TestReviewLensContextCleanupClassifiesCleanupFailureIndependentlyOfOperationContext(t *testing.T) {
+	canceled, cancel := context.WithCancel(context.Background())
+	cancel()
+	expired, cancelExpired := context.WithTimeout(context.Background(), 0)
+	defer cancelExpired()
+
+	for _, test := range []struct {
+		name string
+		ctx  context.Context
+	}{
+		{name: "canceled", ctx: canceled},
+		{name: "deadline exceeded", ctx: expired},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			result, err := reviewLensContextCleanup(test.ctx, "reviewer context", nil, func() error {
+				return errors.New("close inspector")
+			})
+			if result != "" {
+				t.Fatalf("cleanup-only result = %q, want zero result", result)
+			}
+			var refusal *reviewLensContextError
+			if !errors.As(err, &refusal) || refusal.Code != "lens_context_inspection_failed" {
+				t.Fatalf("cleanup-only error = %v, want ordinary inspection-failed refusal", err)
+			}
+			if refusal.Code == "lens_context_deadline_exceeded" || refusal.Code == "lens_context_canceled" {
+				t.Fatalf("cleanup-only error = %v, must not inherit the operation context classification", err)
+			}
+		})
 	}
 }
 
