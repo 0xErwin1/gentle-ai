@@ -249,7 +249,7 @@ func TestNegotiatedReviewBindSDDRejectsHistoricalLegacyThroughTypedFailureEnvelo
 }
 
 func TestNegotiatedReviewOperationsRejectInvalidContractsBeforeMutation(t *testing.T) {
-	for _, contract := range []string{"", "gentle-ai.review-integration/v2"} {
+	for _, contract := range []string{"", "gentle-ai.review-integration/v3"} {
 		t.Run("finalize_"+contract, func(t *testing.T) {
 			repo := initReviewCLIRepo(t)
 			writeNegotiatedOperationChange(t, repo, "thin")
@@ -388,17 +388,10 @@ func startReviewOperationFixture(t *testing.T, repo, lineage string) ReviewFacad
 
 func writeNegotiatedOperationChange(t *testing.T, repo, change string) {
 	t.Helper()
-	root := filepath.Join(repo, "openspec", "changes", change)
 	for path, content := range map[string]string{
 		"tasks.md": "- [x] 1.1 Done\n", "proposal.md": "# Proposal\n", "design.md": "# Design\n", "specs/binding/spec.md": "# Spec\n",
 	} {
-		fullPath := filepath.Join(root, filepath.FromSlash(path))
-		if err := os.MkdirAll(filepath.Dir(fullPath), 0o755); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(fullPath, []byte(content), 0o644); err != nil {
-			t.Fatal(err)
-		}
+		writeReviewStartCandidate(t, repo, "openspec/changes/"+change+"/"+path, content, 0o644)
 	}
 }
 

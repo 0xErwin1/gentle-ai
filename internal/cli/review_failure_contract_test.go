@@ -60,7 +60,7 @@ func TestNegotiatedReviewContractFailuresArePreMutationAndLegacyErrorsStayCompat
 		args []string
 		code string
 	}{
-		{name: "capabilities unsupported", args: []string{"capabilities", "--contract", "gentle-ai.review-integration/v2"}, code: "unsupported_contract"},
+		{name: "capabilities unsupported", args: []string{"capabilities", "--contract", "gentle-ai.review-integration/v3"}, code: "unsupported_contract"},
 		{name: "start empty", args: []string{"start", "--contract="}, code: "empty_contract"},
 		{name: "finalize malformed", args: []string{"finalize", "--contract"}, code: "invalid_request"},
 	}
@@ -85,6 +85,18 @@ func TestNegotiatedReviewContractFailuresArePreMutationAndLegacyErrorsStayCompat
 	var publicErr *ReviewIntegrationFailureError
 	if errors.As(err, &publicErr) {
 		t.Fatalf("unnegotiated error became negotiated: %v", err)
+	}
+}
+
+func TestNegotiatedReviewV2FailureUsesSuccessorEnvelope(t *testing.T) {
+	var output bytes.Buffer
+	err := RunReview([]string{"start", "--contract", ReviewIntegrationContractV2, "unexpected"}, &output)
+	if err == nil {
+		t.Fatal("invalid v2 request succeeded")
+	}
+	failure := decodeReviewIntegrationFailure(t, output.Bytes())
+	if failure.Schema != ReviewIntegrationFailureSchemaV2 || failure.Contract != ReviewIntegrationContractV2 || failure.Code != "invalid_request" {
+		t.Fatalf("v2 failure = %#v", failure)
 	}
 }
 
@@ -226,10 +238,34 @@ func TestReviewIntegrationOperationRegistryOwnsPublishedAndFailurePolicy(t *test
 			t.Fatalf("duplicate operation name %q", metadata.Operation)
 		}
 		commands[metadata.Command], operations[metadata.Operation] = struct{}{}, struct{}{}
-		byCommand, commandOK := reviewIntegrationOperationByCommand(metadata.Command)
 		byName, nameOK := reviewIntegrationOperationByName(metadata.Operation)
-		if !commandOK || !nameOK || byCommand.Operation != metadata.Operation || byName.Command != metadata.Command ||
-			!validReviewIntegrationFailureOperation(metadata.Operation) || reviewLockOperationLabel(metadata.Operation) != metadata.Label {
+		if !nameOK || byName.Command != metadata.Command || reviewLockOperationLabel(metadata.Operation) != metadata.Label {
+			t.Fatalf("operation metadata does not drive every policy lookup: %#v", metadata)
+		}
+		byCommand, commandOK := reviewIntegrationOperationByCommand(metadata.Command)
+		if !metadata.Negotiated {
+			// A non-negotiated row exists for exactly one reason: to own the
+			// runnable CLI verb for an operation the status schemas publish as
+			// an execute transition. It must stay out of every negotiated
+			// surface -- the capabilities `operations` array and the failure
+			// envelope's `operation` enum are both published contracts with a
+			// closed vocabulary and a pinned length -- and it must not carry
+			// negotiated flag metadata nothing consumes and nothing verifies,
+			// because unverified metadata rots into a confident lie.
+			if commandOK {
+				t.Fatalf("non-negotiated operation %q is routed as a negotiated command", metadata.Operation)
+			}
+			if validReviewIntegrationFailureOperation(metadata.Operation) {
+				t.Fatalf("non-negotiated operation %q widened the published failure operation enum", metadata.Operation)
+			}
+			if len(metadata.ValueFlags) != 0 || len(metadata.BoolFlags) != 0 || len(metadata.IntFlags) != 0 ||
+				metadata.MutatesAuthority || metadata.JoinOnTimeout || metadata.TimeoutRetryable || metadata.ReadOnlyFlag != "" {
+				t.Fatalf("non-negotiated operation %q carries negotiated policy metadata nothing consumes: %#v", metadata.Operation, metadata)
+			}
+			continue
+		}
+		if !commandOK || byCommand.Operation != metadata.Operation ||
+			!validReviewIntegrationFailureOperation(metadata.Operation) {
 			t.Fatalf("operation metadata does not drive every policy lookup: %#v", metadata)
 		}
 		shape := reviewIntegrationOperationFlagShape(metadata.Operation)
@@ -617,7 +653,6 @@ func TestNegotiatedReadOnlyCatchAllStaysContentFreeAndNeverAbsorbsProcessControl
 	if failure.Message != "The negotiated read-only review operation failed safely." {
 		t.Fatalf("read-only catch-all message is not content-free: %q", failure.Message)
 	}
-
 	control := fmt.Errorf("inventory review authority: %w", &reviewtransaction.GitProcessControlError{
 		Args: []string{"status", "--porcelain=v2"}, Cause: errors.New("NtResumeProcess status 0xC0000022"),
 	})
@@ -677,16 +712,25 @@ func TestNegotiatedFinalizePostTransitionGitTimeoutRequiresStatus(t *testing.T) 
 	t.Cleanup(func() { _ = os.Setenv("PATH", oldPath) })
 	oldTimeout := reviewFacadeOperationTimeout
 	// The aggregate budget must comfortably exceed the per-git-command timeout
-	// (localGitCommandTimeout, 15s) plus the slowest-runner overhead of reaching
-	// the committed begin-fix transition. The injected helper stalls longer than
-	// the per-git-command timeout (see reviewGitProcessHelperExitCode), so the
+	// pinned below plus the slowest-runner overhead of reaching the committed
+	// begin-fix transition. The injected helper stalls longer than the
+	// per-git-command timeout (see reviewGitProcessHelperExitCode), so the
 	// per-git-command timeout deterministically fires first and is classified as
 	// git_command_timeout in the native_committed phase. A tight 1s budget raced
 	// the aggregate operation_timeout ahead of that sub-operation timeout on slow
 	// Windows runners; 25s removes the race without slowing the exit, which is
-	// bounded by the 15s per-git-command timeout regardless of this budget.
+	// bounded by the pinned 15s per-git-command timeout regardless of this
+	// budget.
 	reviewFacadeOperationTimeout = 25 * time.Second
 	t.Cleanup(func() { reviewFacadeOperationTimeout = oldTimeout })
+	// The production per-command budget is a generous hang guard (issue #2483)
+	// that would let the stalled helper outlive the 25s aggregate budget and
+	// flip the classification to operation_timeout. Pin the historical 15s
+	// ordering per-command < aggregate < helper stall so the classification
+	// stays deterministic.
+	oldGitBudget := reviewtransaction.LocalGitCommandTimeout
+	reviewtransaction.LocalGitCommandTimeout = 15 * time.Second
+	t.Cleanup(func() { reviewtransaction.LocalGitCommandTimeout = oldGitBudget })
 	oldTransitionHook := reviewFacadeCommittedTransitionHook
 	reviewFacadeCommittedTransitionHook = func(ctx context.Context, hookRepo, operation, _ string) error {
 		if operation != "review/begin-fix" {
@@ -791,8 +835,8 @@ func reviewGitProcessHelperExitCode() (int, bool) {
 		return 0, false
 	}
 	if payload, err := os.ReadFile(os.Getenv(reviewGitHelperStatePathEnv)); err == nil && strings.Contains(string(payload), `"proposed_correction_lines":`) {
-		// Stall well beyond the per-git-command timeout (localGitCommandTimeout,
-		// 15s) so that the bounded Git subprocess is cut by that per-command
+		// Stall well beyond the per-git-command timeout the parent test pins to
+		// 15s so that the bounded Git subprocess is cut by that per-command
 		// timeout rather than completing on its own. This keeps the post-commit
 		// failure classified as git_command_timeout deterministically instead of
 		// racing the aggregate operation budget on slow runners.

@@ -78,7 +78,7 @@ func TestNegotiatedReviewStatusReportsFreshStartAndPreservesGlobalStatus(t *test
 	if err := status.Validate(); err != nil {
 		t.Fatal(err)
 	}
-	if status.Schema != ReviewIntegrationStatusSchema || status.Contract != ReviewIntegrationContractV1 || status.Operation != "review.status" ||
+	if status.Schema != ReviewIntegrationStatusSchemaV2 || status.Contract != ReviewIntegrationContractV1 || status.Operation != "review.status" ||
 		status.Applicability != reviewtransaction.TargetApplicabilityCurrent || status.Authority == nil ||
 		status.Authority.State != reviewtransaction.StateReviewing || status.Authority.LineageID != started.LineageID ||
 		status.Receipt.Status != ReviewReceiptExpectedMissing || status.Receipt.Identity != "" ||
@@ -156,7 +156,7 @@ func transitionArgumentValue(t *testing.T, transition *ReviewNextTransition, nam
 func TestNegotiatedReviewStatusContractAndSchemasAreStrict(t *testing.T) {
 	repo := initReviewCLIRepo(t)
 	var output bytes.Buffer
-	err := RunReview([]string{"status", "--contract", "gentle-ai.review-integration/v2", "--cwd", repo}, &output)
+	err := RunReview([]string{"status", "--contract", "gentle-ai.review-integration/v3", "--cwd", repo}, &output)
 	if err == nil {
 		t.Fatalf("unsupported status contract = %q, %v", output.String(), err)
 	}
@@ -168,9 +168,10 @@ func TestNegotiatedReviewStatusContractAndSchemasAreStrict(t *testing.T) {
 		name string
 		id   string
 	}{
-		{name: "status-v2.schema.json", id: ReviewIntegrationStatusSchemaID},
+		{name: "status-v2.schema.json", id: ReviewIntegrationStatusSchemaIDV2},
 		{name: "authority-repair-assessment.schema.json", id: reviewtransaction.AuthorityRepairAssessmentSchemaID},
 		{name: "projection.schema.json", id: ReviewIntegrationProjectionSchemaID},
+		{name: "correction-plan-request.schema.json", id: reviewtransaction.CorrectionPlanRequestSchemaID},
 		{name: "targeted-validation-request.schema.json", id: reviewtransaction.TargetedValidationRequestSchemaID},
 	} {
 		payload, readErr := os.ReadFile(filepath.Join(root, "schemas", item.name))
@@ -221,6 +222,36 @@ func TestNegotiatedReviewStatusContractAndSchemasAreStrict(t *testing.T) {
 				t.Fatalf("%s accepted compact current target without frozen inputs", item.name)
 			}
 		}
+	}
+}
+
+func TestV4StatusRemainsReadableAlongsideV5(t *testing.T) {
+	status := ReviewTargetStatusResult{
+		Schema:        ReviewIntegrationStatusSchemaV4,
+		Contract:      ReviewIntegrationContractV2,
+		Operation:     "review.status",
+		Applicability: reviewtransaction.TargetApplicabilityCurrent,
+		Authority: &ReviewTargetStatusAuthority{
+			Version: reviewtransaction.AuthorityVersionCompact, LineageID: "v4-compatibility",
+			State: reviewtransaction.StateValidating, Generation: 1,
+			Revision: "sha256:" + strings.Repeat("a", 64),
+		},
+		Receipt:        ReviewTargetStatusReceipt{Status: ReviewReceiptExpectedMissing},
+		Action:         reviewtransaction.TargetStatusActionFinalize,
+		Replayability:  reviewtransaction.ReplayabilityNotReplayable,
+		Frozen:         &ReviewTargetStatusFrozen{Tier: reviewtransaction.RiskMedium, OriginalChangedLines: 2, CorrectionBudget: 1},
+		TargetIdentity: "sha256:" + strings.Repeat("b", 64),
+		Projection: ReviewTargetStatusProjection{
+			Schema: ReviewIntegrationProjectionSchema, Kind: reviewtransaction.TargetCurrentChanges, Projection: reviewtransaction.ProjectionWorkspace,
+			BaseTree: strings.Repeat("c", 40), InitialReviewTree: strings.Repeat("d", 40), CurrentCandidateTree: strings.Repeat("d", 40),
+			PathsDigest: "sha256:" + strings.Repeat("e", 64), Paths: []string{"tracked.txt"}, IntendedUntracked: []string{},
+			IntendedUntrackedProof: "sha256:" + strings.Repeat("f", 64), InitialSnapshotIdentity: "sha256:" + strings.Repeat("b", 64), CurrentSnapshotIdentity: "sha256:" + strings.Repeat("b", 64),
+		},
+		Repair:     reviewtransaction.UnsupportedAuthorityRepairAssessment(),
+		Candidates: []string{},
+	}
+	if err := status.Validate(); err != nil {
+		t.Fatalf("v4 STATUS must remain readable: %v", err)
 	}
 }
 
@@ -337,7 +368,7 @@ func TestReviewActionEligibilityStopsWithoutCompleteExecutionInputs(t *testing.T
 			Revision: "sha256:" + strings.Repeat("a", 64), OriginalChangedLines: 2, Tier: reviewtransaction.RiskMedium, CorrectionBudget: 1,
 			Action: action, Replayability: replayability,
 		}
-		status := newReviewTargetStatusResult(native)
+		status := newReviewTargetStatusResultForContract(native, ReviewIntegrationContractV2)
 		status.Projection = publishedStatusFixtureProjection(t)
 		status.TargetIdentity = status.Projection.CurrentSnapshotIdentity
 		status.Eligibility = newReviewActionEligibility(status)
@@ -383,21 +414,36 @@ func TestReviewActionEligibilityStopsWithoutCompleteExecutionInputs(t *testing.T
 }
 
 func TestNegotiatedReviewFinalizeEligibilityRequiresTargetScopedStatus(t *testing.T) {
-	for _, state := range []reviewtransaction.State{
-		reviewtransaction.StateReviewing,
-		reviewtransaction.StateCorrectionRequired,
-		reviewtransaction.StateValidating,
-		reviewtransaction.StateApproved,
+	for _, contract := range []struct {
+		name   string
+		value  string
+		schema string
+	}{
+		{name: "v1", value: ReviewIntegrationContractV1, schema: ReviewIntegrationOperationSchema},
+		{name: "v2", value: ReviewIntegrationContractV2, schema: ReviewIntegrationOperationSchemaV2},
 	} {
-		t.Run(string(state), func(t *testing.T) {
-			var output bytes.Buffer
-			if err := encodeCompactFacadeFinalize(&output, true, true, false, reviewtransaction.CompactState{LineageID: "review-finalize-eligibility", State: state}, "sha256:"+strings.Repeat("a", 64), reviewtransaction.CompactStore{}, "finalize"); err != nil {
-				t.Fatal(err)
-			}
-			var result ReviewIntegrationFinalizeResult
-			decodeStrictReviewJSON(t, decodeReviewOperationEnvelope(t, output.Bytes()).Result, &result)
-			if result.Eligibility == nil || result.Eligibility.ValidateFinalize() != nil {
-				t.Fatalf("finalize eligibility = %#v", result.Eligibility)
+		t.Run(contract.name, func(t *testing.T) {
+			for _, state := range []reviewtransaction.State{
+				reviewtransaction.StateReviewing,
+				reviewtransaction.StateCorrectionRequired,
+				reviewtransaction.StateValidating,
+				reviewtransaction.StateApproved,
+			} {
+				t.Run(string(state), func(t *testing.T) {
+					var output bytes.Buffer
+					if err := encodeCompactFacadeFinalize(&output, true, contract.value, true, false, reviewtransaction.CompactState{LineageID: "review-finalize-eligibility", State: state}, "sha256:"+strings.Repeat("a", 64), reviewtransaction.CompactStore{}, "finalize"); err != nil {
+						t.Fatal(err)
+					}
+					envelope := decodeReviewOperationEnvelope(t, output.Bytes())
+					if envelope.Contract != contract.value || envelope.Schema != contract.schema {
+						t.Fatalf("finalize operation identity = %q, %q; want %q, %q", envelope.Contract, envelope.Schema, contract.value, contract.schema)
+					}
+					var result ReviewIntegrationFinalizeResult
+					decodeStrictReviewJSON(t, envelope.Result, &result)
+					if result.Eligibility == nil || result.Eligibility.ValidateFinalize() != nil {
+						t.Fatalf("finalize eligibility = %#v", result.Eligibility)
+					}
+				})
 			}
 		})
 	}
@@ -602,7 +648,7 @@ func TestNegotiatedStatusPreservesManualRecoveryAuthorityContext(t *testing.T) {
 		Action: reviewtransaction.TargetStatusActionRecover, ActionDisposition: reviewtransaction.RecoveryEscalated,
 		Replayability: reviewtransaction.ReplayabilityManualActionRequired,
 	}
-	got := newReviewTargetStatusResult(native)
+	got := newReviewTargetStatusResultForContract(native, ReviewIntegrationContractV2)
 	if got.Action != reviewtransaction.TargetStatusActionRecover || got.Replayability != reviewtransaction.ReplayabilityManualActionRequired ||
 		got.ActionDisposition != reviewtransaction.RecoveryEscalated ||
 		got.Authority == nil || got.Authority.LineageID != native.LineageID || got.Authority.Revision != native.Revision {
@@ -622,7 +668,7 @@ func TestNegotiatedStatusBindsRecoveryDispositionToRecoverAction(t *testing.T) {
 			Action: reviewtransaction.TargetStatusActionRecover, ActionDisposition: reviewtransaction.RecoveryScopeChanged,
 			Replayability: reviewtransaction.ReplayabilityManualActionRequired,
 		}
-		result := newReviewTargetStatusResult(native)
+		result := newReviewTargetStatusResultForContract(native, ReviewIntegrationContractV2)
 		result.Projection = publishedStatusFixtureProjection(t)
 		result.TargetIdentity = result.Projection.CurrentSnapshotIdentity
 		result.Eligibility = newReviewActionEligibility(result)
@@ -673,7 +719,7 @@ func TestReviewActionEligibilityFailsClosedForEscalatedAuthority(t *testing.T) {
 			Revision: "sha256:" + strings.Repeat("a", 64), OriginalChangedLines: 2, Tier: reviewtransaction.RiskMedium, CorrectionBudget: 1,
 			Action: action, ActionDisposition: disposition, Replayability: replayability,
 		}
-		status := newReviewTargetStatusResult(native)
+		status := newReviewTargetStatusResultForContract(native, ReviewIntegrationContractV2)
 		status.Projection = publishedStatusFixtureProjection(t)
 		status.TargetIdentity = status.Projection.CurrentSnapshotIdentity
 		status.Eligibility = newReviewActionEligibility(status)
@@ -744,7 +790,7 @@ func TestNegotiatedStatusOffersRecoveryForAccountingOnlyEscalatedUnchangedTarget
 		Action: reviewtransaction.TargetStatusActionRecover, ActionDisposition: reviewtransaction.RecoveryEscalated,
 		Replayability: reviewtransaction.ReplayabilityManualActionRequired,
 	}
-	status := newReviewTargetStatusResult(native)
+	status := newReviewTargetStatusResultForContract(native, ReviewIntegrationContractV2)
 	status.Projection = publishedStatusFixtureProjection(t)
 	status.TargetIdentity = status.Projection.CurrentSnapshotIdentity
 	status.Eligibility = newReviewActionEligibility(status)
@@ -793,12 +839,12 @@ func TestNegotiatedLegacyReceiptStatusNeverUsesCompactPublicationPending(t *test
 		State:            reviewtransaction.StateApproved,
 		ReceiptIdentity:  "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 	}
-	present := newReviewTargetStatusResult(native)
+	present := newReviewTargetStatusResultForContract(native, ReviewIntegrationContractV2)
 	if present.Receipt.Status != ReviewReceiptPresent || present.Receipt.Identity != native.ReceiptIdentity {
 		t.Fatalf("approved legacy receipt = %#v", present.Receipt)
 	}
 	native.ReceiptIdentity = ""
-	missing := newReviewTargetStatusResult(native)
+	missing := newReviewTargetStatusResultForContract(native, ReviewIntegrationContractV2)
 	if missing.Receipt.Status == ReviewReceiptPublicationPending || missing.Receipt.Identity != "" {
 		t.Fatalf("legacy receipt inherited compact publication semantics: %#v", missing.Receipt)
 	}
@@ -946,6 +992,52 @@ func TestNegotiatedReviewStatusCompletesWithOneHundredHistoricalLeaves(t *testin
 	t.Logf("negotiated status completed 100 terminal histories in %s within the %s contract deadline", elapsed, reviewFacadeOperationTimeout)
 }
 
+func TestNegotiatedReviewStatusFreshLargeDirtyCandidateOffersStart(t *testing.T) {
+	if testing.Short() {
+		t.Skip("uses a repository with a large tracked dirty candidate")
+	}
+	repo := initReviewCLIRepo(t)
+	for index := 0; index < 64; index++ {
+		path := filepath.Join(repo, "inventory", fmt.Sprintf("tracked-%03d.txt", index))
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(strings.Repeat("baseline content\n", 1024)), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	runReviewCLIGit(t, repo, "add", "inventory")
+	runReviewCLIGit(t, repo, "commit", "-qm", "fixture: tracked inventory")
+	for index := 0; index < 64; index++ {
+		path := filepath.Join(repo, "inventory", fmt.Sprintf("tracked-%03d.txt", index))
+		if err := os.WriteFile(path, []byte(strings.Repeat("revised content\n", 1024)), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	unavailableProcessTemp(t)
+
+	var output bytes.Buffer
+	if err := RunReview([]string{
+		"status", "--contract", ReviewIntegrationContractV1, "--next-transition", "--cwd", repo,
+	}, &output); err != nil {
+		t.Fatalf("fresh negotiated status on a large tracked dirty candidate: %v\n%s", err, output.String())
+	}
+	var status ReviewTargetStatusResult
+	decodeStrictReviewJSON(t, output.Bytes(), &status)
+	if status.Applicability != reviewtransaction.TargetApplicabilityUnrelated ||
+		status.Action != reviewtransaction.TargetStatusActionStart || status.NextTransition == nil ||
+		status.NextTransition.Kind != reviewNextTransitionExecute || status.NextTransition.Execute == nil ||
+		status.NextTransition.Execute.Operation != "review.start" {
+		t.Fatalf("fresh large dirty status = %#v", status)
+	}
+	// A fresh target has no authority. Asserting the start offer alone would
+	// pass even if status had bound this candidate to unrelated history.
+	if status.Authority != nil {
+		t.Fatalf("fresh large dirty status published an authority: %#v", status.Authority)
+	}
+	requireNoReviewProcessTempResidue(t, repo)
+}
+
 func TestNegotiatedReviewStatusReturnsFailureForUnreadableAuthority(t *testing.T) {
 	repo := initReviewCLIRepo(t)
 	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("candidate\n"), 0o644); err != nil {
@@ -1059,5 +1151,93 @@ func writeNegotiatedStatusHistory(t *testing.T, repo string, count int) {
 		if err := reviewtransaction.WriteCompactReceiptAtomic(filepath.Join(dir, receiptName), receipt); err != nil {
 			t.Fatal(err)
 		}
+	}
+}
+
+// TestCorrectionPlanStatusAcceptsFrozenBindingAfterAppliedFix is the regression
+// guard for issue #2132's unforecast branch: the plan request binds to the
+// FROZEN reviewed candidate, so read-only review status must accept it even when
+// the live workspace identity diverges (the fix applied, uncommitted). It does
+// not prove the correctly ordered forecasted bounded-correction flow, which
+// routes to correction_repository_verification_required with targeted validation.
+// Before the fix, Validate() compared the plan request's TargetIdentity against
+// the LIVE identity and failed the whole status operation with
+// "negotiated status correction request binding is invalid".
+func TestCorrectionPlanStatusAcceptsFrozenBindingAfterAppliedFix(t *testing.T) {
+	for _, tt := range []struct {
+		name, reason string
+		forecast     bool
+		change       bool
+	}{
+		{name: "no forecast, changed workspace", reason: "correction_plan_required", change: true},
+		{name: "forecast, request-build error", reason: "corrected_candidate_unavailable", forecast: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			repo := initReviewCLIRepo(t)
+			const candidatePath = "candidate.go"
+			writeReviewStartCandidate(t, repo, candidatePath, "package candidate\n\nfunc value() int { return 1 }\n", 0o644)
+			lineage := "correction-status-frozen-" + strings.ReplaceAll(strings.ReplaceAll(strings.ToLower(tt.name), ",", ""), " ", "-")
+			started := runNegotiatedReviewStart(t, repo, lineage)
+			resultPath := filepath.Join(t.TempDir(), "blocking-result.json")
+			writeReviewCLIJSON(t, resultPath, facadeReviewerResult{
+				Lens: started.SelectedLenses[0], Findings: []facadeFinding{{
+					Location: "candidate.go:3", Severity: "CRITICAL", Claim: "candidate value is wrong",
+					ProofRefs: []string{"candidate.go:3 changed hunk"}, EvidenceClass: reviewtransaction.EvidenceDeterministic,
+					CausalDisposition: reviewtransaction.CausalIntroduced,
+				}}, Evidence: []string{"inspected exact candidate"},
+			})
+			if err := finalizeReviewCLIArgs(t, repo, []string{"--cwd", repo, "--lineage", started.LineageID, "--result", resultPath}, &bytes.Buffer{}); err != nil {
+				t.Fatal(err)
+			}
+			if tt.forecast {
+				if err := RunReviewFacadeFinalize([]string{"--cwd", repo, "--lineage", started.LineageID, "--correction-lines", "1"}, &bytes.Buffer{}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if tt.change {
+				// The bounded fix lands in the workspace but stays uncommitted,
+				// so the live identity diverges from the reviewed candidate.
+				writeReviewStartCandidate(t, repo, candidatePath, "package candidate\n\nfunc value() int { return 2 }\n", 0o644)
+			}
+			store, err := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, started.LineageID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			before, err := os.ReadFile(store.StatePath())
+			if err != nil {
+				t.Fatal(err)
+			}
+			var statusOutput bytes.Buffer
+			if err := RunReview(negotiatedStatusArgs(repo, ReviewIntegrationContractV2,
+				"--lineage", started.LineageID), &statusOutput); err != nil {
+				t.Fatalf("status after applied fix: %v\n%s", err, statusOutput.String())
+			}
+			var status ReviewTargetStatusResult
+			decodeStrictReviewJSON(t, statusOutput.Bytes(), &status)
+			if err := status.Validate(); err != nil {
+				t.Fatalf("status contract validation: %v\n%s", err, statusOutput.String())
+			}
+			transition := status.NextTransition
+			if transition == nil || transition.CorrectionRequest == nil || transition.ReasonCode != tt.reason {
+				t.Fatalf("status transition = %#v\n%s", transition, statusOutput.String())
+			}
+			request := transition.CorrectionRequest
+			if request.LineageID != status.Authority.LineageID || request.ExpectedRevision != status.Authority.Revision ||
+				request.TargetIdentity != reviewAuthorityTargetIdentity(status) {
+				t.Fatalf("correction plan request does not bind to the frozen reviewed candidate: request=%#v status=%#v", request, status)
+			}
+			if tt.change {
+				if status.AuthorityTargetIdentity == "" || request.TargetIdentity != status.AuthorityTargetIdentity ||
+					request.TargetIdentity == status.TargetIdentity {
+					t.Fatalf("changed workspace status did not bind to the frozen authority identity: request=%#v status=%#v", request, status)
+				}
+			} else if status.AuthorityTargetIdentity != "" {
+				t.Fatalf("unchanged workspace status invented an authority identity: %#v", status)
+			}
+			after, err := os.ReadFile(store.StatePath())
+			if err != nil || !bytes.Equal(before, after) {
+				t.Fatalf("read-only status after applied fix mutated authority: %v", err)
+			}
+		})
 	}
 }

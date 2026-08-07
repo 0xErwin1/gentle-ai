@@ -151,8 +151,7 @@ func sddReviewSubAgentsForCodeGraphTest() []string {
 }
 
 func sddShellDisabledSubAgentsForCodeGraphTest() []string {
-	agents := []string{"jd-judge-a", "jd-judge-b"}
-	return append(agents, sddReviewSubAgentsForCodeGraphTest()...)
+	return []string{"jd-judge-a", "jd-judge-b", "review-refuter"}
 }
 
 func assertOpenCodeSubAgentReadOnlyTools(t *testing.T, agentsMap map[string]any, agentName string) {
@@ -635,7 +634,7 @@ func TestInjectNativeSDDSubagentsIncludeCodeGraphGuidanceWhenEnabled(t *testing.
 					t.Fatalf("%s guidance count = %d, want 1", fileName, count)
 				}
 
-				source := renderBoundedReviewAsset(adapter.EmbeddedSubAgentsDir() + "/" + fileName)
+				source := renderBoundedReviewAsset(adapter.Agent(), adapter.EmbeddedSubAgentsDir()+"/"+fileName)
 				if tc.toolGrant != "" {
 					sourceTools := nativeToolsLineForCodeGraphTest(t, source)
 					wantTools := sourceTools + ", " + tc.toolGrant

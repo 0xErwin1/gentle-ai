@@ -20,6 +20,20 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
 )
 
+func TestReviewCaptureEvidenceRepositoryResolverDiagnostics(t *testing.T) {
+	if err := RunReviewCaptureEvidence(nil, io.Discard); err == nil || err.Error() != "review capture-evidence requires one exact repository resolver: --repository-context or --cwd, plus --lineage, --target, --expected-revision, --outcome, and --input" {
+		t.Fatalf("missing capture-evidence inputs = %v", err)
+	}
+	args := []string{
+		"--repository-context", "rctx1_" + strings.Repeat("a", 64), "--cwd", t.TempDir(),
+		"--lineage", "lineage", "--target", "sha256:" + strings.Repeat("b", 64),
+		"--expected-revision", "sha256:" + strings.Repeat("c", 64), "--outcome", "passed", "--input", "-",
+	}
+	if err := RunReviewCaptureEvidence(args, io.Discard); err == nil || err.Error() != "review capture-evidence accepts either --repository-context or --cwd, not both" {
+		t.Fatalf("ambiguous capture-evidence resolver = %v", err)
+	}
+}
+
 func TestReviewCaptureResultStrictBindingReplayAndFinalize(t *testing.T) {
 	repo, started, _, record := newArtifactReview(t, false)
 	input := filepath.Join(t.TempDir(), "result.json")
@@ -62,6 +76,12 @@ func TestReviewCaptureResultStrictBindingReplayAndFinalize(t *testing.T) {
 	}
 	if err := RunReviewCaptureResult(validArgs, io.Discard); err == nil {
 		t.Fatal("mismatched replay accepted")
+	} else {
+		for _, want := range []string{"review dispose-result", "review preserve-result"} {
+			if !strings.Contains(err.Error(), want) {
+				t.Fatalf("reviewer result byte-conflict = %q, want it to name %q", err.Error(), want)
+			}
+		}
 	}
 	manifest := strings.TrimSpace(first.String())
 	for _, finalize := range [][]string{
@@ -110,6 +130,9 @@ func TestReviewCaptureResultRejectsSemanticAdmissionBeforePublication(t *testing
 			result.Inspection.Status = "blocked"
 			result.Evidence = []string{"Access denied; candidate was not inspected."}
 		}},
+		{name: "out of scope inspection path", mutate: func(result *facadeReviewerResult) {
+			result.Inspection.Paths = append(result.Inspection.Paths, "unrelated/old.go")
+		}},
 		{name: "out of scope finding", mutate: func(result *facadeReviewerResult) {
 			result.Findings = []facadeFinding{{
 				ID: "R3-001", Location: "unrelated/old.go:3", Severity: "CRITICAL", Claim: "unrelated defect",
@@ -147,6 +170,75 @@ func TestReviewCaptureResultRejectsSemanticAdmissionBeforePublication(t *testing
 	}
 }
 
+func TestReviewCaptureResultPublishesExternalRepositoryProofExactlyOnce(t *testing.T) {
+	repo := initReviewCLIRepo(t)
+	if err := os.WriteFile(filepath.Join(repo, "support.go"), []byte("package support\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runReviewCLIGit(t, repo, "add", "--", "support.go")
+	runReviewCLIGit(t, repo, "commit", "-m", "add supporting implementation")
+	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("candidate\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	started := startFacadeReview(t, repo)
+	store, err := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, started.LineageID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	record, err := store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := admittedReviewerResultForTest(t, repo, record, record.State.SelectedLenses[0], 0)
+	result.Evidence = []string{"supporting proof: support.go:1"}
+	result.Findings = []facadeFinding{{
+		ID: "R3-001", Location: "tracked.txt:1", Severity: "WARNING", Claim: "candidate behavior depends on supporting code",
+		ProofRefs: []string{"repository proof: support.go:1"},
+	}}
+	input := filepath.Join(t.TempDir(), "result.json")
+	writeReviewCLIJSON(t, input, result)
+	args := []string{
+		"--cwd", repo, "--lineage", started.LineageID, "--target", record.State.InitialSnapshot.Identity,
+		"--lens", record.State.SelectedLenses[0], "--order", "0", "--input", input,
+	}
+	var first bytes.Buffer
+	if err := RunReviewCaptureResult(args, &first); err != nil {
+		t.Fatalf("capture external repository proof: %v", err)
+	}
+	var artifact reviewResultArtifact
+	decodeStrictReviewJSON(t, first.Bytes(), &artifact)
+	if artifact.AdmissionDecision != reviewtransaction.ArtifactAdmissionCompleted {
+		t.Fatalf("external proof admission = %q", artifact.AdmissionDecision)
+	}
+	payload, err := os.ReadFile(artifact.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var published admittedReviewerResult
+	decodeStrictReviewJSON(t, payload, &published)
+	if strings.Count(strings.Join(published.Result.Evidence, "\n"), "support.go:1") != 1 ||
+		strings.Count(strings.Join(published.Result.Findings[0].ProofRefs, "\n"), "support.go:1") != 1 {
+		t.Fatalf("external repository proof was not published exactly once: %#v", published.Result)
+	}
+	var replay bytes.Buffer
+	if err := RunReviewCaptureResult(args, &replay); err != nil || replay.String() != first.String() {
+		t.Fatalf("exact external-proof replay changed: %v\nfirst=%s\nreplay=%s", err, first.String(), replay.String())
+	}
+	entries, err := os.ReadDir(filepath.Join(store.Dir, reviewtransaction.CompactReviewerResultsDir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	jsonFiles := 0
+	for _, entry := range entries {
+		if strings.HasSuffix(entry.Name(), ".json") {
+			jsonFiles++
+		}
+	}
+	if jsonFiles != 1 {
+		t.Fatalf("captured reviewer JSON files = %d, want exactly one", jsonFiles)
+	}
+}
+
 // TestReviewCaptureResultIDLessCandidateCausalFinding proves issue-1699 is not
 // actually fixed by the Group A canonicalization change: a severe
 // introduced/behavior-activated/worsened finding submitted with no "id" field
@@ -180,6 +272,33 @@ func TestReviewCaptureResultIDLessCandidateCausalFinding(t *testing.T) {
 	decodeStrictReviewJSON(t, captured.Bytes(), &artifact)
 	if artifact.AdmissionDecision != reviewtransaction.ArtifactAdmissionCompleted {
 		t.Fatalf("id-less candidate-causal admission = %q, want completed", artifact.AdmissionDecision)
+	}
+}
+
+func TestReviewCaptureResultRejectsInvalidLocationWithActionableDiagnostic(t *testing.T) {
+	repo, started, _, record := newArtifactReview(t, false)
+	result := admittedReviewerResultForTest(t, repo, record, record.State.SelectedLenses[0], 0)
+	result.Findings = []facadeFinding{{
+		ID: "R3-001", Location: "tracked.txt:1-2", Severity: "CRITICAL", Claim: "candidate failure",
+		ProofRefs: []string{"tracked.txt changed hunk"}, EvidenceClass: reviewtransaction.EvidenceDeterministic,
+		CausalDisposition: reviewtransaction.CausalIntroduced,
+	}}
+	input := filepath.Join(t.TempDir(), "result.json")
+	writeReviewCLIJSON(t, input, result)
+
+	err := RunReviewCaptureResult([]string{
+		"--cwd", repo, "--lineage", started.LineageID, "--target", record.State.InitialSnapshot.Identity,
+		"--lens", record.State.SelectedLenses[0], "--order", "0", "--input", input,
+	}, io.Discard)
+	var admissionErr *reviewtransaction.ArtifactAdmissionError
+	var locationErr *reviewtransaction.FindingLocationError
+	if !errors.As(err, &admissionErr) || !errors.As(err, &locationErr) {
+		t.Fatalf("capture-result error = %v; want typed admission and location errors", err)
+	}
+	if admissionErr.Diagnostic == nil || admissionErr.Diagnostic.FindingID != "R3-001" ||
+		admissionErr.Diagnostic.Location != "tracked.txt:1-2" ||
+		admissionErr.Diagnostic.Reason != "line_suffix_not_integer" {
+		t.Fatalf("capture diagnostic = %#v", admissionErr.Diagnostic)
 	}
 }
 
@@ -594,10 +713,9 @@ func TestReviewCaptureResultConcurrentSelectedLenses(t *testing.T) {
 		t.Fatal(err)
 	}
 }
-func TestCaptureReviewerArtifactDirectorySync(t *testing.T) {
+func TestReviewerArtifactDirectorySyncCompatibility(t *testing.T) {
 	originalGOOS, originalSync := reviewArtifactRuntimeGOOS, syncReviewerArtifactDirectory
 	t.Cleanup(func() { reviewArtifactRuntimeGOOS, syncReviewerArtifactDirectory = originalGOOS, originalSync })
-	warning := []byte(`{"findings":[{"severity":"WARNING"}],"evidence":["unchanged"]}` + "\n")
 	cases := []struct {
 		name, goos string
 		err        error
@@ -610,21 +728,11 @@ func TestCaptureReviewerArtifactDirectorySync(t *testing.T) {
 	}
 	for _, tt := range cases {
 		t.Run(tt.name, func(t *testing.T) {
-			storeDir := t.TempDir()
-			state := reviewtransaction.CompactState{LineageID: "lineage", InitialSnapshot: reviewtransaction.Snapshot{Identity: "target"}, SelectedLenses: []string{"review-correctness"}}
 			reviewArtifactRuntimeGOOS = func() string { return tt.goos }
 			syncReviewerArtifactDirectory = func(string) error { return tt.err }
-			artifact, err := captureReviewerArtifact(storeDir, state, 0, warning)
-			path := filepath.Join(storeDir, "reviewer-results", "00-review-correctness.json")
-			if !tt.wantOK {
-				if _, statErr := os.Stat(path); err == nil || artifact != (reviewResultArtifact{}) || !os.IsNotExist(statErr) {
-					t.Fatalf("fatal sync returned artifact or retained publication: artifact=%+v err=%v", artifact, err)
-				}
-				return
-			}
-			got, readErr := os.ReadFile(path)
-			if err != nil || readErr != nil || !bytes.Equal(got, warning) {
-				t.Fatalf("compatible sync changed WARNING result: capture=%v read=%v got=%q", err, readErr, got)
+			err := syncReviewerArtifactDirectoryCompatible(t.TempDir())
+			if (err == nil) != tt.wantOK {
+				t.Fatalf("sync compatibility error = %v, want success %v", err, tt.wantOK)
 			}
 		})
 	}
@@ -636,9 +744,7 @@ func newArtifactReview(t *testing.T, high bool) (string, ReviewFacadeStartResult
 	if high {
 		name = "service-token.ts"
 	}
-	if err := os.WriteFile(filepath.Join(repo, name), []byte("candidate\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	writeReviewStartCandidate(t, repo, name, "candidate\n", 0o644)
 	started := startFacadeReview(t, repo)
 	store, _ := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, started.LineageID)
 	record, err := store.Load()

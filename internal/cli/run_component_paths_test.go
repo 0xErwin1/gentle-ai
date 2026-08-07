@@ -355,19 +355,60 @@ func TestComponentPathsContext7KimiIncludesMCPConfig(t *testing.T) {
 	}
 }
 
-func TestComponentPathsContext7ClaudeUsesSettingsFile(t *testing.T) {
+// TestComponentPathsContext7ClaudeUsesUserRegistry pins Claude Context7 to
+// the file injection actually writes: ~/.claude.json (issue #1868).
+// settings.json is only mutated best-effort and may not exist, and the legacy
+// managed ~/.claude/mcp/context7.json is removed by injection, so verifying
+// either would fail on a healthy install.
+func TestComponentPathsContext7ClaudeUsesUserRegistry(t *testing.T) {
 	home := t.TempDir()
 	adapters := resolveAdapters([]model.AgentID{model.AgentClaudeCode})
 
 	paths := componentPaths(home, model.Selection{}, adapters, model.ComponentContext7)
 
-	want := filepath.Join(home, ".claude", "settings.json")
-	if !containsPath(paths, want) {
-		t.Fatalf("componentPaths(context7,claude) missing %q\npaths=%v", want, paths)
+	registry := filepath.Join(home, ".claude.json")
+	if !containsPath(paths, registry) {
+		t.Fatalf("componentPaths(context7,claude) missing %q\npaths=%v", registry, paths)
 	}
-	legacy := filepath.Join(home, ".claude", "mcp", "context7.json")
-	if containsPath(paths, legacy) {
-		t.Fatalf("componentPaths(context7,claude) should not verify legacy path %q\npaths=%v", legacy, paths)
+	for _, absent := range []string{
+		filepath.Join(home, ".claude", "mcp", "context7.json"),
+		filepath.Join(home, ".claude", "settings.json"),
+	} {
+		if containsPath(paths, absent) {
+			t.Fatalf("componentPaths(context7,claude) must not require %q\npaths=%v", absent, paths)
+		}
+	}
+}
+
+func TestComponentPathsContext7ClaudeRespectsWorkspaceScope(t *testing.T) {
+	home := t.TempDir()
+	workspace := t.TempDir()
+	adapters := resolveAdapters([]model.AgentID{model.AgentClaudeCode})
+
+	paths := componentPathsWithWorkspaceScoped(home, workspace, ScopeWorkspace, model.Selection{}, adapters, model.ComponentContext7)
+
+	want := filepath.Join(workspace, ".claude", "settings.json")
+	if !containsPath(paths, want) {
+		t.Fatalf("componentPathsWithWorkspaceScoped(context7,claude) with ScopeWorkspace missing %q\npaths=%v", want, paths)
+	}
+}
+
+func TestComponentPathsEngramClaudeUsesUserRegistryAndPreservesWorkspaceScope(t *testing.T) {
+	home := t.TempDir()
+	workspace := t.TempDir()
+	adapters := resolveAdapters([]model.AgentID{model.AgentClaudeCode})
+
+	global := componentPaths(home, model.Selection{}, adapters, model.ComponentEngram)
+	registry := filepath.Join(home, ".claude.json")
+	legacy := filepath.Join(home, ".claude", "mcp", "engram.json")
+	if !containsPath(global, registry) || containsPath(global, legacy) {
+		t.Fatalf("global Engram paths must use only Claude's user registry; paths=%v", global)
+	}
+
+	workspacePaths := componentPathsWithWorkspaceScoped(home, workspace, ScopeWorkspace, model.Selection{}, adapters, model.ComponentEngram)
+	workspaceLegacy := filepath.Join(workspace, ".claude", "mcp", "engram.json")
+	if !containsPath(workspacePaths, workspaceLegacy) || containsPath(workspacePaths, filepath.Join(workspace, ".claude.json")) {
+		t.Fatalf("workspace Engram paths must remain unchanged; paths=%v", workspacePaths)
 	}
 }
 
@@ -844,7 +885,10 @@ func TestBackupTargetsIncludeRoutingGuidancePathsWithoutAnyComponent(t *testing.
 	selection := model.Selection{Agents: []model.AgentID{agent}}
 	resolved := planner.ResolvedPlan{Agents: selection.Agents}
 
-	targets := backupTargets(home, "", ScopeGlobal, selection, resolved)
+	targets, err := backupTargets(home, "", ScopeGlobal, selection, resolved)
+	if err != nil {
+		t.Fatalf("backupTargets() error = %v", err)
+	}
 
 	routing, err := agentguidance.RoutingPaths(home, agent)
 	if err != nil {
@@ -860,6 +904,25 @@ func TestBackupTargetsIncludeRoutingGuidancePathsWithoutAnyComponent(t *testing.
 	}
 }
 
+func TestBackupTargetsEngramClaudeIncludeRegistryAndLegacyMigrationSource(t *testing.T) {
+	home := t.TempDir()
+	selection := model.Selection{Agents: []model.AgentID{model.AgentClaudeCode}, Components: []model.ComponentID{model.ComponentEngram}}
+	resolved := planner.ResolvedPlan{Agents: selection.Agents, OrderedComponents: selection.Components}
+
+	targets, err := backupTargets(home, "", ScopeGlobal, selection, resolved)
+	if err != nil {
+		t.Fatalf("backupTargets() error = %v", err)
+	}
+	for _, want := range []string{
+		filepath.Join(home, ".claude.json"),
+		filepath.Join(home, ".claude", "mcp", "engram.json"),
+	} {
+		if !containsPath(targets, want) {
+			t.Fatalf("backupTargets missing Claude Engram path %q; targets=%v", want, targets)
+		}
+	}
+}
+
 func TestBackupTargetsContainNoDuplicatePaths(t *testing.T) {
 	home := t.TempDir()
 	agentIDs := []model.AgentID{model.AgentClaudeCode, model.AgentOpenCode, model.AgentKimi}
@@ -870,7 +933,10 @@ func TestBackupTargetsContainNoDuplicatePaths(t *testing.T) {
 	}
 	resolved := planner.ResolvedPlan{Agents: agentIDs, OrderedComponents: selection.Components}
 
-	targets := backupTargets(home, "", ScopeGlobal, selection, resolved)
+	targets, err := backupTargets(home, "", ScopeGlobal, selection, resolved)
+	if err != nil {
+		t.Fatalf("backupTargets() error = %v", err)
+	}
 
 	assertNoDuplicatePaths(t, "backupTargets", targets)
 }

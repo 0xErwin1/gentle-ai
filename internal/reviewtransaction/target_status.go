@@ -129,8 +129,61 @@ func AssessTargetStatusWithSnapshot(ctx context.Context, repo string, request Ta
 	if err != nil {
 		return TargetStatusResult{}, Snapshot{}, err
 	}
+	if request.LineageID == "" && request.Target.Kind == TargetCurrentChanges && request.Target.Projection == ProjectionWorkspace {
+		candidates, recoveryErr := selectorlessCommittedBaseDiffCorrections(ctx, repo)
+		if recoveryErr != nil {
+			return TargetStatusResult{}, Snapshot{}, recoveryErr
+		}
+		switch len(candidates) {
+		case 0:
+		case 1:
+			live, request.LineageID = candidates[0].snapshot, candidates[0].lineage
+		default:
+			lineages := make([]string, len(candidates))
+			for index, candidate := range candidates {
+				lineages[index] = candidate.lineage
+			}
+			return TargetStatusResult{
+				Applicability: TargetApplicabilityAmbiguous, Action: TargetStatusActionSelectLineage,
+				Replayability: ReplayabilityStatusRequired, TargetIdentity: live.Identity,
+				Projection: targetProjectionFromSnapshot(live), CandidateLineageIDs: lineages,
+			}, live, nil
+		}
+	}
 	result, err := assessTargetStatusSnapshot(ctx, repo, request, live)
 	return result, live, err
+}
+
+type selectorlessCommittedBaseDiffCorrection struct {
+	lineage  string
+	snapshot Snapshot
+}
+
+func selectorlessCommittedBaseDiffCorrections(ctx context.Context, repo string) ([]selectorlessCommittedBaseDiffCorrection, error) {
+	stores, err := DiscoverCompactStores(ctx, repo)
+	if err != nil {
+		return nil, err
+	}
+	candidates := []selectorlessCommittedBaseDiffCorrection{}
+	for _, store := range stores {
+		record, loadErr := store.LoadContext(ctx)
+		if loadErr != nil {
+			if IsCompactAuthorityOperationalFailure(loadErr) {
+				return nil, loadErr
+			}
+			continue
+		}
+		live, rebuildErr := RebuildCommittedBaseDiffCorrectionCandidate(ctx, repo, record.State)
+		if rebuildErr != nil {
+			if IsCompactAuthorityOperationalFailure(rebuildErr) || IsCorrectionBudgetExceeded(rebuildErr) {
+				return nil, rebuildErr
+			}
+			continue
+		}
+		candidates = append(candidates, selectorlessCommittedBaseDiffCorrection{lineage: record.State.LineageID, snapshot: live})
+	}
+	sort.Slice(candidates, func(i, j int) bool { return candidates[i].lineage < candidates[j].lineage })
+	return candidates, nil
 }
 
 func assessTargetStatusSnapshot(ctx context.Context, repo string, request TargetStatusRequest, live Snapshot) (TargetStatusResult, error) {
@@ -174,22 +227,39 @@ func assessTargetStatusSnapshot(ctx context.Context, repo string, request Target
 				continue
 			}
 		}
-		// The exact predicate START uses to refuse a fresh lineage against an
-		// approved predecessor: same frozen delivery scope, changed candidate
-		// tree. Classifying it as anything weaker made negotiated status emit
-		// a START the store then refused — the closed loop of issue #1826 —
-		// while the recovery-authorization collection stayed unreachable.
+		if state.State == StateCorrectionRequired {
+			_, eligible, eligibilityErr := compactCorrectionRequiredStagedScopeRecovery(ctx, repo, state, live)
+			if eligibilityErr != nil {
+				return targetStatusFailure(base, eligibilityErr)
+			}
+			if eligible {
+				candidate.correctionRecovery, candidate.recoveryDisposition = true, RecoveryScopeChanged
+				candidates = append(candidates, candidate)
+				continue
+			}
+		}
+		// The same predicates START uses to refuse a fresh lineage against an
+		// approved predecessor: either the frozen delivery scope has a changed
+		// candidate, or a disjoint base advance preserves the exact feature patch.
+		// Classifying either relationship more weakly makes negotiated status emit
+		// a START the store then refuses while recovery authorization stays unreachable.
 		// Like the staged scope-expansion edge above, only a published
 		// canonical receipt may bind an approved predecessor for recovery; a
 		// receiptless approved authority keeps its publication-repair routing.
 		// Collection stays separate from governing candidates: the sole such
 		// predecessor mirrors START's single-recovery-candidate answer below,
 		// while plural matches keep the Phase 3e "nothing governs" listing.
-		if candidate.receiptPublished && candidate.receiptCanonical && compactApprovedScopeChangedRecovery(state, live) {
-			recovery := candidate
-			recovery.correctionRecovery = true
-			recovery.recoveryDisposition = RecoveryScopeChanged
-			approvedScopeRecovery = append(approvedScopeRecovery, recovery)
+		if candidate.receiptPublished && candidate.receiptCanonical {
+			rebasedRecovery, rebasedErr := compactApprovedRebasedScopeRecovery(ctx, repo, state, live)
+			if rebasedErr != nil {
+				return targetStatusFailure(base, rebasedErr)
+			}
+			if compactApprovedScopeChangedRecovery(state, live) || rebasedRecovery {
+				recovery := candidate
+				recovery.correctionRecovery = true
+				recovery.recoveryDisposition = RecoveryScopeChanged
+				approvedScopeRecovery = append(approvedScopeRecovery, recovery)
+			}
 		}
 		if state.State == StateEscalated {
 			requested := state
@@ -398,12 +468,7 @@ func inspectLegacyTargetReceipt(store Store, transaction Transaction) (string, e
 	if err != nil {
 		return "", fmt.Errorf("derive terminal legacy receipt: %w", err)
 	}
-	canonical, err := json.MarshalIndent(expected, "", "  ")
-	if err != nil {
-		return "", fmt.Errorf("canonicalize legacy target receipt: %w", err)
-	}
-	canonical = append(canonical, '\n')
-	if !reflect.DeepEqual(existing, expected) || !bytes.Equal(payload, canonical) {
+	if !reflect.DeepEqual(existing, expected) {
 		return "", errors.New("legacy target receipt does not equal the canonical derived receipt")
 	}
 	sum := sha256.Sum256(payload)
