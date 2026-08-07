@@ -511,7 +511,7 @@ func TestStartCompactAuthorityRunsBeforeCreateGuardOnlyAtNewAuthorityBoundary(t 
 	}
 }
 
-func TestStartCompactAuthorityKeepsStagedAndWorkspaceAuthoritiesDistinct(t *testing.T) {
+func TestStartCompactAuthorityReusesContentEquivalentStagedAndWorkspaceAuthority(t *testing.T) {
 	repo := initSnapshotRepo(t)
 	writeSnapshotFile(t, repo, "tracked.txt", "candidate\n")
 	gitSnapshot(t, repo, "add", "--", "tracked.txt")
@@ -523,9 +523,9 @@ func TestStartCompactAuthorityKeepsStagedAndWorkspaceAuthoritiesDistinct(t *test
 	}
 	storeCompactStartAuthority(t, repo, staged)
 
-	created, err := StartCompactAuthority(context.Background(), repo, CompactStartRequest{State: workspace})
-	if err != nil || created.Action != CompactStartCreated || created.Record.State.LineageID != workspace.LineageID {
-		t.Fatalf("workspace start against staged authority = %#v, %v", created, err)
+	reused, err := StartCompactAuthority(context.Background(), repo, CompactStartRequest{State: workspace})
+	if err != nil || reused.Action != CompactStartResumed || reused.Record.State.LineageID != staged.LineageID {
+		t.Fatalf("workspace start against staged authority = %#v, %v", reused, err)
 	}
 	replayed, err := StartCompactAuthority(context.Background(), repo, CompactStartRequest{State: staged})
 	if err != nil || replayed.Action != CompactStartResumed || replayed.Record.State.LineageID != staged.LineageID {
@@ -533,7 +533,7 @@ func TestStartCompactAuthorityKeepsStagedAndWorkspaceAuthoritiesDistinct(t *test
 	}
 }
 
-func TestStartCompactAuthoritySelectsProjectionSpecificBaseDiffAuthorityAfterCommit(t *testing.T) {
+func TestStartCompactAuthorityRejectsAmbiguousProjectionCompatibleBaseDiffAuthorityAfterCommit(t *testing.T) {
 	repo := initSnapshotRepo(t)
 	base := strings.TrimSpace(gitSnapshot(t, repo, "rev-parse", "HEAD"))
 	writeSnapshotFile(t, repo, "tracked.txt", "candidate\n")
@@ -551,16 +551,15 @@ func TestStartCompactAuthoritySelectsProjectionSpecificBaseDiffAuthorityAfterCom
 	for _, tt := range []struct {
 		name       string
 		projection Projection
-		want       string
 	}{
-		{name: "staged", projection: ProjectionStaged, want: staged.LineageID},
-		{name: "workspace", projection: ProjectionWorkspace, want: workspace.LineageID},
+		{name: "staged", projection: ProjectionStaged},
+		{name: "workspace", projection: ProjectionWorkspace},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			requested := newCompactStartStateForTarget(t, repo, "compact-start-"+tt.name+"-base-request", Target{Kind: TargetBaseDiff, Projection: tt.projection, BaseRef: base, IntendedUntracked: []string{}})
 			result, err := StartCompactAuthority(context.Background(), repo, CompactStartRequest{State: requested})
-			if err != nil || result.Action != CompactStartResumed || result.Record.State.LineageID != tt.want {
-				t.Fatalf("%s base-diff authority selection = %#v, %v", tt.name, result, err)
+			if err != nil || result.Action != CompactStartBlocked {
+				t.Fatalf("%s ambiguous base-diff authority = %#v, %v", tt.name, result, err)
 			}
 		})
 	}
