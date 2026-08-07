@@ -45,5 +45,18 @@
     "supported_operations": ["review/complete-fix", "review/validate-fix"],
     "authorization_schema": "gentle-ai.review-repair-authorization/v1"
   },
-  "candidates": []
+  "candidates": [],
+  "next_transition": {
+    "kind": "stop",
+    "reason_code": "manual_intervention_required"
+  },
+  "forecast": {
+    "horizon": "terminal",
+    "steps": [{
+      "step": 1,
+      "kind": "stop",
+      "reason_code": "manual_intervention_required",
+      "description": "Manual intervention is required to proceed"
+    }]
+  }
 }

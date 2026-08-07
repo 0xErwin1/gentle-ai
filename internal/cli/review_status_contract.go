@@ -36,6 +36,25 @@ const (
 	ReviewReceiptNotApplicable      ReviewReceiptStatus = "not_applicable"
 )
 
+type ReviewForecastHorizon string
+
+const (
+	ForecastHorizonPartial  ReviewForecastHorizon = "partial"
+	ForecastHorizonTerminal ReviewForecastHorizon = "terminal"
+)
+
+type ReviewForecastItem struct {
+	Step        int    `json:"step"`
+	Kind        string `json:"kind"`
+	ReasonCode  string `json:"reason_code"`
+	Description string `json:"description"`
+}
+
+type ReviewForecast struct {
+	Horizon ReviewForecastHorizon `json:"horizon"`
+	Steps   []ReviewForecastItem  `json:"steps"`
+}
+
 type ReviewTargetStatusResult struct {
 	Schema        string                                `json:"schema"`
 	Contract      string                                `json:"contract"`
@@ -66,6 +85,7 @@ type ReviewTargetStatusResult struct {
 	Candidates             []string                                             `json:"candidates"`
 	Reconciliation         *ReviewFinalizeReconciliation                        `json:"reconciliation,omitempty"`
 	Eligibility            *ReviewActionEligibility                             `json:"eligibility,omitempty"`
+	Forecast               *ReviewForecast                                      `json:"forecast,omitempty"`
 	NextTransition         *ReviewNextTransition                                `json:"next_transition,omitempty"`
 	ValidationRequest      *reviewtransaction.TargetedValidationRequest         `json:"validation_request,omitempty"`
 	FinalVerificationRetry *reviewtransaction.FinalVerificationRetryEligibility `json:"final_verification_retry,omitempty"`
@@ -394,6 +414,47 @@ func (result ReviewTargetStatusResult) Validate() error {
 				request.CorrectionBudget != result.Frozen.CorrectionBudget {
 				return errors.New("negotiated status correction request binding is invalid") // refusal:by-design world-action: provider-generated status and request bindings require a code fix when they disagree
 			}
+		}
+	}
+	if result.Forecast != nil {
+		if result.Contract != ReviewIntegrationContractV2 {
+			return errors.New("forecast requires the v2 review integration contract") // refusal:by-design world-action: frozen v1 status cannot accept additive routing data
+		}
+		if result.NextTransition == nil {
+			return errors.New("forecast without next_transition is invalid") // refusal:by-design world-action: status forecast requires next_transition
+		}
+		switch result.Forecast.Horizon {
+		case ForecastHorizonPartial, ForecastHorizonTerminal:
+		default:
+			return fmt.Errorf("invalid forecast horizon %q", result.Forecast.Horizon) // refusal:by-design world-action: status forecast requires valid horizon
+		}
+		if len(result.Forecast.Steps) != 1 {
+			return errors.New("forecast must contain exactly one step") // refusal:by-design world-action: status forecast is descriptive only
+		}
+		step := result.Forecast.Steps[0]
+		if step.Step != 1 {
+			return fmt.Errorf("forecast step must be 1, got %d", step.Step) // refusal:by-design world-action: forecast head must remain singular
+		}
+		switch step.Kind {
+		case reviewNextTransitionExecute, reviewNextTransitionCollect, reviewNextTransitionStop:
+		default:
+			return fmt.Errorf("forecast step 1 has invalid kind %q", step.Kind) // refusal:by-design world-action: status forecast step kind must be valid
+		}
+		if strings.TrimSpace(step.ReasonCode) == "" {
+			return errors.New("forecast step 1 has empty reason_code") // refusal:by-design world-action: status forecast step reason_code must not be empty
+		}
+		if strings.TrimSpace(step.Description) == "" {
+			return errors.New("forecast step 1 has empty description") // refusal:by-design world-action: status forecast step description must not be empty
+		}
+		if step.Kind != result.NextTransition.Kind || step.ReasonCode != result.NextTransition.ReasonCode {
+			return fmt.Errorf("forecast head (%s/%s) diverges from next_transition (%s/%s)", // refusal:by-design world-action: status forecast head must match next_transition
+				step.Kind, step.ReasonCode, result.NextTransition.Kind, result.NextTransition.ReasonCode)
+		}
+		if result.NextTransition.Kind == reviewNextTransitionStop && result.Forecast.Horizon != ForecastHorizonTerminal {
+			return errors.New("stop transition requires a terminal forecast") // refusal:by-design world-action: stop transition forecast must be terminal
+		}
+		if result.NextTransition.Kind != reviewNextTransitionStop && result.Forecast.Horizon != ForecastHorizonPartial {
+			return errors.New("non-stop transition requires a partial forecast") // refusal:by-design world-action: callers must refresh status after action
 		}
 	}
 	switch result.Applicability {

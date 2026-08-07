@@ -976,3 +976,68 @@ func reviewCollectTransition(reason string, inputs ...ReviewTransitionInput) Rev
 func reviewStopTransition(reason string) ReviewNextTransition {
 	return ReviewNextTransition{Kind: reviewNextTransitionStop, ReasonCode: reason}
 }
+
+func reviewReasonDescription(reason string) string {
+	switch reason {
+	case "fresh_target_ready":
+		return "Target is unreviewed and ready for initial review start"
+	case "captured_results_ready":
+		return "Captured reviewer results are complete and ready for finalization"
+	case "native_low_risk_verification":
+		return "Low risk candidate eligible for native verification"
+	case "approved_receipt_ready":
+		return "Review is approved and receipt is ready for gate validation"
+	case "exact_receipt_replay":
+		return "Exact receipt replay safe for finalization"
+	case "lineage_selection_required":
+		return "Multiple lineages match target; select an explicit lineage"
+	case "reviewer_results_required":
+		return "Reviewer lens artifacts required for current revision"
+	case "targeted_validation_required":
+		return "Targeted validation run required for correction plan"
+	case "correction_plan_required":
+		return "Correction plan required to resolve review findings"
+	case "verification_evidence_required":
+		return "Verification evidence required prior to finalization"
+	case "delivery_gate_required":
+		return "Delivery gate selection required before validation"
+	case "staged_workspace_overlay_recovery_unavailable":
+		return "Staged workspace overlay recovery is unavailable"
+	case "corrupted_or_unverifiable_authority":
+		return "Review authority is corrupted or unverifiable"
+	case "missing_authority_binding":
+		return "Target authority binding is missing"
+	case "original_finalize_request_required":
+		return "Original finalize request is required to reconcile"
+	case "unchanged_or_unverified_authority":
+		return "Authority requires a changed or verified candidate"
+	case "native_stop_required":
+		return "Native stop transition required by authority"
+	case "captured_artifacts_unverifiable":
+		return "Captured artifacts failed verification or are missing"
+	case "corrected_candidate_unavailable":
+		return "Corrected candidate is unavailable for forecasted correction"
+	case "pre_pr_selector_unrepresentable":
+		return "Selected base-ref cannot be represented for pre-PR gate"
+	case "manual_intervention_required":
+		return "Manual intervention is required to proceed"
+	default:
+		return strings.ReplaceAll(reason, "_", " ")
+	}
+}
+
+func newReviewForecast(head ReviewNextTransition) ReviewForecast {
+	horizon := ForecastHorizonPartial
+	if head.Kind == reviewNextTransitionStop {
+		horizon = ForecastHorizonTerminal
+	}
+	return ReviewForecast{
+		Horizon: horizon,
+		Steps: []ReviewForecastItem{{
+			Step:        1,
+			Kind:        head.Kind,
+			ReasonCode:  head.ReasonCode,
+			Description: reviewReasonDescription(head.ReasonCode),
+		}},
+	}
+}
