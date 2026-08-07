@@ -662,14 +662,14 @@ func (r *installRuntime) stagePlan() pipeline.StagePlan {
 		apply = append(apply, agentInstallStep{id: "agent:" + string(agent), agent: agent, homeDir: r.homeDir, profile: r.profile})
 	}
 
+	for _, tool := range r.selection.CommunityTools {
+		apply = append(apply, communityToolInstallStep{id: "community-tool:" + string(tool), tool: tool, workspaceDir: r.workspaceDir, homeDir: r.homeDir, state: r.state})
+	}
+
 	if containsAgent(r.resolved.Agents, model.AgentOpenCode) {
 		for _, plugin := range r.selection.OpenCodePlugins {
 			apply = append(apply, openCodePluginInstallStep{id: "opencode-plugin:" + string(plugin), plugin: plugin, homeDir: r.homeDir})
 		}
-	}
-
-	for _, tool := range r.selection.CommunityTools {
-		apply = append(apply, communityToolInstallStep{id: "community-tool:" + string(tool), tool: tool, workspaceDir: r.workspaceDir, homeDir: r.homeDir, state: r.state})
 	}
 
 	for _, component := range r.resolved.OrderedComponents {
@@ -1861,6 +1861,13 @@ func backupTargets(homeDir, workspaceDir string, scope InstallScope, selection m
 		for _, path := range communitytool.CodeGraphManagedPaths(homeDir) {
 			paths[path] = struct{}{}
 		}
+	}
+	pluginPaths, err := opencodeplugin.InstallPaths(homeDir, selection.OpenCodePlugins)
+	if err != nil {
+		return nil, err
+	}
+	for _, path := range pluginPaths {
+		paths[path] = struct{}{}
 	}
 
 	targets := make([]string, 0, len(paths))
