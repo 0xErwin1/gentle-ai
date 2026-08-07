@@ -1527,7 +1527,7 @@ func compactApprovedRebasedScopeRecovery(ctx context.Context, repo string, exist
 // representations for the same base-to-candidate tree range.
 func compactStartDeliveryScopeMatches(existing, requested CompactState) bool {
 	original, live := existing.InitialSnapshot, requested.InitialSnapshot
-	return original.Projection == live.Projection &&
+	return compactTargetProjectionsCompatible(original.Kind, original.Projection, live.Kind, live.Projection) &&
 		compactStartTargetKindsCompatible(original.Kind, live.Kind) &&
 		live.BaseTree == original.BaseTree &&
 		live.PathsDigest == original.PathsDigest &&
@@ -1543,6 +1543,25 @@ func compactStartTargetKindsCompatible(existing, requested TargetKind) bool {
 	}
 	return existing == TargetCurrentChanges && requested == TargetBaseDiff ||
 		existing == TargetBaseDiff && requested == TargetCurrentChanges
+}
+
+func compactTargetProjectionsCompatible(existingKind TargetKind, existingProjection Projection, requestedKind TargetKind, requestedProjection Projection) bool {
+	if existingProjection == "" {
+		existingProjection = ProjectionWorkspace
+	}
+	if requestedProjection == "" {
+		requestedProjection = ProjectionWorkspace
+	}
+	if existingProjection == requestedProjection {
+		return true
+	}
+	// Staged/workspace representations are safe only for this content-equivalent
+	// kind class because surrounding predicates still bind one content boundary;
+	// workspace-overlay remains excluded.
+	return (existingKind == TargetCurrentChanges || existingKind == TargetBaseDiff) &&
+		(requestedKind == TargetCurrentChanges || requestedKind == TargetBaseDiff) &&
+		(existingProjection == ProjectionStaged && requestedProjection == ProjectionWorkspace ||
+			existingProjection == ProjectionWorkspace && requestedProjection == ProjectionStaged)
 }
 
 type compactCorrectionTargetClaim uint8
