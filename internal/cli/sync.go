@@ -1453,11 +1453,21 @@ func RunSyncWithSelection(homeDir string, selection model.Selection) (SyncResult
 	if !result.Verify.Ready {
 		return result, fmt.Errorf("post-sync verification failed:\n%s", verify.RenderReport(result.Verify))
 	}
-	if persistedStateErr == nil && !persistedState.CommunityToolsConfigured && selection.CommunityTools != nil {
-		persistedState.CommunityTools = communityToolIDsToStrings(selection.CommunityTools)
-		persistedState.CommunityToolsConfigured = true
-		if err := state.Write(homeDir, persistedState); err != nil {
-			return result, fmt.Errorf("persist migrated community tool selection: %w", err)
+	if persistedStateErr == nil {
+		shouldWriteState := false
+		if persistedState.InstalledBinaryVersion != "" && persistedState.InstalledBinaryVersion != AppVersion {
+			persistedState.InstalledBinaryVersion = AppVersion
+			shouldWriteState = true
+		}
+		if !persistedState.CommunityToolsConfigured && selection.CommunityTools != nil {
+			persistedState.CommunityTools = communityToolIDsToStrings(selection.CommunityTools)
+			persistedState.CommunityToolsConfigured = true
+			shouldWriteState = true
+		}
+		if shouldWriteState {
+			if err := state.Write(homeDir, persistedState); err != nil {
+				return result, fmt.Errorf("persist migrated community tool selection: %w", err)
+			}
 		}
 	}
 
