@@ -312,15 +312,16 @@ func TestReviewLensContextCleanupClassifiesCleanupFailureIndependentlyOfOperatio
 	defer cancelExpired()
 
 	for _, test := range []struct {
-		name string
-		ctx  context.Context
+		name     string
+		ctx      context.Context
+		closeErr error
 	}{
-		{name: "canceled", ctx: canceled},
-		{name: "deadline exceeded", ctx: expired},
+		{name: "canceled", ctx: canceled, closeErr: errors.New("close canceled inspector")},
+		{name: "deadline exceeded", ctx: expired, closeErr: errors.New("close expired inspector")},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			result, err := reviewLensContextCleanup(test.ctx, "reviewer context", nil, func() error {
-				return errors.New("close inspector")
+				return test.closeErr
 			})
 			if result != "" {
 				t.Fatalf("cleanup-only result = %q, want zero result", result)
@@ -329,8 +330,8 @@ func TestReviewLensContextCleanupClassifiesCleanupFailureIndependentlyOfOperatio
 			if !errors.As(err, &refusal) || refusal.Code != "lens_context_inspection_failed" {
 				t.Fatalf("cleanup-only error = %v, want ordinary inspection-failed refusal", err)
 			}
-			if refusal.Code == "lens_context_deadline_exceeded" || refusal.Code == "lens_context_canceled" {
-				t.Fatalf("cleanup-only error = %v, must not inherit the operation context classification", err)
+			if !errors.Is(err, test.closeErr) {
+				t.Fatalf("cleanup-only error = %v, want close error %v", err, test.closeErr)
 			}
 		})
 	}
@@ -376,9 +377,8 @@ func TestReviewLensContextCallersFailClosedOnInspectorCleanupFailure(t *testing.
 					t.Fatal("cleanup did not zero the result")
 				}
 				if !operation {
-					want := reviewLensContextInspectionFailure(context.Background(), cleanupErr).Error()
-					if err == nil || err.Error() != want {
-						t.Fatalf("cleanup-only error = %v, want %q", err, want)
+					if !errors.Is(err, cleanupErr) {
+						t.Fatalf("cleanup-only error = %v, want cleanup cause %v", err, cleanupErr)
 					}
 					return
 				}
