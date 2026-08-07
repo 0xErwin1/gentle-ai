@@ -410,6 +410,18 @@ func (result ReviewTargetStatusResult) Validate() error {
 			return fmt.Errorf("forecast head (%s/%s) diverges from next_transition (%s/%s)",
 				head.Kind, head.ReasonCode, result.NextTransition.Kind, result.NextTransition.ReasonCode)
 		}
+		switch {
+		case result.NextTransition.Kind == reviewNextTransitionStop:
+			if result.Forecast.Horizon != ForecastHorizonTerminal || len(result.Forecast.Steps) != 1 {
+				return errors.New("stop transition requires a terminal one-step forecast")
+			}
+		case len(result.Forecast.Steps) > 1:
+			if result.Forecast.Horizon != ForecastHorizonPartial {
+				return errors.New("multi-step forecast requires a partial horizon")
+			}
+		case result.Forecast.Horizon != ForecastHorizonComplete:
+			return errors.New("single-step non-stop forecast requires a complete horizon")
+		}
 	}
 	switch result.Applicability {
 	case reviewtransaction.TargetApplicabilityCurrent:
