@@ -38,6 +38,7 @@ func runSDDAttempt(ctx context.Context, args []string, stdout io.Writer) error {
 	flags.SetOutput(io.Discard)
 	cwd := registerSDDAttemptStringFlag(flags, operation, "cwd")
 	change := registerSDDAttemptStringFlag(flags, operation, "change")
+	destinationWorktree := registerSDDAttemptStringFlag(flags, operation, "destination-worktree")
 	expected := registerSDDAttemptStringFlag(flags, operation, "expected-revision")
 	token := registerSDDAttemptStringFlag(flags, operation, "token")
 	requestID := registerSDDAttemptStringFlag(flags, operation, "request-id")
@@ -127,6 +128,12 @@ func runSDDAttempt(ctx context.Context, args []string, stdout io.Writer) error {
 			CleanupEvidence:    *cleanupEvidence, ProcessEvidence: *processEvidence,
 			ExpectedBindingRevision: *expectedBindingRevision, SuccessorLineageID: *successorLineage,
 			RemediatesEvidenceRevision: *remediatesEvidenceRevision,
+		})
+	case "handoff":
+		result, err = store.HandoffCompact(ctx, sddstatus.CompactHandoffRequest{
+			HandoffAttemptRequest: sddstatus.HandoffAttemptRequest{
+				ExpectedRevision: *expected, RequestID: *requestID, DestinationWorktree: *destinationWorktree,
+			},
 		})
 	case "reset":
 		result, err = store.Reset(ctx, sddstatus.ResetObjectiveRequest{
@@ -237,6 +244,12 @@ var sddAttemptOperationDefinitions = []sddAttemptOperationContract{
 		{name: "expected-binding-revision", usage: "optional; with successor-lineage and remediates-evidence-revision"},
 		{name: "successor-lineage", usage: "optional; lowercase approved lineage, at most 128 bytes"},
 		{name: "remediates-evidence-revision", usage: "optional; repaired sha256:<64 lowercase hex> failed evidence"},
+	}},
+	{name: "handoff", purpose: "Atomically move the active attempt to one linked worktree", flags: []sddAttemptFlagDefinition{
+		sddAttemptCWDFlag, sddAttemptChangeFlag,
+		{name: "expected-revision", required: true, usage: "required; exact sha256:<64 lowercase hex> runtime revision"},
+		{name: "request-id", required: true, usage: "required; lowercase idempotency key, at most 128 bytes"},
+		{name: "destination-worktree", required: true, usage: "required; canonical registered linked worktree of the same Git common directory"},
 	}},
 	{name: "reset", purpose: "Reset a decision-required or complete objective", flags: []sddAttemptFlagDefinition{
 		sddAttemptCWDFlag, sddAttemptChangeFlag,
@@ -496,7 +509,7 @@ func missingSDDAttemptOperationFlags(args []string, operation string) []string {
 func missingSDDAttemptOperationError(operation string, missing []string) error {
 	message := fmt.Sprintf("sdd-attempt %s requires %s", operation, strings.Join(missing, ", "))
 	switch operation {
-	case "acquire", "settle", "grant":
+	case "acquire", "settle", "handoff", "grant":
 		message += fmt.Sprintf("; rerun `gentle-ai sdd-attempt %s` with those missing flags", operation)
 	}
 	return errors.New(message)
