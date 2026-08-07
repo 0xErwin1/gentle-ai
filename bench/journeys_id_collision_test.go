@@ -34,6 +34,7 @@ func journeySources() []journeySource {
 		{"journeys_advisory.go", advisoryJourneys()},
 		{"journeys_zero_delta.go", zeroDeltaJourneys()},
 		{"journeys_local_gate_advance.go", localGateBaseAdvanceJourneys()},
+		{"journeys_intended_untracked.go", intendedUntrackedJourneys()},
 	}
 }
 
