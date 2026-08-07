@@ -69,13 +69,13 @@ func TestSchemaExampleShapedResultIsAdmitted(t *testing.T) {
 	request.Result = LensResult{Lens: LensReliability, Findings: []Finding{}, Evidence: evidence}
 	request.CandidateCausalFindingIDs = nil
 
-	_, admission, err := AdmitArtifact(request)
+	_, admission, err := AdmitArtifact(t.Context(), request)
 	if err != nil || admission.Decision != ArtifactAdmissionCompleted {
 		t.Fatalf("AdmitArtifact(schema-shaped result) decision = %q, error = %v; want completed", admission.Decision, err)
 	}
 
 	request.EchoedSubjectHash = ""
-	_, admission, err = AdmitArtifact(request)
+	_, admission, err = AdmitArtifact(t.Context(), request)
 	if err == nil || admission.Decision != ArtifactAdmissionIncomplete {
 		t.Fatalf("AdmitArtifact(no subject_hash) decision = %q, error = %v; want incomplete", admission.Decision, err)
 	}
@@ -83,6 +83,51 @@ func TestSchemaExampleShapedResultIsAdmitted(t *testing.T) {
 		if !strings.Contains(admission.Diagnostic, want) {
 			t.Fatalf("refusal %q does not name %q", admission.Diagnostic, want)
 		}
+	}
+}
+
+func TestValidateReviewerResultMatchesNativeAdmissionShape(t *testing.T) {
+	subject, frozen, request := admittedArtifactFixture(t)
+	base := ReviewerResult{
+		SubjectHash: subject.SubjectHash,
+		Inspection:  request.Inspection,
+		Lens:        subject.Lens,
+		Findings: []Finding{{
+			ID: "R3-001", Lens: "reliability", Location: "internal/a.go:7", Severity: "BLOCKER", Claim: "candidate error is lost",
+			EvidenceClass: EvidenceDeterministic, CausalDisposition: CausalIntroduced, ProofRefs: []string{"internal/a.go:7"},
+		}},
+		Evidence: []string{"inspection: internal/a.go:7 and internal/b.go:1"},
+	}
+	tests := []struct {
+		name    string
+		mutate  func(*ReviewerResult)
+		wantErr bool
+	}{
+		{name: "native finding lens", mutate: func(result *ReviewerResult) { result.Findings[0].Lens = "reliability" }},
+		{name: "binding hash", mutate: func(result *ReviewerResult) { result.SubjectHash = "sha256:" + strings.Repeat("0", 64) }, wantErr: true},
+		{name: "selected lens", mutate: func(result *ReviewerResult) { result.Lens = LensRisk }, wantErr: true},
+		{name: "missing lens binding", mutate: func(result *ReviewerResult) { result.Lens = "" }, wantErr: true},
+		{name: "full manifest", mutate: func(result *ReviewerResult) { result.Inspection.Paths = result.Inspection.Paths[:1] }, wantErr: true},
+		{name: "non severe classification enum", mutate: func(result *ReviewerResult) {
+			result.Findings[0].Severity = "WARNING"
+			result.Findings[0].EvidenceClass = "unknown"
+		}, wantErr: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			result := base
+			result.Inspection.Paths = append([]string(nil), base.Inspection.Paths...)
+			result.Findings = append([]Finding(nil), base.Findings...)
+			test.mutate(&result)
+			payload, err := json.Marshal(result)
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = ValidateReviewerResult(payload, subject, frozen.ChangedPathManifest)
+			if (err != nil) != test.wantErr {
+				t.Fatalf("ValidateReviewerResult() error = %v, wantErr %v", err, test.wantErr)
+			}
+		})
 	}
 }
 

@@ -35,14 +35,14 @@ type ReviewModeResult struct {
 	Status    reviewtransaction.RDDModeStatus `json:"status"`
 }
 
-// RunReviewMode is the user-controlled review-driven-development kill switch.
+// RunReviewMode is the user-controlled receipt-driven-development kill switch.
 // The global mode lives in uncommitted user state; the clone-local override
 // lives under this clone's Git common directory and can only disable. Any off
 // wins, status never mutates, and re-enabling applies to future candidates only.
 func RunReviewMode(args []string, stdout io.Writer) error {
 	if len(args) == 0 || args[0] == "help" || args[0] == "-h" || args[0] == "--help" {
 		_, _ = fmt.Fprintln(stdout, "Usage: gentle-ai review mode <enable|disable|status> [--cwd <repo>] [--scope <global|clone>] [--expected-revision <revision>] [--json]")
-		_, _ = fmt.Fprintln(stdout, "User-owned kill switch. Any off wins: a repository may disable review-driven development for this clone but can never require it, and no other clone inherits the override. status is read-only and reports both sources plus the effective mode. Re-enabling applies to future candidates only.")
+		_, _ = fmt.Fprintln(stdout, "User-owned kill switch. Any off wins: a repository may disable receipt-driven development for this clone but can never require it, and no other clone inherits the override. status is read-only and reports both sources plus the effective mode. Re-enabling applies to future candidates only.")
 		return nil
 	}
 	operation := args[0]
@@ -52,7 +52,7 @@ func RunReviewMode(args []string, stdout io.Writer) error {
 		return fmt.Errorf("unknown review mode command %q", operation)
 	}
 
-	flags := newReviewFlagSet("review mode "+operation, stdout, "Read or set the user-controlled review-driven-development kill switch.")
+	flags := newReviewFlagSet("review mode "+operation, stdout, "Read or set the user-controlled receipt-driven-development kill switch.")
 	cwd := flags.String("cwd", ".", "repository path")
 	scope := flags.String("scope", reviewModeScopeGlobal, "mode source to write: global or clone")
 	expectedRevision := flags.String("expected-revision", "", "exact clone-local revision this write replaces")
@@ -162,7 +162,7 @@ func (err *ReviewModeUnreadableError) Error() string {
 		subject += " is not a mode this product can read"
 	}
 	return fmt.Sprintf(
-		"%s; an unreadable switch is not a disabled switch, so review-driven development stays managed until the value is overwritten: run %s to turn reviews on, or %s to turn them off",
+		"%s; an unreadable switch is not a disabled switch, so receipt-driven development stays managed until the value is overwritten: run %s to turn reviews on, or %s to turn them off",
 		subject,
 		strings.Join(reviewModeCommandsByVerb(commands, "enable"), " and "),
 		strings.Join(reviewModeCommandsByVerb(commands, "disable"), " and "),
@@ -349,7 +349,7 @@ func emitReviewMode(stdout io.Writer, result ReviewModeResult, emitJSON bool) er
 	}
 	_, err := fmt.Fprintf(
 		stdout,
-		"review-driven development: %s (decided by %s)\n  global:      %s\n  clone-local: %s\n",
+		"receipt-driven development: %s (decided by %s)\n  global:      %s\n  clone-local: %s\n",
 		reviewModeLabel(result.Status.Effective),
 		result.Status.Source,
 		reviewModeLabel(result.Status.Global),
@@ -405,6 +405,27 @@ const (
 	reviewConsentAnswerRun    = "1"
 	reviewConsentAnswerNotNow = "2"
 )
+
+type reviewConsentLocale string
+
+const (
+	reviewConsentLocaleEnglish reviewConsentLocale = "en"
+	reviewConsentLocaleSpanish reviewConsentLocale = "es"
+)
+
+// normalizeReviewConsentLocale keeps the absent locale on the published English
+// projection while accepting the two native consent-envelope localizations.
+func normalizeReviewConsentLocale(value string) (reviewConsentLocale, error) {
+	switch strings.TrimSpace(value) {
+	case "", string(reviewConsentLocaleEnglish):
+		return reviewConsentLocaleEnglish, nil
+	case string(reviewConsentLocaleSpanish):
+		return reviewConsentLocaleSpanish, nil
+	default:
+		// refusal:by-design operator-knowledge: only the caller knows which supported locale matches the active conversation
+		return "", errors.New("review consent locale must be en or es")
+	}
+}
 
 const (
 	reviewConsentHeadline = "Gentle AI can review this change before you call it done."
@@ -533,11 +554,10 @@ func reviewConsoleTerminal(file *os.File) bool {
 // one-time question is asked here — after the candidate is frozen and the tier
 // is classified — so it can state the real reason instead of a generic warning.
 //
-// The consent declaration changes only who the question is asked through: a
-// relay-declared caller receives the typed question instead of the console
-// prompt or the silent skip, and the granted/declined answers reuse exactly
-// the machinery the interactive answers use — granting latches the one-time
-// question, declining persists nothing and stays scoped to this candidate.
+// A consent declaration selects candidate-scoped negotiated semantics: relay
+// always returns the typed question, while granted and declined apply only to
+// the exact frozen candidate and never touch the legacy clone-wide latch. An
+// undeclared START keeps the one-time console behavior unchanged.
 func authorizeReviewStart(ctx context.Context, repo string, assessment reviewtransaction.RiskAssessment, consent reviewStartConsentMode) error {
 	global, err := readGlobalRDDMode()
 	if err != nil {
@@ -558,15 +578,19 @@ func authorizeReviewStart(ctx context.Context, repo string, assessment reviewtra
 		return nil
 	}
 	switch consent {
+	case reviewConsentModeRelay:
+		// The caller declared it can relay a blocking question, so the typed
+		// envelope is the question. Candidate-scoped consent must not be
+		// suppressed by the legacy clone-wide console latch.
+		return errReviewConsentQuestionRequired
 	case reviewConsentModeDeclined:
 		// An explicit relayed "no" is honored exactly like the interactive
 		// answer 2: this candidate only, nothing persisted, never latched.
 		return fmt.Errorf("%w: the next candidate is asked again", errReviewDeclinedForCandidate)
 	case reviewConsentModeGranted:
-		// The relayed "yes" mirrors the interactive answer 1: latch the
-		// one-time question so future candidates review without asking. The
-		// latch write is idempotent, which keeps this follow-up replay-safe.
-		return recordReviewConsentAsked(ctx, repo)
+		// The exact target binding was revalidated before this call. Authorize
+		// only that candidate; later candidates must receive their own question.
+		return nil
 	}
 	console := reviewConsole()
 	asked, err := reviewtransaction.RDDConsentAsked(ctx, repo)
@@ -578,12 +602,6 @@ func authorizeReviewStart(ctx context.Context, repo string, assessment reviewtra
 	}
 	if asked {
 		return nil
-	}
-	if consent == reviewConsentModeRelay {
-		// The caller declared it can relay a blocking question, so the typed
-		// envelope is the question. Nothing is persisted and no notice is
-		// printed: the envelope replaces the console, it does not add to it.
-		return errReviewConsentQuestionRequired
 	}
 	if !console.Interactive {
 		// The notice carries the same information every time (issue #1848), so

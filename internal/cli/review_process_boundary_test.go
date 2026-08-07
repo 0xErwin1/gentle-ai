@@ -3,7 +3,6 @@ package cli
 import (
 	"bytes"
 	"fmt"
-	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -78,13 +77,7 @@ func paddedReviewCLIModule(header []string, lines int) string {
 
 func writeReviewCLIModule(t *testing.T, repo, name, content string) {
 	t.Helper()
-	path := filepath.Join(repo, name)
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	writeReviewStartCandidate(t, repo, filepath.ToSlash(name), content, 0o644)
 }
 
 func TestReviewStartContractValidatesProcessBoundaryReason(t *testing.T) {
@@ -112,11 +105,10 @@ func TestReviewStartContractValidatesProcessBoundaryReason(t *testing.T) {
 func TestNegotiatedReviewStartResumesFrozenMediumAuthorityAfterClassifierUpgrade(t *testing.T) {
 	legacy := ReviewFacadeStartResult{Action: string(reviewtransaction.CompactStartResumed), LineageID: "pre-upgrade", RiskLevel: reviewtransaction.RiskMedium, SelectedLenses: []string{reviewtransaction.LensReliability}, Projection: reviewtransaction.ProjectionWorkspace, ChangedFiles: 1, ChangedLines: 20, CorrectionBudget: 10}
 	assessment := reviewtransaction.RiskAssessment{Level: reviewtransaction.RiskHigh, ChangedLines: 20, Reasons: []reviewtransaction.RiskReason{{Code: reviewtransaction.RiskReasonCode("process_boundary"), Signal: reviewtransaction.SignalShellProcess, Path: "runner.py"}}}
-	diff, err := reviewtransaction.NewFrozenCandidateDiff([]byte("diff"))
-	if err != nil {
-		t.Fatal(err)
+	contextResult := reviewtransaction.FrozenCandidateContext{
+		BaseTree: strings.Repeat("a", 40), CandidateTree: strings.Repeat("b", 40),
+		ChangedPathManifest: []reviewtransaction.ChangedPathManifestEntry{{Path: "process_helper.go", Status: reviewtransaction.CandidatePathAdded, OldMode: "000000", NewMode: "100644"}},
 	}
-	contextResult := reviewtransaction.FrozenCandidateContext{CandidateDiff: diff, ChangedPathManifest: []reviewtransaction.ChangedPathManifestEntry{{Path: "process_helper.go", Status: reviewtransaction.CandidatePathAdded, OldMode: "000000", NewMode: "100644"}}}
 	result, err := newReviewIntegrationStartResult(legacy, assessment, "", &contextResult, nil)
 	if err != nil || result.RiskLevel != reviewtransaction.RiskMedium || !reflect.DeepEqual(result.SelectedLenses, legacy.SelectedLenses) {
 		t.Fatalf("resumed authority = risk %q lenses %v error %v, want frozen medium %v", result.RiskLevel, result.SelectedLenses, err, legacy.SelectedLenses)

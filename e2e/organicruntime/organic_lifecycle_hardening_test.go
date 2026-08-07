@@ -24,7 +24,7 @@ import (
 func currentChangesTargetIdentity(t *testing.T, repo string) string {
 	t.Helper()
 	builder := reviewtransaction.SnapshotBuilder{Repo: repo}
-	intended, err := builder.DiscoverIntendedUntracked(context.Background())
+	intended, err := builder.DiscoverUnignoredUntracked(context.Background())
 	if err != nil {
 		t.Fatalf("discover intended untracked candidate: %v", err)
 	}
@@ -37,51 +37,25 @@ func currentChangesTargetIdentity(t *testing.T, repo string) string {
 	return snapshot.Identity
 }
 
-// organicLargeWorkspaceE2EEnvironment gates the deliberately heavy
-// large-workspace review/start proof below. Building a several-thousand-file
-// candidate launches one Git subprocess per intended-untracked path
-// (untrackedProof) plus per-changed-path diff work, twice over (once for
-// this test's own target-identity precompute, once inside review/start
-// itself): that is what reliably pushes real candidate construction past
-// the shared 25s facade deadline without an artificial delay hook, but Git
-// subprocess-spawn throughput is wildly platform-dependent. At 5,000 files
-// it blew the Windows CI job budget even though the behavior it proved was
-// correct (community report on issue 1778's Windows CI leg). Keep it out of
-// the default CI path; opt in locally or from a dedicated job with
-// GENTLE_AI_LARGE_WORKSPACE_E2E=1. The always-on, deterministic proof of the
-// same deadline-selection wiring is TestReviewFacadeOperationDeadlineSelector
-// in internal/cli/review_facade_test.go: it asserts review.start resolves to
-// reviewFacadeStartOperationTimeout while every other operation keeps
-// reviewFacadeOperationTimeout, with no dependency on real elapsed time or
-// process-spawn throughput. That unit test alone catches a regression to the
-// deadline-selection wiring (e.g. review.start silently falling back to the
-// shared deadline); only this gated end-to-end test catches the original
-// 1778 symptom itself — a valid large candidate actually being cut off
-// mid-sweep — and only when it is run.
+// organicLargeWorkspaceE2EEnvironment gates the deliberately heavy lifecycle
+// proof below. The fixture catches regressions from batched Git inventories
+// back to per-path subprocess loops across START, capture, and finalize.
 const organicLargeWorkspaceE2EEnvironment = "GENTLE_AI_LARGE_WORKSPACE_E2E"
 
-// TestOrganicReviewStartDeadlineHeadroom proves Group E (1778): review/start
-// uses its own start-scoped deadline instead of the shared 25s facade
-// deadline, so a valid candidate whose construction takes longer than 25s
-// still completes instead of being cut off mid-sweep.
+// TestOrganicReviewStartDeadlineHeadroom now covers the #1957 remainder of
+// #1778: later capture and finalize operations share the same bounded topology.
 func TestOrganicReviewStartDeadlineHeadroom(t *testing.T) {
 	t.Run("issue-1778", func(t *testing.T) {
 		if os.Getenv(organicLargeWorkspaceE2EEnvironment) != "1" {
-			t.Skip("set GENTLE_AI_LARGE_WORKSPACE_E2E=1 to run the large-workspace review/start deadline-headroom proof; see TestReviewFacadeOperationDeadlineSelector in internal/cli for the always-on deterministic proof of the same deadline-selection wiring")
+			t.Skip("set GENTLE_AI_LARGE_WORKSPACE_E2E=1 to run the large-workspace START/capture/finalize proof")
 		}
 		harness := newOrganicHarness(t)
-		lineage := "organic-start-deadline-headroom"
+		lineage := "organic-large-workspace-lifecycle"
 
-		// The shared facade operation deadline every other operation keeps using
-		// is 25s. Real candidate construction is dominated by one Git subprocess
-		// per intended-untracked path (untrackedProof) plus per-changed-path diff
-		// work in the frozen candidate context, so a workspace with enough new
-		// files reliably pushes construction past that shared deadline without
-		// needing an artificial delay hook.
 		const headroomFiles = 5000
 		files := make(map[string]string, headroomFiles)
 		for index := 0; index < headroomFiles; index++ {
-			files[fmt.Sprintf("bulk/headroom-%05d.txt", index)] = "headroom candidate content\n"
+			files[fmt.Sprintf("bulk/headroom-%05d.mdx", index)] = "export const value = 1\n"
 		}
 		harness.writeFiles(files)
 
@@ -90,7 +64,8 @@ func TestOrganicReviewStartDeadlineHeadroom(t *testing.T) {
 		// not itself subject to the facade deadline; only the timed call below is.
 		targetIdentity := currentChangesTargetIdentity(t, harness.repo.worktree)
 
-		started := time.Now()
+		lifecycleStarted := time.Now()
+		startedAt := time.Now()
 		stdout, stderr, err := harness.gentleAllowFailure(
 			"review", "start", "--cwd", harness.repo.worktree,
 			"--lineage", lineage,
@@ -98,26 +73,32 @@ func TestOrganicReviewStartDeadlineHeadroom(t *testing.T) {
 			"--target", targetIdentity,
 			"--projection", "workspace",
 		)
-		elapsed := time.Since(started)
-		// If review/start had regressed to the shared 25s facade deadline, a
-		// candidate this size would be cut off mid-sweep and the call above
-		// would return a non-nil err: that failure, not an elapsed-time
-		// floor, is what proves the 1778 regression didn't come back.
+		startElapsed := time.Since(startedAt)
 		if err != nil {
-			t.Fatalf("negotiated review start on a large valid workspace failed after %s: %v\nstdout:\n%s\nstderr:\n%s", elapsed, err, stdout, stderr)
+			t.Fatalf("negotiated review start on a large valid workspace failed after %s: %v\nstdout:\n%s\nstderr:\n%s", startElapsed, err, stdout, stderr)
 		}
-		if elapsed >= organicLocalTimeout {
-			t.Fatalf("negotiated review start took %s, want less than the harness local timeout %s", elapsed, organicLocalTimeout)
+		if startElapsed >= organicLocalTimeout {
+			t.Fatalf("negotiated review start took %s, want less than the harness local timeout %s", startElapsed, organicLocalTimeout)
 		}
-		// No lower-bound elapsed assertion: this must never fail just because
-		// candidate construction got faster. Log instead, so a maintainer can
-		// tell whether headroomFiles still needs bumping to keep exercising
-		// the past-25s window this test exists to cover.
-		if elapsed <= 25*time.Second {
-			t.Logf("negotiated review start on a %d-file candidate completed in %s, at or under the shared 25s facade deadline: candidate construction got faster, so this run no longer proves start-scoped deadline headroom (consider raising headroomFiles)", headroomFiles, elapsed)
-		} else {
-			t.Logf("negotiated review start on a %d-file candidate completed in %s, past the shared 25s facade deadline and under the start-scoped deadline", headroomFiles, elapsed)
+		var started organicStartResult
+		if err := json.Unmarshal([]byte(stdout), &started); err != nil {
+			t.Fatalf("decode large-workspace START: %v\n%s", err, stdout)
 		}
+		if returnedTargetIdentity := started.targetIdentity(); returnedTargetIdentity != targetIdentity {
+			t.Fatalf("START target identity = %q, want %q", returnedTargetIdentity, targetIdentity)
+		}
+		if len(started.SelectedLenses) != 1 {
+			t.Fatalf("large active-MDX workspace selected lenses = %v, want one consolidated lens", started.SelectedLenses)
+		}
+		finalized := harness.approveReview(lineage, started)
+		lifecycleElapsed := time.Since(lifecycleStarted)
+		if finalized.State != organicStateApproved {
+			t.Fatalf("large-workspace lifecycle finalized as %q, want %q", finalized.State, organicStateApproved)
+		}
+		if lifecycleElapsed >= organicLocalTimeout {
+			t.Fatalf("large-workspace lifecycle took %s, want less than the harness local timeout %s", lifecycleElapsed, organicLocalTimeout)
+		}
+		t.Logf("large-workspace lifecycle completed %d files: START=%s total=%s", headroomFiles, startElapsed, lifecycleElapsed)
 
 		harness.assertSingleReviewLineage(lineage)
 		harness.assertNoSDDArtifacts()
@@ -392,7 +373,7 @@ func TestOrganicReviewLifecycleErrorTyping(t *testing.T) {
 	t.Run("issue-1832", func(t *testing.T) {
 		// A disposable repository with no remote and no branch upstream: no
 		// publication boundary to derive at all. That is not authority
-		// damage, and while review-driven development is off it is not
+		// damage, and while receipt-driven development is off it is not
 		// something pre-push should block on.
 		harness := newOrganicHarness(t)
 		harness.git("remote", "remove", "origin")
@@ -415,8 +396,11 @@ func TestOrganicReviewLifecycleErrorTyping(t *testing.T) {
 		if result.Allowed || result.Result == string(reviewtransaction.GateAllow) {
 			t.Fatalf("disabled pre-push with no upstream fabricated an approval: %#v", result)
 		}
-		if result.Context.Denial == nil {
-			t.Fatalf("disabled pre-push with no upstream hid why no receipt governs: %#v", result)
+		// Wave 5 Slice 2 (design decision 4): the switch is consulted before
+		// any authority read, so the no-upstream boundary is never even
+		// derived while disabled -- no discovery-kind detail leaks.
+		if result.Context.Denial != nil {
+			t.Fatalf("disabled pre-push with no upstream leaked discovery-kind detail: %#v", result.Context.Denial)
 		}
 	})
 
@@ -659,7 +643,7 @@ func TestOrganicReviewExecutableTransitionContract(t *testing.T) {
 			}
 			harness.gentle(
 				"review", "capture-evidence", "--cwd", harness.repo.worktree, "--lineage", lineage,
-				"--target", status.TargetIdentity, "--expected-revision", status.Authority.Revision, "--input", evidencePath,
+				"--target", status.TargetIdentity, "--expected-revision", status.Authority.Revision, "--outcome", "passed", "--input", evidencePath,
 			)
 			stdout, stderr, err := harness.gentleAllowFailure("review", "finalize", "--cwd", harness.repo.worktree, "--lineage", lineage)
 			if err != nil {
@@ -1087,37 +1071,21 @@ func TestOrganicReviewRecoveryGraph(t *testing.T) {
 		harness.assertNoSDDArtifacts()
 	})
 
-	t.Run("issue-1782", func(t *testing.T) {
-		harness := newOrganicHarness(t)
-		var commits []string
-		for _, name := range []string{"a", "b", "c"} {
-			lineage := "organic-chain-segment-1782-" + name
-			path := "segment-" + name + ".txt"
-			harness.writeFiles(map[string]string{path: "reviewed segment " + name + "\n"})
-			harness.git("add", "--", path)
-			started, _ := harness.startReview(lineage, "--projection", "staged")
-			if approved := harness.approveReview(lineage, started); approved.State != organicStateApproved {
-				t.Fatalf("segment %s did not approve: %#v", name, approved)
-			}
-			expected := strings.TrimSpace(harness.git("rev-parse", "HEAD"))
-			harness.git("commit", "-q", "-m", "deliver reviewed segment "+name)
-			harness.pushWithLease(expected)
-			commits = append(commits, strings.TrimSpace(harness.git("rev-parse", "HEAD")))
-		}
-
-		// Move the published tracker back to the FIRST delivered commit
-		// (segment A): the chain A->B->C on top of it is genuinely linear, but
-		// the historical prologue commit's receipt still lands exactly on A.
-		// Before the fix this was misreported as a chain convergence.
-		harness.bareGit("update-ref", "refs/heads/main", commits[0])
-		harness.git("fetch", "-q", "origin", "main")
-
-		prGate := harness.gate("pre-pr", "--base-ref", "origin/main")
-		if !prGate.Allowed || prGate.Result != organicGateAllow {
-			t.Fatalf("linear chain with the publication tracker at its own mid-chain root = %#v", prGate)
-		}
-		harness.assertNoSDDArtifacts()
-	})
+	// issue-1782 is DELETED, not superseded (Wave 5 Slice 5, pre-PR chain
+	// composition deletion): its regression -- a linear A->B->C delivery
+	// chain misreported as a "chain convergence" when the published
+	// tracker sat at the chain's own mid-chain root -- was a bug inside
+	// EvaluateCompactPrePRChain's own composition graph and convergence
+	// detection. That graph no longer exists
+	// (TestPrePRComposition_ZeroCallers, internal/cli, proves it by
+	// call-absence), so there is no analogous "after" behavior to pin: a
+	// three-segment linear chain like this fixture built now denies
+	// receipt_ambiguous at pre-PR regardless of where the tracker sits,
+	// exactly like TestUnqualifiedPrePRDiscoveryDeniesSequentialCompactReceiptsWithoutComposition
+	// (internal/cli) and j61-pre-pr-multi-segment-delivery-denies-without-composition
+	// (bench/journeys_wave5.go) already prove for the general multi-segment
+	// case -- this fixture's specific tracker-placement detail is no longer
+	// a distinguishing variable once composition itself is gone.
 }
 
 // TestOrganicReviewStoreRobustness proves Group D (1813): one invalid
@@ -1366,7 +1334,7 @@ func TestOrganicReviewDefectReportToolFaultVersusUserDecision(t *testing.T) {
 		}
 		harness.gentle(
 			"review", "capture-evidence", "--cwd", harness.repo.worktree, "--lineage", lineage,
-			"--target", status.TargetIdentity, "--expected-revision", status.Authority.Revision, "--input", firstEvidence,
+			"--target", status.TargetIdentity, "--expected-revision", status.Authority.Revision, "--outcome", "passed", "--input", firstEvidence,
 		)
 
 		secondEvidence := filepath.Join(t.TempDir(), "evidence-two.txt")
@@ -1375,7 +1343,7 @@ func TestOrganicReviewDefectReportToolFaultVersusUserDecision(t *testing.T) {
 		}
 		_, stderr, err := harness.gentleAllowFailure(
 			"review", "capture-evidence", "--cwd", harness.repo.worktree, "--lineage", lineage,
-			"--target", status.TargetIdentity, "--expected-revision", status.Authority.Revision, "--input", secondEvidence,
+			"--target", status.TargetIdentity, "--expected-revision", status.Authority.Revision, "--outcome", "passed", "--input", secondEvidence,
 		)
 		if err == nil {
 			t.Fatal("conflicting captured final evidence unexpectedly succeeded")

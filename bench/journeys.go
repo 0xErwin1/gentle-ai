@@ -23,6 +23,12 @@ type statusEnvelope struct {
 		Revision  string `json:"revision"`
 	} `json:"authority"`
 	TargetIdentity string `json:"target_identity"`
+	Projection     struct {
+		BaseTree             string   `json:"base_tree"`
+		CurrentCandidateTree string   `json:"current_candidate_tree"`
+		PathsDigest          string   `json:"paths_digest"`
+		Paths                []string `json:"paths"`
+	} `json:"projection"`
 	NextTransition struct {
 		Kind    string `json:"kind"`
 		Collect struct {
@@ -44,6 +50,7 @@ type statusEnvelope struct {
 		} `json:"collect"`
 		Execute struct {
 			Operation string `json:"operation"`
+			Command   string `json:"command"`
 			Arguments []struct {
 				Name  string `json:"name"`
 				Value string `json:"value"`
@@ -95,7 +102,12 @@ var captureEvidenceCapability = &Capability{
 // readStatus issues one `review status --next-transition`. The invocation is
 // counted: an agent driving this flow really does have to spend it.
 func readStatus(r *journeyRun) (statusEnvelope, error) {
-	observation := r.run([]string{"review", "status", "--cwd", r.sandbox.Repo, "--contract", reviewContract, "--next-transition"}, false)
+	return readStatusFor(r)
+}
+
+func readStatusFor(r *journeyRun, selectors ...string) (statusEnvelope, error) {
+	args := append([]string{"review", "status", "--cwd", r.sandbox.Repo, "--contract", reviewContract, "--next-transition"}, selectors...)
+	observation := r.run(args, false)
 	var envelope statusEnvelope
 	if err := json.Unmarshal([]byte(strings.TrimSpace(observation.Stdout)), &envelope); err != nil {
 		return envelope, fmt.Errorf("parse review status: %w (stderr: %s)", err, firstLine(observation.Stderr))
@@ -138,8 +150,12 @@ func writeScratch(sandbox *Sandbox, name string, content []byte) (string, error)
 // the next transition, synthesize the reviewer result it asks for, capture it,
 // repeat. Each capture counts as one model run.
 func captureAllLenses(r *journeyRun) error {
+	return captureAllLensesFor(r)
+}
+
+func captureAllLensesFor(r *journeyRun, selectors ...string) error {
 	for round := 0; round < 8; round++ {
-		envelope, err := readStatus(r)
+		envelope, err := readStatusFor(r, selectors...)
 		if err != nil {
 			return err
 		}
@@ -173,7 +189,11 @@ func captureAllLenses(r *journeyRun) error {
 
 // captureFinalEvidence answers the verification-evidence collect step.
 func captureFinalEvidence(r *journeyRun) error {
-	envelope, err := readStatus(r)
+	return captureFinalEvidenceFor(r)
+}
+
+func captureFinalEvidenceFor(r *journeyRun, selectors ...string) error {
+	envelope, err := readStatusFor(r, selectors...)
 	if err != nil {
 		return err
 	}
@@ -190,6 +210,7 @@ func captureFinalEvidence(r *journeyRun) error {
 		"--lineage", envelope.argument("lineage"),
 		"--target", envelope.argument("target"),
 		"--expected-revision", envelope.argument("expected-revision"),
+		"--outcome", "passed",
 		"--input", path,
 	}, false)
 	return nil
@@ -245,21 +266,103 @@ func runNextTransitionVerbatim(r *journeyRun) (Observation, error) {
 	if err != nil {
 		return Observation{}, err
 	}
+	return runPrintedTransition(r, envelope)
+}
+
+// runPrintedTransition runs the command the product PRINTED, exactly as
+// printed.
+//
+// It deliberately does not re-derive the verb from the operation name, which
+// is what this corpus used to do. That re-derivation was the reason a journey
+// named "the printed transition executes exactly as printed" kept passing over
+// an execute transition whose `command` was empty: the benchmark quietly
+// assembled the command the product owed the reader, ran its own, and reported
+// the flow as continuing. "Runs verbatim" has to mean the printed bytes, or it
+// measures the benchmark instead of the product.
+//
+// It is also more correct than the split it replaces. An operation name is not
+// a verb -- "review.retry_final_verification" and "review.bind_sdd" spell
+// their verbs with hyphens -- so splitting on "." only ever produced a runnable
+// verb by coincidence.
+func runPrintedTransition(r *journeyRun, envelope statusEnvelope) (Observation, error) {
 	if envelope.NextTransition.Kind != "execute" {
 		return Observation{}, fmt.Errorf("expected an execute transition, got %q", envelope.NextTransition.Kind)
 	}
-	verb := strings.SplitN(envelope.NextTransition.Execute.Operation, ".", 2)
-	if len(verb) != 2 {
-		return Observation{}, fmt.Errorf("execute operation %q is not <verb>.<subcommand>", envelope.NextTransition.Execute.Operation)
-	}
-	args := []string{verb[0], verb[1], "--cwd", r.sandbox.Repo}
-	for _, argument := range envelope.NextTransition.Execute.Arguments {
-		if argument.Token == "" {
-			return Observation{}, fmt.Errorf("argument %q carried no runnable token", argument.Name)
-		}
-		args = append(args, argument.Token)
+	args, err := printedCommandArguments(envelope.NextTransition.Execute.Command)
+	if err != nil {
+		return Observation{}, fmt.Errorf("execute transition for %q %w", envelope.NextTransition.Execute.Operation, err)
 	}
 	return r.run(args, false), nil
+}
+
+// printedCommandArguments turns one printed command line into the argv a POSIX
+// shell would hand the product, and refuses anything that is not a complete,
+// immediately runnable `gentle-ai ...` invocation.
+func printedCommandArguments(command string) ([]string, error) {
+	words, err := splitPrintedCommandWords(command)
+	if err != nil {
+		return nil, err
+	}
+	if len(words) == 0 {
+		return nil, errors.New("carried no command to run")
+	}
+	if words[0] != productName {
+		return nil, fmt.Errorf("printed a command that starts with %q, not %q", words[0], productName)
+	}
+	if len(words) == 1 {
+		return nil, fmt.Errorf("printed a command that names no arguments: %q", command)
+	}
+	if !HasRunnableCommand(command) {
+		return nil, fmt.Errorf("printed a command that is not runnable as printed: %q", command)
+	}
+	return words[1:], nil
+}
+
+// splitPrintedCommandWords splits a printed command line into shell words.
+//
+// It understands exactly the quoting the product emits and nothing more:
+// POSIX single quotes, and a backslash escape for the one character single
+// quotes cannot contain (reviewTransitionShellWord renders an embedded quote
+// as '\”). Anything else -- an unterminated quote, a trailing escape -- is a
+// line that would not run as printed, and saying so is the point.
+func splitPrintedCommandWords(line string) ([]string, error) {
+	words := []string{}
+	var word strings.Builder
+	quoted, escaped, started := false, false, false
+	for _, char := range line {
+		switch {
+		case quoted && char == '\'':
+			quoted = false
+		case quoted:
+			word.WriteRune(char)
+		case escaped:
+			word.WriteRune(char)
+			escaped = false
+		case char == '\\':
+			escaped, started = true, true
+		case char == '\'':
+			quoted, started = true, true
+		case char == ' ' || char == '\t' || char == '\n' || char == '\r':
+			if started {
+				words = append(words, word.String())
+				word.Reset()
+				started = false
+			}
+		default:
+			word.WriteRune(char)
+			started = true
+		}
+	}
+	if quoted {
+		return nil, fmt.Errorf("printed a command with an unterminated quote: %q", line)
+	}
+	if escaped {
+		return nil, fmt.Errorf("printed a command with a trailing escape: %q", line)
+	}
+	if started {
+		words = append(words, word.String())
+	}
+	return words, nil
 }
 
 // ---------------------------------------------------------------------------
@@ -407,11 +510,19 @@ var abandonCapability = &Capability{Verb: []string{"review", "abandon"}, Flags: 
 // coreJourneys below are the flows drawn from the community testing guide and
 // the failure paths it collected; edgeJourneys in journeys_edge.go are the edge
 // cases those flows never reached; sddJourneys in journeys_sdd.go is the SDD
-// remediation successor cycle and the two surfaces that meet it, which nothing
-// in the first two parts had ever driven.
+// remediation successor cycle and fail-closed authority controls; and
+// waveOneJourneys pins integrated community fixes at their real CLI boundary.
 func Journeys() []Journey {
 	journeys := append(coreJourneys(), edgeJourneys()...)
-	return append(journeys, sddJourneys()...)
+	journeys = append(journeys, sddJourneys()...)
+	journeys = append(journeys, sddChainJourneys()...)
+	journeys = append(journeys, captureEvidenceDescriptorJourneys()...)
+	journeys = append(journeys, waveOneJourneys()...)
+	journeys = append(journeys, waveThreeJourneys()...)
+	journeys = append(journeys, waveFiveJourneys()...)
+	journeys = append(journeys, advisoryJourneys()...)
+	journeys = append(journeys, zeroDeltaJourneys()...)
+	return append(journeys, localGateBaseAdvanceJourneys()...)
 }
 
 func coreJourneys() []Journey {
