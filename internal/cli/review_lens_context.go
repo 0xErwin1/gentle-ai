@@ -128,6 +128,7 @@ type reviewLensContextDeps struct {
 	discover func(context.Context, string, string, bool) (reviewtransaction.CompactStore, reviewtransaction.CompactRecord, error)
 	prepare  func(reviewtransaction.SnapshotBuilder, context.Context, reviewtransaction.Snapshot) (reviewLensCandidateInspector, error)
 	inspect  func(context.Context, reviewLensCandidateInspector, string, int, string) ([]byte, error)
+	close    func(reviewLensCandidateInspector) error
 	record   func(string, reviewtransaction.LensContextEmission) error
 }
 
@@ -148,6 +149,7 @@ func reviewLensContextDependencies() reviewLensContextDeps {
 		inspect: func(ctx context.Context, inspector reviewLensCandidateInspector, operation string, pathIndex int, side string) ([]byte, error) {
 			return inspector.Inspect(ctx, operation, pathIndex, side)
 		},
+		close:  func(inspector reviewLensCandidateInspector) error { return inspector.Close() },
 		record: reviewtransaction.PublishLensContextEmission,
 	}
 }
@@ -180,12 +182,7 @@ func runReviewLensContext(args []string, help io.Writer, deps reviewLensContextD
 		return nil, err
 	}
 	defer func() {
-		if cleanupErr := authority.Inspector.Close(); cleanupErr != nil {
-			payload = nil
-			if err == nil {
-				err = reviewLensContextInspectionFailure(ctx, cleanupErr)
-			}
-		}
+		payload, err = reviewLensContextCleanup(ctx, payload, err, func() error { return deps.close(authority.Inspector) })
 	}()
 	if len(authority.Frozen.ChangedPathManifest) > advisoryreview.MaxEvidenceEntries {
 		return nil, reviewLensContextRefusal("lens_context_budget_exceeded", reviewLensContextCapacityAction(len(authority.Frozen.ChangedPathManifest)))
@@ -430,6 +427,18 @@ func reviewLensContextInspectionFailure(ctx context.Context, err error) error {
 	return reviewLensContextRefusal("lens_context_inspection_failed", reviewLensContextRefreshAction)
 }
 
+func reviewLensContextCleanup[T any](ctx context.Context, result T, operationErr error, close func() error) (T, error) {
+	cleanupErr := close()
+	if cleanupErr == nil {
+		return result, operationErr
+	}
+	var zero T
+	if operationErr != nil {
+		return zero, errors.Join(operationErr, cleanupErr)
+	}
+	return zero, reviewLensContextInspectionFailure(ctx, cleanupErr)
+}
+
 // reviewLensContextDeadline reports the aggregate-deadline refusal when either
 // the operation context expired or the failure itself carries a cancellation,
 // and nil when the failure has an unrelated cause. It never invents a
@@ -445,5 +454,5 @@ func reviewLensContextDeadline(ctx context.Context, err error) error {
 }
 
 func reviewLensContextCapacityAction(entries int) string {
-	return fmt.Sprintf("immutable candidate evidence has %d paths but advisory review accepts at most %d evidence entries; retrying this candidate cannot succeed; split the candidate into a chained sequence of smaller reviewable commits, then start a review for the reduced scope by running %s", entries, advisoryreview.MaxEvidenceEntries, reviewNextTransitionRefreshCommandV21)
+	return fmt.Sprintf("immutable candidate evidence has %d paths but provider-owned reviewer context accepts at most %d evidence entries; retrying this candidate cannot succeed; split the candidate into a chained sequence of smaller reviewable commits, then start a review for the reduced scope by running %s", entries, advisoryreview.MaxEvidenceEntries, reviewNextTransitionRefreshCommandV21)
 }

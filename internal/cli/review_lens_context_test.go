@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -267,7 +268,8 @@ func TestReviewLensContextRefusesManifestOverAdvisoryCapacityBeforePatchInspecti
 	if err == nil || !strings.Contains(err.Error(), "lens_context_budget_exceeded") {
 		t.Fatalf("entry-capacity error = %v", err)
 	}
-	if !strings.Contains(err.Error(), "33") || !strings.Contains(err.Error(), "32") ||
+	if strings.Contains(err.Error(), "advisory review") || !strings.Contains(err.Error(), "provider-owned reviewer context accepts at most") ||
+		!strings.Contains(err.Error(), "33") || !strings.Contains(err.Error(), "32") || !strings.Contains(err.Error(), "retrying this candidate cannot succeed") ||
 		!strings.Contains(err.Error(), "chained sequence of smaller reviewable commits") || !strings.Contains(err.Error(), reviewNextTransitionRefreshCommandV21) {
 		t.Fatalf("entry-capacity guidance does not name its limit and runnable continuation: %q", err)
 	}
@@ -276,6 +278,61 @@ func TestReviewLensContextRefusesManifestOverAdvisoryCapacityBeforePatchInspecti
 	}
 	if len(block) != 0 {
 		t.Fatalf("entry-capacity refusal emitted %d bytes of reviewer context", len(block))
+	}
+}
+
+func TestReviewLensContextCallersFailClosedOnInspectorCleanupFailure(t *testing.T) {
+	cleanupErr := errors.New("close inspector")
+	for _, caller := range []struct {
+		name string
+		call func(reviewLensContextDeps, string, string) (error, bool)
+	}{
+		{"lens context", func(deps reviewLensContextDeps, handle, lens string) (error, bool) {
+			payload, err := runReviewLensContext([]string{"--repository-context", handle, "--lens", lens}, io.Discard, deps)
+			return err, payload == nil
+		}},
+		{"advisory request", func(deps reviewLensContextDeps, handle, lens string) (error, bool) {
+			request, err := resolveAdvisoryRequest(context.Background(), deps, handle, lens)
+			return err, request.ArtifactSubject == (reviewtransaction.ArtifactSubject{}) && request.ChangedPathManifest == nil && request.Evidence == nil
+		}},
+	} {
+		for _, operation := range []bool{false, true} {
+			t.Run(caller.name, func(t *testing.T) {
+				_, args, _, _ := newCandidateInspectionReview(t, "candidate\n", true)
+				handle, lens := args[slices.Index(args, "--repository-context")+1], args[slices.Index(args, "--lens")+1]
+				deps := reviewLensContextDependencies()
+				deps.close = func(inspector reviewLensCandidateInspector) error {
+					if err := inspector.Close(); err != nil {
+						return err
+					}
+					return cleanupErr
+				}
+				if operation {
+					inspect := deps.inspect
+					deps.inspect = func(ctx context.Context, inspector reviewLensCandidateInspector, kind string, index int, side string) ([]byte, error) {
+						if kind == "patch" {
+							return nil, nil
+						}
+						return inspect(ctx, inspector, kind, index, side)
+					}
+				}
+				err, zero := caller.call(deps, handle, lens)
+				if !zero {
+					t.Fatal("cleanup did not zero the result")
+				}
+				if !operation {
+					want := reviewLensContextInspectionFailure(context.Background(), cleanupErr).Error()
+					if err == nil || err.Error() != want {
+						t.Fatalf("cleanup-only error = %v, want %q", err, want)
+					}
+					return
+				}
+				var refusal *reviewLensContextError
+				if !errors.As(err, &refusal) || refusal.Code != "lens_context_empty_patch" || !errors.Is(err, cleanupErr) {
+					t.Fatalf("operation and cleanup error = %v, want empty-patch refusal and cleanup cause", err)
+				}
+			})
+		}
 	}
 }
 

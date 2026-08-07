@@ -417,20 +417,7 @@ func TestPreparedCandidateInspectorReusesOneSetupForFourReads(t *testing.T) {
 	if children != 11 {
 		t.Fatalf("Git children for prepare plus four reads = %d, want 11", children)
 	}
-	if err := inspector.Close(); err != nil {
-		t.Fatal(err)
-	}
-}
-
-func TestPreparedCandidateInspectorMatchesOneShotInspection(t *testing.T) {
-	requireSnapshotGit(t)
-	repo, snapshot := preparedCandidateSnapshot(t)
 	builder := SnapshotBuilder{Repo: repo}
-	inspector, err := builder.PrepareCandidateInspector(t.Context(), snapshot)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer inspector.Close()
 	for _, inspection := range []struct {
 		operation string
 		pathIndex int
@@ -450,15 +437,6 @@ func TestPreparedCandidateInspectorMatchesOneShotInspection(t *testing.T) {
 		if !bytes.Equal(got, want) {
 			t.Fatalf("prepared Inspect(%q, %d, %q) differs from one-shot", inspection.operation, inspection.pathIndex, inspection.side)
 		}
-	}
-}
-
-func TestPreparedCandidateInspectorClosesAfterInspectionError(t *testing.T) {
-	requireSnapshotGit(t)
-	repo, snapshot := preparedCandidateSnapshot(t)
-	inspector, err := (SnapshotBuilder{Repo: repo}).PrepareCandidateInspector(t.Context(), snapshot)
-	if err != nil {
-		t.Fatal(err)
 	}
 	if _, err := inspector.Inspect(t.Context(), "patch", -1, ""); err == nil {
 		t.Fatal("Inspect() error = nil, want missing canonical path index refusal")
