@@ -877,3 +877,129 @@ func TestReviewForecastHeadMatchesNextTransitionAndTailIsDescriptive(t *testing.
 		t.Fatalf("unexpected step 2: %#v", forecastFresh.Steps[1])
 	}
 }
+
+func TestReviewStatusValidateRejectsMalformedForecast(t *testing.T) {
+	validTransition := &ReviewNextTransition{
+		Kind:       "stop",
+		ReasonCode: "corrupted_or_unverifiable_authority",
+	}
+
+	tests := []struct {
+		name     string
+		forecast *ReviewForecast
+		wantErr  string
+	}{
+		{
+			name: "forecast without next_transition",
+			forecast: &ReviewForecast{
+				Horizon: ForecastHorizonTerminal,
+				Steps: []ReviewForecastItem{
+					{Step: 1, Kind: "stop", ReasonCode: "corrupted_or_unverifiable_authority", Description: "desc"},
+				},
+			},
+			wantErr: "forecast without next_transition is invalid",
+		},
+		{
+			name: "invalid horizon",
+			forecast: &ReviewForecast{
+				Horizon: "invalid_horizon",
+				Steps: []ReviewForecastItem{
+					{Step: 1, Kind: "stop", ReasonCode: "corrupted_or_unverifiable_authority", Description: "desc"},
+				},
+			},
+			wantErr: `invalid forecast horizon "invalid_horizon"`,
+		},
+		{
+			name: "empty steps",
+			forecast: &ReviewForecast{
+				Horizon: ForecastHorizonTerminal,
+				Steps:   []ReviewForecastItem{},
+			},
+			wantErr: "forecast steps must not be empty",
+		},
+		{
+			name: "non sequential step number",
+			forecast: &ReviewForecast{
+				Horizon: ForecastHorizonTerminal,
+				Steps: []ReviewForecastItem{
+					{Step: 2, Kind: "stop", ReasonCode: "corrupted_or_unverifiable_authority", Description: "desc"},
+				},
+			},
+			wantErr: "forecast step 1 has non-sequential number 2",
+		},
+		{
+			name: "invalid step kind",
+			forecast: &ReviewForecast{
+				Horizon: ForecastHorizonTerminal,
+				Steps: []ReviewForecastItem{
+					{Step: 1, Kind: "invalid_kind", ReasonCode: "corrupted_or_unverifiable_authority", Description: "desc"},
+				},
+			},
+			wantErr: `forecast step 1 has invalid kind "invalid_kind"`,
+		},
+		{
+			name: "empty reason code",
+			forecast: &ReviewForecast{
+				Horizon: ForecastHorizonTerminal,
+				Steps: []ReviewForecastItem{
+					{Step: 1, Kind: "stop", ReasonCode: "  ", Description: "desc"},
+				},
+			},
+			wantErr: "forecast step 1 has empty reason_code",
+		},
+		{
+			name: "empty description",
+			forecast: &ReviewForecast{
+				Horizon: ForecastHorizonTerminal,
+				Steps: []ReviewForecastItem{
+					{Step: 1, Kind: "stop", ReasonCode: "corrupted_or_unverifiable_authority", Description: "  "},
+				},
+			},
+			wantErr: "forecast step 1 has empty description",
+		},
+		{
+			name: "head divergence",
+			forecast: &ReviewForecast{
+				Horizon: ForecastHorizonTerminal,
+				Steps: []ReviewForecastItem{
+					{Step: 1, Kind: "execute", ReasonCode: "corrupted_or_unverifiable_authority", Description: "desc"},
+				},
+			},
+			wantErr: "forecast head (execute/corrupted_or_unverifiable_authority) diverges from next_transition (stop/corrupted_or_unverifiable_authority)",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			status := newReviewTargetStatusResult(reviewtransaction.TargetStatusResult{
+				Applicability:    reviewtransaction.TargetApplicabilityCorrupted,
+				AuthorityVersion: reviewtransaction.AuthorityVersionCompact,
+				Action:           reviewtransaction.TargetStatusActionStop,
+				Replayability:    reviewtransaction.ReplayabilityNotReplayable,
+			})
+			status.TargetIdentity = "sha256:" + strings.Repeat("a", 64)
+			status.Projection = ReviewTargetStatusProjection{
+				Schema:                  ReviewIntegrationProjectionSchema,
+				Projection:              reviewtransaction.ProjectionWorkspace,
+				BaseTree:                strings.Repeat("a", 40),
+				InitialReviewTree:       strings.Repeat("b", 40),
+				CurrentCandidateTree:    strings.Repeat("c", 40),
+				PathsDigest:             "sha256:" + strings.Repeat("a", 64),
+				IntendedUntrackedProof:  "sha256:" + strings.Repeat("b", 64),
+				InitialSnapshotIdentity: status.TargetIdentity,
+				CurrentSnapshotIdentity: status.TargetIdentity,
+				Paths:                   []string{"tracked.txt"},
+				IntendedUntracked:       []string{},
+			}
+			status.Forecast = tt.forecast
+			if tt.name != "forecast without next_transition" {
+				status.NextTransition = validTransition
+			}
+
+			err := status.Validate()
+			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("expected error containing %q, got %v", tt.wantErr, err)
+			}
+		})
+	}
+}
