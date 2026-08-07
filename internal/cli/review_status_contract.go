@@ -67,13 +67,13 @@ type ReviewTargetStatusResult struct {
 	// ActionDisposition names the provider recovery class accepted by the
 	// selected action. Generic recover and final-verification retry remain
 	// distinct operations.
-	ActionDisposition       reviewtransaction.RecoveryDisposition                `json:"action_disposition,omitempty"`
-	Replayability           reviewtransaction.Replayability                      `json:"replayability"`
-	Frozen                  *ReviewTargetStatusFrozen                            `json:"frozen,omitempty"`
-	TargetIdentity          string                                               `json:"target_identity"`
-	AuthorityTargetIdentity string                                               `json:"authority_target_identity,omitempty"`
-	Projection              ReviewTargetStatusProjection                         `json:"projection"`
-	Repair                  reviewtransaction.AuthorityRepairAssessment          `json:"repair"`
+	ActionDisposition       reviewtransaction.RecoveryDisposition       `json:"action_disposition,omitempty"`
+	Replayability           reviewtransaction.Replayability             `json:"replayability"`
+	Frozen                  *ReviewTargetStatusFrozen                   `json:"frozen,omitempty"`
+	TargetIdentity          string                                      `json:"target_identity"`
+	AuthorityTargetIdentity string                                      `json:"authority_target_identity,omitempty"`
+	Projection              ReviewTargetStatusProjection                `json:"projection"`
+	Repair                  reviewtransaction.AuthorityRepairAssessment `json:"repair"`
 	// Disposition is Wave 6's negotiated-route provider preview (rdd-closure-
 	// disposition-execution / "Reachable Through the Negotiated Transition
 	// Route"): populated only when Repair is not eligible but a closed
