@@ -39,13 +39,14 @@ type ClaudePhaseAssignmentState struct {
 
 // InstallState holds the persisted user selections from the last install run.
 type InstallState struct {
-	InstalledAgents     []string            `json:"installed_agents"`
-	SelectionConfigured bool                `json:"selection_configured,omitempty"`
-	Components          []model.ComponentID `json:"components,omitempty"`
-	Skills              []model.SkillID     `json:"skills,omitempty"`
-	Preset              model.PresetID      `json:"preset,omitempty"`
-	SDDMode             model.SDDModeID     `json:"sdd_mode,omitempty"`
-	StrictTDD           bool                `json:"strict_tdd,omitempty"`
+	InstalledAgents        []string            `json:"installed_agents"`
+	InstalledBinaryVersion string              `json:"installed_binary_version,omitempty"`
+	SelectionConfigured    bool                `json:"selection_configured,omitempty"`
+	Components             []model.ComponentID `json:"components,omitempty"`
+	Skills                 []model.SkillID     `json:"skills,omitempty"`
+	Preset                 model.PresetID      `json:"preset,omitempty"`
+	SDDMode                model.SDDModeID     `json:"sdd_mode,omitempty"`
+	StrictTDD              bool                `json:"strict_tdd,omitempty"`
 	// CommunityTools records optional tools explicitly selected in the Gentle AI
 	// installer. Configured distinguishes a completed empty selection from legacy
 	// state files that predate persistence of this choice.
@@ -194,6 +195,7 @@ func MergeAgents(existing InstallState, newAgents []string) InstallState {
 
 	return InstallState{
 		InstalledAgents:             merged,
+		InstalledBinaryVersion:      existing.InstalledBinaryVersion,
 		SelectionConfigured:         existing.SelectionConfigured,
 		Components:                  existing.Components,
 		Skills:                      existing.Skills,

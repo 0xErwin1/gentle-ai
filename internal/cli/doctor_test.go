@@ -372,6 +372,43 @@ func TestCheckStateJSON_OK(t *testing.T) {
 	}
 }
 
+func TestCheckInstalledAssetVersion_MatchingPass(t *testing.T) {
+	homeDir := t.TempDir()
+	stateDir := filepath.Join(homeDir, ".gentle-ai")
+	if err := os.MkdirAll(stateDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	payload := fmt.Sprintf(`{"installed_binary_version":%q}`, AppVersion)
+	if err := os.WriteFile(filepath.Join(stateDir, "state.json"), []byte(payload), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	got := checkInstalledAssetVersion(homeDir)
+	if got.Status != CheckStatusPass {
+		t.Errorf("expected pass, got %s: %s", got.Status, got.Detail)
+	}
+}
+
+func TestCheckInstalledAssetVersion_SkewWarning(t *testing.T) {
+	homeDir := t.TempDir()
+	stateDir := filepath.Join(homeDir, ".gentle-ai")
+	if err := os.MkdirAll(stateDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	payload := `{"installed_binary_version":"v0.9.0"}`
+	if err := os.WriteFile(filepath.Join(stateDir, "state.json"), []byte(payload), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	got := checkInstalledAssetVersion(homeDir)
+	if got.Status != CheckStatusWarn {
+		t.Errorf("expected warn for version skew, got %s: %s", got.Status, got.Detail)
+	}
+	if !strings.Contains(got.Detail, "v0.9.0") || !strings.Contains(got.Detail, "gentle-ai sync") {
+		t.Errorf("unexpected detail: %s", got.Detail)
+	}
+}
+
 // --- checkEngramReachable ---
 
 // setStdioProbeForTest pins the stdio MCP probe outcome for one test.
