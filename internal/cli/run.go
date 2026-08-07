@@ -1719,15 +1719,6 @@ var tuiInstallStagePlan = func(runtime *installRuntime) pipeline.StagePlan {
 	return runtime.stagePlan()
 }
 
-// ExecuteTUIInstall runs the same install runtime as the CLI and carries
-// non-fatal Pi CodeGraph manual actions into the TUI completion result.
-// It discards the orchestrator for callers that cannot compensate a
-// downstream state-persistence failure.
-func ExecuteTUIInstall(homeDir string, selection model.Selection, resolved planner.ResolvedPlan, profile system.PlatformProfile, onProgress pipeline.ProgressFunc) pipeline.ExecutionResult {
-	result, _ := ExecuteTUIInstallWithOrchestrator(homeDir, selection, resolved, profile, onProgress)
-	return result
-}
-
 // ExecuteTUIInstallWithOrchestrator runs a TUI install and returns the
 // orchestrator so a downstream state-persistence failure can be compensated.
 // Carries non-fatal Pi CodeGraph manual actions into the TUI completion result.
