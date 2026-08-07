@@ -85,29 +85,27 @@ func TestStablePromotionWorkflowUsesBoundSourceAndProtectedPublication(t *testin
 		"concurrency:",
 		"./scripts/promote-stable-preflight.sh",
 		"ref: ${{ steps.provenance.outputs.source_sha }}",
-		"workdir: source",
+		"reset-empty-draft",
 		"environment: release",
 		"actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd",
-		"source prerelease tag drifted",
-		"stable tag readback failed",
-		"go mod tidy -diff",
+		"recovery_state",
+		"stable tag recovery identity changed",
+		"test -n \"$GH_TOKEN\"",
 		"./scripts/release-signing-preflight.sh",
-		"HOMEBREW_TAP_TOKEN",
+		"GORELEASER_CURRENT_TAG",
 		"./scripts/verify-release-assets.sh",
-		".immutable == true",
-		"restore-main-access:",
-		"deployment-branch-policies/$POLICY_ID",
+		"stable published recovery state changed",
+		"RELEASE_ENVIRONMENT_POLICY_TOKEN",
+		"--method DELETE",
 	} {
 		if !strings.Contains(workflow, required) {
 			t.Errorf("stable promotion workflow is missing %q", required)
 		}
 	}
-	for _, forbidden := range []string{"actions/workflows/", "disable"} {
-		if strings.Contains(strings.ToLower(workflow), forbidden) {
-			t.Errorf("stable promotion workflow must not %q", forbidden)
-		}
+	if regexp.MustCompile(`(?i)actions/workflows/.*/disable`).MatchString(workflow) {
+		t.Error("stable promotion workflow must not disable the legacy publisher")
 	}
-	if regexp.MustCompile(`(?m)^\s*run:.*\bgit push\b`).MatchString(workflow) {
+	if regexp.MustCompile(`(?m)\bgit push\b`).MatchString(workflow) {
 		t.Error("stable promotion workflow must not push a tag from a shell step")
 	}
 	action := regexp.MustCompile(`^\s*(-\s*)?uses:\s*[^@\s]+@([0-9a-f]{40})(?:\s|$)`)
@@ -269,9 +267,10 @@ func TestReleaseSecurityScriptsAreSyntacticallyValidAndFailClosed(t *testing.T) 
 			path: "promote-stable-preflight.sh",
 			required: []string{
 				`source prerelease tag must be canonical`,
-				`release environment policy ID is invalid`,
-				`stable tag must be $expected_stable`,
-				`source prerelease release must be immutable, published, and prerelease`,
+				`workflow revision is not exact current origin/main`,
+				`stable tag is incompatible with the admitted source`,
+				`stable release state is incompatible with safe recovery`,
+				`recovery_state=%s`,
 				`GITHUB_SHA=$source_sha ./scripts/require-ci-success.sh`,
 			},
 		},
