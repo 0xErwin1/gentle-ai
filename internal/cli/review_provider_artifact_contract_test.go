@@ -22,7 +22,7 @@ func TestReviewProviderArtifactV1ContractsArePinned(t *testing.T) {
 		// every new snapshot. Deliberate, not drift.
 		"fixtures/start-v2.fixture.json":         "cc229f42781add54a86d904e913bb72e1373f04e7520a28fb3d245674bf703b5",
 		"fixtures/status.fixture.json":           "555054d8046a896162995dcb117752f9cd1ef903fb9ebaad29af1b7e7f319bb3",
-		"fixtures/status-v2.fixture.json":        "d0dbcddc5bf8947de314f3a9e938b094627b0f01ab3bfaa10a79b3b27fda7a76",
+		"fixtures/status-v2.fixture.json":        "cb6c5ca78603e928c50a5ba25914eeb2168f10c57ab6e4c137d524bf3cb2fa1c",
 		"fixtures/status-ambiguous.fixture.json": "ee695fd58ba72adfb3b51dfd16432a177498173a45bfcb594d6bdc53bfa32e6e",
 		"fixtures/status-corrupted.fixture.json": "4cfc0048c28a39cec8a32fecfaad66e56e5c1248263ceb4ce66b6717981880b2",
 		"fixtures/status-recover.fixture.json":   "714f762f72380ce93d567626cafbaa536ab3aae02af73d3d40ca123f1f30d8b0",
@@ -34,7 +34,7 @@ func TestReviewProviderArtifactV1ContractsArePinned(t *testing.T) {
 		"schemas/start.schema.json":              "4296aebbd4128ce51945a2f6d3228aa77ac7215c802978d559bff5279ec56229",
 		"schemas/start-v2.schema.json":           "ec8550cd93bbe84af1ce87dfd7abfa9e24692f42b20f8f0bf9cac1d4b88ea46c",
 		"schemas/status.schema.json":             "250d2c646b8822b38eaefafd2bfdefa1134cc23a00e553a7201f33257573149a",
-		"schemas/status-v2.schema.json":          "dd9914b647a1d9edc4ecdcbed4f0c800b39ec290912d5c2a4cc6ba3098d5f21e",
+		"schemas/status-v2.schema.json":          "9bd808db7abe0dfde3a49b41784456a000b0266ccc15d1601adbc333bea739aa",
 	}
 	for name, expected := range want {
 		payload, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(name)))
