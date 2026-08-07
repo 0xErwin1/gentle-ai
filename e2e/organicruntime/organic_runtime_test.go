@@ -2536,15 +2536,31 @@ func (fixture *openCodeFixtureServer) acceptInstalledSDDApplyExecutor(writer htt
 		transcript.WriteString(messageText(message.Content))
 	}
 	content := transcript.String()
-	override := strings.Index(content, "## Executor Override")
-	gate := strings.Index(content, "**ORCHESTRATOR GATE**")
-	if override < 0 || gate < 0 || override > gate {
-		fixture.fail(writer, "installed sdd-apply executor did not load the override before the orchestrator gate")
+	// The proof asserts the role contract the executor actually received, not
+	// one wording of it. Ordering between two blocks is no longer the property
+	// under test: a single block whose every imperative follows its own
+	// condition is, and the executor branch must come first because these
+	// skills are delegate_only and the sub-agent is the intended reader.
+	role := strings.Index(content, "## Execution Role")
+	if role < 0 {
+		fixture.fail(writer, "installed sdd-apply executor did not load its Execution Role block")
 		return false
 	}
-	if !strings.Contains(content, "Continue with the phase work below. Do NOT delegate.") {
+	executor := strings.Index(content, "If you are the `sdd-apply` sub-agent")
+	orchestrator := strings.Index(content, "If you loaded this skill through the `skill()` tool")
+	if executor < 0 || orchestrator < 0 || executor > orchestrator {
+		fixture.fail(writer, "installed sdd-apply executor role block does not state the executor branch before the orchestrator branch")
+		return false
+	}
+	if !strings.Contains(content, "continue with the phase work below. Do not delegate. Do not call the Skill tool.") {
 		fixture.fail(writer, "installed sdd-apply executor is missing its non-delegating continuation instruction")
 		return false
+	}
+	for _, retraction := range []string{"does NOT apply to you", "the gate above", "the gate below"} {
+		if strings.Contains(content, retraction) {
+			fixture.fail(writer, "installed sdd-apply executor received a retraction phrase %q that undoes an earlier imperative", retraction)
+			return false
+		}
 	}
 	for _, rawTool := range input.Tools {
 		var tool struct {
