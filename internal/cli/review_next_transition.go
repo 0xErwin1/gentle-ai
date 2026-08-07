@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
 )
 
@@ -50,12 +51,32 @@ type ReviewTransitionInput struct {
 	Schema              string                                        `json:"schema"`
 	CaptureOperation    string                                        `json:"capture_operation"`
 	Arguments           []ReviewTransitionArgument                    `json:"arguments"`
+	Submission          *ReviewTransitionSubmission                   `json:"submission,omitempty"`
 	ArtifactSubject     *reviewtransaction.ArtifactSubject            `json:"artifact_subject,omitempty"`
 	CandidateDiff       *reviewtransaction.FrozenCandidateDiff        `json:"candidate_diff,omitempty"`
 	BaseTree            string                                        `json:"base_tree,omitempty"`
 	CandidateTree       string                                        `json:"candidate_tree,omitempty"`
 	ChangedPathManifest *[]reviewtransaction.ChangedPathManifestEntry `json:"changed_path_manifest,omitempty"`
 	ValidationRequest   *reviewtransaction.TargetedValidationRequest  `json:"validation_request,omitempty"`
+}
+
+// ReviewTransitionSubmission is the provider-owned argv template. Consumers
+// substitute only the declared Value or Values slots.
+type ReviewTransitionSubmission struct {
+	OperationToken string                            `json:"operation_token"`
+	ArgumentTokens []string                          `json:"argument_tokens"`
+	Value          *ReviewTransitionSubmissionValue  `json:"value,omitempty"`
+	Values         []ReviewTransitionSubmissionValue `json:"values,omitempty"`
+}
+
+type ReviewTransitionSubmissionValue struct {
+	Slot                 string   `json:"slot"`
+	Domain               string   `json:"domain"`
+	Schema               string   `json:"schema,omitempty"`
+	Minimum              int      `json:"minimum,omitempty"`
+	Maximum              int      `json:"maximum,omitempty"`
+	AllowedValues        []string `json:"allowed_values,omitempty"`
+	SubstitutionLocation int      `json:"substitution_location"`
 }
 
 type reviewCaptureContext struct {
@@ -109,7 +130,21 @@ func newReviewNextTransition(status ReviewTargetStatusResult, selectedLenses []s
 				input.Selector.Projection == reviewtransaction.ProjectionStaged {
 				return reviewStopTransition("staged_workspace_overlay_recovery_unavailable")
 			}
-			return reviewExecuteTransition("fresh_target_ready", "review.start", reviewStartArguments(status, input.StartLineage), []ReviewTransitionArgument{{Name: "target_identity", Value: status.TargetIdentity}}, ReviewTransitionBinding{LineageID: input.StartLineage, TargetIdentity: status.TargetIdentity}, nil)
+			// A workspace candidate that froze zero paths is the one fresh
+			// target whose START cannot succeed: the facade refuses it in
+			// preflight with empty_candidate_scope and names base_ref as the
+			// input it needs. Returning that START anyway made status and
+			// preflight disagree forever, since the refusal has no way back
+			// into this classification (issue #2584). Collect the base
+			// instead, and — exactly like the refusal it replaces — name it
+			// without deriving it, so the caller keeps choosing the scope.
+			if status.Projection.Kind == reviewtransaction.TargetCurrentChanges && len(status.Projection.Paths) == 0 {
+				return reviewCollectTransition("empty_candidate_base_ref_required", ReviewTransitionInput{
+					Name: "base_ref", Schema: "gentle-ai.review-base-ref-selection/v1", CaptureOperation: "external.select_base_ref",
+					Arguments: reviewTargetArguments(status),
+				})
+			}
+			return reviewExecuteTransition("fresh_target_ready", "review.start", reviewStartArguments(status, input.StartLineage, input.RuntimeAgent), []ReviewTransitionArgument{{Name: "target_identity", Value: status.TargetIdentity}}, ReviewTransitionBinding{LineageID: input.StartLineage, TargetIdentity: status.TargetIdentity}, nil)
 		case reviewtransaction.TargetApplicabilityAmbiguous:
 			return reviewCollectTransition("lineage_selection_required", ReviewTransitionInput{
 				Name: "lineage_selection", Schema: "gentle-ai.review-lineage-selection/v1", CaptureOperation: "external.select_lineage",
@@ -118,6 +153,15 @@ func newReviewNextTransition(status ReviewTargetStatusResult, selectedLenses []s
 		case reviewtransaction.TargetApplicabilityCorrupted:
 			if status.Repair.Status == reviewtransaction.AuthorityRepairEligible && status.Repair.Candidate != nil {
 				return reviewRepairTransition(status, input)
+			}
+			// Wave 6 (rdd-closure-disposition-execution / "Reachable Through
+			// the Negotiated Transition Route"): the classified vocabulary
+			// above has nothing to say about a closed content-mismatched-
+			// recovery-authorization closure — status.Disposition is
+			// populated only for exactly that gap, so it is checked only
+			// once the classified route above has already refused.
+			if status.Disposition != nil {
+				return reviewDispositionTransition(status, input)
 			}
 			return reviewStopTransition("corrupted_or_unverifiable_authority")
 		default:
@@ -167,16 +211,10 @@ func newReviewNextTransition(status ReviewTargetStatusResult, selectedLenses []s
 					!errors.Is(input.EvidenceErr, reviewtransaction.ErrCapturedVerificationEvidenceMetadataMissing) {
 					return reviewStopTransition("captured_verification_evidence_invalid")
 				}
-				return reviewCollectTransition("correction_repository_verification_required", ReviewTransitionInput{
-					Name: "evidence", Schema: reviewtransaction.VerificationEvidenceRecordSchema,
-					CaptureOperation: "review.capture-evidence", Arguments: reviewBindingArguments(validationBinding),
-				})
+				return reviewCollectTransition("correction_repository_verification_required", reviewCaptureEvidenceInput(input.Contract, validationBinding))
 			}
 			if capturedEvidence == nil {
-				return reviewCollectTransition("correction_repository_verification_required", ReviewTransitionInput{
-					Name: "evidence", Schema: reviewtransaction.VerificationEvidenceRecordSchema,
-					CaptureOperation: "review.capture-evidence", Arguments: reviewBindingArguments(validationBinding),
-				})
+				return reviewCollectTransition("correction_repository_verification_required", reviewCaptureEvidenceInput(input.Contract, validationBinding))
 			}
 			switch capturedEvidence.Outcome {
 			case reviewtransaction.VerificationOutcomeFailed:
@@ -193,6 +231,7 @@ func newReviewNextTransition(status ReviewTargetStatusResult, selectedLenses []s
 				Name: "targeted_validation", Schema: reviewtransaction.TargetedValidationRequestSchema,
 				CaptureOperation: "external.run_targeted_validation", Arguments: reviewBindingArguments(validationBinding),
 				ValidationRequest: input.ValidationRequest,
+				Submission:        reviewTargetedValidationSubmission(input.Contract, validationBinding, *input.ValidationRequest),
 			})
 		}
 		if input.CorrectionForecasted {
@@ -208,7 +247,7 @@ func newReviewNextTransition(status ReviewTargetStatusResult, selectedLenses []s
 		}
 		transition := reviewCollectTransition("correction_plan_required", ReviewTransitionInput{
 			Name: "correction_lines", Schema: "gentle-ai.review-correction-plan/v1", CaptureOperation: "external.plan_correction",
-			Arguments: reviewBindingArguments(binding),
+			Arguments: reviewBindingArguments(binding), Submission: reviewCorrectionPlanSubmission(input.Contract, binding, *input.CorrectionRequest),
 		})
 		transition.CorrectionRequest = input.CorrectionRequest
 		return transition
@@ -233,10 +272,7 @@ func newReviewNextTransition(status ReviewTargetStatusResult, selectedLenses []s
 		if status.Frozen != nil && status.Frozen.Tier == reviewtransaction.RiskLow {
 			return reviewExecuteTransition("native_low_risk_verification", "review.finalize", []ReviewTransitionArgument{{Name: "lineage", Value: binding.LineageID}}, []ReviewTransitionArgument{{Name: "state", Value: "validating"}, {Name: "risk_level", Value: "low"}}, binding, nil)
 		}
-		return reviewCollectTransition("verification_evidence_required", ReviewTransitionInput{
-			Name: "evidence", Schema: reviewtransaction.VerificationEvidenceRecordSchema, CaptureOperation: "review.capture-evidence",
-			Arguments: reviewBindingArguments(binding),
-		})
+		return reviewCollectTransition("verification_evidence_required", reviewCaptureEvidenceInput(input.Contract, binding))
 	case reviewtransaction.StateInvalidated:
 		return reviewRecoveryCollection(status, binding, input)
 	case reviewtransaction.StateApproved:
@@ -298,6 +334,7 @@ func newReviewNextTransition(status ReviewTargetStatusResult, selectedLenses []s
 }
 
 type reviewFinalizeTransitionContext struct {
+	Contract          string
 	RepositoryContext string
 	ValidationRequest *reviewtransaction.TargetedValidationRequest
 	CorrectionRequest *reviewtransaction.CorrectionPlanRequest
@@ -336,7 +373,7 @@ func reviewFinalizeNextTransition(state reviewtransaction.CompactState, revision
 		return reviewExecuteTransition("captured_results_ready", "review.finalize", []ReviewTransitionArgument{{Name: "lineage", Value: state.LineageID}, {Name: "captured_results", Value: "true"}}, []ReviewTransitionArgument{{Name: "state", Value: "reviewing"}, {Name: "captured_artifacts", Value: "complete"}}, reviewTransitionBinding(status.Authority, status.TargetIdentity), artifacts)
 	}
 	return newReviewNextTransition(status, state.SelectedLenses, artifacts, transitionContext.CapturedEvidence, artifactErr, reviewNextTransitionInput{
-		RepositoryContext: transitionContext.RepositoryContext, ValidationRequest: transitionContext.ValidationRequest,
+		Contract: transitionContext.Contract, RepositoryContext: transitionContext.RepositoryContext, ValidationRequest: transitionContext.ValidationRequest,
 		CorrectionRequest: transitionContext.CorrectionRequest, EvidenceErr: transitionContext.EvidenceErr, CorrectionForecasted: state.ProposedCorrectionLines != nil,
 		CaptureContext: transitionContext.CaptureContext,
 	})
@@ -430,6 +467,8 @@ type reviewNextTransitionInput struct {
 	Successor, Reason, Actor, Authorization        string
 	RepairActor, RepairReason, RepairAuthorization string
 	StartLineage                                   string
+	RuntimeAgent                                   model.AgentID
+	Contract                                       string
 	RepositoryContext                              string
 	ValidationRequest                              *reviewtransaction.TargetedValidationRequest
 	CorrectionRequest                              *reviewtransaction.CorrectionPlanRequest
@@ -437,6 +476,94 @@ type reviewNextTransitionInput struct {
 	CorrectionForecasted                           bool
 	CaptureContext                                 *reviewCaptureContext
 	Selector                                       *reviewTransitionSelector
+}
+
+const reviewSubmissionValuePlaceholder = "{{value}}"
+
+func reviewCorrectionPlanSubmission(contract string, binding ReviewTransitionBinding, request reviewtransaction.CorrectionPlanRequest) *ReviewTransitionSubmission {
+	if contract != ReviewIntegrationContractV2 || binding.RepositoryContext == "" {
+		return nil
+	}
+	return reviewFinalizeSubmission([]string{
+		reviewTransitionArgumentToken(ReviewTransitionArgument{Name: "contract", Value: contract}),
+		reviewTransitionArgumentToken(ReviewTransitionArgument{Name: "lineage", Value: binding.LineageID}),
+		reviewTransitionArgumentToken(ReviewTransitionArgument{Name: "expected-revision", Value: binding.Revision}),
+		reviewTransitionArgumentToken(ReviewTransitionArgument{Name: "target", Value: binding.TargetIdentity}),
+		reviewTransitionArgumentToken(ReviewTransitionArgument{Name: "request-hash", Value: request.RequestHash}),
+		reviewTransitionArgumentToken(ReviewTransitionArgument{Name: "repository-context", Value: binding.RepositoryContext}),
+		"--correction-lines=" + reviewSubmissionValuePlaceholder,
+	}, ReviewTransitionSubmissionValue{
+		Slot: "correction_lines", Domain: "positive_correction_lines", Minimum: 1,
+		Maximum: request.CorrectionBudget, SubstitutionLocation: 6,
+	})
+}
+
+func reviewTargetedValidationSubmission(contract string, binding ReviewTransitionBinding, request reviewtransaction.TargetedValidationRequest) *ReviewTransitionSubmission {
+	if contract != ReviewIntegrationContractV2 || binding.RepositoryContext == "" {
+		return nil
+	}
+	return reviewFinalizeSubmission([]string{
+		reviewTransitionArgumentToken(ReviewTransitionArgument{Name: "contract", Value: contract}),
+		reviewTransitionArgumentToken(ReviewTransitionArgument{Name: "lineage", Value: binding.LineageID}),
+		reviewTransitionArgumentToken(ReviewTransitionArgument{Name: "expected-revision", Value: binding.Revision}),
+		reviewTransitionArgumentToken(ReviewTransitionArgument{Name: "target", Value: binding.TargetIdentity}),
+		reviewTransitionArgumentToken(ReviewTransitionArgument{Name: "request-hash", Value: request.RequestHash}),
+		reviewTransitionArgumentToken(ReviewTransitionArgument{Name: "repository-context", Value: binding.RepositoryContext}),
+		"--validation=" + reviewSubmissionValuePlaceholder,
+		"--captured-evidence=true",
+	}, ReviewTransitionSubmissionValue{
+		Slot: "validation", Domain: "artifact_path_or_stdin", Schema: reviewValidatorSchemaID,
+		SubstitutionLocation: 6,
+	})
+}
+
+func reviewFinalizeSubmission(argumentTokens []string, value ReviewTransitionSubmissionValue) *ReviewTransitionSubmission {
+	return &ReviewTransitionSubmission{OperationToken: "finalize", ArgumentTokens: argumentTokens, Value: &value}
+}
+
+func reviewCaptureEvidenceInput(contract string, binding ReviewTransitionBinding) ReviewTransitionInput {
+	arguments := reviewBindingArguments(binding)
+	schema := reviewtransaction.VerificationEvidenceRecordSchema
+	if contract == ReviewIntegrationContractV2 {
+		schema = reviewVerificationEvidenceSchemaID
+		arguments = append(arguments, ReviewTransitionArgument{Name: "repository-context", Value: binding.RepositoryContext})
+	}
+	return ReviewTransitionInput{
+		Name: "evidence", Schema: schema, CaptureOperation: "review.capture-evidence", Arguments: arguments,
+		Submission: reviewCaptureEvidenceSubmission(contract, binding),
+	}
+}
+
+func reviewCaptureEvidenceSubmission(contract string, binding ReviewTransitionBinding) *ReviewTransitionSubmission {
+	if contract != ReviewIntegrationContractV2 || binding.RepositoryContext == "" {
+		return nil
+	}
+	return &ReviewTransitionSubmission{
+		OperationToken: "capture-evidence",
+		ArgumentTokens: []string{
+			reviewTransitionArgumentToken(ReviewTransitionArgument{Name: "lineage", Value: binding.LineageID}),
+			reviewTransitionArgumentToken(ReviewTransitionArgument{Name: "expected-revision", Value: binding.Revision}),
+			reviewTransitionArgumentToken(ReviewTransitionArgument{Name: "target", Value: binding.TargetIdentity}),
+			reviewTransitionArgumentToken(ReviewTransitionArgument{Name: "repository-context", Value: binding.RepositoryContext}),
+			"--outcome={{outcome}}",
+			"--input={{input}}",
+		},
+		Values: []ReviewTransitionSubmissionValue{
+			{
+				Slot: "outcome", Domain: "verification_outcome",
+				AllowedValues: []string{
+					string(reviewtransaction.VerificationOutcomePassed),
+					string(reviewtransaction.VerificationOutcomeFailed),
+					string(reviewtransaction.VerificationOutcomeProceduralFailure),
+				},
+				SubstitutionLocation: 4,
+			},
+			{
+				Slot: "input", Domain: "artifact_path_or_stdin", Schema: reviewVerificationEvidenceSchemaID,
+				SubstitutionLocation: 5,
+			},
+		},
+	}
 }
 
 type reviewTransitionSelector struct {
@@ -449,7 +576,7 @@ type reviewTransitionSelector struct {
 	PrePRRepresentable    bool
 }
 
-func reviewStartArguments(status ReviewTargetStatusResult, lineage string) []ReviewTransitionArgument {
+func reviewStartArguments(status ReviewTargetStatusResult, lineage string, runtime model.AgentID) []ReviewTransitionArgument {
 	contract := status.Contract
 	if contract == "" {
 		contract = ReviewIntegrationContractV1
@@ -467,6 +594,9 @@ func reviewStartArguments(status ReviewTargetStatusResult, lineage string) []Rev
 	}
 	if strings.TrimSpace(lineage) != "" {
 		arguments = append(arguments, ReviewTransitionArgument{Name: "lineage", Value: lineage})
+	}
+	if runtime != "" {
+		arguments = append(arguments, ReviewTransitionArgument{Name: "agent", Value: string(runtime)})
 	}
 	if contract == ReviewIntegrationContractV2 {
 		arguments = append(arguments, ReviewTransitionArgument{Name: "consent", Value: string(reviewConsentModeRelay)})
@@ -503,6 +633,52 @@ func reviewRepairTransition(status ReviewTargetStatusResult, input reviewNextTra
 	}
 	return reviewCollectTransition("repair_authorization_required", ReviewTransitionInput{
 		Name: "repair_authorization", Schema: assessment.AuthorizationSchema, CaptureOperation: "external.authorize_repair",
+		Arguments: providerArguments,
+	})
+}
+
+// reviewDispositionTransition is Wave 6's negotiated route for a closure
+// disposition plan (rdd-closure-disposition-execution / "Reachable Through
+// the Negotiated Transition Route", design decision D7): it serves the exact
+// same `review repair` verb reviewRepairTransition already routes to — no
+// new operation, no new CLI command — through collect{disposition_
+// authorization} then execute{review.repair, --plan-digest
+// --inventory-revision --actor --reason --authorization}, mirroring
+// reviewRepairTransition's own collect-then-execute shape byte-for-byte so a
+// caller who already understands one understands both. It is only ever
+// reached once the classified route above it has already refused (its
+// caller checks status.Disposition only after status.Repair), so it never
+// competes with or shadows Wave 2's classified vocabulary.
+func reviewDispositionTransition(status ReviewTargetStatusResult, input reviewNextTransitionInput) ReviewNextTransition {
+	disposition := status.Disposition
+	providerArguments := []ReviewTransitionArgument{
+		{Name: "plan-digest", Value: disposition.PlanDigest},
+		{Name: "inventory-revision", Value: disposition.AuthorityInventoryRevision},
+	}
+	if strings.TrimSpace(input.RepairActor) != "" && strings.TrimSpace(input.RepairReason) != "" && strings.TrimSpace(input.RepairAuthorization) != "" {
+		arguments := append([]ReviewTransitionArgument{}, providerArguments...)
+		arguments = append(arguments,
+			ReviewTransitionArgument{Name: "actor", Value: input.RepairActor},
+			ReviewTransitionArgument{Name: "reason", Value: input.RepairReason},
+			// The authorization VALUE is deliberately the "provided" sentinel,
+			// never the real bytes — mirroring reviewRepairTransition's own
+			// "maintainer-authorization" argument (tasks.md 4.5's threat
+			// matrix: emitted tokens carry no authorization bytes).
+			ReviewTransitionArgument{Name: "authorization", Value: "provided"},
+		)
+		// Every other "review.repair" execute transition carries a concrete
+		// lineage_id/revision binding (reviewRepairTransition's own
+		// candidate.LineageID/candidate.Revision) — the disposition plan's
+		// seed is the matching identity here (Wave 6 D7's status.Disposition
+		// carries it for exactly this reason).
+		return reviewExecuteTransition("disposition_authorized", "review.repair", arguments, []ReviewTransitionArgument{
+			{Name: "plan_digest", Value: disposition.PlanDigest},
+			{Name: "authority_inventory_revision", Value: disposition.AuthorityInventoryRevision},
+			{Name: "disposition_authorization", Value: "provided"},
+		}, ReviewTransitionBinding{LineageID: disposition.SeedLineageID, Revision: disposition.SeedExpectedRevision, TargetIdentity: status.TargetIdentity}, nil)
+	}
+	return reviewCollectTransition("disposition_authorization_required", ReviewTransitionInput{
+		Name: "disposition_authorization", Schema: reviewtransaction.AuthorityDispositionAuthorizationSchema, CaptureOperation: "external.authorize_repair",
 		Arguments: providerArguments,
 	})
 }
@@ -799,4 +975,69 @@ func reviewCollectTransition(reason string, inputs ...ReviewTransitionInput) Rev
 
 func reviewStopTransition(reason string) ReviewNextTransition {
 	return ReviewNextTransition{Kind: reviewNextTransitionStop, ReasonCode: reason}
+}
+
+func reviewReasonDescription(reason string) string {
+	switch reason {
+	case "fresh_target_ready":
+		return "Target is unreviewed and ready for initial review start"
+	case "captured_results_ready":
+		return "Captured reviewer results are complete and ready for finalization"
+	case "native_low_risk_verification":
+		return "Low risk candidate eligible for native verification"
+	case "approved_receipt_ready":
+		return "Review is approved and receipt is ready for gate validation"
+	case "exact_receipt_replay":
+		return "Exact receipt replay safe for finalization"
+	case "lineage_selection_required":
+		return "Multiple lineages match target; select an explicit lineage"
+	case "reviewer_results_required":
+		return "Reviewer lens artifacts required for current revision"
+	case "targeted_validation_required":
+		return "Targeted validation run required for correction plan"
+	case "correction_plan_required":
+		return "Correction plan required to resolve review findings"
+	case "verification_evidence_required":
+		return "Verification evidence required prior to finalization"
+	case "delivery_gate_required":
+		return "Delivery gate selection required before validation"
+	case "staged_workspace_overlay_recovery_unavailable":
+		return "Staged workspace overlay recovery is unavailable"
+	case "corrupted_or_unverifiable_authority":
+		return "Review authority is corrupted or unverifiable"
+	case "missing_authority_binding":
+		return "Target authority binding is missing"
+	case "original_finalize_request_required":
+		return "Original finalize request is required to reconcile"
+	case "unchanged_or_unverified_authority":
+		return "Authority requires a changed or verified candidate"
+	case "native_stop_required":
+		return "Native stop transition required by authority"
+	case "captured_artifacts_unverifiable":
+		return "Captured artifacts failed verification or are missing"
+	case "corrected_candidate_unavailable":
+		return "Corrected candidate is unavailable for forecasted correction"
+	case "pre_pr_selector_unrepresentable":
+		return "Selected base-ref cannot be represented for pre-PR gate"
+	case "manual_intervention_required":
+		return "Manual intervention is required to proceed"
+	default:
+		return strings.ReplaceAll(reason, "_", " ")
+	}
+}
+
+func newReviewForecast(head ReviewNextTransition) ReviewForecast {
+	horizon := ForecastHorizonPartial
+	if head.Kind == reviewNextTransitionStop {
+		horizon = ForecastHorizonTerminal
+	}
+	return ReviewForecast{
+		Horizon: horizon,
+		Steps: []ReviewForecastItem{{
+			Step:        1,
+			Kind:        head.Kind,
+			ReasonCode:  head.ReasonCode,
+			Description: reviewReasonDescription(head.ReasonCode),
+		}},
+	}
 }

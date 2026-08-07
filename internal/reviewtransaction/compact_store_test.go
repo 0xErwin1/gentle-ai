@@ -511,7 +511,7 @@ func TestStartCompactAuthorityRunsBeforeCreateGuardOnlyAtNewAuthorityBoundary(t 
 	}
 }
 
-func TestStartCompactAuthorityKeepsStagedAndWorkspaceAuthoritiesDistinct(t *testing.T) {
+func TestStartCompactAuthorityReusesContentEquivalentStagedAndWorkspaceAuthority(t *testing.T) {
 	repo := initSnapshotRepo(t)
 	writeSnapshotFile(t, repo, "tracked.txt", "candidate\n")
 	gitSnapshot(t, repo, "add", "--", "tracked.txt")
@@ -523,9 +523,9 @@ func TestStartCompactAuthorityKeepsStagedAndWorkspaceAuthoritiesDistinct(t *test
 	}
 	storeCompactStartAuthority(t, repo, staged)
 
-	created, err := StartCompactAuthority(context.Background(), repo, CompactStartRequest{State: workspace})
-	if err != nil || created.Action != CompactStartCreated || created.Record.State.LineageID != workspace.LineageID {
-		t.Fatalf("workspace start against staged authority = %#v, %v", created, err)
+	reused, err := StartCompactAuthority(context.Background(), repo, CompactStartRequest{State: workspace})
+	if err != nil || reused.Action != CompactStartResumed || reused.Record.State.LineageID != staged.LineageID {
+		t.Fatalf("workspace start against staged authority = %#v, %v", reused, err)
 	}
 	replayed, err := StartCompactAuthority(context.Background(), repo, CompactStartRequest{State: staged})
 	if err != nil || replayed.Action != CompactStartResumed || replayed.Record.State.LineageID != staged.LineageID {
@@ -533,7 +533,7 @@ func TestStartCompactAuthorityKeepsStagedAndWorkspaceAuthoritiesDistinct(t *test
 	}
 }
 
-func TestStartCompactAuthoritySelectsProjectionSpecificBaseDiffAuthorityAfterCommit(t *testing.T) {
+func TestStartCompactAuthorityRejectsAmbiguousProjectionCompatibleBaseDiffAuthorityAfterCommit(t *testing.T) {
 	repo := initSnapshotRepo(t)
 	base := strings.TrimSpace(gitSnapshot(t, repo, "rev-parse", "HEAD"))
 	writeSnapshotFile(t, repo, "tracked.txt", "candidate\n")
@@ -551,16 +551,15 @@ func TestStartCompactAuthoritySelectsProjectionSpecificBaseDiffAuthorityAfterCom
 	for _, tt := range []struct {
 		name       string
 		projection Projection
-		want       string
 	}{
-		{name: "staged", projection: ProjectionStaged, want: staged.LineageID},
-		{name: "workspace", projection: ProjectionWorkspace, want: workspace.LineageID},
+		{name: "staged", projection: ProjectionStaged},
+		{name: "workspace", projection: ProjectionWorkspace},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			requested := newCompactStartStateForTarget(t, repo, "compact-start-"+tt.name+"-base-request", Target{Kind: TargetBaseDiff, Projection: tt.projection, BaseRef: base, IntendedUntracked: []string{}})
 			result, err := StartCompactAuthority(context.Background(), repo, CompactStartRequest{State: requested})
-			if err != nil || result.Action != CompactStartResumed || result.Record.State.LineageID != tt.want {
-				t.Fatalf("%s base-diff authority selection = %#v, %v", tt.name, result, err)
+			if err != nil || result.Action != CompactStartBlocked {
+				t.Fatalf("%s ambiguous base-diff authority = %#v, %v", tt.name, result, err)
 			}
 		})
 	}
@@ -1140,6 +1139,9 @@ func TestStartCompactAuthorityBlocksInvalidReceiptAndCorruptUnrelatedStore(t *te
 			t.Fatalf("invalid receipt start = %#v, %v", result, err)
 		}
 	})
+	// A corrupt UNRELATED entry is not a reason to refuse new work. It is
+	// still a reason to refuse itself, and both halves are asserted here so
+	// the relaxation cannot quietly become permissiveness.
 	t.Run("corrupt unrelated store", func(t *testing.T) {
 		repo := initSnapshotRepo(t)
 		writeSnapshotFile(t, repo, "tracked.txt", "historical candidate\n")
@@ -1148,8 +1150,14 @@ func TestStartCompactAuthorityBlocksInvalidReceiptAndCorruptUnrelatedStore(t *te
 			t.Fatal(err)
 		}
 		writeSnapshotFile(t, repo, "tracked.txt", "new candidate\n")
-		if _, err := StartCompactAuthority(context.Background(), repo, CompactStartRequest{State: newCompactTestState(t, repo, "compact-start-corrupt-request")}); err == nil {
-			t.Fatal("corrupt unrelated store allowed a fresh authority")
+		if _, err := StartCompactAuthority(context.Background(), repo, CompactStartRequest{State: newCompactTestState(t, repo, "compact-start-corrupt-request")}); err != nil {
+			t.Fatalf("a corrupt unrelated entry refused a fresh authority: %v", err)
+		}
+		if err := CompactAuthorityLineageBlocked(context.Background(), repo, "compact-start-corrupt-history"); err == nil {
+			t.Fatal("the corrupt entry reports no block of its own")
+		}
+		if _, err := store.Load(); err == nil {
+			t.Fatal("the corrupt entry became loadable")
 		}
 	})
 }
@@ -1950,21 +1958,60 @@ func TestCompactDiscoveryIgnoresOnlyUnpublishedCrashResidue(t *testing.T) {
 	if err != nil || len(leaves) != 1 || leaves[0].lineageID != state.LineageID {
 		t.Fatalf("leaves with crash residue = %#v, %v", leaves, err)
 	}
+	// Neither of the two shapes below may be silently treated as authority,
+	// and neither may take the published lineage down with it. "Hidden" means
+	// enumerated as authority or absent from the inventory -- not "did not
+	// abort the whole enumeration", which is what a shared review store can
+	// never afford to do over one directory.
 	unexpected := filepath.Join(residue.Dir, "unexpected-residue")
 	if err := os.WriteFile(unexpected, []byte("not a temporary publication"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := CompactAuthorityLeaves(context.Background(), repo); err == nil {
-		t.Fatal("unexpected state-less lineage entry was hidden as crash residue")
-	}
+	requireResidueNeverAuthority(t, repo, residue.lineageID, state.LineageID)
 	if err := os.Remove(unexpected); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(residue.StatePath(), []byte("corrupt published authority"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := CompactAuthorityLeaves(context.Background(), repo); err == nil {
-		t.Fatal("corrupt published authority was hidden as residue")
+	requireResidueNeverAuthority(t, repo, residue.lineageID, state.LineageID)
+	if err := CompactAuthorityLineageBlocked(context.Background(), repo, residue.lineageID); err == nil {
+		t.Fatal("corrupt published authority reports no block of its own")
+	}
+}
+
+// requireResidueNeverAuthority holds both halves at once: the residue lineage
+// is never a leaf, the published lineage still is, and the inventory names the
+// residue rather than dropping it.
+func requireResidueNeverAuthority(t *testing.T, repo, residue, published string) {
+	t.Helper()
+	leaves, err := CompactAuthorityLeaves(context.Background(), repo)
+	if err != nil {
+		t.Fatalf("residue poisoned enumeration: %v", err)
+	}
+	names := map[string]bool{}
+	for _, leaf := range leaves {
+		names[leaf.lineageID] = true
+	}
+	if names[residue] {
+		t.Fatalf("residue lineage %q was enumerated as authority: %#v", residue, names)
+	}
+	if !names[published] {
+		t.Fatalf("published lineage %q was excluded by residue: %#v", published, names)
+	}
+	report, err := InventoryAuthority(context.Background(), repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	named := false
+	for _, entry := range report.Entries {
+		named = named || entry.LineageID == residue
+	}
+	for _, diagnostic := range report.Diagnostics {
+		named = named || strings.Contains(diagnostic.Path, residue)
+	}
+	if !named {
+		t.Fatalf("residue lineage %q vanished from the inventory: %#v", residue, report)
 	}
 }
 
@@ -2143,6 +2190,34 @@ func TestCompactStateRejectsChecksumValidImpossibleSemantics(t *testing.T) {
 				t.Fatalf("checksum-valid impossible import error = %v", err)
 			}
 		})
+	}
+}
+
+// TestCompactStoresShareRepositoryWriteLock re-homed from
+// compact_chain_test.go (Wave 5 Slice 5, pre-PR chain composition deletion):
+// the invariant itself — every compact store in one repository shares ONE
+// physical write lock file, regardless of lineage — is general-purpose, not
+// composition-specific; only the deleted file's elaborate multi-segment
+// pre-PR chain fixture was. Rebuilt here with the minimal fixture this
+// invariant actually needs: two independent lineages' own
+// CompactAuthoritativeStore values in the same repository.
+func TestCompactStoresShareRepositoryWriteLock(t *testing.T) {
+	repo := initSnapshotRepo(t)
+	first, err := CompactAuthoritativeStore(context.Background(), repo, "shared-lock-first")
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := CompactAuthoritativeStore(context.Background(), repo, "shared-lock-second")
+	if err != nil {
+		t.Fatal(err)
+	}
+	held, err := acquireStoreLock(first.lockPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer held.release()
+	if _, err := acquireStoreLock(second.lockPath); !errors.Is(err, ErrConcurrentUpdate) {
+		t.Fatalf("second compact store lock error = %v, want concurrent update", err)
 	}
 }
 
@@ -2666,6 +2741,39 @@ func newCompactStartStateForTarget(t *testing.T, repo, lineage string, target Ta
 		t.Fatal(err)
 	}
 	return state
+}
+
+func TestCompactCorrectionRemainingBudget(t *testing.T) {
+	tests := []struct {
+		name       string
+		budget     int
+		cumulative int
+		want       int
+		wantErr    bool
+	}{
+		{name: "unspent", budget: 2, want: 2},
+		{name: "partially spent", budget: 5, cumulative: 2, want: 3},
+		{name: "exhausted", budget: 2, cumulative: 2},
+		{name: "cumulative exceeds budget", budget: 2, cumulative: 3, wantErr: true},
+		{name: "negative cumulative", budget: 2, cumulative: -1, wantErr: true},
+		{name: "negative budget", budget: -1, wantErr: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			remaining, err := compactCorrectionRemainingBudget(CompactState{
+				CorrectionBudget: test.budget, CumulativeCorrectionLines: test.cumulative,
+			})
+			if test.wantErr {
+				if err == nil {
+					t.Fatal("remaining budget accepted invalid accounting")
+				}
+				return
+			}
+			if err != nil || remaining != test.want {
+				t.Fatalf("remaining budget = %d, %v; want %d, nil", remaining, err, test.want)
+			}
+		})
+	}
 }
 
 func newCompactTestState(t *testing.T, repo, lineage string) CompactState {

@@ -40,9 +40,7 @@ func TestNegotiatedCorrectionPlanningExposesProviderOwnedFindings(t *testing.T) 
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			repo := initReviewCLIRepo(t)
-			if err := os.WriteFile(filepath.Join(repo, tt.path), []byte(tt.content), 0o644); err != nil {
-				t.Fatal(err)
-			}
+			writeReviewStartCandidate(t, repo, tt.path, tt.content, 0o644)
 			started := runNegotiatedReviewStart(t, repo, "correction-findings-"+strings.ReplaceAll(tt.name, " ", "-"))
 			if started.RiskLevel != tt.wantRisk || len(started.SelectedLenses) != tt.wantSelectedLens {
 				t.Fatalf("review routing = risk %q lenses %v", started.RiskLevel, started.SelectedLenses)
@@ -135,8 +133,7 @@ func TestNegotiatedCorrectionPlanningExposesProviderOwnedFindings(t *testing.T) 
 			if err != nil {
 				t.Fatal(err)
 			}
-			validateAgainstPublishedNextTransitionSchema(t, transitionPayload)
-			validateAgainstPublishedNextTransitionSchemaV2(t, transitionPayload)
+			validateAgainstPublishedNextTransitionSchemaV4(t, transitionPayload)
 			after, err := os.ReadFile(store.StatePath())
 			if err != nil || !bytes.Equal(before, after) || len(record.State.CorrectionAttempts) != 0 || record.State.CumulativeCorrectionLines != 0 {
 				t.Fatalf("read-only correction request consumed authority or budget: %v", err)
