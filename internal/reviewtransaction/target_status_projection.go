@@ -322,15 +322,13 @@ func projectCompactTerminalHistory(state CompactState, live Snapshot) compactTer
 
 func compactLiveTargetMatchesValidatedSnapshot(state CompactState, live Snapshot, requireCurrentCandidate bool) bool {
 	initial := state.InitialSnapshot
-	proof := initial.IntendedUntrackedProof
-	if requireCurrentCandidate {
-		proof = state.CurrentSnapshot.IntendedUntrackedProof
-	}
+	sideBandMatches := requireCurrentCandidate ||
+		(equalStrings(initial.IntendedUntracked, live.IntendedUntracked) &&
+			initial.IntendedUntrackedProof == live.IntendedUntrackedProof)
 	return compactTargetProjectionsCompatible(initial.Kind, initial.Projection, live.Kind, live.Projection) &&
 		compactStartTargetKindsCompatible(initial.Kind, live.Kind) &&
 		initial.BaseTree == live.BaseTree && (!requireCurrentCandidate || state.CurrentSnapshot.CandidateTree == live.CandidateTree) &&
-		pathsAreSubset(live.Paths, state.GenesisPaths) == nil && equalStrings(initial.IntendedUntracked, live.IntendedUntracked) &&
-		proof == live.IntendedUntrackedProof && len(live.LedgerIDs) == 0
+		pathsAreSubset(live.Paths, state.GenesisPaths) == nil && sideBandMatches && len(live.LedgerIDs) == 0
 }
 
 func legacyLiveTargetMatchesValidatedSnapshot(transaction Transaction, live Snapshot) bool {
@@ -343,8 +341,7 @@ func legacyLiveTargetMatchesValidatedSnapshot(transaction Transaction, live Snap
 	return compactTargetProjectionsCompatible(transaction.Snapshot.Kind, transaction.Snapshot.Projection, live.Kind, live.Projection) &&
 		kindsMatch && transaction.BaseTree == live.BaseTree &&
 		transaction.FinalCandidateTree == live.CandidateTree && pathsAreSubset(live.Paths, genesis) == nil &&
-		equalStrings(transaction.Snapshot.IntendedUntracked, live.IntendedUntracked) &&
-		transaction.Snapshot.IntendedUntrackedProof == live.IntendedUntrackedProof && len(live.LedgerIDs) == 0
+		len(live.LedgerIDs) == 0
 }
 
 func classifyCompactCorrectionTargetForStatus(ctx context.Context, repo string, existing CompactState, live Snapshot) (compactCorrectionTargetClaim, error) {

@@ -1546,15 +1546,22 @@ func compactStartTargetKindsCompatible(existing, requested TargetKind) bool {
 }
 
 func compactTargetProjectionsCompatible(existingKind TargetKind, existingProjection Projection, requestedKind TargetKind, requestedProjection Projection) bool {
+	if existingProjection == "" {
+		existingProjection = ProjectionWorkspace
+	}
+	if requestedProjection == "" {
+		requestedProjection = ProjectionWorkspace
+	}
 	if existingProjection == requestedProjection {
 		return true
 	}
-	existingWorkspace := existingProjection == "" || existingProjection == ProjectionWorkspace
-	requestedWorkspace := requestedProjection == "" || requestedProjection == ProjectionWorkspace
-	return (existingKind == TargetCurrentChanges && requestedKind == TargetBaseDiff ||
-		existingKind == TargetBaseDiff && requestedKind == TargetCurrentChanges) &&
-		(existingProjection == ProjectionStaged && requestedWorkspace ||
-			existingWorkspace && requestedProjection == ProjectionStaged)
+	// Staged/workspace representations are safe only for this content-equivalent
+	// kind class because surrounding predicates still bind one content boundary;
+	// workspace-overlay remains excluded.
+	return (existingKind == TargetCurrentChanges || existingKind == TargetBaseDiff) &&
+		(requestedKind == TargetCurrentChanges || requestedKind == TargetBaseDiff) &&
+		(existingProjection == ProjectionStaged && requestedProjection == ProjectionWorkspace ||
+			existingProjection == ProjectionWorkspace && requestedProjection == ProjectionStaged)
 }
 
 type compactCorrectionTargetClaim uint8

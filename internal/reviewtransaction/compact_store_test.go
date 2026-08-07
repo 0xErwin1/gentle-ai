@@ -511,7 +511,7 @@ func TestStartCompactAuthorityRunsBeforeCreateGuardOnlyAtNewAuthorityBoundary(t 
 	}
 }
 
-func TestStartCompactAuthorityKeepsStagedAndWorkspaceAuthoritiesDistinct(t *testing.T) {
+func TestStartCompactAuthorityReusesContentEquivalentStagedAndWorkspaceAuthority(t *testing.T) {
 	repo := initSnapshotRepo(t)
 	writeSnapshotFile(t, repo, "tracked.txt", "candidate\n")
 	gitSnapshot(t, repo, "add", "--", "tracked.txt")
@@ -523,9 +523,9 @@ func TestStartCompactAuthorityKeepsStagedAndWorkspaceAuthoritiesDistinct(t *test
 	}
 	storeCompactStartAuthority(t, repo, staged)
 
-	created, err := StartCompactAuthority(context.Background(), repo, CompactStartRequest{State: workspace})
-	if err != nil || created.Action != CompactStartCreated || created.Record.State.LineageID != workspace.LineageID {
-		t.Fatalf("workspace start against staged authority = %#v, %v", created, err)
+	reused, err := StartCompactAuthority(context.Background(), repo, CompactStartRequest{State: workspace})
+	if err != nil || reused.Action != CompactStartResumed || reused.Record.State.LineageID != staged.LineageID {
+		t.Fatalf("workspace start against staged authority = %#v, %v", reused, err)
 	}
 	replayed, err := StartCompactAuthority(context.Background(), repo, CompactStartRequest{State: staged})
 	if err != nil || replayed.Action != CompactStartResumed || replayed.Record.State.LineageID != staged.LineageID {
