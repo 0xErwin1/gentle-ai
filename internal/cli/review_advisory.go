@@ -119,12 +119,7 @@ func resolveAdvisoryRequest(ctx context.Context, deps reviewLensContextDeps, rep
 		return advisoryreview.Request{}, err
 	}
 	defer func() {
-		if cleanupErr := authority.Inspector.Close(); cleanupErr != nil {
-			request = advisoryreview.Request{}
-			if err == nil {
-				err = reviewLensContextInspectionFailure(ctx, cleanupErr)
-			}
-		}
+		request, err = reviewLensContextCleanup(ctx, request, err, func() error { return deps.close(authority.Inspector) })
 	}()
 	if len(authority.Frozen.ChangedPathManifest) > advisoryreview.MaxEvidenceEntries {
 		return advisoryreview.Request{}, reviewLensContextRefusal("lens_context_budget_exceeded", reviewLensContextCapacityAction(len(authority.Frozen.ChangedPathManifest)))
