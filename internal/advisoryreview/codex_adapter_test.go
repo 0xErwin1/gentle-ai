@@ -267,6 +267,18 @@ func TestCodexAdapterScrubsChildEnvironmentToPathAndCodexHome(t *testing.T) {
 	if value, present := entries["CODEX_HOME"]; !present || value == "" {
 		t.Fatalf("codex child environment CODEX_HOME = %q, present=%v, want the allowlisted CODEX_HOME", value, present)
 	}
+	// Windows processes cannot start without SYSTEMROOT, so os/exec appends it
+	// to any Env that omits it. The hosted runner therefore yields a third
+	// entry the allowlist never asked for and cannot refuse (community report
+	// #2675). It is the platform's floor, not inherited ambient state: every
+	// variable the scrub exists to keep out is still asserted absent above.
+	if runtime.GOOS == "windows" {
+		for key := range entries {
+			if strings.EqualFold(key, "SYSTEMROOT") {
+				delete(entries, key)
+			}
+		}
+	}
 	if len(entries) != 2 {
 		t.Fatalf("codex child environment = %v, want exactly PATH and CODEX_HOME", entries)
 	}
