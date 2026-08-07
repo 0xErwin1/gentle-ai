@@ -1527,7 +1527,7 @@ func compactApprovedRebasedScopeRecovery(ctx context.Context, repo string, exist
 // representations for the same base-to-candidate tree range.
 func compactStartDeliveryScopeMatches(existing, requested CompactState) bool {
 	original, live := existing.InitialSnapshot, requested.InitialSnapshot
-	return original.Projection == live.Projection &&
+	return compactTargetProjectionsCompatible(original.Kind, original.Projection, live.Kind, live.Projection) &&
 		compactStartTargetKindsCompatible(original.Kind, live.Kind) &&
 		live.BaseTree == original.BaseTree &&
 		live.PathsDigest == original.PathsDigest &&
@@ -1543,6 +1543,18 @@ func compactStartTargetKindsCompatible(existing, requested TargetKind) bool {
 	}
 	return existing == TargetCurrentChanges && requested == TargetBaseDiff ||
 		existing == TargetBaseDiff && requested == TargetCurrentChanges
+}
+
+func compactTargetProjectionsCompatible(existingKind TargetKind, existingProjection Projection, requestedKind TargetKind, requestedProjection Projection) bool {
+	if existingProjection == requestedProjection {
+		return true
+	}
+	existingWorkspace := existingProjection == "" || existingProjection == ProjectionWorkspace
+	requestedWorkspace := requestedProjection == "" || requestedProjection == ProjectionWorkspace
+	return (existingKind == TargetCurrentChanges && requestedKind == TargetBaseDiff ||
+		existingKind == TargetBaseDiff && requestedKind == TargetCurrentChanges) &&
+		(existingProjection == ProjectionStaged && requestedWorkspace ||
+			existingWorkspace && requestedProjection == ProjectionStaged)
 }
 
 type compactCorrectionTargetClaim uint8
