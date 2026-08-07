@@ -967,6 +967,27 @@ func TestReviewStatusValidateRejectsMalformedForecast(t *testing.T) {
 			},
 			wantErr: "forecast head (execute/corrupted_or_unverifiable_authority) diverges from next_transition (stop/corrupted_or_unverifiable_authority)",
 		},
+		{
+			name: "stop transition non-terminal horizon",
+			forecast: &ReviewForecast{
+				Horizon: ForecastHorizonPartial,
+				Steps: []ReviewForecastItem{
+					{Step: 1, Kind: "stop", ReasonCode: "corrupted_or_unverifiable_authority", Description: "desc"},
+				},
+			},
+			wantErr: "stop transition requires a terminal one-step forecast",
+		},
+		{
+			name: "stop transition multi-step forecast",
+			forecast: &ReviewForecast{
+				Horizon: ForecastHorizonTerminal,
+				Steps: []ReviewForecastItem{
+					{Step: 1, Kind: "stop", ReasonCode: "corrupted_or_unverifiable_authority", Description: "desc"},
+					{Step: 2, Kind: "stop", ReasonCode: "corrupted_or_unverifiable_authority", Description: "desc"},
+				},
+			},
+			wantErr: "stop transition requires a terminal one-step forecast",
+		},
 	}
 
 	for _, tt := range tests {
