@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/gentleman-programming/gentle-ai/v2/internal/advisoryreview"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
 )
 
@@ -82,6 +83,8 @@ const (
 	reviewLensContextEmptyPatchAction = "one content-changing path produced no patch bytes at all, which no legitimate candidate does; " +
 		"refresh the exact native next transition by running " + reviewNextTransitionRefreshCommandV21 +
 		" and run this operation again, and if the same path keeps producing no patch treat it as a native inspection defect and stop retrying"
+	reviewLensContextDeadlineAction = "refresh the exact native next transition by running " + reviewNextTransitionRefreshCommandV21 +
+		", then retry this operation once with the tokens it returns; if the same lens slot reaches the same deadline again, an identical retry cannot change its frozen scope or deadline, so split the candidate into a chained sequence of smaller reviewable commits, then start a review for the reduced scope by running " + reviewNextTransitionRefreshCommandV21
 	reviewLensContextConflictAction = "this frozen lens slot already recorded a reviewer context produced by a different mechanism, and audit history is never rewritten; " +
 		"produce this lens context by the same mechanism that already recorded one, or start a review for a fresh candidate by running " +
 		reviewNextTransitionRefreshCommandV21
@@ -123,8 +126,15 @@ type reviewLensContextDeps struct {
 	timeout  time.Duration
 	resolve  func(context.Context, string) (string, reviewtransaction.ReviewRepositoryContextBinding, error)
 	discover func(context.Context, string, string, bool) (reviewtransaction.CompactStore, reviewtransaction.CompactRecord, error)
-	inspect  func(reviewtransaction.SnapshotBuilder, context.Context, reviewtransaction.Snapshot, string, int, string) ([]byte, error)
+	prepare  func(reviewtransaction.SnapshotBuilder, context.Context, reviewtransaction.Snapshot) (reviewLensCandidateInspector, error)
+	inspect  func(context.Context, reviewLensCandidateInspector, string, int, string) ([]byte, error)
 	record   func(string, reviewtransaction.LensContextEmission) error
+}
+
+type reviewLensCandidateInspector interface {
+	FrozenCandidateContext() reviewtransaction.FrozenCandidateContext
+	Inspect(context.Context, string, int, string) ([]byte, error)
+	Close() error
 }
 
 func reviewLensContextDependencies() reviewLensContextDeps {
@@ -132,12 +142,17 @@ func reviewLensContextDependencies() reviewLensContextDeps {
 		timeout:  reviewLensContextTimeout,
 		resolve:  reviewtransaction.ResolveReviewRepositoryContextBinding,
 		discover: discoverCompactFacadeReview,
-		inspect:  reviewtransaction.SnapshotBuilder.InspectCandidate,
-		record:   reviewtransaction.PublishLensContextEmission,
+		prepare: func(builder reviewtransaction.SnapshotBuilder, ctx context.Context, snapshot reviewtransaction.Snapshot) (reviewLensCandidateInspector, error) {
+			return builder.PrepareCandidateInspector(ctx, snapshot)
+		},
+		inspect: func(ctx context.Context, inspector reviewLensCandidateInspector, operation string, pathIndex int, side string) ([]byte, error) {
+			return inspector.Inspect(ctx, operation, pathIndex, side)
+		},
+		record: reviewtransaction.PublishLensContextEmission,
 	}
 }
 
-func runReviewLensContext(args []string, help io.Writer, deps reviewLensContextDeps) ([]byte, error) {
+func runReviewLensContext(args []string, help io.Writer, deps reviewLensContextDeps) (payload []byte, err error) {
 	ctx, cancel := context.WithTimeout(context.Background(), deps.timeout)
 	defer cancel()
 	flags := newReviewFlagSet("review lens-context", help,
@@ -164,9 +179,19 @@ func runReviewLensContext(args []string, help io.Writer, deps reviewLensContextD
 	if err != nil {
 		return nil, err
 	}
+	defer func() {
+		if cleanupErr := authority.Inspector.Close(); cleanupErr != nil {
+			payload = nil
+			if err == nil {
+				err = reviewLensContextInspectionFailure(ctx, cleanupErr)
+			}
+		}
+	}()
+	if len(authority.Frozen.ChangedPathManifest) > advisoryreview.MaxEvidenceEntries {
+		return nil, reviewLensContextRefusal("lens_context_budget_exceeded", reviewLensContextCapacityAction(len(authority.Frozen.ChangedPathManifest)))
+	}
 
-	block, err := reviewLensContextBlock(ctx, deps, reviewtransaction.SnapshotBuilder{Repo: authority.Root}, authority.State,
-		authority.Binding, authority.Subject, authority.Frozen)
+	block, err := reviewLensContextBlock(ctx, deps, authority.Inspector, authority.Binding, authority.Subject, authority.Frozen)
 	if err != nil {
 		return nil, err
 	}
@@ -198,12 +223,11 @@ func runReviewLensContext(args []string, help io.Writer, deps reviewLensContextD
 // opaque repository context and a lens name into native authority -- never
 // two independent copies of that resolution.
 type reviewLensAuthority struct {
-	Root    string
-	Store   reviewtransaction.CompactStore
-	State   reviewtransaction.CompactState
-	Binding reviewLensContextBinding
-	Subject reviewtransaction.ArtifactSubject
-	Frozen  reviewtransaction.FrozenCandidateContext
+	Store     reviewtransaction.CompactStore
+	Binding   reviewLensContextBinding
+	Subject   reviewtransaction.ArtifactSubject
+	Frozen    reviewtransaction.FrozenCandidateContext
+	Inspector reviewLensCandidateInspector
 }
 
 // resolveReviewLensAuthority recovers the exact lineage, target, revision,
@@ -240,22 +264,26 @@ func resolveReviewLensAuthority(ctx context.Context, deps reviewLensContextDeps,
 	}
 
 	builder := reviewtransaction.SnapshotBuilder{Repo: root}
-	frozen, err := builder.FrozenCandidateContext(ctx, state.InitialSnapshot)
+	inspector, err := deps.prepare(builder, ctx, state.InitialSnapshot)
 	if err != nil {
 		return reviewLensAuthority{}, reviewLensContextInspectionFailure(ctx, err)
 	}
+	frozen := inspector.FrozenCandidateContext()
 	subject, err := reviewtransaction.NewArtifactSubject(state, record.Revision, frozen, state.SelectedLenses[order], order, "")
 	if err != nil {
+		if cleanupErr := inspector.Close(); cleanupErr != nil {
+			err = errors.Join(err, cleanupErr)
+		}
 		return reviewLensAuthority{}, reviewLensContextInspectionFailure(ctx, err)
 	}
 
 	return reviewLensAuthority{
-		Root: root, Store: store, State: state,
+		Store: store,
 		Binding: reviewLensContextBinding{
 			Lineage: binding.LineageID, Target: binding.TargetIdentity, Lens: state.SelectedLenses[order], Order: order,
 			Revision: binding.Revision, RepositoryContext: repositoryContext, SubjectHash: subject.SubjectHash,
 		},
-		Subject: subject, Frozen: frozen,
+		Subject: subject, Frozen: frozen, Inspector: inspector,
 	}, nil
 }
 
@@ -277,7 +305,7 @@ func reviewLensContextSelectedOrder(selected []string, lens string) (int, error)
 }
 
 func reviewLensContextBlock(
-	ctx context.Context, deps reviewLensContextDeps, builder reviewtransaction.SnapshotBuilder, state reviewtransaction.CompactState,
+	ctx context.Context, deps reviewLensContextDeps, inspector reviewLensCandidateInspector,
 	binding reviewLensContextBinding, subject reviewtransaction.ArtifactSubject, frozen reviewtransaction.FrozenCandidateContext,
 ) ([]byte, error) {
 	// RepositoryRoot stays empty: this block is produced only for an opaque
@@ -323,7 +351,7 @@ func reviewLensContextBlock(
 		{header: reviewLensContextNameStatus, operation: "name-status"},
 		{header: reviewLensContextNumstat, operation: "numstat"},
 	} {
-		payload, err := deps.inspect(builder, ctx, state.InitialSnapshot, discovery.operation, -1, "")
+		payload, err := deps.inspect(ctx, inspector, discovery.operation, -1, "")
 		if err != nil {
 			return nil, reviewLensContextInspectionFailure(ctx, err)
 		}
@@ -332,7 +360,7 @@ func reviewLensContextBlock(
 		}
 	}
 	for index, entry := range frozen.ChangedPathManifest {
-		payload, err := deps.inspect(builder, ctx, state.InitialSnapshot, "patch", index, "")
+		payload, err := deps.inspect(ctx, inspector, "patch", index, "")
 		if err != nil {
 			return nil, reviewLensContextInspectionFailure(ctx, err)
 		}
@@ -408,10 +436,14 @@ func reviewLensContextInspectionFailure(ctx context.Context, err error) error {
 // cancellation: a nil return means the caller should classify normally.
 func reviewLensContextDeadline(ctx context.Context, err error) error {
 	if errors.Is(ctx.Err(), context.DeadlineExceeded) || errors.Is(err, context.DeadlineExceeded) {
-		return reviewLensContextRefusal("lens_context_deadline_exceeded", reviewLensContextRefreshAction)
+		return reviewLensContextRefusal("lens_context_deadline_exceeded", reviewLensContextDeadlineAction)
 	}
 	if errors.Is(ctx.Err(), context.Canceled) || errors.Is(err, context.Canceled) {
 		return reviewLensContextRefusal("lens_context_canceled", reviewLensContextRefreshAction)
 	}
 	return nil
+}
+
+func reviewLensContextCapacityAction(entries int) string {
+	return fmt.Sprintf("immutable candidate evidence has %d paths but advisory review accepts at most %d evidence entries; retrying this candidate cannot succeed; split the candidate into a chained sequence of smaller reviewable commits, then start a review for the reduced scope by running %s", entries, advisoryreview.MaxEvidenceEntries, reviewNextTransitionRefreshCommandV21)
 }

@@ -203,11 +203,11 @@ func TestReviewLensContextRefusesEmptyPatchForContentChangingPath(t *testing.T) 
 	handle := args[slices.Index(args, "--repository-context")+1]
 	lens := args[slices.Index(args, "--lens")+1]
 	deps := reviewLensContextDependencies()
-	deps.inspect = func(builder reviewtransaction.SnapshotBuilder, ctx context.Context, snapshot reviewtransaction.Snapshot, operation string, pathIndex int, side string) ([]byte, error) {
+	deps.inspect = func(ctx context.Context, inspector reviewLensCandidateInspector, operation string, pathIndex int, side string) ([]byte, error) {
 		if operation == "patch" {
 			return nil, nil
 		}
-		return builder.InspectCandidate(ctx, snapshot, operation, pathIndex, side)
+		return inspector.Inspect(ctx, operation, pathIndex, side)
 	}
 	block, err := runReviewLensContext([]string{"--repository-context", handle, "--lens", lens}, io.Discard, deps)
 	if err == nil || !strings.Contains(err.Error(), "lens_context_empty_patch") {
@@ -233,6 +233,49 @@ func TestReviewLensContextCarriesAggregateDeadline(t *testing.T) {
 	}
 	if len(block) != 0 {
 		t.Fatalf("deadline refusal emitted %d bytes of reviewer context", len(block))
+	}
+	want := "lens_context_deadline_exceeded: provider-owned reviewer lens context was not produced; " + reviewLensContextDeadlineAction
+	if err.Error() != want {
+		t.Fatalf("deadline guidance = %q, want %q", err, want)
+	}
+	if !strings.Contains(err.Error(), "retry this operation once") || !strings.Contains(err.Error(), "if the same lens slot reaches the same deadline again") ||
+		!strings.Contains(err.Error(), "split the candidate into a chained sequence of smaller reviewable commits") || !strings.Contains(err.Error(), reviewNextTransitionRefreshCommandV21) {
+		t.Fatalf("deadline guidance is not a single retry followed by a runnable reduced-scope exit: %q", err)
+	}
+}
+
+func TestReviewLensContextRefusesManifestOverAdvisoryCapacityBeforePatchInspection(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("USERPROFILE", os.Getenv("HOME"))
+	repo := initReviewCLIRepo(t)
+	for index := range 33 {
+		writeReviewStartCandidate(t, repo, fmt.Sprintf("path-%02d.txt", index), "candidate\n", 0o644)
+	}
+	started := runNegotiatedReviewStart(t, repo, "lens-context-entry-capacity")
+	deps := reviewLensContextDependencies()
+	inspect := deps.inspect
+	patchReads := 0
+	deps.inspect = func(ctx context.Context, inspector reviewLensCandidateInspector, operation string, pathIndex int, side string) ([]byte, error) {
+		if operation == "patch" {
+			patchReads++
+		}
+		return inspect(ctx, inspector, operation, pathIndex, side)
+	}
+	block, err := runReviewLensContext([]string{
+		"--repository-context", started.RepositoryContext.Handle, "--lens", started.SelectedLenses[0],
+	}, io.Discard, deps)
+	if err == nil || !strings.Contains(err.Error(), "lens_context_budget_exceeded") {
+		t.Fatalf("entry-capacity error = %v", err)
+	}
+	if !strings.Contains(err.Error(), "33") || !strings.Contains(err.Error(), "32") ||
+		!strings.Contains(err.Error(), "chained sequence of smaller reviewable commits") || !strings.Contains(err.Error(), reviewNextTransitionRefreshCommandV21) {
+		t.Fatalf("entry-capacity guidance does not name its limit and runnable continuation: %q", err)
+	}
+	if patchReads != 0 {
+		t.Fatalf("patch inspections before entry-capacity refusal = %d, want 0", patchReads)
+	}
+	if len(block) != 0 {
+		t.Fatalf("entry-capacity refusal emitted %d bytes of reviewer context", len(block))
 	}
 }
 
