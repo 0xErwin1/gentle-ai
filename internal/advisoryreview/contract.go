@@ -21,7 +21,7 @@ const (
 	// invented cap. Refusal happens before any evidence reaches a model;
 	// evidence is never truncated to fit.
 	maxEvidenceBytes   = reviewtransaction.MaxFrozenCandidateDiffBytes
-	maxEvidenceEntries = 32
+	MaxEvidenceEntries = 32
 	maxResultBytes     = 64 << 10
 )
 
@@ -146,7 +146,7 @@ func validateRequest(request Request) error {
 	if err := reviewtransaction.ValidateReviewerResultBinding(request.ArtifactSubject, request.ChangedPathManifest); err != nil {
 		return fmt.Errorf("validate advisory reviewer binding: %w", err)
 	}
-	if len(request.Evidence) == 0 || len(request.Evidence) > maxEvidenceEntries || len(request.Evidence) != len(request.ChangedPathManifest) {
+	if len(request.Evidence) == 0 || len(request.Evidence) > MaxEvidenceEntries || len(request.Evidence) != len(request.ChangedPathManifest) {
 		// refusal:by-design operator-knowledge: advisory review requires bounded provider-owned evidence
 		return fmt.Errorf("advisory review requires one bounded evidence entry for every frozen candidate path")
 	}
