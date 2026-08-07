@@ -78,7 +78,8 @@ jobs:
             completed_once("j54-sdd-missing-authority-receipt-fails-closed") and
             completed_once("j55-sdd-mismatched-authority-receipt-fails-closed") and
             completed_once("j56-sdd-non-allow-post-apply-gate-fails-closed") and
-            completed_once("j58-sdd-foreign-openspec-path-fails-closed")
+            completed_once("j58-sdd-foreign-openspec-path-fails-closed") and
+            completed_once("j75-intended-untracked-selection-executes-printed-start")
           ' "$RUNNER_TEMP/bench-portable.json"
           "$RUNNER_TEMP/gentle-ai-bench" run --binary "$RUNNER_TEMP/gentle-ai" --axis source-coupled --only j57-sdd-authority-drift-during-discovery-fails-closed --out "$RUNNER_TEMP/bench-source-coupled-untagged.json"
           jq -e '

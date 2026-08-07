@@ -30,8 +30,9 @@ type statusEnvelope struct {
 		Paths                []string `json:"paths"`
 	} `json:"projection"`
 	NextTransition struct {
-		Kind    string `json:"kind"`
-		Collect struct {
+		Kind       string `json:"kind"`
+		ReasonCode string `json:"reason_code"`
+		Collect    struct {
 			Inputs []struct {
 				Name             string `json:"name"`
 				CaptureOperation string `json:"capture_operation"`
@@ -106,7 +107,11 @@ func readStatus(r *journeyRun) (statusEnvelope, error) {
 }
 
 func readStatusFor(r *journeyRun, selectors ...string) (statusEnvelope, error) {
-	args := append([]string{"review", "status", "--cwd", r.sandbox.Repo, "--contract", reviewContract, "--next-transition"}, selectors...)
+	return readStatusForContract(r, reviewContract, selectors...)
+}
+
+func readStatusForContract(r *journeyRun, contract string, selectors ...string) (statusEnvelope, error) {
+	args := append([]string{"review", "status", "--cwd", r.sandbox.Repo, "--contract", contract, "--next-transition"}, selectors...)
 	observation := r.run(args, false)
 	var envelope statusEnvelope
 	if err := json.Unmarshal([]byte(strings.TrimSpace(observation.Stdout)), &envelope); err != nil {
@@ -523,6 +528,7 @@ func Journeys() []Journey {
 	journeys = append(journeys, advisoryJourneys()...)
 	journeys = append(journeys, zeroDeltaJourneys()...)
 	journeys = append(journeys, localGateBaseAdvanceJourneys()...)
+	journeys = append(journeys, intendedUntrackedJourneys()...)
 	return append(journeys, handoffJourneys()...)
 }
 
