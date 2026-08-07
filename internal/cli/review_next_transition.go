@@ -983,8 +983,6 @@ func reviewReasonDescription(reason string) string {
 		return "Target is unreviewed and ready for initial review start"
 	case "captured_results_ready":
 		return "Captured reviewer results are complete and ready for finalization"
-	case "captured_verification_evidence_ready":
-		return "Verification evidence captured and ready for finalization"
 	case "native_low_risk_verification":
 		return "Low risk candidate eligible for native verification"
 	case "approved_receipt_ready":
@@ -1028,89 +1026,18 @@ func reviewReasonDescription(reason string) string {
 	}
 }
 
-func newReviewForecast(status ReviewTargetStatusResult, selectedLenses []string, artifacts []ReviewTransitionArtifact, capturedEvidence *reviewtransaction.VerificationEvidenceRecord, artifactErr error, input reviewNextTransitionInput) ReviewForecast {
-	head := newReviewNextTransition(status, selectedLenses, artifacts, capturedEvidence, artifactErr, input)
-
-	headItem := ReviewForecastItem{
-		Step:        1,
-		Kind:        head.Kind,
-		ReasonCode:  head.ReasonCode,
-		Description: reviewReasonDescription(head.ReasonCode),
-	}
-
-	steps := []ReviewForecastItem{headItem}
-	horizon := ForecastHorizonComplete
-
+func newReviewForecast(head ReviewNextTransition) ReviewForecast {
+	horizon := ForecastHorizonPartial
 	if head.Kind == reviewNextTransitionStop {
 		horizon = ForecastHorizonTerminal
-		return ReviewForecast{
-			Horizon: horizon,
-			Steps:   steps,
-		}
 	}
-
-	// Tail projection for known multi-step flows
-	switch head.ReasonCode {
-	case "fresh_target_ready":
-		horizon = ForecastHorizonPartial
-		steps = append(steps, ReviewForecastItem{
-			Step:        2,
-			Kind:        reviewNextTransitionCollect,
-			ReasonCode:  "reviewer_results_required",
-			Description: reviewReasonDescription("reviewer_results_required"),
-		})
-	case "reviewer_results_required":
-		horizon = ForecastHorizonPartial
-		steps = append(steps, ReviewForecastItem{
-			Step:        2,
-			Kind:        reviewNextTransitionExecute,
-			ReasonCode:  "captured_results_ready",
-			Description: reviewReasonDescription("captured_results_ready"),
-		})
-	case "captured_results_ready":
-		horizon = ForecastHorizonPartial
-		steps = append(steps, ReviewForecastItem{
-			Step:        2,
-			Kind:        reviewNextTransitionCollect,
-			ReasonCode:  "delivery_gate_required",
-			Description: reviewReasonDescription("delivery_gate_required"),
-		})
-	case "correction_plan_required":
-		horizon = ForecastHorizonPartial
-		steps = append(steps, ReviewForecastItem{
-			Step:        2,
-			Kind:        reviewNextTransitionCollect,
-			ReasonCode:  "targeted_validation_required",
-			Description: reviewReasonDescription("targeted_validation_required"),
-		})
-	case "targeted_validation_required":
-		horizon = ForecastHorizonPartial
-		steps = append(steps, ReviewForecastItem{
-			Step:        2,
-			Kind:        reviewNextTransitionCollect,
-			ReasonCode:  "verification_evidence_required",
-			Description: reviewReasonDescription("verification_evidence_required"),
-		})
-	case "verification_evidence_required":
-		horizon = ForecastHorizonPartial
-		steps = append(steps, ReviewForecastItem{
-			Step:        2,
-			Kind:        reviewNextTransitionExecute,
-			ReasonCode:  "captured_verification_evidence_ready",
-			Description: reviewReasonDescription("captured_verification_evidence_ready"),
-		})
-	case "delivery_gate_required":
-		horizon = ForecastHorizonPartial
-		steps = append(steps, ReviewForecastItem{
-			Step:        2,
-			Kind:        reviewNextTransitionExecute,
-			ReasonCode:  "approved_receipt_ready",
-			Description: reviewReasonDescription("approved_receipt_ready"),
-		})
-	}
-
 	return ReviewForecast{
 		Horizon: horizon,
-		Steps:   steps,
+		Steps: []ReviewForecastItem{{
+			Step:        1,
+			Kind:        head.Kind,
+			ReasonCode:  head.ReasonCode,
+			Description: reviewReasonDescription(head.ReasonCode),
+		}},
 	}
 }

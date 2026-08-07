@@ -39,7 +39,6 @@ const (
 type ReviewForecastHorizon string
 
 const (
-	ForecastHorizonComplete ReviewForecastHorizon = "complete"
 	ForecastHorizonPartial  ReviewForecastHorizon = "partial"
 	ForecastHorizonTerminal ReviewForecastHorizon = "terminal"
 )
@@ -418,49 +417,44 @@ func (result ReviewTargetStatusResult) Validate() error {
 		}
 	}
 	if result.Forecast != nil {
+		if result.Contract != ReviewIntegrationContractV2 {
+			return errors.New("forecast requires the v2 review integration contract") // refusal:by-design world-action: frozen v1 status cannot accept additive routing data
+		}
 		if result.NextTransition == nil {
 			return errors.New("forecast without next_transition is invalid") // refusal:by-design world-action: status forecast requires next_transition
 		}
 		switch result.Forecast.Horizon {
-		case ForecastHorizonComplete, ForecastHorizonPartial, ForecastHorizonTerminal:
+		case ForecastHorizonPartial, ForecastHorizonTerminal:
 		default:
 			return fmt.Errorf("invalid forecast horizon %q", result.Forecast.Horizon) // refusal:by-design world-action: status forecast requires valid horizon
 		}
-		if len(result.Forecast.Steps) == 0 {
-			return errors.New("forecast steps must not be empty") // refusal:by-design world-action: status forecast requires steps
+		if len(result.Forecast.Steps) != 1 {
+			return errors.New("forecast must contain exactly one step") // refusal:by-design world-action: status forecast is descriptive only
 		}
-		for i, step := range result.Forecast.Steps {
-			if step.Step != i+1 {
-				return fmt.Errorf("forecast step %d has non-sequential number %d", i+1, step.Step) // refusal:by-design world-action: status forecast step numbers must be sequential
-			}
-			switch step.Kind {
-			case reviewNextTransitionExecute, reviewNextTransitionCollect, reviewNextTransitionStop:
-			default:
-				return fmt.Errorf("forecast step %d has invalid kind %q", step.Step, step.Kind) // refusal:by-design world-action: status forecast step kind must be valid
-			}
-			if strings.TrimSpace(step.ReasonCode) == "" {
-				return fmt.Errorf("forecast step %d has empty reason_code", step.Step) // refusal:by-design world-action: status forecast step reason_code must not be empty
-			}
-			if strings.TrimSpace(step.Description) == "" {
-				return fmt.Errorf("forecast step %d has empty description", step.Step) // refusal:by-design world-action: status forecast step description must not be empty
-			}
+		step := result.Forecast.Steps[0]
+		if step.Step != 1 {
+			return fmt.Errorf("forecast step must be 1, got %d", step.Step) // refusal:by-design world-action: forecast head must remain singular
 		}
-		head := result.Forecast.Steps[0]
-		if head.Kind != result.NextTransition.Kind || head.ReasonCode != result.NextTransition.ReasonCode {
+		switch step.Kind {
+		case reviewNextTransitionExecute, reviewNextTransitionCollect, reviewNextTransitionStop:
+		default:
+			return fmt.Errorf("forecast step 1 has invalid kind %q", step.Kind) // refusal:by-design world-action: status forecast step kind must be valid
+		}
+		if strings.TrimSpace(step.ReasonCode) == "" {
+			return errors.New("forecast step 1 has empty reason_code") // refusal:by-design world-action: status forecast step reason_code must not be empty
+		}
+		if strings.TrimSpace(step.Description) == "" {
+			return errors.New("forecast step 1 has empty description") // refusal:by-design world-action: status forecast step description must not be empty
+		}
+		if step.Kind != result.NextTransition.Kind || step.ReasonCode != result.NextTransition.ReasonCode {
 			return fmt.Errorf("forecast head (%s/%s) diverges from next_transition (%s/%s)", // refusal:by-design world-action: status forecast head must match next_transition
-				head.Kind, head.ReasonCode, result.NextTransition.Kind, result.NextTransition.ReasonCode)
+				step.Kind, step.ReasonCode, result.NextTransition.Kind, result.NextTransition.ReasonCode)
 		}
-		switch {
-		case result.NextTransition.Kind == reviewNextTransitionStop:
-			if result.Forecast.Horizon != ForecastHorizonTerminal || len(result.Forecast.Steps) != 1 {
-				return errors.New("stop transition requires a terminal one-step forecast") // refusal:by-design world-action: stop transition forecast must be terminal one step
-			}
-		case len(result.Forecast.Steps) > 1:
-			if result.Forecast.Horizon != ForecastHorizonPartial {
-				return errors.New("multi-step forecast requires a partial horizon") // refusal:by-design world-action: multi-step forecast requires partial horizon
-			}
-		case result.Forecast.Horizon != ForecastHorizonComplete:
-			return errors.New("single-step non-stop forecast requires a complete horizon") // refusal:by-design world-action: single step non-stop forecast requires complete horizon
+		if result.NextTransition.Kind == reviewNextTransitionStop && result.Forecast.Horizon != ForecastHorizonTerminal {
+			return errors.New("stop transition requires a terminal forecast") // refusal:by-design world-action: stop transition forecast must be terminal
+		}
+		if result.NextTransition.Kind != reviewNextTransitionStop && result.Forecast.Horizon != ForecastHorizonPartial {
+			return errors.New("non-stop transition requires a partial forecast") // refusal:by-design world-action: callers must refresh status after action
 		}
 	}
 	switch result.Applicability {

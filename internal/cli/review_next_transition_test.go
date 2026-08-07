@@ -9,6 +9,8 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"regexp"
+	"slices"
 	"strings"
 	"testing"
 
@@ -898,180 +900,193 @@ func TestReviewNextTransitionRefusesTargetDriftAndUnverifiableCaptures(t *testin
 	}
 }
 
-func TestReviewForecastHeadMatchesNextTransitionAndTailIsDescriptive(t *testing.T) {
-	statusStop := ReviewTargetStatusResult{
-		Applicability: reviewtransaction.TargetApplicabilityCorrupted,
-	}
-	forecastStop := newReviewForecast(statusStop, nil, nil, nil, nil, reviewNextTransitionInput{})
-	if forecastStop.Horizon != ForecastHorizonTerminal {
-		t.Fatalf("expected terminal horizon for stop transition, got %q", forecastStop.Horizon)
-	}
-	if len(forecastStop.Steps) != 1 || forecastStop.Steps[0].ReasonCode != "corrupted_or_unverifiable_authority" {
-		t.Fatalf("expected 1 stop step, got %#v", forecastStop.Steps)
-	}
-
-	statusFresh := ReviewTargetStatusResult{
-		Applicability:  reviewtransaction.TargetApplicabilityUnrelated,
-		TargetIdentity: "sha256:" + strings.Repeat("a", 64),
-	}
-	forecastFresh := newReviewForecast(statusFresh, nil, nil, nil, nil, reviewNextTransitionInput{})
-	if forecastFresh.Horizon != ForecastHorizonPartial {
-		t.Fatalf("expected partial horizon for multi-step fresh target, got %q", forecastFresh.Horizon)
-	}
-	if len(forecastFresh.Steps) < 2 {
-		t.Fatalf("expected multi-step forecast for fresh target, got %#v", forecastFresh.Steps)
-	}
-	if forecastFresh.Steps[0].Step != 1 || forecastFresh.Steps[0].ReasonCode != "fresh_target_ready" {
-		t.Fatalf("unexpected step 1: %#v", forecastFresh.Steps[0])
-	}
-	if forecastFresh.Steps[1].Step != 2 || forecastFresh.Steps[1].ReasonCode != "reviewer_results_required" {
-		t.Fatalf("unexpected step 2: %#v", forecastFresh.Steps[1])
+func TestReviewForecastMirrorsExactlyOneNextTransition(t *testing.T) {
+	for _, tt := range []struct {
+		name    string
+		status  ReviewTargetStatusResult
+		horizon ReviewForecastHorizon
+	}{
+		{name: "stop", status: ReviewTargetStatusResult{Applicability: reviewtransaction.TargetApplicabilityCorrupted}, horizon: ForecastHorizonTerminal},
+		{name: "execute", status: ReviewTargetStatusResult{Applicability: reviewtransaction.TargetApplicabilityUnrelated, TargetIdentity: "sha256:" + strings.Repeat("a", 64)}, horizon: ForecastHorizonPartial},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			head := newReviewNextTransition(tt.status, nil, nil, nil, nil, reviewNextTransitionInput{})
+			forecast := newReviewForecast(head)
+			if forecast.Horizon != tt.horizon || len(forecast.Steps) != 1 {
+				t.Fatalf("forecast = %#v, want one %s step", forecast, tt.horizon)
+			}
+			step := forecast.Steps[0]
+			if step.Step != 1 || step.Kind != head.Kind || step.ReasonCode != head.ReasonCode || strings.TrimSpace(step.Description) == "" {
+				t.Fatalf("forecast step = %#v, head = %#v", step, head)
+			}
+		})
 	}
 }
 
 func TestReviewStatusValidateRejectsMalformedForecast(t *testing.T) {
-	validTransition := &ReviewNextTransition{
-		Kind:       "stop",
-		ReasonCode: "corrupted_or_unverifiable_authority",
-	}
-
+	item := ReviewForecastItem{Step: 1, Kind: "stop", ReasonCode: "corrupted_or_unverifiable_authority", Description: "desc"}
 	tests := []struct {
-		name     string
-		forecast *ReviewForecast
-		wantErr  string
+		name, wantErr string
+		forecast      ReviewForecast
+		next          bool
 	}{
-		{
-			name: "forecast without next_transition",
-			forecast: &ReviewForecast{
-				Horizon: ForecastHorizonTerminal,
-				Steps: []ReviewForecastItem{
-					{Step: 1, Kind: "stop", ReasonCode: "corrupted_or_unverifiable_authority", Description: "desc"},
-				},
-			},
-			wantErr: "forecast without next_transition is invalid",
-		},
-		{
-			name: "invalid horizon",
-			forecast: &ReviewForecast{
-				Horizon: "invalid_horizon",
-				Steps: []ReviewForecastItem{
-					{Step: 1, Kind: "stop", ReasonCode: "corrupted_or_unverifiable_authority", Description: "desc"},
-				},
-			},
-			wantErr: `invalid forecast horizon "invalid_horizon"`,
-		},
-		{
-			name: "empty steps",
-			forecast: &ReviewForecast{
-				Horizon: ForecastHorizonTerminal,
-				Steps:   []ReviewForecastItem{},
-			},
-			wantErr: "forecast steps must not be empty",
-		},
-		{
-			name: "non sequential step number",
-			forecast: &ReviewForecast{
-				Horizon: ForecastHorizonTerminal,
-				Steps: []ReviewForecastItem{
-					{Step: 2, Kind: "stop", ReasonCode: "corrupted_or_unverifiable_authority", Description: "desc"},
-				},
-			},
-			wantErr: "forecast step 1 has non-sequential number 2",
-		},
-		{
-			name: "invalid step kind",
-			forecast: &ReviewForecast{
-				Horizon: ForecastHorizonTerminal,
-				Steps: []ReviewForecastItem{
-					{Step: 1, Kind: "invalid_kind", ReasonCode: "corrupted_or_unverifiable_authority", Description: "desc"},
-				},
-			},
-			wantErr: `forecast step 1 has invalid kind "invalid_kind"`,
-		},
-		{
-			name: "empty reason code",
-			forecast: &ReviewForecast{
-				Horizon: ForecastHorizonTerminal,
-				Steps: []ReviewForecastItem{
-					{Step: 1, Kind: "stop", ReasonCode: "  ", Description: "desc"},
-				},
-			},
-			wantErr: "forecast step 1 has empty reason_code",
-		},
-		{
-			name: "empty description",
-			forecast: &ReviewForecast{
-				Horizon: ForecastHorizonTerminal,
-				Steps: []ReviewForecastItem{
-					{Step: 1, Kind: "stop", ReasonCode: "corrupted_or_unverifiable_authority", Description: "  "},
-				},
-			},
-			wantErr: "forecast step 1 has empty description",
-		},
-		{
-			name: "head divergence",
-			forecast: &ReviewForecast{
-				Horizon: ForecastHorizonTerminal,
-				Steps: []ReviewForecastItem{
-					{Step: 1, Kind: "execute", ReasonCode: "corrupted_or_unverifiable_authority", Description: "desc"},
-				},
-			},
-			wantErr: "forecast head (execute/corrupted_or_unverifiable_authority) diverges from next_transition (stop/corrupted_or_unverifiable_authority)",
-		},
-		{
-			name: "stop transition non-terminal horizon",
-			forecast: &ReviewForecast{
-				Horizon: ForecastHorizonPartial,
-				Steps: []ReviewForecastItem{
-					{Step: 1, Kind: "stop", ReasonCode: "corrupted_or_unverifiable_authority", Description: "desc"},
-				},
-			},
-			wantErr: "stop transition requires a terminal one-step forecast",
-		},
-		{
-			name: "stop transition multi-step forecast",
-			forecast: &ReviewForecast{
-				Horizon: ForecastHorizonTerminal,
-				Steps: []ReviewForecastItem{
-					{Step: 1, Kind: "stop", ReasonCode: "corrupted_or_unverifiable_authority", Description: "desc"},
-					{Step: 2, Kind: "stop", ReasonCode: "corrupted_or_unverifiable_authority", Description: "desc"},
-				},
-			},
-			wantErr: "stop transition requires a terminal one-step forecast",
-		},
+		{"missing next", "forecast without next_transition is invalid", ReviewForecast{Horizon: ForecastHorizonTerminal, Steps: []ReviewForecastItem{item}}, false},
+		{"invalid horizon", `invalid forecast horizon "invalid_horizon"`, ReviewForecast{Horizon: "invalid_horizon", Steps: []ReviewForecastItem{item}}, true},
+		{"complete horizon", `invalid forecast horizon "complete"`, ReviewForecast{Horizon: "complete", Steps: []ReviewForecastItem{item}}, true},
+		{"multiple steps", "forecast must contain exactly one step", ReviewForecast{Horizon: ForecastHorizonTerminal, Steps: []ReviewForecastItem{item, item}}, true},
+		{"step is not one", "forecast step must be 1, got 2", ReviewForecast{Horizon: ForecastHorizonTerminal, Steps: []ReviewForecastItem{{Step: 2, Kind: item.Kind, ReasonCode: item.ReasonCode, Description: item.Description}}}, true},
+		{"invalid kind", `forecast step 1 has invalid kind "invalid_kind"`, ReviewForecast{Horizon: ForecastHorizonTerminal, Steps: []ReviewForecastItem{{Step: 1, Kind: "invalid_kind", ReasonCode: item.ReasonCode, Description: item.Description}}}, true},
+		{"empty reason", "forecast step 1 has empty reason_code", ReviewForecast{Horizon: ForecastHorizonTerminal, Steps: []ReviewForecastItem{{Step: 1, Kind: item.Kind, Description: item.Description}}}, true},
+		{"empty description", "forecast step 1 has empty description", ReviewForecast{Horizon: ForecastHorizonTerminal, Steps: []ReviewForecastItem{{Step: 1, Kind: item.Kind, ReasonCode: item.ReasonCode}}}, true},
+		{"head divergence", "forecast head (execute/corrupted_or_unverifiable_authority) diverges", ReviewForecast{Horizon: ForecastHorizonTerminal, Steps: []ReviewForecastItem{{Step: 1, Kind: "execute", ReasonCode: item.ReasonCode, Description: item.Description}}}, true},
+		{"stop partial", "stop transition requires a terminal forecast", ReviewForecast{Horizon: ForecastHorizonPartial, Steps: []ReviewForecastItem{item}}, true},
 	}
+	status := newReviewTargetStatusResultForContract(reviewtransaction.TargetStatusResult{Applicability: reviewtransaction.TargetApplicabilityCorrupted, AuthorityVersion: reviewtransaction.AuthorityVersionCompact, Action: reviewtransaction.TargetStatusActionStop, Replayability: reviewtransaction.ReplayabilityNotReplayable}, ReviewIntegrationContractV2)
+	status.TargetIdentity = "sha256:" + strings.Repeat("a", 64)
+	status.Projection = ReviewTargetStatusProjection{Schema: ReviewIntegrationProjectionSchema, Projection: reviewtransaction.ProjectionWorkspace, BaseTree: strings.Repeat("a", 40), InitialReviewTree: strings.Repeat("b", 40), CurrentCandidateTree: strings.Repeat("c", 40), PathsDigest: "sha256:" + strings.Repeat("a", 64), IntendedUntrackedProof: "sha256:" + strings.Repeat("b", 64), InitialSnapshotIdentity: status.TargetIdentity, CurrentSnapshotIdentity: status.TargetIdentity, Paths: []string{"tracked.txt"}, IntendedUntracked: []string{}}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			status := newReviewTargetStatusResultForContract(reviewtransaction.TargetStatusResult{
-				Applicability:    reviewtransaction.TargetApplicabilityCorrupted,
-				AuthorityVersion: reviewtransaction.AuthorityVersionCompact,
-				Action:           reviewtransaction.TargetStatusActionStop,
-				Replayability:    reviewtransaction.ReplayabilityNotReplayable,
-			}, ReviewIntegrationContractV1)
-			status.TargetIdentity = "sha256:" + strings.Repeat("a", 64)
-			status.Projection = ReviewTargetStatusProjection{
-				Schema:                  ReviewIntegrationProjectionSchema,
-				Projection:              reviewtransaction.ProjectionWorkspace,
-				BaseTree:                strings.Repeat("a", 40),
-				InitialReviewTree:       strings.Repeat("b", 40),
-				CurrentCandidateTree:    strings.Repeat("c", 40),
-				PathsDigest:             "sha256:" + strings.Repeat("a", 64),
-				IntendedUntrackedProof:  "sha256:" + strings.Repeat("b", 64),
-				InitialSnapshotIdentity: status.TargetIdentity,
-				CurrentSnapshotIdentity: status.TargetIdentity,
-				Paths:                   []string{"tracked.txt"},
-				IntendedUntracked:       []string{},
+			got := status
+			got.Forecast = &tt.forecast
+			if tt.next {
+				got.NextTransition = &ReviewNextTransition{Kind: item.Kind, ReasonCode: item.ReasonCode}
 			}
-			status.Forecast = tt.forecast
-			if tt.name != "forecast without next_transition" {
-				status.NextTransition = validTransition
-			}
-
-			err := status.Validate()
+			err := got.Validate()
 			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
 				t.Fatalf("expected error containing %q, got %v", tt.wantErr, err)
 			}
 		})
 	}
+}
+
+func TestNegotiatedStatusForecastStaysOnStderrAndV1StaysFrozen(t *testing.T) {
+	repo := initReviewCLIRepo(t)
+	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("forecast\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	previous := reviewNarrationOutput
+	var stderr bytes.Buffer
+	reviewNarrationOutput = &stderr
+	t.Cleanup(func() { reviewNarrationOutput = previous })
+
+	var stdout bytes.Buffer
+	if err := RunReviewStatus([]string{"--cwd", repo, "--contract", ReviewIntegrationContractV2, "--next-transition"}, &stdout); err != nil {
+		t.Fatal(err)
+	}
+	var status ReviewTargetStatusResult
+	if err := json.Unmarshal(stdout.Bytes(), &status); err != nil {
+		t.Fatalf("stdout is not JSON: %v\n%s", err, stdout.String())
+	}
+	if err := status.Validate(); err != nil {
+		t.Fatalf("status envelope is invalid: %v", err)
+	}
+	if status.NextTransition == nil || status.Forecast == nil || len(status.Forecast.Steps) != 1 {
+		t.Fatalf("status forecast = %#v, transition = %#v", status.Forecast, status.NextTransition)
+	}
+	step := status.Forecast.Steps[0]
+	if status.Forecast.Horizon != ForecastHorizonPartial || step.Step != 1 || step.Kind != status.NextTransition.Kind || step.ReasonCode != status.NextTransition.ReasonCode || strings.TrimSpace(step.Description) == "" {
+		t.Fatalf("status forecast = %#v, transition = %#v", status.Forecast, status.NextTransition)
+	}
+	for _, want := range []string{"Forecast horizon: partial", "step 1", step.Kind, step.ReasonCode, step.Description, "Re-query STATUS"} {
+		if !strings.Contains(stderr.String(), want) {
+			t.Errorf("stderr forecast missing %q:\n%s", want, stderr.String())
+		}
+	}
+
+	var legacy bytes.Buffer
+	if err := RunReviewStatus([]string{"--cwd", repo, "--contract", ReviewIntegrationContractV1, "--next-transition"}, &legacy); err != nil {
+		t.Fatal(err)
+	}
+	var v1 map[string]any
+	if err := json.Unmarshal(legacy.Bytes(), &v1); err != nil {
+		t.Fatal(err)
+	}
+	if _, found := v1["forecast"]; found {
+		t.Fatalf("v1 status gained forecast: %s", legacy.String())
+	}
+}
+
+func TestNativeStatusSchemasValidateWholeForecastEnvelope(t *testing.T) {
+	fixture, err := os.ReadFile(filepath.Join("..", "..", "contracts", "review-integration", "v2", "fixtures", "status-v5.fixture.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"status-v4.schema.json", "status-v5.schema.json"} {
+		t.Run(name, func(t *testing.T) {
+			var document map[string]any
+			if err := json.Unmarshal(fixture, &document); err != nil {
+				t.Fatal(err)
+			}
+			document["schema"] = "gentle-ai.review-integration.status/v" + strings.TrimSuffix(strings.TrimPrefix(name, "status-v"), ".schema.json")
+			schema := compileWholeNativeStatusSchema(t, name)
+			if err := schema.Validate(document); err != nil {
+				t.Fatalf("whole %s envelope rejected fixture: %v", name, err)
+			}
+			document["unknown"] = true
+			if err := schema.Validate(document); err == nil {
+				t.Fatal("whole schema accepted an unknown property")
+			}
+		})
+	}
+}
+
+func compileWholeNativeStatusSchema(t *testing.T, name string) *jsonschema.Schema {
+	t.Helper()
+	root, err := filepath.Abs(filepath.Join("..", "..", "contracts", "review-integration"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	compiler := jsonschema.NewCompiler()
+	compiler.UseRegexpEngine(reviewSchemaRegexpEngine)
+	for _, version := range []string{"v1", "v2"} {
+		paths, err := filepath.Glob(filepath.Join(root, version, "schemas", "*.schema.json"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, path := range paths {
+			payload, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var document map[string]any
+			if err := json.Unmarshal(payload, &document); err != nil {
+				t.Fatal(err)
+			}
+			if err := compiler.AddResource(document["$id"].(string), document); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	id := "https://gentle-ai.dev/contracts/review-integration/v2/schemas/" + name
+	schema, err := compiler.Compile(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return schema
+}
+
+type reviewSchemaRegexp struct {
+	pattern string
+	re      *regexp.Regexp
+}
+
+func (r reviewSchemaRegexp) String() string { return r.pattern }
+
+func (r reviewSchemaRegexp) MatchString(value string) bool {
+	if r.re == nil {
+		return value != "" && !strings.HasPrefix(value, "/") && !strings.Contains(value, "\n") && !slices.Contains(strings.Split(value, "/"), "..")
+	}
+	return r.re.MatchString(value)
+}
+
+func reviewSchemaRegexpEngine(pattern string) (jsonschema.Regexp, error) {
+	if pattern == "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$)).+$" {
+		return reviewSchemaRegexp{pattern: pattern}, nil
+	}
+	re, err := regexp.Compile(pattern)
+	if err != nil {
+		return nil, err
+	}
+	return reviewSchemaRegexp{pattern: pattern, re: re}, nil
 }

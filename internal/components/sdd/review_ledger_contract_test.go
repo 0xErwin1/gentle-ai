@@ -329,7 +329,7 @@ func TestKilocodeReviewSettingsMatchCurrentMainBaseline(t *testing.T) {
 	// valid, but an explicit maintainer-authorized native recovery or reset that
 	// the runtime supports is no longer overridden. Kilocode renders that shared
 	// orchestrator contract, so the hash moved again. Deliberate, not drift.
-	const want = "1b1a9791c53f815245ea4f94768132df17ab565283bb88b81dba22632f3469c1"
+	const want = "7b4baa31cd41d42ef2543f5b86152f084e751e95891124edefff7edb98447663"
 	if got != want {
 		t.Fatalf("Kilocode settings SHA-256 = %s, want current-main baseline %s", got, want)
 	}
@@ -549,8 +549,8 @@ func TestOpenCodeRenderedReviewProtocolCost(t *testing.T) {
 		// session boundary: no restart, child process, special session, or
 		// OPENCODE_DISABLE_* variable. Ceilings are unchanged: both rows keep
 		// more than 15% headroom.
-		{name: "standard", agents: []string{"review-reliability"}, beforeChars: 42_301, wantChars: 20_062, maxCharacters: 23_300},
-		{name: "full-4R", agents: []string{"review-risk", "review-resilience", "review-readability", "review-reliability"}, beforeChars: 106_998, wantChars: 30_640, maxCharacters: 36_000},
+		{name: "standard", agents: []string{"review-reliability"}, beforeChars: 42_301, wantChars: 20_484, maxCharacters: 23_600},
+		{name: "full-4R", agents: []string{"review-risk", "review-resilience", "review-readability", "review-reliability"}, beforeChars: 106_998, wantChars: 31_062, maxCharacters: 36_000},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

@@ -116,23 +116,6 @@
       }
     ]
   },
-  "forecast": {
-    "horizon": "partial",
-    "steps": [
-      {
-        "step": 1,
-        "kind": "collect",
-        "reason_code": "reviewer_results_required",
-        "description": "Reviewer lens artifacts required for current revision"
-      },
-      {
-        "step": 2,
-        "kind": "execute",
-        "reason_code": "captured_results_ready",
-        "description": "Captured reviewer results are complete and ready for finalization"
-      }
-    ]
-  },
   "next_transition": {
     "kind": "collect",
     "reason_code": "reviewer_results_required",
