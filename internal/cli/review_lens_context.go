@@ -438,7 +438,10 @@ func reviewLensContextCleanup[T any](_ context.Context, result T, operationErr e
 	}
 	// Cleanup is outside the bounded operation, so its error cannot inherit the
 	// operation context's cancellation or deadline classification.
-	return zero, reviewLensContextRefusal("lens_context_inspection_failed", reviewLensContextRefreshAction)
+	return zero, errors.Join(
+		reviewLensContextRefusal("lens_context_inspection_failed", reviewLensContextRefreshAction),
+		cleanupErr,
+	)
 }
 
 // reviewLensContextDeadline reports the aggregate-deadline refusal when either
