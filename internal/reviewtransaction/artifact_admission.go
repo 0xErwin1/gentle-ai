@@ -454,7 +454,7 @@ func newFrozenRepositoryPathLookup(ctx context.Context, frozen FrozenCandidateCo
 	}
 	return &frozenRepositoryPathLookup{
 		ctx: ctx, repo: frozen.repositoryRoot, isolation: isolation, trees: trees, cache: make(map[string]bool),
-	}, cleanup, nil
+	}, func() { _ = cleanup() }, nil
 }
 
 func (lookup *frozenRepositoryPathLookup) contains(logicalPath string) (bool, error) {
