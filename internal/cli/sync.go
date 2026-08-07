@@ -650,7 +650,7 @@ func syncAdapterSkillBackupTargets(homeDir, workspaceDir string, selection model
 			continue
 		}
 		if slices.Contains(selection.Components, model.ComponentSkills) {
-			skillDir := adapter.SkillsDir(homeDir)
+			skillDir := adapter.SkillsDir(componentInjectionDir(homeDir, workspaceDir, adapter))
 			if skillDir == "" {
 				continue
 			}
@@ -1048,7 +1048,7 @@ func (s componentSyncStep) Run() error {
 			return nil
 		}
 		for _, adapter := range adapters {
-			res, err := skills.Inject(s.homeDir, adapter, skillIDs)
+			res, err := skills.Inject(componentInjectionDir(s.homeDir, s.workspaceDir, adapter), adapter, skillIDs)
 			if err != nil {
 				return fmt.Errorf("sync skills for %q: %w", adapter.Agent(), err)
 			}
