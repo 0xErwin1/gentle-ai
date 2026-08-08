@@ -762,7 +762,7 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 	projection := flags.String("projection", string(reviewtransaction.ProjectionWorkspace), "negotiated target projection: workspace or staged")
 	baseRef := flags.String("base-ref", "", "optional negotiated immutable base-to-HEAD target")
 	baseTree := flags.String("base-tree", "", "optional negotiated resolved immutable overlay base tree")
-	flags.Bool("committed-only", false, "acknowledge that --base-ref selects committed-only review scope")
+	committedOnly := flags.Bool("committed-only", false, "acknowledge that --base-ref selects committed-only review scope")
 	workspaceOverlay := flags.Bool("workspace-overlay", false, "select a negotiated base-ref workspace overlay target")
 	gate := flags.String("gate", string(reviewtransaction.GatePreCommit), "lifecycle gate for an approved receipt transition")
 	recoverySuccessor := flags.String("recovery-successor-lineage", "", "authorized successor lineage for a recovery transition")
@@ -819,8 +819,11 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 		}
 		selectedBaseRef := strings.TrimSpace(*baseRef)
 		selectedBaseTree := strings.TrimSpace(*baseTree)
-		if committedOnlyProvided && (selectedBaseRef == "" || *workspaceOverlay) {
+		if *committedOnly && (selectedBaseRef == "" || *workspaceOverlay) {
 			return errors.New("review status --committed-only requires --base-ref without --workspace-overlay; rerun `gentle-ai review status --base-ref <ref> --committed-only`")
+		}
+		if selectedBaseRef != "" && committedOnlyProvided && !*committedOnly && !*workspaceOverlay {
+			return errors.New("review status --base-ref requires --committed-only; rerun `gentle-ai review status --base-ref <ref> --committed-only`")
 		}
 		stagedRecoveryOverlay := *workspaceOverlay && selectedProjection == reviewtransaction.ProjectionStaged
 		if *workspaceOverlay && stagedRecoveryOverlay && (selectedBaseRef == "" || selectedBaseTree != "") {
