@@ -319,6 +319,42 @@ func TestCloneLocalRDDOverrideRejectsStaleExpectedRevision(t *testing.T) {
 	}
 }
 
+func TestCloneLocalRDDModeTransitionsPublishExactlyOneGeneration(t *testing.T) {
+	repo := initSnapshotRepo(t)
+	ctx := context.Background()
+	global := RDDGlobalMode{Value: "off"}
+
+	disabled, err := SetCloneLocalRDDMode(ctx, repo, RDDModeOff, "", global)
+	if err != nil {
+		t.Fatalf("SetCloneLocalRDDMode(off) error = %v", err)
+	}
+	dir, err := cloneLocalRDDModeRoot(ctx, repo, false)
+	if err != nil {
+		t.Fatalf("cloneLocalRDDModeRoot error = %v", err)
+	}
+	if generation, err := cloneLocalRDDOverrideHeadGeneration(dir); err != nil || generation != 1 {
+		t.Fatalf("off transition generation = %d, %v, want 1", generation, err)
+	}
+
+	inherited, err := SetCloneLocalRDDMode(ctx, repo, RDDModeUnset, disabled.Revision, global)
+	if err != nil {
+		t.Fatalf("SetCloneLocalRDDMode(inherit) error = %v", err)
+	}
+	if inherited.Source != RDDModeSourceGlobal || inherited.CloneLocal != RDDModeUnset {
+		t.Fatalf("off-to-inherit status = %#v", inherited)
+	}
+	if generation, err := cloneLocalRDDOverrideHeadGeneration(dir); err != nil || generation != 2 {
+		t.Fatalf("off-to-inherit generation = %d, %v, want 2", generation, err)
+	}
+
+	if _, err := SetCloneLocalRDDMode(ctx, repo, RDDModeOff, inherited.Revision, global); err != nil {
+		t.Fatalf("SetCloneLocalRDDMode(off after inherit) error = %v", err)
+	}
+	if generation, err := cloneLocalRDDOverrideHeadGeneration(dir); err != nil || generation != 3 {
+		t.Fatalf("inherit-to-off generation = %d, %v, want 3", generation, err)
+	}
+}
+
 func TestCloneLocalRDDOverrideConcurrentWritersKeepOneWinner(t *testing.T) {
 	repo := initSnapshotRepo(t)
 	global := RDDGlobalMode{Value: "on"}
