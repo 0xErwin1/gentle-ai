@@ -75,6 +75,52 @@ func TestReleaseWorkflowUsesFailClosedLeastPrivilegeGates(t *testing.T) {
 	}
 }
 
+func TestStablePromotionWorkflowUsesBoundSourceAndProtectedPublication(t *testing.T) {
+	workflow := readRepositoryFile(t, ".github", "workflows", "promote-stable-rc.yml")
+	for _, required := range []string{
+		"workflow_dispatch:",
+		"source_prerelease_tag:",
+		"stable_tag:",
+		"release_environment_policy_id:",
+		"concurrency:",
+		"./scripts/promote-stable-preflight.sh",
+		"ref: ${{ steps.provenance.outputs.source_sha }}",
+		"reset-empty-draft",
+		"environment: release",
+		"actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd",
+		"recovery_state",
+		"stable tag recovery identity changed",
+		"test -n \"$GH_TOKEN\"",
+		"./scripts/release-signing-preflight.sh",
+		"GORELEASER_CURRENT_TAG",
+		"./scripts/verify-release-assets.sh",
+		"stable published recovery state changed",
+		"RELEASE_ENVIRONMENT_POLICY_TOKEN",
+		"--method DELETE",
+	} {
+		if !strings.Contains(workflow, required) {
+			t.Errorf("stable promotion workflow is missing %q", required)
+		}
+	}
+	if regexp.MustCompile(`(?i)actions/workflows/.*/disable`).MatchString(workflow) {
+		t.Error("stable promotion workflow must not disable the legacy publisher")
+	}
+	if regexp.MustCompile(`(?m)\bgit push\b`).MatchString(workflow) {
+		t.Error("stable promotion workflow must not push a tag from a shell step")
+	}
+	action := regexp.MustCompile(`^\s*(-\s*)?uses:\s*[^@\s]+@([0-9a-f]{40})(?:\s|$)`)
+	scanner := bufio.NewScanner(strings.NewReader(workflow))
+	for scanner.Scan() {
+		line := scanner.Text()
+		if strings.Contains(line, "uses:") && !action.MatchString(line) {
+			t.Errorf("stable promotion action is not pinned to a full commit SHA: %s", strings.TrimSpace(line))
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestReleaseAssetVerifierPreservesReadOnlyRotationVerification(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		t.Skip("release verification runtime is Ubuntu-specific")
@@ -215,6 +261,17 @@ func TestReleaseSecurityScriptsAreSyntacticallyValidAndFailClosed(t *testing.T) 
 				`head_sha=$GITHUB_SHA`,
 				`actions/workflows/$workflow_ref/runs`,
 				`[[ "$conclusion" == "success" ]]`,
+			},
+		},
+		{
+			path: "promote-stable-preflight.sh",
+			required: []string{
+				`source prerelease tag must be canonical`,
+				`workflow revision is not exact current origin/main`,
+				`stable tag is incompatible with the admitted source`,
+				`stable release state is incompatible with safe recovery`,
+				`recovery_state=%s`,
+				`GITHUB_SHA=$source_sha ./scripts/require-ci-success.sh`,
 			},
 		},
 		{
