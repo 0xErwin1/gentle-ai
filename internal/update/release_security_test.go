@@ -128,6 +128,30 @@ func TestStablePromotionWorkflowUsesBoundSourceAndProtectedPublication(t *testin
 	}
 }
 
+func TestSigningMaterialCleanupFallsBackAndProvesAbsence(t *testing.T) {
+	for _, workflowPath := range [][]string{
+		{".github", "workflows", "release.yml"},
+		{".github", "workflows", "promote-stable-rc.yml"},
+	} {
+		workflow := readRepositoryFile(t, workflowPath...)
+		for _, required := range []string{
+			"- name: Remove signing material",
+			"if: always()",
+			`shred --remove "$MINISIGN_SECRET_KEY_FILE" 2>/dev/null || rm -f "$MINISIGN_SECRET_KEY_FILE"`,
+			`rm -f "$MINISIGN_SIGNING_PUBLIC_KEY_FILE"`,
+			`test ! -e "$MINISIGN_SECRET_KEY_FILE"`,
+			`test ! -e "$MINISIGN_SIGNING_PUBLIC_KEY_FILE"`,
+		} {
+			if !strings.Contains(workflow, required) {
+				t.Errorf("%s cleanup is missing %q", filepath.Join(workflowPath...), required)
+			}
+		}
+		if strings.Contains(workflow, `shred --remove "$MINISIGN_SECRET_KEY_FILE" 2>/dev/null || true`) {
+			t.Errorf("%s cleanup masks shred failure", filepath.Join(workflowPath...))
+		}
+	}
+}
+
 func TestReleaseAssetVerifierPreservesReadOnlyRotationVerification(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		t.Skip("release verification runtime is Ubuntu-specific")
