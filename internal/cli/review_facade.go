@@ -743,10 +743,6 @@ func runReviewCommand(args []string, stdout io.Writer) error {
 	}
 }
 
-func RunReviewStatus(args []string, stdout io.Writer) error {
-	return runReviewStatus(context.Background(), args, stdout)
-}
-
 func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error {
 	flags := newReviewFlagSet("review status", stdout, "Read every compact-v2 and shipped legacy-v1 authority from the shared Git common directory without mutation.")
 	cwd := flags.String("cwd", ".", "repository path")
@@ -1325,10 +1321,6 @@ func reviewNotInvalidatedPredecessorRefusal(cause error, cwd, predecessor, expec
 		reviewRecoverCommand(cwd, predecessor, expected, successor, string(reviewtransaction.RecoveryScopeChanged)))
 }
 
-func RunReviewBindSDD(args []string, stdout io.Writer) error {
-	return runReviewBindSDD(context.Background(), args, stdout)
-}
-
 func runReviewBindSDD(ctx context.Context, args []string, stdout io.Writer) error {
 	flags := newReviewFlagSet("review bind-sdd", stdout, "Bind an explicit approved compact lineage to an OpenSpec change.")
 	cwd := flags.String("cwd", "", "repository path")
@@ -1457,10 +1449,6 @@ func RunReviewInvalidate(args []string, stdout io.Writer) error {
 		return err
 	}
 	return encodeReviewJSON(stdout, ReviewInvalidateResult{Operation: "review/invalidate", LineageID: *lineage, State: reviewtransaction.StateInvalidated, StoreRevision: revision})
-}
-
-func RunReviewFacadeStart(args []string, stdout io.Writer) error {
-	return runReviewFacadeStart(context.Background(), args, stdout)
 }
 
 func runReviewFacadeStart(ctx context.Context, args []string, stdout io.Writer) error {
@@ -2267,10 +2255,6 @@ var reviewUnadmittedResultRefusal = "review finalize no longer accepts --result:
 	"so it cannot prove the lens inspected the frozen candidate. " +
 	"Capture each selected lens with `" + reviewCaptureResultCommandName() + "` (see `" + reviewNextTransitionRefreshCommand + "` for the exact lineage/target/lens/order bindings), " +
 	"then run `gentle-ai review finalize --captured-results=true`"
-
-func RunReviewFacadeFinalize(args []string, stdout io.Writer) error {
-	return runReviewFacadeFinalize(context.Background(), args, stdout)
-}
 
 func reviewFinalizeFlagProvided(args []string, name string) bool {
 	for _, argument := range args {
@@ -3107,10 +3091,6 @@ func facadeFinalizeReplayRequestDigest(lineage, revision string, receipt reviewt
 		Schema: "gentle-ai.review-finalize-replay-request/v1", Operation: "review/finalize",
 		LineageID: lineage, StoreRevision: revision, Receipt: receipt,
 	})
-}
-
-func RunReviewFacadeValidate(args []string, stdout io.Writer) error {
-	return runReviewFacadeValidate(context.Background(), args, stdout)
 }
 
 func runReviewFacadeValidate(ctx context.Context, args []string, stdout io.Writer) error {
