@@ -71,8 +71,11 @@ type scopeChangedFixtureBinding struct {
 	lens     string
 	subject  string
 	context  string
+	lineage  string
 	target   string
 	revision string
+	order    string
+	paths    []string
 }
 
 func scopeChangedFixtureStatus(r *journeyRun, lineage string) (statusEnvelope, error) {
@@ -88,17 +91,40 @@ func scopeChangedFixtureNextBinding(r *journeyRun, lineage, wantLens string) (sc
 		envelope.NextTransition.Kind != "collect" || len(envelope.NextTransition.Collect.Inputs) == 0 {
 		return scopeChangedFixtureBinding{}, fmt.Errorf("%s does not offer reviewing capture slots: %+v", lineage, envelope)
 	}
-	input := envelope.NextTransition.Collect.Inputs[0]
-	lens := envelope.argument("lens")
-	binding := scopeChangedFixtureBinding{
-		lens: lens, subject: input.ArtifactSubject.SubjectHash, context: envelope.argument("repository-context"),
-		target: envelope.TargetIdentity, revision: envelope.Authority.Revision,
+	for _, input := range envelope.NextTransition.Collect.Inputs {
+		if input.Name != "reviewer_result" || input.CaptureOperation != "review.capture-result" {
+			continue
+		}
+		binding := scopeChangedFixtureBinding{subject: input.ArtifactSubject.SubjectHash}
+		for _, entry := range input.ChangedPathManifest {
+			binding.paths = append(binding.paths, entry.Path)
+		}
+		for _, argument := range input.Arguments {
+			switch argument.Name {
+			case "lens":
+				binding.lens = argument.Value
+			case "repository-context":
+				binding.context = argument.Value
+			case "lineage":
+				binding.lineage = argument.Value
+			case "target":
+				binding.target = argument.Value
+			case "expected-revision":
+				binding.revision = argument.Value
+			case "order":
+				binding.order = argument.Value
+			}
+		}
+		if binding.lens != wantLens {
+			continue
+		}
+		if binding.subject == "" || binding.context == "" || binding.lineage != lineage || binding.target == "" ||
+			binding.revision == "" || binding.order == "" || len(binding.paths) == 0 {
+			return scopeChangedFixtureBinding{}, fmt.Errorf("%s capture binding = %+v, want complete exact %q slot", lineage, input, wantLens)
+		}
+		return binding, nil
 	}
-	if input.Name != "reviewer_result" || input.CaptureOperation != "review.capture-result" || lens != wantLens ||
-		binding.subject == "" || binding.context == "" || binding.target == "" || binding.revision == "" {
-		return scopeChangedFixtureBinding{}, fmt.Errorf("%s capture binding = %+v, want exact %q slot", lineage, input, wantLens)
-	}
-	return binding, nil
+	return scopeChangedFixtureBinding{}, fmt.Errorf("%s does not offer exact %q capture slot", lineage, wantLens)
 }
 
 func scopeChangedFixtureBindingKey(kind, lens string) string {
@@ -110,7 +136,12 @@ func requireScopeChangedFixtureFourLensSlots(envelope statusEnvelope) error {
 	if len(inputs) != len(scopeChangedFixtureLenses) {
 		return fmt.Errorf("high-risk status publishes %d reviewer slots, want %d", len(inputs), len(scopeChangedFixtureLenses))
 	}
-	for index, input := range inputs {
+	want := make(map[string]bool, len(scopeChangedFixtureLenses))
+	for _, lens := range scopeChangedFixtureLenses {
+		want[lens] = true
+	}
+	seen := make(map[string]bool, len(scopeChangedFixtureLenses))
+	for _, input := range inputs {
 		lens := ""
 		for _, argument := range input.Arguments {
 			if argument.Name == "lens" {
@@ -118,9 +149,10 @@ func requireScopeChangedFixtureFourLensSlots(envelope statusEnvelope) error {
 			}
 		}
 		if input.Name != "reviewer_result" || input.CaptureOperation != "review.capture-result" ||
-			lens != scopeChangedFixtureLenses[index] {
-			return fmt.Errorf("high-risk slot %d = %+v, want %q", index, input, scopeChangedFixtureLenses[index])
+			!want[lens] || seen[lens] {
+			return fmt.Errorf("high-risk capture slot = %+v, want each canonical lens exactly once", input)
 		}
+		seen[lens] = true
 	}
 	return nil
 }
@@ -143,26 +175,23 @@ func scopeChangedFixturePayload(binding scopeChangedFixtureBinding, lensForm str
 	})
 }
 
-func captureScopeChangedFixtureResult(r *journeyRun, lineage string, binding scopeChangedFixtureBinding, payload []byte, name string) (Observation, error) {
+func captureScopeChangedFixtureResult(r *journeyRun, binding scopeChangedFixtureBinding, payload []byte, name string) (Observation, error) {
 	path, err := writeScratch(r.sandbox, name, payload)
 	if err != nil {
 		return Observation{}, err
 	}
 	return r.run([]string{
 		"review", "capture-result", "--repository-context", binding.context,
-		"--lineage", lineage, "--target", binding.target,
+		"--lineage", binding.lineage, "--target", binding.target,
 		"--expected-revision", binding.revision, "--lens", binding.lens,
-		"--order", scopeChangedFixtureOrder(binding.lens), "--input", path,
+		"--order", binding.order, "--input", path,
 	}, true), nil
 }
 
-func scopeChangedFixtureOrder(lens string) string {
-	for index, candidate := range scopeChangedFixtureLenses {
-		if lens == candidate {
-			return fmt.Sprintf("%d", index)
-		}
-	}
-	return "-1"
+func (binding scopeChangedFixtureBinding) equals(other scopeChangedFixtureBinding) bool {
+	return binding.lens == other.lens && binding.subject == other.subject && binding.context == other.context &&
+		binding.lineage == other.lineage && binding.target == other.target && binding.revision == other.revision &&
+		binding.order == other.order && strings.Join(binding.paths, "\x00") == strings.Join(other.paths, "\x00")
 }
 
 func requireScopeChangedFixtureCapture(observation Observation) error {
@@ -184,23 +213,23 @@ func captureScopeChangedFixturePredecessor(r *journeyRun) error {
 		if err != nil {
 			return err
 		}
-		status, err := scopeChangedFixtureStatus(r, scopeChangedFixturePredecessor)
-		if err != nil {
-			return err
-		}
 		if index == 0 {
+			status, err := scopeChangedFixtureStatus(r, scopeChangedFixturePredecessor)
+			if err != nil {
+				return err
+			}
 			if err := requireScopeChangedFixtureFourLensSlots(status); err != nil {
 				return err
 			}
-			r.sandbox.Scratch["scope-changed-fixture-predecessor-target"] = status.TargetIdentity
+			r.sandbox.Scratch["scope-changed-fixture-predecessor-target"] = binding.target
 		}
 		r.sandbox.Scratch[scopeChangedFixtureBindingKey("predecessor-subject", lens)] = binding.subject
 		r.sandbox.Scratch[scopeChangedFixtureBindingKey("predecessor-context", lens)] = binding.context
-		payload, err := scopeChangedFixturePayload(binding, lens, status.paths(), index < 3)
+		payload, err := scopeChangedFixturePayload(binding, lens, binding.paths, index < 3)
 		if err != nil {
 			return err
 		}
-		observation, err := captureScopeChangedFixtureResult(r, scopeChangedFixturePredecessor, binding, payload, fmt.Sprintf("predecessor-%d.json", index))
+		observation, err := captureScopeChangedFixtureResult(r, binding, payload, fmt.Sprintf("predecessor-%d.json", index))
 		if err != nil {
 			return err
 		}
@@ -251,7 +280,7 @@ func assertScopeChangedFixtureSlotUnconsumed(r *journeyRun, lineage string, want
 	if err != nil {
 		return err
 	}
-	if got != want {
+	if !got.equals(want) {
 		return fmt.Errorf("rejected %s capture consumed or changed its slot: got %+v, want %+v", lineage, got, want)
 	}
 	return nil
@@ -262,7 +291,7 @@ func rejectScopeChangedFixtureNegativeControls(r *journeyRun) error {
 	if err != nil {
 		return err
 	}
-	malformed, err := captureScopeChangedFixtureResult(r, scopeChangedFixtureSuccessor, binding, []byte("{"), "malformed-successor.json")
+	malformed, err := captureScopeChangedFixtureResult(r, binding, []byte("{"), "malformed-successor.json")
 	if err != nil {
 		return err
 	}
@@ -273,11 +302,13 @@ func rejectScopeChangedFixtureNegativeControls(r *journeyRun) error {
 		return err
 	}
 	wrongSubject := "sha256:" + strings.Repeat("0", 64)
-	payload, err := scopeChangedFixturePayload(scopeChangedFixtureBinding{lens: binding.lens, subject: wrongSubject, context: binding.context}, binding.lens, []string{"internal/auth/policy.go", "internal/auth/session.go"}, false)
+	unboundBinding := binding
+	unboundBinding.subject = wrongSubject
+	payload, err := scopeChangedFixturePayload(unboundBinding, binding.lens, binding.paths, false)
 	if err != nil {
 		return err
 	}
-	unbound, err := captureScopeChangedFixtureResult(r, scopeChangedFixtureSuccessor, binding, payload, "unbound-successor.json")
+	unbound, err := captureScopeChangedFixtureResult(r, binding, payload, "unbound-successor.json")
 	if err != nil {
 		return err
 	}
@@ -297,11 +328,11 @@ func captureScopeChangedFixtureSuccessor(r *journeyRun) error {
 			binding.context == r.sandbox.Scratch[scopeChangedFixtureBindingKey("predecessor-context", lens)] {
 			return fmt.Errorf("successor %s binding did not receive new subject and repository context", lens)
 		}
-		status, err := scopeChangedFixtureStatus(r, scopeChangedFixtureSuccessor)
-		if err != nil {
-			return err
-		}
 		if index == 0 {
+			status, err := scopeChangedFixtureStatus(r, scopeChangedFixtureSuccessor)
+			if err != nil {
+				return err
+			}
 			if err := requireScopeChangedFixtureFourLensSlots(status); err != nil {
 				return err
 			}
@@ -310,11 +341,11 @@ func captureScopeChangedFixtureSuccessor(r *journeyRun) error {
 		if lens == "review-resilience" || lens == "review-readability" {
 			lensForm = strings.TrimPrefix(lens, "review-")
 		}
-		payload, err := scopeChangedFixturePayload(binding, lensForm, status.paths(), false)
+		payload, err := scopeChangedFixturePayload(binding, lensForm, binding.paths, false)
 		if err != nil {
 			return err
 		}
-		observation, err := captureScopeChangedFixtureResult(r, scopeChangedFixtureSuccessor, binding, payload, fmt.Sprintf("successor-%d.json", index))
+		observation, err := captureScopeChangedFixtureResult(r, binding, payload, fmt.Sprintf("successor-%d.json", index))
 		if err != nil {
 			return err
 		}
