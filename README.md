@@ -21,13 +21,17 @@
 > **Receipt-Driven Development (RDD) is the supported stable path.** `v2.2.0` was the historical release where that path became supported after RDD began in `v1.47.0`: small work stays direct, broader implementation is delegated, SDD stays optional, and every route converges on structural proof, bounded review, an exact receipt, and delivery authorization.
 >
 > The current stable release is [`v2.3.0`](https://github.com/Gentleman-Programming/gentle-ai/releases/tag/v2.3.0). `@latest` is the stable channel:
+>
 > ```bash
 > go install github.com/gentleman-programming/gentle-ai/v2/cmd/gentle-ai@latest
 > ```
+>
 > To opt into the current prerelease, [`v2.4.0-rc.1`](https://github.com/Gentleman-Programming/gentle-ai/releases/tag/v2.4.0-rc.1), install its exact tag:
+>
 > ```bash
 > go install github.com/gentleman-programming/gentle-ai/v2/cmd/gentle-ai@v2.4.0-rc.1
 > ```
+>
 > Use `@main` only for unreleased development changes. See the [full RDD version policy](docs/quickstart.md#version-policy).
 >
 > Note the `/v2` suffix: Go requires it for major version 2 and above. Releases before `v2.0.0` use the unsuffixed import path.
