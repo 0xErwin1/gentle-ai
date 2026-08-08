@@ -431,6 +431,12 @@ func stageOrdinaryCode(sandbox *Sandbox) error {
 	if err := sandbox.write(path, content); err != nil {
 		return err
 	}
+	// j12 reverses the inspected-path manifest; two ordinary files make that proof observable.
+	path = filepath.Join(sandbox.Repo, "internal", "format", "whitespace.go")
+	content = "package format\n\n// IsBlank reports whether a label contains no characters.\nfunc IsBlank(label string) bool {\n\treturn label == \"\"\n}\n"
+	if err := sandbox.write(path, content); err != nil {
+		return err
+	}
 	return sandbox.git(sandbox.Repo, "add", "-A")
 }
 
@@ -533,6 +539,7 @@ func Journeys() []Journey {
 	journeys = append(journeys, intendedUntrackedJourneys()...)
 	journeys = append(journeys, captureResultDryRunJourneys()...)
 	journeys = append(journeys, issue2031Journeys()...)
+	journeys = append(journeys, findingIDPrefixJourneys()...)
 	return append(journeys, handoffJourneys()...)
 }
 

@@ -38,6 +38,7 @@ func journeySources() []journeySource {
 		{"journeys_intended_untracked.go", intendedUntrackedJourneys()},
 		{"journeys_capture_result_dry_run.go", captureResultDryRunJourneys()},
 		{"journeys_issue_2031.go", issue2031Journeys()},
+		{"journeys_finding_id_prefix.go", findingIDPrefixJourneys()},
 	}
 }
 

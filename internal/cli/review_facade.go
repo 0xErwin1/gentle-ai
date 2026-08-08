@@ -185,12 +185,20 @@ func reviewNegotiatedStartCommand(snapshot reviewtransaction.Snapshot, runtimeAg
 type ReviewFacadeLensBinding struct {
 	Lens  string `json:"lens"`
 	Order int    `json:"order"`
+	// FindingIDPrefix is the prefix admission requires for explicit finding
+	// IDs bound to this lens. It follows the lens, not the selection order:
+	// high-risk START selects review-resilience at order 1, but its explicit
+	// IDs must still carry R4-.
+	FindingIDPrefix string `json:"finding_id_prefix"`
 }
 
 func facadeLensBindings(lenses []string) []ReviewFacadeLensBinding {
 	bindings := make([]ReviewFacadeLensBinding, len(lenses))
 	for order, lens := range lenses {
-		bindings[order] = ReviewFacadeLensBinding{Lens: lens, Order: order}
+		bindings[order] = ReviewFacadeLensBinding{
+			Lens: lens, Order: order,
+			FindingIDPrefix: reviewtransaction.FindingIDPrefixForLens(lens),
+		}
 	}
 	return bindings
 }
@@ -754,7 +762,7 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 	projection := flags.String("projection", string(reviewtransaction.ProjectionWorkspace), "negotiated target projection: workspace or staged")
 	baseRef := flags.String("base-ref", "", "optional negotiated immutable base-to-HEAD target")
 	baseTree := flags.String("base-tree", "", "optional negotiated resolved immutable overlay base tree")
-	flags.Bool("committed-only", false, "acknowledge that --base-ref selects committed-only review scope")
+	committedOnly := flags.Bool("committed-only", false, "acknowledge that --base-ref selects committed-only review scope")
 	workspaceOverlay := flags.Bool("workspace-overlay", false, "select a negotiated base-ref workspace overlay target")
 	gate := flags.String("gate", string(reviewtransaction.GatePreCommit), "lifecycle gate for an approved receipt transition")
 	recoverySuccessor := flags.String("recovery-successor-lineage", "", "authorized successor lineage for a recovery transition")
@@ -811,8 +819,11 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 		}
 		selectedBaseRef := strings.TrimSpace(*baseRef)
 		selectedBaseTree := strings.TrimSpace(*baseTree)
-		if committedOnlyProvided && (selectedBaseRef == "" || *workspaceOverlay) {
+		if *committedOnly && (selectedBaseRef == "" || *workspaceOverlay) {
 			return errors.New("review status --committed-only requires --base-ref without --workspace-overlay; rerun `gentle-ai review status --base-ref <ref> --committed-only`")
+		}
+		if selectedBaseRef != "" && committedOnlyProvided && !*committedOnly && !*workspaceOverlay {
+			return errors.New("review status --base-ref requires --committed-only; rerun `gentle-ai review status --base-ref <ref> --committed-only`")
 		}
 		stagedRecoveryOverlay := *workspaceOverlay && selectedProjection == reviewtransaction.ProjectionStaged
 		if *workspaceOverlay && stagedRecoveryOverlay && (selectedBaseRef == "" || selectedBaseTree != "") {
@@ -3178,7 +3189,9 @@ func runReviewFacadeValidate(ctx context.Context, args []string, stdout io.Write
 	// removed detail-visibility assertions moved to). Fencing this behind
 	// `!negotiated` used to mean the identical repository exited 0 for a
 	// human and 1 for any agent driving the negotiated contract (#2222).
-	if reviewDeliveryDisposition(ctx, root, false) == reviewtransaction.RDDDeliveryDisabledUnmanaged {
+	if delivery, err := reviewDeliveryDisposition(ctx, root, false); err != nil {
+		return err
+	} else if delivery == reviewtransaction.RDDDeliveryDisabledUnmanaged {
 		return emitDisabledUnmanagedDelivery(stdout, gateInput.Gate, negotiated, *contract)
 	}
 	// Amendment C's single shared branch (design decision 4, Wave 3 Slice
