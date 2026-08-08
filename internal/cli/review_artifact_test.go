@@ -275,6 +275,58 @@ func TestReviewCaptureResultIDLessCandidateCausalFinding(t *testing.T) {
 	}
 }
 
+func TestReviewCaptureResultCanonicalizesPublishedLensFormsAndRejectsExplicitInvalidValues(t *testing.T) {
+	t.Run("long form finding lens", func(t *testing.T) {
+		repo, started, _, record := newArtifactReview(t, false)
+		result := admittedReviewerResultForTest(t, repo, record, record.State.SelectedLenses[0], 0)
+		result.Lens = "reliability"
+		result.Findings = []facadeFinding{{
+			Lens: reviewtransaction.LensReliability, Location: "tracked.txt:1", Severity: "WARNING", Claim: "candidate behavior changed",
+			ProofRefs: []string{"tracked.txt:1 changed hunk"},
+		}}
+		input := filepath.Join(t.TempDir(), "result.json")
+		writeReviewCLIJSON(t, input, result)
+		if err := RunReviewCaptureResult([]string{
+			"--cwd", repo, "--lineage", started.LineageID, "--target", record.State.InitialSnapshot.Identity,
+			"--lens", record.State.SelectedLenses[0], "--order", "0", "--input", input,
+		}, io.Discard); err != nil {
+			t.Fatalf("capture long-form lens: %v", err)
+		}
+	})
+
+	for _, lens := range []string{"", "review-"} {
+		t.Run("explicit result lens "+fmt.Sprintf("%q", lens), func(t *testing.T) {
+			repo, started, store, record := newArtifactReview(t, false)
+			result := admittedReviewerResultForTest(t, repo, record, record.State.SelectedLenses[0], 0)
+			payload, err := json.Marshal(result)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var document map[string]any
+			if err := json.Unmarshal(payload, &document); err != nil {
+				t.Fatal(err)
+			}
+			document["lens"] = lens
+			payload, err = json.Marshal(document)
+			if err != nil {
+				t.Fatal(err)
+			}
+			input := filepath.Join(t.TempDir(), "result.json")
+			if err := os.WriteFile(input, payload, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			err = RunReviewCaptureResult([]string{
+				"--cwd", repo, "--lineage", started.LineageID, "--target", record.State.InitialSnapshot.Identity,
+				"--lens", record.State.SelectedLenses[0], "--order", "0", "--input", input,
+			}, io.Discard)
+			if err == nil {
+				t.Fatal("capture accepted an explicit invalid lens")
+			}
+			assertArtifactRevision(t, store, record.Revision)
+		})
+	}
+}
+
 func TestReviewCaptureResultRejectsInvalidLocationWithActionableDiagnostic(t *testing.T) {
 	repo, started, _, record := newArtifactReview(t, false)
 	result := admittedReviewerResultForTest(t, repo, record, record.State.SelectedLenses[0], 0)
