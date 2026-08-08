@@ -1569,6 +1569,12 @@ func TestReviewFacadeUsageMatchesEveryFacadeDispatch(t *testing.T) {
 	}
 }
 
+func TestReviewFacadeHelpHasNoPartialCommandList(t *testing.T) {
+	if strings.Contains(reviewFacadeUsageHelp(t), "Additive headless capabilities") {
+		t.Fatal("review facade help contains a second partial command list")
+	}
+}
+
 func TestEveryAdvertisedReviewFacadeVerbDispatches(t *testing.T) {
 	advertised := reviewFacadeUsageVerbs(t, reviewFacadeUsageHelp(t))
 	verbs := make([]string, 0, len(advertised))
