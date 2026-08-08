@@ -376,13 +376,18 @@ func RunReviewCaptureResult(args []string, stdout io.Writer) error {
 	if _, err := prepareCompactReviewerResults(reviewtransaction.CompactState{SelectedLenses: []string{*lens}}, []facadeReviewerResult{result}, facadeRefuterResult{}); err != nil {
 		return reviewPreflightError(err)
 	}
-	canonicalResult, err := json.Marshal(result)
+	canonicalReviewerResult, err := reviewtransaction.CanonicalizeReviewerResult(payload, subject.Lens)
+	if err != nil {
+		return reviewPreflightError(err)
+	}
+	canonicalResult, err := json.Marshal(canonicalReviewerResult)
 	if err != nil {
 		return err
 	}
 	canonicalResult = append(canonicalResult, '\n')
-	nativeResult := result.nativeLensResult()
-	nativeResult.Lens = *lens
+	nativeResult := reviewtransaction.LensResult{
+		Lens: canonicalReviewerResult.Lens, Findings: canonicalReviewerResult.Findings, Evidence: canonicalReviewerResult.Evidence,
+	}
 	// Derive verified candidate-causal IDs from the CANONICALIZED result, not
 	// the raw one: CanonicalCompactLensResult assigns a fallback ID
 	// (`<prefix>-NNN`) to any severe finding submitted without an explicit
