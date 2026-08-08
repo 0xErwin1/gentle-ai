@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -240,11 +241,23 @@ func reviewCommandDispatchVerbs(t *testing.T) map[string]bool {
 
 func reviewCommandDispatchVerbsFromSource(t *testing.T, source []byte) map[string]bool {
 	t.Helper()
-	file, err := parser.ParseFile(token.NewFileSet(), "review_facade.go", source, 0)
+	owners, err := reviewCommandDispatchOwners(source)
 	if err != nil {
 		t.Fatal(err)
 	}
-	verbs := map[string]bool{}
+	verbs := make(map[string]bool, len(owners))
+	for verb := range owners {
+		verbs[verb] = true
+	}
+	return verbs
+}
+
+func reviewCommandDispatchOwners(source []byte) (map[string]string, error) {
+	file, err := parser.ParseFile(token.NewFileSet(), "review_facade.go", source, 0)
+	if err != nil {
+		return nil, err
+	}
+	owners := map[string]string{}
 	found := map[string]bool{}
 	for _, declaration := range file.Decls {
 		function, ok := declaration.(*ast.FuncDecl)
@@ -252,37 +265,43 @@ func reviewCommandDispatchVerbsFromSource(t *testing.T, source []byte) map[strin
 			continue
 		}
 		if found[function.Name.Name] {
-			t.Fatalf("review facade declares %s more than once", function.Name.Name)
+			return nil, fmt.Errorf("review facade declares %s more than once", function.Name.Name)
 		}
 		found[function.Name.Name] = true
-		for _, clause := range reviewCommandDispatchSwitch(t, function).Body.List {
+		dispatch, err := reviewCommandDispatchSwitch(function)
+		if err != nil {
+			return nil, err
+		}
+		for _, clause := range dispatch.Body.List {
 			caseClause, ok := clause.(*ast.CaseClause)
 			if !ok {
-				t.Fatalf("%s dispatch switch contains %T instead of a case clause", function.Name.Name, clause)
+				return nil, fmt.Errorf("%s dispatch switch contains %T instead of a case clause", function.Name.Name, clause)
 			}
 			for _, expression := range caseClause.List {
 				literal, ok := expression.(*ast.BasicLit)
 				if !ok || literal.Kind != token.STRING {
-					t.Fatalf("%s dispatch case expression = %T, want string literal", function.Name.Name, expression)
+					return nil, fmt.Errorf("%s dispatch case expression = %T, want string literal", function.Name.Name, expression)
 				}
 				verb, err := strconv.Unquote(literal.Value)
 				if err != nil {
-					t.Fatal(err)
+					return nil, fmt.Errorf("unquote %s dispatch case: %w", function.Name.Name, err)
 				}
-				verbs[verb] = true
+				if owner, exists := owners[verb]; exists {
+					return nil, fmt.Errorf("review command %q dispatched by both %s and %s", verb, owner, function.Name.Name)
+				}
+				owners[verb] = function.Name.Name
 			}
 		}
 	}
 	for _, name := range []string{"runReviewCommandContext", "runReviewCommand"} {
 		if !found[name] {
-			t.Fatalf("review_facade.go has no %s function", name)
+			return nil, fmt.Errorf("review_facade.go has no %s function", name)
 		}
 	}
-	return verbs
+	return owners, nil
 }
 
-func reviewCommandDispatchSwitch(t *testing.T, function *ast.FuncDecl) *ast.SwitchStmt {
-	t.Helper()
+func reviewCommandDispatchSwitch(function *ast.FuncDecl) (*ast.SwitchStmt, error) {
 	var dispatch *ast.SwitchStmt
 	for _, statement := range function.Body.List {
 		switchStatement, ok := statement.(*ast.SwitchStmt)
@@ -290,14 +309,14 @@ func reviewCommandDispatchSwitch(t *testing.T, function *ast.FuncDecl) *ast.Swit
 			continue
 		}
 		if dispatch != nil {
-			t.Fatalf("%s has more than one top-level review command dispatch switch", function.Name.Name)
+			return nil, fmt.Errorf("%s has more than one top-level review command dispatch switch", function.Name.Name)
 		}
 		dispatch = switchStatement
 	}
 	if dispatch == nil {
-		t.Fatalf("%s has no top-level `switch args[0]` dispatch", function.Name.Name)
+		return nil, fmt.Errorf("%s has no top-level `switch args[0]` dispatch", function.Name.Name)
 	}
-	return dispatch
+	return dispatch, nil
 }
 
 func reviewCommandDispatchTag(expression ast.Expr) bool {
@@ -348,6 +367,28 @@ func unrelated(args []string) {
 	}
 	if len(verbs) != 4 || verbs["nested"] || verbs["unrelated"] {
 		t.Fatalf("multiline dispatch extraction escaped its two facade switches: %v", verbs)
+	}
+}
+
+func TestReviewCommandDispatchVerbsRejectsDuplicateFacadeVerb(t *testing.T) {
+	const source = `package cli
+
+func runReviewCommandContext(args []string) {
+	switch args[0] {
+	case "duplicate":
+	}
+}
+
+func runReviewCommand(args []string) {
+	switch args[0] {
+	case "duplicate":
+	}
+}
+`
+
+	_, err := reviewCommandDispatchOwners([]byte(source))
+	if err == nil || !strings.Contains(err.Error(), `review command "duplicate" dispatched by both runReviewCommandContext and runReviewCommand`) {
+		t.Fatalf("duplicate dispatch error = %v", err)
 	}
 }
 
