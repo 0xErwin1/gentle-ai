@@ -53,7 +53,7 @@ jq -e --arg tag "$source_tag" \
   die "source prerelease release must be immutable, published, and prerelease"
 
 # shellcheck disable=SC2016 # GraphQL receives its own $tag variable.
-stable_release=$(gh api graphql -f 'query=query($tag: String!) { repository(owner: "Gentleman-Programming", name: "gentle-ai") { release(tagName: $tag) { id } } }' -f "tag=$stable_tag" --jq '.data.repository.release.id // empty')
+stable_release=$(gh api graphql -f 'query=query($tag: String!) { repository(owner: "Gentleman-Programming", name: "gentle-ai") { release(tagName: $tag) { databaseId } } }' -f "tag=$stable_tag" --jq '.data.repository.release.databaseId // empty')
 stable_ref=$(git ls-remote origin "refs/tags/$stable_tag" | awk 'NR == 1 { print $1 }')
 stable_peeled=$(git ls-remote origin "refs/tags/$stable_tag^{}" | awk 'NR == 1 { print $1 }')
 recovery_state=fresh
