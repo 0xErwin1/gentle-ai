@@ -92,7 +92,13 @@ jobs:
               [.journeys[] | select(.id == $id)] as $matches
               | ($matches | length == 1) and ($matches[0].status == "completed");
             completed_once("tr02-reset-after-rescope-keeps-the-ledger-readable") and
-            completed_once("tr03-review-disabled-mid-change-keeps-sdd-moving")
+            completed_once("tr03-review-disabled-mid-change-keeps-sdd-moving") and
+            completed_once("tr04-reset-then-rescope-keeps-the-ledger-readable") and
+            completed_once("tr05-review-re-enabled-mid-change-keeps-sdd-moving") and
+            completed_once("tr06-mode-flip-during-an-active-attempt") and
+            completed_once("tr07-reset-then-reset-keeps-the-ledger-readable") and
+            completed_once("tr08-scope-change-after-a-delegated-handoff") and
+            completed_once("tr09-mode-flip-while-a-review-lineage-is-open")
           ' "$RUNNER_TEMP/bench-transition.json"
           "$RUNNER_TEMP/gentle-ai-bench" run --binary "$RUNNER_TEMP/gentle-ai" --axis source-coupled --only j57-sdd-authority-drift-during-discovery-fails-closed --out "$RUNNER_TEMP/bench-source-coupled-untagged.json"
           jq -e '

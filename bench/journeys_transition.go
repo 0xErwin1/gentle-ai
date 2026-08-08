@@ -105,6 +105,138 @@ func transitionJourneys() []Journey {
 			},
 		},
 		{
+			ID:     "tr04-reset-then-rescope-keeps-the-ledger-readable",
+			Title:  "The mirror of tr02: reset first, then narrow",
+			Source: "systematic pairing of the mutating ledger verbs",
+			// tr01 and tr02 cover rescope-then-X. This is X-then-rescope, and
+			// it exists because the asymmetry #2830 exposed is about which
+			// generation the last attempt belongs to, and reset advances that
+			// generation too. If the defect is a property of generation
+			// advancement rather than of rescope specifically, this is where
+			// it appears.
+			Steps: []Step{
+				{Name: "fixture: repository with a committed OpenSpec change", Fixture: sddRuntimeRepo},
+				{Name: "begin an objective and fail it with the workspace unchanged",
+					Requires: sddAttemptBeginCapability, Composite: transitionBeginAndFail},
+				{Name: "spend the objective's attempts to reach a state reset publishes from",
+					Requires: sddAttemptBeginCapability, Composite: transitionExhaustOriginal},
+				{Name: "reset the objective", Requires: sddAttemptResetCapability,
+					Composite: transitionReset("bench-reset-before-rescope")},
+				{Name: "then narrow the fresh objective", Requires: sddAttemptResetCapability,
+					Composite: transitionRescope("bench-rescope-after-reset", "narrower after reset")},
+				{Name: "the ledger still answers", Composite: transitionProveLedgerReadable},
+			},
+		},
+		{
+			ID:     "tr05-review-re-enabled-mid-change-keeps-sdd-moving",
+			Title:  "Turn review back ON in the middle of a change that started without it",
+			Source: "the mirror of tr03; the switch is documented as reversible",
+			// tr03 proves work survives the switch going off. Nothing proved
+			// the other direction, and it is the riskier one: turning review ON
+			// mid-change means delivery starts demanding a receipt for work
+			// that has none yet. If that wedges, a user who enables review to
+			// be careful is punished for it, which is the opposite of what the
+			// switch is for.
+			Steps: []Step{
+				{Name: "fixture: repository with a committed OpenSpec change", Fixture: sddRuntimeRepo},
+				{Name: "turn review off before starting", Requires: modeCapability,
+					Args: productArgs("review", "mode", "disable", "--scope", "clone")},
+				{Name: "begin an objective and fail it with the workspace unchanged",
+					Requires: sddAttemptBeginCapability, Composite: transitionBeginAndFail},
+				{Name: "turn review back on mid-change", Requires: modeCapability,
+					Args: productArgs("review", "mode", "enable")},
+				{Name: "the ledger still answers with review back on", Composite: transitionProveLedgerReadable},
+				{Name: "and the work continues", Requires: sddAttemptBeginCapability, Composite: transitionBeginAgain},
+			},
+		},
+		{
+			ID:     "tr06-mode-flip-during-an-active-attempt",
+			Title:  "Flip the switch while an attempt is OPEN, not between attempts",
+			Source: "the sequence tr03 and tr05 both avoid: no terminal boundary to land on",
+			// tr03 and tr05 both flip the switch between attempts, which is the
+			// polite moment. A user hits the switch when they are stuck, and
+			// being stuck usually means an attempt is open. That is a harder
+			// state: the ledger holds an active attempt whose settlement rules
+			// were decided under the previous mode.
+			Steps: []Step{
+				{Name: "fixture: repository with a committed OpenSpec change", Fixture: sddRuntimeRepo},
+				{Name: "begin an attempt and leave it open", Requires: sddAttemptBeginCapability,
+					Composite: transitionBeginOnly},
+				{Name: "flip review off with the attempt still open", Requires: modeCapability,
+					Args: productArgs("review", "mode", "disable", "--scope", "clone")},
+				{Name: "the ledger still answers mid-attempt", Composite: transitionProveLedgerReadable},
+				{Name: "and the open attempt can still be settled",
+					Requires: sddAttemptFinishCapability, Composite: transitionFinishOpenAttempt},
+				{Name: "the ledger still answers after settling", Composite: transitionProveLedgerReadable},
+			},
+		},
+		{
+			ID:     "tr07-reset-then-reset-keeps-the-ledger-readable",
+			Title:  "Reset twice: the same-verb pair tr01 proves is dangerous for rescope",
+			Source: "systematic pairing; tr01 shows a same-verb repeat can wedge",
+			// tr01 established that repeating a generation-advancing verb is a
+			// real hazard, and tr04 showed the hazard is not generic to
+			// generation advancement. This closes the third corner: the other
+			// same-verb repeat. If reset shares any part of rescope's
+			// write-versus-replay asymmetry, repeating it is where it surfaces.
+			Steps: []Step{
+				{Name: "fixture: repository with a committed OpenSpec change", Fixture: sddRuntimeRepo},
+				{Name: "begin an objective and fail it with the workspace unchanged",
+					Requires: sddAttemptBeginCapability, Composite: transitionBeginAndFail},
+				{Name: "spend the attempts to reach a state reset publishes from",
+					Requires: sddAttemptBeginCapability, Composite: transitionExhaustOriginal},
+				{Name: "reset once", Requires: sddAttemptResetCapability,
+					Composite: transitionReset("bench-reset-first")},
+				{Name: "reset again immediately", Requires: sddAttemptResetCapability,
+					Composite: transitionReset("bench-reset-second")},
+				{Name: "the ledger still answers", Composite: transitionProveLedgerReadable},
+			},
+		},
+		{
+			ID:     "tr08-scope-change-after-a-delegated-handoff",
+			Title:  "Hand the attempt to a linked worktree, then change the scope",
+			Source: "systematic pairing across surfaces; handoff rebinds the worktree an attempt belongs to",
+			// Handoff moves an attempt's effective worktree, and a scope change
+			// rewrites the objective that attempt belongs to. Both edit the
+			// provenance the other reads, and no journey ran them in sequence.
+			// #2783 is a live handoff defect on Windows, so this pair is not
+			// theoretical: it is the neighbourhood of a known-bad surface.
+			Steps: []Step{
+				{Name: "fixture: repository with a committed OpenSpec change", Fixture: sddHandoffRuntimeRepo},
+				{Name: "fixture: a delegated linked worktree", Fixture: sddHandoffDelegatedWorktree},
+				{Name: "acquire, hand off, and settle in the delegated worktree",
+					Requires: sddAttemptHandoffCapability, Composite: sddHandoffAndSettleDelegatedWorktree},
+				{Name: "the ledger answers after the handoff", Composite: transitionProveLedgerReadable},
+				{Name: "now change the scope of the handed-off objective",
+					Requires:  sddAttemptResetCapability,
+					Composite: transitionRescope("bench-rescope-after-handoff", "narrower after handoff")},
+				{Name: "the ledger still answers", Composite: transitionProveLedgerReadable},
+			},
+		},
+		{
+			ID:     "tr09-mode-flip-while-a-review-lineage-is-open",
+			Title:  "Turn review off while a REVIEW is open, not merely while an attempt is",
+			Source: "tr03 and tr06 flip the switch against SDD state; this flips it against review state",
+			// The switch's own contract says delivery falls back to ordinary
+			// repository policy. That is easy to honour when no review exists.
+			// The interesting state is a started, unfinalized lineage: authority
+			// exists, no receipt does, and the switch says stop consulting it.
+			// If that combination wedges, the escape hatch fails exactly when
+			// someone reaches for it.
+			Steps: []Step{
+				{Name: "fixture: repo with remote", Fixture: baseRepoWithRemote},
+				{Name: "fixture: stage docs", Fixture: stageDocs("transition")},
+				{Name: "start a review and leave it open", Requires: startCapability,
+					Args: productArgs("review", "start"), After: rememberLineage},
+				{Name: "turn review off with the lineage still open", Requires: modeCapability,
+					Args: productArgs("review", "mode", "disable", "--scope", "clone")},
+				{Name: "review status still answers", Requires: statusCapability,
+					Args: productArgs("review", "status")},
+				{Name: "and the delivery gate answers under ordinary policy",
+					Requires: validateCapability, Args: productArgs("review", "validate", "--gate", "pre-commit")},
+			},
+		},
+		{
 			ID:     "tr03-review-disabled-mid-change-keeps-sdd-moving",
 			Title:  "Turn review off in the middle of a change: SDD must keep working under ordinary policy",
 			Source: "maintainer-named coverage gap: no journey changes mode mid-lifecycle",
@@ -187,12 +319,59 @@ var narrowedObjective = []string{
 	"--max-attempts", "6", "--max-changed-lines", "600",
 }
 
+// transitionExhaustOriginal spends the ORIGINAL objective's attempts, which is
+// how tr04 reaches a state reset publishes from rather than one it refuses.
+func transitionExhaustOriginal(r *journeyRun) error {
+	return transitionExhaustWith(r, sddObjective, "bench-exhaust-original")
+}
+
+// transitionBeginOnly leaves an attempt open, which is the state a user is
+// usually in when they reach for the kill switch.
+func transitionBeginOnly(r *journeyRun) error {
+	status, err := readRuntimeStatus(r)
+	if err != nil {
+		return err
+	}
+	r.run(sddAttemptArgs(r, "begin", status.Revision, "bench-open-attempt", sddObjective...), false)
+	status, err = readRuntimeStatus(r)
+	if err != nil {
+		return err
+	}
+	if status.ActiveAttempt == nil {
+		return fmt.Errorf("expected an open attempt, got none")
+	}
+	return nil
+}
+
+// transitionFinishOpenAttempt settles the attempt tr06 left open. An open
+// attempt that cannot be closed after a mode flip is a wedge with extra steps.
+func transitionFinishOpenAttempt(r *journeyRun) error {
+	status, err := readRuntimeStatus(r)
+	if err != nil {
+		return err
+	}
+	r.run(sddAttemptArgs(r, "finish", status.Revision, "bench-settle-after-flip",
+		append([]string{"--outcome", "failed", "--evidence-revision", sddFailedEvidence}, sddTerminalEvidence...)...), false)
+	status, err = readRuntimeStatus(r)
+	if err != nil {
+		return err
+	}
+	if status.ActiveAttempt != nil {
+		return fmt.Errorf("the attempt could not be settled after the mode flip")
+	}
+	return nil
+}
+
 // transitionExhaustAttempts drives the narrowed objective to decision-required
 // by failing attempts until the ledger stops offering begin. That is the state
 // where reset genuinely publishes, which is what makes tr02 able to observe a
 // wedge at all: an operation refused before publication cannot leave a bad
 // record behind, so a journey that only reaches a refusal measures nothing.
 func transitionExhaustAttempts(r *journeyRun) error {
+	return transitionExhaustWith(r, narrowedObjective, "bench-exhaust")
+}
+
+func transitionExhaustWith(r *journeyRun, objective []string, prefix string) error {
 	for attempt := 0; attempt < 8; attempt++ {
 		status, err := readRuntimeStatus(r)
 		if err != nil {
@@ -201,8 +380,8 @@ func transitionExhaustAttempts(r *journeyRun) error {
 		if status.NextAction != "begin" {
 			return nil
 		}
-		id := fmt.Sprintf("bench-exhaust-%d", attempt)
-		r.run(sddAttemptArgs(r, "begin", status.Revision, id+"-begin", narrowedObjective...), false)
+		id := fmt.Sprintf("%s-%d", prefix, attempt)
+		r.run(sddAttemptArgs(r, "begin", status.Revision, id+"-begin", objective...), false)
 
 		if status, err = readRuntimeStatus(r); err != nil {
 			return err
