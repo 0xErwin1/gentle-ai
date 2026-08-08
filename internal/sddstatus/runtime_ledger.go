@@ -1388,14 +1388,15 @@ func (store RuntimeStore) Reset(ctx context.Context, request ResetObjectiveReque
 // replaying one from the immutable chain (applyRuntimeRecord), so a
 // committed rescope always replays deterministically.
 func runtimeObjectiveRescopeStructurallyPermitted(status RuntimeStatus) bool {
-	if status.DecisionRequired || status.Complete {
+	if status.Objective == nil || status.DecisionRequired || status.Complete {
 		return false
 	}
 	if len(status.Attempts) == 0 {
 		return false
 	}
 	last := status.Attempts[len(status.Attempts)-1]
-	return last.Outcome == AttemptFailed || last.Outcome == AttemptInterrupted
+	return last.ObjectiveID == status.Objective.ID &&
+		(last.Outcome == AttemptFailed || last.Outcome == AttemptInterrupted)
 }
 
 // Rescope implements AUDITED NARROWING RESCOPE (#2298, #2296 part 2): the
@@ -1982,7 +1983,7 @@ func applyRuntimeRescopeEvent(replay *runtimeReplay, revision string, record run
 	// is comparable across them. RescopeCandidateIdentity is NOT compared
 	// here for the same reason; it is still shape-validated and reused
 	// verbatim to derive ObjectiveID below.
-	if last.ObjectiveID != objective.ID || (last.Outcome != AttemptFailed && last.Outcome != AttemptInterrupted) ||
+	if (last.Outcome != AttemptFailed && last.Outcome != AttemptInterrupted) ||
 		last.FinishCandidateTree != event.RescopeCandidateTree {
 		return errors.New("objective rescope candidate does not match the terminal zero-drift finish") // refusal:by-design world-action: the zero-drift candidate was verified before publication, so a mismatch is a mutated record and the exit is restoring the store
 	}
