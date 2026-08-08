@@ -100,7 +100,12 @@ func TestMain(m *testing.M) {
 		os.Exit(runOrganicActor(role))
 	}
 	if binary := strings.TrimSpace(os.Getenv(organicTestBinaryEnvironment)); binary != "" {
-		organicBinary = binary
+		resolvedBinary, err := exec.LookPath(binary)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "%s=%q does not resolve to an executable: %v\n", organicTestBinaryEnvironment, binary, err)
+			os.Exit(1)
+		}
+		organicBinary = resolvedBinary
 		os.Exit(m.Run())
 	}
 	workspace, err := os.MkdirTemp("", "organic-e2e-binary")
@@ -1637,6 +1642,15 @@ func (harness *organicHarness) writeJSON(name string, value any) string {
 	}
 	// Review inputs live outside the repository so they never become part of the
 	// candidate they describe.
+	path := filepath.Join(harness.t.TempDir(), name)
+	if err := os.WriteFile(path, payload, 0o600); err != nil {
+		harness.t.Fatal(err)
+	}
+	return path
+}
+
+func (harness *organicHarness) writeRawReviewerResult(name string, payload []byte) string {
+	harness.t.Helper()
 	path := filepath.Join(harness.t.TempDir(), name)
 	if err := os.WriteFile(path, payload, 0o600); err != nil {
 		harness.t.Fatal(err)
