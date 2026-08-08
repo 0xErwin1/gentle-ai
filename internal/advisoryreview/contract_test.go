@@ -166,7 +166,7 @@ func TestValidateMatchesNativeReviewerResultRules(t *testing.T) {
 		wantErr bool
 	}{
 		{name: "finding lens is accepted", mutate: func(result *reviewtransaction.ReviewerResult) { result.Findings[0].Lens = "reliability" }},
-		{name: "lens binding is required", mutate: func(result *reviewtransaction.ReviewerResult) { result.Lens = "" }, wantErr: true},
+		{name: "omitted lens binding canonicalizes", mutate: func(result *reviewtransaction.ReviewerResult) { result.Lens = "" }},
 		{name: "finding ID must use native schema", mutate: func(result *reviewtransaction.ReviewerResult) { result.Findings[0].ID = "bad-id" }, wantErr: true},
 		{name: "proof reference must be concrete", mutate: func(result *reviewtransaction.ReviewerResult) { result.Findings[0].ProofRefs = []string{"TODO"} }, wantErr: true},
 		{name: "evidence must be concrete", mutate: func(result *reviewtransaction.ReviewerResult) { result.Evidence = []string{"passed"} }, wantErr: true},

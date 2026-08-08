@@ -30,6 +30,23 @@ func TestReviewerResultEnvelopeMatchesAdmission(t *testing.T) {
 	}
 }
 
+func TestReviewerResultSchemaPublishesBothFindingLensForms(t *testing.T) {
+	var document map[string]any
+	if err := json.Unmarshal([]byte(ReviewerResultSchema), &document); err != nil {
+		t.Fatalf("decode reviewer schema: %v", err)
+	}
+	properties := document["properties"].(map[string]any)
+	lenses, _ := json.Marshal(properties["findings"].(map[string]any)["items"].(map[string]any)["properties"].(map[string]any)["lens"].(map[string]any)["enum"])
+	for _, lens := range []string{
+		"risk", "resilience", "readability", "reliability",
+		LensRisk, LensResilience, LensReadability, LensReliability,
+	} {
+		if !strings.Contains(string(lenses), `"`+lens+`"`) {
+			t.Fatalf("finding lens enum %s omits %q", lenses, lens)
+		}
+	}
+}
+
 // TestSchemaExampleShapedResultIsAdmitted builds a payload the way a reader
 // following only the published schema would build it — its own example, with
 // the placeholder subject and paths replaced by the real binding — and proves
@@ -110,7 +127,7 @@ func TestValidateReviewerResultMatchesNativeAdmissionShape(t *testing.T) {
 		}},
 		{name: "binding hash", mutate: func(result *ReviewerResult) { result.SubjectHash = "sha256:" + strings.Repeat("0", 64) }, wantErr: true},
 		{name: "selected lens", mutate: func(result *ReviewerResult) { result.Lens = LensRisk }, wantErr: true},
-		{name: "missing lens binding", mutate: func(result *ReviewerResult) { result.Lens = "" }, wantErr: true},
+		{name: "missing lens binding", mutate: func(result *ReviewerResult) { result.Lens = "" }},
 		{name: "missing frozen path", mutate: func(result *ReviewerResult) { result.Inspection.Paths = result.Inspection.Paths[:1] }, wantErr: true, wantMessage: "reviewer inspection coverage: missing_frozen_manifest_paths=1"},
 		{name: "foreign path", mutate: func(result *ReviewerResult) {
 			result.Inspection.Paths = append(result.Inspection.Paths, "outside/private.go")
@@ -136,6 +153,107 @@ func TestValidateReviewerResultMatchesNativeAdmissionShape(t *testing.T) {
 			}
 			if test.wantMessage != "" && err.Error() != test.wantMessage {
 				t.Fatalf("ValidateReviewerResult() error = %q, want %q", err, test.wantMessage)
+			}
+		})
+	}
+}
+
+func TestValidateReviewerResultCanonicalizesOmittedLensAndFindingID(t *testing.T) {
+	subject, frozen, request := admittedArtifactFixture(t)
+	payload, err := json.Marshal(ReviewerResult{
+		SubjectHash: subject.SubjectHash,
+		Inspection:  request.Inspection,
+		Findings: []Finding{{
+			Location: "internal/a.go:7", Severity: "WARNING", Claim: "candidate error is lost",
+			ProofRefs: []string{"internal/a.go:7"},
+		}},
+		Evidence: []string{"inspection: internal/a.go:7 and internal/b.go:1"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var document map[string]any
+	if err := json.Unmarshal(payload, &document); err != nil {
+		t.Fatal(err)
+	}
+	delete(document["findings"].([]any)[0].(map[string]any), "id")
+	payload, err = json.Marshal(document)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := ValidateReviewerResult(payload, subject, frozen.ChangedPathManifest)
+	if err != nil {
+		t.Fatalf("ValidateReviewerResult() error = %v", err)
+	}
+	if result.Lens != subject.Lens || result.Findings[0].ID != "R3-001" || result.Findings[0].Lens != "reliability" {
+		t.Fatalf("canonical result = %#v", result)
+	}
+}
+
+func TestValidateReviewerResultCanonicalizesPublishedLensForms(t *testing.T) {
+	subject, frozen, request := admittedArtifactFixture(t)
+	payload, err := json.Marshal(ReviewerResult{
+		SubjectHash: subject.SubjectHash,
+		Inspection:  request.Inspection,
+		Lens:        "reliability",
+		Findings: []Finding{{
+			ID: "R3-001", Lens: LensReliability, Location: "internal/a.go:7", Severity: "WARNING",
+			Claim: "candidate error is lost", ProofRefs: []string{"internal/a.go:7"},
+		}},
+		Evidence: []string{"inspection: internal/a.go:7 and internal/b.go:1"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := ValidateReviewerResult(payload, subject, frozen.ChangedPathManifest)
+	if err != nil {
+		t.Fatalf("ValidateReviewerResult() error = %v", err)
+	}
+	if result.Lens != LensReliability || result.Findings[0].Lens != "reliability" {
+		t.Fatalf("canonical result = %#v", result)
+	}
+}
+
+func TestValidateReviewerResultRejectsExplicitInvalidCanonicalizedFields(t *testing.T) {
+	subject, frozen, request := admittedArtifactFixture(t)
+	base := ReviewerResult{
+		SubjectHash: subject.SubjectHash,
+		Inspection:  request.Inspection,
+		Lens:        subject.Lens,
+		Findings: []Finding{{
+			ID: "R3-001", Lens: "reliability", Location: "internal/a.go:7", Severity: "WARNING",
+			Claim: "candidate error is lost", ProofRefs: []string{"internal/a.go:7"},
+		}},
+		Evidence: []string{"inspection: internal/a.go:7 and internal/b.go:1"},
+	}
+	tests := []struct {
+		name   string
+		mutate func(map[string]any)
+	}{
+		{name: "empty result lens", mutate: func(document map[string]any) { document["lens"] = "" }},
+		{name: "bare review result lens", mutate: func(document map[string]any) { document["lens"] = "review-" }},
+		{name: "empty finding lens", mutate: func(document map[string]any) { document["findings"].([]any)[0].(map[string]any)["lens"] = "" }},
+		{name: "bare review finding lens", mutate: func(document map[string]any) { document["findings"].([]any)[0].(map[string]any)["lens"] = "review-" }},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			payload, err := json.Marshal(base)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var document map[string]any
+			if err := json.Unmarshal(payload, &document); err != nil {
+				t.Fatal(err)
+			}
+			test.mutate(document)
+			payload, err = json.Marshal(document)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := ValidateReviewerResult(payload, subject, frozen.ChangedPathManifest); err == nil {
+				t.Fatal("ValidateReviewerResult() = nil, want refusal")
 			}
 		})
 	}
