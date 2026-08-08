@@ -73,7 +73,7 @@ func TestStatusStartTransitionPreservesFrozenTarget(t *testing.T) {
 	})
 }
 
-func TestNegotiatedStatusRejectsCommittedOnlyWithoutBaseRef(t *testing.T) {
+func TestNegotiatedStatusInterpretsCommittedOnlyValue(t *testing.T) {
 	repo := initReviewCLIRepo(t)
 	tests := []struct {
 		name string
@@ -81,9 +81,8 @@ func TestNegotiatedStatusRejectsCommittedOnlyWithoutBaseRef(t *testing.T) {
 		want string
 	}{
 		{name: "true without base", args: []string{"--contract", ReviewIntegrationContractV1, "--next-transition", "--cwd", repo, "--committed-only"}, want: "--committed-only requires --base-ref"},
-		{name: "false without base", args: []string{"--contract", ReviewIntegrationContractV1, "--next-transition", "--cwd", repo, "--committed-only=false"}, want: "--committed-only requires --base-ref"},
+		{name: "false without base", args: []string{"--contract", ReviewIntegrationContractV1, "--next-transition", "--cwd", repo, "--committed-only=false"}},
 		{name: "false without contract", args: []string{"--cwd", repo, "--committed-only=false"}, want: reviewStatusTargetSelectorsRequireContractReason},
-		{name: "false with base", args: []string{"--contract", ReviewIntegrationContractV1, "--next-transition", "--cwd", repo, "--base-ref", "HEAD", "--committed-only=false"}},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -93,6 +92,25 @@ func TestNegotiatedStatusRejectsCommittedOnlyWithoutBaseRef(t *testing.T) {
 			}
 		})
 	}
+
+	t.Run("false with base refuses like START", func(t *testing.T) {
+		statusErr := RunReviewStatus([]string{
+			"--contract", ReviewIntegrationContractV1, "--next-transition", "--cwd", repo,
+			"--base-ref", "HEAD", "--committed-only=false",
+		}, io.Discard)
+		if statusErr == nil {
+			t.Fatal("STATUS accepted --base-ref with --committed-only=false")
+		}
+
+		startErr := RunReviewFacadeStart([]string{
+			"--contract", ReviewIntegrationContractV1, "--cwd", repo,
+			"--target", "sha256:" + strings.Repeat("0", 64), "--projection", "workspace",
+			"--base-ref", "HEAD", "--committed-only=false",
+		}, io.Discard)
+		if startErr == nil {
+			t.Fatal("START accepted --base-ref with --committed-only=false")
+		}
+	})
 }
 
 func TestNegotiatedV2FreshStatusIncludesExactConsentRelay(t *testing.T) {
