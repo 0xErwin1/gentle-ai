@@ -1107,6 +1107,16 @@ type findingLocation struct {
 	EndLine   int
 }
 
+// findingLocationHasPositiveLines reports whether a parsed finding location
+// carries strictly positive 1-based line numbers. It is a defense-in-depth
+// lower bound for causality: source lines are numbered from 1, so a location
+// whose start or end line is below 1 can never designate a line that exists in
+// the candidate and must never be treated as candidate-causal. This holds the
+// invariant even if a parser path ever yielded a non-positive line.
+func findingLocationHasPositiveLines(finding findingLocation) bool {
+	return finding.StartLine >= 1 && finding.EndLine >= 1
+}
+
 func parseFindingLocation(location string) (findingLocation, error) {
 	fail := func(reason FindingLocationErrorReason) (findingLocation, error) {
 		return findingLocation{}, &FindingLocationError{Location: location, Reason: reason}
@@ -1161,7 +1171,13 @@ func parseFindingLocationLine(value string) (int, FindingLocationErrorReason) {
 			return 0, FindingLocationLineNotInteger
 		}
 	}
-	line, err := strconv.ParseUint(value, 10, strconv.IntSize)
+	// The all-digits check above guarantees no sign character reaches here, so
+	// the value is a non-negative literal. Parse it as an unsigned integer that
+	// must fit a positive Go int: bit size strconv.IntSize-1 caps the result at
+	// the platform's MaxInt, so any value above it (including the [2^63, 2^64-1]
+	// band that a full 64-bit parse accepted before wrapping negative via int())
+	// refuses as an overflow instead of silently becoming a negative line.
+	line, err := strconv.ParseUint(value, 10, strconv.IntSize-1)
 	if err != nil {
 		return 0, FindingLocationLineOverflowsInteger
 	}
