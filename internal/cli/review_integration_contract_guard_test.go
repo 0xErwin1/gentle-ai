@@ -219,11 +219,10 @@ func reviewIntegrationProductionSources(t *testing.T) []string {
 	return sources
 }
 
-// reviewCommandDispatchCaseRegexp extracts a quoted case label, e.g.
-// `case "start":` or `case "start", "status":` (only the first label of a
-// multi-label case is meaningful here; none of the two switches this test
-// reads use multi-label cases for review verbs).
-var reviewCommandDispatchCaseRegexp = regexp.MustCompile(`^\s*case "([a-z][a-z-]*)":`)
+// reviewCommandDispatchCaseRegexp isolates a review command case label, while
+// reviewCommandDispatchVerbRegexp extracts every verb from a multi-label case.
+var reviewCommandDispatchCaseRegexp = regexp.MustCompile(`^\s*case ((?:"[a-z][a-z-]*"(?:,\s*)?)+):`)
+var reviewCommandDispatchVerbRegexp = regexp.MustCompile(`"([a-z][a-z-]*)"`)
 
 // reviewCommandDispatchVerbs mechanically extracts every case label inside
 // runReviewCommandContext and runReviewCommand in review_facade.go -- the two
@@ -252,7 +251,9 @@ func reviewCommandDispatchVerbs(t *testing.T) map[string]bool {
 			continue
 		}
 		if match := reviewCommandDispatchCaseRegexp.FindStringSubmatch(line); match != nil {
-			verbs[match[1]] = true
+			for _, label := range reviewCommandDispatchVerbRegexp.FindAllStringSubmatch(match[1], -1) {
+				verbs[label[1]] = true
+			}
 		}
 	}
 	return verbs
