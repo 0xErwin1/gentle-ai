@@ -155,10 +155,11 @@ func claudeReviewerCollectStatus(t *testing.T, harness *organicHarness, lineage 
 		"--base-ref", "origin/main", "--projection", "workspace",
 		"--untracked-scope=exclude", "--expected-untracked-inventory", digest,
 	)
-	if err := json.Unmarshal(payload, &status); err != nil {
+	var declaredStatus organicNegotiatedStatusResult
+	if err := json.Unmarshal(payload, &declaredStatus); err != nil {
 		t.Fatalf("decode negotiated review status after untracked declaration: %v\n%s", err, payload)
 	}
-	return status
+	return declaredStatus
 }
 
 // claudePoisonedReviewSetup is the shared fixture for the Claude organic
@@ -424,6 +425,7 @@ func runClaudeReview(ctx context.Context, binary, prompt string, environment []s
 // against the identical genuine raw bytes before finally admitting them, plus
 // a dedicated transport-failure case using a deliberately expired context.
 func TestRealClaudeReviewerOrdinarySessionAdmitsRawOutput(t *testing.T) {
+	claude := requireClaudeNetworkNone(t)
 	setup := setupClaudePoisonedReview(t, "claude-poisoned-worktree-ordinary-session")
 
 	prompt := setup.claudeAdvisoryPrompt(t)
@@ -432,7 +434,6 @@ func TestRealClaudeReviewerOrdinarySessionAdmitsRawOutput(t *testing.T) {
 	}
 
 	server, calls := newClaudeReviewFixture(t, setup, prompt)
-	claude := requireClaudeNetworkNone(t)
 	home := t.TempDir()
 	environment := []string{
 		"HOME=" + home,
@@ -476,10 +477,7 @@ func TestRealClaudeReviewerOrdinarySessionAdmitsRawOutput(t *testing.T) {
 	// genuinely unterminated regardless of how much trailing prose claude
 	// adds.
 	malformed := raw[:closingBrace]
-	malformedPath := setup.harness.writeJSON("claude-malformed.json", json.RawMessage("null"))
-	if err := os.WriteFile(malformedPath, malformed, 0o600); err != nil {
-		t.Fatal(err)
-	}
+	malformedPath := setup.harness.writeRawReviewerResult("claude-malformed.json", malformed)
 	if _, _, err := setup.captureResult(malformedPath); err == nil {
 		t.Fatal("native admission accepted malformed claude output")
 	}
@@ -493,10 +491,7 @@ func TestRealClaudeReviewerOrdinarySessionAdmitsRawOutput(t *testing.T) {
 	if wrongSubject == string(raw) {
 		t.Fatalf("raw claude output does not contain the expected subject_hash %q to mutate:\n%s", setup.binding["subject-hash"], raw)
 	}
-	mismatchedPath := setup.harness.writeJSON("claude-mismatched.json", json.RawMessage("null"))
-	if err := os.WriteFile(mismatchedPath, []byte(wrongSubject), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	mismatchedPath := setup.harness.writeRawReviewerResult("claude-mismatched.json", []byte(wrongSubject))
 	if _, _, err := setup.captureResult(mismatchedPath); err == nil {
 		t.Fatal("native admission accepted a subject-mismatched claude output")
 	}
@@ -506,10 +501,7 @@ func TestRealClaudeReviewerOrdinarySessionAdmitsRawOutput(t *testing.T) {
 	}
 
 	// --- Positive: the genuine raw output is admitted and reaches a receipt. ---
-	resultPath := setup.harness.writeJSON("claude-result.json", json.RawMessage("null"))
-	if err := os.WriteFile(resultPath, raw, 0o600); err != nil {
-		t.Fatal(err)
-	}
+	resultPath := setup.harness.writeRawReviewerResult("claude-result.json", raw)
 	if _, stderr, err := setup.captureResult(resultPath); err != nil {
 		t.Fatalf("native admission refused genuine claude output: %v\n%s", err, stderr)
 	}
