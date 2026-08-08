@@ -13,6 +13,7 @@ import (
 	"reflect"
 	"runtime"
 	"slices"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -1498,6 +1499,152 @@ func TestReviewFacadeHelpAndFlatCompatibilityPathsRemainAvailable(t *testing.T) 
 		if err := test.run([]string{"--help"}, &output); err != nil || !strings.Contains(output.String(), test.want) {
 			t.Fatalf("flat compatibility help %q: %v\n%s", test.want, err, output.String())
 		}
+	}
+}
+
+// reviewFacadeUsageVerbs reads only the compact facade's usage declaration;
+// later help prose may explain a verb but cannot advertise it as a facade verb.
+func reviewFacadeUsageVerbs(t *testing.T, help string) map[string]bool {
+	t.Helper()
+	line, _, _ := strings.Cut(help, "\n")
+	const prefix = "Usage: gentle-ai review <"
+	const suffix = "> [flags]"
+	if !strings.HasPrefix(line, prefix) || !strings.HasSuffix(line, suffix) {
+		t.Fatalf("review facade usage declaration = %q", line)
+	}
+
+	verbs := map[string]bool{}
+	for _, verb := range strings.Split(strings.TrimSuffix(strings.TrimPrefix(line, prefix), suffix), "|") {
+		if verbs[verb] {
+			t.Fatalf("review facade usage declaration names %q more than once", verb)
+		}
+		verbs[verb] = true
+	}
+	return verbs
+}
+
+func reviewFacadeUsageConformanceError(advertised, dispatched map[string]bool) error {
+	missing := []string{}
+	for verb := range dispatched {
+		if !advertised[verb] {
+			missing = append(missing, verb)
+		}
+	}
+	unexpected := []string{}
+	for verb := range advertised {
+		if !dispatched[verb] {
+			unexpected = append(unexpected, verb)
+		}
+	}
+	if len(missing) == 0 && len(unexpected) == 0 {
+		return nil
+	}
+	sort.Strings(missing)
+	sort.Strings(unexpected)
+	return fmt.Errorf("facade usage drift: missing dispatched verbs %v; advertised without facade dispatch %v", missing, unexpected)
+}
+
+func reviewFacadeUsageHelp(t *testing.T) string {
+	t.Helper()
+	var help bytes.Buffer
+	if err := RunReview([]string{"--help"}, &help); err != nil {
+		t.Fatal(err)
+	}
+	return help.String()
+}
+
+func copyReviewFacadeVerbSet(verbs map[string]bool) map[string]bool {
+	clone := make(map[string]bool, len(verbs))
+	for verb := range verbs {
+		clone[verb] = true
+	}
+	return clone
+}
+
+func TestReviewFacadeUsageMatchesEveryFacadeDispatch(t *testing.T) {
+	advertised := reviewFacadeUsageVerbs(t, reviewFacadeUsageHelp(t))
+	dispatched := reviewCommandDispatchVerbs(t)
+	if err := reviewFacadeUsageConformanceError(advertised, dispatched); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestReviewFacadeHelpHasNoPartialCommandList(t *testing.T) {
+	if strings.Contains(reviewFacadeUsageHelp(t), "Additive headless capabilities") {
+		t.Fatal("review facade help contains a second partial command list")
+	}
+}
+
+func TestEveryAdvertisedReviewFacadeVerbDispatches(t *testing.T) {
+	advertised := reviewFacadeUsageVerbs(t, reviewFacadeUsageHelp(t))
+	verbs := make([]string, 0, len(advertised))
+	for verb := range advertised {
+		verbs = append(verbs, verb)
+	}
+	sort.Strings(verbs)
+
+	for _, verb := range verbs {
+		t.Run(verb, func(t *testing.T) {
+			var output bytes.Buffer
+			err := RunReview([]string{verb, "--help"}, &output)
+			evidence := output.String()
+			if err != nil {
+				evidence += "\n" + err.Error()
+			}
+			lowered := strings.ToLower(evidence)
+			if strings.Contains(lowered, "unknown") || strings.Contains(lowered, "unrecognized") {
+				t.Fatalf("review %s dispatch evidence is unrecognized:\n%s", verb, evidence)
+			}
+			usage := "Usage: gentle-ai review " + verb
+			requires := "review " + verb + " requires"
+			if !strings.Contains(evidence, usage) && !strings.Contains(evidence, requires) {
+				t.Fatalf("review %s did not produce verb-specific dispatch evidence; want %q or %q:\n%s", verb, usage, requires, evidence)
+			}
+		})
+	}
+}
+
+func TestReviewFacadeUsageBoundaryExcludesAppMode(t *testing.T) {
+	facade := reviewCommandDispatchVerbs(t)
+	if facade[reviewModeDispatchVerb] {
+		t.Fatalf("review %s belongs to the app pre-dispatch, not the compact facade switch", reviewModeDispatchVerb)
+	}
+	if !reviewDispatchableReviewVerbs(t)[reviewModeDispatchVerb] {
+		t.Fatalf("review %s is missing from the app dispatch boundary", reviewModeDispatchVerb)
+	}
+	if reviewFacadeUsageVerbs(t, reviewFacadeUsageHelp(t))[reviewModeDispatchVerb] {
+		t.Fatalf("review %s must not be advertised by the compact facade usage declaration", reviewModeDispatchVerb)
+	}
+}
+
+func TestReviewFacadeUsageRatchetRejectsDrift(t *testing.T) {
+	advertised := reviewFacadeUsageVerbs(t, reviewFacadeUsageHelp(t))
+	dispatched := reviewCommandDispatchVerbs(t)
+	deletedAdvertised := copyReviewFacadeVerbSet(advertised)
+	delete(deletedAdvertised, "capture-result")
+	inventedDispatched := copyReviewFacadeVerbSet(dispatched)
+	inventedDispatched["invented"] = true
+	for _, test := range []struct {
+		name       string
+		advertised map[string]bool
+		dispatched map[string]bool
+	}{
+		{
+			name:       "deleted advertised verb",
+			advertised: deletedAdvertised,
+			dispatched: dispatched,
+		},
+		{
+			name:       "invented dispatch verb",
+			advertised: advertised,
+			dispatched: inventedDispatched,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if err := reviewFacadeUsageConformanceError(test.advertised, test.dispatched); err == nil {
+				t.Fatal("facade usage drift unexpectedly passed")
+			}
+		})
 	}
 }
 

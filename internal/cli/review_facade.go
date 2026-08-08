@@ -620,8 +620,7 @@ func (err *reviewStartContextError) Unwrap() error { return err.Cause }
 
 func RunReview(args []string, stdout io.Writer) error {
 	if len(args) == 0 || args[0] == "help" || args[0] == "-h" || args[0] == "--help" {
-		_, _ = fmt.Fprintln(stdout, "Usage: gentle-ai review <advisory|capabilities|start|finalize|validate|status|repair|invalidate|abandon|recover|retry-final-verification|reclaim|inspect-authority|inspect-candidate|dispose-result|reopen-results|schema|bind-sdd> [flags]\n\nOrdinary review facade; repository scope, authority, canonical artifacts, and lifecycle transitions are derived by Go. `review advisory` validates model transport output for later native admission; it never directly creates a receipt or delivery decision. Use review retry-final-verification only for a provider-proven completed failed final-verification tooling incident. Generic review recover remains unchanged. Use review repair --preflight for provider-owned classified authority repair.")
-		_, _ = fmt.Fprintln(stdout, "Additive headless capabilities: gentle-ai review capture-result (with --preflight), gentle-ai review inspect-candidate, and gentle-ai review preserve-result.")
+		_, _ = fmt.Fprintln(stdout, "Usage: gentle-ai review <advisory|capture-result|lens-context|capture-evidence|preserve-result|capabilities|start|finalize|validate|status|repair|invalidate|abandon|recover|retry-final-verification|reclaim|inspect-authority|inspect-candidate|dispose-result|reopen-results|schema|bind-sdd> [flags]\n\nOrdinary review facade; repository scope, authority, canonical artifacts, and lifecycle transitions are derived by Go. `review advisory` validates model transport output for later native admission; it never directly creates a receipt or delivery decision. Use review retry-final-verification only for a provider-proven completed failed final-verification tooling incident. Generic review recover remains unchanged. Use review repair --preflight for provider-owned classified authority repair.")
 		return nil
 	}
 	operation, negotiated, preflightFailure := reviewIntegrationFailureRoute(args)
@@ -632,7 +631,7 @@ func RunReview(args []string, stdout io.Writer) error {
 		return newReviewIntegrationFailureError(*preflightFailure, nil)
 	}
 	if !negotiated {
-		if err := runReviewCommand(args, stdout); err != nil {
+		if err := runReviewCommandContext(context.Background(), args, stdout); err != nil {
 			// The plain form has no envelope contract, but an unanticipated
 			// internal fault on a mutating operation is the same product defect
 			// there (issue #1881 crashed exactly this way): attach the saved
@@ -723,24 +722,12 @@ func runReviewCommand(args []string, stdout io.Writer) error {
 		return RunReviewPreserveResult(args[1:], stdout)
 	case "capabilities":
 		return RunReviewCapabilities(args[1:], stdout)
-	case "start":
-		return RunReviewFacadeStart(args[1:], stdout)
-	case "finalize":
-		return RunReviewFacadeFinalize(args[1:], stdout)
-	case "validate":
-		return RunReviewFacadeValidate(args[1:], stdout)
-	case "status":
-		return RunReviewStatus(args[1:], stdout)
-	case "repair":
-		return RunReviewRepair(args[1:], stdout)
 	case "invalidate":
 		return RunReviewInvalidate(args[1:], stdout)
 	case "abandon":
 		return RunReviewAbandon(args[1:], stdout)
 	case "recover":
 		return RunReviewRecover(args[1:], stdout)
-	case "retry-final-verification":
-		return RunReviewRetryFinalVerification(args[1:], stdout)
 	case "reclaim":
 		return RunReviewReclaim(args[1:], stdout)
 	case "inspect-authority":
@@ -751,15 +738,9 @@ func runReviewCommand(args []string, stdout io.Writer) error {
 		return RunReviewReopenResults(args[1:], stdout)
 	case "schema":
 		return RunReviewSchema(args[1:], stdout)
-	case "bind-sdd":
-		return RunReviewBindSDD(args[1:], stdout)
 	default:
 		return fmt.Errorf("unknown review command %q", args[0])
 	}
-}
-
-func RunReviewStatus(args []string, stdout io.Writer) error {
-	return runReviewStatus(context.Background(), args, stdout)
 }
 
 func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error {
@@ -1340,10 +1321,6 @@ func reviewNotInvalidatedPredecessorRefusal(cause error, cwd, predecessor, expec
 		reviewRecoverCommand(cwd, predecessor, expected, successor, string(reviewtransaction.RecoveryScopeChanged)))
 }
 
-func RunReviewBindSDD(args []string, stdout io.Writer) error {
-	return runReviewBindSDD(context.Background(), args, stdout)
-}
-
 func runReviewBindSDD(ctx context.Context, args []string, stdout io.Writer) error {
 	flags := newReviewFlagSet("review bind-sdd", stdout, "Bind an explicit approved compact lineage to an OpenSpec change.")
 	cwd := flags.String("cwd", "", "repository path")
@@ -1472,10 +1449,6 @@ func RunReviewInvalidate(args []string, stdout io.Writer) error {
 		return err
 	}
 	return encodeReviewJSON(stdout, ReviewInvalidateResult{Operation: "review/invalidate", LineageID: *lineage, State: reviewtransaction.StateInvalidated, StoreRevision: revision})
-}
-
-func RunReviewFacadeStart(args []string, stdout io.Writer) error {
-	return runReviewFacadeStart(context.Background(), args, stdout)
 }
 
 func runReviewFacadeStart(ctx context.Context, args []string, stdout io.Writer) error {
@@ -2282,10 +2255,6 @@ var reviewUnadmittedResultRefusal = "review finalize no longer accepts --result:
 	"so it cannot prove the lens inspected the frozen candidate. " +
 	"Capture each selected lens with `" + reviewCaptureResultCommandName() + "` (see `" + reviewNextTransitionRefreshCommand + "` for the exact lineage/target/lens/order bindings), " +
 	"then run `gentle-ai review finalize --captured-results=true`"
-
-func RunReviewFacadeFinalize(args []string, stdout io.Writer) error {
-	return runReviewFacadeFinalize(context.Background(), args, stdout)
-}
 
 func reviewFinalizeFlagProvided(args []string, name string) bool {
 	for _, argument := range args {
@@ -3122,10 +3091,6 @@ func facadeFinalizeReplayRequestDigest(lineage, revision string, receipt reviewt
 		Schema: "gentle-ai.review-finalize-replay-request/v1", Operation: "review/finalize",
 		LineageID: lineage, StoreRevision: revision, Receipt: receipt,
 	})
-}
-
-func RunReviewFacadeValidate(args []string, stdout io.Writer) error {
-	return runReviewFacadeValidate(context.Background(), args, stdout)
 }
 
 func runReviewFacadeValidate(ctx context.Context, args []string, stdout io.Writer) error {
