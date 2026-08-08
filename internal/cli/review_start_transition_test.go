@@ -30,7 +30,7 @@ func TestStatusStartTransitionPreservesFrozenTarget(t *testing.T) {
 		writeReviewStartCandidate(t, repo, "tracked.txt", "committed\n", 0o644)
 		runReviewCLIGit(t, repo, "add", "tracked.txt")
 		runReviewCLIGit(t, repo, "commit", "-qm", "candidate")
-		status := negotiatedStartStatus(t, repo, "--base-ref", "moving-base")
+		status := negotiatedStartStatus(t, repo, "--base-ref", "moving-base", "--committed-only")
 		assertStartTransition(t, status, []string{"contract", "target", "projection", "base-ref", "committed-only"})
 		if got := startTransitionArgumentValue(t, status, "base-ref"); got != status.Projection.BaseTree {
 			t.Fatalf("emitted base-ref = %q, want resolved tree %q", got, status.Projection.BaseTree)
@@ -68,6 +68,17 @@ func TestStatusStartTransitionPreservesFrozenTarget(t *testing.T) {
 			t.Fatalf("unborn START = %#v, want target %q", started, status.TargetIdentity)
 		}
 	})
+}
+
+func TestNegotiatedStatusRejectsCommittedOnlyWithoutBaseRef(t *testing.T) {
+	repo := initReviewCLIRepo(t)
+	var output bytes.Buffer
+	err := RunReviewStatus([]string{
+		"--contract", ReviewIntegrationContractV1, "--next-transition", "--cwd", repo, "--committed-only",
+	}, &output)
+	if err == nil || !strings.Contains(err.Error(), "--committed-only requires --base-ref") {
+		t.Fatalf("committed-only without base-ref error = %v", err)
+	}
 }
 
 func TestNegotiatedV2FreshStatusIncludesExactConsentRelay(t *testing.T) {
