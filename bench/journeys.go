@@ -532,6 +532,7 @@ func Journeys() []Journey {
 	journeys = append(journeys, localGateBaseAdvanceJourneys()...)
 	journeys = append(journeys, intendedUntrackedJourneys()...)
 	journeys = append(journeys, captureResultDryRunJourneys()...)
+	journeys = append(journeys, issue2031Journeys()...)
 	return append(journeys, handoffJourneys()...)
 }
 
