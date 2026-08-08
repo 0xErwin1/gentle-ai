@@ -185,7 +185,7 @@ jobs:
       - name: Verify signing credential and identity binding
         working-directory: source
         env:
-          GITHUB_REF_NAME: ${{ inputs.stable_tag }}
+          RELEASE_SIGNING_TAG: ${{ inputs.stable_tag }}
           MINISIGN_PUBLIC_KEYS: ${{ vars.MINISIGN_PUBLIC_KEYS }}
           MINISIGN_PUBLIC_KEYS_CANONICAL: ${{ steps.trust-anchors.outputs.canonical }}
         run: ./scripts/release-signing-preflight.sh
@@ -214,22 +214,24 @@ jobs:
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
         with:
-          ref: ${{ inputs.stable_tag }}
-          path: source
+          # The verifier is orchestration code, not a release artifact. It must
+          # come from the reviewed main revision that dispatched this promotion.
+          ref: ${{ github.sha }}
+          path: orchestration
           fetch-depth: 0
           fetch-tags: true
           persist-credentials: false
       - name: Install Minisign
         run: sudo apt-get update && sudo apt-get install --no-install-recommends -y minisign
       - name: Verify published assets from GitHub
-        working-directory: source
+        working-directory: orchestration
         env:
           GH_TOKEN: ${{ github.token }}
-          GITHUB_REF_NAME: ${{ inputs.stable_tag }}
+          RELEASE_VERIFICATION_TAG: ${{ inputs.stable_tag }}
           MINISIGN_PUBLIC_KEYS: ${{ vars.MINISIGN_PUBLIC_KEYS }}
         run: ./scripts/verify-release-assets.sh
       - name: Verify immutable public provenance
-        working-directory: source
+        working-directory: orchestration
         env:
           GH_TOKEN: ${{ github.token }}
           SOURCE_SHA: ${{ needs.preflight.outputs.source_sha }}
