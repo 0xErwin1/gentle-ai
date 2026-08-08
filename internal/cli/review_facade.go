@@ -621,7 +621,6 @@ func (err *reviewStartContextError) Unwrap() error { return err.Cause }
 func RunReview(args []string, stdout io.Writer) error {
 	if len(args) == 0 || args[0] == "help" || args[0] == "-h" || args[0] == "--help" {
 		_, _ = fmt.Fprintln(stdout, "Usage: gentle-ai review <advisory|capture-result|lens-context|capture-evidence|preserve-result|capabilities|start|finalize|validate|status|repair|invalidate|abandon|recover|retry-final-verification|reclaim|inspect-authority|inspect-candidate|dispose-result|reopen-results|schema|bind-sdd> [flags]\n\nOrdinary review facade; repository scope, authority, canonical artifacts, and lifecycle transitions are derived by Go. `review advisory` validates model transport output for later native admission; it never directly creates a receipt or delivery decision. Use review retry-final-verification only for a provider-proven completed failed final-verification tooling incident. Generic review recover remains unchanged. Use review repair --preflight for provider-owned classified authority repair.")
-		_, _ = fmt.Fprintln(stdout, "Additive headless capabilities: gentle-ai review capture-result (with --preflight), gentle-ai review inspect-candidate, and gentle-ai review preserve-result.")
 		return nil
 	}
 	operation, negotiated, preflightFailure := reviewIntegrationFailureRoute(args)
@@ -632,7 +631,7 @@ func RunReview(args []string, stdout io.Writer) error {
 		return newReviewIntegrationFailureError(*preflightFailure, nil)
 	}
 	if !negotiated {
-		if err := runReviewCommand(args, stdout); err != nil {
+		if err := runReviewCommandContext(context.Background(), args, stdout); err != nil {
 			// The plain form has no envelope contract, but an unanticipated
 			// internal fault on a mutating operation is the same product defect
 			// there (issue #1881 crashed exactly this way): attach the saved
@@ -723,24 +722,12 @@ func runReviewCommand(args []string, stdout io.Writer) error {
 		return RunReviewPreserveResult(args[1:], stdout)
 	case "capabilities":
 		return RunReviewCapabilities(args[1:], stdout)
-	case "start":
-		return RunReviewFacadeStart(args[1:], stdout)
-	case "finalize":
-		return RunReviewFacadeFinalize(args[1:], stdout)
-	case "validate":
-		return RunReviewFacadeValidate(args[1:], stdout)
-	case "status":
-		return RunReviewStatus(args[1:], stdout)
-	case "repair":
-		return RunReviewRepair(args[1:], stdout)
 	case "invalidate":
 		return RunReviewInvalidate(args[1:], stdout)
 	case "abandon":
 		return RunReviewAbandon(args[1:], stdout)
 	case "recover":
 		return RunReviewRecover(args[1:], stdout)
-	case "retry-final-verification":
-		return RunReviewRetryFinalVerification(args[1:], stdout)
 	case "reclaim":
 		return RunReviewReclaim(args[1:], stdout)
 	case "inspect-authority":
@@ -751,8 +738,6 @@ func runReviewCommand(args []string, stdout io.Writer) error {
 		return RunReviewReopenResults(args[1:], stdout)
 	case "schema":
 		return RunReviewSchema(args[1:], stdout)
-	case "bind-sdd":
-		return RunReviewBindSDD(args[1:], stdout)
 	default:
 		return fmt.Errorf("unknown review command %q", args[0])
 	}
