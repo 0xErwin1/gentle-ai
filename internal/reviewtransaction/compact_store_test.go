@@ -5,10 +5,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"math"
 	"os"
 	"path/filepath"
 	"reflect"
 	"runtime"
+	"strconv"
 	"strings"
 	"syscall"
 	"testing"
@@ -2715,6 +2717,60 @@ func TestSnapshotCandidateLocationSupportsStructuredCausality(t *testing.T) {
 				if got || !errors.Is(err, ErrInvalidFindingLocation) || !errors.As(err, &locationErr) || locationErr.Reason != tt.wantError {
 					t.Fatalf("CandidateLocationSupportsCausality(%q) = %t, %v; want typed %q", tt.location, got, err, tt.wantError)
 				}
+			}
+		})
+	}
+}
+
+// TestParseFindingLocationLineRejectsPositiveIntOverflowBand pins the boundary
+// that hid the integer-wraparound defect: a value in [2^63, 2^64-1] once parsed
+// without error under a 64-bit unsigned parse and then wrapped to a negative
+// line via int() conversion. The largest legal line (MaxInt64) must still be
+// admitted, while the whole overflow band must refuse with the overflow reason.
+func TestParseFindingLocationLineRejectsPositiveIntOverflowBand(t *testing.T) {
+	for _, tt := range []struct {
+		name   string
+		value  string
+		want   int
+		reason FindingLocationErrorReason
+	}{
+		{"max int64 admits", strconv.Itoa(math.MaxInt64), math.MaxInt64, ""},
+		{"two to the sixty-three overflows", "9223372036854775808", 0, FindingLocationLineOverflowsInteger},
+		{"max uint64 overflows", "18446744073709551615", 0, FindingLocationLineOverflowsInteger},
+		{"max int64 with trailing zero overflows", strconv.Itoa(math.MaxInt64) + "0", 0, FindingLocationLineOverflowsInteger},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			got, reason := parseFindingLocationLine(tt.value)
+			if got != tt.want || reason != tt.reason {
+				t.Fatalf("parseFindingLocationLine(%q) = %d, %q; want %d, %q", tt.value, got, reason, tt.want, tt.reason)
+			}
+			if got < 0 {
+				t.Fatalf("parseFindingLocationLine(%q) returned negative line %d", tt.value, got)
+			}
+		})
+	}
+}
+
+// TestFindingLocationHasPositiveLinesRejectsNonPositive proves the causality
+// lower bound independently of the parser: a synthesized finding whose line is
+// non-positive (as an out-of-band parse or a future regression could yield) is
+// never treated as candidate-causal, even if the parser guard were reverted.
+func TestFindingLocationHasPositiveLinesRejectsNonPositive(t *testing.T) {
+	for _, tt := range []struct {
+		name    string
+		finding findingLocation
+		want    bool
+	}{
+		{"wrapped min int", findingLocation{Path: "internal/a.go", StartLine: math.MinInt64, EndLine: math.MinInt64}, false},
+		{"negative both", findingLocation{Path: "internal/a.go", StartLine: -1, EndLine: -1}, false},
+		{"negative end only", findingLocation{Path: "internal/a.go", StartLine: 1, EndLine: -1}, false},
+		{"zero end", findingLocation{Path: "internal/a.go", StartLine: 1, EndLine: 0}, false},
+		{"zero start", findingLocation{Path: "internal/a.go", StartLine: 0, EndLine: 5}, false},
+		{"positive range", findingLocation{Path: "internal/a.go", StartLine: 1, EndLine: 5}, true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := findingLocationHasPositiveLines(tt.finding); got != tt.want {
+				t.Fatalf("findingLocationHasPositiveLines(%#v) = %t; want %t", tt.finding, got, tt.want)
 			}
 		})
 	}
