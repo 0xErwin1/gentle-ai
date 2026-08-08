@@ -19,6 +19,8 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/gentleman-programming/gentle-ai/v2/internal/advisoryreview"
 )
 
 // claudePoisonMarker is planted, after the candidate freezes, into the
@@ -260,11 +262,44 @@ func writeClaudeReviewSSE(w http.ResponseWriter, result string) {
 	_, _ = fmt.Fprintf(w, "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_mock\",\"type\":\"message\",\"role\":\"assistant\",\"model\":\"claude-sonnet-5\",\"content\":[],\"stop_reason\":null,\"stop_sequence\":null,\"usage\":{\"input_tokens\":10,\"output_tokens\":1}}}\n\nevent: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\nevent: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":%s}}\n\nevent: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\nevent: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\",\"stop_sequence\":null},\"usage\":{\"output_tokens\":10}}\n\nevent: message_stop\ndata: {\"type\":\"message_stop\"}\n\n", text)
 }
 
+func requireCanonicalClaudeRequest(t *testing.T, setup claudePoisonedReviewSetup, prompt string) advisoryreview.Request {
+	t.Helper()
+	_, input, found := strings.Cut(prompt, "Input:\n")
+	if !found {
+		t.Fatalf("canonical advisory prompt omitted its Input block:\n%s", prompt)
+	}
+	payload, _, found := strings.Cut(input, "\n\nOutput schema:\n")
+	if !found {
+		t.Fatalf("canonical advisory prompt omitted its Output schema boundary:\n%s", prompt)
+	}
+	var request advisoryreview.Request
+	if err := json.Unmarshal([]byte(payload), &request); err != nil {
+		t.Fatalf("decode canonical advisory request: %v\n%s", err, payload)
+	}
+	subject := request.ArtifactSubject
+	if subject.SubjectHash != setup.binding["subject-hash"] || subject.LineageID != setup.binding["lineage"] ||
+		subject.AuthorityRevision != setup.binding["expected-revision"] || subject.TargetIdentity != setup.binding["target"] ||
+		subject.Lens != setup.binding["lens"] || subject.BaseTree == "" || subject.CandidateTree == "" {
+		t.Fatalf("canonical advisory subject does not match the negotiated binding: subject=%+v binding=%v", subject, setup.binding)
+	}
+	if len(request.ChangedPathManifest) != len(setup.manifestPaths) || len(request.Evidence) != len(setup.manifestPaths) {
+		t.Fatalf("canonical advisory scope is incomplete: manifest=%+v evidence=%+v want paths=%v", request.ChangedPathManifest, request.Evidence, setup.manifestPaths)
+	}
+	for index, path := range setup.manifestPaths {
+		if request.ChangedPathManifest[index].Path != path || request.Evidence[index].Path != path || strings.TrimSpace(request.Evidence[index].Content) == "" {
+			t.Fatalf("canonical advisory path %d is not bound to complete provider evidence: manifest=%+v evidence=%+v", index, request.ChangedPathManifest[index], request.Evidence[index])
+		}
+	}
+	if !strings.Contains(request.Evidence[0].Content, "func Compute(value int) int") ||
+		!strings.Contains(request.Evidence[0].Content, "return value * 2") || strings.Contains(request.Evidence[0].Content, claudePoisonMarker) {
+		t.Fatalf("canonical advisory evidence is not the frozen candidate content: %q", request.Evidence[0].Content)
+	}
+	return request
+}
+
 func newClaudeReviewFixture(t *testing.T, setup claudePoisonedReviewSetup, prompt string) (*httptest.Server, *atomic.Int32) {
 	t.Helper()
-	if !strings.Contains(prompt, "GENTLE_AI_REVIEW_BINDING") {
-		t.Fatalf("canonical advisory prompt omitted the negotiated review binding:\n%s", prompt)
-	}
+	canonicalRequest := requireCanonicalClaudeRequest(t, setup, prompt)
 	result, err := json.Marshal(map[string]any{
 		"subject_hash": setup.binding["subject-hash"],
 		"inspection":   map[string]any{"status": "completed", "paths": setup.manifestPaths},
@@ -294,7 +329,7 @@ func newClaudeReviewFixture(t *testing.T, setup claudePoisonedReviewSetup, promp
 			return
 		}
 		calls.Add(1)
-		for _, required := range []string{"GENTLE_AI_REVIEW_BINDING", setup.binding["subject-hash"], setup.binding["lens"], setup.candidatePath} {
+		for _, required := range []string{canonicalRequest.ArtifactSubject.SubjectHash, canonicalRequest.ArtifactSubject.Lens, setup.candidatePath, "func Compute(value int) int", "return value * 2"} {
 			if !bytes.Contains(body, []byte(required)) {
 				t.Errorf("Claude request omitted provider-bound value %q", required)
 			}
@@ -389,7 +424,6 @@ func runClaudeReview(ctx context.Context, binary, prompt string, environment []s
 // against the identical genuine raw bytes before finally admitting them, plus
 // a dedicated transport-failure case using a deliberately expired context.
 func TestRealClaudeReviewerOrdinarySessionAdmitsRawOutput(t *testing.T) {
-	claude := requireClaudeNetworkNone(t)
 	setup := setupClaudePoisonedReview(t, "claude-poisoned-worktree-ordinary-session")
 
 	prompt := setup.claudeAdvisoryPrompt(t)
@@ -398,6 +432,7 @@ func TestRealClaudeReviewerOrdinarySessionAdmitsRawOutput(t *testing.T) {
 	}
 
 	server, calls := newClaudeReviewFixture(t, setup, prompt)
+	claude := requireClaudeNetworkNone(t)
 	home := t.TempDir()
 	environment := []string{
 		"HOME=" + home,
