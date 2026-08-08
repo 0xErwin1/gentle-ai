@@ -28,6 +28,7 @@ func journeySources() []journeySource {
 		{"journeys_sdd_chain.go", sddChainJourneys()},
 		{"journeys_handoff.go", handoffJourneys()},
 		{"journeys_capture_evidence_v5.go", captureEvidenceDescriptorJourneys()},
+		{"journeys_scope_changed_fixture.go", scopeChangedFixtureJourneys()},
 		{"journeys_wave1.go", waveOneJourneys()},
 		{"journeys_wave3.go", waveThreeJourneys()},
 		{"journeys_wave5.go", waveFiveJourneys()},
