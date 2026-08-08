@@ -32,6 +32,9 @@ func TestStatusStartTransitionPreservesFrozenTarget(t *testing.T) {
 		runReviewCLIGit(t, repo, "commit", "-qm", "candidate")
 		status := negotiatedStartStatus(t, repo, "--base-ref", "moving-base", "--committed-only")
 		assertStartTransition(t, status, []string{"contract", "target", "projection", "base-ref", "committed-only"})
+		if got := startTransitionArgumentValue(t, status, "committed-only"); got != "true" {
+			t.Fatalf("emitted committed-only = %q, want true", got)
+		}
 		if got := startTransitionArgumentValue(t, status, "base-ref"); got != status.Projection.BaseTree {
 			t.Fatalf("emitted base-ref = %q, want resolved tree %q", got, status.Projection.BaseTree)
 		}
@@ -72,12 +75,23 @@ func TestStatusStartTransitionPreservesFrozenTarget(t *testing.T) {
 
 func TestNegotiatedStatusRejectsCommittedOnlyWithoutBaseRef(t *testing.T) {
 	repo := initReviewCLIRepo(t)
-	var output bytes.Buffer
-	err := RunReviewStatus([]string{
-		"--contract", ReviewIntegrationContractV1, "--next-transition", "--cwd", repo, "--committed-only",
-	}, &output)
-	if err == nil || !strings.Contains(err.Error(), "--committed-only requires --base-ref") {
-		t.Fatalf("committed-only without base-ref error = %v", err)
+	tests := []struct {
+		name string
+		args []string
+		want string
+	}{
+		{name: "true without base", args: []string{"--contract", ReviewIntegrationContractV1, "--next-transition", "--cwd", repo, "--committed-only"}, want: "--committed-only requires --base-ref"},
+		{name: "false without base", args: []string{"--contract", ReviewIntegrationContractV1, "--next-transition", "--cwd", repo, "--committed-only=false"}, want: "--committed-only requires --base-ref"},
+		{name: "false without contract", args: []string{"--cwd", repo, "--committed-only=false"}, want: reviewStatusTargetSelectorsRequireContractReason},
+		{name: "false with base", args: []string{"--contract", ReviewIntegrationContractV1, "--next-transition", "--cwd", repo, "--base-ref", "HEAD", "--committed-only=false"}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			err := RunReviewStatus(test.args, io.Discard)
+			if test.want == "" && err != nil || test.want != "" && (err == nil || !strings.Contains(err.Error(), test.want)) {
+				t.Fatalf("status error = %v, want %q", err, test.want)
+			}
+		})
 	}
 }
 

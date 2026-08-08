@@ -2,6 +2,7 @@ package reviewtransaction
 
 import (
 	"encoding/json"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -36,13 +37,21 @@ func TestReviewerResultSchemaPublishesBothFindingLensForms(t *testing.T) {
 		t.Fatalf("decode reviewer schema: %v", err)
 	}
 	properties := document["properties"].(map[string]any)
-	lenses, _ := json.Marshal(properties["findings"].(map[string]any)["items"].(map[string]any)["properties"].(map[string]any)["lens"].(map[string]any)["enum"])
-	for _, lens := range []string{
+	want := []string{
 		"risk", "resilience", "readability", "reliability",
 		LensRisk, LensResilience, LensReadability, LensReliability,
+	}
+	for name, raw := range map[string]any{
+		"result":  properties["lens"].(map[string]any)["enum"],
+		"finding": properties["findings"].(map[string]any)["items"].(map[string]any)["properties"].(map[string]any)["lens"].(map[string]any)["enum"],
 	} {
-		if !strings.Contains(string(lenses), `"`+lens+`"`) {
-			t.Fatalf("finding lens enum %s omits %q", lenses, lens)
+		payload, err := json.Marshal(raw)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var got []string
+		if err := json.Unmarshal(payload, &got); err != nil || !reflect.DeepEqual(got, want) {
+			t.Fatalf("%s lens enum = %v, want %v (%v)", name, got, want, err)
 		}
 	}
 }
