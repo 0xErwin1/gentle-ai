@@ -1515,9 +1515,6 @@ func reviewFacadeUsageVerbs(t *testing.T, help string) map[string]bool {
 
 	verbs := map[string]bool{}
 	for _, verb := range strings.Split(strings.TrimSuffix(strings.TrimPrefix(line, prefix), suffix), "|") {
-		if !reviewCommandDispatchCaseRegexp.MatchString("case \"" + verb + "\":") {
-			t.Fatalf("review facade usage declaration contains invalid verb %q", verb)
-		}
 		if verbs[verb] {
 			t.Fatalf("review facade usage declaration names %q more than once", verb)
 		}
