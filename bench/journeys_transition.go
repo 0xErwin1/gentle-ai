@@ -237,6 +237,61 @@ func transitionJourneys() []Journey {
 			},
 		},
 		{
+			ID:     "tr10-scope-change-after-the-review-is-bound",
+			Title:  "Bind an approved review to the change, then move the objective under it",
+			Source: "cross-surface pairing: the binding names an objective a scope change replaces",
+			// The highest-value pair left after tr08, and the most plausible in
+			// real use: you get a review approved, bind it to the change, and
+			// then discover the scope was wrong. The binding records the
+			// objective it was bound against; a rescope replaces that objective
+			// with a new generation. Two records now disagree about which
+			// objective is current, which is the same shape as #2830 one
+			// surface over.
+			//
+			// Whether the rescope should be admitted here is a product
+			// question. Whether both surfaces still answer afterwards is not.
+			Steps: []Step{
+				{Name: "fixture: repository with a committed OpenSpec change", Fixture: sddRuntimeRepo},
+				{Name: "begin, fail, begin again", Requires: sddAttemptBeginCapability, Composite: sddBeginFailBegin},
+				{Name: "fixture: the bounded correction moves the candidate", Fixture: sddBoundedCorrection},
+				{Name: "review start on the corrected candidate", Requires: startCapability,
+					Args: productArgs("review", "start"), After: rememberLineage},
+				{Name: "review finalize", Requires: finalizeCapability,
+					Args: productArgs("review", "finalize"), After: rememberLineage},
+				{Name: "bind the approved review to the change", Requires: bindSDDCapability,
+					Composite: sddBindApprovedReview},
+				{Name: "now move the objective the binding names",
+					Requires:  sddAttemptResetCapability,
+					Composite: transitionRescope("bench-rescope-after-bind", "narrower after binding")},
+				{Name: "the ledger still answers", Composite: transitionProveLedgerReadable},
+				{Name: "and so does review status", Requires: statusCapability,
+					Args: productArgs("review", "status")},
+			},
+		},
+		{
+			ID:     "tr11-abandon-the-review-while-an-attempt-is-open",
+			Title:  "Quarantine the review out from under a running SDD attempt",
+			Source: "cross-surface pairing: the two surfaces own separate state and nothing sequences them",
+			// SDD attempts and review lineages are separate authorities that a
+			// change uses together. Abandoning the review while an attempt is
+			// open removes one of them mid-flight. Nothing chained these, and
+			// the failure mode if they disagree is the worst kind: the work is
+			// neither reviewable nor abandonable, with each surface pointing at
+			// the other.
+			Steps: []Step{
+				{Name: "fixture: repository with a committed OpenSpec change", Fixture: sddRuntimeRepo},
+				{Name: "begin an attempt and leave it open", Requires: sddAttemptBeginCapability,
+					Composite: transitionBeginOnly},
+				{Name: "start a review alongside it", Requires: startCapability,
+					Args: productArgs("review", "start"), After: rememberLineage},
+				{Name: "abandon that review while the attempt runs", Requires: abandonCapability,
+					Composite: abandonNonTerminalLineage},
+				{Name: "the ledger still answers", Composite: transitionProveLedgerReadable},
+				{Name: "and the open attempt can still be settled",
+					Requires: sddAttemptFinishCapability, Composite: transitionFinishOpenAttempt},
+			},
+		},
+		{
 			ID:     "tr03-review-disabled-mid-change-keeps-sdd-moving",
 			Title:  "Turn review off in the middle of a change: SDD must keep working under ordinary policy",
 			Source: "maintainer-named coverage gap: no journey changes mode mid-lifecycle",

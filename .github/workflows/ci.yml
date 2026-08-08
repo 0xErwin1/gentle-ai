@@ -98,7 +98,9 @@ jobs:
             completed_once("tr06-mode-flip-during-an-active-attempt") and
             completed_once("tr07-reset-then-reset-keeps-the-ledger-readable") and
             completed_once("tr08-scope-change-after-a-delegated-handoff") and
-            completed_once("tr09-mode-flip-while-a-review-lineage-is-open")
+            completed_once("tr09-mode-flip-while-a-review-lineage-is-open") and
+            completed_once("tr10-scope-change-after-the-review-is-bound") and
+            completed_once("tr11-abandon-the-review-while-an-attempt-is-open")
           ' "$RUNNER_TEMP/bench-transition.json"
           "$RUNNER_TEMP/gentle-ai-bench" run --binary "$RUNNER_TEMP/gentle-ai" --axis source-coupled --only j57-sdd-authority-drift-during-discovery-fails-closed --out "$RUNNER_TEMP/bench-source-coupled-untagged.json"
           jq -e '
