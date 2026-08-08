@@ -19,12 +19,10 @@ import (
 	"syscall"
 	"testing"
 	"time"
-
-	"github.com/gentleman-programming/gentle-ai/v2/internal/advisoryreview"
 )
 
 // claudePoisonMarker is planted, after the candidate freezes, into the
-// reviewed file and a brand-new secret-shaped file. ClaudeAdapter launches
+// reviewed file and a brand-new secret-shaped file. The test-local launcher runs
 // claude in an empty scratch directory it creates and deletes itself, with
 // every built-in tool disabled, so neither location can ever reach the
 // reviewer's own prompt, regardless of what the live worktree contains by the
@@ -311,6 +309,62 @@ func newClaudeReviewFixture(t *testing.T, setup claudePoisonedReviewSetup, promp
 	return server, &calls
 }
 
+type claudeReviewEnvelope struct {
+	IsError bool   `json:"is_error"`
+	Result  string `json:"result"`
+}
+
+// runClaudeReview is test-local process wiring for the pinned runtime proof.
+// Production Claude transport remains session prompt-carried; this launcher
+// exists only to prove that the genuine CLI preserves that boundary.
+func runClaudeReview(ctx context.Context, binary, prompt string, environment []string) ([]byte, error) {
+	scratch, err := os.MkdirTemp("", "gentle-ai-claude-advisory-*")
+	if err != nil {
+		return nil, fmt.Errorf("claude advisory transport unavailable: create scratch directory: %w", err)
+	}
+	defer os.RemoveAll(scratch)
+
+	command := exec.CommandContext(ctx, binary,
+		"--bare",
+		"--print",
+		"--output-format", "json",
+		"--tools", "",
+		"--permission-mode", "dontAsk",
+		"--setting-sources=",
+		"--strict-mcp-config",
+		"--disable-slash-commands",
+		"--no-chrome",
+		"--no-session-persistence",
+		"--prompt-suggestions=false",
+	)
+	command.Dir = scratch
+	command.Env = environment
+	command.Stdin = strings.NewReader(prompt)
+	var stdout, stderr bytes.Buffer
+	command.Stdout = &stdout
+	command.Stderr = &stderr
+	if err := command.Run(); err != nil {
+		var envelope claudeReviewEnvelope
+		if jsonErr := json.Unmarshal(stdout.Bytes(), &envelope); jsonErr == nil && strings.TrimSpace(envelope.Result) != "" {
+			return nil, fmt.Errorf("claude advisory transport failed: %w: %s", err, strings.TrimSpace(envelope.Result))
+		}
+		detail := strings.TrimSpace(stderr.String())
+		if detail == "" {
+			detail = strings.TrimSpace(stdout.String())
+		}
+		return nil, fmt.Errorf("claude advisory transport failed: %w: %s", err, detail)
+	}
+
+	var envelope claudeReviewEnvelope
+	if err := json.Unmarshal(stdout.Bytes(), &envelope); err != nil {
+		return nil, fmt.Errorf("claude advisory transport produced no decodable result envelope: %w: %s", err, stdout.String())
+	}
+	if envelope.IsError {
+		return nil, fmt.Errorf("claude advisory transport failed: %s", envelope.Result)
+	}
+	return []byte(envelope.Result), nil
+}
+
 // TestRealClaudeReviewerOrdinarySessionAdmitsRawOutput is the Claude Code
 // organic runtime proof the shared advisory transport
 // (rdd-advisory-transport SKILL.md) requires -- the evidence gap issues #2692
@@ -318,8 +372,8 @@ func newClaudeReviewFixture(t *testing.T, setup claudePoisonedReviewSetup, promp
 // prompt-carried transport against a fake local model, but no real Claude
 // Code run had completed a review to a terminal receipt. This is that run, in
 // the exact shape the Codex proof uses: a genuinely launched review-risk
-// lens, run by a real `claude --print` process through
-// advisoryreview.ClaudeAdapter in an empty scratch directory it creates and
+// lens, run by a real `claude --print` process through the test-local launcher
+// in an empty scratch directory it creates and
 // deletes itself, with every built-in tool disabled, still only ever sees the
 // frozen candidate the provider rendered into its prompt -- not the reviewed
 // file's live poisoned content and not a brand-new secret-shaped file. The
@@ -345,25 +399,20 @@ func TestRealClaudeReviewerOrdinarySessionAdmitsRawOutput(t *testing.T) {
 
 	server, calls := newClaudeReviewFixture(t, setup, prompt)
 	home := t.TempDir()
-	adapter := &advisoryreview.ClaudeAdapter{
-		LookPath: func(string) (string, error) { return claude, nil },
-		Environment: func() []string {
-			return []string{
-				"HOME=" + home,
-				"CLAUDE_CONFIG_DIR=" + filepath.Join(home, ".claude"),
-				"XDG_CONFIG_HOME=" + filepath.Join(home, ".config"),
-				"XDG_CACHE_HOME=" + filepath.Join(home, ".cache"),
-				"ANTHROPIC_API_KEY=" + claudeRuntimeFakeKey,
-				"ANTHROPIC_BASE_URL=" + server.URL,
-				"NO_PROXY=127.0.0.1,localhost",
-				"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1",
-				"LANG=C", "LC_ALL=C",
-			}
-		},
+	environment := []string{
+		"HOME=" + home,
+		"CLAUDE_CONFIG_DIR=" + filepath.Join(home, ".claude"),
+		"XDG_CONFIG_HOME=" + filepath.Join(home, ".config"),
+		"XDG_CACHE_HOME=" + filepath.Join(home, ".cache"),
+		"ANTHROPIC_API_KEY=" + claudeRuntimeFakeKey,
+		"ANTHROPIC_BASE_URL=" + server.URL,
+		"NO_PROXY=127.0.0.1,localhost",
+		"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1",
+		"LANG=C", "LC_ALL=C",
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), organicAgentTimeout)
 	defer cancel()
-	raw, err := adapter.Review(ctx, prompt)
+	raw, err := runClaudeReview(ctx, claude, prompt, environment)
 	if err != nil {
 		t.Fatalf("real claude reviewer call failed: %v", err)
 	}
@@ -471,7 +520,7 @@ func (setup claudePoisonedReviewSetup) captureResult(inputPath string) (string, 
 // TestRealClaudeReviewerTransportFailureStrandsNothing is the timeout/
 // transport-failure fail-closed companion: an already-expired context makes
 // the real claude binary a genuine transport failure (the process is killed
-// before it can answer), ClaudeAdapter reports it as a typed transport error,
+// before it can answer), the launcher reports it as a transport error,
 // and the negotiated review is untouched -- no capture, no consumed
 // correction budget, no stranded lineage. STATUS still offers the exact same
 // collect slot afterward. This is precisely the dead-end #2692 and #2566
@@ -490,11 +539,14 @@ func TestRealClaudeReviewerTransportFailureStrandsNothing(t *testing.T) {
 		t.Fatalf("fixture did not reach the reviewer collect transition: %#v", before.NextTransition)
 	}
 
-	adapter := advisoryreview.NewClaudeAdapter()
+	claude, err := exec.LookPath("claude")
+	if err != nil {
+		t.Fatalf("resolve claude binary: %v", err)
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Nanosecond)
 	defer cancel()
 	<-ctx.Done()
-	raw, err := adapter.Review(ctx, prompt)
+	raw, err := runClaudeReview(ctx, claude, prompt, []string{"HOME=" + t.TempDir(), "PATH=" + os.Getenv("PATH")})
 	if err == nil {
 		t.Fatalf("Review() with an already-expired context = %q, nil, want a transport failure", raw)
 	}
