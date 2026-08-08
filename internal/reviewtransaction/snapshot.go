@@ -359,6 +359,9 @@ func (builder SnapshotBuilder) CandidateLocationSupportsCausality(ctx context.Co
 	if stringIndex(snapshot.Paths, finding.Path) < 0 {
 		return false, nil
 	}
+	if !findingLocationHasPositiveLines(finding) {
+		return false, nil
+	}
 	if causality == CausalBehaviorActivated {
 		entry, err := runGit(ctx, builder.Repo, nil, nil, "ls-tree", "-z", snapshot.CandidateTree, "--", literalPathspec(finding.Path))
 		if err != nil || len(entry) == 0 {
