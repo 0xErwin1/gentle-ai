@@ -65,6 +65,7 @@ const (
 	organicActorBodyEnvironment    = "GENTLE_AI_ORGANIC_ACTOR_BODY"
 	organicActorMessageEnvironment = "GENTLE_AI_ORGANIC_ACTOR_MESSAGE"
 	organicActorBinaryEnvironment  = "GENTLE_AI_ORGANIC_ACTOR_BINARY"
+	organicTestBinaryEnvironment   = "GENTLE_AI_ORGANIC_TEST_BINARY"
 
 	organicActorRoleDirect    = "direct"
 	organicActorRoleDelegated = "delegated"
@@ -97,6 +98,10 @@ var organicBinary string
 func TestMain(m *testing.M) {
 	if role := strings.TrimSpace(os.Getenv(organicActorRoleEnvironment)); role != "" {
 		os.Exit(runOrganicActor(role))
+	}
+	if binary := strings.TrimSpace(os.Getenv(organicTestBinaryEnvironment)); binary != "" {
+		organicBinary = binary
+		os.Exit(m.Run())
 	}
 	workspace, err := os.MkdirTemp("", "organic-e2e-binary")
 	if err != nil {
