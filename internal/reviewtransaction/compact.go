@@ -39,6 +39,14 @@ type CompactSemanticStateError struct {
 	LineageID string
 	State     State
 	Problem   string
+	// OutdatedIdentity marks the one semantic failure a retired
+	// snapshot-identity formula leaves behind (#2743): the record's bytes
+	// parse and its structure is intact, but the identity it froze was
+	// computed by an earlier release's formula, so recomputation under the
+	// current formula no longer matches. Outdated means gate-invalid, not
+	// damaged: diagnostics classify it historical instead of malformed, and
+	// no scoped walk lets it block another lineage's operation.
+	OutdatedIdentity bool
 }
 
 func (err *CompactSemanticStateError) Error() string {
@@ -596,10 +604,21 @@ func validateCompactSnapshotMetadata(snapshot Snapshot) error {
 	}
 	wantIdentity := snapshotIdentityForProjection(snapshot.Kind, snapshot.Projection, snapshot.BaseTree, snapshot.CandidateTree, snapshot.PathsDigest, snapshot.IntendedUntrackedProof, snapshot.IntendedUntracked, snapshot.LedgerIDs)
 	if snapshot.Identity != wantIdentity {
-		return errors.New("compact snapshot identity does not match its metadata")
+		return errCompactSnapshotIdentityMismatch
 	}
 	return nil
 }
+
+// errCompactSnapshotIdentityMismatch is the exact semantic failure a record
+// frozen under a retired snapshot-identity formula produces when the current
+// formula recomputes its identity (#2743: every pre-rc.2 compact-v2 record
+// fails here after the #2659/PR-#2667 identity purification). It is a
+// sentinel so parseCompactRecord can mark the resulting typed
+// *CompactSemanticStateError as OutdatedIdentity — the clean-break policy
+// keeps such records gate-invalid without rewriting their bytes, and
+// diagnostics owe them an honest historical classification instead of
+// narrating them as damage.
+var errCompactSnapshotIdentityMismatch = errors.New("compact snapshot identity does not match its metadata")
 
 func validateCompactFindings(state CompactState) error {
 	if state.State == StateReviewing || state.State == StateInvalidated {
