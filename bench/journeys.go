@@ -523,6 +523,7 @@ func Journeys() []Journey {
 	journeys = append(journeys, sddJourneys()...)
 	journeys = append(journeys, sddChainJourneys()...)
 	journeys = append(journeys, captureEvidenceDescriptorJourneys()...)
+	journeys = append(journeys, scopeChangedFixtureJourneys()...)
 	journeys = append(journeys, waveOneJourneys()...)
 	journeys = append(journeys, waveThreeJourneys()...)
 	journeys = append(journeys, waveFiveJourneys()...)
