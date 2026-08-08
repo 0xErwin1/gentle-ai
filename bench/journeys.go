@@ -129,8 +129,9 @@ func synthesizeReviewerResult(subjectHash string, paths []string) ([]byte, error
 	if subjectHash == "" {
 		return nil, errors.New("collect envelope carried no subject hash")
 	}
-	if len(paths) == 0 {
-		paths = []string{"."}
+	paths = append([]string{}, paths...)
+	for left, right := 0, len(paths)-1; left < right; left, right = left+1, right-1 {
+		paths[left], paths[right] = paths[right], paths[left]
 	}
 	return json.Marshal(map[string]any{
 		"subject_hash": subjectHash,
@@ -234,7 +235,7 @@ func rejectedThenRecapture(r *journeyRun) error {
 		return errors.New("expected a reviewer-result collect transition")
 	}
 	bad, err := synthesizeReviewerResult(
-		"sha256:0000000000000000000000000000000000000000000000000000000000000000", envelope.paths())
+		envelope.NextTransition.Collect.Inputs[0].ArtifactSubject.SubjectHash, nil)
 	if err != nil {
 		return err
 	}
@@ -697,7 +698,7 @@ func coreJourneys() []Journey {
 		{
 			ID:     "j12-rejected-capture-then-recapture",
 			Title:  "Failure path: a reviewer result the product rejects, then a recapture",
-			Source: "community failure path: binding mismatch",
+			Source: "#2614: incomplete inspection coverage refuses, then an unordered complete manifest recaptures",
 			Steps: []Step{
 				{Name: "fixture: repo", Fixture: baseRepo},
 				{Name: "fixture: stage ordinary code", Fixture: stageOrdinaryCode},

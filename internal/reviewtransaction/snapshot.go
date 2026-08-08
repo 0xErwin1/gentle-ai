@@ -352,20 +352,20 @@ func (builder SnapshotBuilder) CandidateLocationSupportsCausality(ctx context.Co
 	if err := builder.ValidateEvidence(ctx, snapshot); err != nil {
 		return false, err
 	}
-	logicalPath, line, err := parseFindingLocation(location)
+	finding, err := parseFindingLocation(location)
 	if err != nil {
 		return false, err
 	}
-	if stringIndex(snapshot.Paths, logicalPath) < 0 {
+	if stringIndex(snapshot.Paths, finding.Path) < 0 {
 		return false, nil
 	}
 	if causality == CausalBehaviorActivated {
-		entry, err := runGit(ctx, builder.Repo, nil, nil, "ls-tree", "-z", snapshot.CandidateTree, "--", literalPathspec(logicalPath))
+		entry, err := runGit(ctx, builder.Repo, nil, nil, "ls-tree", "-z", snapshot.CandidateTree, "--", literalPathspec(finding.Path))
 		if err != nil || len(entry) == 0 {
 			return false, err
 		}
 		for _, tree := range []string{snapshot.CandidateTree} {
-			blob, err := runGit(ctx, builder.Repo, nil, nil, "show", tree+":"+logicalPath)
+			blob, err := runGit(ctx, builder.Repo, nil, nil, "show", tree+":"+finding.Path)
 			if err != nil {
 				return false, err
 			}
@@ -373,7 +373,7 @@ func (builder SnapshotBuilder) CandidateLocationSupportsCausality(ctx context.Co
 			if len(blob) > 0 && blob[len(blob)-1] != '\n' {
 				lines++
 			}
-			if line <= lines {
+			if finding.EndLine <= lines {
 				return true, nil
 			}
 		}
@@ -382,7 +382,7 @@ func (builder SnapshotBuilder) CandidateLocationSupportsCausality(ctx context.Co
 	if causality != CausalIntroduced && causality != CausalWorsened {
 		return false, nil
 	}
-	output, err := runGit(ctx, builder.Repo, nil, nil, "diff", "--unified=0", "--no-renames", "--no-ext-diff", "--no-textconv", snapshot.BaseTree, snapshot.CandidateTree, "--", literalPathspec(logicalPath))
+	output, err := runGit(ctx, builder.Repo, nil, nil, "diff", "--unified=0", "--no-renames", "--no-ext-diff", "--no-textconv", snapshot.BaseTree, snapshot.CandidateTree, "--", literalPathspec(finding.Path))
 	if err != nil {
 		return false, err
 	}
@@ -393,7 +393,7 @@ func (builder SnapshotBuilder) CandidateLocationSupportsCausality(ctx context.Co
 		if len(match[offset+1]) > 0 {
 			count, _ = strconv.Atoi(string(match[offset+1]))
 		}
-		if count > 0 && line >= start && line < start+count {
+		if count > 0 && finding.StartLine >= start && finding.EndLine < start+count {
 			return true, nil
 		}
 	}

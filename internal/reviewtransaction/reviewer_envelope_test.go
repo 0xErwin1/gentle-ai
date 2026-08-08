@@ -99,15 +99,22 @@ func TestValidateReviewerResultMatchesNativeAdmissionShape(t *testing.T) {
 		Evidence: []string{"inspection: internal/a.go:7 and internal/b.go:1"},
 	}
 	tests := []struct {
-		name    string
-		mutate  func(*ReviewerResult)
-		wantErr bool
+		name        string
+		mutate      func(*ReviewerResult)
+		wantErr     bool
+		wantMessage string
 	}{
 		{name: "native finding lens", mutate: func(result *ReviewerResult) { result.Findings[0].Lens = "reliability" }},
+		{name: "unordered complete manifest", mutate: func(result *ReviewerResult) {
+			result.Inspection.Paths[0], result.Inspection.Paths[1] = result.Inspection.Paths[1], result.Inspection.Paths[0]
+		}},
 		{name: "binding hash", mutate: func(result *ReviewerResult) { result.SubjectHash = "sha256:" + strings.Repeat("0", 64) }, wantErr: true},
 		{name: "selected lens", mutate: func(result *ReviewerResult) { result.Lens = LensRisk }, wantErr: true},
 		{name: "missing lens binding", mutate: func(result *ReviewerResult) { result.Lens = "" }, wantErr: true},
-		{name: "full manifest", mutate: func(result *ReviewerResult) { result.Inspection.Paths = result.Inspection.Paths[:1] }, wantErr: true},
+		{name: "missing frozen path", mutate: func(result *ReviewerResult) { result.Inspection.Paths = result.Inspection.Paths[:1] }, wantErr: true, wantMessage: "reviewer inspection coverage: missing_frozen_manifest_paths=1"},
+		{name: "foreign path", mutate: func(result *ReviewerResult) {
+			result.Inspection.Paths = append(result.Inspection.Paths, "outside/private.go")
+		}, wantErr: true, wantMessage: "reviewer inspection coverage: foreign_inspection_paths=1"},
 		{name: "non severe classification enum", mutate: func(result *ReviewerResult) {
 			result.Findings[0].Severity = "WARNING"
 			result.Findings[0].EvidenceClass = "unknown"
@@ -126,6 +133,9 @@ func TestValidateReviewerResultMatchesNativeAdmissionShape(t *testing.T) {
 			_, err = ValidateReviewerResult(payload, subject, frozen.ChangedPathManifest)
 			if (err != nil) != test.wantErr {
 				t.Fatalf("ValidateReviewerResult() error = %v, wantErr %v", err, test.wantErr)
+			}
+			if test.wantMessage != "" && err.Error() != test.wantMessage {
+				t.Fatalf("ValidateReviewerResult() error = %q, want %q", err, test.wantMessage)
 			}
 		})
 	}

@@ -279,7 +279,7 @@ func TestReviewCaptureResultRejectsInvalidLocationWithActionableDiagnostic(t *te
 	repo, started, _, record := newArtifactReview(t, false)
 	result := admittedReviewerResultForTest(t, repo, record, record.State.SelectedLenses[0], 0)
 	result.Findings = []facadeFinding{{
-		ID: "R3-001", Location: "tracked.txt:1-2", Severity: "CRITICAL", Claim: "candidate failure",
+		ID: "R3-001", Location: "tracked.txt:1-2,3", Severity: "CRITICAL", Claim: "candidate failure",
 		ProofRefs: []string{"tracked.txt changed hunk"}, EvidenceClass: reviewtransaction.EvidenceDeterministic,
 		CausalDisposition: reviewtransaction.CausalIntroduced,
 	}}
@@ -296,7 +296,7 @@ func TestReviewCaptureResultRejectsInvalidLocationWithActionableDiagnostic(t *te
 		t.Fatalf("capture-result error = %v; want typed admission and location errors", err)
 	}
 	if admissionErr.Diagnostic == nil || admissionErr.Diagnostic.FindingID != "R3-001" ||
-		admissionErr.Diagnostic.Location != "tracked.txt:1-2" ||
+		admissionErr.Diagnostic.Location != "tracked.txt:1-2,3" ||
 		admissionErr.Diagnostic.Reason != "line_suffix_not_integer" {
 		t.Fatalf("capture diagnostic = %#v", admissionErr.Diagnostic)
 	}

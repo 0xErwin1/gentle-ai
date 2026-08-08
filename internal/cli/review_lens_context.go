@@ -398,7 +398,7 @@ Scope. The %s sections below are the complete and only view of this candidate: a
 
 Causality. Report only what this candidate caused. Give every BLOCKER or CRITICAL finding an evidence_class and a causal_disposition, and mark what the base already contained as pre-existing or base-only rather than as a blocker.
 
-Return. Emit exactly one JSON object and nothing else: no prose before or after it, no markdown fence, no task envelope. It must validate against the schema in %s. Set subject_hash to exactly %s. Set inspection.status to "completed" and inspection.paths to every manifest path, in the order given. findings and evidence must both be present, and evidence must be non-empty.
+Return. Emit exactly one JSON object and nothing else: no prose before or after it, no markdown fence, no task envelope. It must validate against the schema in %s. Set subject_hash to exactly %s. Set inspection.status to "completed" and inspection.paths to the complete unique unordered set of every manifest path. Each finding location is one path:line or path:start-end inclusive span. findings and evidence must both be present, and evidence must be non-empty.
 
 Honesty. If you could not inspect the candidate, say so in evidence and do not return a clean result: an access failure is not a completed inspection, and reporting one as clean is the single outcome this review cannot recover from.`,
 		title, focus, reviewLensContextPatch, paths, reviewLensContextContextHeader,
