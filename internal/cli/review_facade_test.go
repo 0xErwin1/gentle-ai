@@ -1622,7 +1622,11 @@ func TestReviewerSchemaRequiresRuntimeMandatoryFindingEvidence(t *testing.T) {
 
 func TestReviewSchemasRequireConcreteEvidenceStrings(t *testing.T) {
 	for _, kind := range []string{"reviewer", "refuter", "validator"} {
-		if !bytes.Contains(reviewInputSchemas[kind], []byte(`"pattern":"\\S"`)) {
+		var compact bytes.Buffer
+		if err := json.Compact(&compact, reviewInputSchemas[kind]); err != nil {
+			t.Fatalf("compact %s schema: %v", kind, err)
+		}
+		if !bytes.Contains(compact.Bytes(), []byte(`"pattern":"\\S"`)) {
 			t.Fatalf("%s schema lacks concrete-evidence pattern", kind)
 		}
 	}
