@@ -161,8 +161,10 @@ Two harness defects found by pointing it at itself are worth knowing about, beca
 
 ## 10. Known open
 
-- **SDD `verify` still blocks with reviews off.** The archive gate honors the switch; `applyPreVerifyReviewRouting` blocks verify one phase earlier with `next: "review"`, and `review start` refuses. Unblocking it decides whether verify may run with no review at all.
-- **The `sdd-archive` assets still require `reviewGate.result: allow`** in prose, so the agent-facing contract blocks where the native projection now allows.
 - **`review status` and `--next-transition` do not carry escalation numbers.** `finalize` and the gates do.
 - **Reviewer-result authoring is discover-by-iteration strict.** `finding.lens` must be the unprefixed name; supplying the selector's own output string is rejected.
 - **`max` reasoning effort does not exist.** The Codex effort type accepts `low`, `medium`, `high`, `xhigh`. Codex itself validates nothing, so an unknown value would be silently ignored rather than rejected.
+
+### Resolved disabled-mode SDD behavior
+
+The disabled-mode SDD limitations previously listed here were resolved in `v2.3.0` and remain resolved in `v2.4.0-rc.1` and `main`. When review is disabled, SDD status skips review authority, omits `reviewGate`, and pre-verify does not route to review. Archive proceeds under ordinary policy when `reviewGate` is absent; `reviewGate.result: allow` is required only for a present gate representing discovered review activity. Native lifecycle delivery gates remain separate and report `disabled/unmanaged` when review is disabled.
