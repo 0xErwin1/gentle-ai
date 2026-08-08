@@ -2720,6 +2720,33 @@ func TestSnapshotCandidateLocationSupportsStructuredCausality(t *testing.T) {
 			}
 		})
 	}
+	// A non-positive line can no longer be expressed as a location string, so
+	// these rows enter at the level the causality comparisons consume. They pin
+	// the defense-in-depth lower bound against the real snapshot: without it a
+	// negative EndLine satisfies the behavior-activated `EndLine <= lines` test
+	// for every tracked file, fabricating causality on a line that cannot exist.
+	for _, tt := range []struct {
+		name      string
+		finding   findingLocation
+		causality CausalDisposition
+		want      bool
+	}{
+		{"activated wrapped min int", findingLocation{Path: "tracked.txt", StartLine: math.MinInt64, EndLine: math.MinInt64}, CausalBehaviorActivated, false},
+		{"activated negative range", findingLocation{Path: "tracked.txt", StartLine: -5, EndLine: -1}, CausalBehaviorActivated, false},
+		{"activated negative end", findingLocation{Path: "tracked.txt", StartLine: 1, EndLine: -1}, CausalBehaviorActivated, false},
+		{"activated zero", findingLocation{Path: "tracked.txt", StartLine: 0, EndLine: 0}, CausalBehaviorActivated, false},
+		{"introduced negative range", findingLocation{Path: "tracked.txt", StartLine: -5, EndLine: -1}, CausalIntroduced, false},
+		{"worsened negative range", findingLocation{Path: "tracked.txt", StartLine: -5, EndLine: -1}, CausalWorsened, false},
+		{"activated positive range still causal", findingLocation{Path: "tracked.txt", StartLine: 1, EndLine: 5}, CausalBehaviorActivated, true},
+		{"introduced positive line still causal", findingLocation{Path: "tracked.txt", StartLine: 2, EndLine: 2}, CausalIntroduced, true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := (SnapshotBuilder{Repo: repo}).candidateFindingSupportsCausality(context.Background(), snapshot, tt.finding, tt.causality)
+			if err != nil || got != tt.want {
+				t.Fatalf("candidateFindingSupportsCausality(%#v, %q) = %t, %v; want %t", tt.finding, tt.causality, got, err, tt.want)
+			}
+		})
+	}
 }
 
 // TestParseFindingLocationLineRejectsPositiveIntOverflowBand pins the boundary
