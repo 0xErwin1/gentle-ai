@@ -1068,23 +1068,25 @@ func (state *CompactState) CompleteReview(input CompactReviewInput) error {
 }
 
 func findingLocationInGenesis(location string, genesisPaths []string) bool {
-	logicalPath, _, err := parseFindingLocation(location)
-	return err == nil && stringIndex(genesisPaths, logicalPath) >= 0
+	finding, err := parseFindingLocation(location)
+	return err == nil && stringIndex(genesisPaths, finding.Path) >= 0
 }
 
 // ErrInvalidFindingLocation identifies reviewer locations that cannot be used
 // as repository line evidence.
-var ErrInvalidFindingLocation = errors.New("invalid reviewer finding location; correct it to repository/path:<positive-line> before running gentle-ai review capture-result again")
+var ErrInvalidFindingLocation = errors.New("invalid reviewer finding location; correct it to repository/path:<positive-line> or repository/path:<positive-start>-<positive-end> before running gentle-ai review capture-result again")
 
 // FindingLocationErrorReason is a stable machine-readable validation reason.
 type FindingLocationErrorReason string
 
 const (
-	FindingLocationExpectedPathAndLine FindingLocationErrorReason = "expected_path_and_line"
-	FindingLocationLineNotInteger      FindingLocationErrorReason = "line_suffix_not_integer"
-	FindingLocationLineNotPositive     FindingLocationErrorReason = "line_must_be_positive"
-	FindingLocationPathNotRelative     FindingLocationErrorReason = "path_must_be_repository_relative"
-	FindingLocationPathNotCanonical    FindingLocationErrorReason = "path_must_be_canonical"
+	FindingLocationExpectedPathAndLine  FindingLocationErrorReason = "expected_path_and_line"
+	FindingLocationLineNotInteger       FindingLocationErrorReason = "line_suffix_not_integer"
+	FindingLocationLineNotPositive      FindingLocationErrorReason = "line_must_be_positive"
+	FindingLocationLineOverflowsInteger FindingLocationErrorReason = "line_overflows_integer"
+	FindingLocationRangeNotAscending    FindingLocationErrorReason = "range_must_be_ascending"
+	FindingLocationPathNotRelative      FindingLocationErrorReason = "path_must_be_repository_relative"
+	FindingLocationPathNotCanonical     FindingLocationErrorReason = "path_must_be_canonical"
 )
 
 // FindingLocationError describes why a reviewer location is invalid.
@@ -1099,41 +1101,74 @@ func (err *FindingLocationError) Error() string {
 
 func (err *FindingLocationError) Unwrap() error { return ErrInvalidFindingLocation }
 
-func parseFindingLocation(location string) (string, int, error) {
+type findingLocation struct {
+	Path      string
+	StartLine int
+	EndLine   int
+}
+
+func parseFindingLocation(location string) (findingLocation, error) {
+	fail := func(reason FindingLocationErrorReason) (findingLocation, error) {
+		return findingLocation{}, &FindingLocationError{Location: location, Reason: reason}
+	}
 	separator := strings.LastIndexByte(location, ':')
 	if separator <= 0 || separator == len(location)-1 {
-		return "", 0, &FindingLocationError{Location: location, Reason: FindingLocationExpectedPathAndLine}
+		return fail(FindingLocationExpectedPathAndLine)
 	}
 	lineSuffix := location[separator+1:]
-	line, err := strconv.Atoi(lineSuffix)
-	if err != nil {
-		return "", 0, &FindingLocationError{Location: location, Reason: FindingLocationLineNotInteger}
+	if strings.HasPrefix(lineSuffix, "-") && strings.Count(lineSuffix, "-") == 1 {
+		return fail(FindingLocationLineNotPositive)
 	}
-	for index := range lineSuffix {
-		if lineSuffix[index] < '0' || lineSuffix[index] > '9' {
-			reason := FindingLocationLineNotInteger
-			if line <= 0 {
-				reason = FindingLocationLineNotPositive
-			}
-			return "", 0, &FindingLocationError{Location: location, Reason: reason}
+	startText, endText, ranged := strings.Cut(lineSuffix, "-")
+	if strings.Count(lineSuffix, "-") > 1 {
+		return fail(FindingLocationLineNotInteger)
+	}
+	start, reason := parseFindingLocationLine(startText)
+	if reason != "" {
+		return fail(reason)
+	}
+	end := start
+	if ranged {
+		end, reason = parseFindingLocationLine(endText)
+		if reason != "" {
+			return fail(reason)
 		}
-	}
-	if line <= 0 {
-		return "", 0, &FindingLocationError{Location: location, Reason: FindingLocationLineNotPositive}
+		if start > end {
+			return fail(FindingLocationRangeNotAscending)
+		}
 	}
 	logicalPath := location[:separator]
 	if len(logicalPath) >= 3 && logicalPath[1] == ':' && logicalPath[2] == '/' &&
 		((logicalPath[0] >= 'A' && logicalPath[0] <= 'Z') || (logicalPath[0] >= 'a' && logicalPath[0] <= 'z')) {
-		return "", 0, &FindingLocationError{Location: location, Reason: FindingLocationPathNotRelative}
+		return fail(FindingLocationPathNotRelative)
 	}
 	if _, pathErr := normalizeLogicalPath(strings.ReplaceAll(logicalPath, ":", "/")); pathErr != nil {
-		return "", 0, &FindingLocationError{Location: location, Reason: FindingLocationPathNotCanonical}
+		return fail(FindingLocationPathNotCanonical)
 	}
 	canonical, pathErr := normalizeLogicalPath(logicalPath)
 	if pathErr != nil || canonical != logicalPath {
-		return "", 0, &FindingLocationError{Location: location, Reason: FindingLocationPathNotCanonical}
+		return fail(FindingLocationPathNotCanonical)
 	}
-	return canonical, line, nil
+	return findingLocation{Path: canonical, StartLine: start, EndLine: end}, nil
+}
+
+func parseFindingLocationLine(value string) (int, FindingLocationErrorReason) {
+	if value == "" {
+		return 0, FindingLocationLineNotInteger
+	}
+	for index := range value {
+		if value[index] < '0' || value[index] > '9' {
+			return 0, FindingLocationLineNotInteger
+		}
+	}
+	line, err := strconv.ParseUint(value, 10, strconv.IntSize)
+	if err != nil {
+		return 0, FindingLocationLineOverflowsInteger
+	}
+	if line == 0 {
+		return 0, FindingLocationLineNotPositive
+	}
+	return int(line), ""
 }
 
 func (state *CompactState) Invalidate(reason string) error {

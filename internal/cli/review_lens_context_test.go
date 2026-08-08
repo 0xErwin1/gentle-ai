@@ -563,7 +563,7 @@ func TestReviewLensContextStandsAloneAsTheReviewerInstruction(t *testing.T) {
 			}
 			// The reviewer must know the evidence in the block is the whole
 			// candidate, and that reading anything else is not permitted.
-			for _, required := range []string{"complete and only", "working tree", "subject_hash"} {
+			for _, required := range []string{"complete and only", "working tree", "subject_hash", "complete unique unordered set", "path:line or path:start-end"} {
 				if !strings.Contains(instruction, required) {
 					t.Fatalf("instruction omits %q:\n%s", required, instruction)
 				}
