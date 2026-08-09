@@ -177,6 +177,30 @@ func TestCompactAcquireForeignTokenStaysBlockedWithoutMutation(t *testing.T) {
 	}
 }
 
+func TestCompactAcquireReplayRejectsForeignToken(t *testing.T) {
+	repo := initRuntimeLedgerRepo(t)
+	store := mustRuntimeStore(t, repo, "foreign-replay-token")
+	request := BeginAttemptRequest{
+		RequestID: "foreign-replay-begin", WorkUnit: "foreign replay unit",
+		EvidenceGoal: "refuse a foreign token for a replayed request", MaxAttempts: 2, MaxChangedLines: 20,
+	}
+	started, err := store.Begin(context.Background(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	beforeRecords := countRuntimeRecords(t, store.Dir)
+	result, err := store.Acquire(context.Background(), CompactAcquireRequest{
+		BeginAttemptRequest: request, Token: runtimeTestHash('f'),
+	})
+	if err != nil || result.State != CompactStateBlocked || result.Reason != CompactBlockInvalidContinuation {
+		t.Fatalf("foreign replay token = %#v, err=%v", result, err)
+	}
+	status, statusErr := store.Status()
+	if statusErr != nil || status.Revision != started.Revision || countRuntimeRecords(t, store.Dir) != beforeRecords {
+		t.Fatalf("foreign replay token mutated authority: status=%#v err=%v records=%d", status, statusErr, countRuntimeRecords(t, store.Dir))
+	}
+}
+
 func TestCompactSettlePreservesAtomicRemediationAndReplay(t *testing.T) {
 	legacyFixture := newRuntimeUnchangedBindingFixture(t, "compact-legacy-evidence")
 	write(t, filepath.Join(legacyFixture.store.Repo, "openspec", "changes", "compact-legacy-evidence", "tasks.md"), "- [x] 1.1 Done\n# candidate-changing remediation\n")

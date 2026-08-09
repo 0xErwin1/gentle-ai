@@ -157,7 +157,7 @@ func TestRuntimeLegacyEmptyPopulationStillReplays(t *testing.T) {
 	}
 	record := runtimeRecord{
 		Schema: runtimeRecordSchema, Change: store.Change, Operation: runtimeOperationBegin,
-		RequestID: request.RequestID, RequestDigest: runtimeValueHash("gentle-ai.sdd-runtime-begin-request/v1", request),
+		RequestID: request.RequestID, RequestDigest: "sha256:4295a33871e78b342640fedd251dd1f2db9471c53cad6153ba43d7e4caa7ad70",
 		Begin: &runtimeBeginEvent{
 			ObjectiveID: legacyRuntimeObjectiveID(store.Change, request.EvidenceGoal), WorkUnit: request.WorkUnit,
 			EvidenceGoal: request.EvidenceGoal, MaxAttempts: request.MaxAttempts, MaxChangedLines: request.MaxChangedLines,
@@ -180,5 +180,36 @@ func TestRuntimeLegacyEmptyPopulationStillReplays(t *testing.T) {
 	status, err := store.Status()
 	if err != nil || status.ActiveAttempt == nil || len(status.ActiveAttempt.IntendedUntracked) != 0 {
 		t.Fatalf("legacy empty selected population did not replay: status=%#v err=%v", status, err)
+	}
+	beforeRecords := countRuntimeRecords(t, store.Dir)
+	synced := false
+	originalSync := runtimeSyncDirectory
+	runtimeSyncDirectory = func(path string) error {
+		if path == store.Dir {
+			synced = true
+		}
+		return originalSync(path)
+	}
+	t.Cleanup(func() { runtimeSyncDirectory = originalSync })
+	retry := CompactAcquireRequest{BeginAttemptRequest: BeginAttemptRequest{
+		RequestID: request.RequestID, WorkUnit: request.WorkUnit, EvidenceGoal: request.EvidenceGoal,
+		MaxAttempts: request.MaxAttempts, MaxChangedLines: request.MaxChangedLines,
+	}, Token: revision}
+	result, err := store.Acquire(context.Background(), retry)
+	status, statusErr := store.Status()
+	if err != nil || statusErr != nil || !synced || result.State != CompactStateProceed || result.Token != revision || status.Revision != revision || status.ActiveAttempt == nil || countRuntimeRecords(t, store.Dir) != beforeRecords {
+		t.Fatalf("legacy tokenized replay = %#v, status=%#v err=%v/%v records=%d", result, status, err, statusErr, countRuntimeRecords(t, store.Dir))
+	}
+	foreign := retry
+	foreign.Token = runtimeTestHash('f')
+	divergent := retry
+	divergent.IntendedUntracked = []string{"other.txt"}
+	empty := retry
+	empty.IntendedUntracked = []string{}
+	for _, rejected := range []CompactAcquireRequest{foreign, divergent, empty} {
+		result, err := store.Acquire(context.Background(), rejected)
+		if err != nil || result.State != CompactStateBlocked || result.Reason != CompactBlockInvalidContinuation || countRuntimeRecords(t, store.Dir) != beforeRecords {
+			t.Fatalf("legacy rejected continuation = %#v, err=%v records=%d", result, err, countRuntimeRecords(t, store.Dir))
+		}
 	}
 }

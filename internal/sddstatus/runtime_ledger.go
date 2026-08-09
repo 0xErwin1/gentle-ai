@@ -341,12 +341,12 @@ type BeginAttemptRequest struct {
 // legacyBeginAttemptRequest preserves replay of records written before
 // intended_untracked became candidate provenance.
 type legacyBeginAttemptRequest struct {
-	ExpectedRevision string
-	RequestID        string
-	WorkUnit         string
-	EvidenceGoal     string
-	MaxAttempts      int
-	MaxChangedLines  int
+	ExpectedRevision string `json:"expected_revision"`
+	RequestID        string `json:"request_id"`
+	WorkUnit         string `json:"work_unit"`
+	EvidenceGoal     string `json:"evidence_goal"`
+	MaxAttempts      int    `json:"max_attempts"`
+	MaxChangedLines  int    `json:"max_changed_lines"`
 }
 
 type FinishAttemptRequest struct {
@@ -715,11 +715,19 @@ func runtimeObjectiveHasRecordedAttempt(status RuntimeStatus) bool {
 }
 
 func (store RuntimeStore) Begin(ctx context.Context, request BeginAttemptRequest) (RuntimeStatus, error) {
+	legacyRequest := request.IntendedUntracked == nil
 	request, err := normalizeBeginAttemptRequest(request)
 	if err != nil {
 		return RuntimeStatus{}, err
 	}
 	digest := runtimeValueHash("gentle-ai.sdd-runtime-begin-request/v1", request)
+	legacyDigest := ""
+	if legacyRequest {
+		legacyDigest = runtimeValueHash("gentle-ai.sdd-runtime-begin-request/v1", legacyBeginAttemptRequest{
+			ExpectedRevision: request.ExpectedRevision, RequestID: request.RequestID, WorkUnit: request.WorkUnit,
+			EvidenceGoal: request.EvidenceGoal, MaxAttempts: request.MaxAttempts, MaxChangedLines: request.MaxChangedLines,
+		})
+	}
 	return store.mutate(ctx, request.ExpectedRevision, request.RequestID, digest, func(replay runtimeReplay) (runtimeRecord, error) {
 		status := replay.Status
 		if status.ActiveAttempt != nil {
@@ -815,7 +823,7 @@ func (store RuntimeStore) Begin(ctx context.Context, request BeginAttemptRequest
 			}}, nil
 		}
 		return runtimeRecord{Operation: runtimeOperationBegin, Begin: event}, nil
-	})
+	}, legacyDigest)
 }
 
 func (store RuntimeStore) Finish(ctx context.Context, request FinishAttemptRequest) (RuntimeStatus, error) {
@@ -1616,6 +1624,7 @@ func (store RuntimeStore) mutate(
 	ctx context.Context,
 	expected, requestID, requestDigest string,
 	build func(runtimeReplay) (runtimeRecord, error),
+	legacyRequestDigest ...string,
 ) (RuntimeStatus, error) {
 	if err := ctx.Err(); err != nil {
 		return RuntimeStatus{}, err
@@ -1637,7 +1646,8 @@ func (store RuntimeStore) mutate(
 		return RuntimeStatus{}, err
 	}
 	if receipt, ok := replay.Requests[requestID]; ok {
-		if receipt.Digest != requestDigest {
+		if receipt.Digest != requestDigest &&
+			(len(legacyRequestDigest) != 1 || receipt.Digest != legacyRequestDigest[0]) {
 			return RuntimeStatus{}, ErrRuntimeRequestConflict
 		}
 		if err := store.syncReplay(); err != nil {
@@ -2215,7 +2225,7 @@ func validateRuntimeBeginEvent(record runtimeRecord) error {
 		EvidenceGoal: event.EvidenceGoal, MaxAttempts: event.MaxAttempts, MaxChangedLines: event.MaxChangedLines,
 	}
 	if runtimeValueHash("gentle-ai.sdd-runtime-begin-request/v1", request) != record.RequestDigest &&
-		runtimeValueHash("gentle-ai.sdd-runtime-begin-request/v1", legacy) != record.RequestDigest {
+		(event.IntendedUntracked != nil || runtimeValueHash("gentle-ai.sdd-runtime-begin-request/v1", legacy) != record.RequestDigest) {
 		return errors.New("SDD runtime begin request digest does not match record")
 	}
 	return nil
