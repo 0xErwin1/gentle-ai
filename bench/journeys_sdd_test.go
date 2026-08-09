@@ -12,6 +12,8 @@ var portableSDDFailClosedAuthorityJourneyIDs = []string{
 	"j55-sdd-mismatched-authority-receipt-fails-closed",
 	"j56-sdd-non-allow-post-apply-gate-fails-closed",
 	"j58-sdd-foreign-openspec-path-fails-closed",
+	"j80-rescope-authorized-evidence-only-retry",
+	"j81-rc1-consecutive-rescope-repair-executes-printed-command",
 }
 
 func portableSDDFailClosedAuthorityJourneySet(found bool) map[string]bool {
@@ -39,10 +41,12 @@ func TestPortableSDDFailClosedAuthorityJourneysAreRegistered(t *testing.T) {
 	// j78-lens-finding-id-prefix-discovery (#1844), j79-consecutive-rescope-
 	// refuses-before-publication (#2830), and j80-rescope-authorized-evidence-
 	// only-retry (#2621).
+	// j81's RC-created repair fixture (#2839) follows the independently-owned
+	// #2621 journey.
 	// Bump this deliberately when a journey is added, and name it here: the
 	// count exists so a journey cannot appear or vanish unnoticed.
-	if got := len(seen); got != 81 {
-		t.Errorf("core journey count = %d, want 81", got)
+	if got := len(seen); got != 82 {
+		t.Errorf("core journey count = %d, want 82", got)
 	}
 	for id, found := range want {
 		if !found {

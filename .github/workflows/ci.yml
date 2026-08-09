@@ -79,6 +79,7 @@ jobs:
             completed_once("j55-sdd-mismatched-authority-receipt-fails-closed") and
             completed_once("j56-sdd-non-allow-post-apply-gate-fails-closed") and
             completed_once("j58-sdd-foreign-openspec-path-fails-closed") and
+			completed_once("j81-rc1-consecutive-rescope-repair-executes-printed-command") and
             completed_once("j75-intended-untracked-selection-executes-printed-start")
           ' "$RUNNER_TEMP/bench-portable.json"
           # Transition axis (#2829): sequences of ordinary operations, which is
