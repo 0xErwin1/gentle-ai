@@ -1007,6 +1007,10 @@ func proveCompactPrePushMonotonicSubset(ctx context.Context, repo string, state 
 		proof.Reason = "outgoing paths are outside immutable receipt scope"
 		return proof, nil
 	}
+	if snapshot.CandidateTree != finalTree {
+		proof.Reason = "derived pre-push candidate does not match the approved final candidate"
+		return proof, nil
+	}
 	output, err := runGit(ctx, repo, nil, nil, "rev-parse", "HEAD^{tree}")
 	if err != nil {
 		return proof, fmt.Errorf("resolve pre-push HEAD tree: %w", err)
@@ -1048,18 +1052,15 @@ func proveCompactPrePushMonotonicSubset(ctx context.Context, repo string, state 
 }
 
 func compactUniqueCommitForTree(ctx context.Context, repo, tree, head string) (string, bool, error) {
-	output, err := runGit(ctx, repo, nil, nil, "rev-list", "--topo-order", head)
+	output, err := runGit(ctx, repo, nil, nil, "rev-list", "--topo-order", "--no-commit-header", "--format=%H%x00%T", head)
 	if err != nil {
 		return "", false, fmt.Errorf("enumerate reviewed-base ancestry: %w", err)
 	}
 	matches := []string{}
-	for _, commit := range strings.Fields(string(output)) {
-		candidate, candidateErr := runGit(ctx, repo, nil, nil, "rev-parse", commit+"^{tree}")
-		if candidateErr != nil {
-			return "", false, fmt.Errorf("resolve reviewed-base ancestry tree: %w", candidateErr)
-		}
-		if strings.TrimSpace(string(candidate)) == tree {
-			matches = append(matches, commit)
+	for _, pair := range strings.Split(strings.TrimSpace(string(output)), "\n") {
+		parts := strings.SplitN(pair, "\x00", 2)
+		if len(parts) == 2 && parts[1] == tree {
+			matches = append(matches, parts[0])
 		}
 	}
 	if len(matches) != 1 {
@@ -1097,6 +1098,10 @@ func validateCompactMonotonicHistory(ctx context.Context, repo, base, head strin
 	if len(commits) == 0 {
 		return "reviewed base has no newly reachable publication commits", nil
 	}
+	approved := make(map[string]bool, len(genesis))
+	for _, path := range genesis {
+		approved[path] = true
+	}
 	known := map[string]bool{base: true}
 	for _, commit := range commits {
 		known[commit] = true
@@ -1117,7 +1122,7 @@ func validateCompactMonotonicHistory(ctx context.Context, repo, base, head strin
 		}
 		parents := strings.Fields(string(parentsOutput))
 		if len(parents) < 2 || parents[0] != commit {
-			return "publication commit has invalid parent topology", nil
+			return "publication commit has a missing parent (shallow or grafted repository topology)", nil
 		}
 		for _, parent := range parents[1:] {
 			if !known[parent] {
@@ -1131,7 +1136,7 @@ func validateCompactMonotonicHistory(ctx context.Context, repo, base, head strin
 				}
 				entries[parent] = parentEntries
 			}
-			if reason := validateCompactMonotonicEdge(baseEntries, finalEntries, genesis, parentEntries, current); reason != "" {
+			if reason := validateCompactMonotonicEdge(baseEntries, finalEntries, approved, parentEntries, current); reason != "" {
 				return reason, nil
 			}
 		}
@@ -1148,7 +1153,7 @@ func listCompactContentTreeEntries(ctx context.Context, repo, tree string) (map[
 }
 
 func validateCompactEndpointEntries(base, final, current map[string][]byte) string {
-	for path := range current {
+	for _, path := range compactTreeEntryPaths(current) {
 		if _, baseOK := base[path]; !baseOK {
 			if _, finalOK := final[path]; !finalOK {
 				return fmt.Sprintf("publication path %q is outside immutable receipt scope", path)
@@ -1163,11 +1168,7 @@ func validateCompactEndpointEntries(base, final, current map[string][]byte) stri
 	return ""
 }
 
-func validateCompactMonotonicEdge(base, final map[string][]byte, genesis []string, parent, current map[string][]byte) string {
-	approved := make(map[string]bool, len(genesis))
-	for _, path := range genesis {
-		approved[path] = true
-	}
+func validateCompactMonotonicEdge(base, final map[string][]byte, approved map[string]bool, parent, current map[string][]byte) string {
 	for _, path := range compactTreeEntryPaths(base, final, parent, current) {
 		if bytes.Equal(parent[path], current[path]) {
 			continue
