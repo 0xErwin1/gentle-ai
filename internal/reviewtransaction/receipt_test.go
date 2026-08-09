@@ -218,11 +218,11 @@ func TestParseGateContextRestrictsBaseAdvanceStatusPerGate(t *testing.T) {
 			}
 		})
 	}
-	boundary := `,"pre_pr_boundary":{"source":"explicit","selector":"origin/main","commit":"` + base + `","merge_base":"MERGE"}}`
-	for _, mergeBase := range []string{"", "not-a-tree"} {
-		payload := baseContext(GatePrePR) + strings.Replace(boundary, "MERGE", mergeBase, 1)
+	boundaries := []string{`,"pre_pr_boundary":{"source":"explicit","selector":"origin/main","commit":"` + base + `","merge_base":""}}`, `,"pre_pr_boundary":{"source":"explicit","selector":"origin/main","commit":"` + base + `","merge_base":"not-a-tree"}}`, `,"pre_pr_boundary":{"source":"explicit","selector":"origin/main","commit":"","merge_base":"not-a-tree"},"denial":{"stage":"boundary-selection","code":"unavailable"}}`}
+	for _, boundary := range boundaries {
+		payload := baseContext(GatePrePR) + boundary
 		if _, err := ParseGateContext([]byte(payload)); err == nil {
-			t.Fatalf("ParseGateContext accepted available pre-PR boundary merge_base %q", mergeBase)
+			t.Fatalf("ParseGateContext accepted invalid pre-PR boundary %s", boundary)
 		}
 	}
 }

@@ -363,7 +363,7 @@ func ParseGateContext(payload []byte) (GateContext, error) {
 	if context.PrePRBoundary != nil {
 		boundary := context.PrePRBoundary
 		unavailable := boundary.Commit == "" && context.Denial != nil && context.Denial.Stage == "boundary-selection" && context.Denial.Code == "unavailable"
-		if context.Gate != GatePrePR || ((!validGitTree(boundary.Commit) || !validGitTree(boundary.MergeBase)) && !unavailable) || strings.TrimSpace(boundary.Selector) == "" ||
+		if context.Gate != GatePrePR || (unavailable && boundary.MergeBase != "") || ((!validGitTree(boundary.Commit) || !validGitTree(boundary.MergeBase)) && !unavailable) || strings.TrimSpace(boundary.Selector) == "" ||
 			(boundary.Source != PrePRBoundaryExplicit && boundary.Source != PrePRBoundaryPublicationDefault) {
 			return GateContext{}, errors.New("gate context contains invalid pre-PR boundary evidence")
 		}
