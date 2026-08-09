@@ -3,9 +3,21 @@
   "public_tag": "v2.4.0-rc.1",
   "commit": "3d1e673553c9afb0bf91a710121f415d6a7e4ed1",
   "generator_commands": [
-    "git checkout 3d1e673553c9afb0bf91a710121f415d6a7e4ed1",
-    "go build -trimpath -o gentle-ai ./cmd/gentle-ai",
-    "gentle-ai sdd-attempt begin; finish --outcome failed; rescope; rescope"
+    "test ! -e /tmp/opencode/2839-repro",
+    "mkdir -p /tmp/opencode/2839-repro",
+    "git clone --no-checkout . /tmp/opencode/2839-repro/source",
+    "git -C /tmp/opencode/2839-repro/source checkout 3d1e673553c9afb0bf91a710121f415d6a7e4ed1",
+    "go -C /tmp/opencode/2839-repro/source build -trimpath -o /tmp/opencode/2839-repro/gentle-ai ./cmd/gentle-ai",
+    "mkdir /tmp/opencode/2839-repro/repo",
+    "git -C /tmp/opencode/2839-repro/repo init -b main -q",
+    "git -C /tmp/opencode/2839-repro/repo config user.name Fixture",
+    "git -C /tmp/opencode/2839-repro/repo config user.email fixture@example.invalid",
+    "git -C /tmp/opencode/2839-repro/repo config commit.gpgsign false",
+    "git -C /tmp/opencode/2839-repro/repo commit --allow-empty -qm \"fixture baseline\"",
+    "(cd /tmp/opencode/2839-repro && ./gentle-ai sdd-attempt begin --cwd /tmp/opencode/2839-repro/repo --change consecutive-rescope-repair --expected-revision= --request-id begin-a --work-unit objective-a --evidence-goal prove-a --max-attempts 2 --max-changed-lines 20)",
+    "(cd /tmp/opencode/2839-repro && ./gentle-ai sdd-attempt finish --cwd /tmp/opencode/2839-repro/repo --change consecutive-rescope-repair --expected-revision \"$(./gentle-ai sdd-attempt status --cwd /tmp/opencode/2839-repro/repo --change consecutive-rescope-repair | jq -r '.revision')\" --request-id finish-a-failed --outcome failed --evidence-revision sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa --diagnosis \"intentional failed zero-drift attempt\" --harness-disposition reused --cleanup-evidence clean --process-evidence reproduced)",
+    "(cd /tmp/opencode/2839-repro && ./gentle-ai sdd-attempt rescope --cwd /tmp/opencode/2839-repro/repo --change consecutive-rescope-repair --expected-revision \"$(./gentle-ai sdd-attempt status --cwd /tmp/opencode/2839-repro/repo --change consecutive-rescope-repair | jq -r '.revision')\" --request-id rescope-a-b --work-unit objective-b --evidence-goal prove-b --max-attempts 1 --max-changed-lines 10 --reason \"narrow A to B\" --actor fixture-maintainer)",
+    "(cd /tmp/opencode/2839-repro && ./gentle-ai sdd-attempt rescope --cwd /tmp/opencode/2839-repro/repo --change consecutive-rescope-repair --expected-revision \"$(./gentle-ai sdd-attempt status --cwd /tmp/opencode/2839-repro/repo --change consecutive-rescope-repair | jq -r '.revision')\" --request-id rescope-b-c --work-unit objective-c --evidence-goal prove-c --max-attempts 1 --max-changed-lines 5 --reason \"narrow B to C\" --actor fixture-maintainer)"
   ],
   "operation_shape": [
     "attempt/begin objective A",
