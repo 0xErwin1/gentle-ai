@@ -243,10 +243,10 @@ func advanceReviewedSupersetAdvertisedMain(sandbox *Sandbox) error {
 	if err := sandbox.git(sibling, "checkout", "-q", "-B", "main", "origin/main"); err != nil {
 		return err
 	}
-	if err := sandbox.git(sibling, "config", "user.email", "bench@example.test"); err != nil {
+	if err := sandbox.git(sibling, "config", "user.email", "bench@example.invalid"); err != nil {
 		return err
 	}
-	if err := sandbox.git(sibling, "config", "user.name", "Benchmark Fixture"); err != nil {
+	if err := sandbox.git(sibling, "config", "user.name", "Bench"); err != nil {
 		return err
 	}
 	if err := sandbox.write(filepath.Join(sibling, reviewedSupersetBaseAdvancePath), "# Disjoint base advance\n"); err != nil {
@@ -277,10 +277,17 @@ func advanceReviewedSupersetAdvertisedMain(sandbox *Sandbox) error {
 func requireReviewedSupersetPrePRAllow(sandbox *Sandbox, observation Observation) error {
 	var gate waveGateResult
 	if err := json.Unmarshal([]byte(strings.TrimSpace(observation.Stdout)), &gate); err != nil {
+		if observation.ExitCode != 0 {
+			return fmt.Errorf("moving-base pre-PR exited %d: %s", observation.ExitCode, firstLine(observation.Stderr))
+		}
 		return fmt.Errorf("parse moving-base pre-PR result: %w (stderr: %s)", err, firstLine(observation.Stderr))
 	}
 	if !gate.Allowed || gate.Result != "allow" || gate.Context.LineageID != sandbox.Lineage {
-		return fmt.Errorf("moving advertised base pre-PR rejected: exit=%d result=%q allowed=%t gate=%+v", observation.ExitCode, gate.Result, gate.Allowed, gate)
+		stage, code := "", ""
+		if gate.Context.Denial != nil {
+			stage, code = gate.Context.Denial.Stage, gate.Context.Denial.Code
+		}
+		return fmt.Errorf("moving advertised base pre-PR rejected: exit=%d result=%q allowed=%t denial_stage=%q denial_code=%q gate=%+v", observation.ExitCode, gate.Result, gate.Allowed, stage, code, gate)
 	}
 	return nil
 }
@@ -292,8 +299,9 @@ func executeReviewedSupersetMovingBaseTransition(run *journeyRun) error {
 	if err != nil {
 		return err
 	}
-	if envelope.NextTransition.Kind != "execute" || envelope.NextTransition.Execute.Operation != "review.validate" {
-		return fmt.Errorf("moving-base pre-PR transition = %+v, want review.validate execute", envelope.NextTransition)
+	if envelope.NextTransition.Kind != "execute" || envelope.NextTransition.Execute.Operation != "review.validate" ||
+		envelope.executeArgument("gate") != "pre-pr" || envelope.executeArgument("base-ref") != "origin/main" {
+		return fmt.Errorf("moving-base pre-PR transition = %+v, want review.validate --gate pre-pr --base-ref origin/main", envelope.NextTransition)
 	}
 	observation, err := runPrintedTransition(run, envelope)
 	if err != nil {
