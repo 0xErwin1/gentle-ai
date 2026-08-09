@@ -18,7 +18,7 @@ func TestRuntimeLedgerRepairsPublishedConsecutiveRescope(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	b, err := store.Rescope(context.Background(), RescopeObjectiveRequest{ExpectedRevision: failed.Revision, RequestID: "rescope-a-b", WorkUnit: "objective-b", EvidenceGoal: "prove B", MaxAttempts: 2, MaxChangedLines: 10, Reason: "narrow A to B", Actor: "maintainer"})
+	b, err := store.Rescope(context.Background(), RescopeObjectiveRequest{ExpectedRevision: failed.Revision, RequestID: "rescope-a-b", WorkUnit: "objective-b", EvidenceGoal: "prove B", MaxAttempts: 1, MaxChangedLines: 10, Reason: "narrow A to B", Actor: "maintainer"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -48,10 +48,14 @@ func TestRuntimeLedgerRepairsPublishedConsecutiveRescope(t *testing.T) {
 	if err != nil || string(after) != string(before) {
 		t.Fatalf("poisoned record changed: err=%v", err)
 	}
-	if repaired.Objective == nil || repaired.Objective.ID != b.Objective.ID || repaired.LastRepair == nil || repaired.LastRepair.ReplacedRevision != poisonRevision || repaired.LastReset != nil || repaired.NextAction != RuntimeActionBegin || repaired.CumulativeAttempts != 1 {
+	if repaired.Objective == nil || repaired.Objective.ID != b.Objective.ID || repaired.LastRepair == nil || repaired.LastRepair.ReplacedRevision != poisonRevision || repaired.LastReset != nil || !repaired.DecisionRequired || repaired.NextAction != RuntimeActionReset || repaired.CumulativeAttempts != 1 {
 		t.Fatalf("repaired status = %#v", repaired)
 	}
-	if _, err := store.Begin(context.Background(), BeginAttemptRequest{ExpectedRevision: repaired.Revision, RequestID: "begin-b", WorkUnit: "objective-b", EvidenceGoal: "prove B", MaxAttempts: 2, MaxChangedLines: 10}); err != nil {
+	reset, err := store.Reset(context.Background(), ResetObjectiveRequest{ExpectedRevision: repaired.Revision, RequestID: "reset-b", Reason: "reset repaired exhausted objective", Actor: "maintainer"})
+	if err != nil || reset.LastReset == nil || reset.DecisionRequired || reset.NextAction != RuntimeActionBegin {
+		t.Fatalf("reset repaired objective = %#v, err=%v", reset, err)
+	}
+	if _, err := store.Begin(context.Background(), BeginAttemptRequest{ExpectedRevision: reset.Revision, RequestID: "begin-b", WorkUnit: "objective-b", EvidenceGoal: "prove B", MaxAttempts: 1, MaxChangedLines: 10}); err != nil {
 		t.Fatalf("begin after repair: %v", err)
 	}
 }

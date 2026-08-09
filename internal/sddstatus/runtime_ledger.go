@@ -1542,6 +1542,9 @@ func (store RuntimeStore) RepairConsecutiveRescope(ctx context.Context, request 
 				record, recordErr := store.loadRecord(receipt.Revision)
 				if recordErr == nil && record.Operation == runtimeOperationRepairConsecutiveRescope &&
 					record.Repair.ReplacedRevision == request.ExpectedRevision {
+					if err := store.syncReplay(); err != nil {
+						return RuntimeStatus{}, &RuntimePublicationError{Revision: receipt.Revision, Committed: true, Cause: err}
+					}
 					return replay.Status, nil
 				}
 			}
@@ -2179,6 +2182,11 @@ func applyRuntimeConsecutiveRescopeRepairEvent(store RuntimeStore, replay *runti
 	replay.Status.LastRepair = &RuntimeRepair{
 		Revision: revision, ReplacedRevision: event.ReplacedRevision, RestoredRevision: event.RestoredRevision,
 		Reason: event.Reason, Actor: event.Actor,
+	}
+	if replay.Status.CumulativeAttempts >= replay.Status.Objective.MaxAttempts ||
+		replay.Status.CumulativeChangedLines >= replay.Status.Objective.MaxChangedLines {
+		replay.Status.DecisionRequired = true
+		replay.Status.NextAction = RuntimeActionReset
 	}
 	return nil
 }
