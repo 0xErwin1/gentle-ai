@@ -8,8 +8,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 )
 
@@ -34,8 +36,25 @@ type rc1ConsecutiveRescopeManifest struct {
 	Records           map[string]string `json:"records"`
 }
 
+var rc1ConsecutiveRescopeGeneratorCommands = []string{
+	"git checkout 3d1e673553c9afb0bf91a710121f415d6a7e4ed1",
+	"go build -trimpath -o gentle-ai ./cmd/gentle-ai",
+	"gentle-ai sdd-attempt begin; finish --outcome failed; rescope; rescope",
+}
+
+var rc1ConsecutiveRescopeOperationShape = []string{
+	"attempt/begin objective A",
+	"attempt/finish failed zero-drift objective A",
+	"objective/rescope A to B",
+	"objective/rescope B to C",
+}
+
 func rc1ConsecutiveRescopeRecords() (map[string]string, error) {
-	payload, err := consecutiveRescopeRC1.ReadFile("testdata/consecutive-rescope-rc1/provenance.json")
+	return rc1ConsecutiveRescopeRecordsFrom(consecutiveRescopeRC1)
+}
+
+func rc1ConsecutiveRescopeRecordsFrom(fixture fs.FS) (map[string]string, error) {
+	payload, err := fs.ReadFile(fixture, "testdata/consecutive-rescope-rc1/provenance.json")
 	if err != nil {
 		return nil, err
 	}
@@ -43,11 +62,17 @@ func rc1ConsecutiveRescopeRecords() (map[string]string, error) {
 	if err := json.Unmarshal(payload, &manifest); err != nil {
 		return nil, fmt.Errorf("parse RC fixture provenance: %w", err)
 	}
-	if manifest.Schema != "gentle-ai.sdd-runtime-fixture-provenance/v1" || manifest.PublicTag != "v2.4.0-rc.1" || manifest.Commit != "3d1e673553c9afb0bf91a710121f415d6a7e4ed1" || len(manifest.GeneratorCommands) != 3 || len(manifest.OperationShape) != 4 || len(manifest.Records) != 4 {
+	if manifest.Schema != "gentle-ai.sdd-runtime-fixture-provenance/v1" || manifest.PublicTag != "v2.4.0-rc.1" || manifest.Commit != "3d1e673553c9afb0bf91a710121f415d6a7e4ed1" || len(manifest.Records) != 4 {
 		return nil, errors.New("invalid bounded RC fixture provenance")
 	}
+	if !slices.Equal(manifest.OperationShape, rc1ConsecutiveRescopeOperationShape) {
+		return nil, errors.New("RC fixture provenance refuses a different ordered operation sequence")
+	}
+	if !slices.Equal(manifest.GeneratorCommands, rc1ConsecutiveRescopeGeneratorCommands) {
+		return nil, errors.New("RC fixture provenance refuses different generator commands")
+	}
 	for name, expected := range manifest.Records {
-		payload, err := consecutiveRescopeRC1.ReadFile("testdata/consecutive-rescope-rc1/records/" + name)
+		payload, err := fs.ReadFile(fixture, "testdata/consecutive-rescope-rc1/records/"+name)
 		if err != nil {
 			return nil, err
 		}
