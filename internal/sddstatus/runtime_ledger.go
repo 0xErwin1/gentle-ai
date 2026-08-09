@@ -3208,10 +3208,15 @@ func (err *runtimeConsecutiveRescopeRepairRequiredError) Error() string {
 func (store RuntimeStore) consecutiveRescopeRepairContinuation(revision string) string {
 	requestID := "repair-" + strings.TrimPrefix(revision, "sha256:")[:16]
 	reason := "repair historical consecutive-rescope publication " + revision
-	return fmt.Sprintf(
-		"gentle-ai sdd-attempt repair --cwd %s --change %q --expected-revision %s --request-id %q --actor %q --reason %q",
-		pathquote.Quote(store.Workspace), store.Change, revision, requestID, "sdd-runtime-repair", reason,
-	)
+	return strings.Join([]string{
+		"gentle-ai", "sdd-attempt", "repair",
+		"--cwd", pathquote.ShellWord(store.Workspace),
+		"--change", pathquote.ShellWord(store.Change),
+		"--expected-revision", pathquote.ShellWord(revision),
+		"--request-id", pathquote.ShellWord(requestID),
+		"--actor", pathquote.ShellWord("sdd-runtime-repair"),
+		"--reason", pathquote.ShellWord(reason),
+	}, " ")
 }
 
 var runtimeRepairBeforePublishHook = func() {}
