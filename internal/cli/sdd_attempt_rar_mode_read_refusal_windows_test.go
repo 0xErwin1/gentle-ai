@@ -33,7 +33,7 @@ func TestRunSDDAttemptSettleRepairsUnsafeDisabledRARModeWithoutRecursing(t *test
 	if err := os.WriteFile(child, []byte("private child\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	childBefore := windowsACL(t, child)
+	childBefore := windowsACLEffectivePermissions(t, child)
 	unsafeParentSetup := "$p = " + quotePowerShellLiteral(privateRARDir) + "; $acl = [System.IO.Directory]::GetAccessControl($p); $acl.SetAccessRuleProtection($false, $true); [System.IO.Directory]::SetAccessControl($p, $acl)"
 	windowsRunPowerShell(t, unsafeParentSetup)
 
@@ -64,7 +64,7 @@ func TestRunSDDAttemptSettleRepairsUnsafeDisabledRARModeWithoutRecursing(t *test
 	if err != nil || status.Enabled() {
 		t.Fatalf("printed repair did not restore the real RAR predicate: status=%#v error=%v", status, err)
 	}
-	if childAfter := windowsACL(t, child); childAfter != childBefore {
+	if childAfter := windowsACLEffectivePermissions(t, child); childAfter != childBefore {
 		t.Fatalf("printed repair recursively changed child ACL\nbefore=%q\nafter=%q", childBefore, childAfter)
 	}
 	completed, _ := runCompactSDDAttempt(t, settleArgs)
@@ -90,11 +90,13 @@ func windowsRunPowerShell(t *testing.T, script string) {
 	}
 }
 
-func windowsACL(t *testing.T, path string) string {
+func windowsACLEffectivePermissions(t *testing.T, path string) string {
 	t.Helper()
 	output, err := exec.Command("icacls.exe", path).CombinedOutput()
 	if err != nil {
 		t.Fatalf("read ACL for %q: %v\n%s", path, err, output)
 	}
-	return strings.TrimSpace(string(output))
+	// Repairing the parent can recompute whether an unchanged child ACE is
+	// inherited. Compare principals and rights, not that provenance marker.
+	return strings.ReplaceAll(strings.TrimSpace(string(output)), "(I)", "")
 }
