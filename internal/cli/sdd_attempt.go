@@ -9,6 +9,7 @@ import (
 	"io"
 	"strings"
 
+	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/sddstatus"
 )
 
@@ -59,6 +60,11 @@ func runSDDAttempt(ctx context.Context, args []string, stdout io.Writer) error {
 	actor := registerSDDAttemptStringFlag(flags, operation, "actor")
 	var roots sddAttemptRootList
 	registerSDDAttemptRootFlag(flags, operation, &roots)
+	var intendedUntracked reviewRepeatedPathFlag
+	registerSDDAttemptIntendedUntrackedFlag(flags, operation, &intendedUntracked)
+	var untrackedScope, expectedUntrackedInventory reviewSingleValueFlag
+	registerSDDAttemptUntrackedScopeFlag(flags, operation, "untracked-scope", &untrackedScope)
+	registerSDDAttemptUntrackedScopeFlag(flags, operation, "expected-untracked-inventory", &expectedUntrackedInventory)
 	changeInstance := registerSDDAttemptStringFlag(flags, operation, "change-instance")
 	if err := flags.Parse(args[1:]); err != nil {
 		return err
@@ -101,6 +107,18 @@ func runSDDAttempt(ctx context.Context, args []string, stdout io.Writer) error {
 	if missing := missingSDDAttemptOperationFlags(args[1:], operation); len(missing) != 0 {
 		return missingSDDAttemptOperationError(operation, missing)
 	}
+	var intended []string
+	declaredUntracked := reviewIntendedUntrackedDeclared(untrackedScope, intendedUntracked, expectedUntrackedInventory)
+	if operation == "begin" || operation == "acquire" && (*token == "" || declaredUntracked) {
+		scope, scopeErr := intendedUntrackedScopeForTarget(ctx, reviewtransaction.SnapshotBuilder{Repo: *cwd}, untrackedScope, intendedUntracked, expectedUntrackedInventory, "gentle-ai sdd-attempt "+operation, "gentle-ai sdd-attempt "+operation)
+		if scopeErr != nil {
+			return scopeErr
+		}
+		if scope.NeedsSelection {
+			return intendedUntrackedSelectionRequired(scope, "gentle-ai sdd-attempt "+operation)
+		}
+		intended = scope.Intended
+	}
 	var result any
 	switch operation {
 	case "status":
@@ -117,7 +135,7 @@ func runSDDAttempt(ctx context.Context, args []string, stdout io.Writer) error {
 	case "begin":
 		result, err = store.Begin(ctx, sddstatus.BeginAttemptRequest{
 			ExpectedRevision: *expected, RequestID: *requestID, WorkUnit: *workUnit, EvidenceGoal: *evidenceGoal,
-			MaxAttempts: *maxAttempts, MaxChangedLines: *maxChangedLines,
+			MaxAttempts: *maxAttempts, MaxChangedLines: *maxChangedLines, IntendedUntracked: intended,
 		})
 	case "finish":
 		remediationFlags := presentSDDAttemptFlags(args[1:], "expected-binding-revision", "successor-lineage", "remediates-evidence-revision")
@@ -152,7 +170,7 @@ func runSDDAttempt(ctx context.Context, args []string, stdout io.Writer) error {
 		result, err = store.Acquire(ctx, sddstatus.CompactAcquireRequest{
 			BeginAttemptRequest: sddstatus.BeginAttemptRequest{
 				RequestID: *requestID, WorkUnit: *workUnit, EvidenceGoal: *evidenceGoal,
-				MaxAttempts: *maxAttempts, MaxChangedLines: *maxChangedLines,
+				MaxAttempts: *maxAttempts, MaxChangedLines: *maxChangedLines, IntendedUntracked: intended,
 			},
 			Token:                      *token,
 			RemediatesEvidenceRevision: *remediatesEvidenceRevision,
@@ -234,6 +252,9 @@ var sddAttemptOperationDefinitions = []sddAttemptOperationContract{
 		{name: "evidence-goal", required: true, usage: "required; single-line objective, at most 240 bytes"},
 		{name: "max-attempts", kind: sddAttemptIntFlag, usage: "optional; default 2, limit 1..100"},
 		{name: "max-changed-lines", kind: sddAttemptIntFlag, usage: "optional; default 200, limit 1..1000000"},
+		{name: "untracked-scope", usage: "required when eligible untracked files exist; select or exclude"},
+		{name: "expected-untracked-inventory", usage: "required with untracked-scope; inventory digest"},
+		{name: "intended-untracked", kind: sddAttemptRepeatableStringFlag, usage: "repeatable selected repo-relative untracked path"},
 	}},
 	{name: "finish", purpose: "Complete the active runtime attempt", flags: []sddAttemptFlagDefinition{
 		sddAttemptCWDFlag, sddAttemptChangeFlag,
@@ -282,6 +303,9 @@ var sddAttemptOperationDefinitions = []sddAttemptOperationContract{
 		{name: "max-attempts", kind: sddAttemptIntFlag, usage: "optional; default 2, limit 1..100"},
 		{name: "max-changed-lines", kind: sddAttemptIntFlag, usage: "optional; default 200, limit 1..1000000"},
 		{name: "remediates-evidence-revision", usage: "optional; sha256:<64 lowercase hex> failed evidence for unmanaged remediation"},
+		{name: "untracked-scope", usage: "required when eligible untracked files exist; select or exclude"},
+		{name: "expected-untracked-inventory", usage: "required with untracked-scope; inventory digest"},
+		{name: "intended-untracked", kind: sddAttemptRepeatableStringFlag, usage: "repeatable selected repo-relative untracked path"},
 	}},
 	{name: "settle", purpose: "Complete the attempt selected by its token", flags: []sddAttemptFlagDefinition{
 		sddAttemptCWDFlag, sddAttemptChangeFlag,
@@ -496,6 +520,18 @@ func registerSDDAttemptIntFlag(flags *flag.FlagSet, operation, name string) *int
 func registerSDDAttemptRootFlag(flags *flag.FlagSet, operation string, roots *sddAttemptRootList) {
 	if definition, ok := sddAttemptOperationFlag(operation, "root"); ok {
 		flags.Var(roots, definition.name, definition.usage)
+	}
+}
+
+func registerSDDAttemptIntendedUntrackedFlag(flags *flag.FlagSet, operation string, paths *reviewRepeatedPathFlag) {
+	if definition, ok := sddAttemptOperationFlag(operation, "intended-untracked"); ok {
+		flags.Var(paths, definition.name, definition.usage)
+	}
+}
+
+func registerSDDAttemptUntrackedScopeFlag(flags *flag.FlagSet, operation, name string, value *reviewSingleValueFlag) {
+	if definition, ok := sddAttemptOperationFlag(operation, name); ok {
+		flags.Var(value, definition.name, definition.usage)
 	}
 }
 

@@ -45,6 +45,10 @@ func reviewIntendedUntrackedDeclared(mode reviewSingleValueFlag, selected review
 }
 
 func reviewIntendedUntrackedScopeForTarget(ctx context.Context, builder reviewtransaction.SnapshotBuilder, mode reviewSingleValueFlag, selected reviewRepeatedPathFlag, expectedDigest reviewSingleValueFlag) (reviewIntendedUntrackedScope, error) {
+	return intendedUntrackedScopeForTarget(ctx, builder, mode, selected, expectedDigest, "gentle-ai review status --next-transition", "gentle-ai review start")
+}
+
+func intendedUntrackedScopeForTarget(ctx context.Context, builder reviewtransaction.SnapshotBuilder, mode reviewSingleValueFlag, selected reviewRepeatedPathFlag, expectedDigest reviewSingleValueFlag, inventoryCommand, selectionCommand string) (reviewIntendedUntrackedScope, error) {
 	inventory, digest, err := builder.IntendedUntrackedInventory(ctx)
 	if err != nil {
 		return reviewIntendedUntrackedScope{}, err
@@ -58,19 +62,19 @@ func reviewIntendedUntrackedScopeForTarget(ctx context.Context, builder reviewtr
 		return scope, nil
 	}
 	if !mode.set || !expectedDigest.set {
-		return reviewIntendedUntrackedScope{}, errors.New("untracked selection requires --untracked-scope and --expected-untracked-inventory; rerun `gentle-ai review status --next-transition`")
+		return reviewIntendedUntrackedScope{}, fmt.Errorf("untracked selection requires --untracked-scope and --expected-untracked-inventory; run `gentle-ai review status --next-transition` to obtain the canonical inventory, then rerun `gentle-ai %s`", strings.TrimPrefix(inventoryCommand, "gentle-ai "))
 	}
 	switch mode.value {
 	case "exclude":
 		if len(selected) != 0 {
-			return reviewIntendedUntrackedScope{}, errors.New("--untracked-scope=exclude does not accept --intended-untracked; rerun `gentle-ai review start --untracked-scope=select`")
+			return reviewIntendedUntrackedScope{}, fmt.Errorf("--untracked-scope=exclude does not accept --intended-untracked; run `gentle-ai review status --next-transition` to refresh the canonical inventory, then rerun `gentle-ai %s --untracked-scope=select`", strings.TrimPrefix(selectionCommand, "gentle-ai "))
 		}
 	case "select":
 		if len(selected) == 0 {
-			return reviewIntendedUntrackedScope{}, errors.New("--untracked-scope=select requires at least one --intended-untracked; rerun `gentle-ai review start --untracked-scope=exclude`")
+			return reviewIntendedUntrackedScope{}, fmt.Errorf("--untracked-scope=select requires at least one --intended-untracked; run `gentle-ai review status --next-transition` to refresh the canonical inventory, then rerun `gentle-ai %s --untracked-scope=exclude`", strings.TrimPrefix(selectionCommand, "gentle-ai "))
 		}
 	default:
-		return reviewIntendedUntrackedScope{}, fmt.Errorf("--untracked-scope must be exclude or select, got %q; rerun `gentle-ai review status --next-transition`", mode.value)
+		return reviewIntendedUntrackedScope{}, fmt.Errorf("--untracked-scope must be exclude or select, got %q; run `gentle-ai review status --next-transition` to obtain the canonical inventory, then rerun `gentle-ai %s`", mode.value, strings.TrimPrefix(inventoryCommand, "gentle-ai "))
 	}
 	intended, err := builder.ValidateIntendedUntrackedSelection(ctx, expectedDigest.value, selected)
 	if err != nil {
@@ -81,7 +85,11 @@ func reviewIntendedUntrackedScopeForTarget(ctx context.Context, builder reviewtr
 }
 
 func reviewIntendedUntrackedSelectionRequired(scope reviewIntendedUntrackedScope) error {
-	return fmt.Errorf("untracked files require an explicit declaration; run `gentle-ai review status --next-transition`, then rerun with --untracked-scope=exclude --expected-untracked-inventory=%s or --untracked-scope=select --intended-untracked=<repo-relative-path> --expected-untracked-inventory=%s", scope.Digest, scope.Digest)
+	return intendedUntrackedSelectionRequired(scope, "gentle-ai review status --next-transition")
+}
+
+func intendedUntrackedSelectionRequired(scope reviewIntendedUntrackedScope, inventoryCommand string) error {
+	return fmt.Errorf("untracked files require an explicit declaration; run `gentle-ai review status --next-transition` to obtain the canonical inventory, then rerun `gentle-ai %s` with --untracked-scope=exclude --expected-untracked-inventory=%s or --untracked-scope=select --intended-untracked=<repo-relative-path> --expected-untracked-inventory=%s", strings.TrimPrefix(inventoryCommand, "gentle-ai "), scope.Digest, scope.Digest)
 }
 
 func reviewIntendedUntrackedCollection(status ReviewTargetStatusResult, scope reviewIntendedUntrackedScope) ReviewNextTransition {

@@ -13,6 +13,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 
@@ -205,12 +206,13 @@ type RuntimeObjective struct {
 }
 
 type RuntimeAttempt struct {
-	Ordinal                int    `json:"ordinal"`
-	ObjectiveID            string `json:"objective_id"`
-	ObjectiveGeneration    int    `json:"objective_generation"`
-	WorkUnit               string `json:"work_unit"`
-	BeginCandidateIdentity string `json:"begin_candidate_identity"`
-	BeginCandidateTree     string `json:"begin_candidate_tree"`
+	Ordinal                int      `json:"ordinal"`
+	ObjectiveID            string   `json:"objective_id"`
+	ObjectiveGeneration    int      `json:"objective_generation"`
+	WorkUnit               string   `json:"work_unit"`
+	BeginCandidateIdentity string   `json:"begin_candidate_identity"`
+	BeginCandidateTree     string   `json:"begin_candidate_tree"`
+	IntendedUntracked      []string `json:"intended_untracked,omitempty"`
 	// BeginWorktree is the canonical (absolute, symlink-evaluated) --cwd Begin
 	// ran under (#2296 part 1). It is empty for every chain recorded before
 	// this field existed — that emptiness IS the legacy signal, so replay and
@@ -327,12 +329,24 @@ type RuntimeStatus struct {
 }
 
 type BeginAttemptRequest struct {
-	ExpectedRevision string `json:"expected_revision"`
-	RequestID        string `json:"request_id"`
-	WorkUnit         string `json:"work_unit"`
-	EvidenceGoal     string `json:"evidence_goal"`
-	MaxAttempts      int    `json:"max_attempts"`
-	MaxChangedLines  int    `json:"max_changed_lines"`
+	ExpectedRevision  string   `json:"expected_revision"`
+	RequestID         string   `json:"request_id"`
+	WorkUnit          string   `json:"work_unit"`
+	EvidenceGoal      string   `json:"evidence_goal"`
+	MaxAttempts       int      `json:"max_attempts"`
+	MaxChangedLines   int      `json:"max_changed_lines"`
+	IntendedUntracked []string `json:"intended_untracked"`
+}
+
+// legacyBeginAttemptRequest preserves replay of records written before
+// intended_untracked became candidate provenance.
+type legacyBeginAttemptRequest struct {
+	ExpectedRevision string
+	RequestID        string
+	WorkUnit         string
+	EvidenceGoal     string
+	MaxAttempts      int
+	MaxChangedLines  int
 }
 
 type FinishAttemptRequest struct {
@@ -520,15 +534,16 @@ type runtimeAdvanceEvent struct {
 }
 
 type runtimeBeginEvent struct {
-	ObjectiveID            string `json:"objective_id"`
-	ObjectiveGeneration    int    `json:"objective_generation,omitempty"`
-	WorkUnit               string `json:"work_unit"`
-	EvidenceGoal           string `json:"evidence_goal"`
-	MaxAttempts            int    `json:"max_attempts"`
-	MaxChangedLines        int    `json:"max_changed_lines"`
-	Ordinal                int    `json:"ordinal"`
-	BeginCandidateIdentity string `json:"begin_candidate_identity"`
-	BeginCandidateTree     string `json:"begin_candidate_tree"`
+	ObjectiveID            string   `json:"objective_id"`
+	ObjectiveGeneration    int      `json:"objective_generation,omitempty"`
+	WorkUnit               string   `json:"work_unit"`
+	EvidenceGoal           string   `json:"evidence_goal"`
+	MaxAttempts            int      `json:"max_attempts"`
+	MaxChangedLines        int      `json:"max_changed_lines"`
+	Ordinal                int      `json:"ordinal"`
+	BeginCandidateIdentity string   `json:"begin_candidate_identity"`
+	BeginCandidateTree     string   `json:"begin_candidate_tree"`
+	IntendedUntracked      []string `json:"intended_untracked"`
 	// BeginWorktree records store.Workspace at Begin time (#2296 part 1): the
 	// resolved, symlink-evaluated absolute path of the exact --cwd this begin
 	// ran under. omitempty is load-bearing — every record predating this field
@@ -743,8 +758,11 @@ func (store RuntimeStore) Begin(ctx context.Context, request BeginAttemptRequest
 			if last.Outcome == AttemptRunning || last.FinishCandidateIdentity == "" || last.FinishCandidateTree == "" {
 				return runtimeRecord{}, errors.New("SDD runtime objective has invalid terminal candidate provenance")
 			}
-			snapshot, err = captureRuntimeTerminalCandidate(ctx, store, last.BeginCandidateTree)
+			snapshot, err = captureRuntimeTerminalCandidate(ctx, store, last.BeginCandidateTree, last.IntendedUntracked)
 			if err == nil && (snapshot.Identity != last.FinishCandidateIdentity || snapshot.CandidateTree != last.FinishCandidateTree) {
+				return runtimeRecord{}, store.runtimeObjectiveChangeRefusal(ctx, status)
+			}
+			if err == nil && !slices.Equal(request.IntendedUntracked, last.IntendedUntracked) {
 				return runtimeRecord{}, store.runtimeObjectiveChangeRefusal(ctx, status)
 			}
 		case status.Objective != nil && !advancing:
@@ -764,12 +782,12 @@ func (store RuntimeStore) Begin(ctx context.Context, request BeginAttemptRequest
 				request.MaxChangedLines != status.Objective.MaxChangedLines {
 				return runtimeRecord{}, store.runtimeObjectiveChangeRefusal(ctx, status)
 			}
-			snapshot, err = captureRuntimeCandidate(ctx, store.Repo)
+			snapshot, err = captureRuntimeCandidate(ctx, store.Repo, request.IntendedUntracked)
 			if err == nil && (snapshot.Identity != status.Objective.InitialCandidateIdentity || snapshot.CandidateTree != status.Objective.InitialCandidateTree) {
 				return runtimeRecord{}, store.runtimeObjectiveChangeRefusal(ctx, status)
 			}
 		default:
-			snapshot, err = captureRuntimeCandidate(ctx, store.Repo)
+			snapshot, err = captureRuntimeCandidate(ctx, store.Repo, request.IntendedUntracked)
 		}
 		if err != nil {
 			return runtimeRecord{}, fmt.Errorf("capture SDD runtime candidate before launch: %w", err)
@@ -787,7 +805,8 @@ func (store RuntimeStore) Begin(ctx context.Context, request BeginAttemptRequest
 			ObjectiveID: objectiveID, ObjectiveGeneration: generation, WorkUnit: request.WorkUnit, EvidenceGoal: request.EvidenceGoal,
 			MaxAttempts: request.MaxAttempts, MaxChangedLines: request.MaxChangedLines,
 			Ordinal: status.NextOrdinal, BeginCandidateIdentity: snapshot.Identity, BeginCandidateTree: snapshot.CandidateTree,
-			BeginWorktree: store.Workspace, EffectiveWorktree: store.Workspace,
+			IntendedUntracked: slices.Clone(snapshot.IntendedUntracked),
+			BeginWorktree:     store.Workspace, EffectiveWorktree: store.Workspace,
 		}
 		if advancing {
 			return runtimeRecord{Operation: runtimeOperationAdvance, Begin: event, Advance: &runtimeAdvanceEvent{
@@ -865,7 +884,7 @@ func (store RuntimeStore) Finish(ctx context.Context, request FinishAttemptReque
 		// review disagree about what the candidate even is.
 		snapshot, err := (reviewtransaction.SnapshotBuilder{Repo: store.Repo}).Build(ctx, reviewtransaction.Target{
 			Kind: reviewtransaction.TargetBaseWorkspaceOverlay, BaseRef: active.BeginCandidateTree,
-			Projection: reviewtransaction.ProjectionWorkspace, IntendedUntracked: []string{},
+			Projection: reviewtransaction.ProjectionWorkspace, IntendedUntracked: active.IntendedUntracked,
 		})
 		if err != nil {
 			return runtimeRecord{}, fmt.Errorf("capture SDD runtime candidate after attempt: %w", err)
@@ -986,7 +1005,7 @@ func (store RuntimeStore) Handoff(ctx context.Context, request HandoffAttemptReq
 		if err != nil {
 			return runtimeRecord{}, err
 		}
-		snapshot, err := captureRuntimeHandoffCandidate(ctx, request.DestinationWorktree, active.BeginCandidateTree)
+		snapshot, err := captureRuntimeHandoffCandidate(ctx, request.DestinationWorktree, active.BeginCandidateTree, active.IntendedUntracked)
 		if err != nil {
 			return runtimeRecord{}, fmt.Errorf("capture delegated SDD runtime candidate before handoff: %w", err)
 		}
@@ -1245,7 +1264,7 @@ func (store RuntimeStore) runtimeObjectiveResetAdmissible(ctx context.Context, s
 		return true
 	}
 	last := status.Attempts[len(status.Attempts)-1]
-	candidate, err := captureRuntimeTerminalCandidate(ctx, store, last.BeginCandidateTree)
+	candidate, err := captureRuntimeTerminalCandidate(ctx, store, last.BeginCandidateTree, last.IntendedUntracked)
 	if err != nil {
 		return false
 	}
@@ -1265,7 +1284,7 @@ func (store RuntimeStore) runtimeObjectiveRescopeAdmissible(ctx context.Context,
 		return false
 	}
 	last := status.Attempts[len(status.Attempts)-1]
-	candidate, err := captureRuntimeTerminalCandidate(ctx, store, last.BeginCandidateTree)
+	candidate, err := captureRuntimeTerminalCandidate(ctx, store, last.BeginCandidateTree, last.IntendedUntracked)
 	if err != nil {
 		return false
 	}
@@ -1346,6 +1365,7 @@ func (store RuntimeStore) Reset(ctx context.Context, request ResetObjectiveReque
 		if !runtimeResetStructurallyPermitted(status) {
 			return runtimeRecord{}, ErrRuntimeResetNotAllowed
 		}
+		last := status.Attempts[len(status.Attempts)-1]
 		if !status.DecisionRequired && !status.Complete {
 			// The only remaining structurally-permitted scope is a terminal
 			// failed/interrupted attempt with budget still available: begin
@@ -1353,8 +1373,7 @@ func (store RuntimeStore) Reset(ctx context.Context, request ResetObjectiveReque
 			// begin is actually blocked by candidate drift. Otherwise an
 			// elective early reset would launder the per-objective budget
 			// (CumulativeAttempts resets to zero on every reset).
-			last := status.Attempts[len(status.Attempts)-1]
-			candidate, driftErr := captureRuntimeTerminalCandidate(ctx, store, last.BeginCandidateTree)
+			candidate, driftErr := captureRuntimeTerminalCandidate(ctx, store, last.BeginCandidateTree, last.IntendedUntracked)
 			if driftErr != nil {
 				return runtimeRecord{}, fmt.Errorf("capture SDD runtime candidate to check reset drift eligibility: %w", driftErr)
 			}
@@ -1362,7 +1381,7 @@ func (store RuntimeStore) Reset(ctx context.Context, request ResetObjectiveReque
 				return runtimeRecord{}, store.runtimeZeroDriftResetRefusal(status)
 			}
 		}
-		snapshot, err := captureRuntimeCandidate(ctx, store.Repo)
+		snapshot, err := captureRuntimeCandidate(ctx, store.Repo, last.IntendedUntracked)
 		if err != nil {
 			return runtimeRecord{}, fmt.Errorf("capture SDD runtime candidate at objective reset: %w", err)
 		}
@@ -1427,7 +1446,7 @@ func (store RuntimeStore) Rescope(ctx context.Context, request RescopeObjectiveR
 			return runtimeRecord{}, ErrRuntimeRescopeNotAllowed
 		}
 		last := status.Attempts[len(status.Attempts)-1]
-		drift, driftErr := captureRuntimeTerminalCandidate(ctx, store, last.BeginCandidateTree)
+		drift, driftErr := captureRuntimeTerminalCandidate(ctx, store, last.BeginCandidateTree, last.IntendedUntracked)
 		if driftErr != nil {
 			return runtimeRecord{}, fmt.Errorf("capture SDD runtime candidate to check rescope drift eligibility: %w", driftErr)
 		}
@@ -1459,7 +1478,7 @@ func (store RuntimeStore) Rescope(ctx context.Context, request RescopeObjectiveR
 		// on it exactly because there is zero drift -- so this second capture
 		// is provably the same underlying content the drift check just
 		// verified, not a fresh unguarded read.
-		fresh, err := captureRuntimeCandidate(ctx, store.Repo)
+		fresh, err := captureRuntimeCandidate(ctx, store.Repo, last.IntendedUntracked)
 		if err != nil {
 			return runtimeRecord{}, fmt.Errorf("capture SDD runtime candidate at objective rescope: %w", err)
 		}
@@ -1912,7 +1931,7 @@ func applyRuntimeBeginEvent(replay *runtimeReplay, revision string, record runti
 	attempt := RuntimeAttempt{
 		Ordinal: event.Ordinal, ObjectiveID: event.ObjectiveID, ObjectiveGeneration: generation,
 		WorkUnit: event.WorkUnit, BeginCandidateIdentity: event.BeginCandidateIdentity,
-		BeginCandidateTree: event.BeginCandidateTree, BeginWorktree: event.BeginWorktree,
+		BeginCandidateTree: event.BeginCandidateTree, IntendedUntracked: slices.Clone(runtimeIntendedUntracked([][]string{event.IntendedUntracked})), BeginWorktree: event.BeginWorktree,
 		EffectiveWorktree: event.EffectiveWorktree, Outcome: AttemptRunning,
 	}
 	replay.Status.Attempts = append(replay.Status.Attempts, attempt)
@@ -2180,11 +2199,23 @@ func validateRuntimeBeginEvent(record runtimeRecord) error {
 		(event.EffectiveWorktree != "" && (validateRuntimeText(event.EffectiveWorktree, 4096) != nil || event.EffectiveWorktree != event.BeginWorktree)) {
 		return errors.New("invalid SDD runtime begin event")
 	}
+	if event.IntendedUntracked != nil {
+		canonical, err := canonicalRuntimeIntendedUntracked(event.IntendedUntracked)
+		if err != nil || !slices.Equal(canonical, event.IntendedUntracked) {
+			return errors.New("invalid SDD runtime intended untracked provenance; restore the runtime authority from a valid backup, then run `gentle-ai sdd-attempt status` to confirm the recovered candidate")
+		}
+	}
 	request := BeginAttemptRequest{
 		ExpectedRevision: record.PreviousRevision, RequestID: record.RequestID, WorkUnit: event.WorkUnit,
 		EvidenceGoal: event.EvidenceGoal, MaxAttempts: event.MaxAttempts, MaxChangedLines: event.MaxChangedLines,
+		IntendedUntracked: event.IntendedUntracked,
 	}
-	if runtimeValueHash("gentle-ai.sdd-runtime-begin-request/v1", request) != record.RequestDigest {
+	legacy := legacyBeginAttemptRequest{
+		ExpectedRevision: record.PreviousRevision, RequestID: record.RequestID, WorkUnit: event.WorkUnit,
+		EvidenceGoal: event.EvidenceGoal, MaxAttempts: event.MaxAttempts, MaxChangedLines: event.MaxChangedLines,
+	}
+	if runtimeValueHash("gentle-ai.sdd-runtime-begin-request/v1", request) != record.RequestDigest &&
+		runtimeValueHash("gentle-ai.sdd-runtime-begin-request/v1", legacy) != record.RequestDigest {
 		return errors.New("SDD runtime begin request digest does not match record")
 	}
 	return nil
@@ -2465,7 +2496,27 @@ func normalizeBeginAttemptRequest(request BeginAttemptRequest) (BeginAttemptRequ
 	if request.MaxChangedLines < 1 || request.MaxChangedLines > maximumRuntimeChangedLines {
 		return BeginAttemptRequest{}, fmt.Errorf("max_changed_lines must be within 1..%d", maximumRuntimeChangedLines)
 	}
+	intended, err := canonicalRuntimeIntendedUntracked(request.IntendedUntracked)
+	if err != nil {
+		return BeginAttemptRequest{}, err
+	}
+	request.IntendedUntracked = intended
 	return request, nil
+}
+
+func canonicalRuntimeIntendedUntracked(paths []string) ([]string, error) {
+	canonical := slices.Clone(paths)
+	if canonical == nil {
+		return []string{}, nil
+	}
+	slices.Sort(canonical)
+	for index, path := range canonical {
+		if validateRuntimeText(path, 4096) != nil || filepath.IsAbs(path) || filepath.ToSlash(filepath.Clean(path)) != path ||
+			path == "." || path == ".." || strings.HasPrefix(path, "../") || (index > 0 && path == canonical[index-1]) {
+			return nil, errors.New("intended_untracked must be canonical unique repository-relative paths; rerun `gentle-ai sdd-attempt acquire` or `gentle-ai sdd-attempt begin` with the inventory-validated --untracked-scope and --intended-untracked flags")
+		}
+	}
+	return canonical, nil
 }
 
 // runtimeRevisionShapeObservation describes a rejected sha256:<64-lowercase-hex>
@@ -2757,11 +2808,11 @@ func validHarnessDisposition(disposition HarnessDisposition) bool {
 	return disposition == HarnessReused || disposition == HarnessInvalidated
 }
 
-func captureRuntimeCandidate(ctx context.Context, repo string) (reviewtransaction.Snapshot, error) {
+func captureRuntimeCandidate(ctx context.Context, repo string, intendedUntracked ...[]string) (reviewtransaction.Snapshot, error) {
 	builder := reviewtransaction.SnapshotBuilder{Repo: repo}
 	return builder.Build(ctx, reviewtransaction.Target{
 		Kind: reviewtransaction.TargetCurrentChanges, Projection: reviewtransaction.ProjectionWorkspace,
-		IntendedUntracked: []string{},
+		IntendedUntracked: runtimeIntendedUntracked(intendedUntracked),
 	})
 }
 
@@ -2769,20 +2820,27 @@ func captureRuntimeCandidate(ctx context.Context, repo string) (reviewtransactio
 // overlaid on the attempt's begin candidate tree, the same computation Begin
 // and Reset both use to detect whether the candidate drifted out from under
 // a terminal (no active attempt) objective scope.
-func captureRuntimeTerminalCandidate(ctx context.Context, store RuntimeStore, beginCandidateTree string) (reviewtransaction.Snapshot, error) {
+func captureRuntimeTerminalCandidate(ctx context.Context, store RuntimeStore, beginCandidateTree string, intendedUntracked ...[]string) (reviewtransaction.Snapshot, error) {
 	builder := reviewtransaction.SnapshotBuilder{Repo: store.Repo}
 	return builder.Build(ctx, reviewtransaction.Target{
 		Kind: reviewtransaction.TargetBaseWorkspaceOverlay, BaseRef: beginCandidateTree,
-		Projection: reviewtransaction.ProjectionWorkspace, IntendedUntracked: []string{},
+		Projection: reviewtransaction.ProjectionWorkspace, IntendedUntracked: runtimeIntendedUntracked(intendedUntracked),
 	})
 }
 
-func captureRuntimeHandoffCandidate(ctx context.Context, worktree, beginCandidateTree string) (reviewtransaction.Snapshot, error) {
+func captureRuntimeHandoffCandidate(ctx context.Context, worktree, beginCandidateTree string, intendedUntracked []string) (reviewtransaction.Snapshot, error) {
 	builder := reviewtransaction.SnapshotBuilder{Repo: worktree}
 	return builder.Build(ctx, reviewtransaction.Target{
 		Kind: reviewtransaction.TargetBaseWorkspaceOverlay, BaseRef: beginCandidateTree,
-		Projection: reviewtransaction.ProjectionWorkspace, IntendedUntracked: []string{},
+		Projection: reviewtransaction.ProjectionWorkspace, IntendedUntracked: intendedUntracked,
 	})
+}
+
+func runtimeIntendedUntracked(populations [][]string) []string {
+	if len(populations) == 0 || populations[0] == nil {
+		return []string{}
+	}
+	return populations[0]
 }
 
 func canonicalRuntimeHandoffPath(path string) (string, error) {
