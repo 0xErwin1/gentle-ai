@@ -564,6 +564,12 @@ func compactBlockedExitText(reason CompactBlockReason, token string) string {
 // runnable continuation a caller routes on keeps its exact bytes.
 func compactBlockedByUnreadableAuthority(cause error) CompactAttemptResult {
 	result := compactBlocked(CompactBlockCorruptAuthority, "")
+	var repair *runtimeConsecutiveRescopeRepairRequiredError
+	if errors.As(cause, &repair) {
+		result.Exit = repair.Error()
+		result.Detail = repair.Error()
+		return result
+	}
 	if cause != nil {
 		result.Detail = result.Detail + " (cause: " + cause.Error() + ")"
 	}
