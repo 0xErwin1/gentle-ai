@@ -326,28 +326,35 @@ func printedCommandArguments(command string) ([]string, error) {
 
 // splitPrintedCommandWords splits a printed command line into shell words.
 //
-// It understands exactly the quoting the product emits and nothing more:
-// POSIX single quotes, and a backslash escape for the one character single
-// quotes cannot contain (reviewTransitionShellWord renders an embedded quote
-// as '\”). Anything else -- an unterminated quote, a trailing escape -- is a
+// It understands the single and double quotes the product emits. Within double
+// quotes it applies POSIX's narrow backslash rules without evaluating any shell
+// syntax. Anything else -- an unterminated quote or a trailing escape -- is a
 // line that would not run as printed, and saying so is the point.
 func splitPrintedCommandWords(line string) ([]string, error) {
 	words := []string{}
 	var word strings.Builder
-	quoted, escaped, started := false, false, false
+	var quote rune
+	escaped, doubleQuotedEscape, started := false, false, false
 	for _, char := range line {
 		switch {
-		case quoted && char == '\'':
-			quoted = false
-		case quoted:
-			word.WriteRune(char)
 		case escaped:
+			if char != '\n' {
+				if doubleQuotedEscape && char != '$' && char != '`' && char != '"' && char != '\\' {
+					word.WriteRune('\\')
+				}
+				word.WriteRune(char)
+			}
+			escaped, doubleQuotedEscape = false, false
+		case quote != 0 && char == quote:
+			quote = 0
+		case quote == '"' && char == '\\':
+			escaped, doubleQuotedEscape, started = true, true, true
+		case quote != 0:
 			word.WriteRune(char)
-			escaped = false
 		case char == '\\':
 			escaped, started = true, true
-		case char == '\'':
-			quoted, started = true, true
+		case char == '\'' || char == '"':
+			quote, started = char, true
 		case char == ' ' || char == '\t' || char == '\n' || char == '\r':
 			if started {
 				words = append(words, word.String())
@@ -359,7 +366,7 @@ func splitPrintedCommandWords(line string) ([]string, error) {
 			started = true
 		}
 	}
-	if quoted {
+	if quote != 0 {
 		return nil, fmt.Errorf("printed a command with an unterminated quote: %q", line)
 	}
 	if escaped {
@@ -541,6 +548,7 @@ func Journeys() []Journey {
 	journeys = append(journeys, findingIDPrefixJourneys()...)
 	journeys = append(journeys, rescopeWriteGuardJourneys()...)
 	journeys = append(journeys, rescopeEvidenceOnlyRetryJourneys()...)
+	journeys = append(journeys, consecutiveRescopeRepairJourneys()...)
 	return append(journeys, handoffJourneys()...)
 }
 

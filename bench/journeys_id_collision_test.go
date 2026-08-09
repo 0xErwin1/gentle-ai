@@ -40,6 +40,7 @@ func journeySources() []journeySource {
 		{"journeys_finding_id_prefix.go", findingIDPrefixJourneys()},
 		{"journeys_rescope_write_guard.go", rescopeWriteGuardJourneys()},
 		{"journeys_rescope_evidence_retry.go", rescopeEvidenceOnlyRetryJourneys()},
+		{"journeys_consecutive_rescope_repair.go", consecutiveRescopeRepairJourneys()},
 	}
 }
 
