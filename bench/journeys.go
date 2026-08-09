@@ -539,6 +539,7 @@ func Journeys() []Journey {
 	journeys = append(journeys, intendedUntrackedJourneys()...)
 	journeys = append(journeys, captureResultDryRunJourneys()...)
 	journeys = append(journeys, findingIDPrefixJourneys()...)
+	journeys = append(journeys, rescopeWriteGuardJourneys()...)
 	return append(journeys, handoffJourneys()...)
 }
 
