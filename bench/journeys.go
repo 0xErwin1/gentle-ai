@@ -540,6 +540,7 @@ func Journeys() []Journey {
 	journeys = append(journeys, captureResultDryRunJourneys()...)
 	journeys = append(journeys, findingIDPrefixJourneys()...)
 	journeys = append(journeys, rescopeWriteGuardJourneys()...)
+	journeys = append(journeys, rescopeEvidenceOnlyRetryJourneys()...)
 	return append(journeys, handoffJourneys()...)
 }
 
