@@ -870,12 +870,15 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 		var prePR *reviewtransaction.PrePRRequest
 		prePRRepresentable := true
 		if reviewtransaction.GateKind(*gate) == reviewtransaction.GatePrePR {
-			prePRRepresentable = reviewtransaction.ValidatePrePRBoundarySelector(ctx, root, selectedBaseRef) == nil
-		}
-		if reviewtransaction.GateKind(*gate) == reviewtransaction.GatePrePR && prePRRepresentable {
+			prePRTarget := target
 			target, prePR, err = reviewtransaction.BuildPrePRTarget(ctx, root, selectedBaseRef, "", intendedScope.Intended)
 			if err != nil {
-				return fmt.Errorf("resolve negotiated pre-PR target: %w", err)
+				var resolutionErr *reviewtransaction.GateTargetResolutionError
+				if !errors.As(err, &resolutionErr) {
+					return fmt.Errorf("resolve negotiated pre-PR target: %w", err)
+				}
+				target = prePRTarget
+				prePRRepresentable = false
 			}
 		}
 		selector := &reviewTransitionSelector{
