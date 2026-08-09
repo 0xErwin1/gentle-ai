@@ -1526,6 +1526,9 @@ func compactApprovedRebasedScopeRecovery(ctx context.Context, repo string, exist
 // committed-only base-diff form before identity derivation. No other mixed
 // projection is admitted here.
 func sameApprovedRebasedRecoveryProjection(original, live Projection) bool {
+	if live == "" {
+		live = ProjectionWorkspace
+	}
 	return sameRecoveryProjection(original, live) || original == ProjectionStaged && live == ProjectionWorkspace
 }
 

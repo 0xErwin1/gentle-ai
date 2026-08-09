@@ -349,6 +349,9 @@ func TestAccountingOnlyEscalationStatusOffersRecoveryInsteadOfDeadEndStop(t *tes
 	if status.Action != TargetStatusActionRecover || status.ActionDisposition != RecoveryEscalated {
 		t.Fatalf("accounting-only escalation with an unchanged target = %#v, want an offered evidence-bound recovery continuation", status)
 	}
+	if status.Decision.RecoverySelector != nil || !status.Decision.SelectorFreeAccountingOnlyRecovery {
+		t.Fatalf("accounting-only escalation decision = %#v, want an explicitly authorized selector-free recovery", status.Decision)
+	}
 
 	successor := recoveredEvidenceSuccessor(t, repo, state, "accounting-only-status-dead-end-successor")
 	const actor, reason = "maintainer@example.com", "recover accounting-only escalation with an unchanged target"
