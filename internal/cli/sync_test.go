@@ -23,6 +23,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v2/internal/components/filemerge"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/pipeline"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/planner"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/state"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/verify"
 )
@@ -1022,7 +1023,10 @@ func TestSyncBackupTargetsIncludeManagedOpenCodePluginsWithoutSDD(t *testing.T) 
 		Components: []model.ComponentID{model.ComponentEngram},
 	}
 
-	targets := syncBackupTargets(home, "", sel, resolveAdapters(sel.Agents))
+	targets, err := syncBackupTargets(home, "", sel, resolveAdapters(sel.Agents))
+	if err != nil {
+		t.Fatalf("syncBackupTargets() error = %v", err)
+	}
 
 	for _, configDir := range []string{"opencode", "kilo"} {
 		for _, plugin := range []string{"model-variants.ts", "review-result-artifacts.ts", "skill-registry.ts"} {
@@ -1037,7 +1041,10 @@ func TestSyncBackupTargetsIncludeManagedOpenCodePluginsWithoutSDD(t *testing.T) 
 func TestSyncBackupTargetsIncludeClaudeEngramLegacyMigrationSource(t *testing.T) {
 	home := t.TempDir()
 	selection := model.Selection{Agents: []model.AgentID{model.AgentClaudeCode}, Components: []model.ComponentID{model.ComponentEngram}}
-	targets := syncBackupTargets(home, "", selection, resolveAdapters(selection.Agents))
+	targets, err := syncBackupTargets(home, "", selection, resolveAdapters(selection.Agents))
+	if err != nil {
+		t.Fatalf("syncBackupTargets() error = %v", err)
+	}
 	want := filepath.Join(home, ".claude", "mcp", "engram.json")
 	if !containsPath(targets, want) {
 		t.Fatalf("sync backup targets missing legacy migration source %q: %v", want, targets)
@@ -1121,6 +1128,76 @@ func TestRunSyncRollbackRestoresClaudeEngramMigrationSource(t *testing.T) {
 	}
 	if len(backups) != 1 {
 		t.Fatalf("persistent backup count = %d, want 1 after duplicate transaction", len(backups))
+	}
+}
+
+func TestSyncSkillBackupRollsBackOpenClawWorkspaceSkills(t *testing.T) {
+	home := t.TempDir()
+	workspace := t.TempDir()
+	currentProject := t.TempDir()
+	writeOpenClawConfigWithWorkspace(t, home, workspace)
+	t.Chdir(currentProject)
+	selection := model.Selection{
+		Agents:     []model.AgentID{model.AgentOpenClaw},
+		Components: []model.ComponentID{model.ComponentSkills},
+		Skills:     []model.SkillID{model.SkillGoTesting},
+	}
+
+	openClawGlobalSkills := filepath.Join(home, ".openclaw", "skills")
+	openClawWorkspaceSkills := filepath.Join(workspace, ".openclaw", "skills")
+	workspaceSkill := filepath.Join(openClawWorkspaceSkills, "go-testing", "SKILL.md")
+	workspaceReference := filepath.Join(openClawWorkspaceSkills, "go-testing", "references", "examples.md")
+	writeStale(t, workspaceSkill)
+	writeStale(t, workspaceReference)
+
+	runtime, err := newSyncRuntime(home, selection)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan := runtime.stagePlan()
+	plan.Apply = append(plan.Apply, failingCompatibilityStep{})
+	result := pipeline.NewOrchestrator(pipeline.DefaultRollbackPolicy()).Execute(plan)
+	if result.Err == nil {
+		t.Fatal("injected later failure did not trigger sync rollback")
+	}
+	for _, path := range []string{workspaceSkill, workspaceReference} {
+		content, readErr := os.ReadFile(path)
+		if readErr != nil || string(content) != "stale" {
+			t.Errorf("sync rollback did not restore %q: content=%q error=%v", path, content, readErr)
+		}
+	}
+	for _, path := range []string{
+		filepath.Join(openClawGlobalSkills, "go-testing", "SKILL.md"),
+		filepath.Join(openClawGlobalSkills, "go-testing", "references", "examples.md"),
+	} {
+		if _, statErr := os.Stat(path); !os.IsNotExist(statErr) {
+			t.Errorf("OpenClaw sync must not write global skill path %q: %v", path, statErr)
+		}
+	}
+}
+
+func TestSyncBackupTargetsOpenClawSkillsUseConfiguredWorkspace(t *testing.T) {
+	home := t.TempDir()
+	workspace := t.TempDir()
+	selection := model.Selection{
+		Agents:     []model.AgentID{model.AgentOpenClaw},
+		Components: []model.ComponentID{model.ComponentSkills},
+		Skills:     []model.SkillID{model.SkillGoTesting},
+	}
+
+	targets, err := syncBackupTargets(home, workspace, selection, resolveAdapters(selection.Agents))
+	if err != nil {
+		t.Fatalf("syncBackupTargets() error = %v", err)
+	}
+
+	workspaceReference := filepath.Join(workspace, ".openclaw", "skills", "go-testing", "references", "examples.md")
+	if !containsPath(targets, workspaceReference) {
+		t.Errorf("sync backup targets missing OpenClaw workspace skill path %q\ntargets = %v", workspaceReference, targets)
+	}
+
+	homeReference := filepath.Join(home, ".openclaw", "skills", "go-testing", "references", "examples.md")
+	if containsPath(targets, homeReference) {
+		t.Errorf("sync backup targets must not include OpenClaw home-root skill path %q\ntargets = %v", homeReference, targets)
 	}
 }
 
@@ -1654,7 +1731,10 @@ func TestSyncRuntimeAddsCodeGraphStepsOnlyWhenSelected(t *testing.T) {
 		t.Fatal("sync plan included Pi CodeGraph without explicit selection")
 	}
 
-	paths := syncBackupTargets(home, "", selected, resolveAdapters([]model.AgentID{model.AgentOpenCode}))
+	paths, err := syncBackupTargets(home, "", selected, resolveAdapters([]model.AgentID{model.AgentOpenCode}))
+	if err != nil {
+		t.Fatal(err)
+	}
 	for _, path := range paths {
 		if path == filepath.Join(home, ".config", "opencode", "AGENTS.md") {
 			return
@@ -1802,7 +1882,7 @@ func TestRunSyncReportsLegacySelectionMigrationPersistenceFailure(t *testing.T) 
 	t.Cleanup(func() { refreshPiCodeGraphIfConfigured = previousRefresh })
 
 	result, err := RunSyncWithSelection(home, model.Selection{Agents: []model.AgentID{model.AgentOpenCode}, Persona: model.PersonaNeutral})
-	if err == nil || !strings.Contains(err.Error(), "persist migrated community tool selection") {
+	if err == nil || !strings.Contains(err.Error(), "persist managed asset provenance") {
 		t.Fatalf("RunSyncWithSelection() error = %v, want migration persistence failure", err)
 	}
 	if !result.Selection.HasCommunityTool(model.CommunityToolCodeGraph) {
@@ -2808,8 +2888,14 @@ func TestRunSyncWithSelection_WritesExpectedFiles(t *testing.T) {
 		"orchestrator": settings.Agent["gentle-orchestrator"].Prompt,
 		"post-apply":   string(applyPayload),
 	} {
-		if !strings.Contains(content, "gentle-ai review status --cwd <repo> --contract gentle-ai.review-integration/v2 --agent claude-code --next-transition") {
-			t.Errorf("synced OpenCode %s controller does not use negotiated STATUS routing", name)
+		// The identity must be OpenCode's own: these are the exact bytes an
+		// OpenCode user installs, and telling them to declare claude-code is
+		// what let a false identity through the transport gate (issue #2440).
+		if !strings.Contains(content, "gentle-ai review status --cwd <repo> --contract gentle-ai.review-integration/v2 --agent "+string(model.AgentOpenCode)+" --next-transition") {
+			t.Errorf("synced OpenCode %s controller does not use negotiated STATUS routing under its own runtime identity", name)
+		}
+		if strings.Contains(content, "--agent "+string(model.AgentClaudeCode)) {
+			t.Errorf("synced OpenCode %s controller tells an OpenCode user to declare Claude Code's identity", name)
 		}
 		for _, stale := range []string{
 			"Call `gentle-ai review start` once.",
@@ -3706,6 +3792,62 @@ func TestSyncPersonaPathsDeclareManagedClaudeOutputStyle(t *testing.T) {
 	}
 }
 
+// TestSyncBackupTargetsCaptureBothManagedOutputStyles pins the persona-switch
+// backup fix: the pre-sync snapshot must capture BOTH managed output-style
+// files so switching personas (which removes the previously selected file) can
+// be rolled back. Verification stays on the selected file (asserted by
+// TestSyncPersonaPathsDeclareManagedClaudeOutputStyle).
+func TestSyncBackupTargetsCaptureBothManagedOutputStyles(t *testing.T) {
+	home := t.TempDir()
+	reg, _ := agents.NewDefaultRegistry()
+	a, _ := reg.Get(model.AgentClaudeCode)
+
+	gentleman := filepath.Join(home, ".claude", "output-styles", "gentleman.md")
+	neutral := filepath.Join(home, ".claude", "output-styles", "neutral.md")
+
+	for _, persona := range []model.PersonaID{model.PersonaGentleman, model.PersonaNeutral} {
+		selection := model.Selection{Persona: persona, Components: []model.ComponentID{model.ComponentPersona}}
+		targets, err := syncBackupTargets(home, "", selection, []agents.Adapter{a})
+		if err != nil {
+			t.Fatalf("syncBackupTargets(%q) error = %v", persona, err)
+		}
+
+		if !containsPath(targets, gentleman) {
+			t.Errorf("syncBackupTargets(%q) missing gentleman.md; got %v", persona, targets)
+		}
+		if !containsPath(targets, neutral) {
+			t.Errorf("syncBackupTargets(%q) missing neutral.md; got %v", persona, targets)
+		}
+	}
+}
+
+// TestBackupTargetsCaptureBothManagedOutputStyles is the install-side twin.
+func TestBackupTargetsCaptureBothManagedOutputStyles(t *testing.T) {
+	home := t.TempDir()
+
+	gentleman := filepath.Join(home, ".claude", "output-styles", "gentleman.md")
+	neutral := filepath.Join(home, ".claude", "output-styles", "neutral.md")
+
+	for _, persona := range []model.PersonaID{model.PersonaGentleman, model.PersonaNeutral} {
+		selection := model.Selection{Persona: persona, Components: []model.ComponentID{model.ComponentPersona}}
+		resolved := planner.ResolvedPlan{
+			Agents:            []model.AgentID{model.AgentClaudeCode},
+			OrderedComponents: []model.ComponentID{model.ComponentPersona},
+		}
+		targets, err := backupTargets(home, "", ScopeGlobal, selection, resolved)
+		if err != nil {
+			t.Fatalf("backupTargets(%q) error = %v", persona, err)
+		}
+
+		if !containsPath(targets, gentleman) {
+			t.Errorf("backupTargets(%q) missing gentleman.md; got %v", persona, targets)
+		}
+		if !containsPath(targets, neutral) {
+			t.Errorf("backupTargets(%q) missing neutral.md; got %v", persona, targets)
+		}
+	}
+}
+
 // TestRunSyncRegeneratesPersonaBlockBetweenMarkers verifies the core fix:
 // when an old persona block lives between markers, sync replaces it with the
 // embedded asset for the current version.
@@ -4303,6 +4445,11 @@ func TestRunSyncPreservesCompletePersistedState(t *testing.T) {
 		LastUpdateCheck: &lastUpdate,
 		PendingSync:     true,
 	}
+	writer, err := managedAssetDigest()
+	if err != nil {
+		t.Fatal(err)
+	}
+	before.ManagedAssetDigest = writer
 	if err := state.Write(home, before); err != nil {
 		t.Fatalf("state.Write: %v", err)
 	}
@@ -4590,7 +4737,10 @@ func TestSyncBackupTargetsIncludeRoutingGuidancePathsWithoutAnyComponent(t *test
 	agent := model.AgentClaudeCode
 	selection := model.Selection{Agents: []model.AgentID{agent}}
 
-	targets := syncBackupTargets(home, "", selection, resolveAdapters(selection.Agents))
+	targets, err := syncBackupTargets(home, "", selection, resolveAdapters(selection.Agents))
+	if err != nil {
+		t.Fatalf("syncBackupTargets() error = %v", err)
+	}
 
 	routing, err := agentguidance.RoutingPaths(home, agent)
 	if err != nil {
@@ -4614,7 +4764,10 @@ func TestSyncBackupTargetsContainNoDuplicatePaths(t *testing.T) {
 		SDDMode:    model.SDDModeSingle,
 	}
 
-	targets := syncBackupTargets(home, "", selection, resolveAdapters(selection.Agents))
+	targets, err := syncBackupTargets(home, "", selection, resolveAdapters(selection.Agents))
+	if err != nil {
+		t.Fatalf("syncBackupTargets() error = %v", err)
+	}
 
 	assertNoDuplicatePaths(t, "syncBackupTargets", targets)
 }
