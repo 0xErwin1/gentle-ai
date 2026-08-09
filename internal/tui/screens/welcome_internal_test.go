@@ -71,6 +71,7 @@ func TestRenderWelcome_StaysWithinViewport(t *testing.T) {
 		{name: "below compact width", width: 18, height: 20, minimum: true},
 		{name: "below frame border width", width: 2, height: 20, minimum: true, wantPrimary: "Go"},
 		{name: "tiny viewport uses atomic labels", width: 2, height: 2, minimum: true, wantPrimary: "Go", wantControl: "q"},
+		{name: "single column tiny viewport uses atomic labels", width: 1, height: 2, minimum: true, wantPrimary: ">", wantControl: "q"},
 		{
 			name:         "short viewport with optional content",
 			width:        120,
