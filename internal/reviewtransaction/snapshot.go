@@ -77,6 +77,11 @@ type SnapshotBuilder struct {
 var exactObjectPattern = regexp.MustCompile(`^[0-9a-fA-F]{40}(?:[0-9a-fA-F]{24})?$`)
 
 func (builder SnapshotBuilder) Build(ctx context.Context, target Target) (Snapshot, error) {
+	// Canonicalization makes a staged base diff committed-only. Validate the
+	// incompatible staged-only untracked form before that projection is erased.
+	if target.Kind == TargetBaseDiff && target.Projection == ProjectionStaged && len(target.IntendedUntracked) != 0 {
+		return Snapshot{}, errors.New("staged projection does not accept intended-untracked paths")
+	}
 	return builder.build(ctx, CanonicalTarget(target), false)
 }
 

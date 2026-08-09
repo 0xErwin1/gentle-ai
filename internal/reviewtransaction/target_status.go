@@ -71,36 +71,38 @@ type TargetProjectionStatus struct {
 // classification. Adapters render Selector and RecoverySelector; they do not
 // reclassify the target relationship or reconstruct recovery representability.
 type TargetStatusDecision struct {
-	CandidateRelation  TargetApplicability
-	SemanticTransition TargetStatusAction
-	TargetIdentity     string
-	Selector           Target
-	RecoverySelector   *Target
+	CandidateRelation                  TargetApplicability
+	SemanticTransition                 TargetStatusAction
+	TargetIdentity                     string
+	Selector                           Target
+	RecoverySelector                   *Target
+	SelectorFreeAccountingOnlyRecovery bool
 }
 
 type TargetStatusResult struct {
-	Applicability           TargetApplicability                `json:"applicability"`
-	AuthorityVersion        AuthorityVersion                   `json:"authority_version,omitempty"`
-	LineageID               string                             `json:"lineage_id,omitempty"`
-	State                   State                              `json:"state,omitempty"`
-	Generation              int                                `json:"generation,omitempty"`
-	Revision                string                             `json:"revision,omitempty"`
-	ReceiptIdentity         string                             `json:"receipt_identity,omitempty"`
-	Action                  TargetStatusAction                 `json:"action"`
-	ActionDisposition       RecoveryDisposition                `json:"action_disposition,omitempty"`
-	Replayability           Replayability                      `json:"replayability"`
-	OriginalChangedLines    int                                `json:"original_changed_lines,omitempty"`
-	Tier                    RiskLevel                          `json:"tier,omitempty"`
-	CorrectionBudget        int                                `json:"correction_budget,omitempty"`
-	SelectedLenses          []string                           `json:"selected_lenses,omitempty"`
-	TargetIdentity          string                             `json:"target_identity"`
-	AuthorityTargetIdentity string                             `json:"authority_target_identity,omitempty"`
-	Projection              TargetProjectionStatus             `json:"projection"`
-	CandidateLineageIDs     []string                           `json:"candidate_lineage_ids"`
-	FinalVerificationRetry  *FinalVerificationRetryEligibility `json:"final_verification_retry,omitempty"`
-	Decision                TargetStatusDecision               `json:"-"`
-	authorityTargetKind     TargetKind
-	authorityProjection     Projection
+	Applicability                      TargetApplicability                `json:"applicability"`
+	AuthorityVersion                   AuthorityVersion                   `json:"authority_version,omitempty"`
+	LineageID                          string                             `json:"lineage_id,omitempty"`
+	State                              State                              `json:"state,omitempty"`
+	Generation                         int                                `json:"generation,omitempty"`
+	Revision                           string                             `json:"revision,omitempty"`
+	ReceiptIdentity                    string                             `json:"receipt_identity,omitempty"`
+	Action                             TargetStatusAction                 `json:"action"`
+	ActionDisposition                  RecoveryDisposition                `json:"action_disposition,omitempty"`
+	Replayability                      Replayability                      `json:"replayability"`
+	OriginalChangedLines               int                                `json:"original_changed_lines,omitempty"`
+	Tier                               RiskLevel                          `json:"tier,omitempty"`
+	CorrectionBudget                   int                                `json:"correction_budget,omitempty"`
+	SelectedLenses                     []string                           `json:"selected_lenses,omitempty"`
+	TargetIdentity                     string                             `json:"target_identity"`
+	AuthorityTargetIdentity            string                             `json:"authority_target_identity,omitempty"`
+	Projection                         TargetProjectionStatus             `json:"projection"`
+	CandidateLineageIDs                []string                           `json:"candidate_lineage_ids"`
+	FinalVerificationRetry             *FinalVerificationRetryEligibility `json:"final_verification_retry,omitempty"`
+	Decision                           TargetStatusDecision               `json:"-"`
+	authorityTargetKind                TargetKind
+	authorityProjection                Projection
+	selectorFreeAccountingOnlyRecovery bool
 }
 
 type targetStatusCandidate struct {
@@ -115,6 +117,9 @@ type targetStatusCandidate struct {
 	receiptReplayable  bool
 	pendingFinalize    bool
 	correctionRecovery bool
+	// selectorFreeAccountingOnlyRecovery is carried from the eligibility
+	// predicate so projection never guesses it from snapshot identity domains.
+	selectorFreeAccountingOnlyRecovery bool
 	// recoveryDisposition names the `review recover --disposition` value the
 	// recovery rules accept for this candidate. It is only set when the
 	// recommended action is recovery; guidance never invents a disposition.
@@ -133,7 +138,6 @@ func AssessTargetStatus(ctx context.Context, repo string, request TargetStatusRe
 // status classification so callers can derive related routing artifacts from
 // the same immutable candidate tree instead of rereading a mutable worktree.
 func AssessTargetStatusWithSnapshot(ctx context.Context, repo string, request TargetStatusRequest) (TargetStatusResult, Snapshot, error) {
-	request.Target = CanonicalTarget(request.Target)
 	if request.LineageID != "" {
 		request.LineageID = strings.TrimSpace(request.LineageID)
 		if err := validateLineageID(request.LineageID); err != nil {
@@ -168,6 +172,7 @@ func AssessTargetStatusWithSnapshot(ctx context.Context, repo string, request Ta
 	result, err := assessTargetStatusSnapshot(ctx, repo, request, live)
 	if err == nil {
 		result = projectTargetStatusDecision(result)
+		result = bindTargetStatusDecisionBaseRef(result, request.Target)
 	}
 	return result, live, err
 }
@@ -295,6 +300,7 @@ func assessTargetStatusSnapshot(ctx context.Context, repo string, request Target
 					// edge instead of dead-ending the operator at Stop.
 					candidate.correctionRecovery = true
 					candidate.recoveryDisposition = RecoveryEscalated
+					candidate.selectorFreeAccountingOnlyRecovery = true
 				} else if eligibility, ok, inspectErr := InspectCompactFinalVerificationRetrySource(ctx, repo, state.LineageID, candidate.compact.Revision); inspectErr != nil {
 					return targetStatusFailure(base, inspectErr)
 				} else if ok {
@@ -441,6 +447,7 @@ func targetStatusForCandidate(result TargetStatusResult, candidate targetStatusC
 		if candidate.correctionRecovery {
 			result.Action, result.Replayability = TargetStatusActionRecover, ReplayabilityManualActionRequired
 			result.ActionDisposition = candidate.recoveryDisposition
+			result.selectorFreeAccountingOnlyRecovery = candidate.selectorFreeAccountingOnlyRecovery
 			return result
 		}
 		if state.State == StateEscalated || state.State == StateCorrectionRequired && state.CorrectionAttemptConsumed() {
@@ -494,6 +501,14 @@ func projectTargetStatusDecision(result TargetStatusResult) TargetStatusResult {
 		result.Decision = decision
 		return result
 	}
+	if result.selectorFreeAccountingOnlyRecovery {
+		// This is the one evidence-bound recovery that intentionally reuses an
+		// unchanged target. Its absence of a selector is an explicit core
+		// decision, never an adapter inference from a nil pointer.
+		decision.SelectorFreeAccountingOnlyRecovery = true
+		result.Decision = decision
+		return result
+	}
 
 	authorityKind, authorityProjection := result.authorityTargetKind, result.authorityProjection
 	if authorityKind == "" {
@@ -525,6 +540,21 @@ func projectTargetStatusDecision(result TargetStatusResult) TargetStatusResult {
 	}
 	decision.RecoverySelector = &recovery
 	result.Decision = decision
+	return result
+}
+
+func bindTargetStatusDecisionBaseRef(result TargetStatusResult, requested Target) TargetStatusResult {
+	baseRef := strings.TrimSpace(requested.BaseRef)
+	if baseRef == "" {
+		return result
+	}
+	if result.Decision.Selector.Kind == TargetBaseDiff || result.Decision.Selector.Kind == TargetBaseWorkspaceOverlay {
+		result.Decision.Selector.BaseRef = baseRef
+	}
+	if result.Decision.RecoverySelector != nil &&
+		(result.Decision.RecoverySelector.Kind == TargetBaseDiff || result.Decision.RecoverySelector.Kind == TargetBaseWorkspaceOverlay) {
+		result.Decision.RecoverySelector.BaseRef = baseRef
+	}
 	return result
 }
 

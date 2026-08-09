@@ -318,8 +318,9 @@ func TestSnapshotProjectionValidationAndIdentity(t *testing.T) {
 		t.Fatalf("unknown projection error = %v", err)
 	}
 	stagedBaseDiff, err := builder.Build(context.Background(), Target{Kind: TargetBaseDiff, Projection: ProjectionStaged, BaseRef: "HEAD", IntendedUntracked: []string{}})
-	if err != nil || stagedBaseDiff.Projection != ProjectionStaged || stagedBaseDiff.CandidateTree != strings.TrimSpace(gitSnapshot(t, repo, "rev-parse", "HEAD^{tree}")) {
-		t.Fatalf("staged base-diff snapshot = %#v, err=%v", stagedBaseDiff, err)
+	committedOnlyBaseDiff, committedOnlyErr := builder.Build(context.Background(), Target{Kind: TargetBaseDiff, Projection: ProjectionWorkspace, BaseRef: "HEAD", IntendedUntracked: []string{}})
+	if err != nil || committedOnlyErr != nil || !reflect.DeepEqual(stagedBaseDiff, committedOnlyBaseDiff) {
+		t.Fatalf("staged base-diff did not canonicalize to committed-only: staged=%#v err=%v committed-only=%#v err=%v", stagedBaseDiff, err, committedOnlyBaseDiff, committedOnlyErr)
 	}
 	if _, err := builder.Build(context.Background(), Target{Kind: TargetBaseDiff, Projection: ProjectionStaged, BaseRef: "HEAD", IntendedUntracked: []string{"untracked.txt"}}); err == nil || !strings.Contains(err.Error(), "does not accept intended-untracked") {
 		t.Fatalf("staged base-diff intended-untracked error = %v", err)

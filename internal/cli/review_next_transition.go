@@ -579,12 +579,13 @@ func reviewCaptureEvidenceSubmission(contract string, binding ReviewTransitionBi
 }
 
 type reviewTransitionSelector struct {
-	Kind               reviewtransaction.TargetKind
-	Projection         reviewtransaction.Projection
-	BaseRef, BaseTree  string
-	WorkspaceOverlay   bool
-	Recovery           *reviewtransaction.Target
-	PrePRRepresentable bool
+	Kind                               reviewtransaction.TargetKind
+	Projection                         reviewtransaction.Projection
+	BaseRef, BaseTree                  string
+	WorkspaceOverlay                   bool
+	Recovery                           *reviewtransaction.Target
+	SelectorFreeAccountingOnlyRecovery bool
+	PrePRRepresentable                 bool
 }
 
 func reviewStartArguments(status ReviewTargetStatusResult, lineage string, runtime model.AgentID, intended reviewIntendedUntrackedScope) []ReviewTransitionArgument {
@@ -727,25 +728,36 @@ func reviewRecoveryCollection(status ReviewTargetStatusResult, binding ReviewTra
 	}
 	var selectorArguments []ReviewTransitionArgument
 	if input.Selector != nil {
-		if status.TargetIdentity == reviewAuthorityTargetIdentity(status) {
-			return reviewStopTransition("recovery_scope_unchanged")
-		}
-		var representable bool
-		selectorArguments, representable = input.Selector.recoveryArguments()
-		if !representable {
-			// Root 7 (#2471): the selector the caller supplied cannot be
-			// represented as a recovery target, so the missing thing is a
-			// different selector they choose, not a dead end.
-			return reviewCollectTransition("recovery_target_unrepresentable", ReviewTransitionInput{
-				Name: "recovery_target_selector", Schema: "gentle-ai.review-recovery-target-selection/v1",
-				CaptureOperation: "external.select_recovery_target", Arguments: reviewTargetArguments(status),
-			})
+		if input.Selector.SelectorFreeAccountingOnlyRecovery {
+			// The core has already narrowed this to the evidence-bound,
+			// accounting-only edge. It is the only selector-free recovery.
+		} else {
+			if input.Selector.Recovery == nil {
+				return reviewCollectTransition("recovery_target_unrepresentable", ReviewTransitionInput{
+					Name: "recovery_target_selector", Schema: "gentle-ai.review-recovery-target-selection/v1",
+					CaptureOperation: "external.select_recovery_target", Arguments: reviewTargetArguments(status),
+				})
+			}
+			if status.TargetIdentity == reviewAuthorityTargetIdentity(status) {
+				return reviewStopTransition("recovery_scope_unchanged")
+			}
+			var representable bool
+			selectorArguments, representable = input.Selector.recoveryArguments()
+			if !representable {
+				// Root 7 (#2471): the selector the caller supplied cannot be
+				// represented as a recovery target, so the missing thing is a
+				// different selector they choose, not a dead end.
+				return reviewCollectTransition("recovery_target_unrepresentable", ReviewTransitionInput{
+					Name: "recovery_target_selector", Schema: "gentle-ai.review-recovery-target-selection/v1",
+					CaptureOperation: "external.select_recovery_target", Arguments: reviewTargetArguments(status),
+				})
+			}
 		}
 	}
 	if input.recoveryAuthorized(binding) {
 		arguments := []ReviewTransitionArgument{{Name: "predecessor-lineage", Value: binding.LineageID}, {Name: "expected-predecessor-revision", Value: binding.Revision}, {Name: "successor-lineage", Value: input.Successor}, {Name: "disposition", Value: string(disposition)}, {Name: "reason", Value: input.Reason}, {Name: "actor", Value: input.Actor}, {Name: "maintainer-authorization", Value: input.Authorization}}
 		transition := reviewExecuteTransition("recovery_authorized", "review.recover", append(arguments, selectorArguments...), []ReviewTransitionArgument{{Name: "state", Value: string(status.Authority.State)}, {Name: "recovery_authorization", Value: "provided"}}, binding, nil)
-		if input.Selector != nil {
+		if input.Selector != nil && !input.Selector.SelectorFreeAccountingOnlyRecovery {
 			transition.Execute.SelectorArguments = reviewTransitionSelectorArguments(selectorArguments)
 		}
 		return transition
@@ -818,7 +830,7 @@ func reviewFinalVerificationRetryCollection(status ReviewTargetStatusResult, bin
 
 func (input reviewNextTransitionInput) recoveryAuthorized(binding ReviewTransitionBinding) bool {
 	successor := ""
-	if input.Selector != nil {
+	if input.Selector != nil && !input.Selector.SelectorFreeAccountingOnlyRecovery {
 		successor = input.Successor
 	}
 	return input.Successor != "" && input.Reason != "" && input.Actor != "" && input.Authorization == reviewTransitionRecoveryAuthorization(binding, successor, input.Actor, input.Reason)
