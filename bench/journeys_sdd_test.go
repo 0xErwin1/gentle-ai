@@ -36,17 +36,19 @@ func TestPortableSDDFailClosedAuthorityJourneysAreRegistered(t *testing.T) {
 			want[journey.ID] = true
 		}
 	}
-	// 82 since j76-claude-advisory-result-reaches-delivery (#2692, #2566),
+	// 83 since j76-claude-advisory-result-reaches-delivery (#2692, #2566),
 	// j77-capture-result-input-preflight-is-read-only (#2630 D2),
 	// j78-lens-finding-id-prefix-discovery (#1844), j79-consecutive-rescope-
 	// refuses-before-publication (#2830), and j80-rescope-authorized-evidence-
 	// only-retry (#2621).
 	// j81's RC-created repair fixture (#2839) follows the independently-owned
 	// #2621 journey.
+	// j82 proves #2127's reviewed full candidate can publish an unpublished
+	// monotonic subset without reopening review.
 	// Bump this deliberately when a journey is added, and name it here: the
 	// count exists so a journey cannot appear or vanish unnoticed.
-	if got := len(seen); got != 82 {
-		t.Errorf("core journey count = %d, want 82", got)
+	if got := len(seen); got != 83 {
+		t.Errorf("core journey count = %d, want 83", got)
 	}
 	for id, found := range want {
 		if !found {
