@@ -44,13 +44,16 @@ func TestCompactPrePushMonotonicReviewedSubset(t *testing.T) {
 		}},
 		{name: "rejects unreviewed merge resolution", wantReason: `publication entry at "a.txt" is outside reviewed base/final endpoints`, mutate: func(t *testing.T, repo string) {
 			branch := currentBranch(context.Background(), repo)
+			mainFinal := trimGit(gitSnapshot(t, repo, "rev-parse", "HEAD"))
 			gitSnapshot(t, repo, "checkout", "-qb", "unreviewed-side", "HEAD~2")
-			commitMonotonicSubsetFile(t, repo, "a.txt", "side A\n", "side reviewed path")
+			commitMonotonicSubsetFile(t, repo, "b.txt", "approved B\n", "side approved B endpoint")
+			sideEndpoint := trimGit(gitSnapshot(t, repo, "rev-parse", "HEAD"))
 			gitSnapshot(t, repo, "checkout", "-q", branch)
-			if gitSnapshotSucceeds(repo, "merge", "--no-ff", "--no-commit", "unreviewed-side") {
-				t.Fatal("merge unexpectedly resolved without conflict")
-			}
-			commitMonotonicSubsetFile(t, repo, "a.txt", "unreviewed merge resolution\n", "resolve merge with unreviewed blob")
+			writeSnapshotFile(t, repo, "a.txt", "unreviewed merge resolution\n")
+			gitSnapshot(t, repo, "add", "a.txt")
+			mergeTree := trimGit(gitSnapshot(t, repo, "write-tree"))
+			merge := trimGit(gitSnapshot(t, repo, "commit-tree", mergeTree, "-p", mainFinal, "-p", sideEndpoint, "-m", "resolve merge with unreviewed blob"))
+			gitSnapshot(t, repo, "update-ref", "HEAD", merge)
 			commitMonotonicSubsetFile(t, repo, "a.txt", "approved A\n", "restore approved A")
 		}},
 	}
