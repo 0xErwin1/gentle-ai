@@ -33,7 +33,7 @@ func TestRunSDDAttemptSettleRepairsUnsafeDisabledRARModeWithoutRecursing(t *test
 	if err := os.WriteFile(child, []byte("private child\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	childBefore := windowsACLSDDL(t, child)
+	childBefore := windowsACL(t, child)
 	windowsRunPowerShell(t, "$acl = Get-Acl -LiteralPath "+quotePowerShellLiteral(privateRARDir)+"; $acl.SetAccessRuleProtection($false, $true); Set-Acl -LiteralPath "+quotePowerShellLiteral(privateRARDir)+" -AclObject $acl")
 
 	runtimeBefore := snapshotRuntimeAuthorityFiles(t, store.Dir)
@@ -63,7 +63,7 @@ func TestRunSDDAttemptSettleRepairsUnsafeDisabledRARModeWithoutRecursing(t *test
 	if err != nil || status.Enabled() {
 		t.Fatalf("printed repair did not restore the real RAR predicate: status=%#v error=%v", status, err)
 	}
-	if childAfter := windowsACLSDDL(t, child); childAfter != childBefore {
+	if childAfter := windowsACL(t, child); childAfter != childBefore {
 		t.Fatalf("printed repair recursively changed child ACL\nbefore=%q\nafter=%q", childBefore, childAfter)
 	}
 	completed, _ := runCompactSDDAttempt(t, settleArgs)
@@ -80,9 +80,9 @@ func windowsRunPowerShell(t *testing.T, script string) {
 	}
 }
 
-func windowsACLSDDL(t *testing.T, path string) string {
+func windowsACL(t *testing.T, path string) string {
 	t.Helper()
-	output, err := exec.Command("powershell.exe", "-NoProfile", "-NonInteractive", "-Command", "(Get-Acl -LiteralPath "+quotePowerShellLiteral(path)+").Sddl").CombinedOutput()
+	output, err := exec.Command("icacls.exe", path).CombinedOutput()
 	if err != nil {
 		t.Fatalf("read ACL for %q: %v\n%s", path, err, output)
 	}
