@@ -199,7 +199,10 @@ func (store RuntimeStore) Acquire(ctx context.Context, request CompactAcquireReq
 		// retry that omitted selection recovers that record's population; an
 		// explicit declaration must still match it exactly below.
 		if recoverIntendedUntracked && request.Token == receipt.Revision && record.Begin != nil {
-			begin.IntendedUntracked = record.Begin.IntendedUntracked
+			begin.IntendedUntracked = nil
+			if record.Begin.IntendedUntracked != nil {
+				begin.IntendedUntracked = slices.Clone(*record.Begin.IntendedUntracked)
+			}
 		}
 		if !compactAcquireMatches(record, begin) {
 			return compactBlocked(CompactBlockInvalidContinuation, ""), nil
@@ -369,10 +372,14 @@ func compactAcquireMatches(record runtimeRecord, request BeginAttemptRequest) bo
 		return false
 	}
 	event := record.Begin
+	var intendedUntracked []string
+	if event.IntendedUntracked != nil {
+		intendedUntracked = *event.IntendedUntracked
+	}
 	return request.ExpectedRevision == record.PreviousRevision && request.RequestID == record.RequestID &&
 		request.WorkUnit == event.WorkUnit && request.EvidenceGoal == event.EvidenceGoal &&
 		request.MaxAttempts == event.MaxAttempts && request.MaxChangedLines == event.MaxChangedLines &&
-		slices.Equal(request.IntendedUntracked, event.IntendedUntracked)
+		slices.Equal(request.IntendedUntracked, intendedUntracked)
 }
 
 func compactSettleReplayRequest(replay runtimeReplay, record runtimeRecord, request CompactSettleRequest) (FinishAttemptRequest, bool) {

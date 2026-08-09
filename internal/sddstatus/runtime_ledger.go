@@ -554,16 +554,18 @@ type runtimeAdvanceEvent struct {
 }
 
 type runtimeBeginEvent struct {
-	ObjectiveID            string   `json:"objective_id"`
-	ObjectiveGeneration    int      `json:"objective_generation,omitempty"`
-	WorkUnit               string   `json:"work_unit"`
-	EvidenceGoal           string   `json:"evidence_goal"`
-	MaxAttempts            int      `json:"max_attempts"`
-	MaxChangedLines        int      `json:"max_changed_lines"`
-	Ordinal                int      `json:"ordinal"`
-	BeginCandidateIdentity string   `json:"begin_candidate_identity"`
-	BeginCandidateTree     string   `json:"begin_candidate_tree"`
-	IntendedUntracked      []string `json:"intended_untracked"`
+	ObjectiveID            string `json:"objective_id"`
+	ObjectiveGeneration    int    `json:"objective_generation,omitempty"`
+	WorkUnit               string `json:"work_unit"`
+	EvidenceGoal           string `json:"evidence_goal"`
+	MaxAttempts            int    `json:"max_attempts"`
+	MaxChangedLines        int    `json:"max_changed_lines"`
+	Ordinal                int    `json:"ordinal"`
+	BeginCandidateIdentity string `json:"begin_candidate_identity"`
+	BeginCandidateTree     string `json:"begin_candidate_tree"`
+	// A nil pointer preserves records written before candidate provenance was
+	// introduced; a non-nil empty slice is a modern, explicit empty selection.
+	IntendedUntracked *[]string `json:"intended_untracked,omitempty"`
 	// BeginWorktree records store.Workspace at Begin time (#2296 part 1): the
 	// resolved, symlink-evaluated absolute path of the exact --cwd this begin
 	// ran under. omitempty is load-bearing — every record predating this field
@@ -836,11 +838,12 @@ func (store RuntimeStore) Begin(ctx context.Context, request BeginAttemptRequest
 		if !advancing && (status.CumulativeAttempts >= request.MaxAttempts || status.CumulativeChangedLines >= request.MaxChangedLines) {
 			return runtimeRecord{}, ErrRuntimeBudgetExhausted
 		}
+		intendedUntracked := slices.Clone(runtimeIntendedUntracked([][]string{snapshot.IntendedUntracked}))
 		event := &runtimeBeginEvent{
 			ObjectiveID: objectiveID, ObjectiveGeneration: generation, WorkUnit: request.WorkUnit, EvidenceGoal: request.EvidenceGoal,
 			MaxAttempts: request.MaxAttempts, MaxChangedLines: request.MaxChangedLines,
 			Ordinal: status.NextOrdinal, BeginCandidateIdentity: snapshot.Identity, BeginCandidateTree: snapshot.CandidateTree,
-			IntendedUntracked: slices.Clone(snapshot.IntendedUntracked),
+			IntendedUntracked: &intendedUntracked,
 			BeginWorktree:     store.Workspace, EffectiveWorktree: store.Workspace,
 		}
 		if advancing {
@@ -2060,10 +2063,14 @@ func applyRuntimeBeginEvent(replay *runtimeReplay, revision string, record runti
 	if replay.Status.CumulativeAttempts >= event.MaxAttempts || replay.Status.CumulativeChangedLines >= event.MaxChangedLines {
 		return errors.New("begin record exceeds the persisted objective budget")
 	}
+	intendedUntracked := []string{}
+	if event.IntendedUntracked != nil {
+		intendedUntracked = slices.Clone(*event.IntendedUntracked)
+	}
 	attempt := RuntimeAttempt{
 		Ordinal: event.Ordinal, ObjectiveID: event.ObjectiveID, ObjectiveGeneration: generation,
 		WorkUnit: event.WorkUnit, BeginCandidateIdentity: event.BeginCandidateIdentity,
-		BeginCandidateTree: event.BeginCandidateTree, IntendedUntracked: slices.Clone(runtimeIntendedUntracked([][]string{event.IntendedUntracked})), BeginWorktree: event.BeginWorktree,
+		BeginCandidateTree: event.BeginCandidateTree, IntendedUntracked: intendedUntracked, BeginWorktree: event.BeginWorktree,
 		EffectiveWorktree: event.EffectiveWorktree, Outcome: AttemptRunning,
 	}
 	replay.Status.Attempts = append(replay.Status.Attempts, attempt)
@@ -2383,15 +2390,19 @@ func validateRuntimeBeginEvent(record runtimeRecord) error {
 		return errors.New("invalid SDD runtime begin event")
 	}
 	if event.IntendedUntracked != nil {
-		canonical, err := canonicalRuntimeIntendedUntracked(event.IntendedUntracked)
-		if err != nil || !slices.Equal(canonical, event.IntendedUntracked) {
+		canonical, err := canonicalRuntimeIntendedUntracked(*event.IntendedUntracked)
+		if err != nil || !slices.Equal(canonical, *event.IntendedUntracked) {
 			return errors.New("invalid SDD runtime intended untracked provenance; restore the runtime authority from a valid backup, then run `gentle-ai sdd-attempt status` to confirm the recovered candidate")
 		}
+	}
+	var intendedUntracked []string
+	if event.IntendedUntracked != nil {
+		intendedUntracked = *event.IntendedUntracked
 	}
 	request := BeginAttemptRequest{
 		ExpectedRevision: record.PreviousRevision, RequestID: record.RequestID, WorkUnit: event.WorkUnit,
 		EvidenceGoal: event.EvidenceGoal, MaxAttempts: event.MaxAttempts, MaxChangedLines: event.MaxChangedLines,
-		IntendedUntracked: event.IntendedUntracked,
+		IntendedUntracked: intendedUntracked,
 	}
 	legacy := legacyBeginAttemptRequest{
 		ExpectedRevision: record.PreviousRevision, RequestID: record.RequestID, WorkUnit: event.WorkUnit,

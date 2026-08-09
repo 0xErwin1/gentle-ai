@@ -2,8 +2,11 @@ package sddstatus
 
 import (
 	"context"
+	"crypto/sha256"
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -155,19 +158,18 @@ func TestRuntimeLegacyEmptyPopulationStillReplays(t *testing.T) {
 		RequestID: "legacy-empty-begin", WorkUnit: "legacy candidate", EvidenceGoal: "replay empty selected paths",
 		MaxAttempts: 2, MaxChangedLines: 20,
 	}
-	record := runtimeRecord{
-		Schema: runtimeRecordSchema, Change: store.Change, Operation: runtimeOperationBegin,
-		RequestID: request.RequestID, RequestDigest: "sha256:4295a33871e78b342640fedd251dd1f2db9471c53cad6153ba43d7e4caa7ad70",
-		Begin: &runtimeBeginEvent{
-			ObjectiveID: legacyRuntimeObjectiveID(store.Change, request.EvidenceGoal), WorkUnit: request.WorkUnit,
-			EvidenceGoal: request.EvidenceGoal, MaxAttempts: request.MaxAttempts, MaxChangedLines: request.MaxChangedLines,
-			Ordinal: 1, BeginCandidateIdentity: snapshot.Identity, BeginCandidateTree: snapshot.CandidateTree,
-		},
+	// This fixture is pre-provenance JSON, not a current runtimeBeginEvent
+	// serialization: its absent field must stay absent when replay validates it.
+	payload := []byte(fmt.Sprintf(`{"schema":%q,"change":%q,"previous_revision":"","operation":%q,"request_id":%q,"request_digest":%q,"begin":{"objective_id":%q,"work_unit":%q,"evidence_goal":%q,"max_attempts":%d,"max_changed_lines":%d,"ordinal":1,"begin_candidate_identity":%q,"begin_candidate_tree":%q}}`+"\n",
+		runtimeRecordSchema, store.Change, runtimeOperationBegin, request.RequestID,
+		runtimeValueHash("gentle-ai.sdd-runtime-begin-request/v1", request),
+		legacyRuntimeObjectiveID(store.Change, request.EvidenceGoal), request.WorkUnit, request.EvidenceGoal,
+		request.MaxAttempts, request.MaxChangedLines, snapshot.Identity, snapshot.CandidateTree))
+	if strings.Contains(string(payload), `"intended_untracked"`) {
+		t.Fatalf("legacy fixture unexpectedly contains intended_untracked: %s", payload)
 	}
-	revision, payload, err := runtimeRecordRevision(record)
-	if err != nil {
-		t.Fatal(err)
-	}
+	sum := sha256.Sum256(payload)
+	revision := fmt.Sprintf("sha256:%x", sum)
 	if err := store.ensureDirectories(); err != nil {
 		t.Fatal(err)
 	}
@@ -177,9 +179,28 @@ func TestRuntimeLegacyEmptyPopulationStillReplays(t *testing.T) {
 	if err := store.publishHead(revision); err != nil {
 		t.Fatal(err)
 	}
+	legacy, err := store.loadRecord(revision)
+	if err != nil || legacy.Begin == nil || legacy.Begin.IntendedUntracked != nil {
+		t.Fatalf("legacy field presence after decode = %#v, err=%v", legacy.Begin, err)
+	}
 	status, err := store.Status()
 	if err != nil || status.ActiveAttempt == nil || len(status.ActiveAttempt.IntendedUntracked) != 0 {
 		t.Fatalf("legacy empty selected population did not replay: status=%#v err=%v", status, err)
+	}
+	modernStore, err := OpenRuntimeStore(context.Background(), repo, "modern-empty-selected")
+	if err != nil {
+		t.Fatal(err)
+	}
+	modern, err := modernStore.Begin(context.Background(), BeginAttemptRequest{
+		RequestID: "modern-empty-begin", WorkUnit: request.WorkUnit, EvidenceGoal: request.EvidenceGoal,
+		MaxAttempts: request.MaxAttempts, MaxChangedLines: request.MaxChangedLines, IntendedUntracked: []string{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	modernRecord, err := modernStore.loadRecord(modern.Revision)
+	if err != nil || modernRecord.Begin == nil || modernRecord.Begin.IntendedUntracked == nil || len(*modernRecord.Begin.IntendedUntracked) != 0 {
+		t.Fatalf("modern explicit-empty field presence after decode = %#v, err=%v", modernRecord.Begin, err)
 	}
 	beforeRecords := countRuntimeRecords(t, store.Dir)
 	synced := false
