@@ -1064,7 +1064,7 @@ func TestNewModelPickerState(t *testing.T) {
 			wantAvailable:     0,
 			wantUnavailable:   []string{"custom-no-tools"},
 			wantConfigWarning: true,
-			wantWarningText:   `"tool_call": true`,
+			wantWarningText:   `provider["custom-no-tools"].models`,
 		},
 		{
 			name:         "name collision: custom provider wins over catalog",
@@ -1164,7 +1164,7 @@ func TestCustomProviderToolCallWarnings(t *testing.T) {
 			},
 		},
 	}
-	customWarning := `Custom provider "Alpha" has models, but none declare "tool_call": true. Add "tool_call": true to at least one model in provider.alpha.models.`
+	customWarning := `Custom provider "Alpha" has models, but none declare "tool_call": true. Add "tool_call": true to at least one model in provider["alpha"].models.`
 
 	tests := []struct {
 		name            string
@@ -1191,8 +1191,9 @@ func TestCustomProviderToolCallWarnings(t *testing.T) {
 				},
 				"alpha": singleConfigProvider["alpha"],
 			},
-			wantWarning: `Custom provider "Alpha" has models, but none declare "tool_call": true. Add "tool_call": true to at least one model in provider.alpha.models.
-Custom provider "Zeta" has models, but none declare "tool_call": true. Add "tool_call": true to at least one model in provider.zeta.models.`,
+			wantWarning: `Custom provider "Alpha" has models, but none declare "tool_call": true. Add "tool_call": true to at least one model in provider["alpha"].models.` +
+				"\n" +
+				`Custom provider "Zeta" has models, but none declare "tool_call": true. Add "tool_call": true to at least one model in provider["zeta"].models.`,
 		},
 		{
 			name:            "preserves cache warning and renders both warnings",
@@ -1223,6 +1224,19 @@ Custom provider "Zeta" has models, but none declare "tool_call": true. Add "tool
 				}
 			}
 		})
+	}
+}
+
+func TestLMStudioDiscoveryWarningIsNotDuplicated(t *testing.T) {
+	state := lmStudioState(t, `{}`, `{"provider":{"lmstudio":{"models":{"model":{}}}}}`)
+	state = state.Update(LMStudioDiscoveryMsg{
+		BaseURL: state.lmStudioURL,
+		Models:  []opencode.ConfigModel{{Name: "model"}},
+	})
+
+	warning := `LM Studio models need "tool_call": true in provider.lmstudio.models for SDD.`
+	if got := strings.Count(state.ConfigWarning, warning); got != 1 {
+		t.Fatalf("LM Studio warning count = %d, want 1; warning = %q", got, state.ConfigWarning)
 	}
 }
 

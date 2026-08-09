@@ -220,6 +220,9 @@ func appendCustomProviderToolCallWarnings(
 	sort.Strings(ids)
 
 	for _, id := range ids {
+		if id == "lmstudio" {
+			continue
+		}
 		configProvider := configProviders[id]
 		if len(configProvider.Models) == 0 {
 			continue
@@ -235,7 +238,7 @@ func appendCustomProviderToolCallWarnings(
 			name = id
 		}
 		existing = appendConfigWarning(existing, fmt.Sprintf(
-			`Custom provider %q has models, but none declare "tool_call": true. Add "tool_call": true to at least one model in provider.%s.models.`,
+			`Custom provider %q has models, but none declare "tool_call": true. Add "tool_call": true to at least one model in provider[%q].models.`,
 			name,
 			id,
 		))
