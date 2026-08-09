@@ -118,8 +118,6 @@ func TestValidateDerivedGateGeneralizesCompatibleBaseAdvanceToLocalGates(t *test
 	}
 }
 
-// TestValidateDerivedGateAllowsContentProofAtPrePR proves R2's content-bound
-// pre-PR route does not require an unrelated CI attestation.
 func TestValidateDerivedGateAllowsContentProofAtPrePR(t *testing.T) {
 	tx := ordinaryAtFixValidation(t)
 	if err := tx.ValidateFixDelta([]string{"R1-DET"}, true); err != nil {
@@ -219,6 +217,13 @@ func TestParseGateContextRestrictsBaseAdvanceStatusPerGate(t *testing.T) {
 				t.Fatalf("ParseGateContext(%s) error = %v, want nil", tt.name, err)
 			}
 		})
+	}
+	boundary := `,"pre_pr_boundary":{"source":"explicit","selector":"origin/main","commit":"` + base + `","merge_base":"MERGE"}}`
+	for _, mergeBase := range []string{"", "not-a-tree"} {
+		payload := baseContext(GatePrePR) + strings.Replace(boundary, "MERGE", mergeBase, 1)
+		if _, err := ParseGateContext([]byte(payload)); err == nil {
+			t.Fatalf("ParseGateContext accepted available pre-PR boundary merge_base %q", mergeBase)
+		}
 	}
 }
 

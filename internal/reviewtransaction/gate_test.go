@@ -40,6 +40,7 @@ func TestNativePrePRGateAllowsContentAndAttestedCompatibleBaseAdvance(t *testing
 		t.Fatalf("base advance context = %#v", evaluation.Context.BaseAdvance)
 	}
 }
+
 func TestOrdinaryBoundedCompatibleBaseAdvancePreservesFrozenRiskInputs(t *testing.T) {
 	fixture := newCompatiblePrePRFixtureMode(t, "delivery.txt", "base-only.txt", ModeOrdinaryBounded)
 	store, err := AuthoritativeStore(context.Background(), fixture.repo, fixture.receipt.LineageID)
@@ -405,21 +406,15 @@ func TestSelectPrePRBoundaryRejectsAdvertisedUnrelatedSameTree(t *testing.T) {
 
 func TestSelectPrePRBoundaryRejectsAmbiguousMergeBase(t *testing.T) {
 	repo := initSnapshotRepo(t)
-	initial := trimGit(gitSnapshot(t, repo, "rev-parse", "HEAD"))
-	gitSnapshot(t, repo, "branch", "main", initial)
+	gitSnapshot(t, repo, "branch", "main", "HEAD")
 	configurePublicationRemote(t, repo, "main")
 	gitSnapshot(t, repo, "checkout", "-qb", "feature")
-	writeSnapshotFile(t, repo, "feature.txt", "feature\n")
-	gitSnapshot(t, repo, "add", "feature.txt")
-	gitSnapshot(t, repo, "commit", "-m", "feature change")
+	gitSnapshot(t, repo, "commit", "--allow-empty", "-m", "feature change")
 	feature := trimGit(gitSnapshot(t, repo, "rev-parse", "HEAD"))
 	gitSnapshot(t, repo, "checkout", "main")
-	writeSnapshotFile(t, repo, "main.txt", "main\n")
-	gitSnapshot(t, repo, "add", "main.txt")
-	gitSnapshot(t, repo, "commit", "-m", "main change")
-	main := trimGit(gitSnapshot(t, repo, "rev-parse", "HEAD"))
+	gitSnapshot(t, repo, "commit", "--allow-empty", "-m", "main change")
 	gitSnapshot(t, repo, "checkout", "feature")
-	gitSnapshot(t, repo, "merge", "--no-ff", "-m", "merge main into feature", main)
+	gitSnapshot(t, repo, "merge", "--no-ff", "-m", "merge main into feature", "main")
 	gitSnapshot(t, repo, "checkout", "main")
 	gitSnapshot(t, repo, "merge", "--no-ff", "-m", "merge feature into main", feature)
 	gitSnapshot(t, repo, "push", "-q", "origin", "main")
