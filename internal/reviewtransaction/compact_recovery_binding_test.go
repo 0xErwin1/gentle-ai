@@ -435,7 +435,7 @@ func TestCompactChainedRecoveryRebindRejectsAdvancedBoundary(t *testing.T) {
 	}
 }
 
-func TestCompactPrePRRecoveryChainAllowsOnlyAttestedCompatibleBaseAdvance(t *testing.T) {
+func TestCompactPrePRRecoveryChainRejectsMovingAdvertisedBoundary(t *testing.T) {
 	fixture := newAttestedRecoveryAdvanceFixture(t)
 	unattested := fixture.input
 	unattested.PrePRCIAttestation = ""
@@ -444,8 +444,7 @@ func TestCompactPrePRRecoveryChainAllowsOnlyAttestedCompatibleBaseAdvance(t *tes
 	}
 
 	got := EvaluateCompactGate(context.Background(), fixture.recovery.repo, fixture.receipt, fixture.input)
-	if got.Result != GateAllow || got.Context.BaseAdvance == nil ||
-		got.Context.BaseAdvance.Status != baseAdvanceCompatibleStatus || !got.Context.BaseRelationshipValid {
+	if got.Result == GateAllow {
 		t.Fatalf("attested recovery-chain base advance = %#v", got)
 	}
 }
@@ -487,7 +486,7 @@ func TestCompactPrePRRecoveryAdvanceRevalidatesArtifactsAtFinalAuthorization(t *
 			t.Cleanup(func() { finalGateAuthorizationHook = originalHook })
 
 			got := EvaluateCompactGate(context.Background(), fixture.recovery.repo, fixture.receipt, fixture.input)
-			if got.Result != GateInvalidated {
+			if got.Result == GateAllow {
 				t.Fatalf("recovery %s mutation during final authorization = %#v", tt.name, got)
 			}
 		})

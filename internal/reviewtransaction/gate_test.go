@@ -34,6 +34,15 @@ func TestNativePrePRGateAllowsOnlyCryptographicallyAttestedCompatibleBaseAdvance
 	}
 }
 
+func TestNativePrePRGateAllowsContentCompatibleBaseAdvanceWithoutAttestation(t *testing.T) {
+	fixture := newCompatiblePrePRFixture(t, "delivery.txt", "base-only.txt")
+	fixture.request.PrePR.CIAttestationArtifact = ""
+	got := EvaluateNativeGate(context.Background(), fixture.repo, fixture.receipt, fixture.request)
+	if got.Result != GateAllow || got.Context.BaseAdvance == nil || got.Context.BaseAdvance.Status != baseAdvanceCompatibleLocalStatus {
+		t.Fatalf("content-compatible pre-PR advance = %#v", got)
+	}
+}
+
 func TestOrdinaryBoundedCompatibleBaseAdvancePreservesFrozenRiskInputs(t *testing.T) {
 	fixture := newCompatiblePrePRFixtureMode(t, "delivery.txt", "base-only.txt", ModeOrdinaryBounded)
 	store, err := AuthoritativeStore(context.Background(), fixture.repo, fixture.receipt.LineageID)
@@ -66,31 +75,31 @@ func TestPrePRGateFailsClosedForUnprovenBaseAdvance(t *testing.T) {
 		basePath     string
 		mutate       func(t *testing.T, fixture *compatiblePrePRFixture)
 		want         GateResult
+		wantNoProof  bool
 	}{
-		{name: "missing attestation", mutate: func(t *testing.T, fixture *compatiblePrePRFixture) { fixture.request.PrePR.CIAttestationArtifact = "" }, want: GateScopeChanged},
-		{name: "missing receipt-bound trust policy", mutate: func(t *testing.T, fixture *compatiblePrePRFixture) { fixture.request.PolicyArtifact = "" }, want: GateScopeChanged},
+		{name: "missing receipt-bound trust policy", mutate: func(t *testing.T, fixture *compatiblePrePRFixture) { fixture.request.PolicyArtifact = "" }, want: GateInvalidated},
 		{name: "invalid signature", mutate: func(t *testing.T, fixture *compatiblePrePRFixture) {
 			fixture.attestation.Signature = base64.StdEncoding.EncodeToString(make([]byte, ed25519.SignatureSize))
 			fixture.writeAttestation(t)
-		}, want: GateScopeChanged},
+		}, want: GateInvalidated},
 		{name: "wrong merged tree", mutate: func(t *testing.T, fixture *compatiblePrePRFixture) {
 			fixture.attestation.MergedTree = fixture.receipt.FinalCandidateTree
 			fixture.signAndWriteAttestation(t)
-		}, want: GateScopeChanged},
+		}, want: GateInvalidated},
 		{name: "wrong issuer", mutate: func(t *testing.T, fixture *compatiblePrePRFixture) {
 			fixture.attestation.Issuer = "untrusted-ci"
 			fixture.signAndWriteAttestation(t)
-		}, want: GateScopeChanged},
+		}, want: GateInvalidated},
 		{name: "non-success status", mutate: func(t *testing.T, fixture *compatiblePrePRFixture) {
 			fixture.attestation.Status = "pending"
 			fixture.signAndWriteAttestation(t)
-		}, want: GateScopeChanged},
+		}, want: GateInvalidated},
 		{name: "invalidating external evidence", mutate: func(t *testing.T, fixture *compatiblePrePRFixture) {
 			fixture.request.ExternalEvidence = ExternalEvidenceInvalidating
-		}, want: GateScopeChanged},
+		}, want: GateInvalidated, wantNoProof: true},
 		{name: "escalating external evidence", mutate: func(t *testing.T, fixture *compatiblePrePRFixture) {
 			fixture.request.ExternalEvidence = ExternalEvidenceEscalating
-		}, want: GateEscalated},
+		}, want: GateEscalated, wantNoProof: true},
 		{name: "changed delivered patch", mutate: func(t *testing.T, fixture *compatiblePrePRFixture) {
 			writeSnapshotFile(t, fixture.repo, fixture.deliveryPath, "changed delivery\n")
 			gitSnapshot(t, fixture.repo, "add", "--", fixture.deliveryPath)
@@ -101,8 +110,12 @@ func TestPrePRGateFailsClosedForUnprovenBaseAdvance(t *testing.T) {
 			gitSnapshot(t, fixture.repo, "add", "extra-delivery.txt")
 			gitSnapshot(t, fixture.repo, "commit", "-m", "expand delivery")
 		}, want: GateScopeChanged},
+		{name: "executable mode drift", mutate: func(t *testing.T, fixture *compatiblePrePRFixture) {
+			gitSnapshot(t, fixture.repo, "update-index", "--chmod=+x", "--", fixture.deliveryPath)
+			gitSnapshot(t, fixture.repo, "commit", "-m", "change delivery mode")
+		}, want: GateScopeChanged},
 		{name: "overlapping base advance", deliveryPath: "delivery.txt", basePath: "delivery.txt", want: GateInvalidated},
-		{name: "merge conflict", deliveryPath: "conflict/file.txt", basePath: "conflict", want: GateScopeChanged},
+		{name: "merge conflict", deliveryPath: "conflict/file.txt", basePath: "conflict", want: GateInvalidated},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -117,8 +130,12 @@ func TestPrePRGateFailsClosedForUnprovenBaseAdvance(t *testing.T) {
 			if tt.mutate != nil {
 				tt.mutate(t, fixture)
 			}
-			if got := EvaluateNativeGate(context.Background(), fixture.repo, fixture.receipt, fixture.request); got.Result != tt.want {
+			got := EvaluateNativeGate(context.Background(), fixture.repo, fixture.receipt, fixture.request)
+			if got.Result != tt.want {
 				t.Fatalf("EvaluateNativeGate() = %#v, want %q", got, tt.want)
+			}
+			if tt.wantNoProof && got.Context.BaseAdvance != nil {
+				t.Fatalf("external evidence attached base compatibility proof: %#v", got.Context.BaseAdvance)
 			}
 		})
 	}
@@ -314,13 +331,13 @@ func TestSelectPrePRBoundaryUsesExactExplicitOrPublicationDefaultCommit(t *testi
 			name:     "explicit current chained base",
 			selector: "origin/reviewed-base",
 			want: PrePRBoundarySelection{
-				Source: PrePRBoundaryExplicit, Selector: "origin/reviewed-base", Commit: fixture.originalBaseCommit, Remote: "origin", RemoteRef: "refs/heads/reviewed-base",
+				Source: PrePRBoundaryExplicit, Selector: "origin/reviewed-base", Commit: fixture.originalBaseCommit, MergeBase: fixture.originalBaseCommit, Remote: "origin", RemoteRef: "refs/heads/reviewed-base",
 			},
 		},
 		{
 			name: "publication default without selector",
 			want: PrePRBoundarySelection{
-				Source: PrePRBoundaryPublicationDefault, Selector: "refs/heads/main", Commit: trimGit(gitSnapshot(t, fixture.repo, "rev-parse", "main")), Remote: "origin", RemoteRef: "refs/heads/main",
+				Source: PrePRBoundaryPublicationDefault, Selector: "refs/heads/main", Commit: trimGit(gitSnapshot(t, fixture.repo, "rev-parse", "main")), MergeBase: fixture.originalBaseCommit, Remote: "origin", RemoteRef: "refs/heads/main",
 			},
 		},
 	}
@@ -389,6 +406,39 @@ func TestSelectPrePRBoundaryRejectsAdvertisedUnrelatedSameTree(t *testing.T) {
 	}
 }
 
+func TestSelectPrePRBoundaryRejectsRawSHASelector(t *testing.T) {
+	fixture := newCompatiblePrePRFixture(t, "delivery.txt", "base-only.txt")
+	if _, err := selectPrePRBoundary(context.Background(), fixture.repo, fixture.originalBaseCommit); err == nil || !strings.Contains(err.Error(), "advertised remote branch") {
+		t.Fatalf("raw pre-PR SHA selector error = %v", err)
+	}
+}
+
+func TestSelectPrePRBoundaryRejectsAmbiguousMergeBase(t *testing.T) {
+	repo := initSnapshotRepo(t)
+	initial := trimGit(gitSnapshot(t, repo, "rev-parse", "HEAD"))
+	gitSnapshot(t, repo, "branch", "main", initial)
+	configurePublicationRemote(t, repo, "main")
+	gitSnapshot(t, repo, "checkout", "-qb", "feature")
+	writeSnapshotFile(t, repo, "feature.txt", "feature\n")
+	gitSnapshot(t, repo, "add", "feature.txt")
+	gitSnapshot(t, repo, "commit", "-m", "feature change")
+	feature := trimGit(gitSnapshot(t, repo, "rev-parse", "HEAD"))
+	gitSnapshot(t, repo, "checkout", "main")
+	writeSnapshotFile(t, repo, "main.txt", "main\n")
+	gitSnapshot(t, repo, "add", "main.txt")
+	gitSnapshot(t, repo, "commit", "-m", "main change")
+	main := trimGit(gitSnapshot(t, repo, "rev-parse", "HEAD"))
+	gitSnapshot(t, repo, "checkout", "feature")
+	gitSnapshot(t, repo, "merge", "--no-ff", "-m", "merge main into feature", main)
+	gitSnapshot(t, repo, "checkout", "main")
+	gitSnapshot(t, repo, "merge", "--no-ff", "-m", "merge feature into main", feature)
+	gitSnapshot(t, repo, "push", "-q", "origin", "main")
+	gitSnapshot(t, repo, "checkout", "feature")
+	if _, err := selectPrePRBoundary(context.Background(), repo, "origin/main"); err == nil || !strings.Contains(err.Error(), "2 merge bases") {
+		t.Fatalf("ambiguous pre-PR merge-base error = %v", err)
+	}
+}
+
 func TestSelectPrePRBoundaryUsesRepositoryRootForSubdirectories(t *testing.T) {
 	repo := initSnapshotRepo(t)
 	want := trimGit(gitSnapshot(t, repo, "rev-parse", "HEAD"))
@@ -417,12 +467,26 @@ func TestBuildNativePrePRRequestKeepsExplicitReviewedBaseWhenDefaultAdvanced(t *
 		t.Fatal(err)
 	}
 	if request.Target.BaseRef != fixture.originalBaseCommit || request.PrePR == nil || request.PrePR.Boundary == nil || *request.PrePR.Boundary != (PrePRBoundarySelection{
-		Source: PrePRBoundaryExplicit, Selector: "origin/reviewed-base", Commit: fixture.originalBaseCommit, Remote: "origin", RemoteRef: "refs/heads/reviewed-base", RemoteIdentity: request.PrePR.Boundary.RemoteIdentity,
+		Source: PrePRBoundaryExplicit, Selector: "origin/reviewed-base", Commit: fixture.originalBaseCommit, MergeBase: fixture.originalBaseCommit, Remote: "origin", RemoteRef: "refs/heads/reviewed-base", RemoteIdentity: request.PrePR.Boundary.RemoteIdentity,
 	}) {
 		t.Fatalf("explicit pre-PR request = %#v", request)
 	}
 	if evaluation := EvaluateNativeGate(context.Background(), fixture.repo, fixture.receipt, request); evaluation.Result != GateAllow || evaluation.Context.PrePRBoundary == nil || *evaluation.Context.PrePRBoundary != *request.PrePR.Boundary {
 		t.Fatalf("explicit pre-PR evaluation = %#v", evaluation)
+	}
+}
+
+func TestBuildNativePrePRRequestBindsCandidateToMergeBaseAndBoundaryToAdvertisedTip(t *testing.T) {
+	fixture := newCompatiblePrePRFixture(t, "delivery.txt", "base-only.txt")
+	request, err := BuildNativeGateRequest(context.Background(), fixture.repo, NativeGateRequestInput{
+		Gate: GatePrePR, LineageID: fixture.receipt.LineageID, BaseRef: "origin/main",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if request.PrePR == nil || request.PrePR.Boundary == nil || request.Target.BaseRef != fixture.originalBaseCommit ||
+		request.PrePR.Boundary.MergeBase != fixture.originalBaseCommit || request.PrePR.Boundary.Commit == fixture.originalBaseCommit {
+		t.Fatalf("merge-base-bound pre-PR request = %#v", request)
 	}
 }
 

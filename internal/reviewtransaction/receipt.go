@@ -275,22 +275,15 @@ func RecoverySelfDerivedInputs(predecessor State) []string {
 	}
 }
 
-// baseAdvanceStatusAllowedForGate is the single source of truth D2 (#2471
-// option a) adds for the per-gate compatible-base-advance attestation policy:
-// GatePrePR alone may carry a CI-attested proof (baseAdvanceCompatibleStatus)
-// or the unrelated, already-existing current-changes boundary reconciliation
-// (currentChangesBoundaryCompatibleStatus, #1376); GatePreCommit and
-// GatePrePush may carry only the unattested local proof
-// (baseAdvanceCompatibleLocalStatus) deriveBaseAdvanceCompatibility issues
-// when its requireAttestation parameter is false. Both validateDerivedGate's
-// carve-out and ParseGateContext's structural validation call this one
-// function, so the attestation policy can never drift between "what a gate
-// accepts at evaluation time" and "what a persisted context is allowed to
-// claim happened."
+// baseAdvanceStatusAllowedForGate is the single source of truth for compatible
+// base-advance evidence. Pre-PR accepts either a content-only proof, optional
+// valid CI-attested proof, or current-changes boundary reconciliation. Both
+// validateDerivedGate and ParseGateContext call this function so their policy
+// cannot drift.
 func baseAdvanceStatusAllowedForGate(gate GateKind, status string) bool {
 	switch gate {
 	case GatePrePR:
-		return status == baseAdvanceCompatibleStatus || status == currentChangesBoundaryCompatibleStatus
+		return status == baseAdvanceCompatibleStatus || status == baseAdvanceCompatibleLocalStatus || status == currentChangesBoundaryCompatibleStatus
 	case GatePreCommit, GatePrePush:
 		return status == baseAdvanceCompatibleLocalStatus
 	default:
