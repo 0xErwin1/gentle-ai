@@ -47,12 +47,6 @@ func reviewedSupersetFixture(sandbox *Sandbox) error {
 	if err := baseRepoWithRemote(sandbox); err != nil {
 		return err
 	}
-	if err := sandbox.git(sandbox.Repo, "branch", "-M", "main"); err != nil {
-		return err
-	}
-	if err := sandbox.git(sandbox.Repo, "push", "-q", "-u", "origin", "main"); err != nil {
-		return err
-	}
 	if err := sandbox.git(sandbox.Repo, "checkout", "-q", "-b", "feature"); err != nil {
 		return err
 	}
