@@ -326,22 +326,29 @@ func printedCommandArguments(command string) ([]string, error) {
 
 // splitPrintedCommandWords splits a printed command line into shell words.
 //
-// It understands the single and double quotes the product emits, plus a
-// backslash escape. Anything else -- an unterminated quote or a trailing
-// escape -- is a line that would not run as printed, and saying so is the
-// point.
+// It understands the single and double quotes the product emits. Within double
+// quotes it applies POSIX's narrow backslash rules without evaluating any shell
+// syntax. Anything else -- an unterminated quote or a trailing escape -- is a
+// line that would not run as printed, and saying so is the point.
 func splitPrintedCommandWords(line string) ([]string, error) {
 	words := []string{}
 	var word strings.Builder
 	var quote rune
-	escaped, started := false, false
+	escaped, doubleQuotedEscape, started := false, false, false
 	for _, char := range line {
 		switch {
 		case escaped:
-			word.WriteRune(char)
-			escaped = false
+			if char != '\n' {
+				if doubleQuotedEscape && char != '$' && char != '`' && char != '"' && char != '\\' {
+					word.WriteRune('\\')
+				}
+				word.WriteRune(char)
+			}
+			escaped, doubleQuotedEscape = false, false
 		case quote != 0 && char == quote:
 			quote = 0
+		case quote == '"' && char == '\\':
+			escaped, doubleQuotedEscape, started = true, true, true
 		case quote != 0:
 			word.WriteRune(char)
 		case char == '\\':

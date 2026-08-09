@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -201,5 +203,44 @@ func TestRuntimeConsecutiveRescopeRepairRefusesNonExactDamage(t *testing.T) {
 				t.Fatal("repair accepted non-exact authority")
 			}
 		})
+	}
+}
+
+func TestRuntimeConsecutiveRescopeRepairContinuationQuotesDynamicArguments(t *testing.T) {
+	if testing.Short() {
+		t.Skip("requires a POSIX shell to prove command parsing")
+	}
+	shell, err := exec.LookPath("sh")
+	if err != nil {
+		t.Skip("POSIX shell is unavailable")
+	}
+	marker := filepath.Join(t.TempDir(), "command-substitution-executed")
+	workspace := "/tmp/work space $(touch " + marker + ") o'brien"
+	change := "repair-$(touch " + marker + ")-o'brien"
+	revision := runtimeTestHash('a')
+	command := (RuntimeStore{Workspace: workspace, Change: change}).consecutiveRescopeRepairContinuation(revision)
+
+	// Replace the executable name with `set --` so the shell parses the printed
+	// arguments without launching Gentle AI. A broken quote would create marker.
+	script := "set -- " + strings.TrimPrefix(command, "gentle-ai ") + "\nfor argument in \"$@\"; do printf '%s\\000' \"$argument\"; done"
+	output, err := exec.Command(shell, "-c", script).Output()
+	if err != nil {
+		t.Fatalf("shell rejected continuation %q: %v", command, err)
+	}
+	if _, err := os.Stat(marker); !os.IsNotExist(err) {
+		t.Fatalf("shell executed hostile continuation content: stat marker: %v", err)
+	}
+	got := strings.Split(strings.TrimSuffix(string(output), "\x00"), "\x00")
+	want := []string{
+		"sdd-attempt", "repair",
+		"--cwd", workspace,
+		"--change", change,
+		"--expected-revision", revision,
+		"--request-id", "repair-" + strings.Repeat("a", 16),
+		"--actor", "sdd-runtime-repair",
+		"--reason", "repair historical consecutive-rescope publication " + revision,
+	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("shell arguments = %#v, want %#v", got, want)
 	}
 }
