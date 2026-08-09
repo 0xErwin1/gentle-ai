@@ -204,6 +204,9 @@ func (store RuntimeStore) Acquire(ctx context.Context, request CompactAcquireReq
 		if !compactAcquireMatches(record, begin) {
 			return compactBlocked(CompactBlockInvalidContinuation, ""), nil
 		}
+		if request.Token != "" && request.Token != receipt.Revision {
+			return compactBlocked(CompactBlockInvalidContinuation, ""), nil
+		}
 		if _, err := store.Begin(ctx, begin); err != nil {
 			return store.compactMutationFailure(err, false, begin), nil
 		}
