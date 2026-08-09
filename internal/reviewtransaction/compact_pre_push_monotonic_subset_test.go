@@ -29,16 +29,9 @@ func TestCompactPrePushMonotonicReviewedSubset(t *testing.T) {
 			commitMonotonicSubsetFile(t, repo, "b.txt", "approved B\n", "restore approved B")
 		}},
 		{name: "rejects executable mode drift", wantReason: `publication entry at "b.txt" is outside reviewed base/final endpoints`, mutate: func(t *testing.T, repo string) {
-			gitSnapshot(t, repo, "config", "core.filemode", "true")
-			if err := os.Chmod(filepath.Join(repo, "b.txt"), 0o755); err != nil {
-				t.Fatal(err)
-			}
-			gitSnapshot(t, repo, "add", "b.txt")
+			gitSnapshot(t, repo, "update-index", "--chmod=+x", "--", "b.txt")
 			gitSnapshot(t, repo, "commit", "-m", "executable drift")
-			if err := os.Chmod(filepath.Join(repo, "b.txt"), 0o644); err != nil {
-				t.Fatal(err)
-			}
-			gitSnapshot(t, repo, "add", "b.txt")
+			gitSnapshot(t, repo, "update-index", "--chmod=-x", "--", "b.txt")
 			gitSnapshot(t, repo, "commit", "-m", "restore approved mode")
 		}},
 		{name: "rejects final to base reversal", wantReason: `publication edge reverses or extends reviewed entry at "a.txt"`, mutate: func(t *testing.T, repo string) {
@@ -49,17 +42,16 @@ func TestCompactPrePushMonotonicReviewedSubset(t *testing.T) {
 			commitMonotonicSubsetFile(t, repo, "a.txt", "intermediate A\n", "intermediate A")
 			commitMonotonicSubsetFile(t, repo, "a.txt", "approved A\n", "restore approved A")
 		}},
-		{name: "rejects unreviewed merge resolution", wantReason: `publication path "unreviewed.txt" is outside immutable receipt scope`, mutate: func(t *testing.T, repo string) {
+		{name: "rejects unreviewed merge resolution", wantReason: `publication entry at "a.txt" is outside reviewed base/final endpoints`, mutate: func(t *testing.T, repo string) {
 			branch := currentBranch(context.Background(), repo)
-			gitSnapshot(t, repo, "checkout", "-qb", "unreviewed-side")
-			commitMonotonicSubsetFile(t, repo, "unreviewed.txt", "unreviewed merge content\n", "side unreviewed path")
+			gitSnapshot(t, repo, "checkout", "-qb", "unreviewed-side", "HEAD~2")
+			commitMonotonicSubsetFile(t, repo, "a.txt", "side A\n", "side reviewed path")
 			gitSnapshot(t, repo, "checkout", "-q", branch)
-			gitSnapshot(t, repo, "merge", "--no-ff", "--no-edit", "unreviewed-side")
-			if err := os.Remove(filepath.Join(repo, "unreviewed.txt")); err != nil {
-				t.Fatal(err)
+			if gitSnapshotSucceeds(repo, "merge", "--no-ff", "--no-commit", "unreviewed-side") {
+				t.Fatal("merge unexpectedly resolved without conflict")
 			}
-			gitSnapshot(t, repo, "add", "-A")
-			gitSnapshot(t, repo, "commit", "-m", "remove unreviewed merge resolution")
+			commitMonotonicSubsetFile(t, repo, "a.txt", "unreviewed merge resolution\n", "resolve merge with unreviewed blob")
+			commitMonotonicSubsetFile(t, repo, "a.txt", "approved A\n", "restore approved A")
 		}},
 	}
 	for _, tt := range tests {
@@ -93,6 +85,25 @@ func TestCompactPrePushMonotonicReviewedSubset(t *testing.T) {
 				t.Fatalf("unsafe monotonic subset = %#v", result)
 			}
 		})
+	}
+}
+
+func TestCompactPrePushMonotonicSubsetRejectsMismatchedDerivedCandidate(t *testing.T) {
+	repo, state, receipt := approvedCompactMonotonicSubsetFixture(t, "compact-monotonic-mismatched-candidate")
+	state.InitialSnapshot.Kind = TargetBaseWorkspaceOverlay
+	input := NativeGateRequestInput{Gate: GatePrePush, LineageID: state.LineageID}
+	request, _, err := buildCompactGateRequest(t.Context(), repo, state, input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot, refs, err := buildCompactLifecycleSnapshot(t.Context(), repo, request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot.CandidateTree = receipt.BaseTree
+	proof, err := proveCompactPrePushMonotonicSubset(t.Context(), repo, state, receipt.FinalCandidateTree, receipt.BaseTree, input, snapshot, refs)
+	if err != nil || !proof.Applies || proof.Allowed || proof.Reason != "derived pre-push candidate does not match the approved final candidate" {
+		t.Fatalf("mismatched derived candidate proof = %#v, %v", proof, err)
 	}
 }
 
