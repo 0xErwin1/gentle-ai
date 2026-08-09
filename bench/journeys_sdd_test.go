@@ -45,10 +45,12 @@ func TestPortableSDDFailClosedAuthorityJourneysAreRegistered(t *testing.T) {
 	// #2621 journey.
 	// j82 proves #2127's reviewed full candidate can publish an unpublished
 	// monotonic subset without reopening review.
+	// j83 proves #2127's pre-PR path binds its candidate to the unique merge-base
+	// while the advertised main ref remains a moving publication boundary.
 	// Bump this deliberately when a journey is added, and name it here: the
 	// count exists so a journey cannot appear or vanish unnoticed.
-	if got := len(seen); got != 83 {
-		t.Errorf("core journey count = %d, want 83", got)
+	if got := len(seen); got != 84 {
+		t.Errorf("core journey count = %d, want 84", got)
 	}
 	for id, found := range want {
 		if !found {
