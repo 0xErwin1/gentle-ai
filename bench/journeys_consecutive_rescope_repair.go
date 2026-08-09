@@ -26,6 +26,7 @@ const (
 	rc1ConsecutiveRescopeChange      = "consecutive-rescope-repair"
 	rc1ConsecutiveRescopeFixtureRoot = "/tmp/opencode/2839-repro"
 	rc1ConsecutiveRescopeHead        = "sha256:da84114f95f9d1674cd23a3d06f5d92a3d5d36a029d5d40931500b91854ec622"
+	consecutiveRescopeRepairPrefix   = "run this repair command:\n"
 )
 
 type rc1ConsecutiveRescopeManifest struct {
@@ -185,15 +186,7 @@ func runPrintedConsecutiveRescopeRepair(r *journeyRun) error {
 	if before.ExitCode == 0 || !strings.Contains(before.Stderr, rc1ConsecutiveRescopeHead) {
 		return fmt.Errorf("RC-shaped poisoned status = exit %d, stderr %q", before.ExitCode, firstLine(before.Stderr))
 	}
-	start := strings.Index(before.Stderr, "run `")
-	if start < 0 {
-		return errors.New("poisoned status named no runnable repair command")
-	}
-	command := before.Stderr[start+len("run `"):]
-	if end := strings.Index(command, "`"); end >= 0 {
-		command = command[:end]
-	}
-	args, err := printedCommandArguments(command)
+	args, err := printedConsecutiveRescopeRepairArguments(before.Stderr)
 	if err != nil {
 		return fmt.Errorf("printed repair command: %w", err)
 	}
@@ -241,6 +234,14 @@ func runPrintedConsecutiveRescopeRepair(r *journeyRun) error {
 		return fmt.Errorf("begin after reset = exit %d: %s", begin.ExitCode, firstLine(begin.Stderr))
 	}
 	return nil
+}
+
+func printedConsecutiveRescopeRepairArguments(stderr string) ([]string, error) {
+	_, command, found := strings.Cut(stderr, consecutiveRescopeRepairPrefix)
+	if !found {
+		return nil, errors.New("poisoned status named no runnable repair command")
+	}
+	return printedCommandArguments(command)
 }
 
 func consecutiveRescopeRepairJourneys() []Journey {
