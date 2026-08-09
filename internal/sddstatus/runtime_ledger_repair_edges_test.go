@@ -2,6 +2,7 @@ package sddstatus
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -89,6 +90,12 @@ func TestRuntimeConsecutiveRescopeRepairIdempotenceAndPreservation(t *testing.T)
 	if _, err := fixture.store.RepairConsecutiveRescope(context.Background(), RepairConsecutiveRescopeRequest{ExpectedRevision: head, RequestID: request.RequestID, Reason: "changed digest", Actor: "maintainer"}); err == nil {
 		t.Fatal("repair accepted a changed digest for the same request id")
 	}
+	if repaired.DecisionRequired || repaired.NextAction != RuntimeActionBegin {
+		t.Fatalf("repair with remaining B capacity = %#v", repaired)
+	}
+	if _, err := fixture.store.Begin(context.Background(), BeginAttemptRequest{ExpectedRevision: repaired.Revision, RequestID: "begin-b", WorkUnit: "objective-b", EvidenceGoal: "prove B", MaxAttempts: 2, MaxChangedLines: 10}); err != nil {
+		t.Fatalf("begin after repair with remaining capacity: %v", err)
+	}
 	after, err := os.ReadFile(fixture.path)
 	if err != nil || string(after) != string(before) || repaired.LastReset != nil || repaired.LastRescope == nil || repaired.LastRepair == nil {
 		t.Fatalf("repair altered preserved authority: err=%v status=%#v", err, repaired)
@@ -98,6 +105,69 @@ func TestRuntimeConsecutiveRescopeRepairIdempotenceAndPreservation(t *testing.T)
 	}
 	if _, err := fixture.store.Status(); err == nil {
 		t.Fatal("replay accepted a repair whose preserved record is missing")
+	}
+}
+
+func TestRuntimeConsecutiveRescopeRepairRetriesCommittedSync(t *testing.T) {
+	fixture := newConsecutiveRescopeRepairFixture(t)
+	head, exists, err := readRuntimeHead(filepath.Join(fixture.store.Dir, "HEAD"))
+	if err != nil || !exists {
+		t.Fatal(err)
+	}
+	request := RepairConsecutiveRescopeRequest{ExpectedRevision: head, RequestID: "repair-durable", Reason: "retry committed repair sync", Actor: "maintainer"}
+	originalSync := runtimeSyncDirectory
+	phase := 0
+	runtimeSyncDirectory = func(path string) error {
+		switch {
+		case filepath.Clean(path) == filepath.Clean(fixture.store.Dir) && phase == 0:
+			phase++
+			return errors.New("simulated post-HEAD sync failure")
+		case filepath.Clean(path) == filepath.Clean(filepath.Join(fixture.store.Dir, "records")) && phase == 1:
+			phase++
+			return errors.New("simulated replay record sync failure")
+		default:
+			return originalSync(path)
+		}
+	}
+	t.Cleanup(func() { runtimeSyncDirectory = originalSync })
+
+	_, err = fixture.store.RepairConsecutiveRescope(context.Background(), request)
+	var publication *RuntimePublicationError
+	if !errors.As(err, &publication) || !publication.Committed {
+		t.Fatalf("initial repair = %T %v, want committed publication error", err, err)
+	}
+	_, err = fixture.store.RepairConsecutiveRescope(context.Background(), request)
+	if !errors.As(err, &publication) || !publication.Committed || phase != 2 {
+		t.Fatalf("repair retry = %T %v, sync phase=%d", err, err, phase)
+	}
+	replayed, err := fixture.store.RepairConsecutiveRescope(context.Background(), request)
+	if err != nil || replayed.Revision != publication.Revision || countRuntimeRecords(t, fixture.store.Dir) != 5 {
+		t.Fatalf("durable repair replay = %#v, err=%v records=%d", replayed, err, countRuntimeRecords(t, fixture.store.Dir))
+	}
+}
+
+func TestRuntimeConsecutiveRescopeRepairRefusesConcurrentHeadChange(t *testing.T) {
+	fixture := newConsecutiveRescopeRepairFixture(t)
+	head, exists, err := readRuntimeHead(filepath.Join(fixture.store.Dir, "HEAD"))
+	if err != nil || !exists {
+		t.Fatal(err)
+	}
+	originalHook := runtimeRepairBeforePublishHook
+	runtimeRepairBeforePublishHook = func() {
+		if err := fixture.store.publishHead(fixture.predecessor.Revision); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Cleanup(func() { runtimeRepairBeforePublishHook = originalHook })
+
+	_, err = fixture.store.RepairConsecutiveRescope(context.Background(), RepairConsecutiveRescopeRequest{ExpectedRevision: head, RequestID: "repair-race", Reason: "must not overwrite concurrent head", Actor: "maintainer"})
+	var conflict *RuntimeRevisionConflictError
+	if !errors.As(err, &conflict) || countRuntimeRecords(t, fixture.store.Dir) != 4 {
+		t.Fatalf("concurrent repair = %T %v, records=%d", err, err, countRuntimeRecords(t, fixture.store.Dir))
+	}
+	current, exists, err := readRuntimeHead(filepath.Join(fixture.store.Dir, "HEAD"))
+	if err != nil || !exists || current != fixture.predecessor.Revision {
+		t.Fatalf("concurrent repair HEAD = %q exists=%t err=%v", current, exists, err)
 	}
 }
 
