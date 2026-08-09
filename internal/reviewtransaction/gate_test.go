@@ -14,7 +14,7 @@ import (
 	"testing"
 )
 
-func TestNativePrePRGateAllowsOnlyCryptographicallyAttestedCompatibleBaseAdvance(t *testing.T) {
+func TestNativePrePRGateAllowsContentAndAttestedCompatibleBaseAdvance(t *testing.T) {
 	fixture := newCompatiblePrePRFixture(t, "delivery.txt", "base-only.txt")
 	contentOnly := fixture.request
 	prePR := *contentOnly.PrePR
