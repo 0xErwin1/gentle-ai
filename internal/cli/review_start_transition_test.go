@@ -73,6 +73,25 @@ func TestStatusStartTransitionPreservesFrozenTarget(t *testing.T) {
 	})
 }
 
+func TestNegotiatedStatusStartReplayCanonicalBaseDiffStaged(t *testing.T) {
+	repo := initReviewCLIRepo(t)
+	writeReviewStartCandidate(t, repo, "tracked.txt", "committed\n", 0o644)
+	runReviewCLIGit(t, repo, "add", "tracked.txt")
+	runReviewCLIGit(t, repo, "commit", "-qm", "candidate")
+
+	status := negotiatedStartStatus(t, repo, "--base-ref", "HEAD~1", "--committed-only", "--projection", "staged")
+	if status.Projection.Projection != reviewtransaction.ProjectionWorkspace {
+		t.Fatalf("STATUS projection = %q, want canonical committed-only workspace projection", status.Projection.Projection)
+	}
+	assertStartTransition(t, status, []string{"contract", "target", "projection", "base-ref", "committed-only"})
+	if got := startTransitionArgumentValue(t, status, "projection"); got != string(reviewtransaction.ProjectionWorkspace) {
+		t.Fatalf("emitted projection = %q, want workspace", got)
+	}
+	if started := executeStartTransition(t, repo, status); negotiatedStartTarget(started) != status.TargetIdentity {
+		t.Fatalf("START target = %q, want STATUS target %q", negotiatedStartTarget(started), status.TargetIdentity)
+	}
+}
+
 func TestNegotiatedStatusInterpretsCommittedOnlyValue(t *testing.T) {
 	repo := initReviewCLIRepo(t)
 	tests := []struct {

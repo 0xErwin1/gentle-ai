@@ -49,6 +49,19 @@ func TestCanonicalPathsRejectsDuplicateInput(t *testing.T) {
 	}
 }
 
+func TestCanonicalTargetProjectsStagedBaseDiffToCommittedOnly(t *testing.T) {
+	requested := Target{
+		Kind: TargetBaseDiff, Projection: ProjectionStaged, BaseRef: "HEAD~1", IntendedUntracked: []string{},
+	}
+	got := CanonicalTarget(requested)
+	if got.Projection != ProjectionWorkspace {
+		t.Fatalf("canonical base-diff projection = %q, want committed-only workspace", got.Projection)
+	}
+	if got.Kind != requested.Kind || got.BaseRef != requested.BaseRef || !reflect.DeepEqual(got.IntendedUntracked, requested.IntendedUntracked) {
+		t.Fatalf("canonical target = %#v, want only the executable projection changed", got)
+	}
+}
+
 func TestSnapshotBuilderCurrentChangesIsCompleteAndPreservesRealIndex(t *testing.T) {
 	if testing.Short() {
 		t.Skip("uses real git commands")

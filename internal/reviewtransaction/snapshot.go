@@ -44,6 +44,17 @@ type Target struct {
 	LedgerIDs         []string   `json:"ledger_ids,omitempty"`
 }
 
+// CanonicalTarget projects a requested selector onto the executable target
+// vocabulary before any snapshot identity is derived. A base diff is always a
+// committed-only comparison, so its staged spelling cannot name distinct
+// authority.
+func CanonicalTarget(target Target) Target {
+	if target.Kind == TargetBaseDiff && target.Projection == ProjectionStaged {
+		target.Projection = ProjectionWorkspace
+	}
+	return target
+}
+
 type Snapshot struct {
 	Kind                   TargetKind `json:"kind"`
 	Projection             Projection `json:"projection,omitempty"`
@@ -66,7 +77,7 @@ type SnapshotBuilder struct {
 var exactObjectPattern = regexp.MustCompile(`^[0-9a-fA-F]{40}(?:[0-9a-fA-F]{24})?$`)
 
 func (builder SnapshotBuilder) Build(ctx context.Context, target Target) (Snapshot, error) {
-	return builder.build(ctx, target, false)
+	return builder.build(ctx, CanonicalTarget(target), false)
 }
 
 // BuildStagedWorkspaceOverlayRecovery freezes the exact real index for the
