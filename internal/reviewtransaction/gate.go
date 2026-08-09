@@ -572,8 +572,7 @@ func buildPrePRTarget(ctx context.Context, repo, selector, ciAttestation string,
 		&PrePRRequest{CIAttestationArtifact: ciAttestation, Boundary: &selection, PushRemote: pushRemote, PushRemoteIdentity: pushIdentity}, nil
 }
 
-// BuildPrePRTarget resolves an advertised publication boundary once and binds
-// the returned candidate target to its unique merge-base.
+// BuildPrePRTarget binds an advertised publication boundary to its unique merge-base.
 func BuildPrePRTarget(ctx context.Context, repo, selector, ciAttestation string, intendedUntracked []string) (Target, *PrePRRequest, error) {
 	return buildPrePRTarget(ctx, repo, selector, ciAttestation, intendedUntracked)
 }

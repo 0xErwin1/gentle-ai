@@ -275,8 +275,7 @@ func RecoverySelfDerivedInputs(predecessor State) []string {
 	}
 }
 
-// baseAdvanceStatusAllowedForGate keeps evaluation and persisted-context
-// validation aligned on compatible base-advance evidence.
+// baseAdvanceStatusAllowedForGate keeps evaluation and persisted contexts aligned.
 func baseAdvanceStatusAllowedForGate(gate GateKind, status string) bool {
 	switch gate {
 	case GatePrePR:
