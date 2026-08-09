@@ -287,8 +287,8 @@ func TestStatusRecoverTransitionExecutesAccountingOnlyRecoveryWithoutSelectors(t
 		"--recovery-actor", actor, "--recovery-authorization", authorization)
 	arguments := selectorTransitionArguments(t, status)
 	for _, selector := range []string{"base-ref", "committed-only", "projection", "workspace-overlay"} {
-		if arguments[selector] != "" {
-			t.Fatalf("accounting-only recovery emitted selector %q in %#v", selector, arguments)
+		if value, ok := arguments[selector]; ok {
+			t.Fatalf("accounting-only recovery emitted selector %q=%q in %#v", selector, value, arguments)
 		}
 	}
 	if status.NextTransition.Execute.SelectorArguments != nil {

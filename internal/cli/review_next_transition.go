@@ -727,31 +727,28 @@ func reviewRecoveryCollection(status ReviewTargetStatusResult, binding ReviewTra
 		disposition = reviewtransaction.RecoveryInvalidated
 	}
 	var selectorArguments []ReviewTransitionArgument
-	if input.Selector != nil {
-		if input.Selector.SelectorFreeAccountingOnlyRecovery {
-			// The core has already narrowed this to the evidence-bound,
-			// accounting-only edge. It is the only selector-free recovery.
-		} else {
-			if input.Selector.Recovery == nil {
-				return reviewCollectTransition("recovery_target_unrepresentable", ReviewTransitionInput{
-					Name: "recovery_target_selector", Schema: "gentle-ai.review-recovery-target-selection/v1",
-					CaptureOperation: "external.select_recovery_target", Arguments: reviewTargetArguments(status),
-				})
-			}
-			if status.TargetIdentity == reviewAuthorityTargetIdentity(status) {
-				return reviewStopTransition("recovery_scope_unchanged")
-			}
-			var representable bool
-			selectorArguments, representable = input.Selector.recoveryArguments()
-			if !representable {
-				// Root 7 (#2471): the selector the caller supplied cannot be
-				// represented as a recovery target, so the missing thing is a
-				// different selector they choose, not a dead end.
-				return reviewCollectTransition("recovery_target_unrepresentable", ReviewTransitionInput{
-					Name: "recovery_target_selector", Schema: "gentle-ai.review-recovery-target-selection/v1",
-					CaptureOperation: "external.select_recovery_target", Arguments: reviewTargetArguments(status),
-				})
-			}
+	// The core has already narrowed this to the evidence-bound,
+	// accounting-only edge. It is the only selector-free recovery.
+	if input.Selector != nil && !input.Selector.SelectorFreeAccountingOnlyRecovery {
+		if input.Selector.Recovery == nil {
+			return reviewCollectTransition("recovery_target_unrepresentable", ReviewTransitionInput{
+				Name: "recovery_target_selector", Schema: "gentle-ai.review-recovery-target-selection/v1",
+				CaptureOperation: "external.select_recovery_target", Arguments: reviewTargetArguments(status),
+			})
+		}
+		if status.TargetIdentity == reviewAuthorityTargetIdentity(status) {
+			return reviewStopTransition("recovery_scope_unchanged")
+		}
+		var representable bool
+		selectorArguments, representable = input.Selector.recoveryArguments()
+		if !representable {
+			// Root 7 (#2471): the selector the caller supplied cannot be
+			// represented as a recovery target, so the missing thing is a
+			// different selector they choose, not a dead end.
+			return reviewCollectTransition("recovery_target_unrepresentable", ReviewTransitionInput{
+				Name: "recovery_target_selector", Schema: "gentle-ai.review-recovery-target-selection/v1",
+				CaptureOperation: "external.select_recovery_target", Arguments: reviewTargetArguments(status),
+			})
 		}
 	}
 	if input.recoveryAuthorized(binding) {
