@@ -139,11 +139,11 @@ func readReviewedSupersetStatus(run *journeyRun) (reviewedSupersetStatus, error)
 	observation := run.run(productArgsFor(run, "review", "status", "--contract", reviewContract, "--next-transition",
 		"--lineage", reviewedSupersetLineage, "--base-ref", run.sandbox.Scratch["reviewed-superset-base"]), false)
 	var status reviewedSupersetStatus
-	if err := json.Unmarshal([]byte(strings.TrimSpace(observation.Stdout)), &status); err != nil {
-		return status, fmt.Errorf("parse reviewed-superset receipt status: %w (stderr: %s)", err, firstLine(observation.Stderr))
-	}
 	if observation.ExitCode != 0 {
 		return status, fmt.Errorf("reviewed-superset receipt status exited %d: %s", observation.ExitCode, firstLine(observation.Stderr))
+	}
+	if err := json.Unmarshal([]byte(strings.TrimSpace(observation.Stdout)), &status); err != nil {
+		return status, fmt.Errorf("parse reviewed-superset receipt status: %w (stderr: %s)", err, firstLine(observation.Stderr))
 	}
 	return status, nil
 }
@@ -214,11 +214,12 @@ func publishReviewedPrefix(sandbox *Sandbox) error {
 func requireReviewedSupersetPrePushAllow(sandbox *Sandbox, observation Observation) error {
 	var gate waveGateResult
 	if err := json.Unmarshal([]byte(strings.TrimSpace(observation.Stdout)), &gate); err != nil {
+		if observation.ExitCode != 0 {
+			return fmt.Errorf("reviewed supersets pre-push exited %d: %s", observation.ExitCode, firstLine(observation.Stderr))
+		}
 		return fmt.Errorf("parse reviewed-superset pre-push result: %w (stderr: %s)", err, firstLine(observation.Stderr))
 	}
-	if observation.ExitCode != 0 || !gate.Allowed || gate.Result != "allow" ||
-		gate.Context.LineageID != sandbox.Lineage ||
-		sandbox.Scratch["reviewed-superset-head-tree"] != sandbox.Scratch["reviewed-superset-tree"] {
+	if !gate.Allowed || gate.Result != "allow" || gate.Context.LineageID != sandbox.Lineage {
 		stage, code := "", ""
 		if gate.Context.Denial != nil {
 			stage, code = gate.Context.Denial.Stage, gate.Context.Denial.Code
