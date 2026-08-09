@@ -65,7 +65,7 @@ func driveSelectedUntrackedSDDAttempt(r *journeyRun) error {
 
 func selectedUntrackedSDDJourneys() []Journey {
 	return []Journey{{
-		ID:     "j79-sdd-attempt-selected-untracked-lifecycle",
+		ID:     "j84-sdd-attempt-selected-untracked-lifecycle",
 		Title:  "SDD attempt: inventory-selected untracked bytes remain candidate provenance and accounting",
 		Source: "issue #2716: SDD must not issue authority for undeclared untracked candidate scope",
 		Steps: []Step{
