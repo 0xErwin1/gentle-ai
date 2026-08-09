@@ -215,10 +215,15 @@ func TestRuntimeConsecutiveRescopeRepairContinuationQuotesDynamicArguments(t *te
 		t.Skip("POSIX shell is unavailable")
 	}
 	marker := filepath.Join(t.TempDir(), "command-substitution-executed")
-	workspace := "/tmp/work space $(touch " + marker + ") o'brien"
-	change := "repair-$(touch " + marker + ")-o'brien"
+	workspace := "/tmp/work`space $(touch " + marker + ") o'brien"
+	change := "repair-`change-$(touch " + marker + ")-o'brien"
 	revision := runtimeTestHash('a')
 	command := (RuntimeStore{Workspace: workspace, Change: change}).consecutiveRescopeRepairContinuation(revision)
+	message := (&runtimeConsecutiveRescopeRepairRequiredError{Revision: revision, Continuation: command}).Error()
+	_, command, found := strings.Cut(message, "run this repair command:\n")
+	if !found {
+		t.Fatal("repair-required error named no runnable repair command")
+	}
 
 	// Replace the executable name with `set --` so the shell parses the printed
 	// arguments without launching Gentle AI. A broken quote would create marker.
@@ -242,5 +247,19 @@ func TestRuntimeConsecutiveRescopeRepairContinuationQuotesDynamicArguments(t *te
 	}
 	if !slices.Equal(got, want) {
 		t.Fatalf("shell arguments = %#v, want %#v", got, want)
+	}
+}
+
+func TestRuntimeConsecutiveRescopeRepairRequiredErrorPrintsContinuationOnNewLine(t *testing.T) {
+	const revision = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	const continuation = "gentle-ai sdd-attempt repair --cwd /tmp/repo --change repair-2839"
+
+	got := (&runtimeConsecutiveRescopeRepairRequiredError{
+		Revision:     revision,
+		Continuation: continuation,
+	}).Error()
+	want := "published consecutive-rescope record " + revision + " is unreadable under normal replay; run this repair command:\n" + continuation
+	if got != want {
+		t.Fatalf("repair-required error = %q, want %q", got, want)
 	}
 }

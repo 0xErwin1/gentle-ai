@@ -3202,7 +3202,7 @@ type runtimeConsecutiveRescopeRepairRequiredError struct {
 }
 
 func (err *runtimeConsecutiveRescopeRepairRequiredError) Error() string {
-	return fmt.Sprintf("published consecutive-rescope record %s is unreadable under normal replay; run `%s`", err.Revision, err.Continuation)
+	return fmt.Sprintf("published consecutive-rescope record %s is unreadable under normal replay; run this repair command:\n%s", err.Revision, err.Continuation)
 }
 
 func (store RuntimeStore) consecutiveRescopeRepairContinuation(revision string) string {

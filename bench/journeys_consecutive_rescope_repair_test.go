@@ -20,6 +20,22 @@ func TestRC1ConsecutiveRescopeProvenanceMatchesFixture(t *testing.T) {
 	}
 }
 
+func TestPrintedConsecutiveRescopeRepairArgumentsPreservesLiteralBackticks(t *testing.T) {
+	workspace := "/tmp/work`space"
+	change := "repair`change"
+	stderr := "published consecutive-rescope record sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa is unreadable under normal replay; " + consecutiveRescopeRepairPrefix +
+		"gentle-ai sdd-attempt repair --cwd '" + workspace + "' --change '" + change + "'"
+
+	got, err := printedConsecutiveRescopeRepairArguments(stderr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"sdd-attempt", "repair", "--cwd", workspace, "--change", change}
+	if !slices.Equal(got, want) {
+		t.Fatalf("parsed repair command = %#v, want %#v", got, want)
+	}
+}
+
 func TestRC1ConsecutiveRescopeProvenanceRefusesSameLengthOperationMutation(t *testing.T) {
 	fixture := mutatedRC1ConsecutiveRescopeProvenance(t, func(manifest *rc1ConsecutiveRescopeManifest) {
 		manifest.OperationShape[3] = "objective/rescope B to D"
