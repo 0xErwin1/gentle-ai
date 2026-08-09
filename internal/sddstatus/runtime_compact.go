@@ -3,6 +3,7 @@ package sddstatus
 import (
 	"context"
 	"errors"
+	"slices"
 )
 
 type CompactAttemptState string
@@ -175,6 +176,7 @@ func runtimeReadiness(in runtimeReadinessInput) (CompactAttemptResult, bool) {
 // Acquire claims one native attempt without exposing the growing runtime
 // history. The returned token identifies that exact begin record for Settle.
 func (store RuntimeStore) Acquire(ctx context.Context, request CompactAcquireRequest) (CompactAttemptResult, error) {
+	recoverIntendedUntracked := request.Token != "" && request.IntendedUntracked == nil
 	begin, err := normalizeBeginAttemptRequest(request.BeginAttemptRequest)
 	if err != nil {
 		return CompactAttemptResult{}, err
@@ -193,6 +195,12 @@ func (store RuntimeStore) Acquire(ctx context.Context, request CompactAcquireReq
 			return compactBlockedByUnreadableAuthority(loadErr), nil
 		}
 		begin.ExpectedRevision = record.PreviousRevision
+		// A token is the committed begin record's ownership proof. A tokenized
+		// retry that omitted selection recovers that record's population; an
+		// explicit declaration must still match it exactly below.
+		if recoverIntendedUntracked && request.Token == receipt.Revision && record.Begin != nil {
+			begin.IntendedUntracked = record.Begin.IntendedUntracked
+		}
 		if !compactAcquireMatches(record, begin) {
 			return compactBlocked(CompactBlockInvalidContinuation, ""), nil
 		}
@@ -358,10 +366,10 @@ func compactAcquireMatches(record runtimeRecord, request BeginAttemptRequest) bo
 		return false
 	}
 	event := record.Begin
-	return request == (BeginAttemptRequest{
-		ExpectedRevision: record.PreviousRevision, RequestID: record.RequestID, WorkUnit: event.WorkUnit,
-		EvidenceGoal: event.EvidenceGoal, MaxAttempts: event.MaxAttempts, MaxChangedLines: event.MaxChangedLines,
-	})
+	return request.ExpectedRevision == record.PreviousRevision && request.RequestID == record.RequestID &&
+		request.WorkUnit == event.WorkUnit && request.EvidenceGoal == event.EvidenceGoal &&
+		request.MaxAttempts == event.MaxAttempts && request.MaxChangedLines == event.MaxChangedLines &&
+		slices.Equal(request.IntendedUntracked, event.IntendedUntracked)
 }
 
 func compactSettleReplayRequest(replay runtimeReplay, record runtimeRecord, request CompactSettleRequest) (FinishAttemptRequest, bool) {
