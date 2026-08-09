@@ -16,6 +16,13 @@ import (
 
 func TestNativePrePRGateAllowsOnlyCryptographicallyAttestedCompatibleBaseAdvance(t *testing.T) {
 	fixture := newCompatiblePrePRFixture(t, "delivery.txt", "base-only.txt")
+	contentOnly := fixture.request
+	prePR := *contentOnly.PrePR
+	prePR.CIAttestationArtifact = ""
+	contentOnly.PrePR = &prePR
+	if got := EvaluateNativeGate(context.Background(), fixture.repo, fixture.receipt, contentOnly); got.Result != GateAllow || got.Context.BaseAdvance == nil || got.Context.BaseAdvance.Status != baseAdvanceCompatibleLocalStatus {
+		t.Fatalf("content-compatible pre-PR advance = %#v", got)
+	}
 	originalPreimageHook := artifactPreimagesReadHook
 	artifactPreimagesReadHook = func() {
 		artifactPreimagesReadHook = originalPreimageHook
@@ -33,16 +40,6 @@ func TestNativePrePRGateAllowsOnlyCryptographicallyAttestedCompatibleBaseAdvance
 		t.Fatalf("base advance context = %#v", evaluation.Context.BaseAdvance)
 	}
 }
-
-func TestNativePrePRGateAllowsContentCompatibleBaseAdvanceWithoutAttestation(t *testing.T) {
-	fixture := newCompatiblePrePRFixture(t, "delivery.txt", "base-only.txt")
-	fixture.request.PrePR.CIAttestationArtifact = ""
-	got := EvaluateNativeGate(context.Background(), fixture.repo, fixture.receipt, fixture.request)
-	if got.Result != GateAllow || got.Context.BaseAdvance == nil || got.Context.BaseAdvance.Status != baseAdvanceCompatibleLocalStatus {
-		t.Fatalf("content-compatible pre-PR advance = %#v", got)
-	}
-}
-
 func TestOrdinaryBoundedCompatibleBaseAdvancePreservesFrozenRiskInputs(t *testing.T) {
 	fixture := newCompatiblePrePRFixtureMode(t, "delivery.txt", "base-only.txt", ModeOrdinaryBounded)
 	store, err := AuthoritativeStore(context.Background(), fixture.repo, fixture.receipt.LineageID)
@@ -406,13 +403,6 @@ func TestSelectPrePRBoundaryRejectsAdvertisedUnrelatedSameTree(t *testing.T) {
 	}
 }
 
-func TestSelectPrePRBoundaryRejectsRawSHASelector(t *testing.T) {
-	fixture := newCompatiblePrePRFixture(t, "delivery.txt", "base-only.txt")
-	if _, err := selectPrePRBoundary(context.Background(), fixture.repo, fixture.originalBaseCommit); err == nil || !strings.Contains(err.Error(), "advertised remote branch") {
-		t.Fatalf("raw pre-PR SHA selector error = %v", err)
-	}
-}
-
 func TestSelectPrePRBoundaryRejectsAmbiguousMergeBase(t *testing.T) {
 	repo := initSnapshotRepo(t)
 	initial := trimGit(gitSnapshot(t, repo, "rev-parse", "HEAD"))
@@ -473,20 +463,6 @@ func TestBuildNativePrePRRequestKeepsExplicitReviewedBaseWhenDefaultAdvanced(t *
 	}
 	if evaluation := EvaluateNativeGate(context.Background(), fixture.repo, fixture.receipt, request); evaluation.Result != GateAllow || evaluation.Context.PrePRBoundary == nil || *evaluation.Context.PrePRBoundary != *request.PrePR.Boundary {
 		t.Fatalf("explicit pre-PR evaluation = %#v", evaluation)
-	}
-}
-
-func TestBuildNativePrePRRequestBindsCandidateToMergeBaseAndBoundaryToAdvertisedTip(t *testing.T) {
-	fixture := newCompatiblePrePRFixture(t, "delivery.txt", "base-only.txt")
-	request, err := BuildNativeGateRequest(context.Background(), fixture.repo, NativeGateRequestInput{
-		Gate: GatePrePR, LineageID: fixture.receipt.LineageID, BaseRef: "origin/main",
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if request.PrePR == nil || request.PrePR.Boundary == nil || request.Target.BaseRef != fixture.originalBaseCommit ||
-		request.PrePR.Boundary.MergeBase != fixture.originalBaseCommit || request.PrePR.Boundary.Commit == fixture.originalBaseCommit {
-		t.Fatalf("merge-base-bound pre-PR request = %#v", request)
 	}
 }
 

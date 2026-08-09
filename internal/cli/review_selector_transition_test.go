@@ -117,6 +117,9 @@ func TestStatusAndValidateShareMergeBaseBoundPrePRTarget(t *testing.T) {
 	runReviewCLIGit(t, side, "add", "docs/base.md")
 	runReviewCLIGit(t, side, "commit", "-qm", "docs: advance main")
 	runReviewCLIGit(t, side, "push", "-q", "origin", "main")
+	if err := RunReview([]string{"status", "--cwd", repo, "--contract", ReviewIntegrationContractV1, "--gate", "pre-pr", "--base-ref", "origin/main"}, &bytes.Buffer{}); err == nil {
+		t.Fatalf("unfetched advertised base STATUS error = %v", err)
+	}
 	runReviewCLIGit(t, repo, "fetch", "-q", "origin", "main")
 
 	status := selectorTransitionStatus(t, repo, "--gate", "pre-pr", "--base-ref", "origin/main")
