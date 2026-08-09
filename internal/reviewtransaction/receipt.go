@@ -275,11 +275,8 @@ func RecoverySelfDerivedInputs(predecessor State) []string {
 	}
 }
 
-// baseAdvanceStatusAllowedForGate is the single source of truth for compatible
-// base-advance evidence. Pre-PR accepts either a content-only proof, optional
-// valid CI-attested proof, or current-changes boundary reconciliation. Both
-// validateDerivedGate and ParseGateContext call this function so their policy
-// cannot drift.
+// baseAdvanceStatusAllowedForGate keeps evaluation and persisted-context
+// validation aligned on compatible base-advance evidence.
 func baseAdvanceStatusAllowedForGate(gate GateKind, status string) bool {
 	switch gate {
 	case GatePrePR:
