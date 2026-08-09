@@ -34,7 +34,8 @@ func TestRunSDDAttemptSettleRepairsUnsafeDisabledRARModeWithoutRecursing(t *test
 		t.Fatal(err)
 	}
 	childBefore := windowsACL(t, child)
-	windowsRunPowerShell(t, "$acl = Get-Acl -LiteralPath "+quotePowerShellLiteral(privateRARDir)+"; $acl.SetAccessRuleProtection($false, $true); Set-Acl -LiteralPath "+quotePowerShellLiteral(privateRARDir)+" -AclObject $acl")
+	unsafeParentSetup := "$p = " + quotePowerShellLiteral(privateRARDir) + "; $acl = [System.IO.Directory]::GetAccessControl($p); $acl.SetAccessRuleProtection($false, $true); [System.IO.Directory]::SetAccessControl($p, $acl)"
+	windowsRunPowerShell(t, unsafeParentSetup)
 
 	runtimeBefore := snapshotRuntimeAuthorityFiles(t, store.Dir)
 	rarBefore := snapshotRuntimeAuthorityFiles(t, privateRARDir)
@@ -70,6 +71,15 @@ func TestRunSDDAttemptSettleRepairsUnsafeDisabledRARModeWithoutRecursing(t *test
 	if completed.State != "complete" {
 		t.Fatalf("replayed settle after repair = %#v, want complete", completed)
 	}
+}
+
+func TestReviewModeUnsafeFileRepairCommandRunsOnWindowsPowerShell(t *testing.T) {
+	target := filepath.Join(t.TempDir(), "unsafe file")
+	if err := os.WriteFile(target, []byte("private\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	windowsRunPowerShell(t, (&reviewModeUnsafePathError{Path: target}).repairCommand())
 }
 
 func windowsRunPowerShell(t *testing.T, script string) {
