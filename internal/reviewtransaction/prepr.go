@@ -50,9 +50,7 @@ type prePRCITrust struct {
 
 const (
 	baseAdvanceCompatibleStatus = "base-advanced-compatible"
-	// baseAdvanceCompatibleLocalStatus records the native Git content proof when
-	// no optional CI attestation was supplied. It is accepted at pre-PR only for
-	// the merge-base-bound moving-boundary route.
+	// baseAdvanceCompatibleLocalStatus records native content proof without CI attestation.
 	baseAdvanceCompatibleLocalStatus       = "base-advanced-compatible-local"
 	currentChangesBoundaryCompatibleStatus = "current-changes-boundary-compatible"
 	currentChangesBoundaryCIStatus         = "not-required"
@@ -83,9 +81,7 @@ func prePRAttestationRequested(request GateRequest) bool {
 	return request.PrePR != nil && strings.TrimSpace(request.PrePR.CIAttestationArtifact) != ""
 }
 
-// deriveBaseAdvanceCompatibility verifies the shared merge-base, path, patch,
-// disjointness, and conflict-free merge proof. Attestation is optional; the
-// native content checks are identical for every caller.
+// deriveBaseAdvanceCompatibility verifies the shared content and merge proof.
 func deriveBaseAdvanceCompatibility(ctx context.Context, repo string, receipt Receipt, request GateRequest, snapshot Snapshot, refs *resolvedPrePRRefs, preimages gateArtifactPreimages, requireAttestation bool) (BaseAdvanceCompatibility, error) {
 	if refs == nil {
 		return BaseAdvanceCompatibility{}, errors.New("resolved pre-PR refs are missing")
