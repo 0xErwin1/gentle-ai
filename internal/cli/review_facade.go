@@ -867,15 +867,26 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 			}
 		}
 		target.IntendedUntracked = intendedScope.Intended
-		selector := &reviewTransitionSelector{
-			Kind: target.Kind, Projection: target.Projection, BaseRef: selectedBaseRef,
-			BaseTree: selectedBaseTree, WorkspaceOverlay: *workspaceOverlay, PrePRRepresentable: true,
-		}
+		var prePR *reviewtransaction.PrePRRequest
+		prePRRepresentable := true
 		if reviewtransaction.GateKind(*gate) == reviewtransaction.GatePrePR {
-			selector.PrePRRepresentable = reviewtransaction.ValidatePrePRBoundarySelector(ctx, root, selectedBaseRef) == nil
+			prePRTarget := target
+			target, prePR, err = reviewtransaction.BuildPrePRTarget(ctx, root, selectedBaseRef, "", intendedScope.Intended)
+			if err != nil {
+				var resolutionErr *reviewtransaction.GateTargetResolutionError
+				if !errors.As(err, &resolutionErr) {
+					return fmt.Errorf("resolve negotiated pre-PR target: %w", err)
+				}
+				target = prePRTarget
+				prePRRepresentable = false
+			}
+		}
+		selector := &reviewTransitionSelector{
+			Kind: target.Kind, Projection: selectedProjection, BaseRef: selectedBaseRef,
+			BaseTree: selectedBaseTree, WorkspaceOverlay: *workspaceOverlay, PrePRRepresentable: prePRRepresentable,
 		}
 		native, liveSnapshot, err := reviewtransaction.AssessTargetStatusWithSnapshot(ctx, root, reviewtransaction.TargetStatusRequest{
-			Target: target, LineageID: *lineage,
+			Target: target, LineageID: *lineage, PrePR: prePR,
 		})
 		if err != nil {
 			return fmt.Errorf("assess negotiated review target: %w", err)
@@ -896,6 +907,13 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 		selector.WorkspaceOverlay = result.decision.Selector.Kind == reviewtransaction.TargetBaseWorkspaceOverlay
 		selector.Recovery = result.decision.RecoverySelector
 		selector.SelectorFreeAccountingOnlyRecovery = result.decision.SelectorFreeAccountingOnlyRecovery
+		if *actionEligibility || *nextTransition {
+			mode, modeErr := reviewModeStatus(ctx, root)
+			if modeErr != nil {
+				return modeErr
+			}
+			result.repositoryRoot, result.rddMode, result.rddModeResolved = root, mode, true
+		}
 		if native.Applicability == reviewtransaction.TargetApplicabilityCorrupted &&
 			native.Action == reviewtransaction.TargetStatusActionRepairAuthority {
 			repair, repairErr := reviewtransaction.AssessAuthorityRepairAtRepositoryRoot(ctx, root)
@@ -922,6 +940,7 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 		if *actionEligibility {
 			result.Eligibility = newReviewActionEligibility(result)
 		}
+		var compactAuthority *reviewStatusCompactAuthority
 		if *nextTransition {
 			artifacts := []ReviewTransitionArtifact{}
 			var capturedEvidence *reviewtransaction.VerificationEvidenceRecord
@@ -941,6 +960,11 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 					if loadErr != nil {
 						artifactErr = loadErr
 					} else {
+						compactAuthority = &reviewStatusCompactAuthority{
+							OriginalChangedLines:   record.State.OriginalChangedLines,
+							CorrectionBudget:       record.State.CorrectionBudget,
+							CorrectionBudgetPolicy: record.State.CorrectionBudgetPolicy,
+						}
 						correctionForecasted = record.State.State == reviewtransaction.StateCorrectionRequired && record.State.ProposedCorrectionLines != nil
 						if record.State.State == reviewtransaction.StateCorrectionRequired && !record.State.CorrectionAttemptConsumed() {
 							request, requestErr := reviewtransaction.BuildCorrectionPlanRequest(record.State, record.Revision)
@@ -1009,7 +1033,7 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 			if startLineage == "" && native.Applicability == reviewtransaction.TargetApplicabilityUnrelated {
 				startLineage = reviewAvailableStartLineage(ctx, root, native.TargetIdentity)
 			}
-			input := reviewNextTransitionInput{Gate: reviewtransaction.GateKind(*gate), Successor: *recoverySuccessor, Reason: *recoveryReason, Actor: *recoveryActor, Authorization: *recoveryAuthorization, RepairActor: *repairActor, RepairReason: *repairReason, RepairAuthorization: *repairAuthorization, StartLineage: startLineage, RuntimeAgent: runtime, Contract: *contract, RepositoryContext: repositoryContext, ValidationRequest: validationRequest, CorrectionRequest: correctionRequest, EvidenceErr: evidenceErr, CorrectionForecasted: correctionForecasted, CaptureContext: captureContext, Selector: selector, IntendedUntracked: intendedScope}
+			input := reviewNextTransitionInput{Gate: reviewtransaction.GateKind(*gate), Successor: *recoverySuccessor, Reason: *recoveryReason, Actor: *recoveryActor, Authorization: *recoveryAuthorization, RepairActor: *repairActor, RepairReason: *repairReason, RepairAuthorization: *repairAuthorization, StartLineage: startLineage, RuntimeAgent: runtime, Contract: *contract, RepositoryContext: repositoryContext, ValidationRequest: validationRequest, CorrectionRequest: correctionRequest, EvidenceErr: evidenceErr, CorrectionForecasted: correctionForecasted, CaptureContext: captureContext, Selector: selector, IntendedUntracked: intendedScope, RDDMode: result.rddMode, RDDModeResolved: result.rddModeResolved}
 			transition := newReviewNextTransition(result, native.SelectedLenses, artifacts, capturedEvidence, artifactErr, input)
 			result.NextTransition = &transition
 			if reviewTransitionValidationRequest(&transition) == nil && transition.ReasonCode != "correction_repository_verification_required" &&
@@ -1021,10 +1045,14 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 			// surface (spec "Three-Tier Narration Contract"), written to
 			// stderr only, never mixed into the parsed stream.
 			if transition.Kind == reviewNextTransitionStop {
-				reviewNarrateStopReason(transition.ReasonCode, runtime)
+				continuation := ""
+				if transition.ReasonCode == "rdd_disabled" {
+					continuation = reviewRDDDisabledNarration(result.rddMode, root, args)
+				}
+				reviewNarrateStopReason(transition.ReasonCode, runtime, continuation)
 			}
 		}
-		if intendedScope.NeedsSelection {
+		if intendedScope.NeedsSelection && (result.NextTransition == nil || result.NextTransition.Kind != reviewNextTransitionStop || result.NextTransition.ReasonCode != "rdd_disabled") {
 			transition := reviewIntendedUntrackedCollection(result, intendedScope)
 			result.NextTransition = &transition
 		}
@@ -1033,8 +1061,14 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 			result.Forecast = &forecast
 			reviewNarrateForecast(forecast)
 		}
-		if err := result.Validate(); err != nil {
-			return fmt.Errorf("validate negotiated review status: %w", err)
+		var validationErr error
+		if compactAuthority != nil {
+			validationErr = result.validateWithCompactAuthority(compactAuthority)
+		} else {
+			validationErr = result.Validate()
+		}
+		if validationErr != nil {
+			return fmt.Errorf("validate negotiated review status: %w", validationErr)
 		}
 		return encodeReviewJSON(stdout, result)
 	}
@@ -2204,13 +2238,14 @@ func reviewFacadeStartDeclinedResult(snapshot reviewtransaction.Snapshot, assess
 }
 
 func reviewFacadeStartResultFor(action reviewtransaction.CompactStartAction, lensesRequired bool, authority reviewtransaction.CompactState) ReviewFacadeStartResult {
+	legacyBudget, _ := reviewtransaction.CorrectionBudget(authority.OriginalChangedLines)
 	result := ReviewFacadeStartResult{
 		Operation: "review/start", Action: string(action), LensesRequired: lensesRequired,
 		LineageID: authority.LineageID, State: authority.State, RiskLevel: authority.RiskLevel,
 		SelectedLenses: append([]string{}, authority.SelectedLenses...), LensBindings: facadeLensBindings(authority.SelectedLenses),
 		Projection:   facadeProjection(authority.InitialSnapshot.Projection),
 		ChangedFiles: len(authority.InitialSnapshot.Paths), TargetIdentity: authority.InitialSnapshot.Identity,
-		ChangedLines: authority.OriginalChangedLines, CorrectionBudget: authority.CorrectionBudget,
+		ChangedLines: authority.OriginalChangedLines, CorrectionBudget: legacyBudget,
 	}
 	if authority.InitialSnapshot.Kind == reviewtransaction.TargetBaseWorkspaceOverlay {
 		result.TargetMode = authority.InitialSnapshot.Kind
@@ -2297,7 +2332,7 @@ func runReviewFacadeFinalize(ctx context.Context, args []string, stdout io.Write
 	var resultArtifactFiles repeatedString
 	flags.Var(&resultArtifactFiles, "result-artifact-file", "native reviewer artifact manifest regular file or - for stdin; repeat in selected-lens order")
 	if err := parseReviewFlags(flags, args); err != nil {
-		return reviewPreflightError(err)
+		return err
 	}
 	if reviewHelpRequested(args) {
 		return nil

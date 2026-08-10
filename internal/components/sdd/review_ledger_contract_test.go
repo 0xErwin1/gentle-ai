@@ -334,7 +334,9 @@ func TestKilocodeReviewSettingsMatchCurrentMainBaseline(t *testing.T) {
 	// prompts (+458 characters each); no key is added, removed, or otherwise
 	// changed. The hash is recomputed from the rebased tree. Deliberate, not
 	// drift.
-	const want = "d696513e55fd4556b325f0f11658053a52cbf48832757000454fa0af90920736"
+	// The provider-defect handoff now has three candidate-scoped outcomes;
+	// Kilocode embeds it in the orchestrator prompt, so the hash moved.
+	const want = "f259d91524ee1b893e3ec06fbfc8391d3c629add488c11a7bf5103668e0c7146"
 	if got != want {
 		t.Fatalf("Kilocode settings SHA-256 = %s, want current-main baseline %s", got, want)
 	}
@@ -563,8 +565,8 @@ func TestOpenCodeRenderedReviewProtocolCost(t *testing.T) {
 		// because the machine now routes them as collect transitions, so the
 		// rendered protocol got 372 characters cheaper. The pins move DOWN,
 		// which is the direction this table exists to protect.
-		{name: "standard", agents: []string{"review-reliability"}, beforeChars: 42_301, wantChars: 20_701, maxCharacters: 24_300},
-		{name: "full-4R", agents: []string{"review-risk", "review-resilience", "review-readability", "review-reliability"}, beforeChars: 106_998, wantChars: 33_046, maxCharacters: 38_500},
+		{name: "standard", agents: []string{"review-reliability"}, beforeChars: 42_301, wantChars: 20_878, maxCharacters: 24_300},
+		{name: "full-4R", agents: []string{"review-risk", "review-resilience", "review-readability", "review-reliability"}, beforeChars: 106_998, wantChars: 33_223, maxCharacters: 38_500},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
