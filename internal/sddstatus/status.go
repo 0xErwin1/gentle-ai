@@ -850,12 +850,35 @@ func applyNativeRuntimeRouting(status *Status) {
 		"native SDD runtime execution is blocked(%s) for %q in %s; compact acquire reports the same: %s",
 		readiness.Reason, change, pathquote.Quote(status.ActionContext.WorkspaceRoot), readiness.Exit,
 	)
+	// The attempt ledger governs exactly one question: may a bounded
+	// implementation work unit OPEN. A blocked answer is a true and permanent
+	// answer to that, so Apply is blocked.
+	//
+	// It is not an answer about anything else. Projecting it onto Verify and
+	// Archive stranded #2902's reporter: every task complete, the merged
+	// candidate green on repository CI, receipt-driven review off both
+	// globally and clone-locally, and one historical objective sitting at
+	// maintainer_decision from accounting on work that had already landed.
+	// The change could never be verified and never be archived.
+	//
+	// Nothing is laundered by letting the later phases answer for themselves.
+	// A change whose budget was exhausted mid-flight still has incomplete
+	// tasks and no passing verification, so its own Verify and Archive
+	// dependencies keep it exactly where it was. Those dependencies are the
+	// ones entitled to speak for those phases. The blocker stays in
+	// BlockedReasons either way, so it remains auditable.
 	status.Dependencies.Apply = DependencyBlocked
-	status.Dependencies.Verify = DependencyBlocked
-	status.Dependencies.Archive = DependencyBlocked
-	status.NextRecommended = "resolve-blockers"
 	if !contains(status.BlockedReasons, reason) {
 		status.BlockedReasons = append(status.BlockedReasons, reason)
+	}
+	// resolve-blockers is the right next step only while this block is
+	// actually in the change's way. Once implementation is done and verified,
+	// the change's next step is its own remaining phase, not a reset of an
+	// objective nobody needs to reopen.
+	if status.Dependencies.Verify != DependencyAllDone || status.Dependencies.Archive == DependencyBlocked {
+		status.Dependencies.Verify = DependencyBlocked
+		status.Dependencies.Archive = DependencyBlocked
+		status.NextRecommended = "resolve-blockers"
 	}
 }
 

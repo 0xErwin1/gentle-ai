@@ -99,6 +99,7 @@ func TestCompactMutationFailureClassifiesEveryReachableLedgerSentinel(t *testing
 		{name: "ErrRuntimeNoActiveAttempt", err: ErrRuntimeNoActiveAttempt, reachable: true, wantState: CompactStateBlocked, wantReason: CompactBlockInvalidContinuation},
 		{name: "ErrRuntimeRemediationSuccessorRequired", err: ErrRuntimeRemediationSuccessorRequired, reachable: true, wantState: CompactStateBlocked, wantReason: CompactBlockRemediationRequired},
 		{name: "ErrRuntimeWorktreeMismatch", err: ErrRuntimeWorktreeMismatch, reachable: true, wantState: CompactStateBlocked, wantReason: CompactBlockWorktreeMismatch},
+		{name: "ErrRuntimeCandidateUnavailable", err: ErrRuntimeCandidateUnavailable, reachable: true, wantState: CompactStateBlocked, wantReason: CompactBlockCandidateUnavailable},
 		{name: "ErrBindingRevisionConflict", err: ErrBindingRevisionConflict, reachable: true, wantState: CompactStateBlocked, wantReason: CompactBlockInvalidContinuation},
 		// Reset is the only mutation that can produce these two; Begin/Finish
 		// never do, so Acquire/Settle never route them into
