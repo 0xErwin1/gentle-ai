@@ -120,7 +120,19 @@ var (
 	// under would diff a pinned base tree against an unrelated working tree —
 	// changed_lines: 0 when real work happened, or a wildly inflated delta —
 	// so this refuses before any candidate capture, not after.
-	ErrRuntimeWorktreeMismatch        = errors.New("SDD runtime attempt began in a different linked worktree than this finish is running from")
+	ErrRuntimeWorktreeMismatch = errors.New("SDD runtime attempt began in a different linked worktree than this finish is running from")
+	// ErrRuntimeCandidateUnavailable classifies the one Begin/Finish failure
+	// class that is NOT an authority failure: the attempt ledger loaded,
+	// replayed, and stayed unmutated, but the REPOSITORY candidate the
+	// mutation must capture first could not be built. Left unclassified it
+	// fell through to compactMutationFailure's opaque authority_failure
+	// default on the very first acquire a consumer ever issues (#2114).
+	//
+	// It never travels alone: every wrap keeps the snapshot builder's own
+	// refusal as the cause, because that cause is the only thing that knows
+	// the runnable repository exit. This sentinel classifies; the cause
+	// continues.
+	ErrRuntimeCandidateUnavailable    = errors.New("SDD runtime candidate could not be captured from the repository")                        // refusal:by-design world-action: the exit is a repository-state change (stage the candidate, gitignore an untracked nested checkout, restore a pruned object), which no command of this product can decide or perform; every wrap keeps the snapshot builder's own refusal as the cause and that cause names the exact action
 	ErrRuntimeHandoffSource           = errors.New("SDD runtime handoff source does not equal the active attempt's effective worktree")      // refusal:by-design operator-knowledge: the RuntimeStore wrapper names the active attempt's actual status command
 	ErrRuntimeHandoffDestination      = errors.New("SDD runtime handoff destination is not a registered linked worktree of this repository") // refusal:by-design operator-knowledge: the RuntimeStore wrapper names the active attempt's actual status command
 	ErrRuntimeHandoffAlreadyPerformed = errors.New("SDD runtime attempt has already been handed off")                                        // refusal:by-design operator-knowledge: the RuntimeStore wrapper names the active attempt's actual status command
@@ -334,6 +346,13 @@ type RuntimeStatus struct {
 	// recorded additively alongside Binding/BindingRevision — see
 	// runtime_receipt.go.
 	Receipt *reviewtransaction.SDDReceiptRef `json:"receipt,omitempty"`
+	// BlockedReason and BlockedExit carry the verdict acquire would reach for
+	// the caller's own request, so the read-only surface stops answering a
+	// narrower question than the one consumers were asking it (#2114). Only
+	// AdmissionStatus populates them; the request-blind Status() leaves them
+	// empty and every existing consumer reads exactly what it always read.
+	BlockedReason CompactBlockReason `json:"blocked_reason,omitempty"`
+	BlockedExit   string             `json:"blocked_exit,omitempty"`
 }
 
 type BeginAttemptRequest struct {
@@ -734,81 +753,18 @@ func (store RuntimeStore) Begin(ctx context.Context, request BeginAttemptRequest
 	digest := runtimeValueHash("gentle-ai.sdd-runtime-begin-request/v1", request)
 	return store.mutate(ctx, request.ExpectedRevision, request.RequestID, digest, func(replay runtimeReplay) (runtimeRecord, error) {
 		status := replay.Status
-		if status.ActiveAttempt != nil {
-			return runtimeRecord{}, ErrRuntimeAttemptActive
-		}
-		// A passed objective terminates its own scope, not the change. When the
-		// request names a distinct work unit, the ordinary continuation is the
-		// successor objective, not a maintainer reset that would discard the
-		// completed apply authority along with its evidence.
-		advancing := false
-		if status.Complete {
-			if !runtimeObjectiveAdvanceAdmissible(status, request) {
-				return runtimeRecord{}, store.runtimeObjectiveCompleteRefusal(status)
-			}
-			advancing = true
-		}
-		if status.DecisionRequired {
-			return runtimeRecord{}, ErrRuntimeBudgetExhausted
-		}
-
-		generation := status.ObjectiveGeneration + 1
-		var snapshot reviewtransaction.Snapshot
-		var err error
-		switch {
-		case status.Objective != nil && !advancing && runtimeObjectiveHasRecordedAttempt(status):
-			// The ordinary continuing-objective path: at least one attempt is
-			// already recorded under this exact objective ID, so its terminal
-			// Finish is the candidate provenance to chase.
-			generation = status.Objective.Generation
-			if request.WorkUnit != status.Objective.WorkUnit || request.EvidenceGoal != status.Objective.EvidenceGoal ||
-				request.MaxAttempts != status.Objective.MaxAttempts ||
-				request.MaxChangedLines != status.Objective.MaxChangedLines {
-				return runtimeRecord{}, store.runtimeObjectiveChangeRefusal(ctx, status)
-			}
-			last := status.Attempts[len(status.Attempts)-1]
-			if last.Outcome == AttemptRunning || last.FinishCandidateIdentity == "" || last.FinishCandidateTree == "" {
-				return runtimeRecord{}, errors.New("SDD runtime objective has invalid terminal candidate provenance")
-			}
-			snapshot, err = captureRuntimeTerminalCandidate(ctx, store, last.BeginCandidateTree)
-			if err == nil && (snapshot.Identity != last.FinishCandidateIdentity || snapshot.CandidateTree != last.FinishCandidateTree) {
-				return runtimeRecord{}, store.runtimeObjectiveChangeRefusal(ctx, status)
-			}
-		case status.Objective != nil && !advancing:
-			// A freshly opened objective (Rescope) with no attempt recorded
-			// under its own ID yet: there is no terminal Finish belonging to
-			// THIS objective to chase, so capture a fresh candidate the same
-			// way a brand-new objective's first attempt does, and validate it
-			// against the candidate the objective itself opened with
-			// (RuntimeObjective.InitialCandidate*, set by Rescope to the exact
-			// zero-drift candidate it verified) instead of a prior attempt's
-			// Finish record. Chasing the LAST recorded attempt here would find
-			// one that belongs to the objective THIS one superseded (#2298,
-			// #2296 part 2's landmine) and wrongly refuse.
-			generation = status.Objective.Generation
-			if request.WorkUnit != status.Objective.WorkUnit || request.EvidenceGoal != status.Objective.EvidenceGoal ||
-				request.MaxAttempts != status.Objective.MaxAttempts ||
-				request.MaxChangedLines != status.Objective.MaxChangedLines {
-				return runtimeRecord{}, store.runtimeObjectiveChangeRefusal(ctx, status)
-			}
-			snapshot, err = captureRuntimeCandidate(ctx, store.Repo)
-			if err == nil && (snapshot.Identity != status.Objective.InitialCandidateIdentity || snapshot.CandidateTree != status.Objective.InitialCandidateTree) {
-				return runtimeRecord{}, store.runtimeObjectiveChangeRefusal(ctx, status)
-			}
-		default:
-			snapshot, err = captureRuntimeCandidate(ctx, store.Repo)
-		}
+		// Every precondition, ledger-side and repository-side, is evaluated by
+		// the one predicate the read-only surfaces evaluate too, under this
+		// lock and against this exact replay, so a read that said "admitted"
+		// a moment ago cannot let a stale verdict through here.
+		admission, err := store.runtimeBeginAdmission(ctx, status, request)
 		if err != nil {
-			return runtimeRecord{}, fmt.Errorf("capture SDD runtime candidate before launch: %w", err)
+			return runtimeRecord{}, err
 		}
+		advancing, generation, snapshot := admission.Advancing, admission.Generation, admission.Snapshot
 		objectiveID := runtimeObjectiveID(store.Change, request.WorkUnit, request.EvidenceGoal, snapshot.Identity, generation)
 		if status.Objective != nil && !advancing {
 			objectiveID = status.Objective.ID
-		}
-		// The successor opens a fresh per-objective budget, so the charges the
-		// completed scope accrued cannot exhaust it before its first attempt.
-		if !advancing && (status.CumulativeAttempts >= request.MaxAttempts || status.CumulativeChangedLines >= request.MaxChangedLines) {
-			return runtimeRecord{}, ErrRuntimeBudgetExhausted
 		}
 		event := &runtimeBeginEvent{
 			ObjectiveID: objectiveID, ObjectiveGeneration: generation, WorkUnit: request.WorkUnit, EvidenceGoal: request.EvidenceGoal,
@@ -895,7 +851,7 @@ func (store RuntimeStore) Finish(ctx context.Context, request FinishAttemptReque
 			Projection: reviewtransaction.ProjectionWorkspace, IntendedUntracked: []string{},
 		})
 		if err != nil {
-			return runtimeRecord{}, fmt.Errorf("capture SDD runtime candidate after attempt: %w", err)
+			return runtimeRecord{}, wrapRuntimeCandidateUnavailable("after attempt", err)
 		}
 		changedLines, err := (reviewtransaction.SnapshotBuilder{Repo: store.Repo}).ChangedLines(ctx, snapshot)
 		if err != nil {
@@ -2960,6 +2916,13 @@ func validTerminalAttemptOutcome(outcome AttemptOutcome) bool {
 
 func validHarnessDisposition(disposition HarnessDisposition) bool {
 	return disposition == HarnessReused || disposition == HarnessInvalidated
+}
+
+// wrapRuntimeCandidateUnavailable is the single wrap for every candidate
+// capture the attempt ledger performs, so no capture site can reach the
+// compact boundary unclassified the way both of them did before #2114.
+func wrapRuntimeCandidateUnavailable(stage string, cause error) error {
+	return fmt.Errorf("%w %s: %w", ErrRuntimeCandidateUnavailable, stage, cause)
 }
 
 func captureRuntimeCandidate(ctx context.Context, repo string) (reviewtransaction.Snapshot, error) {
