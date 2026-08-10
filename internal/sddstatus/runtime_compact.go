@@ -20,7 +20,6 @@ const (
 	CompactBlockMaintainerDecision  CompactBlockReason = "maintainer_decision"
 	CompactBlockCorruptAuthority    CompactBlockReason = "corrupt_authority"
 	CompactBlockInvalidContinuation CompactBlockReason = "invalid_continuation"
-	CompactBlockRemediationRequired CompactBlockReason = "remediation_required"
 	CompactBlockWorktreeMismatch    CompactBlockReason = "worktree_mismatch"
 	CompactBlockAuthorityFailure    CompactBlockReason = "authority_failure"
 	// CompactBlockCandidateUnavailable is the repository-side block: the
@@ -473,13 +472,6 @@ func (store RuntimeStore) compactMutationFailure(err error, settle bool, begin B
 		errors.Is(err, ErrRuntimeRequestConflict), errors.Is(err, ErrRuntimeNoActiveAttempt),
 		errors.Is(err, ErrBindingRevisionConflict):
 		reason = CompactBlockInvalidContinuation
-	// ErrRuntimeRemediationSuccessorRequired is the sentinel behind
-	// runtimeRemediationExitRefusal (runtime_ledger.go:628-646): the candidate
-	// moved after Begin, so a passing finish demands the remediation trio
-	// naming its own runnable exit. It previously fell through to the
-	// default authority_failure and lost that exit entirely (#2249).
-	case errors.Is(err, ErrRuntimeRemediationSuccessorRequired):
-		reason = CompactBlockRemediationRequired
 	// ErrRuntimeWorktreeMismatch is the sentinel behind
 	// runtimeWorktreeMismatchRefusal (#2296 part 1): Finish is running from a
 	// different linked worktree than the one Begin recorded. Left
