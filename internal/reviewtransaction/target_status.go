@@ -78,6 +78,7 @@ type TargetStatusDecision struct {
 	Selector                           Target
 	RecoverySelector                   *Target
 	SelectorFreeAccountingOnlyRecovery bool
+	FrozenReviewing                    bool
 }
 
 type TargetStatusResult struct {
@@ -105,6 +106,7 @@ type TargetStatusResult struct {
 	authorityTargetKind                TargetKind
 	authorityProjection                Projection
 	selectorFreeAccountingOnlyRecovery bool
+	frozenReviewing                    bool
 }
 
 type targetStatusCandidate struct {
@@ -119,6 +121,7 @@ type targetStatusCandidate struct {
 	receiptReplayable  bool
 	pendingFinalize    bool
 	correctionRecovery bool
+	frozenReviewing    bool
 	// selectorFreeAccountingOnlyRecovery is carried from the eligibility
 	// predicate so projection never guesses it from snapshot identity domains.
 	selectorFreeAccountingOnlyRecovery bool
@@ -231,6 +234,18 @@ func assessTargetStatusSnapshot(ctx context.Context, repo string, request Target
 			continue
 		}
 		state := candidate.compact.State
+		if request.LineageID != "" && request.Target.Kind == TargetCurrentChanges && request.Target.Projection != ProjectionStaged &&
+			!compactLiveTargetMatchesValidatedSnapshot(state, live, true) {
+			eligible, eligibilityErr := explicitReviewingCompactCandidate(ctx, repo, candidate)
+			if eligibilityErr != nil {
+				return targetStatusFailure(base, eligibilityErr)
+			}
+			if eligible {
+				candidate.frozenReviewing = true
+				candidates = append(candidates, candidate)
+				continue
+			}
+		}
 		if state.State == StateInvalidated && state.InitialSnapshot.Kind == TargetBaseWorkspaceOverlay &&
 			state.InitialSnapshot.Projection == ProjectionStaged && live.Kind == TargetBaseWorkspaceOverlay &&
 			live.Projection == ProjectionStaged && state.InitialSnapshot.BaseTree == live.BaseTree &&
@@ -422,6 +437,47 @@ func assessTargetStatusSnapshot(ctx context.Context, repo string, request Target
 	}
 }
 
+// explicitReviewingCompactCandidate admits a drifted reviewing authority only
+// after its immutable review inputs and every canonical result slot are safe.
+func explicitReviewingCompactCandidate(ctx context.Context, repo string, candidate targetStatusCandidate) (bool, error) {
+	if candidate.compact == nil {
+		return false, nil
+	}
+	state := candidate.compact.State
+	if state.State != StateReviewing || candidate.pendingFinalize || len(state.SelectedLenses) == 0 {
+		return false, nil
+	}
+	superseded, err := CompactLineageSuperseded(ctx, repo, state.LineageID)
+	if err != nil || superseded {
+		return false, err
+	}
+	store, err := CompactAuthoritativeStore(ctx, repo, state.LineageID)
+	if err != nil {
+		return false, err
+	}
+	pending := false
+	for order, lens := range state.SelectedLenses {
+		slot, err := ReadCompactReviewerResultSlot(store.Dir, order, lens)
+		if err != nil {
+			return false, err
+		}
+		pending = pending || !slot.Occupied
+	}
+	if !pending {
+		return false, nil
+	}
+	frozen, err := (SnapshotBuilder{Repo: repo}).FrozenCandidateContext(ctx, state.InitialSnapshot)
+	if err != nil {
+		return false, err
+	}
+	for order, lens := range state.SelectedLenses {
+		if _, err := NewArtifactSubject(state, candidate.compact.Revision, frozen, lens, order, ""); err != nil {
+			return false, err
+		}
+	}
+	return true, nil
+}
+
 func compactLocalBaseAdvanceCompatibility(ctx context.Context, repo string, state CompactState, target Target, live Snapshot) *BaseAdvanceCompatibility {
 	if state.CurrentSnapshot.Kind != TargetBaseDiff || state.Recovery != nil || target.Kind != TargetBaseDiff || strings.TrimSpace(target.BaseRef) == "" {
 		return nil
@@ -473,6 +529,11 @@ func targetStatusForCandidate(result TargetStatusResult, candidate targetStatusC
 	if candidate.compact != nil {
 		record := *candidate.compact
 		state := record.State
+		if candidate.frozenReviewing {
+			result.TargetIdentity = state.InitialSnapshot.Identity
+			result.Projection = targetProjectionFromSnapshot(state.InitialSnapshot)
+			result.frozenReviewing = true
+		}
 		result.State, result.Generation, result.Revision = state.State, state.Generation, record.Revision
 		result.AuthorityTargetIdentity = state.CurrentSnapshot.Identity
 		result.authorityTargetKind, result.authorityProjection = state.InitialSnapshot.Kind, state.InitialSnapshot.Projection
@@ -542,7 +603,7 @@ func projectTargetStatusDecision(result TargetStatusResult) TargetStatusResult {
 	}
 	decision := TargetStatusDecision{
 		CandidateRelation: result.Applicability, SemanticTransition: result.Action,
-		TargetIdentity: result.TargetIdentity, Selector: selector,
+		TargetIdentity: result.TargetIdentity, Selector: selector, FrozenReviewing: result.frozenReviewing,
 	}
 	if result.Action != TargetStatusActionRecover {
 		result.Decision = decision
