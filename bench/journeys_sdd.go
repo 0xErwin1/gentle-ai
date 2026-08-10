@@ -108,8 +108,9 @@ type sddRuntimeStatus struct {
 }
 
 type sddCompactAttemptResult struct {
-	State string `json:"state"`
-	Token string `json:"token"`
+	State  string `json:"state"`
+	Reason string `json:"reason"`
+	Token  string `json:"token"`
 }
 
 // sddStatusV1 is the subset of `sdd-status --json` the kill-switch journeys read.
@@ -1006,7 +1007,10 @@ func sddBeginFailedUnmanagedVerification(r *journeyRun) error {
 }
 
 func sddUnmanagedAcquireCorrection(r *journeyRun) error {
-	observation := r.run(append([]string{"sdd-attempt", "acquire", "--cwd", r.sandbox.Repo, "--change", sddChange, "--request-id", "bench-unmanaged-acquire"}, sddUnmanagedObjective...), false)
+	observation := r.run(append([]string{
+		"sdd-attempt", "acquire", "--cwd", r.sandbox.Repo, "--change", sddChange,
+		"--request-id", "bench-unmanaged-acquire", "--remediates-evidence-revision", sddFailedEvidence,
+	}, sddUnmanagedObjective...), false)
 	var result sddCompactAttemptResult
 	if err := json.Unmarshal([]byte(strings.TrimSpace(observation.Stdout)), &result); err != nil {
 		return fmt.Errorf("parse unmanaged correction acquire: %w (stderr: %s)", err, firstLine(observation.Stderr))
@@ -1030,6 +1034,12 @@ func sddUnmanagedSettle(r *journeyRun, requestID, failedEvidence string, wantSuc
 		return fmt.Errorf("parse unmanaged correction settle: %w (stderr: %s)", err, firstLine(observation.Stderr))
 	}
 	if wantSuccess && (observation.ExitCode != 0 || result.State != "complete") {
+		if result.State == "blocked" && result.Reason == "invalid_continuation" {
+			if err := proveActiveAttempt(r.sandbox, 2, sddFailedEvidence); err != nil {
+				return fmt.Errorf("invalid continuation did not leave the remediation attempt running: %w", err)
+			}
+			return fmt.Errorf("bounded unmanaged correction was blocked as invalid_continuation and left its remediation attempt running")
+		}
 		return fmt.Errorf("bounded unmanaged correction did not settle: %#v exit=%d", result, observation.ExitCode)
 	}
 	if !wantSuccess && result.State != "blocked" {
