@@ -48,6 +48,24 @@ func TestStatusValidateTransitionPreservesCustomPublicationBase(t *testing.T) {
 	if arguments["base-ref"] != "origin/release" || arguments["committed-only"] != "" || arguments["projection"] != "" {
 		t.Fatalf("VALIDATE selectors = %#v", arguments)
 	}
+	prePush := newReviewNextTransition(ReviewTargetStatusResult{
+		Applicability:  reviewtransaction.TargetApplicabilityCurrent,
+		Action:         reviewtransaction.TargetStatusActionValidate,
+		TargetIdentity: "approved-target",
+		Authority:      &ReviewTargetStatusAuthority{LineageID: "selector-validate", State: reviewtransaction.StateApproved},
+		Receipt:        ReviewTargetStatusReceipt{Status: ReviewReceiptPresent},
+	}, nil, nil, nil, nil, reviewNextTransitionInput{
+		Gate: reviewtransaction.GatePrePush, Selector: &reviewTransitionSelector{BaseRef: "origin/release"},
+	})
+	prePushStatus := ReviewTargetStatusResult{NextTransition: &prePush}
+	prePushArguments := selectorTransitionArguments(t, prePushStatus)
+	if prePushStatus.NextTransition == nil || prePushStatus.NextTransition.Execute == nil || prePushStatus.NextTransition.Execute.Operation != "review.validate" ||
+		prePushArguments["base-ref"] != "origin/release" || prePushArguments["committed-only"] != "" || prePushArguments["projection"] != "" {
+		t.Fatalf("pre-push VALIDATE selectors = %#v", prePushStatus.NextTransition)
+	}
+	if err := validateReviewTransitionExecution(*prePushStatus.NextTransition.Execute, prePushArguments); err != nil {
+		t.Fatalf("pre-push VALIDATE contract = %v", err)
+	}
 	assertSelectorTransitionMutationRejected(t, status, func(arguments []ReviewTransitionArgument) []ReviewTransitionArgument {
 		return arguments[:len(arguments)-1]
 	})
