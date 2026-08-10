@@ -60,8 +60,8 @@ func TestPortableSDDFailClosedAuthorityJourneysAreRegistered(t *testing.T) {
 	//
 	// Bump this deliberately when a journey is added OR removed, and name it
 	// here: the count exists so a journey cannot appear or vanish unnoticed.
-	if got := len(seen); got != 87 {
-		t.Errorf("core journey count = %d, want 87", got)
+	if got := len(seen); got != 88 {
+		t.Errorf("core journey count = %d, want 88", got)
 	}
 	for id, found := range want {
 		if !found {

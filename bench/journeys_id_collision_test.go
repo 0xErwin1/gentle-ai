@@ -43,6 +43,7 @@ func journeySources() []journeySource {
 		{"journeys_consecutive_rescope_repair.go", consecutiveRescopeRepairJourneys()},
 		{"journeys_reviewed_superset.go", reviewedSupersetJourneys()},
 		{"journeys_staged_delivery.go", stagedDeliveryJourneys()},
+		{"journeys_frozen_lineage_resume.go", frozenLineageResumeJourneys()},
 		{"journeys_managed_assets.go", managedAssetJourneys()},
 	}
 }
