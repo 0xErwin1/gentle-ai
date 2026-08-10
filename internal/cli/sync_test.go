@@ -1051,6 +1051,23 @@ func TestSyncBackupTargetsIncludeClaudeEngramLegacyMigrationSource(t *testing.T)
 	}
 }
 
+func TestSyncBackupTargetsIncludeClaudeContext7CleanupPath(t *testing.T) {
+	home := t.TempDir()
+	selection := model.Selection{
+		Agents:     []model.AgentID{model.AgentClaudeCode},
+		Components: []model.ComponentID{model.ComponentContext7},
+	}
+
+	targets, err := syncBackupTargets(home, "", selection, resolveAdapters(selection.Agents))
+	if err != nil {
+		t.Fatalf("syncBackupTargets() error = %v", err)
+	}
+	want := filepath.Join(home, ".claude", "settings.json")
+	if !containsPath(targets, want) {
+		t.Fatalf("sync backup targets missing Claude Context7 cleanup path %q: %v", want, targets)
+	}
+}
+
 type failingSyncStep struct{}
 
 func (failingSyncStep) ID() string { return "sync:test:fail-after-engram" }

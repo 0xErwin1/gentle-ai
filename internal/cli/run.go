@@ -1827,6 +1827,11 @@ func backupTargets(homeDir, workspaceDir string, scope InstallScope, selection m
 		for _, path := range componentPathsWithWorkspaceScoped(homeDir, workspaceDir, scope, selection, adapters, component) {
 			paths[path] = struct{}{}
 		}
+		if component == model.ComponentContext7 {
+			for _, path := range claudeMCPSettingsCleanupPaths(homeDir, workspaceDir, scope, adapters) {
+				paths[path] = struct{}{}
+			}
+		}
 		if component == model.ComponentEngram && scope == ScopeGlobal {
 			for _, adapter := range adapters {
 				if adapter.Agent() == model.AgentClaudeCode {
@@ -1925,6 +1930,24 @@ func adapterSkillBackupTargets(homeDir, workspaceDir string, scope InstallScope,
 		}
 	}
 	return paths, nil
+}
+
+// claudeMCPSettingsCleanupPaths returns legacy Claude settings files that MCP
+// injection may rewrite while removing an inert mcpServers block. These paths
+// belong in the rollback snapshot, but not in post-apply verification because
+// cleanup is best-effort and the file may not exist.
+func claudeMCPSettingsCleanupPaths(homeDir, workspaceDir string, scope InstallScope, adapters []agents.Adapter) []string {
+	paths := []string{}
+	for _, adapter := range adapters {
+		if adapter.Agent() != model.AgentClaudeCode || adapter.MCPStrategy() != model.StrategySeparateMCPFiles {
+			continue
+		}
+		targetDir := componentPathDirScoped(homeDir, workspaceDir, scope, adapter, model.ComponentContext7)
+		if path := adapter.SettingsPath(targetDir); path != "" {
+			paths = append(paths, path)
+		}
+	}
+	return paths
 }
 
 // routingGuidancePaths declares the files agentRoutingGuidanceStep rewrites for
@@ -2076,9 +2099,14 @@ func componentPathsWithWorkspaceScoped(homeDir, workspaceDir string, scope Insta
 					if targetDir == homeDir {
 						// Context7 injection writes ~/.claude.json (issue #1868).
 						paths = append(paths, claude.UserConfigPath(homeDir))
-					} else if p := adapter.SettingsPath(targetDir); p != "" {
-						// Workspace scope keeps the scoped settings merge.
-						paths = append(paths, p)
+					} else {
+						// Workspace scope writes <project-root>/.mcp.json, the file
+						// Claude Code loads project-scoped MCP servers from (issue #2213).
+						// The legacy .claude/settings.json block is a best-effort
+						// cleanup, not a guaranteed write, so it is not declared as a
+						// verification target (declaring it would force a false-negative
+						// when the file never existed).
+						paths = append(paths, filepath.Join(targetDir, ".mcp.json"))
 					}
 					break
 				}
