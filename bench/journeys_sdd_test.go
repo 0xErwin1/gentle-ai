@@ -42,7 +42,7 @@ func TestPortableSDDFailClosedAuthorityJourneysAreRegistered(t *testing.T) {
 	// refuses-before-publication (#2830), and j80-rescope-authorized-evidence-
 	// only-retry (#2621).
 	// j81's RC-created repair fixture (#2839) follows the independently-owned
-	// #2621 journey. j85 proves #1956's START argv parse refusal is preflight.
+	// #2621 journey. j85 proves #1956's START and FINALIZE parser refusals are preflight.
 	// j82 proves #2127's reviewed full candidate can publish an unpublished
 	// monotonic subset without reopening review.
 	// j83 proves #2127's pre-PR path binds its candidate to the unique merge-base
