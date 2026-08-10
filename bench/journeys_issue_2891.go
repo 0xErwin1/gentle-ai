@@ -17,6 +17,10 @@ type issue2891Status struct {
 	Consent *struct {
 		Schema       string   `json:"schema"`
 		MissingRoots []string `json:"missing_roots"`
+		Choices      []struct {
+			Answer     string `json:"answer"`
+			Invocation string `json:"invocation"`
+		} `json:"choices"`
 	} `json:"consent"`
 }
 
@@ -76,8 +80,33 @@ func issue2891SameParentStatus(sandbox *Sandbox, observation Observation) error 
 		return fmt.Errorf("allowedEditRoots=%v, want only nested planning workspace %s", status.ActionContext.AllowedEditRoots, sandbox.Repo)
 	}
 	if status.Consent == nil || status.Consent.Schema != "gentle-ai.sdd-integration.consent/v1" ||
-		len(status.Consent.MissingRoots) != 1 || status.Consent.MissingRoots[0] != wantService {
+		len(status.Consent.MissingRoots) != 1 || status.Consent.MissingRoots[0] != wantService ||
+		len(status.Consent.Choices) == 0 || status.Consent.Choices[0].Answer != "granted" {
 		return fmt.Errorf("consent missing_roots=%v, want [%s]", status.Consent, wantService)
+	}
+	sandbox.Scratch["issue-2891-grant-invocation"] = status.Consent.Choices[0].Invocation
+	return nil
+}
+
+func issue2891GrantArgs(sandbox *Sandbox) ([]string, error) {
+	return printedCommandArguments(sandbox.Scratch["issue-2891-grant-invocation"])
+}
+
+func issue2891SameParentGrantedStatus(sandbox *Sandbox, observation Observation) error {
+	var status issue2891Status
+	if err := json.Unmarshal([]byte(strings.TrimSpace(observation.Stdout)), &status); err != nil {
+		return fmt.Errorf("parse granted same-parent sdd-status: %w", err)
+	}
+	wantService, err := filepath.EvalSymlinks(sandbox.Scratch["issue-2891-service"])
+	if err != nil {
+		return err
+	}
+	roots := status.ActionContext.AllowedEditRoots
+	if status.ApplyState != "ready" || status.NextRecommended != "apply" || status.Consent != nil ||
+		strings.Contains(strings.Join(status.BlockedReasons, "\n"), "edit_authority_missing") ||
+		len(roots) != 2 || roots[0] != sandbox.Repo || roots[1] != wantService {
+		return fmt.Errorf("post-grant status=%q/%q roots=%v reasons=%v, want ready/apply with %v",
+			status.ApplyState, status.NextRecommended, roots, status.BlockedReasons, []string{sandbox.Repo, wantService})
 	}
 	return nil
 }
@@ -91,6 +120,9 @@ func issue2891Journeys() []Journey {
 			{Name: "fixture: nested planning workspace and sibling service share one Git root", Fixture: issue2891SameParentRepository},
 			{Name: "sdd-status blocks the unauthorized same-parent target", Requires: sddStatusCapability,
 				Args: productArgs("sdd-status", "same-repo-rollout", "--json"), After: issue2891SameParentStatus},
+			{Name: "sdd-attempt grant executes the emitted consent invocation", Args: issue2891GrantArgs},
+			{Name: "sdd-status re-entry projects the granted sibling edit root", Requires: sddStatusCapability,
+				Args: productArgs("sdd-status", "same-repo-rollout", "--json"), After: issue2891SameParentGrantedStatus},
 		},
 	}}
 }
