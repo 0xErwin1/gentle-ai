@@ -293,13 +293,12 @@ func reviewNarrateForecast(forecast ReviewForecast) {
 // registry is a package-level map with no caller context, so the statements
 // carry a slot rather than a constant: a narration that told every runtime to
 // rerun as `claude-code` would invite a Codex or OpenCode reader to declare a
-// false identity and pass the transport admission check under Claude Code's
-// capability profile (issue #2440). An undeclared caller keeps the slot, which
-// asks the reader to name themselves instead of naming them wrongly.
+// false identity and pass the transport admission check under another runtime's
+// capability profile. An undeclared caller omits the entire optional segment.
 func bindNarrationRuntimeIdentity(statement string, runtimeAgent model.AgentID) string {
 	identity := strings.TrimSpace(string(runtimeAgent))
 	if identity == "" {
-		return statement
+		return strings.ReplaceAll(statement, " --agent "+reviewUndeclaredRuntimeIdentitySlot, "")
 	}
 	return strings.ReplaceAll(statement, reviewUndeclaredRuntimeIdentitySlot, identity)
 }
