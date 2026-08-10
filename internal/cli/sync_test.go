@@ -4048,6 +4048,58 @@ func TestRunSyncWithSelection_PersonaFallsBackToNeutralWhenStateHasNone(t *testi
 	}
 }
 
+// TestRunSyncWithSelection_ExplicitEmptyPersistedPersonaFailsClosed verifies
+// that an explicit empty persona is not treated as the omitted legacy field.
+func TestRunSyncWithSelection_ExplicitEmptyPersistedPersonaFailsClosed(t *testing.T) {
+	home := t.TempDir()
+	setSyncTestHome(t, home)
+
+	if err := os.MkdirAll(filepath.Join(home, ".claude"), 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	originalPersona := "<!-- gentle-ai:persona -->\nexisting valid persona\n<!-- /gentle-ai:persona -->\n"
+	personaPath := filepath.Join(home, ".claude", "CLAUDE.md")
+	if err := os.WriteFile(personaPath, []byte(originalPersona), 0o644); err != nil {
+		t.Fatalf("WriteFile persona: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Dir(state.Path(home)), 0o755); err != nil {
+		t.Fatalf("MkdirAll state: %v", err)
+	}
+	originalState := []byte(`{"installed_agents":["claude-code"],"persona":""}`)
+	if err := os.WriteFile(state.Path(home), originalState, 0o644); err != nil {
+		t.Fatalf("WriteFile state: %v", err)
+	}
+
+	result, err := RunSyncWithSelection(home, model.Selection{
+		Agents:     []model.AgentID{model.AgentClaudeCode},
+		Components: []model.ComponentID{model.ComponentPersona},
+	})
+	if err == nil {
+		t.Fatal("RunSyncWithSelection() error = nil, want explicit empty persisted persona error")
+	}
+	if !strings.Contains(err.Error(), "explicitly empty persona") {
+		t.Fatalf("RunSyncWithSelection() error = %q, want explicit empty persona context", err)
+	}
+	if result.Selection.Persona != "" {
+		t.Fatalf("result.Selection.Persona = %q, want unchanged empty persona", result.Selection.Persona)
+	}
+
+	gotPersona, readErr := os.ReadFile(personaPath)
+	if readErr != nil {
+		t.Fatalf("ReadFile persona: %v", readErr)
+	}
+	if string(gotPersona) != originalPersona {
+		t.Fatalf("persona config changed after rejected sync: got %q, want %q", gotPersona, originalPersona)
+	}
+	gotState, readErr := os.ReadFile(state.Path(home))
+	if readErr != nil {
+		t.Fatalf("ReadFile state: %v", readErr)
+	}
+	if !bytes.Equal(gotState, originalState) {
+		t.Fatalf("state changed after rejected sync: got %q, want %q", gotState, originalState)
+	}
+}
+
 // TestRunSyncWithSelection_ExplicitPersonaWinsOverState verifies that when the
 // caller provides a non-empty persona (e.g. the user just picked one in the
 // ModelConfig TUI step), that explicit choice is preserved even if state says

@@ -276,7 +276,7 @@ func TestWriteOverwrite(t *testing.T) {
 
 func TestWriteFailurePreservesExistingState(t *testing.T) {
 	home := t.TempDir()
-	original := InstallState{InstalledAgents: []string{"opencode"}, Persona: "neutral"}
+	original := InstallState{InstalledAgents: []string{"opencode"}, Persona: "neutral", PersonaPresent: true}
 	if err := Write(home, original); err != nil {
 		t.Fatal(err)
 	}
