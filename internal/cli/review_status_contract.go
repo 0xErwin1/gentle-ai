@@ -91,6 +91,9 @@ type ReviewTargetStatusResult struct {
 	FinalVerificationRetry *reviewtransaction.FinalVerificationRetryEligibility `json:"final_verification_retry,omitempty"`
 	decision               reviewtransaction.TargetStatusDecision               `json:"-"`
 	intendedUntracked      reviewIntendedUntrackedScope
+	repositoryRoot         string
+	rddMode                reviewtransaction.RDDModeStatus
+	rddModeResolved        bool
 }
 
 // ReviewActionEligibility remains an additive compatibility detail for older
@@ -167,6 +170,7 @@ const (
 	reviewActionForbiddenReconciliation        = "forbidden_reconciliation_requires_exact_request"
 	reviewActionForbiddenInputsUnavailable     = "forbidden_required_inputs_unavailable"
 	reviewActionForbiddenFinalizeStatus        = "forbidden_finalize_requires_target_status"
+	reviewActionForbiddenRDDDisabled           = "forbidden_rdd_disabled"
 )
 
 type ReviewFinalizeReconciliation struct {
@@ -249,8 +253,9 @@ func newReviewTargetStatusResultForContract(native reviewtransaction.TargetStatu
 		Generation: native.Generation, Revision: native.Revision,
 	}
 	if native.AuthorityVersion == reviewtransaction.AuthorityVersionCompact {
+		correctionBudget, _ := reviewtransaction.CorrectionBudget(native.OriginalChangedLines)
 		result.Frozen = &ReviewTargetStatusFrozen{
-			Tier: native.Tier, OriginalChangedLines: native.OriginalChangedLines, CorrectionBudget: native.CorrectionBudget,
+			Tier: native.Tier, OriginalChangedLines: native.OriginalChangedLines, CorrectionBudget: correctionBudget,
 		}
 	}
 	if native.ReceiptIdentity != "" {
@@ -268,7 +273,11 @@ func newReviewActionEligibility(status ReviewTargetStatusResult) *ReviewActionEl
 	allowed := ReviewEligibleAction{RequiredInputs: []string{}}
 	switch status.Action {
 	case reviewtransaction.TargetStatusActionStart:
-		allowed.Action, allowed.ReasonCode = "review.start", reviewActionEligibleCurrent
+		if status.rddModeResolved && !status.rddMode.Enabled() {
+			allowed.Action, allowed.ReasonCode = "stop", reviewActionForbiddenRDDDisabled
+		} else {
+			allowed.Action, allowed.ReasonCode = "review.start", reviewActionEligibleCurrent
+		}
 	case reviewtransaction.TargetStatusActionValidate:
 		allowed.Action, allowed.ReasonCode = "stop", reviewActionForbiddenInputsUnavailable
 	case reviewtransaction.TargetStatusActionFinalize:
@@ -327,6 +336,8 @@ func newReviewActionEligibility(status ReviewTargetStatusResult) *ReviewActionEl
 		forbiddenReason = reviewActionForbiddenUnchangedEscalated
 	case status.Action == reviewtransaction.TargetStatusActionReconcileFinalize:
 		forbiddenReason = reviewActionForbiddenReconciliation
+	case status.Action == reviewtransaction.TargetStatusActionStart && status.rddModeResolved && !status.rddMode.Enabled():
+		forbiddenReason = reviewActionForbiddenRDDDisabled
 	case allowed.Action == "stop" && allowed.ReasonCode == reviewActionForbiddenInputsUnavailable:
 		forbiddenReason = reviewActionForbiddenInputsUnavailable
 	}
@@ -350,7 +361,17 @@ func reviewStopEligibility(reason string, requiredInputs []string) *ReviewAction
 	}
 }
 
+type reviewStatusCompactAuthority struct {
+	OriginalChangedLines   int
+	CorrectionBudget       int
+	CorrectionBudgetPolicy string
+}
+
 func (result ReviewTargetStatusResult) Validate() error {
+	return result.validateWithCompactAuthority(nil)
+}
+
+func (result ReviewTargetStatusResult) validateWithCompactAuthority(authority *reviewStatusCompactAuthority) error {
 	legacyTransport := result.Schema == ReviewIntegrationStatusSchemaV2 && result.Contract == ReviewIntegrationContractV1
 	nativeGitTransport := (result.Schema == ReviewIntegrationStatusSchemaV3 || result.Schema == ReviewIntegrationStatusSchemaV4 || result.Schema == ReviewIntegrationStatusSchemaV5) && result.Contract == ReviewIntegrationContractV2
 	if (!legacyTransport && !nativeGitTransport) || result.Operation != "review.status" {
@@ -411,10 +432,21 @@ func (result ReviewTargetStatusResult) Validate() error {
 			return errors.New("negotiated status validation request copies differ")
 		}
 		if request := result.NextTransition.CorrectionRequest; request != nil {
+			expectedBudget := 0
+			if result.Frozen != nil {
+				expectedBudget = result.Frozen.CorrectionBudget
+			}
+			if authority != nil {
+				budget, budgetErr := reviewtransaction.CompactExpectedBudget(authority.OriginalChangedLines, authority.CorrectionBudgetPolicy)
+				if budgetErr != nil || budget != authority.CorrectionBudget {
+					return errors.New("native compact status budget is invalid") // refusal:by-design world-action: provider-generated status and persisted compact authority budget require a code fix when they disagree
+				}
+				expectedBudget = authority.CorrectionBudget
+			}
 			if result.Authority == nil || result.Frozen == nil || result.Authority.Version != reviewtransaction.AuthorityVersionCompact ||
 				result.Authority.State != reviewtransaction.StateCorrectionRequired || request.LineageID != result.Authority.LineageID ||
 				request.ExpectedRevision != result.Authority.Revision || request.TargetIdentity != reviewAuthorityTargetIdentity(result) ||
-				request.CorrectionBudget != result.Frozen.CorrectionBudget {
+				request.CorrectionBudget != expectedBudget {
 				return errors.New("negotiated status correction request binding is invalid") // refusal:by-design world-action: provider-generated status and request bindings require a code fix when they disagree
 			}
 		}
@@ -474,8 +506,7 @@ func (result ReviewTargetStatusResult) Validate() error {
 			if result.Frozen.Tier != reviewtransaction.RiskLow && result.Frozen.Tier != reviewtransaction.RiskMedium && result.Frozen.Tier != reviewtransaction.RiskHigh {
 				return errors.New("current-target frozen tier is invalid")
 			}
-			budget, err := reviewtransaction.CorrectionBudget(result.Frozen.OriginalChangedLines)
-			if err != nil || budget != result.Frozen.CorrectionBudget {
+			if !reviewContractCorrectionBudgetValid(result.Frozen.OriginalChangedLines, result.Frozen.CorrectionBudget) {
 				return errors.New("current-target frozen budget is invalid")
 			}
 		case reviewtransaction.AuthorityVersionLegacy:
@@ -696,6 +727,13 @@ func (result ReviewTargetStatusResult) validateNextTransitionTargets() error {
 			}
 			return nil
 		}
+		if result.Action == reviewtransaction.TargetStatusActionStart && result.rddModeResolved && !result.rddMode.Enabled() {
+			if result.NextTransition.Kind != reviewNextTransitionStop || result.NextTransition.ReasonCode != "rdd_disabled" {
+				// refusal:by-design world-action: only a producer defect can pair a disabled effective mode with a fresh transition other than rdd_disabled
+				return errors.New("disabled fresh target lacks an RDD STOP transition")
+			}
+			return nil
+		}
 		// The one fresh target that has no representable START: a workspace
 		// candidate with zero paths (issue #2584). It collects the base the
 		// caller must choose instead, so requiring an executable START here
@@ -871,6 +909,9 @@ func (result ReviewTargetStatusResult) validateStartNextTransition() error {
 	arguments, err := reviewTransitionArgumentMap(transition.Execute.Arguments, transition.Execute.Operation)
 	if err != nil {
 		return err
+	}
+	if result.repositoryRoot == "" {
+		result.repositoryRoot = arguments["cwd"]
 	}
 	lineage := arguments["lineage"]
 	if lineage != "" && !validReviewIntegrationLineage(lineage) {
@@ -1252,6 +1293,9 @@ func reviewTransitionArgumentMap(arguments []ReviewTransitionArgument, operation
 }
 
 func validateReviewTransitionExecution(execution ReviewTransitionExecution, arguments map[string]string) error {
+	if execution.Command != reviewTransitionCommandLine(execution.Operation, execution.Arguments) {
+		return errors.New("execution transition command does not match its arguments") // refusal:by-design world-action: a producer must publish the exact command its executable arguments define
+	}
 	exact := func(required []string, selectors []ReviewTransitionArgument) bool {
 		if len(arguments) != len(required)+len(selectors) {
 			return false
@@ -1343,9 +1387,14 @@ func (eligibility ReviewActionEligibility) Validate(status ReviewTargetStatusRes
 	if strings.TrimSpace(allowed.Action) == "" || strings.TrimSpace(allowed.ReasonCode) == "" || allowed.RequiredInputs == nil {
 		return errors.New("review action eligibility has an invalid allowed action")
 	}
-	if status.Action == reviewtransaction.TargetStatusActionStart &&
+	if status.Action == reviewtransaction.TargetStatusActionStart && (!status.rddModeResolved || status.rddMode.Enabled()) &&
 		(allowed.Action != "review.start" || allowed.ReasonCode != reviewActionEligibleCurrent || len(allowed.RequiredInputs) != 0) {
 		return errors.New("fresh target eligibility does not allow START")
+	}
+	if status.Action == reviewtransaction.TargetStatusActionStart && status.rddModeResolved && !status.rddMode.Enabled() &&
+		(allowed.Action != "stop" || allowed.ReasonCode != reviewActionForbiddenRDDDisabled || len(allowed.RequiredInputs) != 0) {
+		// refusal:by-design world-action: only a producer defect can advertise START after the resolved mode disabled it
+		return errors.New("disabled fresh target eligibility does not stop START")
 	}
 	seen := map[string]bool{allowed.Action: true}
 	if allowed.Action == "review.recover" || allowed.Action == ReviewIntegrationOperationRetryFinalVerification {
