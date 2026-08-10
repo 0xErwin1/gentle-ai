@@ -81,26 +81,28 @@ func TestEnsureAtomicParentDirRejectsUnsafeDirectoryJunctionTargets(t *testing.T
 	}
 }
 
-func TestWriteFileAtomicRejectsLinkLoop(t *testing.T) {
+func TestWriteFileAtomicRejectsJunctionLoop(t *testing.T) {
 	root := t.TempDir()
 	first := filepath.Join(root, "first")
 	second := filepath.Join(root, "second")
-	if err := os.Symlink(second, first); err != nil {
-		if isSymlinkPrivilegeError(err) {
-			t.Skipf("skipping: SeCreateSymbolicLinkPrivilege not held on this Windows build: %v", err)
-		}
-		t.Fatalf("Symlink(first) error = %v", err)
+	if err := os.Mkdir(first, 0o755); err != nil {
+		t.Fatalf("Mkdir(first) error = %v", err)
 	}
-	if err := os.Symlink(first, second); err != nil {
-		if isSymlinkPrivilegeError(err) {
-			t.Skipf("skipping: SeCreateSymbolicLinkPrivilege not held on this Windows build: %v", err)
-		}
-		t.Fatalf("Symlink(second) error = %v", err)
+	if err := os.Mkdir(second, 0o755); err != nil {
+		t.Fatalf("Mkdir(second) error = %v", err)
 	}
+	if err := os.Remove(first); err != nil {
+		t.Fatalf("Remove(first) error = %v", err)
+	}
+	createDirectoryJunction(t, first, second)
+	if err := os.Remove(second); err != nil {
+		t.Fatalf("Remove(second) error = %v", err)
+	}
+	createDirectoryJunction(t, second, first)
 
 	_, err := WriteFileAtomic(filepath.Join(first, "config.txt"), []byte("new\n"), 0o644)
 	if err == nil {
-		t.Fatal("WriteFileAtomic() error = nil, want link-loop rejection")
+		t.Fatal("WriteFileAtomic() error = nil, want junction-loop rejection")
 	}
 }
 
