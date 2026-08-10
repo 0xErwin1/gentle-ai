@@ -38,7 +38,7 @@ func Inject(homeDir, targetDir string, adapter agents.Adapter) (InjectionResult,
 			if targetDir == homeDir {
 				return injectClaudeUserConfig(homeDir, adapter)
 			}
-			return injectClaudeWorkspaceMCPJSON(homeDir, targetDir, adapter)
+			return injectClaudeWorkspaceMCPJSON(targetDir, adapter)
 		}
 		return injectSeparateFile(targetDir, adapter)
 	case model.StrategyMergeIntoSettings:
@@ -290,7 +290,7 @@ func injectClaudeUserConfig(homeDir string, adapter agents.Adapter) (InjectionRe
 // It also removes the inert mcpServers block the legacy workspace path wrote
 // into <project-root>/.claude/settings.json, which Claude Code ignores for MCP
 // discovery (issue #2213).
-func injectClaudeWorkspaceMCPJSON(homeDir, workspaceDir string, adapter agents.Adapter) (InjectionResult, error) {
+func injectClaudeWorkspaceMCPJSON(workspaceDir string, adapter agents.Adapter) (InjectionResult, error) {
 	mcpPath := filepath.Join(workspaceDir, ".mcp.json")
 	mcpWrite, err := mergeJSONFile(mcpPath, DefaultContext7OverlayJSON())
 	if err != nil {
@@ -300,15 +300,11 @@ func injectClaudeWorkspaceMCPJSON(homeDir, workspaceDir string, adapter agents.A
 	changed := mcpWrite.Changed
 	files := []string{mcpPath}
 	// Best-effort cleanup of the inert settings.json block the legacy path wrote.
-	// homeDir is passed so a workspace that coincides with the user's home still
-	// cleans the same settings file the user-scope path would have cleaned.
 	settingsPath := adapter.SettingsPath(workspaceDir)
 	if settingsChanged, cleanupErr := removeInertSettingsMCPServers(settingsPath); cleanupErr == nil && settingsChanged {
 		changed = true
 		files = append(files, settingsPath)
 	}
-	_ = homeDir // homeDir kept in the signature for symmetry with injectClaudeUserConfig.
-
 	return InjectionResult{Changed: changed, Files: files}, nil
 }
 
