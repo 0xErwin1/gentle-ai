@@ -1163,7 +1163,7 @@ func (builder *SnapshotBuilder) buildCurrentChanges(ctx context.Context, intende
 		return "", "", "", err
 	}
 	candidateTree := strings.TrimSpace(string(candidateOutput))
-	if unborn && candidateTree == baseTree {
+	if unborn && projection == ProjectionStaged && candidateTree == baseTree {
 		return "", "", "", errors.New("unborn repository has no staged changes; stage the review candidate with git add")
 	}
 	if allowStagedIntended && projection != ProjectionStaged {
