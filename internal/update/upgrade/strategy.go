@@ -52,17 +52,13 @@ var (
 // server or CDN could still serve a malicious script within this size limit.
 const maxScriptSize = 1 * 1024 * 1024 // 1 MB
 
-// strategyOutcome carries the result data that is only available after a
-// strategy runs. OpenCode plugin upgrades populate observedVersion from the
-// installed package manifest instead of reusing remote metadata.
 type strategyOutcome struct {
 	exitRequested   bool
 	observedVersion string
 }
 
-// runStrategyWithOutcome executes the upgrade for a single tool using the
-// appropriate strategy for the given platform profile. It returns both the
-// exit-request flag and any version observed after the strategy completes.
+// runStrategy executes the upgrade for a single tool using the appropriate strategy
+// for the given platform profile.
 //
 // Strategy routing:
 //   - brew profile → brewUpgrade (regardless of tool's declared method)
@@ -74,17 +70,17 @@ type strategyOutcome struct {
 //   - script method + windows → manualFallback
 //   - OpenCode plugin method → update materialized package in ~/.config/opencode when possible
 //   - unknown method → manualFallback with explicit message
-func runStrategyWithOutcome(ctx context.Context, r update.UpdateResult, profile system.PlatformProfile, preflightDestination ...string) (strategyOutcome, error) {
+func runStrategy(ctx context.Context, r update.UpdateResult, profile system.PlatformProfile, preflightDestination ...string) (bool, error) {
 	ownership := update.HomebrewNone
 	if profile.PackageManager == "brew" && r.Tool.InstallMethod != update.InstallOpenCodePlugin {
 		var err error
 		ownership, err = homebrewOwnershipDetector(r.Tool.Name)
 		if err != nil {
-			return strategyOutcome{}, fmt.Errorf("detect Homebrew ownership for %s: %w", r.Tool.Name, err)
+			return false, fmt.Errorf("detect Homebrew ownership for %s: %w", r.Tool.Name, err)
 		}
 	}
 	if isBetaGentleAIUpgrade(r) && profile.OS != "windows" && ownership == update.HomebrewNone {
-		return strategyOutcome{}, goInstallMainUpgrade(r.Tool)
+		return false, goInstallMainUpgrade(r.Tool)
 	}
 
 	method := effectiveMethod(r.Tool, profile)
@@ -94,11 +90,11 @@ func runStrategyWithOutcome(ctx context.Context, r update.UpdateResult, profile 
 
 	switch method {
 	case update.InstallBrew:
-		return strategyOutcome{}, brewUpgrade(ctx, r, ownership)
+		return false, brewUpgrade(ctx, r, ownership)
 	case update.InstallGoInstall:
-		return strategyOutcome{}, goInstallUpgrade(ctx, r, profile, firstString(preflightDestination))
+		return false, goInstallUpgrade(ctx, r, profile, firstString(preflightDestination))
 	case update.InstallBinary:
-		return strategyOutcome{}, binaryUpgrade(ctx, r, profile)
+		return false, binaryUpgrade(ctx, r, profile)
 	case update.InstallScript:
 		// GGA's install.sh expects to run from within a cloned repo — it references
 		// $SCRIPT_DIR/bin/gga and $SCRIPT_DIR/lib/*.sh. The generic scriptUpgrade
@@ -106,18 +102,27 @@ func runStrategyWithOutcome(ctx context.Context, r update.UpdateResult, profile 
 		// breaks because those relative paths don't exist. Use the git clone approach
 		// (same as the initial install resolver) for GGA specifically.
 		if r.Tool.Name == "gga" {
-			return strategyOutcome{}, ggaScriptUpgrade(ctx, r)
+			return false, ggaScriptUpgrade(ctx, r)
 		}
-		return strategyOutcome{}, scriptUpgrade(ctx, r, profile)
+		return false, scriptUpgrade(ctx, r, profile)
 	case update.InstallOpenCodePlugin:
-		observedVersion, err := opencodePluginUpgrade(ctx, r)
-		return strategyOutcome{observedVersion: observedVersion}, err
+		_, err := opencodePluginUpgrade(ctx, r)
+		return false, err
 	default:
-		return strategyOutcome{}, &ManualFallbackError{
+		return false, &ManualFallbackError{
 			Hint: fmt.Sprintf("upgrade %q: unsupported install method %q — please update manually. See: https://github.com/Gentleman-Programming/%s",
 				r.Tool.Name, method, r.Tool.Repo),
 		}
 	}
+}
+
+func runStrategyWithOutcome(ctx context.Context, r update.UpdateResult, profile system.PlatformProfile, preflightDestination ...string) (strategyOutcome, error) {
+	if effectiveMethod(r.Tool, profile) == update.InstallOpenCodePlugin {
+		observedVersion, err := opencodePluginUpgrade(ctx, r)
+		return strategyOutcome{observedVersion: observedVersion}, err
+	}
+	exitRequested, err := runStrategy(ctx, r, profile, preflightDestination...)
+	return strategyOutcome{exitRequested: exitRequested}, err
 }
 
 func opencodePluginUpgrade(ctx context.Context, r update.UpdateResult) (string, error) {

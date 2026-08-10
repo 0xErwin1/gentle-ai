@@ -17,13 +17,6 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v2/internal/update"
 )
 
-// runStrategy preserves the boolean assertion seam used by legacy strategy
-// tests. Production callers use runStrategyWithOutcome directly.
-func runStrategy(ctx context.Context, r update.UpdateResult, profile system.PlatformProfile, preflightDestination ...string) (bool, error) {
-	outcome, err := runStrategyWithOutcome(ctx, r, profile, preflightDestination...)
-	return outcome.exitRequested, err
-}
-
 func TestMain(m *testing.M) {
 	if err := os.Unsetenv("GENTLE_AI_CHANNEL"); err != nil {
 		panic(err)
@@ -648,76 +641,38 @@ func TestRunStrategyOpenCodePluginUpgradesMaterializedPackage(t *testing.T) {
 	}
 }
 
-func TestRunStrategyOpenCodePluginRejectsEmptyExpectedVersion(t *testing.T) {
-	origHomeDir, origLookPath, origExecCommand := openCodeHomeDir, lookPathCommand, execCommand
-	t.Cleanup(func() {
-		openCodeHomeDir, lookPathCommand, execCommand = origHomeDir, origLookPath, origExecCommand
-	})
-
-	home := t.TempDir()
-	opencodeDir := filepath.Join(home, ".config", "opencode")
-	pkg := "opencode-subagent-statusline"
-	pkgDir := filepath.Join(opencodeDir, "node_modules", pkg)
-	if err := os.MkdirAll(pkgDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(pkgDir, "package.json"), []byte(`{"version":"0.7.1"}`), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	openCodeHomeDir = func() (string, error) { return home, nil }
-	lookPathCommand = func(file string) (string, error) {
-		if file == "bun" {
-			return "/usr/bin/bun", nil
-		}
-		return "", errors.New("not found")
-	}
-	execCalled := false
-	execCommand = func(name string, args ...string) *exec.Cmd {
-		execCalled = true
-		return mockCmd("true")
-	}
-
-	_, err := runStrategyWithOutcome(context.Background(), update.UpdateResult{
-		Tool: update.ToolInfo{
-			Name:          pkg,
-			InstallMethod: update.InstallOpenCodePlugin,
-			NpmPackage:    pkg,
-		},
-		LatestVersion: "  ",
-		Status:        update.UpdateAvailable,
-	}, system.PlatformProfile{})
-	if err == nil {
-		t.Fatal("expected empty expected version to be rejected")
-	}
-	hint, ok := AsManualFallback(err)
-	if !ok || !strings.Contains(hint, "expected version is empty") {
-		t.Fatalf("error = %T %v, want an actionable empty-version fallback", err, err)
-	}
-	if execCalled {
-		t.Fatal("package manager must not run without a pinned expected version")
-	}
-}
-
 func TestRunStrategyOpenCodePluginRejectsUnverifiedMaterialization(t *testing.T) {
 	tests := []struct {
 		name           string
 		manifest       string
 		registerOnly   bool
+		latestVersion  string
+		wantFallback   bool
 		wantErrorParts []string
 	}{
 		{
+			name:           "empty expected version skips before package manager mutation",
+			registerOnly:   true,
+			latestVersion:  "  ",
+			wantFallback:   true,
+			wantErrorParts: []string{"expected version is empty"},
+		},
+		{
 			name:           "package manager succeeds without materializing the package",
 			registerOnly:   true,
+			latestVersion:  "0.8.0",
 			wantErrorParts: []string{"after bun mutation", "expected version \"0.8.0\"", "absent", "No automatic rollback", "restore or correct"},
 		},
 		{
 			name:           "package manager succeeds but leaves the stale version",
 			manifest:       `{"version":"0.7.1"}`,
+			latestVersion:  "0.8.0",
 			wantErrorParts: []string{"after bun mutation", "expected version \"0.8.0\"", "0.7.1", "No automatic rollback", "restore or correct"},
 		},
 		{
 			name:           "package manager succeeds but leaves an invalid manifest",
 			manifest:       `{not valid json`,
+			latestVersion:  "0.8.0",
 			wantErrorParts: []string{"after bun mutation", "expected version \"0.8.0\"", "invalid", "No automatic rollback", "restore or correct"},
 		},
 	}
@@ -757,7 +712,11 @@ func TestRunStrategyOpenCodePluginRejectsUnverifiedMaterialization(t *testing.T)
 				}
 				return "", errors.New("not found")
 			}
-			execCommand = func(name string, args ...string) *exec.Cmd { return mockCmd("true") }
+			execCalled := false
+			execCommand = func(name string, args ...string) *exec.Cmd {
+				execCalled = true
+				return mockCmd("true")
+			}
 
 			outcome, err := runStrategyWithOutcome(context.Background(), update.UpdateResult{
 				Tool: update.ToolInfo{
@@ -765,7 +724,7 @@ func TestRunStrategyOpenCodePluginRejectsUnverifiedMaterialization(t *testing.T)
 					InstallMethod: update.InstallOpenCodePlugin,
 					NpmPackage:    pkg,
 				},
-				LatestVersion: "0.8.0",
+				LatestVersion: tc.latestVersion,
 				Status:        update.UpdateAvailable,
 			}, system.PlatformProfile{})
 			if err == nil {
@@ -774,8 +733,16 @@ func TestRunStrategyOpenCodePluginRejectsUnverifiedMaterialization(t *testing.T)
 			if outcome.observedVersion != "" {
 				t.Fatalf("observed version = %q, want empty on verification failure", outcome.observedVersion)
 			}
-			if _, ok := AsManualFallback(err); ok {
-				t.Fatalf("error = %T %v, must not be ManualFallbackError after package-manager mutation", err, err)
+			if hint, ok := AsManualFallback(err); ok != tc.wantFallback {
+				t.Fatalf("error = %T %v, ManualFallbackError = %t, want %t", err, err, ok, tc.wantFallback)
+			} else if ok && !strings.Contains(hint, tc.wantErrorParts[0]) {
+				t.Errorf("fallback hint %q does not contain %q", hint, tc.wantErrorParts[0])
+			}
+			if tc.wantFallback {
+				if execCalled {
+					t.Fatal("package manager must not run without a pinned expected version")
+				}
+				return
 			}
 			for _, want := range tc.wantErrorParts {
 				if !strings.Contains(err.Error(), want) {
