@@ -103,16 +103,8 @@ var (
 	// CumulativeChangedLines==0" fallback specifically as attempt-count
 	// laundering; an unguarded widen here would be the same defect wearing a
 	// new operation name.
-	ErrRuntimeRescopeWidened = errors.New("SDD runtime objective rescope may only narrow or hold max_attempts and max_changed_lines, never widen them; " + runtimeLedgerStatusPointer)
-	// ErrRuntimeRemediationSuccessorRequired never travels alone. Every return
-	// site wraps it with runtimeRemediationExitRefusal, which names the exact
-	// runnable continuation for the state the caller is actually in. The
-	// sentinel text deliberately avoids the word "recovery": it sent the first
-	// reporter of this block to `review recover`, which refuses a same-lineage
-	// successor and refuses an unchanged approved scope, and is therefore the
-	// first step of a cycle with no exit.
-	ErrRuntimeRemediationSuccessorRequired = errors.New("a bound passing SDD runtime attempt must also bind the approved review of its corrected candidate")
-	ErrBindingRevisionConflict             = errors.New("SDD review binding revision conflict")
+	ErrRuntimeRescopeWidened   = errors.New("SDD runtime objective rescope may only narrow or hold max_attempts and max_changed_lines, never widen them; " + runtimeLedgerStatusPointer)
+	ErrBindingRevisionConflict = errors.New("SDD review binding revision conflict")
 	// ErrRuntimeWorktreeMismatch never travels alone either. Every return site
 	// wraps it with runtimeWorktreeMismatchRefusal, which names the exact
 	// --cwd that reproduces the binding Begin actually recorded (#2296 part
@@ -837,10 +829,17 @@ func (store RuntimeStore) Finish(ctx context.Context, request FinishAttemptReque
 		chainFailedAttempt, chainHasFailedEvidence := runtimeChainFailedAttempt(status.Attempts)
 		chainFailedEvidence := chainFailedAttempt.EvidenceRevision
 		if unmanagedRemediation {
-			if !store.ReviewDisabled || currentBinding != nil {
-				// refusal:by-design human-authority: unmanaged remediation is valid only while receipt authority is absent and explicitly disabled.
-				return runtimeRecord{}, errors.New("unmanaged remediation requires disabled delivery without a review binding")
+			if !store.ReviewDisabled {
+				// No by-design marker: this names a runnable continuation inline.
+				return runtimeRecord{}, errors.New("unmanaged remediation requires disabled delivery; enable it or run `gentle-ai review mode disable --scope clone --cwd <repo>` for this repository only")
 			}
+			// A binding that predates the switch does NOT block this. The
+			// contract on ReviewDisabled says that while review is off it "does
+			// not exist, so it must have no implications", and a leftover
+			// binding is an implication: it made the switch inert only for
+			// changes that had never used review, so turning it off after the
+			// fact bought nothing. The binding stays recorded and re-enabling
+			// re-validates from the current state.
 			if !chainHasFailedEvidence {
 				// #2881: the caller named a real failure, and their own earlier
 				// slice already repaired it. Blaming their input sent the
@@ -872,23 +871,25 @@ func (store RuntimeStore) Finish(ctx context.Context, request FinishAttemptReque
 		if err != nil {
 			return runtimeRecord{}, fmt.Errorf("measure native SDD runtime line charge: %w", err)
 		}
-		// While the kill switch is off the bound review has no say in whether
-		// this attempt may close: it would demand an approved recovery successor
-		// that review/start is refused from producing, which is a deadlock, not
-		// a safeguard. Re-enabling re-validates from the current state, because
-		// the binding still refers to the candidate it was approved for and the
-		// next enforcement point rediscovers that on its own.
-		if request.Outcome == AttemptPassed && currentBinding != nil && !remediation && !store.ReviewDisabled {
-			if snapshot.CandidateTree != active.BeginCandidateTree {
-				return runtimeRecord{}, store.runtimeRemediationExitRefusal(ctx, status, *currentBinding, active.Ordinal, snapshot.CandidateTree)
-			}
-			if currentBinding.Change != store.Change {
-				return runtimeRecord{}, errors.New("bound SDD review change does not match the runtime objective")
-			}
-			if validateErr := validateRuntimeBoundCandidate(ctx, store.Repo, *currentBinding, snapshot.CandidateTree); validateErr != nil {
-				return runtimeRecord{}, fmt.Errorf("validate unchanged bound SDD candidate: %w", validateErr)
-			}
-		}
+		// Review acts AFTER implementation and verification, on the finished
+		// result. This package already implements that twice: applyReviewOfferRouting
+		// fires only once verify has passed, and resolveNextRecommended never
+		// routes to review before verify.
+		//
+		// A third rule used to disagree with both. A passing IMPLEMENTATION
+		// attempt was refused whenever the review binding covered the
+		// pre-attempt bytes — which it always does, because changing the
+		// candidate is what an attempt is for. That is review deciding whether
+		// implementation may finish, before any verification has run, and it is
+		// #1993: a maintainer-authorized correction passed every gate and could
+		// not be closed, while the only named exit required a review the review
+		// side was structurally unable to produce.
+		//
+		// Nothing is given up. The delivery gates (post-apply, pre-commit,
+		// pre-push, pre-pr, release) re-derive their verdict from the candidate
+		// actually being delivered, so an unreviewed candidate is still refused
+		// there. The binding and receipt stay recorded on the ledger as
+		// metadata: review stops deciding, it does not stop being tracked.
 		if store.ReviewDisabled && currentBinding == nil && request.Outcome == AttemptPassed && chainHasFailedEvidence && !unmanagedRemediation {
 			return runtimeRecord{}, fmt.Errorf("disabled failed verification requires --remediates-evidence-revision %q on the correction settle; rerun `gentle-ai sdd-attempt settle` with that flag", chainFailedEvidence)
 		}
@@ -997,91 +998,10 @@ func (store RuntimeStore) Handoff(ctx context.Context, request HandoffAttemptReq
 	})
 }
 
-// runtimeRemediationExitRefusal turns the bound-passing-finish demand into a
-// refusal that names the continuation that actually clears it.
-//
-// The demand itself is correct: the candidate moved after the attempt began,
-// so closing the attempt as passed while keeping a binding approved for the
-// OLD bytes would launder unreviewed content into a passing runtime record.
-// What was missing is the exit. Since b37aa8e4 the bound lineage itself is a
-// legal --successor-lineage once the corrected candidate is approved on it, so
-// the ordinary way out is one re-run of this same finish with the remediation
-// trio — no `review recover`, no invalidation of healthy approved authority,
-// and no distinct recovery lineage that could never legally exist.
-//
-// The two states are distinguished rather than merged, because a message may
-// name a command only when running it resolves the block. When the bound
-// lineage does not currently hold the approved review of this candidate — it
-// was superseded by a real recovery successor, the live post-apply gate no
-// longer allows, or the approved bytes are not these bytes — the trio naming
-// that lineage is refused further in, so the refusal names the review router
-// instead and says which lineage the trio must eventually name.
-func (store RuntimeStore) runtimeRemediationExitRefusal(
-	ctx context.Context, status RuntimeStatus, binding ReviewBinding, ordinal int, candidateTree string,
-) error {
-	// The sentinel stays in the %w position in both branches: callers that
-	// route on errors.Is must keep working no matter which exit is named.
-	const provenance = "`sdd-attempt status` publishes those three as binding_revision, binding.lineage, and evidence_revision"
-	if !runtimeSelfSuccessorAvailable(ctx, store.Repo, store.Workspace, store.Change, binding, candidateTree) {
-		if stranded, ok := runtimeStrandedSuccessor(ctx, store.Repo, binding, candidateTree); ok {
-			return store.runtimeStrandedSuccessorRefusal(binding, stranded, ordinal)
-		}
-		return fmt.Errorf(
-			"%w: the candidate changed after attempt %d began, and lineage %q does not currently hold the approved review of this candidate, so it cannot be its own successor: get this candidate approved first with `gentle-ai review status --cwd %s --contract %s --next-transition`, which names the next review action, then re-run this finish adding --expected-binding-revision, --successor-lineage, and --remediates-evidence-revision for the lineage that then holds it; %s",
-			ErrRuntimeRemediationSuccessorRequired, ordinal, binding.Lineage,
-			pathquote.Quote(store.Workspace), runtimeReviewIntegrationContract, provenance,
-		)
-	}
-	// An objective with no recorded failed evidence still needs a repaired
-	// revision, and only the caller knows which one that is.
-	remediates := status.EvidenceRevision
-	if remediates == "" {
-		remediates = "<repaired-evidence-sha256>"
-	}
-	return fmt.Errorf(
-		"%w: the candidate changed after attempt %d began, and lineage %q already holds the approved review of the corrected candidate, so that same lineage IS the successor — re-run this finish with the remediation trio: `gentle-ai sdd-attempt finish --cwd %s --change %q --expected-revision %q --request-id \"<unique-request-id>\" --outcome passed --evidence-revision \"<corrected-evidence-sha256>\" --diagnosis \"<proven-diagnosis>\" --harness-disposition <reused|invalidated> --cleanup-evidence \"<cleanup-evidence>\" --process-evidence \"<process-evidence>\" --expected-binding-revision %q --successor-lineage %q --remediates-evidence-revision %s`; %s, and --evidence-revision must differ from --remediates-evidence-revision",
-		ErrRuntimeRemediationSuccessorRequired, ordinal, binding.Lineage,
-		pathquote.Quote(store.Workspace), store.Change, status.Revision,
-		binding.Revision, binding.Lineage, runtimeRemediatesArgument(remediates), provenance,
-	)
-}
-
-// runtimeStrandedSuccessorRefusal names the one operation that clears a
-// stranded recovery successor, and prints the maintainer authorization that
-// operation demands as a filled-in template.
-//
-// The review router is deliberately NOT named here. For this state its printed
-// transition is `review start` on a target no leaf governs, which runs, exits
-// zero and changes nothing; and even a fresh review started under a free
-// lineage is refused by the runtime one layer deeper, because a lineage that is
-// not a scope-changed recovery descendant of the populated binding can never be
-// its successor. Naming a command that runs and leaves the block in place is
-// the most expensive refusal this product can emit, because the operator then
-// trusts it.
-//
-// The authorization template is rendered by the same function the abandon gate
-// verifies against (reviewtransaction.RenderCompactAbandonAuthorization), over
-// the exact summary the eligibility probe accepted. Only the actor remains an
-// operator value, so the bytes a reader assembles are the bytes the gate accepts.
-func (store RuntimeStore) runtimeStrandedSuccessorRefusal(binding ReviewBinding, stranded RuntimeStrandedSuccessor, ordinal int) error {
-	// The sentinel stays in the %w position in every branch: callers that
-	// route on errors.Is must keep working no matter which exit is named.
-	return fmt.Errorf(
-		"%w: the candidate changed after attempt %d began, and lineage %q cannot hold the approved review of this candidate because recovery successor %q supersedes it and froze a target this candidate no longer has, so that successor can never be finalized — quarantine it, then re-run this finish: `gentle-ai review abandon --cwd %s --lineage %q --expected-revision %q --reason %q --actor \"<actor>\" --maintainer-authorization \"<maintainer-authorization>\"`; the abandonment quarantines the stranded successor and records its discarded work, because %q keeps the approved review of the corrected candidate. --maintainer-authorization is exactly these nine lines, joined by LF, with no trailing newline, using the same --actor:\n%s",
-		ErrRuntimeRemediationSuccessorRequired, ordinal, binding.Lineage, stranded.Lineage,
-		pathquote.Quote(store.Workspace), stranded.Lineage, stranded.Revision, reviewtransaction.CompactAbandonReasonOperatorDisposition, binding.Lineage,
-		reviewtransaction.RenderCompactAbandonAuthorization(
-			stranded.Lineage, stranded.Revision, stranded.SnapshotIdentity, "<actor>", reviewtransaction.CompactAbandonReasonOperatorDisposition, stranded.DiscardedWork))
-}
-
-// runtimeRemediatesArgument quotes a concrete revision and leaves an operator
-// placeholder bare, so the printed command tokenizes the same way either way.
-func runtimeRemediatesArgument(remediates string) string {
-	if strings.HasPrefix(remediates, "<") {
-		return remediates
-	}
-	return fmt.Sprintf("%q", remediates)
-}
+// runtimeRemediationExitRefusal, runtimeStrandedSuccessorRefusal and
+// runtimeRemediatesArgument are deleted with the demand they served. They
+// existed to tell an operator which review exit would clear a gate that no
+// longer exists, and leaving them uncalled is how the coupling grows back.
 
 // runtimeWorktreeMismatchRefusal turns a cross-worktree finish into a refusal
 // that names the exact --cwd the ledger's candidate/diff math is pinned to.
@@ -2225,7 +2145,12 @@ func applyRuntimeFinishEvent(replay *runtimeReplay, event *runtimeFinishEvent, u
 		evidenceOnly := runtimeEvidenceOnlyRetryAuthorized(replay.Status.LastReset, replay.Status.LastRescope, chainFailedAttempt, event.FinishCandidateTree)
 		unchangedCandidate := event.FinishCandidateIdentity == active.BeginCandidateIdentity ||
 			event.FinishCandidateTree == active.BeginCandidateTree
-		if replay.Status.Binding != nil || event.Outcome != AttemptPassed ||
+		// A binding is deliberately NOT checked here. The write path stopped
+		// treating a leftover binding as a blocker (the kill switch must have
+		// no implications while it is off), and this replay mirror has to agree
+		// with it or a legitimately committed record makes the whole chain
+		// unreplayable.
+		if event.Outcome != AttemptPassed ||
 			!chainHasFailedEvidence || chainFailedAttempt.EvidenceRevision != event.RemediatesEvidenceRevision ||
 			(unchangedCandidate && !evidenceOnly) ||
 			event.EvidenceRevision == event.RemediatesEvidenceRevision {
