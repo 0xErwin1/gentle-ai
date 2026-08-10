@@ -1240,6 +1240,31 @@ func TestLMStudioDiscoveryWarningIsNotDuplicated(t *testing.T) {
 	}
 }
 
+func TestLMStudioDiscoveryErrorWarnsOnceWhenConfiguredModelsLackToolCalls(t *testing.T) {
+	state := lmStudioState(t, `{}`, `{"provider":{"lmstudio":{"models":{"model":{"name":"Model"}}}}}`)
+	discovery := LMStudioDiscoveryMsg{
+		BaseURL: state.lmStudioURL,
+		Err:     errors.New("connection refused"),
+	}
+	state = state.Update(discovery)
+	state = state.Update(discovery)
+
+	if len(state.AvailableIDs) != 0 {
+		t.Fatalf("AvailableIDs = %v, want LM Studio excluded", state.AvailableIDs)
+	}
+
+	warning := lmStudioToolCallWarning
+	if got := strings.Count(state.ConfigWarning, warning); got != 1 {
+		t.Fatalf("LM Studio tool_call warning count = %d, want 1; warning = %q", got, state.ConfigWarning)
+	}
+	if !strings.Contains(state.ConfigWarning, "LM Studio discovery failed; using configured models.") {
+		t.Fatalf("discovery fallback warning missing: %q", state.ConfigWarning)
+	}
+	if got := strings.Count(RenderModelPicker(nil, state, 0), warning); got != 1 {
+		t.Fatalf("rendered LM Studio tool_call warning count = %d, want 1", got)
+	}
+}
+
 func TestNewModelPickerStateCacheErrorStillDiscovers(t *testing.T) {
 	state := NewModelPickerState(writeTempFile(t, "models.json", `{`), writeTempFile(t, "opencode.json", `{"provider":{"lmstudio":{"url":"http://gateway:1234/v1","models":{"model":{"tool_call":true}}}}}`))
 	if state.Providers == nil || state.lmStudioURL != "http://gateway:1234/v1" || len(state.AvailableIDs) != 1 || !strings.Contains(state.ConfigWarning, "model cache") || state.DiscoverLMStudioCmd() == nil {
