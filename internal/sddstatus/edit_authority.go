@@ -44,7 +44,11 @@ func detectUnauthorizedEditRoots(tasksText string, workspaceRoot string, allowed
 	planningGitRoot := gitRootOf(resolveExistingPath(workspaceRoot))
 	allowed := make([]string, 0, len(allowedEditRoots))
 	for _, root := range allowedEditRoots {
-		allowed = append(allowed, resolveExistingPath(root))
+		root = filepath.Clean(root)
+		if resolved, err := filepath.EvalSymlinks(root); err == nil {
+			root = resolved
+		}
+		allowed = append(allowed, root)
 	}
 
 	unauthorized := map[string]bool{}

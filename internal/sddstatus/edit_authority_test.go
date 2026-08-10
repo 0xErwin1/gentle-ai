@@ -111,6 +111,25 @@ func TestNestedPlanningWorkspaceBlocksSiblingDirectoryWithinParentRepository(t *
 	}
 }
 
+func TestDeletedAllowedRootDoesNotBroadenSiblingAuthorization(t *testing.T) {
+	parent := initRuntimeLedgerRepo(t)
+	planning := filepath.Join(parent, "subproject")
+	granted := filepath.Join(parent, "service-dir")
+	sibling := filepath.Join(parent, "other-service")
+	for _, path := range []string{planning, granted, sibling} {
+		mkdir(t, path)
+	}
+	if err := os.RemoveAll(granted); err != nil {
+		t.Fatal(err)
+	}
+	tasks := "- [ ] 1.1 Update `../other-service/internal/api/handler.go`\n"
+	flagged := detectUnauthorizedEditRoots(tasks, planning, []string{planning, granted})
+	want := realPath(t, sibling)
+	if len(flagged) != 1 || flagged[0] != want {
+		t.Fatalf("deleted granted root broadened authorization: got %v, want [%s]", flagged, want)
+	}
+}
+
 func TestSameRepositoryEditRootUsesCanonicalDirectory(t *testing.T) {
 	root := t.TempDir()
 	directory := filepath.Join(root, "service-dir")
