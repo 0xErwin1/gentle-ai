@@ -22,6 +22,9 @@ var (
 	snapshotRepoTemplateOnce sync.Once
 	snapshotRepoTemplateDir  string
 	snapshotRepoTemplateErr  error
+	mergeTreeProbeOnce       sync.Once
+	mergeTreeWriteTree       bool
+	mergeTreeProbeErr        error
 )
 
 func TestMain(m *testing.M) {
@@ -1856,6 +1859,58 @@ func requireSnapshotGit(t *testing.T) {
 	t.Helper()
 	if testing.Short() {
 		t.Skip("uses real git commands")
+	}
+}
+
+func requireMergeTreeWriteTree(t *testing.T) {
+	t.Helper()
+	requireSnapshotGit(t)
+	mergeTreeProbeOnce.Do(func() {
+		output, err := exec.Command("git", "merge-tree", "-h").CombinedOutput()
+		mergeTreeWriteTree, mergeTreeProbeErr = classifyMergeTreeWriteTreeProbe(output, err)
+	})
+	if mergeTreeProbeErr != nil {
+		t.Fatalf("probe git merge-tree --write-tree capability: %v", mergeTreeProbeErr)
+	}
+	if !mergeTreeWriteTree {
+		t.Skip("git does not support merge-tree --write-tree (needs Git 2.38+)")
+	}
+}
+
+func classifyMergeTreeWriteTreeProbe(output []byte, err error) (bool, error) {
+	validHelp := bytes.Contains(output, []byte("git merge-tree"))
+	if err != nil {
+		var exitErr *exec.ExitError
+		if !errors.As(err, &exitErr) || exitErr.ExitCode() != 129 || !validHelp {
+			return false, fmt.Errorf("git merge-tree -h: %w: %s", err, strings.TrimSpace(string(output)))
+		}
+	}
+	if !validHelp {
+		return false, fmt.Errorf("git merge-tree -h returned unrecognized help output: %q", strings.TrimSpace(string(output)))
+	}
+	return bytes.Contains(output, []byte("--write-tree")), nil
+}
+
+func TestClassifyMergeTreeWriteTreeProbe(t *testing.T) {
+	tests := []struct {
+		name      string
+		output    string
+		err       error
+		want      bool
+		wantError bool
+	}{
+		{name: "supported", output: "usage: git merge-tree [--write-tree] <branch1> <branch2>", want: true},
+		{name: "unsupported", output: "usage: git merge-tree <base-tree> <branch1> <branch2>"},
+		{name: "unexpected command failure", output: "fatal: cannot execute", err: errors.New("exec failed"), wantError: true},
+		{name: "unrecognized successful output", output: "unexpected", wantError: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := classifyMergeTreeWriteTreeProbe([]byte(tt.output), tt.err)
+			if got != tt.want || (err != nil) != tt.wantError {
+				t.Fatalf("classifyMergeTreeWriteTreeProbe() = (%v, %v), want (%v, error=%v)", got, err, tt.want, tt.wantError)
+			}
+		})
 	}
 }
 
