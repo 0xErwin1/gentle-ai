@@ -1476,7 +1476,7 @@ func compactApprovedScopeChangedRecovery(existing CompactState, live Snapshot) b
 func compactApprovedRebasedScopeRecovery(ctx context.Context, repo string, existing CompactState, live Snapshot) (bool, error) {
 	original, approved := existing.InitialSnapshot, existing.CurrentSnapshot
 	if existing.State != StateApproved || original.Kind != TargetCurrentChanges || approved.Kind != TargetCurrentChanges ||
-		live.Kind != TargetBaseDiff || !sameRecoveryProjection(original.Projection, live.Projection) ||
+		live.Kind != TargetBaseDiff || !sameApprovedRebasedRecoveryProjection(original.Projection, live.Projection) ||
 		original.BaseTree != approved.BaseTree || original.BaseTree == live.BaseTree ||
 		approved.CandidateTree == live.CandidateTree || approved.Identity == live.Identity ||
 		len(existing.GenesisPaths) == 0 || !equalStrings(approved.Paths, existing.GenesisPaths) ||
@@ -1519,6 +1519,17 @@ func compactApprovedRebasedScopeRecovery(ctx context.Context, repo string, exist
 		return false, fmt.Errorf("derive live rebased patch identity: %w", err)
 	}
 	return originalPatch == livePatch, nil
+}
+
+// A base-diff has no index-backed staged execution mode. STATUS therefore
+// projects this narrow approved staged-current-changes rebase to its executable
+// committed-only base-diff form before identity derivation. No other mixed
+// projection is admitted here.
+func sameApprovedRebasedRecoveryProjection(original, live Projection) bool {
+	if live == "" {
+		live = ProjectionWorkspace
+	}
+	return sameRecoveryProjection(original, live) || original == ProjectionStaged && live == ProjectionWorkspace
 }
 
 // compactStartDeliveryScopeMatches compares the immutable delivery boundary
@@ -2043,7 +2054,7 @@ func validateCompactSuccessor(previousRevision string, previous, next CompactSta
 		!snapshotsEqual(previous.InitialSnapshot, next.InitialSnapshot) || !equalStrings(previous.GenesisPaths, next.GenesisPaths) ||
 		previous.PolicyHash != next.PolicyHash || previous.RiskLevel != next.RiskLevel ||
 		!equalStrings(previous.SelectedLenses, next.SelectedLenses) || previous.OriginalChangedLines != next.OriginalChangedLines ||
-		previous.CorrectionBudget != next.CorrectionBudget {
+		previous.CorrectionBudget != next.CorrectionBudget || previous.CorrectionBudgetPolicy != next.CorrectionBudgetPolicy {
 		return fmt.Errorf("%w: compact review scope, tier, policy, and budget are immutable", ErrInvalidSuccessor)
 	}
 	switch operation {

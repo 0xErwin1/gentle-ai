@@ -13,7 +13,7 @@ const issue2031EscalatedPredecessor = "issue-2031-escalated-predecessor"
 func issue2031Journeys() []Journey {
 	return []Journey{
 		{
-			ID:     "j79-escalated-changed-scope-negotiates-recovery",
+			ID:     "j94-escalated-changed-scope-negotiates-recovery",
 			Title:  "Escalated changed target: expanded scope negotiates recovery authorization",
 			Source: "issue #2031: changed-target recovery must precede delivery-scope matching",
 			Steps: []Step{
