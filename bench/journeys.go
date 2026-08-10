@@ -515,6 +515,44 @@ func rememberLineage(sandbox *Sandbox, observation Observation) error {
 	return nil
 }
 
+// assertNegotiatedStartUnknownFlagPreflight keeps the parser refusal inside a
+// composite because a direct step treats an unknown flag as unsupported before
+// its After assertion can inspect the negotiated envelope.
+func assertNegotiatedStartUnknownFlagPreflight(run *journeyRun) error {
+	observation := run.run(productArgsFor(run, "review", "start", "--contract", reviewContract, "--unknown-start-flag"), false)
+	if observation.ExitCode == 0 {
+		return errors.New("negotiated START accepted an unknown flag")
+	}
+
+	var failure struct {
+		Code            string `json:"code"`
+		Phase           string `json:"phase"`
+		MutationOutcome string `json:"mutation_outcome"`
+		RetrySafe       bool   `json:"retry_safe"`
+		Replayability   string `json:"replayability"`
+		NextAction      string `json:"next_action"`
+		Cause           string `json:"cause"`
+	}
+	if err := json.Unmarshal([]byte(strings.TrimSpace(observation.Stdout)), &failure); err != nil {
+		return fmt.Errorf("decode negotiated START unknown-flag envelope: %w (stderr: %s)", err, firstLine(observation.Stderr))
+	}
+	if failure.Code != "invalid_request" || failure.Phase != "preflight" ||
+		failure.MutationOutcome != "not_started" || !failure.RetrySafe ||
+		failure.Replayability != "not_replayable" || failure.NextAction != "correct_request" {
+		return fmt.Errorf("START unknown-flag failure = code=%q phase=%q mutation_outcome=%q retry_safe=%t replayability=%q next_action=%q", failure.Code, failure.Phase, failure.MutationOutcome, failure.RetrySafe, failure.Replayability, failure.NextAction)
+	}
+	if failure.Cause != "flag provided but not defined: -unknown-start-flag" {
+		return fmt.Errorf("START unknown-flag cause = %q", failure.Cause)
+	}
+	if _, err := os.Stat(filepath.Join(run.sandbox.Repo, ".git", "gentle-ai", "defect-reports")); !errors.Is(err, os.ErrNotExist) {
+		if err == nil {
+			return errors.New("START unknown-flag refusal wrote a defect report")
+		}
+		return fmt.Errorf("inspect START unknown-flag defect reports: %w", err)
+	}
+	return nil
+}
+
 var startCapability = &Capability{Verb: []string{"review", "start"}, Flags: []string{"--cwd"}}
 
 // Capabilities declare only the flags the step actually uses. Over-declaring
@@ -759,6 +797,16 @@ func coreJourneys() []Journey {
 				{Name: "fixture: stage docs", Fixture: stageDocs("abandoned")},
 				{Name: "review start", Requires: startCapability, Args: productArgs("review", "start"), After: rememberLineage},
 				{Name: "abandon a non-terminal lineage with its V2 binding", Requires: abandonCapability, Composite: abandonNonTerminalLineage},
+			},
+		},
+		{
+			ID:     "j85-negotiated-start-unknown-flag-is-preflight",
+			Title:  "Negotiated START unknown flag is a retry-safe preflight refusal",
+			Source: "#1956: argv parsing happens before START can mutate authority",
+			Steps: []Step{
+				{Name: "fixture: repo", Fixture: baseRepo},
+				{Name: "fixture: stage docs", Fixture: stageDocs("unknown-flag")},
+				{Name: "negotiated START unknown flag is typed before native execution", Requires: startContractCapability, Composite: assertNegotiatedStartUnknownFlagPreflight},
 			},
 		},
 	}
