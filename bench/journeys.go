@@ -515,45 +515,73 @@ func rememberLineage(sandbox *Sandbox, observation Observation) error {
 	return nil
 }
 
-// assertNegotiatedStartUnknownFlagPreflight keeps the parser refusal inside a
-// composite because a direct step treats an unknown flag as unsupported before
-// its After assertion can inspect the negotiated envelope.
-func assertNegotiatedStartUnknownFlagPreflight(run *journeyRun) error {
-	observation := run.run(productArgsFor(run, "review", "start", "--contract", reviewContract, "--unknown-start-flag"), false)
-	if observation.ExitCode == 0 {
-		return errors.New("negotiated START accepted an unknown flag")
+// assertReviewParseRefusalsPreflight keeps parser refusals inside a composite
+// because a direct unknown-flag step is classified as unsupported before its
+// After assertion can inspect the negotiated envelope. The positive equals
+// forms remain covered by TestReviewBooleanFlagSpacedValueNamesTheEqualsForm
+// and core journey j02's --captured-results=true transition.
+func assertReviewParseRefusalsPreflight(run *journeyRun, operation, booleanFlag string) error {
+	cases := []struct {
+		name, cause string
+		args        []string
+		usage       bool
+	}{
+		{name: "unknown flag", args: []string{"--unknown-" + operation + "-flag"}, cause: "flag provided but not defined: -unknown-" + operation + "-flag", usage: true},
+		{name: "detached boolean", args: []string{"--" + booleanFlag, "true"}, cause: "boolean flag --" + booleanFlag + " takes --" + booleanFlag + " or --" + booleanFlag + "=true, not a separate value; got \"true\""},
 	}
-
-	var failure struct {
-		Code            string `json:"code"`
-		Phase           string `json:"phase"`
-		MutationOutcome string `json:"mutation_outcome"`
-		RetrySafe       bool   `json:"retry_safe"`
-		Replayability   string `json:"replayability"`
-		NextAction      string `json:"next_action"`
-		Cause           string `json:"cause"`
-	}
-	if err := json.Unmarshal([]byte(strings.TrimSpace(observation.Stdout)), &failure); err != nil {
-		return fmt.Errorf("decode negotiated START unknown-flag envelope: %w (stderr: %s)", err, firstLine(observation.Stderr))
-	}
-	if failure.Code != "invalid_request" || failure.Phase != "preflight" ||
-		failure.MutationOutcome != "not_started" || !failure.RetrySafe ||
-		failure.Replayability != "not_replayable" || failure.NextAction != "correct_request" {
-		return fmt.Errorf("START unknown-flag failure = code=%q phase=%q mutation_outcome=%q retry_safe=%t replayability=%q next_action=%q", failure.Code, failure.Phase, failure.MutationOutcome, failure.RetrySafe, failure.Replayability, failure.NextAction)
-	}
-	if failure.Cause != "flag provided but not defined: -unknown-start-flag" {
-		return fmt.Errorf("START unknown-flag cause = %q", failure.Cause)
-	}
-	if _, err := os.Stat(filepath.Join(run.sandbox.Repo, ".git", "gentle-ai", "defect-reports")); !errors.Is(err, os.ErrNotExist) {
-		if err == nil {
-			return errors.New("START unknown-flag refusal wrote a defect report")
+	for _, test := range cases {
+		for _, negotiated := range []bool{true, false} {
+			mode := "plain"
+			args := []string{"review", operation}
+			if negotiated {
+				mode = "negotiated"
+				args = append(args, "--contract", reviewContract)
+			}
+			observation := run.run(productArgsFor(run, append(args, test.args...)...), false)
+			if observation.ExitCode == 0 {
+				return fmt.Errorf("%s %s %s accepted a parser refusal", operation, test.name, mode)
+			}
+			if negotiated {
+				var failure struct {
+					Code            string `json:"code"`
+					Phase           string `json:"phase"`
+					MutationOutcome string `json:"mutation_outcome"`
+					RetrySafe       bool   `json:"retry_safe"`
+					Replayability   string `json:"replayability"`
+					NextAction      string `json:"next_action"`
+					Cause           string `json:"cause"`
+				}
+				if err := json.Unmarshal([]byte(strings.TrimSpace(observation.Stdout)), &failure); err != nil {
+					return fmt.Errorf("decode %s %s %s envelope: %w (stderr: %s)", operation, test.name, mode, err, firstLine(observation.Stderr))
+				}
+				if failure.Code != "invalid_request" || failure.Phase != "preflight" ||
+					failure.MutationOutcome != "not_started" || !failure.RetrySafe ||
+					failure.Replayability != "not_replayable" || failure.NextAction != "correct_request" || failure.Cause != test.cause {
+					return fmt.Errorf("%s %s %s failure = code=%q phase=%q mutation_outcome=%q retry_safe=%t replayability=%q next_action=%q cause=%q", operation, test.name, mode, failure.Code, failure.Phase, failure.MutationOutcome, failure.RetrySafe, failure.Replayability, failure.NextAction, failure.Cause)
+				}
+			} else {
+				if got := strings.TrimSpace(observation.Stderr); got != "Error: "+test.cause {
+					return fmt.Errorf("%s %s plain diagnostic = %q, want %q", operation, test.name, got, "Error: "+test.cause)
+				}
+				usage := "Usage: gentle-ai review " + operation + " [flags]"
+				if got := strings.Contains(observation.Stdout, usage); got != test.usage {
+					return fmt.Errorf("%s %s plain usage %t, want %t", operation, test.name, got, test.usage)
+				}
+			}
+			if _, err := os.Stat(filepath.Join(run.sandbox.Repo, ".git", "gentle-ai", "defect-reports")); !errors.Is(err, os.ErrNotExist) {
+				if err == nil {
+					return fmt.Errorf("%s %s %s refusal wrote a defect report", operation, test.name, mode)
+				}
+				return fmt.Errorf("inspect %s %s %s defect reports: %w", operation, test.name, mode, err)
+			}
 		}
-		return fmt.Errorf("inspect START unknown-flag defect reports: %w", err)
 	}
 	return nil
 }
 
 var startCapability = &Capability{Verb: []string{"review", "start"}, Flags: []string{"--cwd"}}
+var startParseRefusalCapability = &Capability{Verb: []string{"review", "start"}, Flags: []string{"--cwd", "--contract", "--committed-only"}}
+var finalizeParseRefusalCapability = &Capability{Verb: []string{"review", "finalize"}, Flags: []string{"--cwd", "--contract", "--captured-results"}}
 
 // Capabilities declare only the flags the step actually uses. Over-declaring
 // would report an older binary as `unsupported` for a step it can in fact run.
@@ -801,12 +829,14 @@ func coreJourneys() []Journey {
 		},
 		{
 			ID:     "j85-negotiated-start-unknown-flag-is-preflight",
-			Title:  "Negotiated START unknown flag is a retry-safe preflight refusal",
-			Source: "#1956: argv parsing happens before START can mutate authority",
+			Title:  "START and FINALIZE parser refusals are preflight and non-mutating",
+			Source: "#1956: argv parsing happens before review authority can mutate",
 			Steps: []Step{
 				{Name: "fixture: repo", Fixture: baseRepo},
-				{Name: "fixture: stage docs", Fixture: stageDocs("unknown-flag")},
-				{Name: "negotiated START unknown flag is typed before native execution", Requires: startContractCapability, Composite: assertNegotiatedStartUnknownFlagPreflight},
+				{Name: "START parser refusals preserve their preflight contract", Requires: startParseRefusalCapability, Composite: func(run *journeyRun) error { return assertReviewParseRefusalsPreflight(run, "start", "committed-only") }},
+				{Name: "FINALIZE parser refusals preserve their preflight contract", Requires: finalizeParseRefusalCapability, Composite: func(run *journeyRun) error {
+					return assertReviewParseRefusalsPreflight(run, "finalize", "captured-results")
+				}},
 			},
 		},
 	}
