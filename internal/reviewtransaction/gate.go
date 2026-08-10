@@ -957,6 +957,9 @@ func buildPushTarget(ctx context.Context, repo, selector, deliveryBaseTree, revi
 
 func selectPrePushBoundary(ctx context.Context, repo, selector string) (PrePRBoundarySelection, error) {
 	if strings.TrimSpace(selector) != "" {
+		if validGitTree(selector) {
+			return resolveExplicitPrePushCommitBoundary(ctx, repo, selector)
+		}
 		return selectPrePRBoundary(ctx, repo, selector)
 	}
 	ref, remote, commit, err := resolveTrackingUpstreamBase(ctx, repo)
@@ -968,6 +971,24 @@ func selectPrePushBoundary(ctx context.Context, repo, selector string) (PrePRBou
 	}
 	identity, err := remoteRepositoryIdentity(ctx, repo, remote)
 	return PrePRBoundarySelection{Source: PrePRBoundaryPublicationDefault, Selector: ref, Commit: commit, Remote: remote, RemoteRef: ref, RemoteIdentity: identity}, err
+}
+
+func resolveExplicitPrePushCommitBoundary(ctx context.Context, repo, selector string) (PrePRBoundarySelection, error) {
+	remoteRef, remote, commit, err := resolveTrackingUpstreamBase(ctx, repo)
+	if err != nil {
+		return PrePRBoundarySelection{}, err
+	}
+	if commit != selector {
+		return PrePRBoundarySelection{}, baseRefTargetResolutionError(fmt.Sprintf("explicit pre-push base %q must match the advertised tracking branch; pass --base-ref <remote>/<branch>", selector))
+	}
+	identity, err := remoteRepositoryIdentity(ctx, repo, remote)
+	if err != nil {
+		return PrePRBoundarySelection{}, err
+	}
+	return PrePRBoundarySelection{
+		Source: PrePRBoundaryExplicit, Selector: selector, Commit: commit, Remote: remote,
+		RemoteRef: "refs/heads/" + strings.TrimPrefix(remoteRef, remote+"/"), RemoteIdentity: identity,
+	}, nil
 }
 
 func resolvePrePushTrackingBoundary(ctx context.Context, repo string, selected PrePRBoundarySelection) (PrePRBoundarySelection, bool, error) {
