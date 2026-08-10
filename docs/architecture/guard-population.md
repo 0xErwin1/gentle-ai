@@ -1,6 +1,6 @@
 # Guard population declarations
 
-Guard population declarations make the accepted input set of selected production guards explicit at the check itself. The v2.2.1 contract covers nine evidenced guard families in `internal/cli`, `internal/reviewtransaction`, and `internal/sddstatus`.
+Guard population declarations make the accepted input set of selected production guards explicit at the check itself. The v2.2.1 contract covers ten evidenced guard families in `internal/cli`, `internal/reviewtransaction`, and `internal/sddstatus`.
 
 ## Review rule
 
