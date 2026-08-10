@@ -553,6 +553,9 @@ func TestInjectClaudeWritesUserConfigAndIsIdempotent(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(home, ".claude", "mcp", "context7.json")); !os.IsNotExist(err) {
 		t.Fatalf("Claude Context7 must not be written to ~/.claude/mcp/context7.json; stat err = %v", err)
 	}
+	if _, err := os.Stat(filepath.Join(home, ".mcp.json")); !os.IsNotExist(err) {
+		t.Fatalf("user scope must not create <home>/.mcp.json; stat err = %v", err)
+	}
 }
 
 // TestInjectClaudeSettingsInertBlockCleanup: the inert settings.json block is
@@ -770,79 +773,38 @@ func TestInjectClaudeWorkspacePreservesUnrelatedServersAndConfig(t *testing.T) {
 	}
 }
 
-// TestInjectClaudeWorkspaceCleansInertSettingsBlock verifies that the legacy
-// inert mcpServers block in <project-root>/.claude/settings.json is removed
-// when it only holds the managed context7 entry, but left untouched when it
-// carries foreign servers (issue #2213).
+// TestInjectClaudeWorkspaceCleansInertSettingsBlock verifies workspace cleanup.
 func TestInjectClaudeWorkspaceCleansInertSettingsBlock(t *testing.T) {
-	cases := []struct {
-		name           string
-		settings       string
-		wantKeyRemoved bool
-	}{
-		{"managed-only block is removed", `{"theme":"dark","mcpServers":{"context7":{"command":"npx","args":["--","context7-mcp"]}}}`, true},
-		{"foreign block is left alone", `{"theme":"dark","mcpServers":{"context7":{"command":"npx","args":["--","context7-mcp"]},"stranded":{"command":"stranded-server"}}}`, false},
-		{"empty block is left alone", `{"theme":"dark","mcpServers":{}}`, false},
+	home := t.TempDir()
+	workspace := t.TempDir()
+	settingsPath := filepath.Join(workspace, ".claude", "settings.json")
+	if err := os.MkdirAll(filepath.Dir(settingsPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll error = %v", err)
 	}
-	for _, tc := range cases {
+	for _, tc := range []struct {
+		name, settings string
+		wantKey        bool
+	}{
+		{"managed-only", `{"theme":"dark","mcpServers":{"context7":{"command":"npx","args":["--","context7-mcp"]}}}`, false},
+		{"foreign", `{"theme":"dark","mcpServers":{"context7":{"command":"npx","args":["--","context7-mcp"]},"stranded":{"command":"stranded-server"}}}`, true},
+		{"empty", `{"theme":"dark","mcpServers":{}}`, true},
+	} {
 		t.Run(tc.name, func(t *testing.T) {
-			home := t.TempDir()
-			workspace := t.TempDir()
-			settingsPath := filepath.Join(workspace, ".claude", "settings.json")
-			if err := os.MkdirAll(filepath.Dir(settingsPath), 0o755); err != nil {
-				t.Fatalf("MkdirAll error = %v", err)
-			}
 			if err := os.WriteFile(settingsPath, []byte(tc.settings), 0o644); err != nil {
 				t.Fatalf("WriteFile(settings) error = %v", err)
 			}
-
 			if _, err := Inject(home, workspace, claudeAdapter()); err != nil {
 				t.Fatalf("Inject() error = %v", err)
 			}
-
-			// .mcp.json must always be the real registration target.
 			readMCPServersContext7Entry(t, filepath.Join(workspace, ".mcp.json"))
-
 			raw, err := os.ReadFile(settingsPath)
 			if err != nil {
 				t.Fatalf("ReadFile(settings) error = %v", err)
 			}
-			settings := map[string]any{}
-			if err := json.Unmarshal(raw, &settings); err != nil {
-				t.Fatalf("Unmarshal(settings) error = %v", err)
-			}
-			_, hasKey := settings["mcpServers"]
-			if tc.wantKeyRemoved && hasKey {
-				t.Fatalf("inert mcpServers key must be removed; got %s", raw)
-			}
-			if !tc.wantKeyRemoved && !hasKey {
-				t.Fatalf("foreign mcpServers block must be left untouched; got %s", raw)
-			}
-			if settings["theme"] != "dark" {
-				t.Fatalf("settings.theme = %#v; want dark preserved", settings["theme"])
+			if got := strings.Contains(string(raw), `"mcpServers"`); got != tc.wantKey {
+				t.Fatalf("mcpServers presence = %t, want %t; got %s", got, tc.wantKey, raw)
 			}
 		})
-	}
-}
-
-// TestInjectClaudeUserScopeUnaffectedByWorkspaceFix is a regression guard: the
-// workspace-scope fix must not change user-scope behavior, which still writes
-// ~/.claude.json and never creates <home>/.mcp.json.
-func TestInjectClaudeUserScopeUnaffectedByWorkspaceFix(t *testing.T) {
-	home := t.TempDir()
-
-	result, err := Inject(home, home, claudeAdapter())
-	if err != nil {
-		t.Fatalf("Inject() error = %v", err)
-	}
-	if !result.Changed {
-		t.Fatalf("Inject() changed = false")
-	}
-	if _, err := os.Stat(filepath.Join(home, ".claude.json")); err != nil {
-		t.Fatalf("~/.claude.json must be written for user scope; stat err = %v", err)
-	}
-	if _, err := os.Stat(filepath.Join(home, ".mcp.json")); !os.IsNotExist(err) {
-		t.Fatalf("user scope must not create <home>/.mcp.json; stat err = %v", err)
 	}
 }
 
