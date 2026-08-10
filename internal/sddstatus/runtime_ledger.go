@@ -841,9 +841,20 @@ func (store RuntimeStore) Finish(ctx context.Context, request FinishAttemptReque
 				// refusal:by-design human-authority: unmanaged remediation is valid only while receipt authority is absent and explicitly disabled.
 				return runtimeRecord{}, errors.New("unmanaged remediation requires disabled delivery without a review binding")
 			}
-			if !chainHasFailedEvidence || chainFailedEvidence != request.RemediatesEvidenceRevision {
-				// refusal:by-design operator-knowledge: the native ledger admits one final correction only for the chain's unremediated failed evidence.
-				return runtimeRecord{}, errors.New("unmanaged remediation requires the current failed evidence and a direct correction attempt")
+			if !chainHasFailedEvidence {
+				// #2881: the caller named a real failure, and their own earlier
+				// slice already repaired it. Blaming their input sent the
+				// reporter looking for authority to guess at; the state is what
+				// changed, and the exit is to stop claiming a remediation.
+				if discharged, ordinal, ok := runtimeDischargedFailure(status.Attempts, request.RemediatesEvidenceRevision); ok {
+					return runtimeRecord{}, runtimeDischargedFailureRefusal(discharged, ordinal)
+				}
+				// No by-design marker: this names a runnable continuation inline.
+				return runtimeRecord{}, errors.New("this correction names failed verification " + request.RemediatesEvidenceRevision + ", but the attempt chain records no failed verification at all; run `gentle-ai sdd-attempt status --cwd <repo> --change <change>` to read the chain, then settle without --remediates-evidence-revision if nothing is being repaired")
+			}
+			if chainFailedEvidence != request.RemediatesEvidenceRevision {
+				// No by-design marker: this names a runnable continuation inline.
+				return runtimeRecord{}, errors.New("this correction names failed verification " + request.RemediatesEvidenceRevision + ", but the chain's unremediated failure is " + chainFailedEvidence + "; settle with --remediates-evidence-revision \"" + chainFailedEvidence + "\", or without the flag if this work unit repairs nothing")
 			}
 		}
 		// Issue #2394: the runtime candidate is the same declared candidate
@@ -932,7 +943,8 @@ func (store RuntimeStore) Finish(ctx context.Context, request FinishAttemptReque
 				return runtimeRecord{}, relationErr
 			}
 			if finalPrepared.GateContext.CandidateTree != snapshot.CandidateTree {
-				return runtimeRecord{}, errors.New("approved SDD remediation successor does not bind the natively charged candidate")
+				return runtimeRecord{}, runtimeChargedCandidateRefusal(
+					finalPrepared.GateContext.CandidateTree, snapshot.CandidateTree, finalPrepared.Lineage)
 			}
 			prepared = finalPrepared
 			bindingEvent := &runtimeBindingEvent{ExpectedRevision: request.ExpectedBindingRevision, Current: prepared}
