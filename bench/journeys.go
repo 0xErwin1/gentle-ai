@@ -73,6 +73,15 @@ func (e statusEnvelope) argument(name string) string {
 	return ""
 }
 
+func (e statusEnvelope) executeArgument(name string) string {
+	for _, argument := range e.NextTransition.Execute.Arguments {
+		if argument.Name == name {
+			return argument.Value
+		}
+	}
+	return ""
+}
+
 func (e statusEnvelope) paths() []string {
 	if len(e.NextTransition.Collect.Inputs) == 0 {
 		return nil
@@ -326,28 +335,35 @@ func printedCommandArguments(command string) ([]string, error) {
 
 // splitPrintedCommandWords splits a printed command line into shell words.
 //
-// It understands exactly the quoting the product emits and nothing more:
-// POSIX single quotes, and a backslash escape for the one character single
-// quotes cannot contain (reviewTransitionShellWord renders an embedded quote
-// as '\”). Anything else -- an unterminated quote, a trailing escape -- is a
+// It understands the single and double quotes the product emits. Within double
+// quotes it applies POSIX's narrow backslash rules without evaluating any shell
+// syntax. Anything else -- an unterminated quote or a trailing escape -- is a
 // line that would not run as printed, and saying so is the point.
 func splitPrintedCommandWords(line string) ([]string, error) {
 	words := []string{}
 	var word strings.Builder
-	quoted, escaped, started := false, false, false
+	var quote rune
+	escaped, doubleQuotedEscape, started := false, false, false
 	for _, char := range line {
 		switch {
-		case quoted && char == '\'':
-			quoted = false
-		case quoted:
-			word.WriteRune(char)
 		case escaped:
+			if char != '\n' {
+				if doubleQuotedEscape && char != '$' && char != '`' && char != '"' && char != '\\' {
+					word.WriteRune('\\')
+				}
+				word.WriteRune(char)
+			}
+			escaped, doubleQuotedEscape = false, false
+		case quote != 0 && char == quote:
+			quote = 0
+		case quote == '"' && char == '\\':
+			escaped, doubleQuotedEscape, started = true, true, true
+		case quote != 0:
 			word.WriteRune(char)
-			escaped = false
 		case char == '\\':
 			escaped, started = true, true
-		case char == '\'':
-			quoted, started = true, true
+		case char == '\'' || char == '"':
+			quote, started = char, true
 		case char == ' ' || char == '\t' || char == '\n' || char == '\r':
 			if started {
 				words = append(words, word.String())
@@ -359,7 +375,7 @@ func splitPrintedCommandWords(line string) ([]string, error) {
 			started = true
 		}
 	}
-	if quoted {
+	if quote != 0 {
 		return nil, fmt.Errorf("printed a command with an unterminated quote: %q", line)
 	}
 	if escaped {
@@ -499,7 +515,73 @@ func rememberLineage(sandbox *Sandbox, observation Observation) error {
 	return nil
 }
 
+// assertReviewParseRefusalsPreflight keeps parser refusals inside a composite
+// because a direct unknown-flag step is classified as unsupported before its
+// After assertion can inspect the negotiated envelope. The positive equals
+// forms remain covered by TestReviewBooleanFlagSpacedValueNamesTheEqualsForm
+// and core journey j02's --captured-results=true transition.
+func assertReviewParseRefusalsPreflight(run *journeyRun, operation, booleanFlag string) error {
+	cases := []struct {
+		name, cause string
+		args        []string
+		usage       bool
+	}{
+		{name: "unknown flag", args: []string{"--unknown-" + operation + "-flag"}, cause: "flag provided but not defined: -unknown-" + operation + "-flag", usage: true},
+		{name: "detached boolean", args: []string{"--" + booleanFlag, "true"}, cause: "boolean flag --" + booleanFlag + " takes --" + booleanFlag + " or --" + booleanFlag + "=true, not a separate value; got \"true\""},
+	}
+	for _, test := range cases {
+		for _, negotiated := range []bool{true, false} {
+			mode := "plain"
+			args := []string{"review", operation}
+			if negotiated {
+				mode = "negotiated"
+				args = append(args, "--contract", reviewContract)
+			}
+			observation := run.run(productArgsFor(run, append(args, test.args...)...), false)
+			if observation.ExitCode == 0 {
+				return fmt.Errorf("%s %s %s accepted a parser refusal", operation, test.name, mode)
+			}
+			if negotiated {
+				var failure struct {
+					Code            string `json:"code"`
+					Phase           string `json:"phase"`
+					MutationOutcome string `json:"mutation_outcome"`
+					RetrySafe       bool   `json:"retry_safe"`
+					Replayability   string `json:"replayability"`
+					NextAction      string `json:"next_action"`
+					Cause           string `json:"cause"`
+				}
+				if err := json.Unmarshal([]byte(strings.TrimSpace(observation.Stdout)), &failure); err != nil {
+					return fmt.Errorf("decode %s %s %s envelope: %w (stderr: %s)", operation, test.name, mode, err, firstLine(observation.Stderr))
+				}
+				if failure.Code != "invalid_request" || failure.Phase != "preflight" ||
+					failure.MutationOutcome != "not_started" || !failure.RetrySafe ||
+					failure.Replayability != "not_replayable" || failure.NextAction != "correct_request" || failure.Cause != test.cause {
+					return fmt.Errorf("%s %s %s failure = code=%q phase=%q mutation_outcome=%q retry_safe=%t replayability=%q next_action=%q cause=%q", operation, test.name, mode, failure.Code, failure.Phase, failure.MutationOutcome, failure.RetrySafe, failure.Replayability, failure.NextAction, failure.Cause)
+				}
+			} else {
+				if got := strings.TrimSpace(observation.Stderr); got != "Error: "+test.cause {
+					return fmt.Errorf("%s %s plain diagnostic = %q, want %q", operation, test.name, got, "Error: "+test.cause)
+				}
+				usage := "Usage: gentle-ai review " + operation + " [flags]"
+				if got := strings.Contains(observation.Stdout, usage); got != test.usage {
+					return fmt.Errorf("%s %s plain usage %t, want %t", operation, test.name, got, test.usage)
+				}
+			}
+			if _, err := os.Stat(filepath.Join(run.sandbox.Repo, ".git", "gentle-ai", "defect-reports")); !errors.Is(err, os.ErrNotExist) {
+				if err == nil {
+					return fmt.Errorf("%s %s %s refusal wrote a defect report", operation, test.name, mode)
+				}
+				return fmt.Errorf("inspect %s %s %s defect reports: %w", operation, test.name, mode, err)
+			}
+		}
+	}
+	return nil
+}
+
 var startCapability = &Capability{Verb: []string{"review", "start"}, Flags: []string{"--cwd"}}
+var startParseRefusalCapability = &Capability{Verb: []string{"review", "start"}, Flags: []string{"--cwd", "--contract", "--committed-only"}}
+var finalizeParseRefusalCapability = &Capability{Verb: []string{"review", "finalize"}, Flags: []string{"--cwd", "--contract", "--captured-results"}}
 
 // Capabilities declare only the flags the step actually uses. Over-declaring
 // would report an older binary as `unsupported` for a step it can in fact run.
@@ -540,6 +622,12 @@ func Journeys() []Journey {
 	journeys = append(journeys, captureResultDryRunJourneys()...)
 	journeys = append(journeys, issue2031Journeys()...)
 	journeys = append(journeys, findingIDPrefixJourneys()...)
+	journeys = append(journeys, rescopeWriteGuardJourneys()...)
+	journeys = append(journeys, rescopeEvidenceOnlyRetryJourneys()...)
+	journeys = append(journeys, consecutiveRescopeRepairJourneys()...)
+	journeys = append(journeys, reviewedSupersetJourneys()...)
+	journeys = append(journeys, stagedDeliveryJourneys()...)
+	journeys = append(journeys, managedAssetJourneys()...)
 	return append(journeys, handoffJourneys()...)
 }
 
@@ -733,54 +821,61 @@ func coreJourneys() []Journey {
 		},
 		{
 			ID:     "j14-abandon-needs-a-hand-built-token",
-			Title:  "Maintainer path: abandoning a pristine lineage needs an assembled authorization",
+			Title:  "Maintainer path: abandoning a non-terminal lineage binds its discarded work",
 			Source: "review abandon contract",
 			Steps: []Step{
 				{Name: "fixture: repo", Fixture: baseRepo},
 				{Name: "fixture: stage docs", Fixture: stageDocs("abandoned")},
 				{Name: "review start", Requires: startCapability, Args: productArgs("review", "start"), After: rememberLineage},
-				{Name: "abandon a pristine lineage", Requires: abandonCapability, Composite: abandonPristineLineage},
+				{Name: "abandon a non-terminal lineage with its V2 binding", Requires: abandonCapability, Composite: abandonNonTerminalLineage},
+			},
+		},
+		{
+			ID:     "j85-review-parse-refusals-are-preflight",
+			Title:  "START and FINALIZE parser refusals are preflight and non-mutating",
+			Source: "#1956: argv parsing happens before review authority can mutate",
+			Steps: []Step{
+				{Name: "fixture: repo", Fixture: baseRepo},
+				{Name: "START parser refusals preserve their preflight contract", Requires: startParseRefusalCapability, Composite: func(run *journeyRun) error { return assertReviewParseRefusalsPreflight(run, "start", "committed-only") }},
+				{Name: "FINALIZE parser refusals preserve their preflight contract", Requires: finalizeParseRefusalCapability, Composite: func(run *journeyRun) error {
+					return assertReviewParseRefusalsPreflight(run, "finalize", "captured-results")
+				}},
 			},
 		},
 	}
 }
 
-// abandonPristineLineage is the manual_tokens exhibit. Abandoning a lineage
-// needs an exact six-line LF-only binding assembled by hand from three values
-// the caller must first go and read out of the authority.
-func abandonPristineLineage(r *journeyRun) error {
-	envelope, err := readStatus(r)
-	if err != nil {
-		return err
+// abandonNonTerminalLineage is the manual_tokens exhibit. Abandoning a lineage
+// needs an exact nine-line LF-only V2 binding assembled from its status row,
+// including the discarded-work summary the gate re-derives.
+func abandonNonTerminalLineage(r *journeyRun) error {
+	observation := r.run([]string{"review", "status", "--cwd", r.sandbox.Repo}, false)
+	var head authorityHead
+	if err := json.Unmarshal([]byte(strings.TrimSpace(observation.Stdout)), &head); err != nil {
+		return fmt.Errorf("parse review status: %w (stderr: %s)", err, firstLine(observation.Stderr))
 	}
-	lineage := envelope.Authority.LineageID
-	revision := envelope.Authority.Revision
-	target := envelope.TargetIdentity
+	if len(head.Entries) != 1 {
+		return fmt.Errorf("review status listed %d authorities, want exactly one", len(head.Entries))
+	}
+	entry := head.Entries[0]
 	const actor = "bench"
-	const reason = "benchmark abandons a pristine lineage"
+	const reason = "operator_disposition"
 
 	// Attempt one: everything the help text lists except the token.
 	r.run([]string{
 		"review", "abandon", "--cwd", r.sandbox.Repo,
-		"--lineage", lineage,
-		"--expected-revision", revision,
+		"--lineage", entry.LineageID,
+		"--expected-revision", entry.Revision,
 		"--reason", reason,
 		"--actor", actor,
 	}, false)
 
-	authorization := strings.Join([]string{
-		"gentle-ai.review-abandon-authorization/v1",
-		"lineage=" + lineage,
-		"revision=" + revision,
-		"snapshot_identity=" + target,
-		"actor=" + actor,
-		"reason=" + reason,
-	}, "\n")
+	authorization := renderAbandonAuthorization(entry, actor, reason)
 
 	r.run([]string{
 		"review", "abandon", "--cwd", r.sandbox.Repo,
-		"--lineage", lineage,
-		"--expected-revision", revision,
+		"--lineage", entry.LineageID,
+		"--expected-revision", entry.Revision,
 		"--reason", reason,
 		"--actor", actor,
 		"--maintainer-authorization", authorization,

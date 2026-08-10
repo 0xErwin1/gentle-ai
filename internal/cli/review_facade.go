@@ -26,9 +26,10 @@ import (
 // source for the refusal when --action-eligibility or --next-transition is
 // requested without --contract. Both runReviewStatus and
 // runReviewFacadeFinalize emit it so the two call sites cannot drift, and it
-// names the exact contract value the caller must pass rather than only
-// describing the requirement.
-const reviewContractRequiredForActionEligibilityReason = "--action-eligibility and --next-transition require --contract " + ReviewIntegrationContractV1
+// names every accepted contract value rather than only describing the
+// requirement.
+const reviewContractRequiredForActionEligibilityReason = "--action-eligibility and --next-transition require --contract " +
+	ReviewIntegrationContractV1 + " or " + ReviewIntegrationContractV2
 
 // reviewStatusTargetSelectorsRequireContractReason is the sibling of
 // reviewContractRequiredForActionEligibilityReason above: it names the same
@@ -866,15 +867,26 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 			}
 		}
 		target.IntendedUntracked = intendedScope.Intended
+		var prePR *reviewtransaction.PrePRRequest
+		prePRRepresentable := true
+		if reviewtransaction.GateKind(*gate) == reviewtransaction.GatePrePR {
+			prePRTarget := target
+			target, prePR, err = reviewtransaction.BuildPrePRTarget(ctx, root, selectedBaseRef, "", intendedScope.Intended)
+			if err != nil {
+				var resolutionErr *reviewtransaction.GateTargetResolutionError
+				if !errors.As(err, &resolutionErr) {
+					return fmt.Errorf("resolve negotiated pre-PR target: %w", err)
+				}
+				target = prePRTarget
+				prePRRepresentable = false
+			}
+		}
 		selector := &reviewTransitionSelector{
 			Kind: target.Kind, Projection: selectedProjection, BaseRef: selectedBaseRef,
-			BaseTree: selectedBaseTree, WorkspaceOverlay: *workspaceOverlay, PrePRRepresentable: true,
-		}
-		if reviewtransaction.GateKind(*gate) == reviewtransaction.GatePrePR {
-			selector.PrePRRepresentable = reviewtransaction.ValidatePrePRBoundarySelector(ctx, root, selectedBaseRef) == nil
+			BaseTree: selectedBaseTree, WorkspaceOverlay: *workspaceOverlay, PrePRRepresentable: prePRRepresentable,
 		}
 		native, liveSnapshot, err := reviewtransaction.AssessTargetStatusWithSnapshot(ctx, root, reviewtransaction.TargetStatusRequest{
-			Target: target, LineageID: *lineage,
+			Target: target, LineageID: *lineage, PrePR: prePR,
 		})
 		if err != nil {
 			return fmt.Errorf("assess negotiated review target: %w", err)
@@ -884,6 +896,24 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 		}
 		result := newReviewTargetStatusResultForContract(native, *contract)
 		result.intendedUntracked = intendedScope
+		// STATUS renders the core's executable decision, never the raw spelling
+		// the CLI parsed.
+		selector.Kind, selector.Projection = result.decision.Selector.Kind, result.decision.Selector.Projection
+		if result.decision.Selector.BaseRef != "" {
+			selector.BaseRef = result.decision.Selector.BaseRef
+		} else if native.Projection.Kind == reviewtransaction.TargetBaseDiff {
+			selector.BaseRef = native.Projection.BaseTree
+		}
+		selector.WorkspaceOverlay = result.decision.Selector.Kind == reviewtransaction.TargetBaseWorkspaceOverlay
+		selector.Recovery = result.decision.RecoverySelector
+		selector.SelectorFreeAccountingOnlyRecovery = result.decision.SelectorFreeAccountingOnlyRecovery
+		if *actionEligibility || *nextTransition {
+			mode, modeErr := reviewModeStatus(ctx, root)
+			if modeErr != nil {
+				return modeErr
+			}
+			result.repositoryRoot, result.rddMode, result.rddModeResolved = root, mode, true
+		}
 		if native.Applicability == reviewtransaction.TargetApplicabilityCorrupted &&
 			native.Action == reviewtransaction.TargetStatusActionRepairAuthority {
 			repair, repairErr := reviewtransaction.AssessAuthorityRepairAtRepositoryRoot(ctx, root)
@@ -910,6 +940,7 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 		if *actionEligibility {
 			result.Eligibility = newReviewActionEligibility(result)
 		}
+		var compactAuthority *reviewStatusCompactAuthority
 		if *nextTransition {
 			artifacts := []ReviewTransitionArtifact{}
 			var capturedEvidence *reviewtransaction.VerificationEvidenceRecord
@@ -918,6 +949,7 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 			var captureContext *reviewCaptureContext
 			var validationRequest *reviewtransaction.TargetedValidationRequest
 			var correctionRequest *reviewtransaction.CorrectionPlanRequest
+			var preCommitDeliveryAssessment *reviewtransaction.CompactGateTargetApplicability
 			correctionForecasted := false
 			var artifactErr error
 			if native.Applicability == reviewtransaction.TargetApplicabilityCurrent && native.AuthorityVersion == reviewtransaction.AuthorityVersionCompact {
@@ -929,35 +961,29 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 					if loadErr != nil {
 						artifactErr = loadErr
 					} else {
+						compactAuthority = &reviewStatusCompactAuthority{
+							OriginalChangedLines:   record.State.OriginalChangedLines,
+							CorrectionBudget:       record.State.CorrectionBudget,
+							CorrectionBudgetPolicy: record.State.CorrectionBudgetPolicy,
+						}
 						correctionForecasted = record.State.State == reviewtransaction.StateCorrectionRequired && record.State.ProposedCorrectionLines != nil
+						if record.State.State == reviewtransaction.StateApproved && result.Receipt.Status == ReviewReceiptPresent &&
+							reviewtransaction.GateKind(*gate) == reviewtransaction.GatePreCommit {
+							assessment, assessmentErr := reviewtransaction.AssessCompactGateTarget(ctx, root, record.State, reviewtransaction.NativeGateRequestInput{
+								Gate: reviewtransaction.GatePreCommit, LineageID: record.State.LineageID,
+								IntendedUntracked: intendedScope.Intended,
+							})
+							if assessmentErr != nil {
+								return fmt.Errorf("assess negotiated staged delivery candidate: %w", assessmentErr)
+							}
+							applicability := assessment.Applicability
+							preCommitDeliveryAssessment = &applicability
+						}
 						if record.State.State == reviewtransaction.StateCorrectionRequired && !record.State.CorrectionAttemptConsumed() {
 							request, requestErr := reviewtransaction.BuildCorrectionPlanRequest(record.State, record.Revision)
 							if requestErr == nil {
 								correctionRequest = &request
 							}
-						}
-						predecessorProjection := record.State.InitialSnapshot.Projection
-						if predecessorProjection == "" {
-							predecessorProjection = reviewtransaction.ProjectionWorkspace
-						}
-						stagedScopeRecovery := result.Action == reviewtransaction.TargetStatusActionRecover &&
-							result.ActionDisposition == reviewtransaction.RecoveryScopeChanged &&
-							(record.State.State == reviewtransaction.StateApproved || record.State.State == reviewtransaction.StateCorrectionRequired) &&
-							record.State.InitialSnapshot.Kind == reviewtransaction.TargetBaseDiff &&
-							target.Kind == reviewtransaction.TargetBaseWorkspaceOverlay &&
-							selector.Projection == reviewtransaction.ProjectionStaged && selector.WorkspaceOverlay
-						approvedRebasedRecovery := result.Action == reviewtransaction.TargetStatusActionRecover &&
-							result.ActionDisposition == reviewtransaction.RecoveryScopeChanged &&
-							record.State.State == reviewtransaction.StateApproved &&
-							record.State.InitialSnapshot.Kind == reviewtransaction.TargetCurrentChanges &&
-							target.Kind == reviewtransaction.TargetBaseDiff &&
-							record.State.InitialSnapshot.BaseTree != liveSnapshot.BaseTree
-						selector.RecoveryRepresentable = record.State.InitialSnapshot.Kind == target.Kind || stagedScopeRecovery || approvedRebasedRecovery
-						if stagedScopeRecovery || selector.RecoveryRepresentable && result.ActionDisposition == reviewtransaction.RecoveryInvalidated && target.Kind == reviewtransaction.TargetBaseWorkspaceOverlay && selector.Projection == reviewtransaction.ProjectionStaged {
-							selector.RecoveryProjection = reviewtransaction.ProjectionStaged
-						} else if selector.RecoveryRepresentable && predecessorProjection != selector.Projection {
-							selector.RecoveryRepresentable = result.ActionDisposition == reviewtransaction.RecoveryEscalated
-							selector.RecoveryProjection = selector.Projection
 						}
 						if correctionForecasted {
 							request, requestErr := reviewtransaction.BuildTargetedValidationRequestFromSnapshot(ctx, root, record.State, record.Revision, liveSnapshot)
@@ -1020,7 +1046,7 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 			if startLineage == "" && native.Applicability == reviewtransaction.TargetApplicabilityUnrelated {
 				startLineage = reviewAvailableStartLineage(ctx, root, native.TargetIdentity)
 			}
-			input := reviewNextTransitionInput{Gate: reviewtransaction.GateKind(*gate), Successor: *recoverySuccessor, Reason: *recoveryReason, Actor: *recoveryActor, Authorization: *recoveryAuthorization, RepairActor: *repairActor, RepairReason: *repairReason, RepairAuthorization: *repairAuthorization, StartLineage: startLineage, RuntimeAgent: runtime, Contract: *contract, RepositoryContext: repositoryContext, ValidationRequest: validationRequest, CorrectionRequest: correctionRequest, EvidenceErr: evidenceErr, CorrectionForecasted: correctionForecasted, CaptureContext: captureContext, Selector: selector, IntendedUntracked: intendedScope}
+			input := reviewNextTransitionInput{Gate: reviewtransaction.GateKind(*gate), Successor: *recoverySuccessor, Reason: *recoveryReason, Actor: *recoveryActor, Authorization: *recoveryAuthorization, RepairActor: *repairActor, RepairReason: *repairReason, RepairAuthorization: *repairAuthorization, StartLineage: startLineage, RuntimeAgent: runtime, Contract: *contract, RepositoryContext: repositoryContext, ValidationRequest: validationRequest, CorrectionRequest: correctionRequest, EvidenceErr: evidenceErr, CorrectionForecasted: correctionForecasted, CaptureContext: captureContext, Selector: selector, IntendedUntracked: intendedScope, RDDMode: result.rddMode, RDDModeResolved: result.rddModeResolved, PreCommitDeliveryAssessment: preCommitDeliveryAssessment}
 			transition := newReviewNextTransition(result, native.SelectedLenses, artifacts, capturedEvidence, artifactErr, input)
 			result.NextTransition = &transition
 			if reviewTransitionValidationRequest(&transition) == nil && transition.ReasonCode != "correction_repository_verification_required" &&
@@ -1032,10 +1058,14 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 			// surface (spec "Three-Tier Narration Contract"), written to
 			// stderr only, never mixed into the parsed stream.
 			if transition.Kind == reviewNextTransitionStop {
-				reviewNarrateStopReason(transition.ReasonCode, runtime)
+				continuation := ""
+				if transition.ReasonCode == "rdd_disabled" {
+					continuation = reviewRDDDisabledNarration(result.rddMode, root, args)
+				}
+				reviewNarrateStopReason(transition.ReasonCode, runtime, continuation)
 			}
 		}
-		if intendedScope.NeedsSelection {
+		if intendedScope.NeedsSelection && (result.NextTransition == nil || result.NextTransition.Kind != reviewNextTransitionStop || result.NextTransition.ReasonCode != "rdd_disabled") {
 			transition := reviewIntendedUntrackedCollection(result, intendedScope)
 			result.NextTransition = &transition
 		}
@@ -1044,8 +1074,14 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 			result.Forecast = &forecast
 			reviewNarrateForecast(forecast)
 		}
-		if err := result.Validate(); err != nil {
-			return fmt.Errorf("validate negotiated review status: %w", err)
+		var validationErr error
+		if compactAuthority != nil {
+			validationErr = result.validateWithCompactAuthority(compactAuthority)
+		} else {
+			validationErr = result.Validate()
+		}
+		if validationErr != nil {
+			return fmt.Errorf("validate negotiated review status: %w", validationErr)
 		}
 		return encodeReviewJSON(stdout, result)
 	}
@@ -1541,16 +1577,6 @@ func runReviewFacadeStart(ctx context.Context, args []string, stdout io.Writer) 
 	}
 	if *workspaceOverlay && (strings.TrimSpace(*baseRef) == "" || *committedOnly || selectedProjection != reviewtransaction.ProjectionWorkspace) {
 		return errors.New("--workspace-overlay requires --base-ref with workspace projection and is incompatible with --committed-only")
-	}
-	if selectedProjection == reviewtransaction.ProjectionStaged && strings.TrimSpace(*baseRef) != "" && !*workspaceOverlay {
-		// Combining --projection staged with --base-ref is ambiguous about
-		// intent, and this seam cannot guess it: a caller who wants the real
-		// staged index reviewed needs plain staged projection, and a caller
-		// who wants a base-diff review needs the committed-only escape. Name
-		// both verbatim so the refusal is actionable either way.
-		return fmt.Errorf("review start with --projection staged and --base-ref is refused because intent is ambiguous: for a staged-index review rerun with %q; for a base-diff review rerun with %q",
-			"gentle-ai review start --projection staged",
-			fmt.Sprintf("gentle-ai review start --base-ref %s --committed-only", strings.TrimSpace(*baseRef)))
 	}
 	if strings.TrimSpace(*baseRef) != "" && !*workspaceOverlay {
 		dirtyTracked, dirtyErr := (reviewtransaction.SnapshotBuilder{Repo: root}).HasDirtyTrackedChanges(ctx)
@@ -2225,13 +2251,14 @@ func reviewFacadeStartDeclinedResult(snapshot reviewtransaction.Snapshot, assess
 }
 
 func reviewFacadeStartResultFor(action reviewtransaction.CompactStartAction, lensesRequired bool, authority reviewtransaction.CompactState) ReviewFacadeStartResult {
+	legacyBudget, _ := reviewtransaction.CorrectionBudget(authority.OriginalChangedLines)
 	result := ReviewFacadeStartResult{
 		Operation: "review/start", Action: string(action), LensesRequired: lensesRequired,
 		LineageID: authority.LineageID, State: authority.State, RiskLevel: authority.RiskLevel,
 		SelectedLenses: append([]string{}, authority.SelectedLenses...), LensBindings: facadeLensBindings(authority.SelectedLenses),
 		Projection:   facadeProjection(authority.InitialSnapshot.Projection),
 		ChangedFiles: len(authority.InitialSnapshot.Paths), TargetIdentity: authority.InitialSnapshot.Identity,
-		ChangedLines: authority.OriginalChangedLines, CorrectionBudget: authority.CorrectionBudget,
+		ChangedLines: authority.OriginalChangedLines, CorrectionBudget: legacyBudget,
 	}
 	if authority.InitialSnapshot.Kind == reviewtransaction.TargetBaseWorkspaceOverlay {
 		result.TargetMode = authority.InitialSnapshot.Kind
@@ -2318,7 +2345,7 @@ func runReviewFacadeFinalize(ctx context.Context, args []string, stdout io.Write
 	var resultArtifactFiles repeatedString
 	flags.Var(&resultArtifactFiles, "result-artifact-file", "native reviewer artifact manifest regular file or - for stdin; repeat in selected-lens order")
 	if err := parseReviewFlags(flags, args); err != nil {
-		return reviewPreflightError(err)
+		return err
 	}
 	if reviewHelpRequested(args) {
 		return nil
