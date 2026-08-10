@@ -1325,7 +1325,8 @@ func validateReviewTransitionExecution(execution ReviewTransitionExecution, argu
 		}
 		if !exact([]string{"lineage", "gate"}, wantSelectors) ||
 			arguments["lineage"] != execution.Binding.LineageID || !validReviewIntegrationGate(gate) ||
-			arguments["base-ref"] != "" && (gate != reviewtransaction.GatePrePR || !validReviewTransitionSelector(arguments["base-ref"])) {
+			arguments["base-ref"] != "" &&
+				((gate != reviewtransaction.GatePrePush && gate != reviewtransaction.GatePrePR) || !validReviewTransitionSelector(arguments["base-ref"])) {
 			return errors.New("review validate transition selectors are invalid")
 		}
 	case "review.recover":

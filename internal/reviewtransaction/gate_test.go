@@ -720,6 +720,37 @@ func TestExplicitPrePushBaseAllowsAbsentTracking(t *testing.T) {
 	}
 }
 
+func TestExplicitPrePushCommitBaseMatchesOnlyTheAdvertisedTrackingBoundary(t *testing.T) {
+	repo := initSnapshotRepo(t)
+	branch := currentBranch(context.Background(), repo)
+	configurePublicationRemote(t, repo, branch)
+	gitSnapshot(t, repo, "config", "branch."+branch+".remote", "origin")
+	gitSnapshot(t, repo, "config", "branch."+branch+".merge", "refs/heads/"+branch)
+	base := trimGit(gitSnapshot(t, repo, "rev-parse", "HEAD"))
+
+	target, push, err := buildPushTarget(context.Background(), repo, base, "", "")
+	if err != nil || target.BaseRef != base || push.Boundary.Source != PrePRBoundaryExplicit ||
+		push.Boundary.Selector != base || push.Boundary.Commit != base || push.Boundary.Remote != "origin" {
+		t.Fatalf("explicit tracking commit target = %#v, %#v, %v", target, push, err)
+	}
+	selection, err := selectExplicitBaseAdvanceBoundary(context.Background(), repo, base)
+	if err != nil || selection.Selector != base || selection.Commit != base || selection.Remote != "origin" {
+		t.Fatalf("explicit base advance selection = %#v, %v", selection, err)
+	}
+
+	writeSnapshotFile(t, repo, "unpublished.txt", "unpublished\n")
+	gitSnapshot(t, repo, "add", "unpublished.txt")
+	gitSnapshot(t, repo, "commit", "-m", "unpublished local commit")
+	unpublished := trimGit(gitSnapshot(t, repo, "rev-parse", "HEAD"))
+	if _, _, err := buildPushTarget(context.Background(), repo, unpublished, "", ""); err == nil || !strings.Contains(err.Error(), "must match the advertised tracking branch") {
+		t.Fatalf("unadvertised explicit pre-push commit error = %v", err)
+	}
+	gitSnapshot(t, repo, "push", "origin", "HEAD:refs/heads/"+branch)
+	if _, err := selectExplicitBaseAdvanceBoundary(context.Background(), repo, base); err == nil || !strings.Contains(err.Error(), "must match the advertised tracking branch") {
+		t.Fatalf("moved advertised tracking commit error = %v", err)
+	}
+}
+
 func TestDefaultPrePushBaseReportsTypedTargetResolution(t *testing.T) {
 	for _, tt := range []struct {
 		name    string
