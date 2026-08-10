@@ -429,8 +429,18 @@ func loadRuntimeBoundCompactArtifacts(ctx context.Context, repo string, binding 
 		return reviewtransaction.CompactRecord{}, err
 	}
 	record, err := store.Load()
-	if err != nil || record.Revision != binding.AuthorityRevision || record.State.State != reviewtransaction.StateApproved {
-		return reviewtransaction.CompactRecord{}, errors.New("bound compact predecessor is stale or not approved")
+	if err != nil {
+		return reviewtransaction.CompactRecord{}, fmt.Errorf("read bound compact predecessor %s: %w", binding.Lineage, err)
+	}
+	// #2894: "stale or not approved" reported two different problems, with two
+	// different exits, in one sentence that distinguished neither.
+	if record.Revision != binding.AuthorityRevision {
+		return reviewtransaction.CompactRecord{}, runtimeBoundPredecessorRefusal(
+			binding.Lineage, binding.AuthorityRevision, record.Revision, true)
+	}
+	if record.State.State != reviewtransaction.StateApproved {
+		return reviewtransaction.CompactRecord{}, runtimeBoundPredecessorRefusal(
+			binding.Lineage, binding.AuthorityRevision, record.Revision, false)
 	}
 	payload, err := os.ReadFile(store.ReceiptPath())
 	if err != nil || bindingHash(payload) != binding.ReceiptHash {
