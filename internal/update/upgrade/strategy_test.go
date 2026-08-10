@@ -700,25 +700,25 @@ func TestRunStrategyOpenCodePluginRejectsEmptyExpectedVersion(t *testing.T) {
 
 func TestRunStrategyOpenCodePluginRejectsUnverifiedMaterialization(t *testing.T) {
 	tests := []struct {
-		name          string
-		manifest      string
-		registerOnly  bool
-		wantHintParts []string
+		name           string
+		manifest       string
+		registerOnly   bool
+		wantErrorParts []string
 	}{
 		{
-			name:          "package manager succeeds without materializing the package",
-			registerOnly:  true,
-			wantHintParts: []string{"expected version \"0.8.0\"", "absent"},
+			name:           "package manager succeeds without materializing the package",
+			registerOnly:   true,
+			wantErrorParts: []string{"after bun mutation", "expected version \"0.8.0\"", "absent", "No automatic rollback", "restore or correct"},
 		},
 		{
-			name:          "package manager succeeds but leaves the stale version",
-			manifest:      `{"version":"0.7.1"}`,
-			wantHintParts: []string{"expected version \"0.8.0\"", "0.7.1"},
+			name:           "package manager succeeds but leaves the stale version",
+			manifest:       `{"version":"0.7.1"}`,
+			wantErrorParts: []string{"after bun mutation", "expected version \"0.8.0\"", "0.7.1", "No automatic rollback", "restore or correct"},
 		},
 		{
-			name:          "package manager succeeds but leaves an invalid manifest",
-			manifest:      `{not valid json`,
-			wantHintParts: []string{"expected version \"0.8.0\"", "invalid"},
+			name:           "package manager succeeds but leaves an invalid manifest",
+			manifest:       `{not valid json`,
+			wantErrorParts: []string{"after bun mutation", "expected version \"0.8.0\"", "invalid", "No automatic rollback", "restore or correct"},
 		},
 	}
 
@@ -774,13 +774,12 @@ func TestRunStrategyOpenCodePluginRejectsUnverifiedMaterialization(t *testing.T)
 			if outcome.observedVersion != "" {
 				t.Fatalf("observed version = %q, want empty on verification failure", outcome.observedVersion)
 			}
-			hint, ok := AsManualFallback(err)
-			if !ok {
-				t.Fatalf("error = %T %v, want ManualFallbackError", err, err)
+			if _, ok := AsManualFallback(err); ok {
+				t.Fatalf("error = %T %v, must not be ManualFallbackError after package-manager mutation", err, err)
 			}
-			for _, want := range tc.wantHintParts {
-				if !strings.Contains(hint, want) {
-					t.Errorf("hint %q does not contain %q", hint, want)
+			for _, want := range tc.wantErrorParts {
+				if !strings.Contains(err.Error(), want) {
+					t.Errorf("error %q does not contain %q", err, want)
 				}
 			}
 		})
