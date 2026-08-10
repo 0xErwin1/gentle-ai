@@ -642,7 +642,7 @@ func authorizeReviewStart(ctx context.Context, repo string, assessment reviewtra
 		return reviewModeUnreadable(ctx, repo, global, err)
 	}
 	if err := authorizeManagedReviewerAssets(); err != nil {
-		return err
+		return reviewPreflightRefusal(reviewPreflightManagedAssetsReason, err)
 	}
 	if assessment.Level == reviewtransaction.RiskLow {
 		// Tier 0 is silent structural readback. Asking here would reintroduce
