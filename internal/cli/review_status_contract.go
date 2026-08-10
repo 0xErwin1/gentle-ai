@@ -89,6 +89,7 @@ type ReviewTargetStatusResult struct {
 	NextTransition         *ReviewNextTransition                                `json:"next_transition,omitempty"`
 	ValidationRequest      *reviewtransaction.TargetedValidationRequest         `json:"validation_request,omitempty"`
 	FinalVerificationRetry *reviewtransaction.FinalVerificationRetryEligibility `json:"final_verification_retry,omitempty"`
+	decision               reviewtransaction.TargetStatusDecision               `json:"-"`
 	intendedUntracked      reviewIntendedUntrackedScope
 	repositoryRoot         string
 	rddMode                reviewtransaction.RDDModeStatus
@@ -220,6 +221,7 @@ func newReviewTargetStatusResultForContract(native reviewtransaction.TargetStatu
 		Applicability: native.Applicability, Action: native.Action, ActionDisposition: native.ActionDisposition,
 		Replayability:  native.Replayability,
 		TargetIdentity: native.TargetIdentity,
+		decision:       native.Decision,
 		Candidates:     append([]string{}, native.CandidateLineageIDs...),
 		Repair:         reviewtransaction.UnsupportedAuthorityRepairAssessment(),
 		Projection: ReviewTargetStatusProjection{

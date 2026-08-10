@@ -18,6 +18,23 @@ import (
 	"time"
 )
 
+func TestTargetStatusDecisionFailsClosedBeforeAnAdapterCanBroadenRecovery(t *testing.T) {
+	base := TargetStatusResult{
+		Applicability: TargetApplicabilityCurrent, Action: TargetStatusActionRecover,
+		ActionDisposition: RecoveryScopeChanged, TargetIdentity: "sha256:target",
+		Projection:          TargetProjectionStatus{Kind: TargetBaseDiff, Projection: ProjectionWorkspace, BaseTree: "next-base"},
+		authorityTargetKind: TargetCurrentChanges, authorityProjection: ProjectionWorkspace,
+	}
+	decision := projectTargetStatusDecision(base)
+	if decision.Decision.RecoverySelector != nil {
+		t.Fatalf("non-approved cross-kind recovery selector = %#v, want fail-closed", decision.Decision.RecoverySelector)
+	}
+	if decision.Decision.CandidateRelation != TargetApplicabilityCurrent || decision.Decision.SemanticTransition != TargetStatusActionRecover ||
+		decision.Decision.TargetIdentity != base.TargetIdentity {
+		t.Fatalf("decision lost core classification: %#v", decision.Decision)
+	}
+}
+
 func TestAssessTargetStatusDerivesReceiptTruthWithoutMutation(t *testing.T) {
 	requireSnapshotGit(t)
 	tests := []struct {
@@ -331,6 +348,9 @@ func TestAccountingOnlyEscalationStatusOffersRecoveryInsteadOfDeadEndStop(t *tes
 	}
 	if status.Action != TargetStatusActionRecover || status.ActionDisposition != RecoveryEscalated {
 		t.Fatalf("accounting-only escalation with an unchanged target = %#v, want an offered evidence-bound recovery continuation", status)
+	}
+	if status.Decision.RecoverySelector != nil || !status.Decision.SelectorFreeAccountingOnlyRecovery {
+		t.Fatalf("accounting-only escalation decision = %#v, want an explicitly authorized selector-free recovery", status.Decision)
 	}
 
 	successor := recoveredEvidenceSuccessor(t, repo, state, "accounting-only-status-dead-end-successor")

@@ -896,6 +896,17 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 		}
 		result := newReviewTargetStatusResultForContract(native, *contract)
 		result.intendedUntracked = intendedScope
+		// STATUS renders the core's executable decision, never the raw spelling
+		// the CLI parsed.
+		selector.Kind, selector.Projection = result.decision.Selector.Kind, result.decision.Selector.Projection
+		if result.decision.Selector.BaseRef != "" {
+			selector.BaseRef = result.decision.Selector.BaseRef
+		} else if native.Projection.Kind == reviewtransaction.TargetBaseDiff {
+			selector.BaseRef = native.Projection.BaseTree
+		}
+		selector.WorkspaceOverlay = result.decision.Selector.Kind == reviewtransaction.TargetBaseWorkspaceOverlay
+		selector.Recovery = result.decision.RecoverySelector
+		selector.SelectorFreeAccountingOnlyRecovery = result.decision.SelectorFreeAccountingOnlyRecovery
 		if *actionEligibility || *nextTransition {
 			mode, modeErr := reviewModeStatus(ctx, root)
 			if modeErr != nil {
@@ -960,29 +971,6 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 							if requestErr == nil {
 								correctionRequest = &request
 							}
-						}
-						predecessorProjection := record.State.InitialSnapshot.Projection
-						if predecessorProjection == "" {
-							predecessorProjection = reviewtransaction.ProjectionWorkspace
-						}
-						stagedScopeRecovery := result.Action == reviewtransaction.TargetStatusActionRecover &&
-							result.ActionDisposition == reviewtransaction.RecoveryScopeChanged &&
-							(record.State.State == reviewtransaction.StateApproved || record.State.State == reviewtransaction.StateCorrectionRequired) &&
-							record.State.InitialSnapshot.Kind == reviewtransaction.TargetBaseDiff &&
-							target.Kind == reviewtransaction.TargetBaseWorkspaceOverlay &&
-							selector.Projection == reviewtransaction.ProjectionStaged && selector.WorkspaceOverlay
-						approvedRebasedRecovery := result.Action == reviewtransaction.TargetStatusActionRecover &&
-							result.ActionDisposition == reviewtransaction.RecoveryScopeChanged &&
-							record.State.State == reviewtransaction.StateApproved &&
-							record.State.InitialSnapshot.Kind == reviewtransaction.TargetCurrentChanges &&
-							target.Kind == reviewtransaction.TargetBaseDiff &&
-							record.State.InitialSnapshot.BaseTree != liveSnapshot.BaseTree
-						selector.RecoveryRepresentable = record.State.InitialSnapshot.Kind == target.Kind || stagedScopeRecovery || approvedRebasedRecovery
-						if stagedScopeRecovery || selector.RecoveryRepresentable && result.ActionDisposition == reviewtransaction.RecoveryInvalidated && target.Kind == reviewtransaction.TargetBaseWorkspaceOverlay && selector.Projection == reviewtransaction.ProjectionStaged {
-							selector.RecoveryProjection = reviewtransaction.ProjectionStaged
-						} else if selector.RecoveryRepresentable && predecessorProjection != selector.Projection {
-							selector.RecoveryRepresentable = result.ActionDisposition == reviewtransaction.RecoveryEscalated
-							selector.RecoveryProjection = selector.Projection
 						}
 						if correctionForecasted {
 							request, requestErr := reviewtransaction.BuildTargetedValidationRequestFromSnapshot(ctx, root, record.State, record.Revision, liveSnapshot)
@@ -1576,16 +1564,6 @@ func runReviewFacadeStart(ctx context.Context, args []string, stdout io.Writer) 
 	}
 	if *workspaceOverlay && (strings.TrimSpace(*baseRef) == "" || *committedOnly || selectedProjection != reviewtransaction.ProjectionWorkspace) {
 		return errors.New("--workspace-overlay requires --base-ref with workspace projection and is incompatible with --committed-only")
-	}
-	if selectedProjection == reviewtransaction.ProjectionStaged && strings.TrimSpace(*baseRef) != "" && !*workspaceOverlay {
-		// Combining --projection staged with --base-ref is ambiguous about
-		// intent, and this seam cannot guess it: a caller who wants the real
-		// staged index reviewed needs plain staged projection, and a caller
-		// who wants a base-diff review needs the committed-only escape. Name
-		// both verbatim so the refusal is actionable either way.
-		return fmt.Errorf("review start with --projection staged and --base-ref is refused because intent is ambiguous: for a staged-index review rerun with %q; for a base-diff review rerun with %q",
-			"gentle-ai review start --projection staged",
-			fmt.Sprintf("gentle-ai review start --base-ref %s --committed-only", strings.TrimSpace(*baseRef)))
 	}
 	if strings.TrimSpace(*baseRef) != "" && !*workspaceOverlay {
 		dirtyTracked, dirtyErr := (reviewtransaction.SnapshotBuilder{Repo: root}).HasDirtyTrackedChanges(ctx)
