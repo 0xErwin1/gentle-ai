@@ -123,3 +123,43 @@ func TestSDDStatusContractRequiresRelayingTheSettleObligation(t *testing.T) {
 		t.Fatal("the contract must say the obligation is not a block, or orchestrators will treat a proceed as a stop")
 	}
 }
+
+// TestReviewLedgerContractAdmitsVerificationRefreshAfterRemediation is #2617.
+//
+// Its reporter had four doors and every one was shut: keeping the admitted
+// failed report blocks archive; re-running SDD verification appeared to
+// violate "one independent requirements/runtime verification"; review was off
+// at clone scope; and the accepted remediation settlement did not by itself
+// produce an archive-admissible state.
+//
+// The code was never the problem — native status already routes to `verify`
+// once a remediation settles. The contract sentence was, because its four
+// nouns (reviewer, refuter, correction, validator) are all REVIEW actors, and
+// it read as forbidding SDD's own verification from ever running twice. The
+// contract must now say which lifecycle it bounds.
+func TestReviewLedgerContractAdmitsVerificationRefreshAfterRemediation(t *testing.T) {
+	// The clarification lives in the SDD status contract, not the review
+	// ledger contract: the review contract's rendered prompt sits inside a
+	// deliberate token ceiling with under 15% headroom, and archive
+	// eligibility is an SDD question anyway.
+	if !strings.Contains(string(assets.MustRead("skills/_shared/review-ledger-contract.md")),
+		"never starts another reviewer, refuter, correction, or validator") {
+		t.Fatal("the one-verification sentence is gone; this guard is stale")
+	}
+	contract := readSharedSDDStatusContract(t)
+	for _, want := range []string{
+		"REVIEW actors",
+		"ADMITS one verification refresh",
+		"not a second independent verification",
+	} {
+		if !strings.Contains(contract, want) {
+			t.Fatalf("the contract does not disambiguate the one-verification rule; it must contain %q", want)
+		}
+	}
+	// And it must not be read as a licence to fabricate a pass.
+	for _, want := range []string{"preserved and never erased", "no PASS is fabricated"} {
+		if !strings.Contains(contract, want) {
+			t.Fatalf("the clarification drops a guarantee it must keep: %q", want)
+		}
+	}
+}
