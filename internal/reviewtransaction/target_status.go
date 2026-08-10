@@ -326,6 +326,11 @@ func assessTargetStatusSnapshot(ctx context.Context, repo string, request Target
 				candidates = append(candidates, candidate)
 				continue
 			}
+		} else if proof := compactLocalBaseAdvanceCompatibility(ctx, repo, state, request.Target, live); proof != nil &&
+			classifyCompactTargetRelation(state.CurrentSnapshot, live, state.GenesisPaths,
+				compactTargetRelationEvidence{CompatibleAdvance: proof}).Kind == compactTargetCompatibleAdvance {
+			candidates = append(candidates, candidate)
+			continue
 		} else if compactLiveTargetMatchesValidatedSnapshot(state, live, true) {
 			if !compactPrePRContentCompatible(ctx, repo, state, live, request.PrePR) {
 				continue
@@ -415,6 +420,23 @@ func assessTargetStatusSnapshot(ctx context.Context, repo string, request Target
 		}
 		return base, nil
 	}
+}
+
+func compactLocalBaseAdvanceCompatibility(ctx context.Context, repo string, state CompactState, target Target, live Snapshot) *BaseAdvanceCompatibility {
+	if state.CurrentSnapshot.Kind != TargetBaseDiff || state.Recovery != nil || target.Kind != TargetBaseDiff || strings.TrimSpace(target.BaseRef) == "" {
+		return nil
+	}
+	receipt, err := state.Receipt()
+	if err != nil {
+		return nil
+	}
+	proof, err := deriveExplicitBaseAdvanceCompatibility(ctx, repo, Receipt{
+		BaseTree: receipt.BaseTree, FinalCandidateTree: receipt.FinalCandidateTree, PathsDigest: receipt.PathsDigest,
+	}, GateRequest{Gate: GatePrePush, Target: target}, live, gateArtifactPreimages{})
+	if err != nil {
+		return nil
+	}
+	return &proof
 }
 
 func compactPrePRContentCompatible(ctx context.Context, repo string, state CompactState, snapshot Snapshot, prePR *PrePRRequest) bool {

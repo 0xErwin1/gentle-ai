@@ -300,7 +300,9 @@ func newReviewNextTransition(status ReviewTargetStatusResult, selectedLenses []s
 			}
 			arguments := []ReviewTransitionArgument{{Name: "lineage", Value: binding.LineageID}, {Name: "gate", Value: string(input.gate())}}
 			selectors := []ReviewTransitionArgument{}
-			if input.Selector != nil && input.gate() == reviewtransaction.GatePrePR && input.Selector.BaseRef != "" {
+			if input.Selector != nil &&
+				(input.gate() == reviewtransaction.GatePrePush || input.gate() == reviewtransaction.GatePrePR) &&
+				input.Selector.BaseRef != "" {
 				selectors = append(selectors, ReviewTransitionArgument{Name: "base-ref", Value: input.Selector.BaseRef})
 				arguments = append(arguments, selectors...)
 			}
