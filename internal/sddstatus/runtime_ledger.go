@@ -349,6 +349,11 @@ type RuntimeStatus struct {
 	// same derivation, so the read-only surface and the operation that spends
 	// the attempt cannot disagree about what the settle will owe (#2912).
 	SettleObligation string `json:"settle_obligation,omitempty"`
+	// Consent carries the blocking question an exhausted attempt budget asks
+	// instead of dead-ending in prose (#2588, and the same dead end #2902 and
+	// #2913 died in). Populated only by AdmissionStatus, and only while the
+	// ledger actually requires that decision.
+	Consent *BudgetConsentResult `json:"consent,omitempty"`
 }
 
 type BeginAttemptRequest struct {
