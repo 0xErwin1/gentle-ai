@@ -51,10 +51,17 @@ func TestPortableSDDFailClosedAuthorityJourneysAreRegistered(t *testing.T) {
 	// j88 proves #2843's unborn STATUS collects explicit untracked intent first;
 	// j89 proves #2758 never offers a workspace receipt for a different index;
 	// j93 proves #2822 classifies stale managed assets before START can persist.
-	// Bump this deliberately when a journey is added, and name it here: the
-	// count exists so a journey cannot appear or vanish unnoticed.
-	if got := len(seen); got != 89 {
-		t.Errorf("core journey count = %d, want 89", got)
+	// #1993 REMOVED two: j38 (the bound-passing-finish refusal routing to the
+	// review router) and j39 (the stranded-successor exit it named). Review
+	// acts after implementation and verification, so that refusal is gone and
+	// both journeys had no subject left. j37 survives, rewritten to prove the
+	// opposite of what it used to: the bound passing finish now CLOSES over a
+	// corrected candidate and keeps the binding recorded.
+	//
+	// Bump this deliberately when a journey is added OR removed, and name it
+	// here: the count exists so a journey cannot appear or vanish unnoticed.
+	if got := len(seen); got != 87 {
+		t.Errorf("core journey count = %d, want 87", got)
 	}
 	for id, found := range want {
 		if !found {
