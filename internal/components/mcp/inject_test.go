@@ -2,8 +2,10 @@ package mcp
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -648,6 +650,58 @@ func TestInjectClaudeWorkspaceWritesMCPJSONAndIsIdempotent(t *testing.T) {
 		if strings.Contains(string(raw), `"mcpServers"`) {
 			t.Fatalf("workspace .claude/settings.json must not carry mcpServers; got %s", raw)
 		}
+	}
+}
+
+// TestInjectClaudeWorkspaceIsDiscoveredByNativeClaudeMCPList proves the
+// project-scope contract through Claude Code itself, without approving the
+// pending project server.
+func TestInjectClaudeWorkspaceIsDiscoveredByNativeClaudeMCPList(t *testing.T) {
+	if testing.Short() {
+		t.Skip("requires the native Claude Code CLI")
+	}
+
+	claudePath, err := exec.LookPath("claude")
+	if err != nil {
+		if errors.Is(err, exec.ErrNotFound) {
+			t.Skip("native Claude Code CLI is not installed")
+		}
+		t.Fatalf("LookPath(claude) error = %v", err)
+	}
+
+	home := t.TempDir()
+	workspace := t.TempDir()
+	if _, err := Inject(home, workspace, claudeAdapter()); err != nil {
+		t.Fatalf("Inject() error = %v", err)
+	}
+
+	cmd := exec.Command(claudePath, "mcp", "list")
+	cmd.Dir = workspace
+	env := os.Environ()
+	homeReplaced := false
+	for index, value := range env {
+		if strings.HasPrefix(value, "HOME=") {
+			env[index] = "HOME=" + home
+			homeReplaced = true
+			break
+		}
+	}
+	if !homeReplaced {
+		env = append(env, "HOME="+home)
+	}
+	cmd.Env = env
+
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("claude mcp list error = %v\noutput:\n%s", err, output)
+	}
+	t.Logf("native Claude project-scope discovery:\n%s", output)
+	lowerOutput := strings.ToLower(string(output))
+	if !strings.Contains(lowerOutput, "context7") {
+		t.Fatalf("claude mcp list did not discover context7 from %q\noutput:\n%s", filepath.Join(workspace, ".mcp.json"), output)
+	}
+	if !strings.Contains(lowerOutput, "pending") && !strings.Contains(lowerOutput, "approval") {
+		t.Fatalf("claude mcp list did not report the unapproved project server\noutput:\n%s", output)
 	}
 }
 

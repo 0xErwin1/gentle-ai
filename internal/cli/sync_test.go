@@ -1058,7 +1058,10 @@ func TestSyncBackupTargetsIncludeClaudeContext7CleanupPath(t *testing.T) {
 		Components: []model.ComponentID{model.ComponentContext7},
 	}
 
-	targets := syncBackupTargets(home, "", selection, resolveAdapters(selection.Agents))
+	targets, err := syncBackupTargets(home, "", selection, resolveAdapters(selection.Agents))
+	if err != nil {
+		t.Fatalf("syncBackupTargets() error = %v", err)
+	}
 	want := filepath.Join(home, ".claude", "settings.json")
 	if !containsPath(targets, want) {
 		t.Fatalf("sync backup targets missing Claude Context7 cleanup path %q: %v", want, targets)
