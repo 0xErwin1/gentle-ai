@@ -358,8 +358,8 @@ func BuildSyncSelection(flags SyncFlags, agentIDs []model.AgentID) model.Selecti
 		// correct default skill set when no explicit skills are provided.
 		Preset: model.PresetFullGentleman,
 		// Persona is left as zero-value here. RunSync resolves it from state.json
-		// when present. Missing or invalid persisted persona resolves to neutral
-		// so sync does not silently reactivate regional persona behavior.
+		// when present. A missing persona field resolves to neutral; invalid state
+		// is rejected so sync cannot silently reactivate regional persona behavior.
 	}
 }
 
@@ -1425,10 +1425,10 @@ func boolToInt(b bool) int {
 //
 // Resolution order:
 //  1. Explicit: if selection.Persona is non-empty, it is left untouched.
-//  2. Persisted: the persisted string is normalized via normalizePersona;
-//     on error (unknown/misspelled value) the fallback is used instead.
-//  3. Fallback: PersonaNeutral for default-safe behavior when persisted state is
-//     missing, empty, unreadable, or invalid.
+//  2. Persisted: the persisted string is normalized via normalizePersona.
+//  3. Fallback: PersonaNeutral for default-safe behavior when the persona field
+//     is empty or the state file is absent. Other read/validation errors are
+//     rejected by validatePersistedSyncState before this function is called.
 func applyResolvedPersona(selection *model.Selection, persisted string) {
 	if selection.Persona != "" {
 		return
@@ -1438,11 +1438,9 @@ func applyResolvedPersona(selection *model.Selection, persisted string) {
 			selection.Persona = id
 			return
 		}
-		// Unknown/misspelled persisted value — fall through to neutral.
+		// Sync entry points reject unknown persisted values before resolution.
 	}
-	// Default-safe fallback: state files written before persona persistence have
-	// no Persona field, and unreadable/invalid state must not implicitly restore
-	// regional persona behavior.
+	// Default-safe fallback for state files written before persona persistence.
 	selection.Persona = model.PersonaNeutral
 }
 
@@ -1464,6 +1462,32 @@ func migratePersistedPersonaAlias(homeDir string, persisted *state.InstallState,
 	return nil
 }
 
+// validatePersistedSyncState rejects state that cannot safely drive sync.
+// A missing state file is allowed for fresh homes; a decoded state without a
+// persona remains compatible with legacy installations.
+func validatePersistedSyncState(persisted state.InstallState, readErr error) error {
+	if readErr != nil {
+		if os.IsNotExist(readErr) {
+			return nil
+		}
+		return fmt.Errorf("read persisted installation state: %w", readErr)
+	}
+
+	if persisted.Persona == "" {
+		if persisted.PersonaPresent {
+			return fmt.Errorf("validate persisted persona: explicitly empty persona is not valid") // refusal:by-design operator-knowledge: only the operator can choose the intended persona to replace malformed persisted state
+		}
+		return nil
+	}
+	if strings.TrimSpace(persisted.Persona) == "" {
+		return fmt.Errorf("validate persisted persona: whitespace-only persona is not valid") // refusal:by-design operator-knowledge: only the operator can choose the intended persona to replace malformed persisted state
+	}
+	if _, _, err := normalizePersona(persisted.Persona); err != nil {
+		return fmt.Errorf("validate persisted persona: %w", err)
+	}
+	return nil
+}
+
 // RunSyncWithSelection is the programmatic entry point for sync.
 // It skips flag parsing and agent discovery — the caller provides the homeDir
 // and a fully-built Selection (agents + components + options).
@@ -1474,6 +1498,9 @@ func RunSyncWithSelection(homeDir string, selection model.Selection) (SyncResult
 	// below must not rewrite state it could not read. Managed-asset provenance
 	// re-reads under its own lock later (#2685), so this read stays advisory.
 	persistedState, persistedStateErr := state.Read(homeDir)
+	if err := validatePersistedSyncState(persistedState, persistedStateErr); err != nil {
+		return SyncResult{Agents: agentIDs, Selection: selection}, err
+	}
 	restorePersistedCommunityTools(homeDir, &selection, persistedState)
 
 	// Resolve persona from persisted state when the caller has not provided one.
@@ -1622,9 +1649,12 @@ func RunSync(args []string) (SyncResult, error) {
 	selection := BuildSyncSelection(flags, agentIDs)
 
 	// Read state once for both model-assignment restoration and persona resolution.
-	// On error (e.g. state.json absent), treat persisted values as empty — model
-	// maps stay as-is and persona falls back to neutral.
-	persistedState, _ := state.Read(homeDir)
+	// A missing state file is treated as a fresh home; other read/validation
+	// errors stop sync before any persona mutation or asset write.
+	persistedState, persistedStateErr := state.Read(homeDir)
+	if err := validatePersistedSyncState(persistedState, persistedStateErr); err != nil {
+		return SyncResult{Agents: agentIDs, Selection: selection}, err
+	}
 	RestorePersistedSelection(&selection, persistedState, flags)
 	restorePersistedCommunityTools(homeDir, &selection, persistedState)
 
