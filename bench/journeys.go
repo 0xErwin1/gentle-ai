@@ -828,7 +828,7 @@ func coreJourneys() []Journey {
 			},
 		},
 		{
-			ID:     "j85-negotiated-start-unknown-flag-is-preflight",
+			ID:     "j85-review-parse-refusals-are-preflight",
 			Title:  "START and FINALIZE parser refusals are preflight and non-mutating",
 			Source: "#1956: argv parsing happens before review authority can mutate",
 			Steps: []Step{
