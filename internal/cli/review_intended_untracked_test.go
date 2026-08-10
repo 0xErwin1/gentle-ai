@@ -96,6 +96,34 @@ func TestIntendedUntrackedPreflightRequiresExplicitIntentBeforeAuthority(t *test
 	assertNoUntrackedSelectionAuthority(t, repo)
 }
 
+func TestNegotiatedStatusUnbornUntrackedRequiresSelectionBeforeSnapshot(t *testing.T) {
+	reviewModeHome(t)
+	repo := initUnbornReviewCLIRepo(t)
+	if err := RunReviewMode([]string{"enable", "--cwd", repo, "--scope", "global"}, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	const path = "scripts/unborn-candidate.sh"
+	writeUndeclaredWorkspaceFile(t, repo, path, "#!/bin/sh\necho candidate\n", 0o755)
+
+	var output bytes.Buffer
+	if err := RunReview([]string{
+		"status", "--cwd", repo, "--contract", ReviewIntegrationContractV2,
+		"--agent", "opencode", "--next-transition",
+	}, &output); err != nil {
+		t.Fatalf("unborn negotiated STATUS: %v\n%s", err, output.String())
+	}
+	var status ReviewTargetStatusResult
+	decodeStrictReviewJSON(t, output.Bytes(), &status)
+	digest, inventory := intendedUntrackedSelection(t, status)
+	if digest == "" || !reflect.DeepEqual(inventory, []string{path}) {
+		t.Fatalf("selection inventory = digest %q paths %v, want only %q", digest, inventory, path)
+	}
+	if status.Authority != nil {
+		t.Fatalf("selection STATUS created authority: %#v", status.Authority)
+	}
+	assertNoUntrackedSelectionAuthority(t, repo)
+}
+
 func TestIntendedUntrackedSelectionUsesCanonicalPathsAndPrintedStart(t *testing.T) {
 	repo := initReviewCLIRepo(t)
 	writeUndeclaredWorkspaceFile(t, repo, "docs/chosen, file.md", "# Chosen\n", 0o644)
