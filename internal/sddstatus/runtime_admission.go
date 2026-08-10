@@ -135,6 +135,12 @@ func (store RuntimeStore) AdmissionStatus(ctx context.Context, request BeginAtte
 		return RuntimeStatus{}, err
 	}
 	status := replay.Status
+	// The obligation is a property of the immutable chain, not of whatever is
+	// blocking right now, so it is set before any early return. An active
+	// attempt or an exhausted budget does not make the chain owe less, and a
+	// surface that goes quiet under those states would disagree with acquire
+	// exactly when the operator is looking hardest.
+	status.SettleObligation = runtimeSettleObligation(status, store.ReviewDisabled)
 
 	normalized, err := normalizeBeginAttemptRequest(request)
 	if err != nil {
