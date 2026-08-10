@@ -1454,6 +1454,9 @@ func validatePersistedSyncState(persisted state.InstallState, readErr error) err
 	}
 
 	if persisted.Persona == "" {
+		if persisted.PersonaPresent {
+			return fmt.Errorf("validate persisted persona: explicitly empty persona is not valid") // refusal:by-design operator-knowledge: only the operator can choose the intended persona to replace malformed persisted state
+		}
 		return nil
 	}
 	if strings.TrimSpace(persisted.Persona) == "" {
