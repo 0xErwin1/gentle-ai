@@ -958,7 +958,10 @@ func TestBackupTargetsClaudeContext7IncludeCleanupWithoutVerificationRequirement
 			resolved := planner.ResolvedPlan{Agents: selection.Agents, OrderedComponents: selection.Components}
 			adapters := resolveAdapters(selection.Agents)
 
-			targets := backupTargets(home, workspace, tc.scope, selection, resolved)
+			targets, err := backupTargets(home, workspace, tc.scope, selection, resolved)
+			if err != nil {
+				t.Fatalf("backupTargets() error = %v", err)
+			}
 			root := home
 			if tc.wantRoot == "workspace" {
 				root = workspace
