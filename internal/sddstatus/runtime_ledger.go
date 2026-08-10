@@ -353,6 +353,10 @@ type RuntimeStatus struct {
 	// empty and every existing consumer reads exactly what it always read.
 	BlockedReason CompactBlockReason `json:"blocked_reason,omitempty"`
 	BlockedExit   string             `json:"blocked_exit,omitempty"`
+	// SettleObligation mirrors the compact acquire field exactly, from the
+	// same derivation, so the read-only surface and the operation that spends
+	// the attempt cannot disagree about what the settle will owe (#2912).
+	SettleObligation string `json:"settle_obligation,omitempty"`
 }
 
 type BeginAttemptRequest struct {
