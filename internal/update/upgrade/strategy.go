@@ -199,7 +199,10 @@ func opencodePluginUpgrade(ctx context.Context, r update.UpdateResult) (string, 
 
 	observedVersion, err := inspectOpenCodePluginVersion(opencodeDir, pkg)
 	if err != nil || observedVersion != expectedVersion {
-		return "", &ManualFallbackError{Hint: openCodePluginVerificationHint(r, pkg, opencodeDir, observedVersion, err)}
+		// A successful package-manager command crosses the mutation boundary. A
+		// failed materialization check is therefore a real failed postcondition,
+		// not a no-op manual fallback.
+		return "", fmt.Errorf("OpenCode plugin %s materialization failed after %s mutation: %s", pkg, pm, openCodePluginVerificationHint(r, pkg, opencodeDir, observedVersion, err))
 	}
 	return observedVersion, nil
 }
@@ -236,7 +239,7 @@ func openCodePluginVerificationHint(r update.UpdateResult, pkg, opencodeDir, obs
 	if verificationErr != nil {
 		detail = fmt.Sprintf(" (%s)", verificationErr)
 	}
-	return fmt.Sprintf("OpenCode plugin %s upgrade was not verified: expected version %q but observed %q%s. Inspect %s/node_modules/%s/package.json and rerun the upgrade.", pkg, strings.TrimSpace(r.LatestVersion), observed, detail, opencodeDir, pkg)
+	return fmt.Sprintf("OpenCode plugin %s upgrade was not verified: expected version %q but observed %q%s. No automatic rollback is available for package-manager state; package metadata, lockfiles, or node_modules may have changed. Inspect %s/node_modules/%s/package.json and the package-manager files in %s, restore or correct them, then rerun the upgrade.", pkg, strings.TrimSpace(r.LatestVersion), observed, detail, opencodeDir, pkg, opencodeDir)
 }
 
 func npmErrorCode(output string) string {
