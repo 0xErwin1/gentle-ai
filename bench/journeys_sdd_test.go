@@ -36,7 +36,7 @@ func TestPortableSDDFailClosedAuthorityJourneysAreRegistered(t *testing.T) {
 			want[journey.ID] = true
 		}
 	}
-	// 84 since j76-claude-advisory-result-reaches-delivery (#2692, #2566),
+	// 85 since j76-claude-advisory-result-reaches-delivery (#2692, #2566),
 	// j77-capture-result-input-preflight-is-read-only (#2630 D2),
 	// j78-lens-finding-id-prefix-discovery (#1844), j79-consecutive-rescope-
 	// refuses-before-publication (#2830), and j80-rescope-authorized-evidence-
