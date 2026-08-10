@@ -106,6 +106,14 @@ func (s Snapshotter) buildEntry(sourcePath string) (ManifestEntry, ArchiveEntry,
 	info, err := os.Lstat(cleanSource)
 	if err != nil {
 		if os.IsNotExist(err) {
+			// Path does not exist on disk: it is a prospective install target,
+			// not a user-owned artifact (sockets, FIFOs, devices, and dangling
+			// symlinks are handled separately below). Mark it as a regular
+			// file install target so the rollback removes anything the install
+			// subsequently creates at this path. Dangling symlinks fall through
+			// to the symlink branch and keep Kind="" (preserve), and special
+			// files keep Kind="" via the IsRegular guard.
+			entry.Kind = PathKindRegularFile
 			return entry, ArchiveEntry{}, nil
 		}
 		return ManifestEntry{}, ArchiveEntry{}, fmt.Errorf("lstat source path %q: %w", cleanSource, err)
