@@ -1896,6 +1896,7 @@ func TestClassifyMergeTreeWriteTreeProbe(t *testing.T) {
 		name      string
 		output    string
 		err       error
+		exitCode  string
 		want      bool
 		wantError bool
 	}{
@@ -1903,14 +1904,32 @@ func TestClassifyMergeTreeWriteTreeProbe(t *testing.T) {
 		{name: "unsupported", output: "usage: git merge-tree <base-tree> <branch1> <branch2>"},
 		{name: "unexpected command failure", output: "fatal: cannot execute", err: errors.New("exec failed"), wantError: true},
 		{name: "unrecognized successful output", output: "unexpected", wantError: true},
+		{name: "supported help exit", output: "usage: git merge-tree [--write-tree] <branch1> <branch2>", exitCode: "129", want: true},
+		{name: "unsupported help exit", output: "usage: git merge-tree <base-tree> <branch1> <branch2>", exitCode: "129"},
+		{name: "unexpected help exit", output: "usage: git merge-tree [--write-tree] <branch1> <branch2>", exitCode: "23", wantError: true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := classifyMergeTreeWriteTreeProbe([]byte(tt.output), tt.err)
+			err := tt.err
+			if tt.exitCode != "" {
+				cmd := exec.Command(os.Args[0], "-test.run=^TestMergeTreeProbeExitHelper$")
+				cmd.Env = append(os.Environ(), "GENTLE_AI_TEST_MERGE_TREE_EXIT="+tt.exitCode)
+				err = cmd.Run()
+			}
+			got, err := classifyMergeTreeWriteTreeProbe([]byte(tt.output), err)
 			if got != tt.want || (err != nil) != tt.wantError {
 				t.Fatalf("classifyMergeTreeWriteTreeProbe() = (%v, %v), want (%v, error=%v)", got, err, tt.want, tt.wantError)
 			}
 		})
+	}
+}
+
+func TestMergeTreeProbeExitHelper(t *testing.T) {
+	switch os.Getenv("GENTLE_AI_TEST_MERGE_TREE_EXIT") {
+	case "129":
+		os.Exit(129)
+	case "23":
+		os.Exit(23)
 	}
 }
 
