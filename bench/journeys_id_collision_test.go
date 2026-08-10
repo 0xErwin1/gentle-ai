@@ -25,6 +25,7 @@ func journeySources() []journeySource {
 		{"journeys.go", coreJourneys()},
 		{"journeys_edge.go", edgeJourneys()},
 		{"journeys_sdd.go", sddJourneys()},
+		{"journeys_issue_2891.go", issue2891Journeys()},
 		{"journeys_sdd_chain.go", sddChainJourneys()},
 		{"journeys_handoff.go", handoffJourneys()},
 		{"journeys_capture_evidence_v5.go", captureEvidenceDescriptorJourneys()},
