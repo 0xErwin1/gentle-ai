@@ -126,10 +126,9 @@ func TestDirectRouteStillRefusesADeclaredRuntime(t *testing.T) {
 
 // TestNegotiatedStartCommandEchoesTheCallersOwnRuntime pins the builder every
 // printed continuation goes through. The negotiated hint sites pass the
-// caller's declared identity, and today only claude-code clears the transport
-// gate, so a constant and an echo are observationally identical on this build.
-// That is exactly why the property needs its own test: the moment a second
-// runtime becomes eligible, a constant would start lying again.
+// caller's declared identity. Every runtime with immutable transport must be
+// echoed exactly; a fixed identity would lie for the rest of the supported
+// set, which is why this property has its own test.
 func TestNegotiatedStartCommandEchoesTheCallersOwnRuntime(t *testing.T) {
 	t.Parallel()
 
