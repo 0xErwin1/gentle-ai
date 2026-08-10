@@ -334,9 +334,11 @@ func TestKilocodeReviewSettingsMatchCurrentMainBaseline(t *testing.T) {
 	// prompts (+458 characters each); no key is added, removed, or otherwise
 	// changed. The hash is recomputed from the rebased tree. Deliberate, not
 	// drift.
-	// The provider-defect handoff now has three candidate-scoped outcomes;
-	// Kilocode embeds it in the orchestrator prompt, so the hash moved.
-	const want = "f259d91524ee1b893e3ec06fbfc8391d3c629add488c11a7bf5103668e0c7146"
+	// #2758 adds the staged_delivery_candidate_required continuation row to
+	// the shared contract. Kilocode embeds it in the orchestrator prompt, so
+	// the hash moved. A rendered comparison against origin/main confirmed this
+	// is the only changed settings scalar.
+	const want = "c614460175fbf92a20d7b372c7e5a179ffac3dd46f54b92e5510ad5389816eae"
 	if got != want {
 		t.Fatalf("Kilocode settings SHA-256 = %s, want current-main baseline %s", got, want)
 	}
@@ -565,8 +567,10 @@ func TestOpenCodeRenderedReviewProtocolCost(t *testing.T) {
 		// because the machine now routes them as collect transitions, so the
 		// rendered protocol got 372 characters cheaper. The pins move DOWN,
 		// which is the direction this table exists to protect.
-		{name: "standard", agents: []string{"review-reliability"}, beforeChars: 42_301, wantChars: 20_878, maxCharacters: 24_300},
-		{name: "full-4R", agents: []string{"review-risk", "review-resilience", "review-readability", "review-reliability"}, beforeChars: 106_998, wantChars: 33_223, maxCharacters: 38_500},
+		// #2758 adds one staged-delivery STOP continuation (383 rendered
+		// characters per row). The ceilings preserve the required 15% headroom.
+		{name: "standard", agents: []string{"review-reliability"}, beforeChars: 42_301, wantChars: 21_261, maxCharacters: 24_500},
+		{name: "full-4R", agents: []string{"review-risk", "review-resilience", "review-readability", "review-reliability"}, beforeChars: 106_998, wantChars: 33_606, maxCharacters: 38_700},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
