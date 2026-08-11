@@ -11,9 +11,10 @@ import (
 )
 
 const (
-	reviewNextTransitionExecute = "execute"
-	reviewNextTransitionCollect = "collect"
-	reviewNextTransitionStop    = "stop"
+	reviewNextTransitionExecute     = "execute"
+	reviewNextTransitionCollect     = "collect"
+	reviewNextTransitionStop        = "stop"
+	reviewTargetedValidationPurpose = "targeted-validation"
 )
 
 // ReviewNextTransition is the sole negotiated routing decision. Its execute
@@ -879,7 +880,7 @@ func reviewTargetedValidationArguments(contract string, binding ReviewTransition
 	arguments := reviewBindingArguments(binding)
 	if contract == ReviewIntegrationContractV2 {
 		arguments = append(arguments, ReviewTransitionArgument{Name: "repository-context", Value: binding.RepositoryContext},
-			ReviewTransitionArgument{Name: "purpose", Value: "targeted-validation"}, ReviewTransitionArgument{Name: "request-hash", Value: request.RequestHash})
+			ReviewTransitionArgument{Name: "purpose", Value: reviewTargetedValidationPurpose}, ReviewTransitionArgument{Name: "request-hash", Value: request.RequestHash})
 	}
 	return arguments
 }

@@ -77,7 +77,8 @@ func TestSubmissionDescriptorsAreBoundAndExecuteOneValueOnly(t *testing.T) {
 	if len(validation.Arguments) != 6 {
 		t.Fatalf("targeted-validation provider argument count = %d, want 6: %#v", len(validation.Arguments), validation.Arguments)
 	}
-	contextHandle := validation.Arguments[3].Value
+	validationArguments := requiredReviewTransitionArguments(t, validation.Arguments, "lineage", "expected-revision", "target", "repository-context", "purpose", "request-hash")
+	contextHandle := validationArguments["repository-context"]
 	if root, err := reviewtransaction.ResolveReviewRepositoryContext(context.Background(), contextHandle, reviewtransaction.ReviewRepositoryContextBinding{
 		LineageID: ready.Authority.LineageID, Revision: ready.Authority.Revision, TargetIdentity: ready.ValidationRequest.CorrectionTargetIdentity,
 	}); err != nil || root != repo {
@@ -86,18 +87,22 @@ func TestSubmissionDescriptorsAreBoundAndExecuteOneValueOnly(t *testing.T) {
 	wantValidationArguments := []ReviewTransitionArgument{
 		{Name: "lineage", Value: ready.Authority.LineageID}, {Name: "expected-revision", Value: ready.Authority.Revision},
 		{Name: "target", Value: ready.ValidationRequest.CorrectionTargetIdentity}, {Name: "repository-context", Value: contextHandle},
-		{Name: "purpose", Value: "targeted-validation"}, {Name: "request-hash", Value: ready.ValidationRequest.RequestHash},
+		{Name: "purpose", Value: reviewTargetedValidationPurpose}, {Name: "request-hash", Value: ready.ValidationRequest.RequestHash},
 	}
 	if validation.CaptureOperation != "external.run_targeted_validation" || !reflect.DeepEqual(validation.Arguments, wantValidationArguments) {
 		t.Fatalf("targeted-validation provider arguments = %#v, want %#v", validation.Arguments, wantValidationArguments)
 	}
-	for index, value := range []string{"forged-lineage", "sha256:" + strings.Repeat("a", 64), "sha256:" + strings.Repeat("b", 64), "rctx1_" + strings.Repeat("e", 64)} {
-		original := validation.Arguments[index].Value
-		validation.Arguments[index].Value = value
+	for name, value := range map[string]string{
+		"lineage": "forged-lineage", "expected-revision": "sha256:" + strings.Repeat("a", 64),
+		"target": "sha256:" + strings.Repeat("b", 64), "repository-context": "rctx1_" + strings.Repeat("e", 64),
+		"purpose": reviewTargetedValidationPurpose + "-forged", "request-hash": "sha256:" + strings.Repeat("f", 64),
+	} {
+		original := ready.NextTransition.Collect.Inputs[0].Arguments
+		ready.NextTransition.Collect.Inputs[0].Arguments = replaceReviewTransitionArgument(t, original, name, value)
 		if err := ready.validateSubmissionDescriptors(); err == nil {
-			t.Fatalf("targeted-validation descriptor accepted forged %q", validation.Arguments[index].Name)
+			t.Fatalf("targeted-validation descriptor accepted forged %q", name)
 		}
-		validation.Arguments[index].Value = original
+		ready.NextTransition.Collect.Inputs[0].Arguments = original
 	}
 	validationPath := filepath.Join(t.TempDir(), "validation.json")
 	writeReviewCLIJSON(t, validationPath, facadeValidationResult{
@@ -391,6 +396,19 @@ func replaceSubmissionToken(t *testing.T, descriptor ReviewTransitionSubmission,
 	}
 	t.Fatalf("descriptor tokens lack %q: %v", prefix, copy.ArgumentTokens)
 	return ReviewTransitionSubmission{}
+}
+
+func replaceReviewTransitionArgument(t *testing.T, arguments []ReviewTransitionArgument, name, value string) []ReviewTransitionArgument {
+	t.Helper()
+	copy := append([]ReviewTransitionArgument(nil), arguments...)
+	for index := range copy {
+		if copy[index].Name == name {
+			copy[index].Value = value
+			return copy
+		}
+	}
+	t.Fatalf("transition arguments omit %q: %#v", name, arguments)
+	return nil
 }
 
 func swapSubmissionTokens(t *testing.T, descriptor ReviewTransitionSubmission, left, right int) ReviewTransitionSubmission {
