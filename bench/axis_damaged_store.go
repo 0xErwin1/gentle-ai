@@ -497,6 +497,8 @@ const (
 	scratchLiveSnapshot        = "damaged-store/live-snapshot"
 )
 
+const scratchDamagedAuthorityBeforeFinalize = "damaged-store/authority-before-finalize"
+
 // The successor names are the operator's to choose, so this axis chooses two
 // and keeps them stable across runs.
 const (
@@ -1183,7 +1185,49 @@ func proveStoreRecovered(r *journeyRun) error {
 // proveStoreStillDamaged is its mirror, for the steps that claim an operation
 // changed nothing.
 func proveStoreStillDamaged(r *journeyRun) error {
-	return requireDamagedStoreReportsItsDamage(r.sandbox)
+	if err := requireDamagedStoreReportsItsDamage(r.sandbox); err != nil {
+		return err
+	}
+	before, captured := r.sandbox.Scratch[scratchDamagedAuthorityBeforeFinalize]
+	if !captured {
+		return nil
+	}
+	lineage, err := scratchValue(r.sandbox, scratchSuccessor)
+	if err != nil {
+		return err
+	}
+	path, err := storeStatePath(r.sandbox, lineage)
+	if err != nil {
+		return err
+	}
+	after, err := os.ReadFile(path)
+	if err != nil {
+		return fmt.Errorf("read damaged authority after failed FINALIZE: %w", err)
+	}
+	if !bytes.Equal([]byte(before), after) {
+		return errors.New("failed FINALIZE changed the damaged authority bytes")
+	}
+	return nil
+}
+
+// captureDamagedAuthorityBytes records the exact persisted successor before
+// ds14 crosses the public FINALIZE boundary. The follow-up proof still checks
+// that the store remains invalid, then verifies this record was untouched.
+func captureDamagedAuthorityBytes(sandbox *Sandbox) error {
+	lineage, err := scratchValue(sandbox, scratchSuccessor)
+	if err != nil {
+		return err
+	}
+	path, err := storeStatePath(sandbox, lineage)
+	if err != nil {
+		return err
+	}
+	payload, err := os.ReadFile(path)
+	if err != nil {
+		return fmt.Errorf("read damaged authority before FINALIZE: %w", err)
+	}
+	sandbox.Scratch[scratchDamagedAuthorityBeforeFinalize] = string(payload)
+	return nil
 }
 
 // repairAssessment is the subset of `review repair --preflight` that says
@@ -2048,6 +2092,7 @@ func damagedStoreJourneys() []Journey {
 			// mutation that never started.
 			Steps: []Step{
 				{Name: "fixture: non-pristine successor with a schema-prefixed mismatched authorization", Fixture: damagedEdgeWithResults},
+				{Name: "capture the damaged authority before FINALIZE", Fixture: captureDamagedAuthorityBytes},
 				{Name: "negotiate FINALIZE over the damaged successor", Requires: finalizeAuthorizationFailureCapability,
 					Args:  damagedSuccessorFinalizeArgs,
 					After: requireTypedAuthorizationMismatchFailure},
