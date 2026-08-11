@@ -20,7 +20,6 @@ const (
 	CompactBlockMaintainerDecision  CompactBlockReason = "maintainer_decision"
 	CompactBlockCorruptAuthority    CompactBlockReason = "corrupt_authority"
 	CompactBlockInvalidContinuation CompactBlockReason = "invalid_continuation"
-	CompactBlockRemediationRequired CompactBlockReason = "remediation_required"
 	CompactBlockWorktreeMismatch    CompactBlockReason = "worktree_mismatch"
 	CompactBlockAuthorityFailure    CompactBlockReason = "authority_failure"
 	// CompactBlockCandidateUnavailable is the repository-side block: the
@@ -53,6 +52,14 @@ type CompactAttemptResult struct {
 	Token  string              `json:"token,omitempty"`
 	Exit   string              `json:"exit,omitempty"`
 	Detail string              `json:"detail,omitempty"`
+	// SettleObligation names what this attempt's passing settle will already
+	// be bound to, at the moment the token is issued rather than after the
+	// work is done (#2912). An attempt is a bounded, spendable resource, and
+	// every report in this class paid one to discover a demand acquire could
+	// have named up front. It is never a block: the state stays proceed and
+	// the token is real. Empty whenever the chain holds nothing, because a
+	// field that is always populated is noise.
+	SettleObligation string `json:"settle_obligation,omitempty"`
 }
 
 // CompactAcquireRequest is the bounded orchestration projection of
@@ -216,6 +223,9 @@ func (store RuntimeStore) Acquire(ctx context.Context, request CompactAcquireReq
 		Status: replay.Status, AttemptTokens: replay.AttemptTokens,
 		Request: begin, PresentedToken: request.Token,
 	}); terminal {
+		if result.State == CompactStateProceed {
+			result.SettleObligation = runtimeSettleObligation(replay.Status, store.ReviewDisabled)
+		}
 		return result, nil
 	}
 	// #2564 fail-fast: a declared unmanaged correction whose settlement is
@@ -237,7 +247,12 @@ func (store RuntimeStore) Acquire(ctx context.Context, request CompactAcquireReq
 	if err != nil {
 		return store.compactMutationFailure(err, false, begin), nil
 	}
-	return CompactAttemptResult{State: CompactStateProceed, Token: started.Revision}, nil
+	return CompactAttemptResult{
+		State: CompactStateProceed, Token: started.Revision,
+		// Derived from the PRE-mutation chain: the obligation this attempt
+		// inherits is the one that existed when it was opened.
+		SettleObligation: runtimeSettleObligation(replay.Status, store.ReviewDisabled),
+	}, nil
 }
 
 // Settle closes the attempt selected by Token through the ordinary Finish
@@ -457,13 +472,6 @@ func (store RuntimeStore) compactMutationFailure(err error, settle bool, begin B
 		errors.Is(err, ErrRuntimeRequestConflict), errors.Is(err, ErrRuntimeNoActiveAttempt),
 		errors.Is(err, ErrBindingRevisionConflict):
 		reason = CompactBlockInvalidContinuation
-	// ErrRuntimeRemediationSuccessorRequired is the sentinel behind
-	// runtimeRemediationExitRefusal (runtime_ledger.go:628-646): the candidate
-	// moved after Begin, so a passing finish demands the remediation trio
-	// naming its own runnable exit. It previously fell through to the
-	// default authority_failure and lost that exit entirely (#2249).
-	case errors.Is(err, ErrRuntimeRemediationSuccessorRequired):
-		reason = CompactBlockRemediationRequired
 	// ErrRuntimeWorktreeMismatch is the sentinel behind
 	// runtimeWorktreeMismatchRefusal (#2296 part 1): Finish is running from a
 	// different linked worktree than the one Begin recorded. Left
@@ -580,6 +588,31 @@ func compactBlockedByUnreadableAuthority(cause error) CompactAttemptResult {
 		result.Detail = result.Detail + " (cause: " + cause.Error() + ")"
 	}
 	return result
+}
+
+// runtimeSettleObligation is the ONE derivation of "what will this attempt's
+// passing settle already owe". Acquire and the read-only admission surface
+// both call it; neither computes it alongside the other. That is #2114's
+// lesson applied before the fact — two derivations of one truth drift, and the
+// surface that speaks earliest is the one that ends up lying.
+//
+// It reads the same chain-derived binding the settle itself enforces
+// (runtimeChainFailedAttempt, #1974 slice 2 / #2565), so the notice cannot
+// promise something the settle will not demand, or stay silent about
+// something it will.
+func runtimeSettleObligation(status RuntimeStatus, reviewDisabled bool) string {
+	if !reviewDisabled || status.Binding != nil {
+		return ""
+	}
+	failed, ok := runtimeChainFailedAttempt(status.Attempts)
+	if !ok || failed.EvidenceRevision == "" {
+		return ""
+	}
+	return "this attempt's passing settle is already bound to the chain's unremediated failed verification " +
+		failed.EvidenceRevision + ": settle it passed with `--remediates-evidence-revision \"" + failed.EvidenceRevision +
+		"\"`, and with verification evidence distinct from it, over a candidate this attempt actually changed. " +
+		"An audited reset or an interrupted settlement between that failure and this correction does not release the " +
+		"binding — only a passing settlement that names it does."
 }
 
 func compactBlocked(reason CompactBlockReason, token string) CompactAttemptResult {
