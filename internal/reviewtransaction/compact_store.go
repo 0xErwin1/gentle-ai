@@ -2240,6 +2240,12 @@ func parseCompactRecord(payload []byte, lineageID string) (CompactRecord, error)
 	var record CompactRecord
 	if strictErr := decoder.Decode(&record); strictErr != nil {
 		if !retiredCompactFieldError(strictErr) {
+			if compactAuthorityFromNewerRelease(strictErr) {
+				// The decoder error names the exact unknown field, which is
+				// the one piece of evidence identifying which release wrote
+				// this authority. It is preserved, not swallowed.
+				return CompactRecord{}, fmt.Errorf("%w: %v", ErrCompactAuthorityFromNewerRelease, strictErr)
+			}
 			return CompactRecord{}, strictErr
 		}
 		historical, historicalErr := parseHistoricalCompactRecord(payload)
@@ -2326,6 +2332,33 @@ func retiredCompactSnapshotIdentity(snapshot Snapshot) string {
 // retired compatibility field, so only genuine historical records pay the
 // tolerant second parse. The decoder error only carries the leaf field name;
 // the tolerant parse then enforces the exact nesting level of each path.
+// ErrCompactAuthorityFromNewerRelease marks persisted authority that carries a
+// state field this build has never heard of. Strict decoding is the tamper
+// guard and stays, which makes authority non-forward-compatible by
+// construction: every release adding a state field writes bytes an older
+// binary can never read. The binary that would need the fix is the old one, so
+// no compatibility path can exist here the way retiredCompactFieldError exists
+// for the mirror case.
+//
+// What this sentinel buys is an honest refusal. #2461's reporter got
+// `json: unknown field "correction_budget_policy"` wrapped in "refresh the
+// exact native next_transition before retrying", followed that exactly, and
+// hit an identical failure, because refreshing a transition cannot make an
+// older binary parse newer bytes. The message therefore names the only thing
+// that does resolve it: run a build at least as new as the writer.
+var ErrCompactAuthorityFromNewerRelease = errors.New(
+	"this compact review authority was written by a newer gentle-ai than the one reading it, which cannot parse it; " +
+		"upgrade the reading gentle-ai to at least the build that wrote this authority",
+)
+
+// compactAuthorityFromNewerRelease reports whether a strict-decode failure is
+// an unknown state field rather than a retired one. Retired fields are checked
+// first by the caller and take the tolerant historical parse, so reaching here
+// means the field belongs to a release this build predates.
+func compactAuthorityFromNewerRelease(err error) bool {
+	return strings.Contains(err.Error(), "unknown field") && !retiredCompactFieldError(err)
+}
+
 func retiredCompactFieldError(err error) bool {
 	message := err.Error()
 	if !strings.Contains(message, "unknown field") {
