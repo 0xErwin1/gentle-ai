@@ -62,12 +62,14 @@ func TestPortableSDDFailClosedAuthorityJourneysAreRegistered(t *testing.T) {
 	// both journeys had no subject left. j37 survives, rewritten to prove the
 	// opposite of what it used to: the bound passing finish now CLOSES over a
 	// corrected candidate and keeps the binding recorded.
+	// j98 proves #2696 discovers a committed flat-root spec through both public
+	// SDD status surfaces and preserves the same routing state.
 	//
 	// j96 proves #2891 blocks an off-path sibling in a nested same-repository workspace.
 	// Bump this deliberately when a journey is added OR removed, and name it
 	// here: the count exists so a journey cannot appear or vanish unnoticed.
-	if got := len(seen); got != 93 {
-		t.Errorf("core journey count = %d, want 93", got)
+	if got := len(seen); got != 94 {
+		t.Errorf("core journey count = %d, want 94", got)
 	}
 	for id, found := range want {
 		if !found {
