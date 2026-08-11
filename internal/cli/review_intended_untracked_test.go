@@ -232,3 +232,28 @@ func TestIntendedUntrackedConsentFollowUpPreservesSelectedScope(t *testing.T) {
 		t.Fatalf("consent START target = %s, selected status target = %s", negotiatedStartTarget(started), status.TargetIdentity)
 	}
 }
+
+func TestConsentFollowUpPrintedCwdRoundTripsWindowsNativePath(t *testing.T) {
+	const cwd = `C:\Users\reviewer\gentle-ai`
+	command := reviewConsentFollowUpBase(
+		cwd, "sha256:target", reviewtransaction.ProjectionWorkspace,
+		"windows-cwd-roundtrip", "", "", "reliability", "", false, false,
+		ReviewIntegrationContractV2, "", "", reviewIntendedUntrackedScope{},
+	)
+
+	words, err := SplitPrintedCommandWords(command)
+	if err != nil {
+		t.Fatalf("split printed consent follow-up: %v", err)
+	}
+	want := []string{
+		"gentle-ai", "review", "start",
+		"--contract", ReviewIntegrationContractV2,
+		"--cwd", cwd,
+		"--target", "sha256:target",
+		"--projection", string(reviewtransaction.ProjectionWorkspace),
+		"--lineage", "windows-cwd-roundtrip",
+	}
+	if !reflect.DeepEqual(words, want) {
+		t.Fatalf("printed consent follow-up words = %#v, want %#v\ncommand: %q", words, want, command)
+	}
+}
