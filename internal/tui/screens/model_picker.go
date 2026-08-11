@@ -26,6 +26,8 @@ const (
 	ModeEffortSelect                          // Sub-mode: pick a reasoning effort level
 )
 
+const lmStudioToolCallWarning = `LM Studio models need "tool_call": true in provider.lmstudio.models for SDD.`
+
 // maxVisibleItems is the maximum number of items shown in scrollable sub-lists.
 const maxVisibleItems = 10
 const maxVisiblePhaseRows = 16
@@ -138,6 +140,7 @@ func NewModelPickerState(cachePath string, settingsPath string) ModelPickerState
 		customProviderIDs: customIDs,
 	}
 	state.refreshAvailableModels()
+	state.ConfigWarning = appendCustomProviderToolCallWarnings(state.ConfigWarning, providers, configProviders)
 	return state
 }
 
@@ -161,6 +164,7 @@ func (state ModelPickerState) Update(msg tea.Msg) ModelPickerState {
 	}
 	if discovery.Err != nil {
 		state.ConfigWarning = appendConfigWarning(state.ConfigWarning, "LM Studio discovery failed; using configured models.")
+		state.ConfigWarning = appendLMStudioToolCallWarning(state.ConfigWarning, state.Providers["lmstudio"], len(state.lmStudioConfig.Models))
 		return state
 	}
 
@@ -192,9 +196,7 @@ func (state ModelPickerState) Update(msg tea.Msg) ModelPickerState {
 	state.Providers["lmstudio"] = provider
 	state.customProviderIDs = append(state.customProviderIDs, "lmstudio")
 	state.refreshAvailableModels()
-	if len(discovery.Models) > 0 && len(opencode.FilterModelsForSDD(provider)) == 0 {
-		state.ConfigWarning = appendConfigWarning(state.ConfigWarning, "LM Studio models need tool_call: true in provider.lmstudio.models for SDD.")
-	}
+	state.ConfigWarning = appendLMStudioToolCallWarning(state.ConfigWarning, provider, len(discovery.Models))
 	return state
 }
 
@@ -205,6 +207,52 @@ func (state *ModelPickerState) refreshAvailableModels() {
 	for _, id := range state.AvailableIDs {
 		state.SDDModels[id] = opencode.FilterModelsForSDD(state.Providers[id])
 	}
+}
+
+func appendLMStudioToolCallWarning(existing string, provider opencode.Provider, modelCount int) string {
+	if modelCount == 0 || len(opencode.FilterModelsForSDD(provider)) > 0 || strings.Contains(existing, lmStudioToolCallWarning) {
+		return existing
+	}
+	return appendConfigWarning(existing, lmStudioToolCallWarning)
+}
+
+func appendCustomProviderToolCallWarnings(
+	existing string,
+	providers map[string]opencode.Provider,
+	configProviders map[string]opencode.ConfigProvider,
+) string {
+	ids := make([]string, 0, len(configProviders))
+	for id := range configProviders {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+
+	for _, id := range ids {
+		if id == "lmstudio" {
+			continue
+		}
+		configProvider := configProviders[id]
+		if len(configProvider.Models) == 0 {
+			continue
+		}
+
+		provider, ok := providers[id]
+		if !ok || len(opencode.FilterModelsForSDD(provider)) > 0 {
+			continue
+		}
+
+		name := provider.Name
+		if name == "" {
+			name = id
+		}
+		existing = appendConfigWarning(existing, fmt.Sprintf(
+			`Custom provider %q has models, but none declare "tool_call": true. Add "tool_call": true to at least one model in provider[%q].models.`,
+			name,
+			id,
+		))
+	}
+
+	return existing
 }
 
 func appendConfigWarning(existing, warning string) string {
