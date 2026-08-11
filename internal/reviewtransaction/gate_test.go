@@ -969,6 +969,21 @@ func TestAdvertisedRemoteRefRejectsMalformedSuccessfulOutput(t *testing.T) {
 	}
 }
 
+func TestAdvertisedRemoteRefRejectsSplitRecord(t *testing.T) {
+	repo := initSnapshotRepo(t)
+	branch := currentBranch(context.Background(), repo)
+	configurePublicationRemote(t, repo, branch)
+	commit := trimGit(gitSnapshot(t, repo, "rev-parse", "HEAD"))
+	mockLsRemoteOutput(t, commit+"\nrefs/heads/"+branch+"\n")
+
+	_, err := advertisedRemoteRef(context.Background(), repo, "origin", "refs/heads/"+branch, "origin/"+branch, PrePRBoundaryExplicit)
+	var malformed *GitAdvertisedRemoteOutputError
+	var targetErr *GateTargetResolutionError
+	if !errors.As(err, &malformed) || !errors.Is(err, ErrMalformedAdvertisedRemoteOutput) || errors.As(err, &targetErr) {
+		t.Fatalf("split advertised remote ref error = %T %v, want typed operational error", err, err)
+	}
+}
+
 func mockLsRemoteOutput(t *testing.T, output string) {
 	t.Helper()
 	original := gitCommandContext

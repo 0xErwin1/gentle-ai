@@ -613,7 +613,7 @@ var finalizeCapability = &Capability{Verb: []string{"review", "finalize"}, Flags
 var finalizeResultsCapability = &Capability{Verb: []string{"review", "finalize"}, Flags: []string{"--cwd", "--captured-results"}}
 var finalizeEvidenceCapability = &Capability{Verb: []string{"review", "finalize"}, Flags: []string{"--cwd", "--captured-evidence"}}
 var validateCapability = &Capability{Verb: []string{"review", "validate"}, Flags: []string{"--cwd", "--gate"}}
-var validateBaseRefCapability = &Capability{Verb: []string{"review", "validate"}, Flags: []string{"--cwd", "--gate", "--base-ref"}}
+var validateBaseRefCapability = &Capability{Verb: []string{"review", "validate"}, Flags: []string{"--cwd", "--gate", "--base-ref", "--lineage"}}
 var modeCapability = &Capability{Verb: []string{"review", "mode"}, Flags: []string{"--cwd", "--json"}}
 var abandonCapability = &Capability{Verb: []string{"review", "abandon"}, Flags: []string{"--lineage", "--expected-revision", "--reason", "--actor", "--maintainer-authorization"}}
 
