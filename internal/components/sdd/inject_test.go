@@ -4272,7 +4272,13 @@ func TestInjectKilocodeKeepsLegacyBackgroundAgentsPluginAndRemovesOpenCodeReview
 	if err := json.Unmarshal(settings, &root); err != nil {
 		t.Fatalf("Unmarshal(Kilocode settings) error = %v", err)
 	}
-	agentMap, _ := root["agent"].(map[string]any)
+	agentMap, ok := root["agent"].(map[string]any)
+	if !ok {
+		t.Fatalf("Kilocode settings missing agent map: %v", root)
+	}
+	if _, exists := agentMap["gentle-orchestrator"]; !exists {
+		t.Fatalf("Kilocode settings must retain gentle-orchestrator agent: %v", agentMap)
+	}
 	for _, fallbackAgent := range []string{"general", "explore"} {
 		if _, exists := agentMap[fallbackAgent]; exists {
 			t.Fatalf("Kilocode settings must not receive OpenCode-only fallback agent %q", fallbackAgent)
