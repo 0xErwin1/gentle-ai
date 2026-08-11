@@ -15,15 +15,14 @@ func resolveAtomicParentJunction(dir string, info os.FileInfo) (string, os.FileI
 
 	// os.Readlink supports Windows symlinks and mount-point junctions. Other
 	// reparse-point tags return an error and remain rejected.
-	target, err := os.Readlink(dir)
+	if _, err := os.Readlink(dir); err != nil {
+		return "", nil, false, fmt.Errorf("resolving directory junction parent %q: %w", dir, err)
+	}
+	resolved, err := filepath.EvalSymlinks(dir)
 	if err != nil {
 		return "", nil, false, fmt.Errorf("resolving directory junction parent %q: %w", dir, err)
 	}
-	resolved, err := filepath.Abs(target)
-	if err != nil {
-		return "", nil, false, fmt.Errorf("resolve directory junction target %q: %w", target, err)
-	}
-	targetInfo, err := os.Stat(dir)
+	targetInfo, err := os.Stat(resolved)
 	if err != nil {
 		return "", nil, false, fmt.Errorf("stat directory junction target %q: %w", resolved, err)
 	}
