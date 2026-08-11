@@ -595,7 +595,7 @@ func TestProbeStdio_NotInstalled(t *testing.T) {
 	stdioHandshakeFn = func(context.Context, time.Duration, string, ...string) error { return exec.ErrNotFound }
 	t.Cleanup(func() { stdioHandshakeFn = orig })
 
-	if err := ProbeStdio(context.Background(), "engram", "mcp", "--tools=agent"); !errors.Is(err, ErrNotInstalled) {
+	if err := ProbeStdio(context.Background(), 0, "engram", "mcp", "--tools=agent"); !errors.Is(err, ErrNotInstalled) {
 		t.Fatalf("ProbeStdio() error = %v, want ErrNotInstalled", err)
 	}
 }
@@ -605,7 +605,7 @@ func TestProbeStdio_MissingAbsoluteConfiguredCommandFails(t *testing.T) {
 	stdioHandshakeFn = func(context.Context, time.Duration, string, ...string) error { return exec.ErrNotFound }
 	t.Cleanup(func() { stdioHandshakeFn = orig })
 
-	err := ProbeStdio(context.Background(), "/configured/engram", "mcp", "--tools=agent")
+	err := ProbeStdio(context.Background(), 0, "/configured/engram", "mcp", "--tools=agent")
 	if !errors.Is(err, exec.ErrNotFound) {
 		t.Fatalf("ProbeStdio() error = %v, want missing configured command", err)
 	}
@@ -637,7 +637,7 @@ func TestProbeStdio_ClassifiesCommandNotFound(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := ProbeStdio(context.Background(), tt.command, "mcp", "--tools=agent")
+			err := ProbeStdio(context.Background(), 0, tt.command, "mcp", "--tools=agent")
 			if tt.wantNotInstalled {
 				if !errors.Is(err, ErrNotInstalled) {
 					t.Fatalf("ProbeStdio() error = %v, want ErrNotInstalled", err)
@@ -665,7 +665,7 @@ func TestProbeStdio_UsesExactPersistedCommand(t *testing.T) {
 	}
 	t.Cleanup(func() { stdioHandshakeFn = orig })
 
-	if err := ProbeStdio(context.Background(), "/opt/gentle-engram/bin/engram", "mcp", "--tools=custom"); err != nil {
+	if err := ProbeStdio(context.Background(), 0, "/opt/gentle-engram/bin/engram", "mcp", "--tools=custom"); err != nil {
 		t.Fatalf("ProbeStdio() error = %v", err)
 	}
 	if gotName != "/opt/gentle-engram/bin/engram" {
