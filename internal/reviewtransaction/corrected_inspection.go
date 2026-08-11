@@ -9,11 +9,11 @@ import (
 // ResolveCorrectedCandidateInspection resolves the immutable correction snapshot
 // for a captured targeted-validation request without rebuilding live workspace
 // content. The returned snapshot can be passed to SnapshotBuilder.InspectCandidate.
-func ResolveCorrectedCandidateInspection(ctx context.Context, repositoryContext string, request TargetedValidationRequest) (Snapshot, error) {
+func ResolveCorrectedCandidateInspection(ctx context.Context, repositoryContextHandle string, request TargetedValidationRequest) (Snapshot, error) {
 	if err := ValidateTargetedValidationRequest(request); err != nil {
 		return Snapshot{}, errors.New("corrected candidate inspection request is invalid") // refusal:by-design operator-knowledge: only a fresh native transition can provide an exact provider-issued request
 	}
-	repo, binding, err := resolveOpaqueReviewRepositoryContext(ctx, repositoryContext)
+	repo, binding, err := resolveOpaqueReviewRepositoryContext(ctx, repositoryContextHandle)
 	if err != nil {
 		return Snapshot{}, err
 	}
