@@ -74,6 +74,31 @@ func TestSubmissionDescriptorsAreBoundAndExecuteOneValueOnly(t *testing.T) {
 	validation := submissionDescriptorInput(t, ready)
 	assertSubmissionDescriptor(t, validation, ready, "validation")
 	assertSubmissionTransitionSchema(t, ready)
+	if len(validation.Arguments) != 6 {
+		t.Fatalf("targeted-validation provider argument count = %d, want 6: %#v", len(validation.Arguments), validation.Arguments)
+	}
+	contextHandle := validation.Arguments[3].Value
+	if root, err := reviewtransaction.ResolveReviewRepositoryContext(context.Background(), contextHandle, reviewtransaction.ReviewRepositoryContextBinding{
+		LineageID: ready.Authority.LineageID, Revision: ready.Authority.Revision, TargetIdentity: ready.ValidationRequest.CorrectionTargetIdentity,
+	}); err != nil || root != repo {
+		t.Fatalf("targeted-validation repository context = %q, %v; want %q", root, err, repo)
+	}
+	wantValidationArguments := []ReviewTransitionArgument{
+		{Name: "lineage", Value: ready.Authority.LineageID}, {Name: "expected-revision", Value: ready.Authority.Revision},
+		{Name: "target", Value: ready.ValidationRequest.CorrectionTargetIdentity}, {Name: "repository-context", Value: contextHandle},
+		{Name: "purpose", Value: "targeted-validation"}, {Name: "request-hash", Value: ready.ValidationRequest.RequestHash},
+	}
+	if validation.CaptureOperation != "external.run_targeted_validation" || !reflect.DeepEqual(validation.Arguments, wantValidationArguments) {
+		t.Fatalf("targeted-validation provider arguments = %#v, want %#v", validation.Arguments, wantValidationArguments)
+	}
+	for index, value := range []string{"forged-lineage", "sha256:" + strings.Repeat("a", 64), "sha256:" + strings.Repeat("b", 64), "rctx1_" + strings.Repeat("e", 64)} {
+		original := validation.Arguments[index].Value
+		validation.Arguments[index].Value = value
+		if err := ready.validateSubmissionDescriptors(); err == nil {
+			t.Fatalf("targeted-validation descriptor accepted forged %q", validation.Arguments[index].Name)
+		}
+		validation.Arguments[index].Value = original
+	}
 	validationPath := filepath.Join(t.TempDir(), "validation.json")
 	writeReviewCLIJSON(t, validationPath, facadeValidationResult{
 		TargetedValidationRequestHash: ready.ValidationRequest.RequestHash,

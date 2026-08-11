@@ -233,7 +233,7 @@ func newReviewNextTransition(status ReviewTargetStatusResult, selectedLenses []s
 			}
 			return reviewCollectTransition("targeted_validation_required", ReviewTransitionInput{
 				Name: "targeted_validation", Schema: reviewtransaction.TargetedValidationRequestSchema,
-				CaptureOperation: "external.run_targeted_validation", Arguments: reviewBindingArguments(validationBinding),
+				CaptureOperation: "external.run_targeted_validation", Arguments: reviewTargetedValidationArguments(input.Contract, validationBinding, *input.ValidationRequest),
 				ValidationRequest: input.ValidationRequest,
 				Submission:        reviewTargetedValidationSubmission(input.Contract, validationBinding, *input.ValidationRequest),
 			})
@@ -873,6 +873,15 @@ func reviewTargetArguments(status ReviewTargetStatusResult) []ReviewTransitionAr
 
 func reviewBindingArguments(binding ReviewTransitionBinding) []ReviewTransitionArgument {
 	return []ReviewTransitionArgument{{Name: "lineage", Value: binding.LineageID}, {Name: "expected-revision", Value: binding.Revision}, {Name: "target", Value: binding.TargetIdentity}}
+}
+
+func reviewTargetedValidationArguments(contract string, binding ReviewTransitionBinding, request reviewtransaction.TargetedValidationRequest) []ReviewTransitionArgument {
+	arguments := reviewBindingArguments(binding)
+	if contract == ReviewIntegrationContractV2 {
+		arguments = append(arguments, ReviewTransitionArgument{Name: "repository-context", Value: binding.RepositoryContext},
+			ReviewTransitionArgument{Name: "purpose", Value: "targeted-validation"}, ReviewTransitionArgument{Name: "request-hash", Value: request.RequestHash})
+	}
+	return arguments
 }
 
 func reviewTransitionBinding(authority *ReviewTargetStatusAuthority, target string, repositoryContext ...string) ReviewTransitionBinding {

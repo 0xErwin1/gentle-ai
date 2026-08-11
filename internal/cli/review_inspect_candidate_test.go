@@ -174,6 +174,72 @@ func TestReviewInspectCandidateRejectsOversizedObject(t *testing.T) {
 	}
 }
 
+func TestReviewInspectCandidateInspectsProviderBoundCorrectedTree(t *testing.T) {
+	repo, args, ready, store, index := newTargetedCandidateInspectionReview(t)
+	before := readReviewOperationFile(t, store.StatePath())
+	writeReviewStartCandidate(t, repo, "candidate.go", "package candidate\n\nfunc value() int { return 3 }\n", 0o644)
+	t.Chdir(t.TempDir())
+	var output bytes.Buffer
+	if err := RunReviewInspectCandidate(append(args, "--operation", "object", "--path-index", fmt.Sprint(index), "--side", "candidate"), &output); err != nil {
+		t.Fatal(err)
+	}
+	if output.String() != "package candidate\n\nfunc value() int { return 2 }\n" {
+		t.Fatalf("corrected immutable inspection = %q", output.String())
+	}
+	if after := readReviewOperationFile(t, store.StatePath()); !bytes.Equal(after, before) {
+		t.Fatal("inspection changed authority bytes")
+	}
+
+	validation := filepath.Join(t.TempDir(), "validation.json")
+	writeReviewCLIJSON(t, validation, facadeValidationResult{
+		TargetedValidationRequestHash: ready.ValidationRequest.RequestHash,
+		CorrectionTargetIdentity:      ready.ValidationRequest.CorrectionTargetIdentity,
+		OriginalCriteria:              facadeValidationCheck{Passed: true, Evidence: []string{"acceptance passed"}},
+		CorrectionRegression:          facadeValidationCheck{Passed: true, Evidence: []string{"regression passed"}},
+		FollowUps:                     []reviewtransaction.FollowUp{},
+	})
+	if err := RunReviewFacadeFinalize([]string{"--cwd", repo, "--lineage", ready.Authority.LineageID, "--validation", validation, "--captured-evidence=true"}, io.Discard); err == nil {
+		t.Fatal("FINALIZE accepted live correction drift")
+	}
+	stillOpen, err := store.Load()
+	if err != nil || stillOpen.State.State != reviewtransaction.StateCorrectionRequired || len(stillOpen.State.CorrectionAttempts) != 0 {
+		t.Fatalf("drifted FINALIZE changed correction authority: %#v, %v", stillOpen.State, err)
+	}
+	writeReviewStartCandidate(t, repo, "candidate.go", "package candidate\n\nfunc value() int { return 2 }\n", 0o644)
+	if err := RunReviewFacadeFinalize([]string{"--cwd", repo, "--lineage", ready.Authority.LineageID, "--validation", validation, "--captured-evidence=true"}, io.Discard); err != nil {
+		t.Fatalf("FINALIZE after restoring corrected candidate: %v", err)
+	}
+	terminal, err := store.Load()
+	if err != nil || terminal.State.State != reviewtransaction.StateApproved || len(terminal.State.CorrectionAttempts) != 1 {
+		t.Fatalf("restored FINALIZE state = %#v, %v", terminal.State, err)
+	}
+}
+
+func TestReviewInspectCandidateRejectsTargetedBindingDecoys(t *testing.T) {
+	_, lens, _, _ := newCandidateInspectionReview(t, "candidate\n", false)
+	_, targeted, ready, _, _ := newTargetedCandidateInspectionReview(t)
+	targeted = append(targeted, "--operation", "name-status")
+	lens = append(lens, "--operation", "name-status", "--request-hash", ready.ValidationRequest.RequestHash)
+	tests := []inspectionCase{
+		{name: "missing context", argv: removeInspectionArg(targeted, "--repository-context"), want: "requires the exact provider-issued"},
+		{name: "forged context", argv: replaceInspectionArg(targeted, "--repository-context", "rctx1_"+strings.Repeat("0", 64)), want: "repository_context_"},
+		{name: "original lens context", argv: replaceInspectionArg(targeted, "--repository-context", lens[slices.Index(lens, "--repository-context")+1]), want: "repository_context_"},
+		{name: "stale revision", argv: replaceInspectionArg(targeted, "--expected-revision", "sha256:"+strings.Repeat("0", 64)), want: "repository_context_"},
+		{name: "forged target", argv: replaceInspectionArg(targeted, "--target", "sha256:"+strings.Repeat("0", 64)), want: "repository_context_"},
+		{name: "forged request hash", argv: replaceInspectionArg(targeted, "--request-hash", "sha256:"+strings.Repeat("0", 64)), want: "repository_context_"},
+		{name: "lens supplied", argv: append(slices.Clone(targeted), "--lens", "review-risk"), want: "does not accept --lens or --order"},
+		{name: "order supplied", argv: append(slices.Clone(targeted), "--order", "0"), want: "does not accept --lens or --order"},
+		{name: "targeted-only hash on lens mode", argv: lens, want: "request hash is valid only"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if err := RunReviewInspectCandidate(test.argv, io.Discard); err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("targeted inspection error = %v, want %q", err, test.want)
+			}
+		})
+	}
+}
+
 func newCandidateInspectionReview(t *testing.T, tracked string, hostile bool) (string, []string, reviewtransaction.CompactRecord, int) {
 	t.Helper()
 	t.Setenv("HOME", t.TempDir())
@@ -205,8 +271,39 @@ func newCandidateInspectionReview(t *testing.T, tracked string, hostile bool) (s
 	return repo, args, record, index
 }
 
+func newTargetedCandidateInspectionReview(t *testing.T) (string, []string, ReviewTargetStatusResult, reviewtransaction.CompactStore, int) {
+	t.Helper()
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("USERPROFILE", os.Getenv("HOME"))
+	repo, started, store := submissionDescriptorCorrectionFixture(t)
+	if err := RunReviewFacadeFinalize([]string{"--cwd", repo, "--lineage", started.LineageID, "--correction-lines", "2"}, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	writeReviewStartCandidate(t, repo, "candidate.go", "package candidate\n\nfunc value() int { return 2 }\n", 0o644)
+	waiting := submissionDescriptorStatus(t, repo, started.LineageID)
+	evidence := filepath.Join(t.TempDir(), "correction-evidence.txt")
+	if err := os.WriteFile(evidence, []byte("repository verification passed\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := RunReviewCaptureEvidence([]string{"--cwd", repo, "--lineage", started.LineageID,
+		"--target", waiting.ValidationRequest.CorrectionTargetIdentity, "--expected-revision", waiting.Authority.Revision,
+		"--outcome", string(reviewtransaction.VerificationOutcomePassed), "--input", evidence}, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	ready := submissionDescriptorStatus(t, repo, started.LineageID)
+	input := submissionDescriptorInput(t, ready)
+	return repo, []string{"--repository-context", input.Arguments[3].Value, "--expected-revision", input.Arguments[1].Value,
+		"--lineage", input.Arguments[0].Value, "--target", input.Arguments[2].Value, "--purpose", input.Arguments[4].Value, "--request-hash", input.Arguments[5].Value}, ready, store, 0
+}
+
 func replaceInspectionArg(args []string, name, value string) []string {
 	result := slices.Clone(args)
 	result[slices.Index(result, name)+1] = value
 	return result
+}
+
+func removeInspectionArg(args []string, name string) []string {
+	result := slices.Clone(args)
+	index := slices.Index(result, name)
+	return append(result[:index], result[index+2:]...)
 }
