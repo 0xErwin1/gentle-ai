@@ -167,6 +167,22 @@ func TestResolveCorrectedCandidateInspectionFailsClosed(t *testing.T) {
 			t.Fatal("missing correction tree resolved")
 		}
 	})
+	t.Run("altered correction evidence tree", func(t *testing.T) {
+		_, request, correction, handle, _, _ := correctedInspectionFixture(t, "corrected-inspection-altered-tree", &passed)
+		request.CorrectionCandidateTree = correction.BaseTree
+		request.RequestHash = targetedValidationRequestHash(request)
+		if _, err := ResolveCorrectedCandidateInspection(context.Background(), handle, request); err == nil {
+			t.Fatal("altered correction tree resolved")
+		}
+	})
+	t.Run("altered correction evidence path digest", func(t *testing.T) {
+		_, request, _, handle, _, _ := correctedInspectionFixture(t, "corrected-inspection-altered-paths", &passed)
+		request.CorrectionPathsDigest = hash("altered-paths")
+		request.RequestHash = targetedValidationRequestHash(request)
+		if _, err := ResolveCorrectedCandidateInspection(context.Background(), handle, request); err == nil {
+			t.Fatal("altered correction paths resolved")
+		}
+	})
 	t.Run("missing evidence", func(t *testing.T) {
 		_, request, _, handle, _, _ := correctedInspectionFixture(t, "corrected-inspection-missing-evidence", nil)
 		if _, err := ResolveCorrectedCandidateInspection(context.Background(), handle, request); err == nil {

@@ -670,6 +670,10 @@ func (result ReviewTargetStatusResult) validateSubmissionDescriptors() error {
 		if err != nil {
 			return err
 		}
+		if arguments, err := reviewTransitionArgumentMap(input.Arguments); err != nil || len(arguments) != 6 || reviewtransaction.ValidateReviewRepositoryContextHandle(arguments["repository-context"]) != nil ||
+			arguments["purpose"] != "targeted-validation" || arguments["request-hash"] != result.ValidationRequest.RequestHash {
+			return errors.New("targeted validation transition lacks the corrected inspection binding") // refusal:by-design world-action: only STATUS can issue a complete corrected-candidate binding
+		}
 		want := reviewTargetedValidationSubmission(result.Contract, ReviewTransitionBinding{
 			LineageID: result.Authority.LineageID, Revision: result.Authority.Revision,
 			TargetIdentity: result.ValidationRequest.CorrectionTargetIdentity, RepositoryContext: context,
