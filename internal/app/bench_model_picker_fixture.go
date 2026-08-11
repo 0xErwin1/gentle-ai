@@ -32,9 +32,10 @@ func runBenchModelPickerCommand(args []string, stdout io.Writer) (bool, error) {
 	cachePath := filepath.Join(home, ".cache", "opencode", "models.json")
 	picker := screens.NewModelPickerState(cachePath, settingsPath)
 	rows := screens.ModelPickerRowsForState(picker)
+	identityRows := screens.ModelPickerRowsForStateWithIdentity(picker)
 	target := -1
-	for index, row := range rows {
-		if row == "Set all custom agents" {
+	for index, row := range identityRows {
+		if row.Kind == screens.ModelPickerRowKindSetAllCustom {
 			target = index
 			break
 		}

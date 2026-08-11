@@ -46,6 +46,25 @@ type ProviderEntry struct {
 	ModelCount int
 }
 
+// ModelPickerRowKind identifies the behavior of a model-picker row independently
+// from its display label. Custom agent names are user-controlled and may match
+// synthetic row labels.
+type ModelPickerRowKind int
+
+const (
+	ModelPickerRowKindAgent ModelPickerRowKind = iota
+	ModelPickerRowKindSetAllSDD
+	ModelPickerRowKindSeparator
+	ModelPickerRowKindSetAllCustom
+)
+
+// ModelPickerRow carries the stable identity used by model-picker behavior.
+type ModelPickerRow struct {
+	Kind    ModelPickerRowKind
+	Label   string
+	AgentID string
+}
+
 // ModelPickerState holds the available providers and models for the picker screen,
 // plus navigation state for the two-step sub-selection modes.
 type ModelPickerState struct {
@@ -136,7 +155,9 @@ func NewModelPickerState(cachePath string, settingsPath string) ModelPickerState
 	}
 
 	var customAgents []string
-	if agents, err := sdd.DiscoverCustomAgents(settingsPath); err == nil && len(agents) > 0 {
+	if agents, err := sdd.DiscoverCustomAgents(settingsPath); err != nil {
+		configWarning = appendConfigWarning(configWarning, fmt.Sprintf("Could not discover custom agents from opencode.json: %v", err))
+	} else if len(agents) > 0 {
 		customAgents = agents
 	}
 
@@ -238,22 +259,43 @@ func ModelPickerRows() []string {
 }
 
 func modelPickerRowsWithCustom(includeReview bool, customAgents []string) []string {
-	rows := make([]string, 0, 2+len(opencode.SDDPhases())+1+len(opencode.JDPhases())+1+len(opencode.ReviewPhases())+len(customAgents)+2)
-	rows = append(rows, SDDOrchestratorPhase)
-	rows = append(rows, "Set all SDD phases")
-	rows = append(rows, opencode.SDDPhases()...)
+	identityRows := modelPickerRowsWithCustomIdentity(includeReview, customAgents)
+	rows := make([]string, 0, len(identityRows))
+	for _, row := range identityRows {
+		rows = append(rows, row.Label)
+	}
+	return rows
+}
+
+func modelPickerRowsWithCustomIdentity(includeReview bool, customAgents []string) []ModelPickerRow {
+	rows := make([]ModelPickerRow, 0, 2+len(opencode.SDDPhases())+1+len(opencode.JDPhases())+1+len(opencode.ReviewPhases())+len(customAgents)+2)
+	rows = append(rows,
+		ModelPickerRow{Kind: ModelPickerRowKindAgent, Label: SDDOrchestratorPhase, AgentID: SDDOrchestratorPhase},
+		ModelPickerRow{Kind: ModelPickerRowKindSetAllSDD, Label: "Set all SDD phases"},
+	)
+	for _, phase := range opencode.SDDPhases() {
+		rows = append(rows, ModelPickerRow{Kind: ModelPickerRowKindAgent, Label: phase, AgentID: phase})
+	}
 	if len(opencode.JDPhases()) > 0 {
-		rows = append(rows, "--- Judgment Day ---")
-		rows = append(rows, opencode.JDPhases()...)
+		rows = append(rows, ModelPickerRow{Kind: ModelPickerRowKindSeparator, Label: "--- Judgment Day ---"})
+		for _, phase := range opencode.JDPhases() {
+			rows = append(rows, ModelPickerRow{Kind: ModelPickerRowKindAgent, Label: phase, AgentID: phase})
+		}
 	}
 	if includeReview && len(opencode.ReviewPhases()) > 0 {
-		rows = append(rows, "--- Review agents ---")
-		rows = append(rows, opencode.ReviewPhases()...)
+		rows = append(rows, ModelPickerRow{Kind: ModelPickerRowKindSeparator, Label: "--- Review agents ---"})
+		for _, phase := range opencode.ReviewPhases() {
+			rows = append(rows, ModelPickerRow{Kind: ModelPickerRowKindAgent, Label: phase, AgentID: phase})
+		}
 	}
 	if len(customAgents) > 0 {
-		rows = append(rows, "--- Custom / Native agents ---")
-		rows = append(rows, "Set all custom agents")
-		rows = append(rows, customAgents...)
+		rows = append(rows,
+			ModelPickerRow{Kind: ModelPickerRowKindSeparator, Label: "--- Custom / Native agents ---"},
+			ModelPickerRow{Kind: ModelPickerRowKindSetAllCustom, Label: "Set all custom agents"},
+		)
+		for _, agent := range customAgents {
+			rows = append(rows, ModelPickerRow{Kind: ModelPickerRowKindAgent, Label: agent, AgentID: agent})
+		}
 	}
 	return rows
 }
@@ -268,15 +310,32 @@ func ModelPickerRowsForProfile() []string {
 // ModelPickerRowsForState returns model picker rows for a given ModelPickerState,
 // incorporating discovered custom agents and profile settings.
 func ModelPickerRowsForState(state ModelPickerState) []string {
+	identityRows := ModelPickerRowsForStateWithIdentity(state)
+	rows := make([]string, 0, len(identityRows))
+	for _, row := range identityRows {
+		rows = append(rows, row.Label)
+	}
+	return rows
+}
+
+// ModelPickerRowsForStateWithIdentity returns rows with stable behavior kinds
+// for the current picker state. The identity is based on row position and
+// section construction, not on user-controlled display labels.
+func ModelPickerRowsForStateWithIdentity(state ModelPickerState) []ModelPickerRow {
 	customAgents := state.CustomAgents
 	if state.ForProfile {
 		customAgents = nil
 	}
-	return modelPickerRowsWithCustom(!state.ForProfile, customAgents)
+	return modelPickerRowsWithCustomIdentity(!state.ForProfile, customAgents)
 }
 
-func IsModelPickerSeparatorRow(row string) bool {
-	return strings.HasPrefix(row, "--- ")
+// ModelPickerRowAt returns the identity of the row at index, if it exists.
+func ModelPickerRowAt(state ModelPickerState, index int) (ModelPickerRow, bool) {
+	rows := ModelPickerRowsForStateWithIdentity(state)
+	if index < 0 || index >= len(rows) {
+		return ModelPickerRow{}, false
+	}
+	return rows[index], true
 }
 
 // SeparatorRowIdx returns the index of the "--- Judgment Day ---" separator
@@ -420,10 +479,11 @@ func handleModelNav(
 		// not support effort and must clear any stale value.
 		preserveEffort := selected.Reasoning
 		assignments = applyAssignmentPreservingMatchingEffort(*state, assignments, assignment, preserveEffort)
-		// Mirror the AllPhasesModel or AllCustomAgentsModel update when "Set all" rows.
-		if state.SelectedPhaseIdx == 1 {
+		// Mirror the bulk-row state without using its display label as identity.
+		selectedRow, selectedRowOK := ModelPickerRowAt(*state, state.SelectedPhaseIdx)
+		if selectedRowOK && selectedRow.Kind == ModelPickerRowKindSetAllSDD {
 			state.AllPhasesModel = preserveMatchingEffort(state.AllPhasesModel, assignment, preserveEffort)
-		} else if rows := ModelPickerRowsForState(*state); state.SelectedPhaseIdx < len(rows) && rows[state.SelectedPhaseIdx] == "Set all custom agents" {
+		} else if selectedRowOK && selectedRow.Kind == ModelPickerRowKindSetAllCustom {
 			state.AllCustomAgentsModel = preserveMatchingEffort(state.AllCustomAgentsModel, assignment, preserveEffort)
 		}
 
@@ -557,16 +617,13 @@ func compareVersionKeys(left, right []int) int {
 }
 
 func applyAssignmentPreservingMatchingEffort(state ModelPickerState, assignments map[string]model.ModelAssignment, assignment model.ModelAssignment, preserveEffort bool) map[string]model.ModelAssignment {
-	phases := opencode.SDDPhases()
-	rows := ModelPickerRowsForState(state)
+	selectedRow, selectedRowOK := ModelPickerRowAt(state, state.SelectedPhaseIdx)
 	switch {
-	case state.SelectedPhaseIdx == 1:
-		for _, phase := range phases {
+	case selectedRowOK && selectedRow.Kind == ModelPickerRowKindSetAllSDD:
+		for _, phase := range opencode.SDDPhases() {
 			assignments[phase] = preserveMatchingEffort(assignments[phase], assignment, preserveEffort)
 		}
-	case state.SelectedPhaseIdx >= 0 &&
-		state.SelectedPhaseIdx < len(rows) &&
-		rows[state.SelectedPhaseIdx] == "Set all custom agents":
+	case selectedRowOK && selectedRow.Kind == ModelPickerRowKindSetAllCustom:
 		for _, agent := range state.CustomAgents {
 			assignments[agent] = preserveMatchingEffort(assignments[agent], assignment, preserveEffort)
 		}
@@ -586,17 +643,14 @@ func ClearModelPickerAssignment(state *ModelPickerState, assignments map[string]
 		return assignments
 	}
 
-	rows := ModelPickerRowsForState(*state)
-	phases := opencode.SDDPhases()
+	selectedRow, selectedRowOK := ModelPickerRowAt(*state, state.SelectedPhaseIdx)
 	switch {
-	case state.SelectedPhaseIdx == 1:
-		for _, phase := range phases {
+	case selectedRowOK && selectedRow.Kind == ModelPickerRowKindSetAllSDD:
+		for _, phase := range opencode.SDDPhases() {
 			delete(assignments, phase)
 		}
 		state.AllPhasesModel = model.ModelAssignment{}
-	case state.SelectedPhaseIdx >= 0 &&
-		state.SelectedPhaseIdx < len(rows) &&
-		rows[state.SelectedPhaseIdx] == "Set all custom agents":
+	case selectedRowOK && selectedRow.Kind == ModelPickerRowKindSetAllCustom:
 		for _, agent := range state.CustomAgents {
 			delete(assignments, agent)
 		}
@@ -630,17 +684,16 @@ func formatAssignmentLabel(row, provName, modelName, effort string) string {
 // When SelectedPhaseIdx points to "Set all custom agents", the assignment is
 // applied to all discovered custom agents.
 func applyAssignment(state ModelPickerState, assignments map[string]model.ModelAssignment, assignment model.ModelAssignment) map[string]model.ModelAssignment {
-	rows := ModelPickerRowsForState(state)
-	if state.SelectedPhaseIdx < 0 || state.SelectedPhaseIdx >= len(rows) {
+	selectedRow, selectedRowOK := ModelPickerRowAt(state, state.SelectedPhaseIdx)
+	if !selectedRowOK {
 		return assignments
 	}
-	row := rows[state.SelectedPhaseIdx]
 	switch {
-	case state.SelectedPhaseIdx == 1:
+	case selectedRow.Kind == ModelPickerRowKindSetAllSDD:
 		for _, phase := range opencode.SDDPhases() {
 			assignments[phase] = assignment
 		}
-	case row == "Set all custom agents":
+	case selectedRow.Kind == ModelPickerRowKindSetAllCustom:
 		for _, customAgent := range state.CustomAgents {
 			assignments[customAgent] = assignment
 		}
@@ -653,15 +706,11 @@ func applyAssignment(state ModelPickerState, assignments map[string]model.ModelA
 }
 
 func selectedModelPickerAgent(state ModelPickerState) string {
-	rows := ModelPickerRowsForState(state)
-	if state.SelectedPhaseIdx < 0 || state.SelectedPhaseIdx >= len(rows) {
+	row, ok := ModelPickerRowAt(state, state.SelectedPhaseIdx)
+	if !ok || row.Kind != ModelPickerRowKindAgent {
 		return ""
 	}
-	row := rows[state.SelectedPhaseIdx]
-	if state.SelectedPhaseIdx == 1 || row == "Set all custom agents" || IsModelPickerSeparatorRow(row) {
-		return ""
-	}
-	return row
+	return row.AgentID
 }
 
 // effortOptionsFromLevels returns the effort picker options in display order.
@@ -713,10 +762,11 @@ func handleEffortNav(
 		assignment := state.PendingAssignment
 		assignment.Effort = effort
 		assignments = applyAssignment(state, assignments, assignment)
-		// Mirror the AllPhasesModel or AllCustomAgentsModel update.
-		if state.SelectedPhaseIdx == 1 {
+		// Mirror the bulk-row state without using its display label as identity.
+		selectedRow, selectedRowOK := ModelPickerRowAt(state, state.SelectedPhaseIdx)
+		if selectedRowOK && selectedRow.Kind == ModelPickerRowKindSetAllSDD {
 			state.AllPhasesModel = assignment
-		} else if rows := ModelPickerRowsForState(state); state.SelectedPhaseIdx < len(rows) && rows[state.SelectedPhaseIdx] == "Set all custom agents" {
+		} else if selectedRowOK && selectedRow.Kind == ModelPickerRowKindSetAllCustom {
 			state.AllCustomAgentsModel = assignment
 		}
 		state.Mode = ModePhaseList
@@ -833,6 +883,7 @@ func renderPhaseList(
 	b.WriteString("\n\n")
 
 	rows := ModelPickerRowsForState(state)
+	identityRows := ModelPickerRowsForStateWithIdentity(state)
 	start, end := 0, len(rows)
 	if len(rows) > maxVisiblePhaseRows {
 		start = max(0, min(cursor-maxVisiblePhaseRows+1, len(rows)-maxVisiblePhaseRows))
@@ -844,10 +895,11 @@ func renderPhaseList(
 	for offset, row := range rows[start:end] {
 		idx := start + offset
 		focused := idx == cursor
+		identity := identityRows[idx]
 
 		var label string
 		switch {
-		case idx == 0:
+		case identity.Kind == ModelPickerRowKindAgent && identity.AgentID == SDDOrchestratorPhase:
 			// "gentle-orchestrator" row — coordinator, individual assignment only
 			assignment, ok := assignments[SDDOrchestratorPhase]
 			if ok && assignment.ProviderID != "" {
@@ -856,7 +908,7 @@ func renderPhaseList(
 			} else {
 				label = fmt.Sprintf("%-20s (default)", row+" (coordinator)")
 			}
-		case idx == 1:
+		case identity.Kind == ModelPickerRowKindSetAllSDD:
 			// "Set all phases" row — show AllPhasesModel (only updated when this row is used).
 			// Using AllPhasesModel instead of phases[0] prevents the label from changing
 			// when the user picks a model for an individual sub-agent phase (Issue #146).
@@ -866,14 +918,14 @@ func renderPhaseList(
 			} else {
 				label = fmt.Sprintf("%-20s (not set)", row)
 			}
-		case row == "Set all custom agents":
+		case identity.Kind == ModelPickerRowKindSetAllCustom:
 			if state.AllCustomAgentsModel.ProviderID != "" {
 				provName, modelName := resolveNames(state.AllCustomAgentsModel, state)
 				label = formatAssignmentLabel(row, provName, modelName, state.AllCustomAgentsModel.Effort)
 			} else {
 				label = fmt.Sprintf("%-20s (not set)", row)
 			}
-		case IsModelPickerSeparatorRow(row):
+		case identity.Kind == ModelPickerRowKindSeparator:
 			// Separator row — render as a visual divider with subtle indicator when focused.
 			if focused {
 				b.WriteString(styles.SubtextStyle.Render("▸ "+row) + "\n")
@@ -882,7 +934,7 @@ func renderPhaseList(
 			}
 			continue
 		default:
-			assignment, ok := assignments[row]
+			assignment, ok := assignments[identity.AgentID]
 			if ok && assignment.ProviderID != "" {
 				provName, modelName := resolveNames(assignment, state)
 				label = formatAssignmentLabel(row, provName, modelName, assignment.Effort)
