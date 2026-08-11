@@ -304,13 +304,16 @@ func assessTargetStatusSnapshot(ctx context.Context, repo string, request Target
 			}
 		}
 		if state.State == StateEscalated {
+			if compactEscalatedRecoveryTargetChanged(state.CurrentSnapshot, live) {
+				candidate.correctionRecovery = true
+				candidate.recoveryDisposition = RecoveryEscalated
+				candidates = append(candidates, candidate)
+				continue
+			}
 			requested := state
 			requested.InitialSnapshot = live
 			if compactStartDeliveryScopeMatches(state, requested) {
-				candidate.correctionRecovery = compactEscalatedRecoveryTargetChanged(state.CurrentSnapshot, live)
-				if candidate.correctionRecovery {
-					candidate.recoveryDisposition = RecoveryEscalated
-				} else if compactAccountingOnlyEscalation(state) {
+				if compactAccountingOnlyEscalation(state) {
 					// An accounting-only escalation (both original review and
 					// correction regression passed; only the cumulative
 					// correction line count crossed the budget) has a native

@@ -620,6 +620,7 @@ func Journeys() []Journey {
 	journeys = append(journeys, localGateBaseAdvanceJourneys()...)
 	journeys = append(journeys, intendedUntrackedJourneys()...)
 	journeys = append(journeys, captureResultDryRunJourneys()...)
+	journeys = append(journeys, issue2031Journeys()...)
 	journeys = append(journeys, findingIDPrefixJourneys()...)
 	journeys = append(journeys, rescopeWriteGuardJourneys()...)
 	journeys = append(journeys, rescopeEvidenceOnlyRetryJourneys()...)
