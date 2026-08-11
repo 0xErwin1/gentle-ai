@@ -93,11 +93,11 @@ func issue2879Args(sandbox *Sandbox, plan, inventory, reason, authorization stri
 		"--actor", "bench", "--reason", reason, "--authorization", authorization}
 }
 func issue2879Refuse(r *journeyRun) error {
-	path, err := storeStatePath(r.sandbox, issue2879Lineage)
-	before, err := os.ReadFile(path)
+	path, pathErr := storeStatePath(r.sandbox, issue2879Lineage)
+	before, readErr := os.ReadFile(path)
 	base, baseErr := reviewTransactionsBase(r.sandbox)
 	binding, bindErr := dispositionRepositoryBinding(r.sandbox)
-	if err != nil || baseErr != nil || bindErr != nil {
+	if pathErr != nil || readErr != nil || baseErr != nil || bindErr != nil {
 		return errors.New("prepare repair refusals")
 	}
 	plan, inventory, reason := r.sandbox.Scratch[scratchDispositionPlanDigest], r.sandbox.Scratch[scratchDispositionInventoryRevision], "quarantine released historical record"
