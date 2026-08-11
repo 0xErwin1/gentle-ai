@@ -2258,8 +2258,9 @@ func parseCompactRecord(payload []byte, lineageID string) (CompactRecord, error)
 		return CompactRecord{}, errors.New("invalid compact review state record")
 	}
 	if err := record.State.Validate(); err != nil {
+		_, historical := forensicHistoricalCompactRecord(payload, lineageID)
 		return CompactRecord{}, &CompactSemanticStateError{LineageID: record.State.LineageID, State: record.State.State, Problem: err.Error(),
-			OutdatedIdentity: errors.Is(err, errCompactSnapshotIdentityMismatch) && retiredCompactSnapshotIdentities(record.State)}
+			OutdatedIdentity: historical}
 	}
 	if lineageID != "" && record.State.LineageID != lineageID {
 		return CompactRecord{}, errors.New("compact state lineage does not match its directory")
@@ -2319,10 +2320,6 @@ func retiredCompactSnapshotIdentity(snapshot Snapshot) string {
 		writeLengthPrefixed(hash, []byte(value))
 	}
 	return "sha256:" + hex.EncodeToString(hash.Sum(nil))
-}
-
-func retiredCompactSnapshotIdentities(state CompactState) bool {
-	return state.InitialSnapshot.Identity == retiredCompactSnapshotIdentity(state.InitialSnapshot) && state.CurrentSnapshot.Identity == retiredCompactSnapshotIdentity(state.CurrentSnapshot)
 }
 
 // retiredCompactFieldError reports whether a strict decode failure names a
