@@ -26,7 +26,7 @@ func issue2031Journeys() []Journey {
 					Args: productArgs("review", "finalize", "--lineage", issue2031EscalatedPredecessor, "--captured-results=true")},
 				{Name: "finalize failed verification", Requires: finalizeFailedCapability, Composite: finalizeAsFailedVerification},
 				{Name: "fixture: change candidate bytes and delivery scope", Fixture: stageIssue2031RecoveryTarget},
-				{Name: "negotiate escalated recovery authorization", Requires: statusCapability, Composite: negotiateIssue2031Recovery},
+				{Name: "negotiate and execute escalated recovery authorization", Requires: statusCapability, Composite: negotiateIssue2031Recovery},
 			},
 		},
 	}
@@ -74,6 +74,25 @@ func negotiateIssue2031Recovery(r *journeyRun) error {
 		"--recovery-actor", actor, "--recovery-authorization", authorization)
 	if err != nil || authorized.NextTransition.Kind != "execute" || authorized.NextTransition.Execute.Operation != "review.recover" {
 		return fmt.Errorf("authorized escalated recovery continuation = %+v, %v", authorized.NextTransition, err)
+	}
+	if authorized.executeArgument("predecessor-lineage") != issue2031EscalatedPredecessor ||
+		authorized.executeArgument("expected-predecessor-revision") != envelope.Authority.Revision ||
+		authorized.executeArgument("successor-lineage") != successor || authorized.executeArgument("disposition") != "escalated" {
+		return fmt.Errorf("authorized escalated recovery binding = %+v", authorized.NextTransition.Execute)
+	}
+	recovery, err := runPrintedTransition(r, authorized)
+	if err != nil {
+		return err
+	}
+	recovered, err := decodeWaveOperation(recovery, "escalated changed-scope recovery")
+	if err != nil || recovered.LineageID != successor || recovered.State != "reviewing" ||
+		recovered.TargetIdentity != authorized.TargetIdentity {
+		return fmt.Errorf("escalated recovery successor = %+v, %v", recovered, err)
+	}
+	successorStatus, err := readStatusFor(r, "--lineage", successor)
+	if err != nil || successorStatus.Authority.LineageID != successor || successorStatus.Authority.State != "reviewing" ||
+		successorStatus.TargetIdentity != recovered.TargetIdentity {
+		return fmt.Errorf("escalated recovery successor status = %+v, %v", successorStatus, err)
 	}
 	return nil
 }

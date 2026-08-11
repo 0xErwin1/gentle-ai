@@ -142,6 +142,9 @@ type CompactRecord struct {
 	HistoricalCompat bool `json:"-"`
 }
 
+// historicalCompactForensicRecord is raw-byte identity, never authority.
+type historicalCompactForensicRecord struct{ RawDigest string }
+
 type CompactStore struct {
 	Dir                 string
 	lineageID           string
@@ -2255,8 +2258,9 @@ func parseCompactRecord(payload []byte, lineageID string) (CompactRecord, error)
 		return CompactRecord{}, errors.New("invalid compact review state record")
 	}
 	if err := record.State.Validate(); err != nil {
+		_, historical := forensicHistoricalCompactRecord(payload, lineageID)
 		return CompactRecord{}, &CompactSemanticStateError{LineageID: record.State.LineageID, State: record.State.State, Problem: err.Error(),
-			OutdatedIdentity: errors.Is(err, errCompactSnapshotIdentityMismatch)}
+			OutdatedIdentity: historical}
 	}
 	if lineageID != "" && record.State.LineageID != lineageID {
 		return CompactRecord{}, errors.New("compact state lineage does not match its directory")
@@ -2268,6 +2272,54 @@ func parseCompactRecord(payload []byte, lineageID string) (CompactRecord, error)
 		}
 	}
 	return record, nil
+}
+
+func forensicHistoricalCompactRecord(payload []byte, lineageID string) (historicalCompactForensicRecord, bool) {
+	decoder := json.NewDecoder(bytes.NewReader(payload))
+	decoder.DisallowUnknownFields()
+	var record CompactRecord
+	if err := decoder.Decode(&record); err != nil {
+		return historicalCompactForensicRecord{}, false
+	}
+	var extra any
+	if err := decoder.Decode(&extra); err != io.EOF || record.Schema != compactRecordSchema || !validSHA256(record.Revision) || record.State.LineageID != lineageID {
+		return historicalCompactForensicRecord{}, false
+	}
+	want, _, err := makeCompactRecord(record.State)
+	if err != nil || want.Revision != record.Revision || !errors.Is(record.State.Validate(), errCompactSnapshotIdentityMismatch) {
+		return historicalCompactForensicRecord{}, false
+	}
+	state := record.State
+	for _, snapshot := range []*Snapshot{&state.InitialSnapshot, &state.CurrentSnapshot} {
+		if snapshot.Identity != retiredCompactSnapshotIdentity(*snapshot) {
+			return historicalCompactForensicRecord{}, false
+		}
+		snapshot.Identity = snapshotIdentityForProjection(snapshot.Kind, snapshot.Projection, snapshot.BaseTree, snapshot.CandidateTree, snapshot.PathsDigest, snapshot.IntendedUntrackedProof, snapshot.IntendedUntracked, snapshot.LedgerIDs)
+	}
+	if state.Validate() != nil {
+		return historicalCompactForensicRecord{}, false
+	}
+	sum := sha256.Sum256(payload)
+	return historicalCompactForensicRecord{RawDigest: "sha256:" + hex.EncodeToString(sum[:])}, true
+}
+
+func retiredCompactSnapshotIdentity(snapshot Snapshot) string {
+	hash := sha256.New()
+	if snapshot.Kind == TargetBaseWorkspaceOverlay {
+		hash.Write([]byte("gentle-ai.review-snapshot/base-workspace-overlay/v1\x00"))
+	} else if snapshot.Projection == ProjectionStaged {
+		hash.Write([]byte("gentle-ai.review-snapshot/v2\x00"))
+	} else {
+		hash.Write([]byte("gentle-ai.review-snapshot/v1\x00"))
+	}
+	values := []string{string(snapshot.Kind), snapshot.BaseTree, snapshot.CandidateTree, snapshot.PathsDigest, snapshot.IntendedUntrackedProof}
+	if snapshot.Projection == ProjectionStaged {
+		values = []string{string(snapshot.Kind), string(snapshot.Projection), snapshot.BaseTree, snapshot.CandidateTree, snapshot.PathsDigest, snapshot.IntendedUntrackedProof}
+	}
+	for _, value := range append(values, append(snapshot.IntendedUntracked, snapshot.LedgerIDs...)...) {
+		writeLengthPrefixed(hash, []byte(value))
+	}
+	return "sha256:" + hex.EncodeToString(hash.Sum(nil))
 }
 
 // retiredCompactFieldError reports whether a strict decode failure names a
