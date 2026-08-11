@@ -143,12 +143,8 @@ const ReviewStartConsentDeclinedThisCandidate = "declined_this_candidate"
 // and the fix is to name the base to compare against, not to redo the work.
 const reviewStartEmptyCandidateHint = "the candidate has no pending changes; already-committed work can be reviewed by rerunning review start with --base-ref <commit> naming the base to compare against"
 
-// reviewUndeclaredRuntimeIdentitySlot is what the printed continuation carries
-// when no runtime declared itself. The direct route refuses `--agent` outright
-// ("review start --agent requires a negotiated --contract"), so on that path
-// the caller's identity is genuinely unknown, and a slot is the only honest
-// thing to print: naming a concrete runtime there would be this CLI asserting
-// an identity on the caller's behalf.
+// reviewUndeclaredRuntimeIdentitySlot marks the optional agent segment in Tier C
+// narration until bindNarrationRuntimeIdentity either binds or removes it.
 const reviewUndeclaredRuntimeIdentitySlot = "<your-runtime-identity>"
 
 // reviewNegotiatedStartCommand builds the exact negotiated `review start`
@@ -167,11 +163,11 @@ const reviewUndeclaredRuntimeIdentitySlot = "<your-runtime-identity>"
 // correct outcome for this build.
 func reviewNegotiatedStartCommand(snapshot reviewtransaction.Snapshot, runtimeAgent string) string {
 	identity := strings.TrimSpace(runtimeAgent)
-	if identity == "" {
-		identity = reviewUndeclaredRuntimeIdentitySlot
+	command := fmt.Sprintf("gentle-ai review start --contract %s", ReviewIntegrationContractV2)
+	if identity != "" {
+		command += " --agent " + identity
 	}
-	command := fmt.Sprintf("gentle-ai review start --contract %s --agent %s --target %s --projection %s",
-		ReviewIntegrationContractV2, identity, snapshot.Identity, facadeProjection(snapshot.Projection))
+	command += fmt.Sprintf(" --target %s --projection %s", snapshot.Identity, facadeProjection(snapshot.Projection))
 	switch snapshot.Kind {
 	case reviewtransaction.TargetBaseDiff:
 		command += " --base-ref " + snapshot.BaseTree + " --committed-only"
