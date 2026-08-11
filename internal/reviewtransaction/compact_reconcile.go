@@ -38,10 +38,11 @@ type compactRecoveryEdgeClassification struct {
 	// authorization bound to different content than the successor's own
 	// recorded fields. It is deliberately NOT surfaced on
 	// CompactRecoveryEdgeInspection.AnomalyClasses -- that would advertise a
-	// `review reconcile-authority` continuation this edge would then refuse
-	// (design decision 2) -- so CompactRecoveryEdgeInspection's JSON stays
-	// byte-identical. A caller that needs it re-derives classification
-	// directly from records, exactly as deriveAuthorityDispositionPlan does.
+	// continuation outside that inspection vocabulary (design decision 2) -- so
+	// CompactRecoveryEdgeInspection's JSON stays byte-identical. A caller that
+	// needs it re-derives classification directly from records, exactly as
+	// deriveAuthorityDispositionPlan does; the negotiated failure surface routes
+	// this closed class through `review.repair`.
 	DispositionClass string
 }
 
