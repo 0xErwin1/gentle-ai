@@ -234,6 +234,26 @@ Classified execution persists a route-specific assessment digest, authorization-
 
 Before any correction edit, `correction_plan_required` carries a strict `gentle-ai.review-correction-plan-request/v1` object. Its provider-derived hash binds the current lineage, authority revision, frozen target, correction budget, canonical `fix_finding_ids`, and each accepted finding's location, claim, proof references, classification evidence, evidence class, and causal disposition. The same request is re-derived at the post-forecast revision and retained on `corrected_candidate_unavailable`; reading it does not consume an attempt or correction budget. Consumers plan and edit only from this accepted set, never from raw reviewer output.
 
+### Already-edited pre-plan correction
+
+At `correction_plan_required`, do not submit a retrospective forecast. Read the lineage row from `gentle-ai review status --cwd <repo>`, then run `review abandon` with `operator_disposition`, a maintainer actor, and this exact LF-only V2 binding (no trailing newline):
+
+```text
+gentle-ai.review-abandon-authorization/v2
+lineage=<entries[].lineage_id>
+revision=<entries[].revision>
+snapshot_identity=<entries[].snapshot_identity>
+reason=operator_disposition
+captured_lens_results=<entries[].discarded_work.captured_lens_results comma-joined>
+findings_present=<entries[].discarded_work.findings_present>
+evidence_records_present=<entries[].discarded_work.evidence_records_present>
+actor=<actor>
+```
+
+Run `gentle-ai review abandon --cwd <repo> --lineage <lineage> --expected-revision <revision> --reason operator_disposition --actor <actor> --maintainer-authorization <binding>`.
+
+The audit record quarantines authority and provenance; it creates no receipt and preserves candidate bytes. With RDD enabled, delivery stays denied until a fresh review. This applies only before a forecast or validator result, not post-forecast failed-validator or broader-scope cases.
+
 After a correction forecast and an actual candidate change, STATUS first collects candidate-bound repository/full-suite verification evidence. A `verification_failed` record leaves the correction transaction open: no attempt, changed-line charge, or budget is consumed, and a changed candidate receives a distinct immutable evidence directory without replacing the failed bytes. A `procedural_tooling_failed` record executes a terminal escalation before any retry eligibility is considered. Only `passed` repository evidence unlocks `targeted_validation` with a strict `gentle-ai.review-targeted-validation-request/v1` object.
 
 Execute the targeted request unchanged. Its provider-derived hash binds the lineage, expected authority revision, original target, exact frozen finding IDs, projection, corrected candidate tree and identity, and the exact canonical correction-path subset plus its digest. FINALIZE accepts the correction through one atomic state transition only when the targeted validation and passed repository record bind the same authority revision, candidate identity, paths, and ledger IDs. If the candidate did not materially change, no targeted-validation request is issued and routing stops with `corrected_candidate_unavailable`; consumers must not invent a validator request or another correction forecast. An ordinary lineage admits exactly one changed-target correction attempt, even when its measured delta is zero. It never admits a zero-edit correction or second fix transition.
