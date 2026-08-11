@@ -87,6 +87,41 @@ func TestDiscoverCustomAgents(t *testing.T) {
 	}
 }
 
+func TestDiscoverCustomAgentsExcludesReservedRolesAndDeduplicates(t *testing.T) {
+	dir := t.TempDir()
+	settingsPath := filepath.Join(dir, "opencode.json")
+
+	content := `{
+  "agent": {
+    "general": { "model": "openai/gpt-5" },
+    "explore": { "model": "openai/gpt-5-mini" },
+    "gentle-reviewer": { "model": "openai/gpt-5" },
+    "gentle-worker": { "model": "openai/gpt-5-mini" },
+    "sdd-orchestrator": { "model": "openai/gpt-5" },
+    "a-custom-agent": { "model": "openai/gpt-5-mini" },
+    "z-custom-agent": { "model": "openai/gpt-5" },
+    "a-custom-agent": { "model": "openai/gpt-5" }
+  }
+}`
+	if err := os.WriteFile(settingsPath, []byte(content), 0o644); err != nil {
+		t.Fatalf("write settings: %v", err)
+	}
+
+	got, err := DiscoverCustomAgents(settingsPath)
+	if err != nil {
+		t.Fatalf("DiscoverCustomAgents() error = %v", err)
+	}
+	want := []string{"a-custom-agent", "z-custom-agent"}
+	if len(got) != len(want) {
+		t.Fatalf("DiscoverCustomAgents() = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("DiscoverCustomAgents()[%d] = %q, want %q", i, got[i], want[i])
+		}
+	}
+}
+
 func TestReadCurrentModelAssignmentsIncludesReviewAgentsFromJSONC(t *testing.T) {
 	dir := t.TempDir()
 	settingsPath := filepath.Join(dir, "opencode.json")

@@ -1419,6 +1419,24 @@ func TestModelPickerRowsForState_WithCustomAgents(t *testing.T) {
 	}
 }
 
+func TestModelPickerRowsForState_ProfileExcludesCustomAgents(t *testing.T) {
+	state := ModelPickerState{
+		ForProfile:   true,
+		CustomAgents: []string{"custom-profile-agent"},
+	}
+	want := ModelPickerRowsForProfile()
+	got := ModelPickerRowsForState(state)
+
+	if len(got) != len(want) {
+		t.Fatalf("ModelPickerRowsForState(profile) len = %d, want %d; got %v", len(got), len(want), got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("ModelPickerRowsForState(profile)[%d] = %q, want %q; got %v", i, got[i], want[i], got)
+		}
+	}
+}
+
 func TestNewModelPickerState_DiscoversCustomAgents(t *testing.T) {
 	dir := t.TempDir()
 	settingsPath := filepath.Join(dir, "opencode.json")
@@ -1467,6 +1485,26 @@ func TestApplyAssignment_SetAllCustomAgents(t *testing.T) {
 	res := applyAssignment(state, assignments, assigned)
 	if res["custom-1"] != assigned || res["custom-2"] != assigned {
 		t.Fatalf("applyAssignment Set all custom agents = %v, want assigned %v for custom-1 and custom-2", res, assigned)
+	}
+}
+
+func TestHandleModelPickerNav_SetAllCustomAgentsWithoutEffortAssignsEachAgent(t *testing.T) {
+	state := makeTestState(0)
+	state.CustomAgents = []string{"custom-1", "custom-2"}
+	for i, row := range ModelPickerRowsForState(*state) {
+		if row == "Set all custom agents" {
+			state.SelectedPhaseIdx = i
+			break
+		}
+	}
+
+	handled, assignments := HandleModelPickerNav("enter", state, nil)
+	want := model.ModelAssignment{ProviderID: "test-provider", ModelID: "model-alpha"}
+	if !handled || assignments["custom-1"] != want || assignments["custom-2"] != want {
+		t.Fatalf("HandleModelPickerNav() handled=%v assignments=%v, want each custom agent assigned %v", handled, assignments, want)
+	}
+	if state.AllCustomAgentsModel != want {
+		t.Fatalf("AllCustomAgentsModel = %v, want %v", state.AllCustomAgentsModel, want)
 	}
 }
 
