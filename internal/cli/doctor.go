@@ -76,7 +76,7 @@ var (
 		return filepath.SplitList(os.Getenv("PATH"))
 	}
 	osExecutableDoctor = os.Executable
-	engramProbeStdioFn = engram.ProbeStdioWithTimeout
+	engramProbeStdioFn = engram.ProbeStdio
 	httpGetFn          = func(url string, timeout time.Duration) (int, error) {
 		resp, err := (&http.Client{Timeout: timeout}).Get(url) //nolint:noctx
 		if err != nil {

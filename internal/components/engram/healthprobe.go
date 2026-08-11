@@ -110,13 +110,9 @@ type StdioCommand struct {
 // doctor's PATH: an absolute command in the config must be the process that is
 // checked. Only a bare Engram command maps to ErrNotInstalled; a missing path
 // or custom command is a broken configured transport.
-func ProbeStdio(ctx context.Context, command string, args ...string) error {
-	return ProbeStdioWithTimeout(ctx, 0, command, args...)
-}
-
-// ProbeStdioWithTimeout is ProbeStdio bounded by the configured deadline. A
-// zero timeout falls back to the package default.
-func ProbeStdioWithTimeout(ctx context.Context, timeout time.Duration, command string, args ...string) error {
+// The timeout is the one persisted alongside the command in the agent's own
+// MCP configuration; zero falls back to the package default.
+func ProbeStdio(ctx context.Context, timeout time.Duration, command string, args ...string) error {
 	err := stdioHandshakeFn(ctx, stdioProbeDeadline(timeout), command, args...)
 	if isBareEngramCommand(command) && errors.Is(err, exec.ErrNotFound) {
 		return ErrNotInstalled
