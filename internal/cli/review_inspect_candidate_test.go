@@ -8,7 +8,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -177,10 +176,7 @@ func TestReviewInspectCandidateRejectsOversizedObject(t *testing.T) {
 
 func TestReviewInspectCandidateInspectsProviderBoundCorrectedTree(t *testing.T) {
 	repo, args, ready, store, index := newTargetedCandidateInspectionReview(t)
-	before, err := store.Load()
-	if err != nil {
-		t.Fatal(err)
-	}
+	before := readReviewOperationFile(t, store.StatePath())
 	writeReviewStartCandidate(t, repo, "candidate.go", "package candidate\n\nfunc value() int { return 3 }\n", 0o644)
 	t.Chdir(t.TempDir())
 	var output bytes.Buffer
@@ -190,9 +186,8 @@ func TestReviewInspectCandidateInspectsProviderBoundCorrectedTree(t *testing.T) 
 	if output.String() != "package candidate\n\nfunc value() int { return 2 }\n" {
 		t.Fatalf("corrected immutable inspection = %q", output.String())
 	}
-	after, err := store.Load()
-	if err != nil || !reflect.DeepEqual(after, before) {
-		t.Fatalf("inspection authority changed=%t, err=%v", !reflect.DeepEqual(after, before), err)
+	if after := readReviewOperationFile(t, store.StatePath()); !bytes.Equal(after, before) {
+		t.Fatal("inspection changed authority bytes")
 	}
 
 	validation := filepath.Join(t.TempDir(), "validation.json")
@@ -297,15 +292,8 @@ func newTargetedCandidateInspectionReview(t *testing.T) (string, []string, Revie
 	}
 	ready := submissionDescriptorStatus(t, repo, started.LineageID)
 	input := submissionDescriptorInput(t, ready)
-	if len(input.Arguments) != 6 {
-		t.Fatalf("targeted inspection arguments = %#v, want six provider-issued bindings", input.Arguments)
-	}
-	arguments, err := reviewTransitionArgumentMap(input.Arguments)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return repo, []string{"--repository-context", arguments["repository-context"], "--expected-revision", arguments["expected-revision"],
-		"--lineage", arguments["lineage"], "--target", arguments["target"], "--purpose", arguments["purpose"], "--request-hash", arguments["request-hash"]}, ready, store, 0
+	return repo, []string{"--repository-context", input.Arguments[3].Value, "--expected-revision", input.Arguments[1].Value,
+		"--lineage", input.Arguments[0].Value, "--target", input.Arguments[2].Value, "--purpose", input.Arguments[4].Value, "--request-hash", input.Arguments[5].Value}, ready, store, 0
 }
 
 func replaceInspectionArg(args []string, name, value string) []string {
