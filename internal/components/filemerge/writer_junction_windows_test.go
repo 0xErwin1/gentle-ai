@@ -36,6 +36,32 @@ func TestWriteFileAtomicFollowsDirectoryJunction(t *testing.T) {
 	}
 }
 
+func TestWriteFileAtomicFollowsRelativeDirectoryJunction(t *testing.T) {
+	root := t.TempDir()
+	targetName := "relative-target-" + filepath.Base(root)
+	target := filepath.Join(root, targetName)
+	if err := os.Mkdir(target, 0o755); err != nil {
+		t.Fatalf("Mkdir(target) error = %v", err)
+	}
+
+	junction := filepath.Join(root, "junction")
+	createDirectoryJunction(t, junction, targetName)
+
+	content := []byte("relative junction payload\n")
+	path := filepath.Join(junction, "config.txt")
+	if _, err := WriteFileAtomic(path, content, 0o644); err != nil {
+		t.Fatalf("WriteFileAtomic() through relative directory junction error = %v", err)
+	}
+
+	got, err := os.ReadFile(filepath.Join(target, "config.txt"))
+	if err != nil {
+		t.Fatalf("ReadFile(target/config.txt) error = %v", err)
+	}
+	if !bytes.Equal(got, content) {
+		t.Fatalf("target content = %q, want %q", got, content)
+	}
+}
+
 func TestEnsureAtomicParentDirRejectsUnsafeDirectoryJunctionTargets(t *testing.T) {
 	tests := []struct {
 		name          string
@@ -108,7 +134,9 @@ func TestWriteFileAtomicRejectsJunctionLoop(t *testing.T) {
 
 func createDirectoryJunction(t *testing.T, link, target string) {
 	t.Helper()
-	output, err := exec.Command("cmd.exe", "/d", "/c", "mklink", "/J", link, target).CombinedOutput()
+	command := exec.Command("cmd.exe", "/d", "/c", "mklink", "/J", link, target)
+	command.Dir = filepath.Dir(link)
+	output, err := command.CombinedOutput()
 	if err != nil {
 		t.Fatalf("mklink /J %q %q error = %v: %s", link, target, err, output)
 	}
