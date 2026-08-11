@@ -640,6 +640,21 @@ func baseRefTargetResolutionError(message string) error {
 	return &GateTargetResolutionError{RequiredInput: "base_ref", Err: errors.New(message)}
 }
 
+// refusal:by-design world-action: malformed remote output cannot be repaired by a review command; the operator must correct the remote boundary.
+var ErrMalformedAdvertisedRemoteOutput = errors.New("malformed advertised remote output")
+
+type GitAdvertisedRemoteOutputError struct {
+	Remote string
+	Ref    string
+	Output string
+}
+
+func (err *GitAdvertisedRemoteOutputError) Error() string {
+	return fmt.Sprintf("git ls-remote --heads %s %s returned malformed advertised remote output: %q", err.Remote, err.Ref, err.Output)
+}
+
+func (err *GitAdvertisedRemoteOutputError) Unwrap() error { return ErrMalformedAdvertisedRemoteOutput }
+
 func resolveTrackingUpstreamBase(ctx context.Context, repo string) (string, string, string, error) {
 	branchOutput, err := runGit(ctx, repo, nil, nil, "symbolic-ref", "--quiet", "--short", "HEAD")
 	if err != nil {
@@ -678,10 +693,6 @@ func resolveAdvertisedSelector(ctx context.Context, repo, selector string, sourc
 	remotes := strings.Fields(string(output))
 	matches := []PrePRBoundarySelection{}
 	for _, remote := range remotes {
-		identity, identityErr := remoteRepositoryIdentity(ctx, repo, remote)
-		if identityErr != nil {
-			continue
-		}
 		branch := selector
 		if strings.HasPrefix(selector, remote+"/") {
 			branch = strings.TrimPrefix(selector, remote+"/")
@@ -691,15 +702,24 @@ func resolveAdvertisedSelector(ctx context.Context, repo, selector string, sourc
 		if _, err := runGit(ctx, repo, nil, nil, "check-ref-format", "--branch", branch); err != nil {
 			continue
 		}
+		identity, identityErr := remoteRepositoryIdentity(ctx, repo, remote)
+		if identityErr != nil {
+			return PrePRBoundarySelection{}, identityErr
+		}
 		remoteOutput, queryErr := runGit(ctx, repo, nil, nil, "ls-remote", "--heads", remote, branch)
 		if queryErr != nil {
+			return PrePRBoundarySelection{}, queryErr
+		}
+		advertisedOutput := strings.TrimSpace(string(remoteOutput))
+		if advertisedOutput == "" {
 			continue
 		}
-		for _, line := range strings.Split(string(remoteOutput), "\n") {
+		for _, line := range strings.Split(advertisedOutput, "\n") {
 			fields := strings.Fields(line)
-			if len(fields) == 2 && strings.HasPrefix(fields[1], "refs/heads/") && fields[1] == "refs/heads/"+branch {
-				matches = append(matches, PrePRBoundarySelection{Source: source, Selector: selector, Commit: fields[0], Remote: remote, RemoteRef: fields[1], RemoteIdentity: identity})
+			if len(fields) != 2 || !validGitTree(fields[0]) || fields[1] != "refs/heads/"+branch {
+				return PrePRBoundarySelection{}, &GitAdvertisedRemoteOutputError{Remote: remote, Ref: branch, Output: strings.TrimSpace(line)}
 			}
+			matches = append(matches, PrePRBoundarySelection{Source: source, Selector: selector, Commit: fields[0], Remote: remote, RemoteRef: fields[1], RemoteIdentity: identity})
 		}
 	}
 	if len(matches) != 1 {
@@ -721,9 +741,13 @@ func advertisedRemoteRef(ctx context.Context, repo, remote, ref, selector string
 	if err != nil {
 		return PrePRBoundarySelection{}, fmt.Errorf("query base remote %q: %w", remote, err)
 	}
-	fields := strings.Fields(string(output))
-	if len(fields) != 2 || fields[1] != ref || !validGitTree(fields[0]) {
+	advertisedOutput := strings.TrimSpace(string(output))
+	if advertisedOutput == "" {
 		return PrePRBoundarySelection{}, baseRefTargetResolutionError(fmt.Sprintf("base selector %q is not a current advertised remote branch; pass --base-ref <remote>/<branch>", selector))
+	}
+	fields := strings.Fields(advertisedOutput)
+	if len(fields) != 2 || fields[1] != ref || !validGitTree(fields[0]) {
+		return PrePRBoundarySelection{}, &GitAdvertisedRemoteOutputError{Remote: remote, Ref: ref, Output: advertisedOutput}
 	}
 	local, err := resolveCommit(ctx, repo, fields[0])
 	if err != nil || local != fields[0] {
@@ -734,7 +758,10 @@ func advertisedRemoteRef(ctx context.Context, repo, remote, ref, selector string
 
 func remoteRepositoryIdentity(ctx context.Context, repo, remote string) (string, error) {
 	output, err := runGit(ctx, repo, nil, nil, "config", "--get", "remote."+remote+".url")
-	if err != nil || strings.TrimSpace(string(output)) == "" {
+	if err != nil {
+		return "", err
+	}
+	if strings.TrimSpace(string(output)) == "" {
 		return "", errors.New("publication remote URL is not configured")
 	}
 	return repositoryLocationIdentity(ctx, repo, strings.TrimSpace(string(output)))

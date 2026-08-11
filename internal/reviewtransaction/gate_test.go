@@ -8,10 +8,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 )
 
 func TestNativePrePRGateAllowsContentAndAttestedCompatibleBaseAdvance(t *testing.T) {
@@ -795,6 +799,268 @@ func TestDefaultPrePushBaseKeepsInfrastructureErrorsUntyped(t *testing.T) {
 	if !errors.Is(upstreamErr, context.Canceled) || errors.As(upstreamErr, &targetErr) {
 		t.Fatalf("cancelled upstream lookup error = %T %v", upstreamErr, upstreamErr)
 	}
+}
+
+func TestResolveAdvertisedSelectorPreservesOperationalFailures(t *testing.T) {
+	for _, tt := range []struct {
+		name        string
+		prepare     func(*testing.T, string)
+		injectError bool
+		wantCommand string
+	}{
+		{name: "remote identity", injectError: true, wantCommand: "config --get remote.origin.url"},
+		{name: "advertised query", prepare: func(t *testing.T, repo string) {
+			gitSnapshot(t, repo, "remote", "set-url", "origin", filepath.Join(t.TempDir(), "missing.git"))
+		}, wantCommand: "ls-remote --heads origin main"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			repo := initSnapshotRepo(t)
+			branch := currentBranch(context.Background(), repo)
+			configurePublicationRemote(t, repo, branch)
+			if tt.prepare != nil {
+				tt.prepare(t, repo)
+			}
+
+			if tt.injectError {
+				original := gitCommandContext
+				t.Setenv("GENTLE_AI_TEST_GIT_PATH_FAIL", "1")
+				gitCommandContext = func(ctx context.Context, name string, args ...string) *exec.Cmd {
+					if slicesContain(args, "config") && slicesContain(args, "remote.origin.url") {
+						return exec.CommandContext(ctx, os.Args[0], "-test.run=^TestGitAuthorityPathHelperProcess$")
+					}
+					return original(ctx, name, args...)
+				}
+				t.Cleanup(func() { gitCommandContext = original })
+			}
+
+			_, err := resolveAdvertisedSelector(context.Background(), repo, "origin/"+branch, PrePRBoundaryExplicit)
+			var gitErr *GitCommandError
+			var targetErr *GateTargetResolutionError
+			if !errors.As(err, &gitErr) || errors.As(err, &targetErr) || strings.Join(gitErr.Args, " ") != strings.Replace(tt.wantCommand, "main", branch, 1) {
+				t.Fatalf("%s error = %T %v, want operational %q", tt.name, err, err, strings.Replace(tt.wantCommand, "main", branch, 1))
+			}
+		})
+	}
+}
+
+func TestResolveAdvertisedSelectorSkipsUnselectedRemoteIdentityFailure(t *testing.T) {
+	repo := initSnapshotRepo(t)
+	branch := currentBranch(context.Background(), repo)
+	configurePublicationRemote(t, repo, branch)
+	gitSnapshot(t, repo, "remote", "add", "backup", filepath.Join(t.TempDir(), "backup.git"))
+
+	original := gitCommandContext
+	t.Setenv("GENTLE_AI_TEST_GIT_PATH_FAIL", "1")
+	gitCommandContext = func(ctx context.Context, name string, args ...string) *exec.Cmd {
+		if slicesContain(args, "config") && slicesContain(args, "remote.backup.url") {
+			return exec.CommandContext(ctx, os.Args[0], "-test.run=^TestGitAuthorityPathHelperProcess$")
+		}
+		return original(ctx, name, args...)
+	}
+	t.Cleanup(func() { gitCommandContext = original })
+
+	selection, err := resolveAdvertisedSelector(context.Background(), repo, "origin/"+branch, PrePRBoundaryExplicit)
+	if err != nil {
+		t.Fatalf("explicit selected remote resolution error = %T %v", err, err)
+	}
+	if selection.Remote != "origin" || selection.RemoteRef != "refs/heads/"+branch {
+		t.Fatalf("selection = %#v, want origin/%s", selection, branch)
+	}
+}
+
+func TestResolveAdvertisedSelectorClassifiesZeroAndMultipleMatches(t *testing.T) {
+	for _, tt := range []struct {
+		name      string
+		selector  string
+		configure func(*testing.T, string, string)
+	}{
+		{name: "zero", selector: "missing"},
+		{name: "multiple", selector: "main", configure: func(t *testing.T, repo, branch string) {
+			upstream := filepath.Join(t.TempDir(), "upstream.git")
+			gitSnapshot(t, repo, "clone", "--bare", repo, upstream)
+			gitSnapshot(t, repo, "remote", "add", "upstream", upstream)
+		}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			repo := initSnapshotRepo(t)
+			branch := currentBranch(context.Background(), repo)
+			configurePublicationRemote(t, repo, branch)
+			if tt.configure != nil {
+				tt.configure(t, repo, branch)
+			}
+			selector := tt.selector
+			if selector == "main" {
+				selector = branch
+			}
+
+			_, err := resolveAdvertisedSelector(context.Background(), repo, selector, PrePRBoundaryExplicit)
+			var targetErr *GateTargetResolutionError
+			var gitErr *GitCommandError
+			var processErr *GitProcessControlError
+			if !errors.As(err, &targetErr) || targetErr.RequiredInput != "base_ref" || errors.As(err, &gitErr) || errors.As(err, &processErr) {
+				t.Fatalf("%s selector error = %T %v, want semantic target resolution", tt.name, err, err)
+			}
+		})
+	}
+}
+
+func TestResolveAdvertisedSelectorClassifiesAdvertisedOutput(t *testing.T) {
+	for _, tt := range []struct {
+		name          string
+		output        func(string, string) string
+		wantMalformed bool
+		wantSelection bool
+	}{
+		{name: "blank output", output: func(_, _ string) string { return "\n" }},
+		{name: "malformed record", output: func(_, _ string) string { return "not-a-record\n" }, wantMalformed: true},
+		{name: "unexpected record", output: func(branch, commit string) string {
+			return commit + " refs/tags/" + branch + "\n"
+		}, wantMalformed: true},
+		{name: "one valid record", output: func(branch, commit string) string {
+			return commit + " refs/heads/" + branch + "\n"
+		}, wantSelection: true},
+		{name: "multiple valid records", output: func(branch, commit string) string {
+			line := commit + " refs/heads/" + branch + "\n"
+			return line + line
+		}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			repo := initSnapshotRepo(t)
+			branch := currentBranch(context.Background(), repo)
+			configurePublicationRemote(t, repo, branch)
+			commit := trimGit(gitSnapshot(t, repo, "rev-parse", "HEAD"))
+			mockLsRemoteOutput(t, tt.output(branch, commit))
+
+			selection, err := resolveAdvertisedSelector(context.Background(), repo, "origin/"+branch, PrePRBoundaryExplicit)
+			if tt.wantMalformed {
+				var malformed *GitAdvertisedRemoteOutputError
+				var targetErr *GateTargetResolutionError
+				if !errors.As(err, &malformed) || !errors.Is(err, ErrMalformedAdvertisedRemoteOutput) || errors.As(err, &targetErr) {
+					t.Fatalf("malformed output error = %T %v, want typed operational error", err, err)
+				}
+				return
+			}
+			if tt.wantSelection {
+				if err != nil || selection.Commit != commit || selection.RemoteRef != "refs/heads/"+branch {
+					t.Fatalf("valid output selection = %#v, %v; want advertised %s", selection, err, commit)
+				}
+				return
+			}
+			var targetErr *GateTargetResolutionError
+			var malformed *GitAdvertisedRemoteOutputError
+			if !errors.As(err, &targetErr) || errors.As(err, &malformed) || targetErr.RequiredInput != "base_ref" {
+				t.Fatalf("semantic output error = %T %v, want target resolution", err, err)
+			}
+		})
+	}
+}
+
+func TestAdvertisedRemoteRefRejectsMalformedSuccessfulOutput(t *testing.T) {
+	repo := initSnapshotRepo(t)
+	branch := currentBranch(context.Background(), repo)
+	configurePublicationRemote(t, repo, branch)
+	mockLsRemoteOutput(t, "not-a-record\n")
+
+	_, err := advertisedRemoteRef(context.Background(), repo, "origin", "refs/heads/"+branch, "origin/"+branch, PrePRBoundaryExplicit)
+	var malformed *GitAdvertisedRemoteOutputError
+	var targetErr *GateTargetResolutionError
+	if !errors.As(err, &malformed) || !errors.Is(err, ErrMalformedAdvertisedRemoteOutput) || errors.As(err, &targetErr) {
+		t.Fatalf("malformed advertised remote ref error = %T %v, want typed operational error", err, err)
+	}
+}
+
+func mockLsRemoteOutput(t *testing.T, output string) {
+	t.Helper()
+	original := gitCommandContext
+	t.Setenv("GENTLE_AI_TEST_GIT_PATH_OUTPUT", base64.StdEncoding.EncodeToString([]byte(output)))
+	gitCommandContext = func(ctx context.Context, name string, args ...string) *exec.Cmd {
+		if slicesContain(args, "ls-remote") && slicesContain(args, "--heads") {
+			return exec.CommandContext(ctx, os.Args[0], "-test.run=^TestGitAuthorityPathHelperProcess$")
+		}
+		return original(ctx, name, args...)
+	}
+	t.Cleanup(func() { gitCommandContext = original })
+}
+
+func TestResolveAdvertisedSelectorPreservesAdvertisedQueryCancellation(t *testing.T) {
+	repo := initSnapshotRepo(t)
+	branch := currentBranch(context.Background(), repo)
+	configurePublicationRemote(t, repo, branch)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	started, done := startBlockedAdvertisedSelector(t, ctx, repo, branch)
+	<-started
+	cancel()
+	assertAdvertisedQueryTimeout(t, <-done, branch, context.Canceled)
+}
+
+func TestResolveAdvertisedSelectorPreservesAdvertisedQueryTimeout(t *testing.T) {
+	repo := initSnapshotRepo(t)
+	branch := currentBranch(context.Background(), repo)
+	configurePublicationRemote(t, repo, branch)
+	ctx, cancel := context.WithTimeout(context.Background(), 250*time.Millisecond)
+	defer cancel()
+	started, done := startBlockedAdvertisedSelector(t, ctx, repo, branch)
+	<-started
+	assertAdvertisedQueryTimeout(t, <-done, branch, context.DeadlineExceeded)
+}
+
+func startBlockedAdvertisedSelector(t *testing.T, ctx context.Context, repo, branch string) (<-chan struct{}, <-chan error) {
+	t.Helper()
+	started := mockBlockingLsRemote(t)
+	done := make(chan error, 1)
+	go func() {
+		_, err := resolveAdvertisedSelector(ctx, repo, "origin/"+branch, PrePRBoundaryExplicit)
+		done <- err
+	}()
+	return started, done
+}
+
+func assertAdvertisedQueryTimeout(t *testing.T, err error, branch string, cause error) {
+	t.Helper()
+	var timeout *GitCommandTimeoutError
+	var targetErr *GateTargetResolutionError
+	if !errors.As(err, &timeout) || !errors.Is(err, ErrGitCommandTimeout) || !errors.Is(err, cause) || errors.As(err, &targetErr) || !timeout.Remote || !timeout.Aggregate {
+		t.Fatalf("advertised query timeout = %T %#v, want preserved remote cause", err, timeout)
+	}
+	if strings.Join(timeout.Args, " ") != "ls-remote --heads origin "+branch {
+		t.Fatalf("advertised query timeout args = %q", timeout.Args)
+	}
+}
+
+func mockBlockingLsRemote(t *testing.T) <-chan struct{} {
+	t.Helper()
+	original := gitCommandContext
+	reader, writer, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	started := make(chan struct{})
+	var once sync.Once
+	t.Setenv("GENTLE_AI_TEST_LS_REMOTE_BLOCK", "1")
+	gitCommandContext = func(ctx context.Context, name string, args ...string) *exec.Cmd {
+		if slicesContain(args, "ls-remote") && slicesContain(args, "--heads") {
+			once.Do(func() { close(started) })
+			command := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestGitAdvertisedRemoteQueryBlockHelper$")
+			command.Stdin = reader
+			return command
+		}
+		return original(ctx, name, args...)
+	}
+	t.Cleanup(func() {
+		gitCommandContext = original
+		_ = writer.Close()
+		_ = reader.Close()
+	})
+	return started
+}
+
+func TestGitAdvertisedRemoteQueryBlockHelper(t *testing.T) {
+	if os.Getenv("GENTLE_AI_TEST_LS_REMOTE_BLOCK") != "1" {
+		return
+	}
+	_, _ = io.Copy(io.Discard, os.Stdin)
+	os.Exit(0)
 }
 
 func TestExplicitPrePushBasePropagatesConfiguredTrackingResolutionError(t *testing.T) {
