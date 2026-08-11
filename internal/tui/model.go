@@ -1270,7 +1270,8 @@ func (m Model) handleKeyPress(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.ModelPicker.Mode == screens.ModePhaseList && keyStr == "backspace" &&
 		len(m.ModelPicker.AvailableIDs) > 0 {
 		rows := screens.ModelPickerRowsForProfile()
-		if m.Cursor < len(rows) && !screens.IsModelPickerSeparatorRow(rows[m.Cursor]) {
+		row, ok := screens.ModelPickerRowAt(m.ModelPicker, m.Cursor)
+		if m.Cursor < len(rows) && ok && row.Kind != screens.ModelPickerRowKindSeparator {
 			m.ModelPicker.SelectedPhaseIdx = m.Cursor
 			m.Selection.ModelAssignments = screens.ClearModelPickerAssignment(&m.ModelPicker, m.Selection.ModelAssignments)
 			return m, nil
@@ -1629,8 +1630,8 @@ func (m Model) shouldSkipModelPickerSeparator() bool {
 }
 
 func (m Model) isModelPickerSeparatorCursor() bool {
-	rows := screens.ModelPickerRowsForState(m.ModelPicker)
-	return m.Cursor >= 0 && m.Cursor < len(rows) && screens.IsModelPickerSeparatorRow(rows[m.Cursor])
+	row, ok := screens.ModelPickerRowAt(m.ModelPicker, m.Cursor)
+	return ok && row.Kind == screens.ModelPickerRowKindSeparator
 }
 
 func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
@@ -2192,7 +2193,7 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 		rows := screens.ModelPickerRowsForState(m.ModelPicker)
 		if m.Cursor < len(rows) {
 			// Skip separator row — it is not actionable.
-			if screens.IsModelPickerSeparatorRow(rows[m.Cursor]) {
+			if row, ok := screens.ModelPickerRowAt(m.ModelPicker, m.Cursor); ok && row.Kind == screens.ModelPickerRowKindSeparator {
 				return m, nil
 			}
 			// Enter sub-selection: pick provider then model.
@@ -4585,7 +4586,7 @@ func (m Model) confirmProfileCreate() (tea.Model, tea.Cmd) {
 		}
 		rows := screens.ModelPickerRowsForProfile()
 		if m.Cursor < len(rows) {
-			if screens.IsModelPickerSeparatorRow(rows[m.Cursor]) {
+			if row, ok := screens.ModelPickerRowAt(m.ModelPicker, m.Cursor); ok && row.Kind == screens.ModelPickerRowKindSeparator {
 				return m, nil
 			}
 			// Enter sub-selection: pick provider then model.
