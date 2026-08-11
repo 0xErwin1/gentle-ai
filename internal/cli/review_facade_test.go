@@ -2694,8 +2694,10 @@ func TestReviewFacadeFinalizeStateValidating(t *testing.T) {
 		}, io.Discard); err != nil {
 			t.Fatal(err)
 		}
+		// Candidate-and-revision-addressed since issue #2623.
 		canonical := filepath.Join(store.Dir, reviewtransaction.CompactFinalEvidenceDir,
-			strings.TrimPrefix(before.State.CurrentSnapshot.Identity, "sha256:"), reviewtransaction.CompactFinalEvidenceFile)
+			strings.TrimPrefix(before.State.CurrentSnapshot.Identity, "sha256:"),
+			strings.TrimPrefix(before.Revision, "sha256:"), reviewtransaction.CompactFinalEvidenceFile)
 		if err := os.WriteFile(canonical, nil, 0o600); err != nil {
 			t.Fatal(err)
 		}
