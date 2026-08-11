@@ -1504,6 +1504,17 @@ func resolveWorkspaceRoot(options ResolveOptions) (string, error) {
 	if !info.IsDir() {
 		return "", fmt.Errorf("workspace root is not a directory: %s", root)
 	}
+	// A filesystem root is never a workspace, and answering as if it might be
+	// is worse than refusing (#2790). A failure continuation that resolved its
+	// working directory to the drive root used to get a successful, empty,
+	// entirely plausible status back, so the operator read "SDD lost my
+	// project" instead of "that command was pointed at the wrong directory".
+	//
+	// Nothing legitimate is rejected: no project lives at `/` or at `C:\`, so
+	// there is no false positive to weigh against the confusion this prevents.
+	if filepath.Dir(root) == root {
+		return "", fmt.Errorf("workspace root %q is a filesystem root, which never holds an SDD project: whatever produced this call passed the wrong --cwd. Rerun it against the project: `gentle-ai sdd-status --cwd \"<project-directory>\" --json`. If the change is Engram-backed, this dispatcher is blind to it and should not be called at all", root)
+	}
 	return root, nil
 }
 
