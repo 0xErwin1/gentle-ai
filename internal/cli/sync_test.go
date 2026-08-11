@@ -749,6 +749,113 @@ func TestComponentSyncStepRunsPersonaInjectForSync(t *testing.T) {
 	}
 }
 
+func TestComponentSyncStepWritesPiPersonaToWorkspaceAndReportsChangedFile(t *testing.T) {
+	home := t.TempDir()
+	workspace := t.TempDir()
+	path := filepath.Join(workspace, ".pi", "gentle-ai", "persona.json")
+	var changed []string
+	step := componentSyncStep{
+		id:           "sync:persona",
+		component:    model.ComponentPersona,
+		homeDir:      home,
+		workspaceDir: workspace,
+		agents:       []model.AgentID{model.AgentPi},
+		selection:    model.Selection{Persona: model.PersonaNeutral},
+		changedFiles: &changed,
+	}
+
+	if err := step.Run(); err != nil {
+		t.Fatalf("first Pi persona sync error = %v", err)
+	}
+	if !containsPath(changed, path) {
+		t.Fatalf("first Pi persona sync changed files = %v, missing %q", changed, path)
+	}
+	if _, err := os.Stat(filepath.Join(home, ".pi", "gentle-ai", "persona.json")); !os.IsNotExist(err) {
+		t.Fatalf("Pi sync wrote a home-scoped persona config; stat err = %v", err)
+	}
+	if got := readTextFile(t, path); got != "{\n  \"mode\": \"neutral\"\n}\n" {
+		t.Fatalf("Pi persona config = %q, want neutral mode", got)
+	}
+
+	changed = nil
+	if err := step.Run(); err != nil {
+		t.Fatalf("second Pi persona sync error = %v", err)
+	}
+	if len(changed) != 0 {
+		t.Fatalf("second Pi persona sync changed files = %v, want none", changed)
+	}
+}
+
+func TestSyncPersonaPathsAndBackupTargetsTrackOnlyPiWorkspaceConfig(t *testing.T) {
+	home := t.TempDir()
+	workspace := t.TempDir()
+	selection := model.Selection{
+		Agents:     []model.AgentID{model.AgentPi},
+		Components: []model.ComponentID{model.ComponentPersona},
+		Persona:    model.PersonaNeutral,
+	}
+	adapters := resolveAdapters(selection.Agents)
+	want := filepath.Join(workspace, ".pi", "gentle-ai", "persona.json")
+	unwanted := filepath.Join(home, ".pi", "gentle-ai", "persona.json")
+
+	paths := syncPersonaPathsWithWorkspace(home, workspace, selection, adapters)
+	if !containsPath(paths, want) || containsPath(paths, unwanted) {
+		t.Fatalf("sync persona paths = %v, want only workspace Pi config %q", paths, want)
+	}
+	targets, err := syncBackupTargets(home, workspace, selection, adapters)
+	if err != nil {
+		t.Fatalf("syncBackupTargets() error = %v", err)
+	}
+	if !containsPath(targets, want) || containsPath(targets, unwanted) {
+		t.Fatalf("sync backup targets = %v, want only workspace Pi config %q", targets, want)
+	}
+
+	selection.Persona = model.PersonaCustom
+	if paths := syncPersonaPathsWithWorkspace(home, workspace, selection, adapters); len(paths) != 0 {
+		t.Fatalf("custom sync persona paths = %v, want none", paths)
+	}
+}
+
+func TestPiPersonaSyncSnapshotRestoresWorkspaceConfig(t *testing.T) {
+	home := t.TempDir()
+	workspace := t.TempDir()
+	path := filepath.Join(workspace, ".pi", "gentle-ai", "persona.json")
+	mustWriteFile(t, path, []byte("{\n  \"mode\": \"gentleman\"\n}\n"))
+
+	selection := model.Selection{
+		Agents:     []model.AgentID{model.AgentPi},
+		Components: []model.ComponentID{model.ComponentPersona},
+		Persona:    model.PersonaNeutral,
+	}
+	targets, err := syncBackupTargets(home, workspace, selection, resolveAdapters(selection.Agents))
+	if err != nil {
+		t.Fatalf("syncBackupTargets() error = %v", err)
+	}
+	before, err := snapshotSyncFiles(targets)
+	if err != nil {
+		t.Fatalf("snapshotSyncFiles() error = %v", err)
+	}
+	step := componentSyncStep{
+		component:    model.ComponentPersona,
+		homeDir:      home,
+		workspaceDir: workspace,
+		agents:       selection.Agents,
+		selection:    selection,
+	}
+	if err := step.Run(); err != nil {
+		t.Fatalf("Pi persona sync error = %v", err)
+	}
+	if got := readTextFile(t, path); got == "{\n  \"mode\": \"gentleman\"\n}\n" {
+		t.Fatal("Pi persona sync did not change the workspace config before rollback")
+	}
+	if err := restoreSyncFiles(before); err != nil {
+		t.Fatalf("restoreSyncFiles() error = %v", err)
+	}
+	if got, want := readTextFile(t, path), "{\n  \"mode\": \"gentleman\"\n}\n"; got != want {
+		t.Fatalf("restored Pi persona config = %q, want %q", got, want)
+	}
+}
+
 func TestComponentSyncStepRunsSDDInject(t *testing.T) {
 	home := t.TempDir()
 
@@ -1048,6 +1155,23 @@ func TestSyncBackupTargetsIncludeClaudeEngramLegacyMigrationSource(t *testing.T)
 	want := filepath.Join(home, ".claude", "mcp", "engram.json")
 	if !containsPath(targets, want) {
 		t.Fatalf("sync backup targets missing legacy migration source %q: %v", want, targets)
+	}
+}
+
+func TestSyncBackupTargetsIncludeClaudeContext7CleanupPath(t *testing.T) {
+	home := t.TempDir()
+	selection := model.Selection{
+		Agents:     []model.AgentID{model.AgentClaudeCode},
+		Components: []model.ComponentID{model.ComponentContext7},
+	}
+
+	targets, err := syncBackupTargets(home, "", selection, resolveAdapters(selection.Agents))
+	if err != nil {
+		t.Fatalf("syncBackupTargets() error = %v", err)
+	}
+	want := filepath.Join(home, ".claude", "settings.json")
+	if !containsPath(targets, want) {
+		t.Fatalf("sync backup targets missing Claude Context7 cleanup path %q: %v", want, targets)
 	}
 }
 
@@ -3946,6 +4070,129 @@ func TestRunSyncFallsBackToNeutralWhenStateLacksPersona(t *testing.T) {
 	}
 }
 
+func TestRunSyncWithSelectionPiUsesNeutralForMissingPersonaField(t *testing.T) {
+	home := t.TempDir()
+	workspace := t.TempDir()
+	t.Chdir(workspace)
+	piPath := filepath.Join(workspace, ".pi", "gentle-ai", "persona.json")
+	mustWriteFile(t, piPath, []byte("{\n  \"mode\": \"gentleman\"\n}\n"))
+	mustWriteFile(t, state.Path(home), []byte(`{"installed_agents":["pi"]}`))
+
+	result, err := RunSyncWithSelection(home, model.Selection{
+		Agents:     []model.AgentID{model.AgentPi},
+		Components: []model.ComponentID{model.ComponentPersona},
+	})
+	if err != nil {
+		t.Fatalf("RunSyncWithSelection() error = %v", err)
+	}
+	if got, want := result.Selection.Persona, model.PersonaNeutral; got != want {
+		t.Fatalf("Selection.Persona = %q, want %q", got, want)
+	}
+	if got, want := readTextFile(t, piPath), "{\n  \"mode\": \"neutral\"\n}\n"; got != want {
+		t.Fatalf("Pi persona config = %q, want %q", got, want)
+	}
+}
+
+func TestRunSyncWithSelectionPiRejectsInvalidPersistedPersonaWithoutMutation(t *testing.T) {
+	tests := []struct {
+		name       string
+		stateJSON  string
+		stateAsDir bool
+		wantErr    string
+	}{
+		{name: "malformed JSON", stateJSON: `{"installed_agents":["pi"],"persona":`, wantErr: "read persisted installation state"},
+		{name: "unreadable state", stateAsDir: true, wantErr: "read persisted installation state"},
+		{name: "unsupported persona", stateJSON: `{"installed_agents":["pi"],"persona":"unknown"}`, wantErr: `unsupported persona "unknown"`},
+		{name: "explicit empty persona", stateJSON: `{"installed_agents":["pi"],"persona":""}`, wantErr: "explicitly empty persona"},
+		{name: "whitespace-only persona", stateJSON: `{"installed_agents":["pi"],"persona":" \t "}`, wantErr: "whitespace-only persona"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			home := t.TempDir()
+			workspace := t.TempDir()
+			t.Chdir(workspace)
+			piPath := filepath.Join(workspace, ".pi", "gentle-ai", "persona.json")
+			originalPi := []byte("{\n  \"mode\": \"gentleman\"\n}\n")
+			mustWriteFile(t, piPath, originalPi)
+
+			if tt.stateAsDir {
+				if err := os.MkdirAll(state.Path(home), 0o755); err != nil {
+					t.Fatalf("MkdirAll(state path) error = %v", err)
+				}
+			} else {
+				mustWriteFile(t, state.Path(home), []byte(tt.stateJSON))
+			}
+
+			result, err := RunSyncWithSelection(home, model.Selection{
+				Agents:     []model.AgentID{model.AgentPi},
+				Components: []model.ComponentID{model.ComponentPersona},
+			})
+			if err == nil {
+				t.Fatal("RunSyncWithSelection() error = nil, want persisted persona validation error")
+			}
+			if !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("RunSyncWithSelection() error = %q, want %q", err, tt.wantErr)
+			}
+			if result.Selection.Persona != "" {
+				t.Fatalf("Selection.Persona = %q, want unchanged empty persona", result.Selection.Persona)
+			}
+			if got := readTextFile(t, piPath); got != string(originalPi) {
+				t.Fatalf("Pi persona config mutated after rejected sync: got %q, want %q", got, originalPi)
+			}
+		})
+	}
+}
+
+func TestRunSyncPiRejectsUnsupportedPersistedPersonaBeforeMutation(t *testing.T) {
+	home := t.TempDir()
+	setSyncTestHome(t, home)
+	workspace := t.TempDir()
+	t.Chdir(workspace)
+	piPath := filepath.Join(workspace, ".pi", "gentle-ai", "persona.json")
+	originalPi := []byte("{\n  \"mode\": \"gentleman\"\n}\n")
+	mustWriteFile(t, piPath, originalPi)
+	mustWriteFile(t, state.Path(home), []byte(`{"installed_agents":["pi"],"persona":"unknown"}`))
+
+	result, err := RunSync([]string{"--agents", "pi"})
+	if err == nil {
+		t.Fatal("RunSync() error = nil, want unsupported persisted persona error")
+	}
+	if !strings.Contains(err.Error(), `unsupported persona "unknown"`) {
+		t.Fatalf("RunSync() error = %q, want unsupported persona", err)
+	}
+	if result.Selection.Persona != "" {
+		t.Fatalf("Selection.Persona = %q, want unchanged empty persona", result.Selection.Persona)
+	}
+	if got := readTextFile(t, piPath); got != string(originalPi) {
+		t.Fatalf("Pi persona config mutated after rejected sync: got %q, want %q", got, originalPi)
+	}
+}
+
+func TestRunSyncWithSelectionPiCustomPersistedPersonaIsByteStable(t *testing.T) {
+	home := t.TempDir()
+	workspace := t.TempDir()
+	t.Chdir(workspace)
+	piPath := filepath.Join(workspace, ".pi", "gentle-ai", "persona.json")
+	originalPi := []byte("user-owned Pi persona bytes\n")
+	mustWriteFile(t, piPath, originalPi)
+	mustWriteFile(t, state.Path(home), []byte(`{"installed_agents":["pi"],"persona":"custom"}`))
+
+	result, err := RunSyncWithSelection(home, model.Selection{
+		Agents:     []model.AgentID{model.AgentPi},
+		Components: []model.ComponentID{model.ComponentPersona},
+	})
+	if err != nil {
+		t.Fatalf("RunSyncWithSelection() error = %v", err)
+	}
+	if got, want := result.Selection.Persona, model.PersonaCustom; got != want {
+		t.Fatalf("Selection.Persona = %q, want %q", got, want)
+	}
+	if got := readTextFile(t, piPath); got != string(originalPi) {
+		t.Fatalf("custom Pi persona config changed: got %q, want %q", got, originalPi)
+	}
+}
+
 // ─── TUI path: RunSyncWithSelection persona resolution from state ───────────
 
 // TestRunSyncWithSelection_PersonaResolvesFromStateNeutral verifies that when
@@ -4081,19 +4328,19 @@ func TestRunSyncWithSelection_ExplicitPersonaWinsOverState(t *testing.T) {
 	}
 }
 
-// TestRunSyncWithSelection_UnknownPersistedPersonaFallsBackToNeutral documents
-// the normalizePersona contract for unrecognized persisted values: an unknown or
-// misspelled persona string must NOT silently propagate or reactivate Gentleman.
-func TestRunSyncWithSelection_UnknownPersistedPersonaFallsBackToNeutral(t *testing.T) {
+// TestRunSyncWithSelection_UnknownPersistedPersonaFailsClosed verifies that an
+// unsupported persisted persona is rejected before sync can rewrite assets.
+func TestRunSyncWithSelection_UnknownPersistedPersonaFailsClosed(t *testing.T) {
 	home := t.TempDir()
 	setSyncTestHome(t, home)
 
 	if err := os.MkdirAll(filepath.Join(home, ".claude"), 0o755); err != nil {
 		t.Fatalf("MkdirAll: %v", err)
 	}
+	personaPath := filepath.Join(home, ".claude", "CLAUDE.md")
+	originalPersona := "<!-- gentle-ai:persona -->\nexisting valid persona\n<!-- /gentle-ai:persona -->\n"
+	mustWriteFile(t, personaPath, []byte(originalPersona))
 	// Write a state with an unrecognized persona value (wrong capitalization).
-	// normalizePersona does a case-sensitive switch, so "Gentleman" != "gentleman"
-	// and must return an error, triggering the neutral fallback.
 	if err := state.Write(home, state.InstallState{
 		InstalledAgents: []string{"claude-code"},
 		Persona:         "Gentleman", // capitalized — not a valid PersonaID
@@ -4108,12 +4355,17 @@ func TestRunSyncWithSelection_UnknownPersistedPersonaFallsBackToNeutral(t *testi
 	}
 
 	result, err := RunSyncWithSelection(home, sel)
-	if err != nil {
-		t.Fatalf("RunSyncWithSelection() error = %v", err)
+	if err == nil {
+		t.Fatal("RunSyncWithSelection() error = nil, want unsupported persisted persona error")
 	}
-
-	if got, want := result.Selection.Persona, model.PersonaNeutral; got != want {
-		t.Errorf("result.Selection.Persona = %q, want %q (unknown persisted value must fall back to neutral)", got, want)
+	if !strings.Contains(err.Error(), `unsupported persona "Gentleman"`) {
+		t.Fatalf("RunSyncWithSelection() error = %q, want unsupported persona", err)
+	}
+	if result.Selection.Persona != "" {
+		t.Fatalf("Selection.Persona = %q, want unchanged empty persona", result.Selection.Persona)
+	}
+	if got := readTextFile(t, personaPath); got != originalPersona {
+		t.Fatalf("persona config mutated after rejected sync: got %q, want %q", got, originalPersona)
 	}
 }
 
@@ -4442,6 +4694,7 @@ func TestRunSyncPreservesCompletePersistedState(t *testing.T) {
 			"sdd-init": {ProviderID: "anthropic", ModelID: "claude-sonnet-4", Effort: "medium"},
 		},
 		Persona:         "neutral",
+		PersonaPresent:  true,
 		LastUpdateCheck: &lastUpdate,
 		PendingSync:     true,
 	}
