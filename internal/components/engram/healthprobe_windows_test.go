@@ -11,7 +11,7 @@ import (
 
 func TestProbeStdio_MissingRelativeWindowsExecutableIsNotInstalled(t *testing.T) {
 	orig := stdioHandshakeFn
-	stdioHandshakeFn = func(context.Context, string, ...string) error { return exec.ErrNotFound }
+	stdioHandshakeFn = func(context.Context, time.Duration, string, ...string) error { return exec.ErrNotFound }
 	t.Cleanup(func() { stdioHandshakeFn = orig })
 
 	err := ProbeStdio(context.Background(), "engram.exe", "mcp", "--tools=agent")
