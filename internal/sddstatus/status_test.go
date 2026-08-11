@@ -255,7 +255,7 @@ func TestResolveStatusJSONUsesEmptyBlockedReasonsArray(t *testing.T) {
 func TestBlockerReasonsForRoute(t *testing.T) {
 	expected := []string{
 		"proposal.md is missing or partial.",
-		"specs/**/spec.md is missing or partial.",
+		"spec.md or specs/**/spec.md is missing or partial.",
 		"design.md is missing or partial.",
 		"tasks.md is missing or partial.",
 	}
