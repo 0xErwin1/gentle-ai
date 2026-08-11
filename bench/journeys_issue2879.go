@@ -31,7 +31,7 @@ func issue2879Journeys() []Journey {
 			{Name: "fixture: stage unrelated current target", Fixture: stageProse("", "issue2879-current")},
 			{Name: "fixture: replay exact released v2.2.4 authority bytes", Fixture: issue2879HistoricalFixture},
 			{Name: "unrelated malformed entry blocks historical preflight", Requires: repairPreflightCapability, Composite: issue2879Plan},
-			{Name: "inspect historical authority offers repair", Requires: repairPreflightCapability, Args: productArgs("review", "inspect-authority"), After: inspectionAssertion("historical inspection", requireIssue2879HistoricalInspection)},
+			{Name: "inspect historical authority offers repair", Requires: inspectAuthorityCapability, Args: productArgs("review", "inspect-authority"), After: inspectionAssertion("historical inspection", requireIssue2879HistoricalInspection)},
 			{Name: "preflight binds historical repair", Requires: repairPreflightCapability, Args: productArgs("review", "repair", "--preflight"), After: requireDispositionPlanEligible},
 			{Name: "forged and stale repair bindings refuse unchanged", Requires: repairDispositionExecuteCapability, Composite: issue2879Refuse},
 			{Name: "authorized repair quarantines exactly once", Requires: repairDispositionExecuteCapability, Composite: issue2879Execute},
