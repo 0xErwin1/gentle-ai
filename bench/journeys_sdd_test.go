@@ -49,7 +49,7 @@ func TestPortableSDDFailClosedAuthorityJourneysAreRegistered(t *testing.T) {
 	// while the advertised main ref remains a moving publication boundary. j87
 	// proves #2871's correction binds the immutable failure across a later interrupt;
 	// j88 proves #2843's unborn STATUS collects explicit untracked intent first;
-	// j89 proves #2758 never offers a workspace receipt for a different index; j90 proves #2016 resumes an explicit frozen reviewing lineage after workspace drift; j91 proves #1800's pre-plan exit is audited abandon.
+	// j89 proves #2758 never offers a workspace receipt for a different index; j90 proves #2016 resumes an explicit frozen reviewing lineage after workspace drift; j91 proves #1800's pre-plan exit is audited abandon; j92 proves #2879 quarantines released historical bytes without compatibility loading.
 	// j93 proves #2822 classifies stale managed assets before START can persist.
 	// #1993 REMOVED two: j38 (the bound-passing-finish refusal routing to the
 	// review router) and j39 (the stranded-successor exit it named). Review
@@ -60,8 +60,8 @@ func TestPortableSDDFailClosedAuthorityJourneysAreRegistered(t *testing.T) {
 	//
 	// Bump this deliberately when a journey is added OR removed, and name it
 	// here: the count exists so a journey cannot appear or vanish unnoticed.
-	if got := len(seen); got != 89 {
-		t.Errorf("core journey count = %d, want 89", got)
+	if got := len(seen); got != 90 {
+		t.Errorf("core journey count = %d, want 90", got)
 	}
 	for id, found := range want {
 		if !found {
