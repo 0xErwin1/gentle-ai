@@ -111,7 +111,7 @@ func authorityDispositionSelectors(report CompactRecoveryInspectionReport, recor
 // obligation (a)). It refuses (no plan) unless the inspection that produced
 // selected closure carries no entry diagnostics and exactly one report edge
 // re-derives into the one closed content_mismatched_recovery_authorization
-// class.
+// class, except one forensic historical entry whose only diagnostic is outdated.
 func deriveAuthorityDispositionPlan(report CompactRecoveryInspectionReport, records map[string]CompactRecord, binding, actor, reason string, requested ...AuthorityDispositionSelector) (AuthorityDispositionPlan, error) {
 	if len(requested) > 1 {
 		return AuthorityDispositionPlan{}, fmt.Errorf("%w: multiple exact content-mismatch selectors supplied", errAuthorityDispositionPlanNotDerivable)
@@ -120,8 +120,12 @@ func deriveAuthorityDispositionPlan(report CompactRecoveryInspectionReport, reco
 	if err != nil {
 		return AuthorityDispositionPlan{}, err
 	}
-	if len(requested) == 0 && len(selectors) == 0 && len(report.historical) == 1 {
+	if len(requested) == 0 && len(selectors) == 0 && len(report.historical) == 1 && len(report.EntryDiagnostics) == 1 {
 		for lineage, historical := range report.historical {
+			diagnostic := report.EntryDiagnostics[0]
+			if diagnostic.LineageID != lineage || diagnostic.Problem != compactInspectionEntryOutdated {
+				break
+			}
 			inventory, err := authorityInventoryRevision(records, report.historical)
 			if err != nil {
 				return AuthorityDispositionPlan{}, err
