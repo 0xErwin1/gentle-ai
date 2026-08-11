@@ -279,6 +279,35 @@ func ReadCapturedVerificationEvidence(storeDir, lineageID, authorityRevision str
 	return CapturedVerificationEvidence{Record: record, Payload: raw}, nil
 }
 
+// ReadCapturedVerificationEvidenceByIdentity reads a passed evidence record
+// before its immutable tree can be reconstructed from the record itself.
+func ReadCapturedVerificationEvidenceByIdentity(storeDir, lineageID, authorityRevision, targetIdentity string) (CapturedVerificationEvidence, error) {
+	dir, err := compactFinalEvidenceCandidateDir(storeDir, targetIdentity)
+	if err != nil {
+		return CapturedVerificationEvidence{}, fmt.Errorf("%w: %v", ErrCapturedVerificationEvidenceInvalid, err)
+	}
+	info, dirErr := os.Lstat(dir)
+	if dirErr != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 || !compactPrivateArtifactMode(info.Mode(), true) {
+		return CapturedVerificationEvidence{}, ErrCapturedVerificationEvidenceInvalid
+	}
+	raw, rawErr := readCompactEvidenceFile(filepath.Join(dir, CompactFinalEvidenceFile), verificationEvidencePayloadLimit)
+	recordPayload, recordErr := readCompactEvidenceFile(filepath.Join(dir, CompactFinalEvidenceRecordFile), verificationEvidenceRecordLimit)
+	if rawErr != nil || recordErr != nil {
+		return CapturedVerificationEvidence{}, ErrCapturedVerificationEvidenceInvalid
+	}
+	record, err := ParseVerificationEvidenceRecord(recordPayload)
+	if err != nil || record.ValidatePayload(raw) != nil || record.LineageID != lineageID ||
+		record.AuthorityRevision != authorityRevision || record.TargetIdentity != targetIdentity {
+		return CapturedVerificationEvidence{}, ErrCapturedVerificationEvidenceInvalid
+	}
+	dirAfter, err := os.Lstat(dir)
+	if err != nil || !dirAfter.IsDir() || dirAfter.Mode()&os.ModeSymlink != 0 ||
+		!compactPrivateArtifactMode(dirAfter.Mode(), true) || !os.SameFile(info, dirAfter) {
+		return CapturedVerificationEvidence{}, ErrCapturedVerificationEvidenceInvalid
+	}
+	return CapturedVerificationEvidence{Record: record, Payload: raw}, nil
+}
+
 func PublishCapturedVerificationEvidence(request CaptureVerificationEvidenceRequest) (CapturedVerificationEvidence, error) {
 	record, err := NewVerificationEvidenceRecord(request.LineageID, request.AuthorityRevision, request.Target, request.Payload, request.Outcome)
 	if err != nil {
