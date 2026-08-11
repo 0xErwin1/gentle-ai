@@ -244,11 +244,13 @@ lineage=<entries[].lineage_id>
 revision=<entries[].revision>
 snapshot_identity=<entries[].snapshot_identity>
 reason=operator_disposition
-captured_lens_results=<entries[].discarded_work.captured_lens_results comma-joined>
+captured_lens_results=<entries[].discarded_work.captured_lens_results comma-joined in the listed order>
 findings_present=<entries[].discarded_work.findings_present>
 evidence_records_present=<entries[].discarded_work.evidence_records_present>
 actor=<actor>
 ```
+
+Copy every array item verbatim in its listed order, then join them with a single `,` and no added whitespace. The native inventory uses lexicographic captured reviewer-result artifact filename order; do not re-sort or derive a different lens order.
 
 Run `gentle-ai review abandon --cwd <repo> --lineage <lineage> --expected-revision <revision> --reason operator_disposition --actor <actor> --maintainer-authorization <binding>`.
 

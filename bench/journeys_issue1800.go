@@ -49,14 +49,14 @@ func issue1800State(r *journeyRun) ([]byte, issue1800Authority, error) {
 	if err != nil {
 		return nil, issue1800Authority{}, err
 	}
-	bytes, err := os.ReadFile(filepath.Join(strings.TrimSpace(common), "gentle-ai", "review-transactions", "v2", issue1800Lineage, "review-state.json"))
+	stateBytes, err := os.ReadFile(filepath.Join(strings.TrimSpace(common), "gentle-ai", "review-transactions", "v2", issue1800Lineage, "review-state.json"))
 	var record struct {
 		State issue1800Authority `json:"state"`
 	}
 	if err == nil {
-		err = json.Unmarshal(bytes, &record)
+		err = json.Unmarshal(stateBytes, &record)
 	}
-	return bytes, record.State, err
+	return stateBytes, record.State, err
 }
 
 func issue1800Entry(r *journeyRun) (authorityEntry, error) {
@@ -82,7 +82,7 @@ func prepareIssue1800Authority(r *journeyRun) error {
 		state.CorrectionBudget <= 0 || state.ProposedCorrectionLines != nil ||
 		strings.Join(status.Projection.Paths, "\x00") != "candidate.go" ||
 		entry.Revision != status.Authority.Revision || entry.SnapshotIdentity != state.InitialSnapshot.Identity {
-		return fmt.Errorf("pre-plan authority = status:%+v state:%+v errors:%v/%v", status, state, err, stateErr)
+		return fmt.Errorf("pre-plan authority = status:%+v state:%+v errors:%v/%v/%v", status, state, err, stateErr, entryErr)
 	}
 	r.sandbox.Scratch["issue1800-budget"] = strconv.Itoa(state.CorrectionBudget)
 	r.sandbox.Scratch["issue1800-state"] = string(stateBytes)
