@@ -6,6 +6,15 @@ import (
 	"reflect"
 )
 
+// CorrectedCandidateInspectionRepositoryContextError marks opaque repository
+// context resolution failure during corrected inspection.
+type CorrectedCandidateInspectionRepositoryContextError struct{ cause error }
+
+func (err *CorrectedCandidateInspectionRepositoryContextError) Error() string {
+	return err.cause.Error()
+}
+func (err *CorrectedCandidateInspectionRepositoryContextError) Unwrap() error { return err.cause }
+
 // ResolveCorrectedCandidateInspection resolves the immutable correction snapshot
 // for a captured targeted-validation request without rebuilding live workspace
 // content. The returned snapshot can be passed to SnapshotBuilder.InspectCandidate.
@@ -15,7 +24,7 @@ func ResolveCorrectedCandidateInspection(ctx context.Context, repositoryContextH
 	}
 	repo, binding, err := resolveOpaqueReviewRepositoryContext(ctx, repositoryContextHandle)
 	if err != nil {
-		return Snapshot{}, err
+		return Snapshot{}, &CorrectedCandidateInspectionRepositoryContextError{cause: err}
 	}
 	if binding.LineageID != request.LineageID || binding.Revision != request.ExpectedRevision ||
 		binding.TargetIdentity != request.CorrectionTargetIdentity {
@@ -70,7 +79,7 @@ func ResolveCorrectedCandidateInspection(ctx context.Context, repositoryContextH
 func ResolveCorrectedCandidateInspectionBinding(ctx context.Context, repositoryContextHandle string, binding ReviewRepositoryContextBinding, requestHash string) (SnapshotBuilder, Snapshot, error) {
 	repo, contextBinding, err := resolveOpaqueReviewRepositoryContext(ctx, repositoryContextHandle)
 	if err != nil {
-		return SnapshotBuilder{}, Snapshot{}, err
+		return SnapshotBuilder{}, Snapshot{}, &CorrectedCandidateInspectionRepositoryContextError{cause: err}
 	}
 	if contextBinding != binding {
 		return SnapshotBuilder{}, Snapshot{}, errors.New("corrected candidate inspection context does not match binding") // refusal:by-design operator-knowledge: only the opaque provider context commits the exact corrected binding
@@ -113,6 +122,8 @@ func ResolveCorrectedCandidateInspectionBinding(ctx context.Context, repositoryC
 	if err != nil || request.RequestHash != requestHash {
 		return SnapshotBuilder{}, Snapshot{}, errors.New("corrected candidate inspection request hash does not match authority") // refusal:by-design operator-knowledge: only the native targeted request owns this hash
 	}
+	// Passed evidence bootstraps correction; the canonical resolver revalidates Git evidence and target identity.
+	// The request hash covers that correction target identity, so both passes are required.
 	snapshot, err := ResolveCorrectedCandidateInspection(ctx, repositoryContextHandle, request)
 	if err != nil {
 		return SnapshotBuilder{}, Snapshot{}, err

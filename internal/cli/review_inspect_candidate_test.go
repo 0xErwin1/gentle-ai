@@ -150,12 +150,12 @@ func TestReviewInspectCandidateRejectsUnboundInput(t *testing.T) {
 		{name: "object without side", argv: append(slices.Clone(valid), "--operation", "object", "--path-index", pathIndex), want: "object candidate inspection"},
 		{name: "invalid side", argv: append(slices.Clone(valid), "--operation", "object", "--path-index", pathIndex, "--side", "worktree"), want: "object candidate inspection"},
 		{name: "out of range selector", argv: append(slices.Clone(valid), "--operation", "patch", "--path-index", "99"), want: "exact canonical path index"},
-		{name: "wrong context", argv: replaceInspectionArg(valid, "--repository-context", "rctx1_"+strings.Repeat("0", 64)), want: "repository_context_"},
-		{name: "stale binding", argv: replaceInspectionArg(valid, "--expected-revision", "sha256:"+strings.Repeat("0", 64)), want: "repository_context_"},
-		{name: "wrong lineage", argv: replaceInspectionArg(valid, "--lineage", "wrong-lineage"), want: "repository_context_"},
-		{name: "wrong target", argv: replaceInspectionArg(valid, "--target", "sha256:"+strings.Repeat("0", 64)), want: "repository_context_"},
-		{name: "wrong binding", argv: replaceInspectionArg(valid, "--lens", "review-risk"), want: "binding does not match"},
-		{name: "wrong order", argv: replaceInspectionArg(valid, "--order", "99"), want: "binding does not match"},
+		{name: "wrong context", argv: replaceInspectionArg(t, valid, "--repository-context", "rctx1_"+strings.Repeat("0", 64)), want: "repository_context_"},
+		{name: "stale binding", argv: replaceInspectionArg(t, valid, "--expected-revision", "sha256:"+strings.Repeat("0", 64)), want: "repository_context_"},
+		{name: "wrong lineage", argv: replaceInspectionArg(t, valid, "--lineage", "wrong-lineage"), want: "repository_context_"},
+		{name: "wrong target", argv: replaceInspectionArg(t, valid, "--target", "sha256:"+strings.Repeat("0", 64)), want: "repository_context_"},
+		{name: "wrong binding", argv: replaceInspectionArg(t, valid, "--lens", "review-risk"), want: "binding does not match"},
+		{name: "wrong order", argv: replaceInspectionArg(t, valid, "--order", "99"), want: "binding does not match"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -213,6 +213,23 @@ func TestReviewInspectCandidateInspectsProviderBoundCorrectedTree(t *testing.T) 
 	if err != nil || terminal.State.State != reviewtransaction.StateApproved || len(terminal.State.CorrectionAttempts) != 1 {
 		t.Fatalf("restored FINALIZE state = %#v, %v", terminal.State, err)
 	}
+	if err := RunReviewInspectCandidate(append(args, "--operation", "name-status"), io.Discard); err == nil ||
+		!strings.Contains(err.Error(), "requires current unconsumed correction authority") || strings.Contains(err.Error(), "repository_context_") {
+		t.Fatalf("terminal corrected inspection error = %v", err)
+	}
+}
+
+func TestReviewInspectCandidatePreservesCorrectedEvidenceError(t *testing.T) {
+	_, args, ready, store, _ := newTargetedCandidateInspectionReview(t)
+	evidenceDir := filepath.Join(store.Dir, reviewtransaction.CompactFinalEvidenceDir,
+		strings.TrimPrefix(ready.ValidationRequest.CorrectionTargetIdentity, "sha256:"))
+	if err := os.RemoveAll(evidenceDir); err != nil {
+		t.Fatal(err)
+	}
+	err := RunReviewInspectCandidate(append(args, "--operation", "name-status"), io.Discard)
+	if err == nil || !strings.Contains(err.Error(), "requires passed repository verification evidence") || strings.Contains(err.Error(), "repository_context_") {
+		t.Fatalf("missing corrected evidence error = %v", err)
+	}
 }
 
 func TestReviewInspectCandidateRejectsTargetedBindingDecoys(t *testing.T) {
@@ -222,11 +239,11 @@ func TestReviewInspectCandidateRejectsTargetedBindingDecoys(t *testing.T) {
 	lens = append(lens, "--operation", "name-status", "--request-hash", ready.ValidationRequest.RequestHash)
 	tests := []inspectionCase{
 		{name: "missing context", argv: removeInspectionArg(targeted, "--repository-context"), want: "requires the exact provider-issued"},
-		{name: "forged context", argv: replaceInspectionArg(targeted, "--repository-context", "rctx1_"+strings.Repeat("0", 64)), want: "repository_context_"},
-		{name: "original lens context", argv: replaceInspectionArg(targeted, "--repository-context", lens[slices.Index(lens, "--repository-context")+1]), want: "repository_context_"},
-		{name: "stale revision", argv: replaceInspectionArg(targeted, "--expected-revision", "sha256:"+strings.Repeat("0", 64)), want: "repository_context_"},
-		{name: "forged target", argv: replaceInspectionArg(targeted, "--target", "sha256:"+strings.Repeat("0", 64)), want: "repository_context_"},
-		{name: "forged request hash", argv: replaceInspectionArg(targeted, "--request-hash", "sha256:"+strings.Repeat("0", 64)), want: "repository_context_"},
+		{name: "forged context", argv: replaceInspectionArg(t, targeted, "--repository-context", "rctx1_"+strings.Repeat("0", 64)), want: "repository_context_"},
+		{name: "original lens context", argv: replaceInspectionArg(t, targeted, "--repository-context", lens[slices.Index(lens, "--repository-context")+1]), want: "repository_context_"},
+		{name: "stale revision", argv: replaceInspectionArg(t, targeted, "--expected-revision", "sha256:"+strings.Repeat("0", 64)), want: "context does not match binding"},
+		{name: "forged target", argv: replaceInspectionArg(t, targeted, "--target", "sha256:"+strings.Repeat("0", 64)), want: "context does not match binding"},
+		{name: "forged request hash", argv: replaceInspectionArg(t, targeted, "--request-hash", "sha256:"+strings.Repeat("0", 64)), want: "request hash does not match authority"},
 		{name: "lens supplied", argv: append(slices.Clone(targeted), "--lens", "review-risk"), want: "does not accept --lens or --order"},
 		{name: "order supplied", argv: append(slices.Clone(targeted), "--order", "0"), want: "does not accept --lens or --order"},
 		{name: "targeted-only hash on lens mode", argv: lens, want: "request hash is valid only"},
@@ -292,14 +309,40 @@ func newTargetedCandidateInspectionReview(t *testing.T) (string, []string, Revie
 	}
 	ready := submissionDescriptorStatus(t, repo, started.LineageID)
 	input := submissionDescriptorInput(t, ready)
-	return repo, []string{"--repository-context", input.Arguments[3].Value, "--expected-revision", input.Arguments[1].Value,
-		"--lineage", input.Arguments[0].Value, "--target", input.Arguments[2].Value, "--purpose", input.Arguments[4].Value, "--request-hash", input.Arguments[5].Value}, ready, store, 0
+	arguments := requiredReviewTransitionArguments(t, input.Arguments, "repository-context", "expected-revision", "lineage", "target", "purpose", "request-hash")
+	index := slices.Index(ready.Projection.Paths, "candidate.go")
+	if index < 0 {
+		t.Fatalf("corrected target manifest omits candidate.go: %v", ready.Projection.Paths)
+	}
+	return repo, []string{"--repository-context", arguments["repository-context"], "--expected-revision", arguments["expected-revision"],
+		"--lineage", arguments["lineage"], "--target", arguments["target"], "--purpose", arguments["purpose"], "--request-hash", arguments["request-hash"]}, ready, store, index
 }
 
-func replaceInspectionArg(args []string, name, value string) []string {
+func requiredReviewTransitionArguments(t *testing.T, arguments []ReviewTransitionArgument, names ...string) map[string]string {
+	t.Helper()
+	values, err := reviewTransitionArgumentMap(arguments)
+	if err != nil {
+		t.Fatalf("transition arguments = %#v: %v", arguments, err)
+	}
+	for _, name := range names {
+		if value, found := values[name]; !found || strings.TrimSpace(value) == "" {
+			t.Fatalf("transition arguments omit required %q: %#v", name, arguments)
+		}
+	}
+	return values
+}
+
+func replaceInspectionArg(t *testing.T, args []string, name, value string) []string {
+	t.Helper()
 	result := slices.Clone(args)
-	result[slices.Index(result, name)+1] = value
-	return result
+	for index, argument := range result {
+		if argument == name && index+1 < len(result) {
+			result[index+1] = value
+			return result
+		}
+	}
+	t.Fatalf("inspection arguments omit %q: %v", name, args)
+	return nil
 }
 
 func removeInspectionArg(args []string, name string) []string {
