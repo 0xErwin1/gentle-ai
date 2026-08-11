@@ -200,6 +200,43 @@ function sddTaskFailure(phase: string, cwd: string, cause: unknown, metadata?: u
   ) as SDDTaskFailureError
 }
 
+// sddDispatchLatched builds the refusal for a launch that never reached the
+// provider, which is a different fact from the launch that failed.
+//
+// Failing closed after an empty result is deliberate and stays: one failed
+// phase must not be silently retried, and no later phase may advance on top of
+// it. What the latch used to do is replay the stored handoff byte for byte, so
+// a caller launching sdd-apply after sdd-propose came back empty received an
+// envelope naming sdd-propose and asserting it "produced no task output at
+// all". Nothing ran, so that assertion described an attempt that did not
+// happen -- #2948's reporter confirmed no session creation, no permission
+// evaluation, and no streams for the replayed attempts, while a model change
+// and a reworded prompt both appeared to fail identically because neither was
+// ever exercised.
+//
+// This names three things the replay never did: which phase THIS launch asked
+// for, which earlier phase actually failed and how, and the exit. The exit is
+// a new session because the latch is per-session state cleared on
+// session.deleted and dispose; without saying so, deleting the session was an
+// escape nobody had been told about.
+function sddDispatchLatched(requested: string, failure: SDDTaskFailure, cwd: string): Error {
+  return new Error(SDD_TASK_FAILURE_PREFIX + JSON.stringify({
+    schemaName: "gentle-ai.sdd-task-result-failure/v1",
+    status: "blocked",
+    code: "sdd_task_dispatch_latched",
+    phase: requested,
+    latchedPhase: failure.phase,
+    latchedCode: failure.code,
+    summary: `${requested} was not dispatched. Earlier in this session ${failure.phase} returned ` +
+      `${failure.code}, and SDD launches stay latched afterwards so a failed phase is never silently ` +
+      "retried and no later phase advances on top of it. No provider call, no subagent, and no artifact " +
+      "write happened for this launch, so it produced no new evidence about the original failure.",
+    continuation: `gentle-ai sdd-status --cwd ${shellQuote(cwd)} --json`,
+    exit: "Inspect the artifact state the original failure left, surface it to the user, and start a " +
+      "new session to launch SDD phases again. Relaunching in this session cannot dispatch.",
+  }))
+}
+
 function captureCwd(worktree: string | undefined, directory: string): string {
   return worktree || directory
 }
@@ -357,7 +394,7 @@ const ReviewResultArtifactsPlugin: Plugin = async ({ directory, worktree }) => {
     if (isSDDPhase(subagent)) {
       const failure = failedSDDSessions.get(input.sessionID)
       if (failure) {
-        throw new Error(failure.handoff)
+        throw sddDispatchLatched(subagent, failure, captureCwd(worktree, directory))
       }
       return
     }

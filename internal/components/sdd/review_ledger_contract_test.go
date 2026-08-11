@@ -342,7 +342,12 @@ func TestKilocodeReviewSettingsMatchCurrentMainBaseline(t *testing.T) {
 	// instead of whether the workflow appeared blocked, so the automated report
 	// stops filing other projects' defects. Kilocode embeds the orchestrator in
 	// its settings, so the hash moved. Deliberate, not drift.
-	const want = "7538ff110911ed4941787dbb6b361a90a8ea673a25c57ad4c621f5fbeb1921fa"
+	// #2117 adds the sdd_task_dispatch_latched sentence to the shared
+	// transport-failure paragraph: a relaunch after an empty or malformed
+	// phase result never dispatches, so the orchestrator must not read the
+	// replayed envelope as a fresh attempt. Kilocode embeds that orchestrator
+	// contract, so the hash moved. Deliberate, not drift.
+	const want = "ef8f2a833e8d0757a6967c8ebef0625e9a33716167c7490fdd67d5184f9f35b6"
 	if got != want {
 		t.Fatalf("Kilocode settings SHA-256 = %s, want current-main baseline %s", got, want)
 	}
