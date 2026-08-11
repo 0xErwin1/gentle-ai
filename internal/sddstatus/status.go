@@ -436,7 +436,7 @@ func Resolve(options ResolveOptions) (Status, error) {
 		case 1:
 			changeName = activeChanges[0]
 		default:
-			return blockedStatus(ArtifactStoreOpenSpec, workspaceRoot, nil, nil, "select-change", []string{fmt.Sprintf("Change selection is ambiguous: %s.", strings.Join(activeChanges, ", "))}, options.IncludeInstructions), nil
+			return blockedStatus(ArtifactStoreOpenSpec, workspaceRoot, nil, nil, "select-change", ambiguousChangeSelectionReasons("Change", workspaceRoot, activeChanges), options.IncludeInstructions), nil
 		}
 	}
 
@@ -919,7 +919,7 @@ func resolveEngramStatus(workspaceRoot string, requestedChange string, includeIn
 		case 1:
 			changeName = changes[0]
 		default:
-			return blockedEngramStatus(workspaceRoot, nil, "select-change", []string{fmt.Sprintf("Engram change selection is ambiguous: %s.", strings.Join(changes, ", "))}, includeInstructions), true, nil
+			return blockedEngramStatus(workspaceRoot, nil, "select-change", ambiguousChangeSelectionReasons("Engram change", workspaceRoot, changes), includeInstructions), true, nil
 		}
 	}
 
@@ -1549,6 +1549,29 @@ func absOrCWD(path string) (string, error) {
 		return os.Getwd()
 	}
 	return filepath.Abs(path)
+}
+
+// ambiguousChangeSelectionReasons names one runnable command per candidate
+// change instead of listing names and stopping there.
+//
+// The markdown dispatcher already spelled these commands out, but --json never
+// reaches it, and --json is what machine consumers read. #2117 step 5 is the
+// cost: the SDD task-failure envelope hands back
+// `gentle-ai sdd-status --cwd <cwd> --json` as its continuation, which lands
+// here whenever more than one change is active, and the caller found a reason
+// that listed options and named no command. The list stays first because it is
+// what a human scanning the refusal wants; the commands follow because that is
+// what makes the refusal runnable.
+func ambiguousChangeSelectionReasons(subject, workspaceRoot string, changes []string) []string {
+	reasons := make([]string, 0, len(changes)+1)
+	reasons = append(reasons, fmt.Sprintf("%s selection is ambiguous: %s.", subject, strings.Join(changes, ", ")))
+	for _, change := range changes {
+		reasons = append(reasons, fmt.Sprintf(
+			"Run `gentle-ai sdd-status --cwd %s --change %s` to continue with %s.",
+			workspaceRoot, change, change,
+		))
+	}
+	return reasons
 }
 
 func blockedStatus(store ArtifactStore, workspaceRoot string, changeName *string, changeRoot *string, next string, reasons []string, includeInstructions bool) Status {
