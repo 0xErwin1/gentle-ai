@@ -16,6 +16,8 @@ var configurableAgentSet = buildConfigurableAgentSet()
 // reservedAgentSet contains native and package-owned roles that must not be
 // reclassified as user-defined custom agents when their config entries exist.
 var reservedAgentSet = map[string]bool{
+	"build":               true,
+	"plan":                true,
 	"general":             true,
 	"explore":             true,
 	"gentle-reviewer":     true,

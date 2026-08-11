@@ -93,6 +93,8 @@ func TestDiscoverCustomAgentsExcludesReservedRolesAndDeduplicates(t *testing.T) 
 
 	content := `{
   "agent": {
+    "build": { "model": "openai/gpt-5" },
+    "plan": { "model": "openai/gpt-5-mini" },
     "general": { "model": "openai/gpt-5" },
     "explore": { "model": "openai/gpt-5-mini" },
     "gentle-reviewer": { "model": "openai/gpt-5" },
