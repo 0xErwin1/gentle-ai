@@ -2209,10 +2209,10 @@ func TestInjectOpenCodeMultiMode(t *testing.T) {
 		t.Fatalf("agent key has unexpected type: %T", agentRaw)
 	}
 
-	// Multi overlay must contain gentle-orchestrator + 10 SDD sub-agents +
-	// 3 JD agents + 4 review agents + 1 batched refuter = 19 agents.
-	if len(agentMap) != 19 {
-		t.Fatalf("agent count = %d, want 19", len(agentMap))
+	// Multi overlay must contain gentle-orchestrator + 2 native fallback agents +
+	// 10 SDD sub-agents + 3 JD agents + 4 review agents + 1 batched refuter = 21 agents.
+	if len(agentMap) != 21 {
+		t.Fatalf("agent count = %d, want 21", len(agentMap))
 	}
 
 	// Verify gentle-orchestrator is present.
@@ -2597,13 +2597,13 @@ func TestInjectOpenCodeEmptySDDModeDefaultsSingle(t *testing.T) {
 		t.Fatalf("agent key has unexpected type: %T", agentRaw)
 	}
 
-	// Empty mode defaults to single — gentle-orchestrator + 10 SDD sub-agents +
-	// 3 JD agents + 4 review agents + 1 batched refuter = 19 agents.
+	// Empty mode defaults to single — gentle-orchestrator + 2 native fallback agents +
+	// 10 SDD sub-agents + 3 JD agents + 4 review agents + 1 batched refuter = 21 agents.
 	if _, ok := agentMap["gentle-orchestrator"]; !ok {
 		t.Fatal("missing gentle-orchestrator agent")
 	}
-	if len(agentMap) != 19 {
-		t.Fatalf("agent count = %d, want 19", len(agentMap))
+	if len(agentMap) != 21 {
+		t.Fatalf("agent count = %d, want 21", len(agentMap))
 	}
 
 	// Verify orchestrator mode is "primary".
@@ -2655,6 +2655,82 @@ func TestInjectOpenCodeEmptySDDModeDefaultsSingle(t *testing.T) {
 	}
 	refuterTools := agentMap["review-refuter"].(map[string]any)["tools"].(map[string]any)
 	assertOpenCodeRefuterToolsReadOnly(t, "rendered single-mode OpenCode config", refuterTools)
+}
+
+func TestInjectOpenCodeNativeFallbackAgentsPromptsAlignedWithGentlePi(t *testing.T) {
+	mockNoPackageManager(t)
+
+	for _, sddMode := range []string{"multi", ""} {
+		t.Run("sddMode="+sddMode, func(t *testing.T) {
+			home := t.TempDir()
+			result, err := Inject(home, opencodeAdapter(), model.SDDModeID(sddMode))
+			if err != nil {
+				t.Fatalf("Inject failed: %v", err)
+			}
+			if !result.Changed {
+				t.Fatal("expected injection to change configuration")
+			}
+
+			settingsPath := filepath.Join(home, ".config", "opencode", "opencode.json")
+			data, err := os.ReadFile(settingsPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			var root map[string]any
+			if err := json.Unmarshal(data, &root); err != nil {
+				t.Fatal(err)
+			}
+
+			agentMap := root["agent"].(map[string]any)
+			for _, fallbackAgent := range []string{"general", "explore"} {
+				agent, ok := agentMap[fallbackAgent].(map[string]any)
+				if !ok {
+					t.Fatalf("agent %q missing from overlay for mode %q", fallbackAgent, sddMode)
+				}
+				if mode, _ := agent["mode"].(string); mode != "subagent" {
+					t.Errorf("agent %q mode = %q, want subagent", fallbackAgent, mode)
+				}
+				if hidden, _ := agent["hidden"].(bool); !hidden {
+					t.Errorf("agent %q hidden = %v, want true", fallbackAgent, hidden)
+				}
+				prompt, ok := agent["prompt"].(string)
+				if !ok || strings.TrimSpace(prompt) == "" {
+					t.Fatalf("agent %q missing non-empty prompt for mode %q", fallbackAgent, sddMode)
+				}
+				if fallbackAgent == "general" {
+					if !strings.Contains(prompt, "empirical verification") || !strings.Contains(prompt, "Do NOT launch child sub-agents") {
+						t.Fatalf("general fallback agent prompt is missing its bounded auxiliary-task contract: %s", prompt)
+					}
+				} else {
+					if !strings.Contains(prompt, "gentle-pi") || !strings.Contains(prompt, "Do not create, edit, or delete files") {
+						t.Fatalf("explore fallback agent prompt is missing its read-only contract: %s", prompt)
+					}
+					description, _ := agent["description"].(string)
+					if strings.Contains(strings.ToLower(description+" "+prompt), "web search") {
+						t.Fatalf("explore fallback agent advertises an unavailable web-search tool: %s", description)
+					}
+				}
+				tools, ok := agent["tools"].(map[string]any)
+				if !ok {
+					t.Fatalf("agent %q tools have type %T, want object", fallbackAgent, agent["tools"])
+				}
+				wantTools := map[string]bool{
+					"read":  true,
+					"write": fallbackAgent == "general",
+					"edit":  fallbackAgent == "general",
+					"bash":  fallbackAgent == "general",
+					"task":  false,
+				}
+				for tool, want := range wantTools {
+					got, exists := tools[tool].(bool)
+					if !exists || got != want {
+						t.Errorf("agent %q tool %q = %v, want %t", fallbackAgent, tool, tools[tool], want)
+					}
+				}
+			}
+		})
+	}
 }
 
 func TestInjectClaudeIgnoresSDDMode(t *testing.T) {
@@ -4253,6 +4329,26 @@ func TestInjectKilocodeKeepsLegacyBackgroundAgentsPluginAndRemovesOpenCodeReview
 	}
 	if _, err := os.Stat(reviewPluginPath); !os.IsNotExist(err) {
 		t.Fatalf("OpenCode-only review plugin remains installed for Kilo: %v", err)
+	}
+	settings, err := os.ReadFile(filepath.Join(home, ".config", "kilo", "opencode.json"))
+	if err != nil {
+		t.Fatalf("ReadFile(Kilocode settings) error = %v", err)
+	}
+	var root map[string]any
+	if err := json.Unmarshal(settings, &root); err != nil {
+		t.Fatalf("Unmarshal(Kilocode settings) error = %v", err)
+	}
+	agentMap, ok := root["agent"].(map[string]any)
+	if !ok {
+		t.Fatalf("Kilocode settings missing agent map: %v", root)
+	}
+	if _, exists := agentMap["gentle-orchestrator"]; !exists {
+		t.Fatalf("Kilocode settings must retain gentle-orchestrator agent: %v", agentMap)
+	}
+	for _, fallbackAgent := range []string{"general", "explore"} {
+		if _, exists := agentMap[fallbackAgent]; exists {
+			t.Fatalf("Kilocode settings must not receive OpenCode-only fallback agent %q", fallbackAgent)
+		}
 	}
 }
 
