@@ -3130,6 +3130,22 @@ func TestInjectOpenCodeMultiModeWithCustomAgentModelAssignment(t *testing.T) {
 	if _, exists := agents["missing-custom"]; exists {
 		t.Fatal("inject must not create a missing custom agent definition")
 	}
+
+	firstContent := append([]byte(nil), content...)
+	secondResult, err := Inject(home, opencodeAdapter(), model.SDDModeMulti, InjectOptions{OpenCodeModelAssignments: assignments})
+	if err != nil {
+		t.Fatalf("repeat Inject(multi, custom assignment) error = %v", err)
+	}
+	if secondResult.Changed {
+		t.Fatal("repeat Inject(multi, custom assignment) changed = true")
+	}
+	secondContent, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatalf("ReadFile(opencode.json) after repeat sync error = %v", err)
+	}
+	if !bytes.Equal(secondContent, firstContent) {
+		t.Fatalf("repeat sync changed opencode.json bytes:\nfirst:\n%s\nsecond:\n%s", firstContent, secondContent)
+	}
 }
 
 func TestInjectOpenCodeMultiModeNoAssignmentsNoModel(t *testing.T) {
