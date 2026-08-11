@@ -2367,7 +2367,7 @@ func runReviewFacadeFinalize(ctx context.Context, args []string, stdout io.Write
 		return err
 	}
 	if (*actionEligibility || *nextTransition) && !negotiated {
-		return errors.New(reviewContractRequiredForActionEligibilityReason)
+		return reviewPreflightError(errors.New(reviewContractRequiredForActionEligibilityReason))
 	}
 	submissionBindingProvided := reviewFinalizeFlagProvided(args, "expected-revision") || reviewFinalizeFlagProvided(args, "target") ||
 		reviewFinalizeFlagProvided(args, "request-hash") || reviewFinalizeFlagProvided(args, "repository-context")
