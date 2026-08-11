@@ -65,3 +65,54 @@ func ResolveCorrectedCandidateInspection(ctx context.Context, repositoryContextH
 	}
 	return correction, nil
 }
+
+// ResolveCorrectedCandidateInspectionBinding verifies a provider-issued targeted inspection binding.
+func ResolveCorrectedCandidateInspectionBinding(ctx context.Context, repositoryContextHandle string, binding ReviewRepositoryContextBinding, requestHash string) (SnapshotBuilder, Snapshot, error) {
+	repo, contextBinding, err := resolveOpaqueReviewRepositoryContext(ctx, repositoryContextHandle)
+	if err != nil {
+		return SnapshotBuilder{}, Snapshot{}, err
+	}
+	if contextBinding != binding {
+		return SnapshotBuilder{}, Snapshot{}, errors.New("corrected candidate inspection context does not match binding") // refusal:by-design operator-knowledge: only the opaque provider context commits the exact corrected binding
+	}
+	store, err := CompactAuthoritativeStore(ctx, repo, binding.LineageID)
+	if err != nil {
+		return SnapshotBuilder{}, Snapshot{}, err
+	}
+	record, err := store.Load()
+	if err != nil || record.Revision != binding.Revision || record.State.State != StateCorrectionRequired ||
+		record.State.ProposedCorrectionLines == nil || record.State.CorrectionAttemptConsumed() {
+		return SnapshotBuilder{}, Snapshot{}, errors.New("corrected candidate inspection requires current unconsumed correction authority") // refusal:by-design operator-knowledge: a stale or spent correction must be refreshed through STATUS
+	}
+	captured, err := ReadCapturedVerificationEvidenceByIdentity(store.Dir, binding.LineageID, binding.Revision, binding.TargetIdentity)
+	if err != nil || captured.Record.Outcome != VerificationOutcomePassed {
+		return SnapshotBuilder{}, Snapshot{}, errors.New("corrected candidate inspection requires passed repository verification evidence") // refusal:by-design world-action: capture passed evidence for the exact corrected target first
+	}
+	projection, err := canonicalProjection(record.State.InitialSnapshot.Projection)
+	if err != nil {
+		return SnapshotBuilder{}, Snapshot{}, err
+	}
+	correction := Snapshot{
+		Kind: TargetFixDiff, Projection: projection, UnbornHead: record.State.CurrentSnapshot.UnbornHead,
+		BaseTree: record.State.CurrentSnapshot.CandidateTree, CandidateTree: captured.Record.CandidateTree,
+		PathsDigest: captured.Record.PathsDigest, Paths: append([]string(nil), captured.Record.Paths...),
+		IntendedUntracked: append([]string(nil), record.State.InitialSnapshot.IntendedUntracked...),
+		LedgerIDs:         append([]string(nil), record.State.FixFindingIDs...),
+	}
+	builder := SnapshotBuilder{Repo: repo}
+	correction.IntendedUntrackedProof, err = builder.untrackedProof(ctx, correction.CandidateTree, correction.IntendedUntracked)
+	if err != nil {
+		return SnapshotBuilder{}, Snapshot{}, err
+	}
+	correction.Identity = snapshotIdentityForProjection(correction.Kind, correction.Projection, correction.BaseTree,
+		correction.CandidateTree, correction.PathsDigest, correction.IntendedUntrackedProof, correction.IntendedUntracked, correction.LedgerIDs)
+	request, err := targetedValidationRequestForCorrection(record.State, record.Revision, correction)
+	if err != nil || request.RequestHash != requestHash {
+		return SnapshotBuilder{}, Snapshot{}, errors.New("corrected candidate inspection request hash does not match authority") // refusal:by-design operator-knowledge: only the native targeted request owns this hash
+	}
+	snapshot, err := ResolveCorrectedCandidateInspection(ctx, repositoryContextHandle, request)
+	if err != nil {
+		return SnapshotBuilder{}, Snapshot{}, err
+	}
+	return builder, snapshot, nil
+}
