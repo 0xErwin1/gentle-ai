@@ -54,6 +54,57 @@ func TestNegotiatedReviewFailuresUseOneEnvelopeAcrossRoutes(t *testing.T) {
 	}
 }
 
+func TestFinalizeActionEligibilityWithoutContractIsPreflightAndNonMutating(t *testing.T) {
+	tests := []struct {
+		name  string
+		flags []string
+	}{
+		{name: "action eligibility only", flags: []string{"--action-eligibility"}},
+		{name: "next transition only", flags: []string{"--next-transition"}},
+		{name: "both outputs", flags: []string{"--action-eligibility", "--next-transition"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			repo := initReviewCLIRepo(t)
+			beforeStatus := runReviewCLIGit(t, repo, "status", "--porcelain")
+			args := append([]string{"finalize", "--cwd", repo}, tt.flags...)
+			var output bytes.Buffer
+			err := RunReview(args, &output)
+			if err == nil {
+				t.Fatal("missing contract request succeeded")
+			}
+			var preflight *reviewIntegrationPreflightError
+			if !errors.As(err, &preflight) {
+				t.Fatalf("error = %T, want reviewIntegrationPreflightError: %v", err, err)
+			}
+			if err.Error() != reviewContractRequiredForActionEligibilityReason {
+				t.Fatalf("error = %q, want %q", err.Error(), reviewContractRequiredForActionEligibilityReason)
+			}
+			failure := newReviewIntegrationFailure(ReviewIntegrationOperationFinalize, args[1:], err)
+			if failure.Phase != "preflight" || failure.Code != "invalid_request" ||
+				failure.MutationOutcome != ReviewMutationNotStarted || !failure.RetrySafe {
+				t.Fatalf("failure = %#v", failure)
+			}
+			if output.Len() != 0 {
+				t.Fatalf("unnegotiated preflight wrote output: %q", output.String())
+			}
+			if afterStatus := runReviewCLIGit(t, repo, "status", "--porcelain"); afterStatus != beforeStatus {
+				t.Fatalf("working tree changed: before=%q after=%q", beforeStatus, afterStatus)
+			}
+			if _, statErr := os.Stat(reviewCLIAuthorityRoot(t, repo)); !os.IsNotExist(statErr) {
+				t.Fatalf("preflight created review authority: %v", statErr)
+			}
+			reportDir := reviewDefectReportDir(t, repo)
+			entries, readErr := os.ReadDir(reportDir)
+			if readErr == nil && len(entries) != 0 {
+				t.Fatalf("preflight generated defect reports: %v", entries)
+			} else if readErr != nil && !os.IsNotExist(readErr) {
+				t.Fatalf("inspect defect reports: %v", readErr)
+			}
+		})
+	}
+}
+
 func TestNegotiatedReviewContractFailuresArePreMutationAndLegacyErrorsStayCompatible(t *testing.T) {
 	tests := []struct {
 		name string
