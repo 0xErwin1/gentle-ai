@@ -34,15 +34,9 @@ func reviewInspectCandidateDependencies() reviewInspectCandidateDeps {
 		timeout:          reviewInspectCandidateTimeout,
 		operationContext: context.WithTimeout,
 		resolve:          resolveOpaqueReviewRepositoryRoot,
-		resolveCorrected: func(ctx context.Context, handle string, binding reviewtransaction.ReviewRepositoryContextBinding, requestHash string) (reviewtransaction.SnapshotBuilder, reviewtransaction.Snapshot, error) {
-			builder, snapshot, err := reviewtransaction.ResolveCorrectedCandidateInspectionBinding(ctx, handle, binding, requestHash)
-			if err != nil {
-				return reviewtransaction.SnapshotBuilder{}, reviewtransaction.Snapshot{}, reviewRepositoryContextResolutionFailure(err)
-			}
-			return builder, snapshot, nil
-		},
-		discover: discoverCompactFacadeReview,
-		inspect:  reviewtransaction.SnapshotBuilder.InspectCandidate,
+		resolveCorrected: reviewtransaction.ResolveCorrectedCandidateInspectionBinding,
+		discover:         discoverCompactFacadeReview,
+		inspect:          reviewtransaction.SnapshotBuilder.InspectCandidate,
 	}
 }
 
@@ -66,7 +60,7 @@ func runReviewInspectCandidate(args []string, help io.Writer, deps reviewInspect
 	revision := flags.String("expected-revision", "", "exact reviewing authority revision")
 	lineage := flags.String("lineage", "", "exact review lineage identifier")
 	target := flags.String("target", "", "exact frozen target identity")
-	purpose := flags.String("purpose", "reviewing-lens", "reviewing-lens or targeted-validation")
+	purpose := flags.String("purpose", "reviewing-lens", "reviewing-lens or "+reviewTargetedValidationPurpose)
 	requestHash := flags.String("request-hash", "", "exact targeted-validation request hash")
 	lens := flags.String("lens", "", "exact selected lens")
 	order := flags.Int("order", -1, "zero-based selected lens order")
@@ -76,7 +70,7 @@ func runReviewInspectCandidate(args []string, help io.Writer, deps reviewInspect
 	if err := parseReviewFlags(flags, args); err != nil || reviewHelpRequested(args) {
 		return nil, err
 	}
-	if *purpose != "targeted-validation" {
+	if *purpose != reviewTargetedValidationPurpose {
 		if *purpose != "reviewing-lens" {
 			return nil, reviewPreflightError(errors.New("review inspect-candidate purpose must be reviewing-lens or targeted-validation")) // refusal:by-design operator-knowledge: the native inspector has exactly two disjoint authority modes
 		}
@@ -106,7 +100,9 @@ func runReviewInspectCandidate(args []string, help io.Writer, deps reviewInspect
 	default:
 		return nil, reviewPreflightError(fmt.Errorf("unknown candidate inspection operation %q; run `gentle-ai review inspect-candidate --help` for the closed command forms", *operation))
 	}
-	if *purpose == "targeted-validation" {
+	var builder reviewtransaction.SnapshotBuilder
+	var snapshot reviewtransaction.Snapshot
+	if *purpose == reviewTargetedValidationPurpose {
 		if flags.NArg() != 0 || strings.TrimSpace(*repositoryContext) == "" || strings.TrimSpace(*revision) == "" ||
 			strings.TrimSpace(*lineage) == "" || strings.TrimSpace(*target) == "" || strings.TrimSpace(*requestHash) == "" {
 			return nil, reviewPreflightError(errors.New("review inspect-candidate targeted validation requires the exact provider-issued repository context, revision, lineage, target, and request hash; run `gentle-ai review inspect-candidate --help` for the closed command forms"))
@@ -114,40 +110,40 @@ func runReviewInspectCandidate(args []string, help io.Writer, deps reviewInspect
 		if reviewFlagWasProvided(flags, "lens") || reviewFlagWasProvided(flags, "order") {
 			return nil, reviewPreflightError(errors.New("review inspect-candidate targeted validation does not accept --lens or --order")) // refusal:by-design operator-knowledge: only a fresh targeted transition names the lens-free inspector binding
 		}
-		builder, snapshot, err := deps.resolveCorrected(ctx, *repositoryContext, reviewtransaction.ReviewRepositoryContextBinding{
+		var err error
+		builder, snapshot, err = deps.resolveCorrected(ctx, *repositoryContext, reviewtransaction.ReviewRepositoryContextBinding{
 			LineageID: *lineage, TargetIdentity: *target, Revision: *revision,
 		}, *requestHash)
 		if err != nil {
+			var contextResolution *reviewtransaction.CorrectedCandidateInspectionRepositoryContextError
+			if errors.As(err, &contextResolution) {
+				err = reviewRepositoryContextResolutionFailure(err)
+			}
 			return nil, reviewInspectCandidateError(err)
 		}
-		payload, err := deps.inspect(builder, ctx, snapshot, *operation, *pathIndex, *side)
+	} else {
+		root, err := deps.resolve(ctx, *repositoryContext, reviewtransaction.ReviewRepositoryContextBinding{
+			LineageID: *lineage, TargetIdentity: *target, Revision: *revision,
+		})
 		if err != nil {
-			return nil, reviewInspectCandidateError(reviewPreflightError(fmt.Errorf("inspect frozen candidate: %w", err)))
-		}
-		if ctx.Err() != nil {
-			return nil, reviewInspectCandidateError(ctx.Err())
-		}
-		return payload, nil
-	}
-	root, err := deps.resolve(ctx, *repositoryContext, reviewtransaction.ReviewRepositoryContextBinding{
-		LineageID: *lineage, TargetIdentity: *target, Revision: *revision,
-	})
-	if err != nil {
-		return nil, reviewInspectCandidateError(err)
-	}
-	_, record, err := deps.discover(ctx, root, *lineage, false)
-	if err != nil {
-		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 			return nil, reviewInspectCandidateError(err)
 		}
-		return nil, reviewPreflightError(&reviewInspectCandidateAuthorityError{cause: err})
+		_, record, err := deps.discover(ctx, root, *lineage, false)
+		if err != nil {
+			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+				return nil, reviewInspectCandidateError(err)
+			}
+			return nil, reviewPreflightError(&reviewInspectCandidateAuthorityError{cause: err})
+		}
+		state := record.State
+		if state.State != reviewtransaction.StateReviewing || state.InitialSnapshot.Identity != *target || record.Revision != *revision ||
+			*order >= len(state.SelectedLenses) || state.SelectedLenses[*order] != *lens {
+			return nil, reviewPreflightError(errors.New("candidate inspection binding does not match the current reviewing authority; refresh the exact native next_transition before retrying `gentle-ai review inspect-candidate`"))
+		}
+		builder = reviewtransaction.SnapshotBuilder{Repo: root}
+		snapshot = state.InitialSnapshot
 	}
-	state := record.State
-	if state.State != reviewtransaction.StateReviewing || state.InitialSnapshot.Identity != *target || record.Revision != *revision ||
-		*order >= len(state.SelectedLenses) || state.SelectedLenses[*order] != *lens {
-		return nil, reviewPreflightError(errors.New("candidate inspection binding does not match the current reviewing authority; refresh the exact native next_transition before retrying `gentle-ai review inspect-candidate`"))
-	}
-	payload, err := deps.inspect(reviewtransaction.SnapshotBuilder{Repo: root}, ctx, state.InitialSnapshot, *operation, *pathIndex, *side)
+	payload, err := deps.inspect(builder, ctx, snapshot, *operation, *pathIndex, *side)
 	if err != nil {
 		return nil, reviewInspectCandidateError(reviewPreflightError(fmt.Errorf("inspect frozen candidate: %w", err)))
 	}
