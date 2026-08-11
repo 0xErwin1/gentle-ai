@@ -75,7 +75,7 @@ func frozenAuthorityInventory(r *journeyRun) ([]byte, int, error) {
 		if entry.Type()&os.ModeSymlink != 0 {
 			return fmt.Errorf("authority inventory contains symlink %q", path)
 		}
-		if entry.IsDir() {
+		if entry.IsDir() || entry.Name() == "LOCK" {
 			return nil
 		}
 		payload, err := os.ReadFile(path)
