@@ -2698,8 +2698,35 @@ func TestInjectOpenCodeNativeFallbackAgentsPromptsAlignedWithGentlePi(t *testing
 				if !ok || strings.TrimSpace(prompt) == "" {
 					t.Fatalf("agent %q missing non-empty prompt for mode %q", fallbackAgent, sddMode)
 				}
-				if fallbackAgent == "explore" && !strings.Contains(prompt, "gentle-pi") {
-					t.Fatalf("explore fallback agent prompt missing gentle-pi alignment guidance: %s", prompt)
+				if fallbackAgent == "general" {
+					if !strings.Contains(prompt, "empirical verification") || !strings.Contains(prompt, "Do NOT launch child sub-agents") {
+						t.Fatalf("general fallback agent prompt is missing its bounded auxiliary-task contract: %s", prompt)
+					}
+				} else {
+					if !strings.Contains(prompt, "gentle-pi") || !strings.Contains(prompt, "Do not create, edit, or delete files") {
+						t.Fatalf("explore fallback agent prompt is missing its read-only contract: %s", prompt)
+					}
+					description, _ := agent["description"].(string)
+					if strings.Contains(strings.ToLower(description+" "+prompt), "web search") {
+						t.Fatalf("explore fallback agent advertises an unavailable web-search tool: %s", description)
+					}
+				}
+				tools, ok := agent["tools"].(map[string]any)
+				if !ok {
+					t.Fatalf("agent %q tools have type %T, want object", fallbackAgent, agent["tools"])
+				}
+				wantTools := map[string]bool{
+					"read":  true,
+					"write": fallbackAgent == "general",
+					"edit":  fallbackAgent == "general",
+					"bash":  fallbackAgent == "general",
+					"task":  false,
+				}
+				for tool, want := range wantTools {
+					got, exists := tools[tool].(bool)
+					if !exists || got != want {
+						t.Errorf("agent %q tool %q = %v, want %t", fallbackAgent, tool, tools[tool], want)
+					}
 				}
 			}
 		})
@@ -4236,6 +4263,20 @@ func TestInjectKilocodeKeepsLegacyBackgroundAgentsPluginAndRemovesOpenCodeReview
 	}
 	if _, err := os.Stat(reviewPluginPath); !os.IsNotExist(err) {
 		t.Fatalf("OpenCode-only review plugin remains installed for Kilo: %v", err)
+	}
+	settings, err := os.ReadFile(filepath.Join(home, ".config", "kilo", "opencode.json"))
+	if err != nil {
+		t.Fatalf("ReadFile(Kilocode settings) error = %v", err)
+	}
+	var root map[string]any
+	if err := json.Unmarshal(settings, &root); err != nil {
+		t.Fatalf("Unmarshal(Kilocode settings) error = %v", err)
+	}
+	agentMap, _ := root["agent"].(map[string]any)
+	for _, fallbackAgent := range []string{"general", "explore"} {
+		if _, exists := agentMap[fallbackAgent]; exists {
+			t.Fatalf("Kilocode settings must not receive OpenCode-only fallback agent %q", fallbackAgent)
+		}
 	}
 }
 
