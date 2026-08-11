@@ -1254,22 +1254,48 @@ func projectFromGitConfig(content string) string {
 	return ""
 }
 
-var engramTitlePattern = regexp.MustCompile(`^sdd/([^/]+)/(proposal|spec|design|tasks|apply-progress|verify-report|review/(?:transaction|policy|ledger|receipt|chain-bundle|gate-context)|state)$`)
+var engramTitlePattern = regexp.MustCompile(`^sdd/([^/]+)/(proposal|spec|design|tasks|apply-progress|verify-report|review/(?:transaction|policy|ledger|receipt|chain-bundle|gate-context)|state|archive-report)$`)
 
 func collectEngramChanges(observations []engramObservation, project string) []string {
+	// An Engram-backed change has no directory to move, so nothing about the
+	// store itself says a change is finished. OpenSpec derives "active" from
+	// what stays out of openspec/changes/archive/; Engram has no equivalent, so
+	// before this every change that ever persisted an artifact was reported
+	// active forever — thirty of them on one real project, seven of those
+	// archived weeks earlier (#3008).
+	//
+	// The archive phase already writes sdd/{change}/archive-report and calls it
+	// the audit trail. That report is the closure signal; it was simply not in
+	// the title pattern, so the one artifact proving a change is done was the
+	// one this never read.
+	archived := map[string]bool{}
 	seen := map[string]bool{}
 	for _, observation := range observations {
 		if !engramObservationMatchesProject(observation, project) {
 			continue
 		}
 		matches := engramTitlePattern.FindStringSubmatch(strings.TrimSpace(observation.Title))
-		if len(matches) != 3 || matches[2] == "state" {
+		if len(matches) != 3 {
 			continue
 		}
-		seen[matches[1]] = true
+		switch matches[2] {
+		case "archive-report":
+			archived[matches[1]] = true
+		case "state":
+			// Progress metadata, not evidence that work exists.
+		default:
+			seen[matches[1]] = true
+		}
 	}
 	changes := make([]string, 0, len(seen))
 	for change := range seen {
+		// Excluded from DISCOVERY only. Naming an archived change still
+		// resolves it through engramArtifactsForChange, because "which changes
+		// are in flight" and "show me this change" are different questions and
+		// the artifacts remain the audit trail.
+		if archived[change] {
+			continue
+		}
 		changes = append(changes, change)
 	}
 	sort.Strings(changes)
