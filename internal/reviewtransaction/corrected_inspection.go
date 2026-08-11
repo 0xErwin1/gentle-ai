@@ -80,7 +80,10 @@ func ResolveCorrectedCandidateInspectionBinding(ctx context.Context, repositoryC
 		return SnapshotBuilder{}, Snapshot{}, err
 	}
 	record, err := store.Load()
-	if err != nil || record.Revision != binding.Revision || record.State.State != StateCorrectionRequired ||
+	if err != nil {
+		return SnapshotBuilder{}, Snapshot{}, err
+	}
+	if record.Revision != binding.Revision || record.State.State != StateCorrectionRequired ||
 		record.State.ProposedCorrectionLines == nil || record.State.CorrectionAttemptConsumed() {
 		return SnapshotBuilder{}, Snapshot{}, errors.New("corrected candidate inspection requires current unconsumed correction authority") // refusal:by-design operator-knowledge: a stale or spent correction must be refreshed through STATUS
 	}

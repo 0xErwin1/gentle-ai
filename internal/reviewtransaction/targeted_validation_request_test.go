@@ -2,7 +2,9 @@ package reviewtransaction
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"os"
 	"reflect"
 	"strings"
 	"testing"
@@ -181,6 +183,15 @@ func TestResolveCorrectedCandidateInspectionFailsClosed(t *testing.T) {
 		request.RequestHash = targetedValidationRequestHash(request)
 		if _, err := ResolveCorrectedCandidateInspection(context.Background(), handle, request); err == nil {
 			t.Fatal("altered correction paths resolved")
+		}
+	})
+	t.Run("propagates authority load error", func(t *testing.T) {
+		_, request, _, handle, binding, store := correctedInspectionFixture(t, "corrected-inspection-load-error", &passed)
+		if err := os.Remove(store.StatePath()); err != nil {
+			t.Fatal(err)
+		}
+		if _, _, err := ResolveCorrectedCandidateInspectionBinding(context.Background(), handle, binding, request.RequestHash); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("binding load error = %v, want %v", err, os.ErrNotExist)
 		}
 	})
 	t.Run("missing evidence", func(t *testing.T) {
