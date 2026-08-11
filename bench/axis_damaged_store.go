@@ -426,6 +426,10 @@ type storeInspection struct {
 		LineageID string `json:"lineage_id"`
 		Problem   string `json:"problem"`
 	} `json:"entry_diagnostics"`
+	SanctionedExits []struct {
+		LineageID string `json:"successor_lineage_id"`
+		Operation string `json:"operation"`
+	} `json:"sanctioned_exits"`
 }
 
 // storeStatus is the subset of `review status` that says whether the store
@@ -1318,12 +1322,16 @@ func dispositionRepositoryBinding(sandbox *Sandbox) (string, error) {
 // (authority_disposition_plan.go) computes internally, mirroring how
 // reconcileArgs and abandonArgs above hand-render their own authorization
 // bindings rather than depending on an exported production helper.
-func dispositionAuthorization(binding, planDigest, inventoryRevision, actor, reason string) string {
+func dispositionAuthorization(binding, planDigest, inventoryRevision, actor, reason string, class ...string) string {
+	authorizationClass := contentMismatchedRecoveryAuthorizationClass
+	if len(class) == 1 {
+		authorizationClass = class[0]
+	}
 	return strings.Join([]string{
 		authorityDispositionAuthorizationSchema,
 		"schema=" + authorityDispositionPlanSchema,
 		"repository=" + binding,
-		"class=" + contentMismatchedRecoveryAuthorizationClass,
+		"class=" + authorizationClass,
 		"plan_digest=" + planDigest,
 		"inventory_revision=" + inventoryRevision,
 		"actor=" + actor,
