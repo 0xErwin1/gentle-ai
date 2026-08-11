@@ -692,6 +692,7 @@ func resolveAdvertisedSelector(ctx context.Context, repo, selector string, sourc
 	}
 	remotes := strings.Fields(string(output))
 	matches := []PrePRBoundarySelection{}
+	operationalErrors := []error{}
 	for _, remote := range remotes {
 		branch := selector
 		if strings.HasPrefix(selector, remote+"/") {
@@ -704,11 +705,19 @@ func resolveAdvertisedSelector(ctx context.Context, repo, selector string, sourc
 		}
 		identity, identityErr := remoteRepositoryIdentity(ctx, repo, remote)
 		if identityErr != nil {
-			return PrePRBoundarySelection{}, identityErr
+			if strings.Contains(selector, "/") {
+				return PrePRBoundarySelection{}, identityErr
+			}
+			operationalErrors = append(operationalErrors, identityErr)
+			continue
 		}
 		remoteOutput, queryErr := runGit(ctx, repo, nil, nil, "ls-remote", "--heads", remote, branch)
 		if queryErr != nil {
-			return PrePRBoundarySelection{}, queryErr
+			if strings.Contains(selector, "/") {
+				return PrePRBoundarySelection{}, queryErr
+			}
+			operationalErrors = append(operationalErrors, queryErr)
+			continue
 		}
 		advertisedOutput := strings.TrimSpace(string(remoteOutput))
 		if advertisedOutput == "" {
@@ -721,6 +730,9 @@ func resolveAdvertisedSelector(ctx context.Context, repo, selector string, sourc
 			}
 			matches = append(matches, PrePRBoundarySelection{Source: source, Selector: selector, Commit: fields[0], Remote: remote, RemoteRef: fields[1], RemoteIdentity: identity})
 		}
+	}
+	if len(matches) == 0 && len(operationalErrors) > 0 {
+		return PrePRBoundarySelection{}, errors.Join(operationalErrors...)
 	}
 	if len(matches) != 1 {
 		return PrePRBoundarySelection{}, baseRefTargetResolutionError(fmt.Sprintf("explicit pre-PR base %q is missing or ambiguous on advertised remote branches; pass --base-ref <remote>/<branch>", selector))

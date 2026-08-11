@@ -70,8 +70,8 @@ func TestPortableSDDFailClosedAuthorityJourneysAreRegistered(t *testing.T) {
 	// j96 proves #2891 blocks an off-path sibling in a nested same-repository workspace.
 	// Bump this deliberately when a journey is added OR removed, and name it
 	// here: the count exists so a journey cannot appear or vanish unnoticed.
-	if got := len(seen); got != 95 {
-		t.Errorf("core journey count = %d, want 95", got)
+	if got := len(seen); got != 96 {
+		t.Errorf("core journey count = %d, want 96", got)
 	}
 	for id, found := range want {
 		if !found {
