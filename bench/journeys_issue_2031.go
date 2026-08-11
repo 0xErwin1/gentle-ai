@@ -43,18 +43,30 @@ func stageIssue2031RecoveryTarget(sandbox *Sandbox) error {
 }
 
 func negotiateIssue2031Recovery(r *journeyRun) error {
+	expectedCandidateTree, err := gitOut(r.sandbox, r.sandbox.Repo, "write-tree")
+	if err != nil {
+		return fmt.Errorf("derive staged issue #2031 recovery tree: %w", err)
+	}
 	envelope, err := readStatusFor(r, "--lineage", issue2031EscalatedPredecessor)
 	if err != nil {
 		return err
 	}
+	expectedRevision := envelope.Authority.Revision
+	expectedTarget := envelope.TargetIdentity
+	if expectedCandidateTree == "" || expectedRevision == "" || expectedTarget == "" {
+		return fmt.Errorf("escalated changed-scope recovery anchors = tree=%q revision=%q target=%q, want non-empty", expectedCandidateTree, expectedRevision, expectedTarget)
+	}
 	if envelope.Authority.LineageID != issue2031EscalatedPredecessor || envelope.Authority.State != "escalated" ||
+		envelope.Projection.CurrentCandidateTree != expectedCandidateTree ||
+		strings.Join(envelope.Projection.Paths, "\x00") != "docs/recovery.md\x00internal/auth/session.go" ||
 		envelope.NextTransition.Kind != "collect" || envelope.NextTransition.ReasonCode != "recovery_authorization_required" ||
 		len(envelope.NextTransition.Collect.Inputs) != 1 {
 		return fmt.Errorf("escalated changed-scope status = %+v, want bound recovery authorization collection", envelope)
 	}
 	input := envelope.NextTransition.Collect.Inputs[0]
 	if input.CaptureOperation != "external.authorize_recovery" ||
-		envelope.argument("lineage") != issue2031EscalatedPredecessor || envelope.argument("expected-revision") == "" || envelope.argument("target") == "" || envelope.argument("disposition") != "escalated" {
+		envelope.argument("lineage") != issue2031EscalatedPredecessor || envelope.argument("expected-revision") != expectedRevision ||
+		envelope.argument("target") != expectedTarget || envelope.argument("disposition") != "escalated" {
 		return fmt.Errorf("escalated recovery collection = %+v, want fully bound escalated authorization", input)
 	}
 	const successor = "issue-2031-escalated-successor"
@@ -63,8 +75,8 @@ func negotiateIssue2031Recovery(r *journeyRun) error {
 	authorization := strings.Join([]string{
 		"gentle-ai.review-recovery-authorization/v1",
 		"predecessor_lineage=" + issue2031EscalatedPredecessor,
-		"predecessor_revision=" + envelope.argument("expected-revision"),
-		"target_identity=" + envelope.argument("target"),
+		"predecessor_revision=" + expectedRevision,
+		"target_identity=" + expectedTarget,
 		"successor_lineage=" + successor,
 		"actor=" + actor,
 		"reason=" + reason,
@@ -75,9 +87,11 @@ func negotiateIssue2031Recovery(r *journeyRun) error {
 	if err != nil || authorized.NextTransition.Kind != "execute" || authorized.NextTransition.Execute.Operation != "review.recover" {
 		return fmt.Errorf("authorized escalated recovery continuation = %+v, %v", authorized.NextTransition, err)
 	}
-	if authorized.executeArgument("predecessor-lineage") != issue2031EscalatedPredecessor ||
-		authorized.executeArgument("expected-predecessor-revision") != envelope.Authority.Revision ||
-		authorized.executeArgument("successor-lineage") != successor || authorized.executeArgument("disposition") != "escalated" {
+	if authorized.Authority.Revision != expectedRevision || authorized.TargetIdentity != expectedTarget ||
+		authorized.executeArgument("predecessor-lineage") != issue2031EscalatedPredecessor ||
+		authorized.executeArgument("expected-predecessor-revision") != expectedRevision ||
+		authorized.executeArgument("successor-lineage") != successor || authorized.executeArgument("disposition") != "escalated" ||
+		authorized.executeArgument("maintainer-authorization") != authorization {
 		return fmt.Errorf("authorized escalated recovery binding = %+v", authorized.NextTransition.Execute)
 	}
 	recovery, err := runPrintedTransition(r, authorized)
@@ -86,12 +100,12 @@ func negotiateIssue2031Recovery(r *journeyRun) error {
 	}
 	recovered, err := decodeWaveOperation(recovery, "escalated changed-scope recovery")
 	if err != nil || recovered.LineageID != successor || recovered.State != "reviewing" ||
-		recovered.TargetIdentity != authorized.TargetIdentity {
+		recovered.TargetIdentity != expectedTarget {
 		return fmt.Errorf("escalated recovery successor = %+v, %v", recovered, err)
 	}
 	successorStatus, err := readStatusFor(r, "--lineage", successor)
 	if err != nil || successorStatus.Authority.LineageID != successor || successorStatus.Authority.State != "reviewing" ||
-		successorStatus.TargetIdentity != recovered.TargetIdentity {
+		successorStatus.TargetIdentity != expectedTarget {
 		return fmt.Errorf("escalated recovery successor status = %+v, %v", successorStatus, err)
 	}
 	return nil
