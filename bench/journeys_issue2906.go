@@ -41,9 +41,30 @@ func assertIssue2906MissingContractPreflight(run *journeyRun) error {
 		{name: "both outputs", flags: []string{"--action-eligibility", "--next-transition"}},
 	}
 	for _, test := range cases {
+		caseRoot, err := os.MkdirTemp(run.sandbox.Root, "issue2906-missing-contract-")
+		if err != nil {
+			return fmt.Errorf("%s create isolated sandbox: %w", test.name, err)
+		}
+		defer func() { _ = os.RemoveAll(caseRoot) }()
+		caseSandbox, err := newSandbox(run.sandbox.Binary, caseRoot)
+		if err != nil {
+			return fmt.Errorf("%s create isolated sandbox: %w", test.name, err)
+		}
+		if err := baseRepo(caseSandbox); err != nil {
+			return fmt.Errorf("%s create isolated repository: %w", test.name, err)
+		}
+		gitBefore, err := gitOut(caseSandbox, caseSandbox.Repo, "status", "--porcelain=v1")
+		if err != nil {
+			return fmt.Errorf("%s inspect repository before invocation: %w", test.name, err)
+		}
+		headBefore, err := gitOut(caseSandbox, caseSandbox.Repo, "rev-parse", "HEAD")
+		if err != nil {
+			return fmt.Errorf("%s inspect repository head before invocation: %w", test.name, err)
+		}
+		caseRun := &journeyRun{sandbox: caseSandbox, probe: newCapabilityProbe(caseSandbox), accumulator: run.accumulator, step: run.step}
 		args := append([]string{"review", "finalize"}, test.flags...)
-		args = append(args, "--cwd", run.sandbox.Repo)
-		observation := run.run(args, false)
+		args = append(args, "--cwd", caseSandbox.Repo)
+		observation := caseRun.run(args, false)
 		if observation.ExitCode == 0 {
 			return fmt.Errorf("%s accepted missing --contract", test.name)
 		}
@@ -55,11 +76,28 @@ func assertIssue2906MissingContractPreflight(run *journeyRun) error {
 			strings.Contains(observation.Stdout+observation.Stderr, "defect report") {
 			return fmt.Errorf("%s emitted generic fault or defect-report text", test.name)
 		}
-	}
-
-	authorityRoot := filepath.Join(run.sandbox.Repo, ".git", "gentle-ai")
-	if _, err := os.Stat(authorityRoot); !errors.Is(err, os.ErrNotExist) {
-		return fmt.Errorf("missing-contract preflight created authority state: %v", err)
+		gitAfter, err := gitOut(caseSandbox, caseSandbox.Repo, "status", "--porcelain=v1")
+		if err != nil {
+			return fmt.Errorf("%s inspect repository after invocation: %w", test.name, err)
+		}
+		headAfter, err := gitOut(caseSandbox, caseSandbox.Repo, "rev-parse", "HEAD")
+		if err != nil {
+			return fmt.Errorf("%s inspect repository head after invocation: %w", test.name, err)
+		}
+		if gitAfter != gitBefore || headAfter != headBefore {
+			return fmt.Errorf("%s mutated repository: status %q -> %q, HEAD %q -> %q", test.name, gitBefore, gitAfter, headBefore, headAfter)
+		}
+		authorityRoot := filepath.Join(caseSandbox.Repo, ".git", "gentle-ai")
+		if _, err := os.Stat(authorityRoot); !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("%s created authority state: %v", test.name, err)
+		}
+		reportDir := filepath.Join(authorityRoot, "defect-reports")
+		if _, err := os.Stat(reportDir); !errors.Is(err, os.ErrNotExist) {
+			if err == nil {
+				return fmt.Errorf("%s wrote a defect report", test.name)
+			}
+			return fmt.Errorf("%s inspect defect reports: %w", test.name, err)
+		}
 	}
 	return nil
 }
