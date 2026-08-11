@@ -609,6 +609,7 @@ var abandonCapability = &Capability{Verb: []string{"review", "abandon"}, Flags: 
 func Journeys() []Journey {
 	journeys := append(coreJourneys(), edgeJourneys()...)
 	journeys = append(journeys, sddJourneys()...)
+	journeys = append(journeys, issue2891Journeys()...)
 	journeys = append(journeys, sddChainJourneys()...)
 	journeys = append(journeys, captureEvidenceDescriptorJourneys()...)
 	journeys = append(journeys, scopeChangedFixtureJourneys()...)

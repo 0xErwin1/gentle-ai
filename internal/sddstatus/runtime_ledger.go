@@ -523,7 +523,7 @@ type runtimeRecord struct {
 
 // runtimeGrantEvent is the persisted per-change edit-authority grant (#2540
 // S2): a maintainer-authorized record that this change's apply actor may edit
-// the named repository roots, recorded as canonical absolute symlink-evaluated
+// the named edit roots, recorded as canonical absolute symlink-evaluated
 // paths following BeginWorktree's canonicalization precedent. GrantedAt is
 // the ledger's FIRST wall-clock field: digest-safe (the content-addressed
 // record revision binds it immutably) but excluded from the request digest
@@ -2722,7 +2722,7 @@ func normalizeGrantRootsRequest(request GrantRootsRequest) (GrantRootsRequest, e
 		return GrantRootsRequest{}, errors.New("request_id must be a canonical lowercase identifier")
 	}
 	if len(request.Roots) < 1 || len(request.Roots) > maximumRuntimeGrantRoots {
-		return GrantRootsRequest{}, fmt.Errorf("grant requires between 1 and %d roots", maximumRuntimeGrantRoots) // refusal:by-design operator-knowledge: only the caller knows which repository roots this change needs; retry with a bounded non-empty root list
+		return GrantRootsRequest{}, fmt.Errorf("grant requires between 1 and %d roots", maximumRuntimeGrantRoots) // refusal:by-design operator-knowledge: only the caller knows which edit roots this change needs; retry with a bounded non-empty root list
 	}
 	canonical := make([]string, 0, len(request.Roots))
 	seen := make(map[string]struct{}, len(request.Roots))
