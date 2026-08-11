@@ -745,6 +745,11 @@ func advertisedRemoteRef(ctx context.Context, repo, remote, ref, selector string
 	if advertisedOutput == "" {
 		return PrePRBoundarySelection{}, baseRefTargetResolutionError(fmt.Sprintf("base selector %q is not a current advertised remote branch; pass --base-ref <remote>/<branch>", selector))
 	}
+	// A direct lookup must receive one complete record; strings.Fields would
+	// otherwise merge an OID and ref split across record separators.
+	if strings.ContainsAny(advertisedOutput, "\r\n\x00") {
+		return PrePRBoundarySelection{}, &GitAdvertisedRemoteOutputError{Remote: remote, Ref: ref, Output: advertisedOutput}
+	}
 	fields := strings.Fields(advertisedOutput)
 	if len(fields) != 2 || fields[1] != ref || !validGitTree(fields[0]) {
 		return PrePRBoundarySelection{}, &GitAdvertisedRemoteOutputError{Remote: remote, Ref: ref, Output: advertisedOutput}
