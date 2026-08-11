@@ -1146,6 +1146,50 @@ func TestNewReviewIntegrationFailureCause(t *testing.T) {
 	}
 }
 
+func TestEscalatedRecoveryAuthorizationInexactUsesCurrentRepairRoute(t *testing.T) {
+	tests := []struct {
+		name           string
+		repairable     bool
+		wantNextAction string
+		wantMessage    string
+	}{
+		{
+			name:           "schema-prefixed content mismatch",
+			repairable:     true,
+			wantNextAction: "review.repair",
+			wantMessage:    "run review repair",
+		},
+		{
+			name:           "pre-contract authorization",
+			repairable:     false,
+			wantNextAction: "stop",
+			wantMessage:    "no advertised repair operation",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			runErr := fmt.Errorf("invalid compact authority graph: %w", &reviewtransaction.CompactRecoveryAuthorizationInexactError{
+				Projection: reviewtransaction.ProjectionWorkspace, TargetIdentity: "sha256:" + strings.Repeat("a", 64), Repairable: tt.repairable,
+			})
+			failure := newReviewIntegrationFailure(
+				ReviewIntegrationOperationFinalize,
+				[]string{"--lineage", "review-authorization-route"},
+				runErr,
+			)
+			if failure.Code != "escalated_recovery_authorization_inexact" || failure.Phase != "pre_native" ||
+				failure.MutationOutcome != ReviewMutationNotStarted || failure.AuthorityApplicability != "current_target" ||
+				failure.RetrySafe || failure.Replayability != reviewtransaction.ReplayabilityManualActionRequired ||
+				failure.NextAction != tt.wantNextAction || !strings.Contains(failure.Message, tt.wantMessage) ||
+				failure.NextAction == "reconcile-authority" || failure.Cause == "" {
+				t.Fatalf("authorization failure = %#v", failure)
+			}
+			if err := failure.Validate(); err != nil {
+				t.Fatalf("authorization failure validation = %v", err)
+			}
+		})
+	}
+}
+
 func decodeReviewIntegrationFailure(t *testing.T, payload []byte) ReviewIntegrationFailure {
 	t.Helper()
 	decoder := json.NewDecoder(bytes.NewReader(payload))
