@@ -1443,7 +1443,7 @@ func applyResolvedPersona(selection *model.Selection, persisted string) {
 			selection.Persona = id
 			return
 		}
-		// Sync entry points reject unknown persisted values before resolution.
+		// The sync entry points reject unknown persisted values before resolution.
 	}
 	// Default-safe fallback for state files written before persona persistence.
 	selection.Persona = model.PersonaNeutral
@@ -1471,6 +1471,7 @@ func migratePersistedPersonaAlias(homeDir string, persisted *state.InstallState,
 // A missing state file is allowed for fresh homes; a decoded state without a
 // persona remains compatible with legacy installations.
 func validatePersistedSyncState(persisted state.InstallState, readErr error) error {
+	// guard:population persisted-sync-state-integrity fail-closed: legitimate persisted sync state is a missing file or decoded state with an empty or supported persona; read/decode errors, whitespace-only values, and unsupported persona values remain excluded
 	if readErr != nil {
 		if os.IsNotExist(readErr) {
 			return nil
