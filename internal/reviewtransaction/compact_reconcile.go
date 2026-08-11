@@ -108,7 +108,7 @@ func classifyCompactRecoveryEdgeAnomalies(predecessor, successor CompactRecord) 
 		recorded := sha256.Sum256([]byte(recovery.MaintainerAuthorization))
 		classification.RecordedAuthorizationSHA256 = "sha256:" + hex.EncodeToString(recorded[:])
 		return classification
-	case errors.Is(edgeErr, errCompactRecoveryAuthorizationInexact):
+	case errors.Is(edgeErr, ErrCompactRecoveryAuthorizationInexact):
 		if strings.HasPrefix(recovery.MaintainerAuthorization, compactRecoveryAuthorizationSchema) {
 			classification.NonReconcilableError = fmt.Errorf("successor %q records a %s binding bound to different content; that is corruption, not a pre-contract authorization", successor.State.LineageID, compactRecoveryAuthorizationSchema)
 			classification.DispositionClass = compactContentMismatchedRecoveryAuthorizationClass

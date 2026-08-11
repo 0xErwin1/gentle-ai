@@ -80,10 +80,10 @@ func RecoveryPredecessorNotInvalidated(err error) bool {
 	return errors.Is(err, errCompactRecoveryPredecessorNotInvalidated)
 }
 
-// errCompactRecoveryAuthorizationInexact identifies the escalated-recovery
-// authorization-binding anomaly. The public error below preserves whether the
+// ErrCompactRecoveryAuthorizationInexact identifies the escalated-recovery
+// authorization-binding anomaly. The typed error below preserves whether the
 // current disposition planner admits the recorded authorization shape.
-var errCompactRecoveryAuthorizationInexact = errors.New("escalated recovery requires an exact maintainer authorization binding")
+var ErrCompactRecoveryAuthorizationInexact = errors.New("escalated recovery requires an exact maintainer authorization binding")
 
 // CompactRecoveryAuthorizationInexactError identifies a recovery edge whose
 // authorization does not bind the exact predecessor, successor, actor, and
@@ -100,11 +100,11 @@ func (err *CompactRecoveryAuthorizationInexactError) Error() string {
 	if projection == "" {
 		projection = ProjectionWorkspace
 	}
-	return fmt.Sprintf("%s (projection=%s target_identity=%s)", errCompactRecoveryAuthorizationInexact, projection, err.TargetIdentity)
+	return fmt.Sprintf("%s (projection=%s target_identity=%s)", ErrCompactRecoveryAuthorizationInexact, projection, err.TargetIdentity)
 }
 
 func (err *CompactRecoveryAuthorizationInexactError) Unwrap() error {
-	return errCompactRecoveryAuthorizationInexact
+	return ErrCompactRecoveryAuthorizationInexact
 }
 
 // compactRecoveryAuthorizationSchema is the first line of the exact six-line

@@ -197,7 +197,7 @@ func TestClassifyCompactRecoveryEdgeAnomalies(t *testing.T) {
 		},
 		{
 			// The other content-mismatch branch:
-			// errCompactRecoveryAuthorizationInexact with a schema-prefixed but
+			// ErrCompactRecoveryAuthorizationInexact with a schema-prefixed but
 			// wrong-content authorization.
 			name: "schema-prefixed different-content authorization is non-reconcilable corruption",
 			mutate: func(_ CompactRecord, successor *CompactRecord) {
