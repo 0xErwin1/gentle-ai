@@ -1680,6 +1680,11 @@ var repairDispositionExecuteCapability = &Capability{
 	Flags: []string{"--cwd", "--plan-digest", "--inventory-revision", "--actor", "--reason", "--authorization"},
 }
 
+var finalizeAuthorizationFailureCapability = &Capability{
+	Verb:  []string{"review", "finalize"},
+	Flags: []string{"--cwd", "--contract", "--lineage", "--captured-results"},
+}
+
 // ---------------------------------------------------------------------------
 // Corpus
 // ---------------------------------------------------------------------------
@@ -2031,7 +2036,58 @@ func damagedStoreJourneys() []Journey {
 						invalidEdgesWithNoAnomalyClass(1))},
 			},
 		},
+		{
+			ID:     "ds14-finalize-authorization-mismatch-is-typed",
+			Title:  "A real FINALIZE over a schema-prefixed authorization mismatch is typed before mutation and names review repair",
+			Source: "issue #1928: review finalize must classify pre-native recovery authorization failures and expose the current review.repair route",
+			// The fixture reproduces the issue's original boundary: the successor
+			// already contains product-captured reviewer output, but its recorded
+			// schema-prefixed authorization binds a reason different from the one
+			// persisted in the recovery provenance. FINALIZE must fail while
+			// validating that edge, not report operation_outcome_unknown after a
+			// mutation that never started.
+			Steps: []Step{
+				{Name: "fixture: non-pristine successor with a schema-prefixed mismatched authorization", Fixture: damagedEdgeWithResults},
+				{Name: "negotiate FINALIZE over the damaged successor", Requires: finalizeAuthorizationFailureCapability,
+					Args:  damagedSuccessorFinalizeArgs,
+					After: requireTypedAuthorizationMismatchFailure},
+				{Name: "the failed FINALIZE did not mutate the damaged authority", Composite: proveStoreStillDamaged},
+			},
+		},
 	}, closureDispositionJourneys()...)
+}
+
+func damagedSuccessorFinalizeArgs(sandbox *Sandbox) ([]string, error) {
+	lineage, err := scratchValue(sandbox, scratchSuccessor)
+	if err != nil {
+		return nil, err
+	}
+	return []string{"review", "finalize", "--contract", reviewContract, "--lineage", lineage, "--captured-results=true", "--cwd", sandbox.Repo}, nil
+}
+
+type typedAuthorizationMismatchFailure struct {
+	Operation       string `json:"operation"`
+	Code            string `json:"code"`
+	Phase           string `json:"phase"`
+	MutationOutcome string `json:"mutation_outcome"`
+	NextAction      string `json:"next_action"`
+	Cause           string `json:"cause"`
+}
+
+func requireTypedAuthorizationMismatchFailure(_ *Sandbox, observation Observation) error {
+	if observation.ExitCode == 0 {
+		return errors.New("review finalize succeeded over the damaged authorization")
+	}
+	var failure typedAuthorizationMismatchFailure
+	if err := json.Unmarshal([]byte(strings.TrimSpace(observation.Stdout)), &failure); err != nil {
+		return fmt.Errorf("parse negotiated finalize failure: %w (stderr: %s)", err, firstLine(observation.Stderr))
+	}
+	if failure.Operation != "review.finalize" || failure.Code != "escalated_recovery_authorization_inexact" ||
+		failure.Phase != "pre_native" || failure.MutationOutcome != "not_started" || failure.NextAction != "review.repair" ||
+		failure.Cause == "" || strings.Contains(observation.Stdout, "operation_outcome_unknown") || strings.Contains(observation.Stdout, "reconcile-authority") {
+		return fmt.Errorf("negotiated finalize failure = %#v, want typed pre-native repair route", failure)
+	}
+	return nil
 }
 
 // requireUnrelatedTargetIsRouted is ds13's measurement. The negotiated surface

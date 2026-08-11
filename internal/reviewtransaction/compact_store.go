@@ -81,9 +81,31 @@ func RecoveryPredecessorNotInvalidated(err error) bool {
 }
 
 // errCompactRecoveryAuthorizationInexact identifies the escalated-recovery
-// authorization-binding anomaly so reconcile-authority can gate quarantine of
-// historical pre-contract free-form authorizations to exactly this class.
+// authorization-binding anomaly. The public error below preserves whether the
+// current disposition planner admits the recorded authorization shape.
 var errCompactRecoveryAuthorizationInexact = errors.New("escalated recovery requires an exact maintainer authorization binding")
+
+// CompactRecoveryAuthorizationInexactError identifies a recovery edge whose
+// authorization does not bind the exact predecessor, successor, actor, and
+// reason. Repairable is true only for the schema-prefixed content-mismatch
+// class admitted by the current provider-owned disposition plan.
+type CompactRecoveryAuthorizationInexactError struct {
+	Projection     Projection
+	TargetIdentity string
+	Repairable     bool
+}
+
+func (err *CompactRecoveryAuthorizationInexactError) Error() string {
+	projection := err.Projection
+	if projection == "" {
+		projection = ProjectionWorkspace
+	}
+	return fmt.Sprintf("%s (projection=%s target_identity=%s)", errCompactRecoveryAuthorizationInexact, projection, err.TargetIdentity)
+}
+
+func (err *CompactRecoveryAuthorizationInexactError) Unwrap() error {
+	return errCompactRecoveryAuthorizationInexact
+}
 
 // compactRecoveryAuthorizationSchema is the first line of the exact six-line
 // escalated-recovery maintainer authorization binding.
@@ -310,7 +332,7 @@ func RecoverCompactAuthority(ctx context.Context, repo string, request CompactRe
 	if !sameRecoveryProjection(predecessor.State.InitialSnapshot.Projection, request.Successor.InitialSnapshot.Projection) &&
 		!stagedScopeRecovery &&
 		request.MaintainerAuthorization != compactRecoveryAuthorizationBinding(request.PredecessorLineageID, predecessor.Revision, request.Successor.InitialSnapshot.Identity, request.Actor, request.Reason) {
-		return CompactRecord{}, compactRecoveryAuthorizationError(request.Successor.InitialSnapshot)
+		return CompactRecord{}, compactRecoveryAuthorizationError(request.Successor.InitialSnapshot, request.MaintainerAuthorization)
 	}
 	// Every shape the three comparisons above do not cover still records the
 	// caller's authorization verbatim in the provenance below, so a supplied
@@ -321,7 +343,7 @@ func RecoverCompactAuthority(ctx context.Context, repo string, request CompactRe
 		!compactRecoverySuppliedAuthorizationBinds(request.MaintainerAuthorization, request.PredecessorLineageID,
 			predecessor.Revision, request.Successor.InitialSnapshot.Identity, request.Successor.LineageID,
 			request.Actor, request.Reason) {
-		return CompactRecord{}, compactRecoveryAuthorizationError(request.Successor.InitialSnapshot)
+		return CompactRecord{}, compactRecoveryAuthorizationError(request.Successor.InitialSnapshot, request.MaintainerAuthorization)
 	}
 	existing, existingErr := successorStore.Load()
 	if existingErr != nil && !os.IsNotExist(existingErr) {
@@ -584,7 +606,7 @@ func validateCompactRecoveryEdge(predecessor CompactRecord, successor CompactSta
 				return errCompactApprovedRecoveryScopeUnchanged
 			}
 			if forgedSchemaAuthorization() {
-				return compactRecoveryAuthorizationError(next)
+				return compactRecoveryAuthorizationError(next, recovery.MaintainerAuthorization)
 			}
 		case StateCorrectionRequired:
 			if strings.TrimSpace(recovery.MaintainerAuthorization) == "" {
@@ -603,7 +625,7 @@ func validateCompactRecoveryEdge(predecessor CompactRecord, successor CompactSta
 				}
 			}
 			if forgedSchemaAuthorization() {
-				return compactRecoveryAuthorizationError(successor.InitialSnapshot)
+				return compactRecoveryAuthorizationError(successor.InitialSnapshot, recovery.MaintainerAuthorization)
 			}
 			if !compactRecoveryAddsGenesisPath(predecessor.State, successor.InitialSnapshot) &&
 				!compactRecoveryContractsGenesisPaths(predecessor.State, successor.InitialSnapshot) {
@@ -617,12 +639,12 @@ func validateCompactRecoveryEdge(predecessor CompactRecord, successor CompactSta
 			return errCompactRecoveryPredecessorNotInvalidated
 		}
 		if forgedSchemaAuthorization() {
-			return compactRecoveryAuthorizationError(successor.InitialSnapshot)
+			return compactRecoveryAuthorizationError(successor.InitialSnapshot, recovery.MaintainerAuthorization)
 		}
 	case RecoveryEscalated:
 		if recovery.Evidence != nil {
 			if recovery.MaintainerAuthorization != compactRecoveryAuthorizationBinding(predecessor.State.LineageID, predecessor.Revision, successor.InitialSnapshot.Identity, recovery.Actor, recovery.Reason) {
-				return compactRecoveryAuthorizationError(successor.InitialSnapshot)
+				return compactRecoveryAuthorizationError(successor.InitialSnapshot, recovery.MaintainerAuthorization)
 			}
 			if err := validateCompactRecoveredEvidenceEdge(predecessor, successor); err != nil {
 				return err
@@ -637,7 +659,7 @@ func validateCompactRecoveryEdge(predecessor CompactRecord, successor CompactSta
 			return errCompactRecoveryTargetUnchanged
 		}
 		if recovery.MaintainerAuthorization != compactRecoveryAuthorizationBinding(predecessor.State.LineageID, predecessor.Revision, successor.InitialSnapshot.Identity, recovery.Actor, recovery.Reason) {
-			return compactRecoveryAuthorizationError(successor.InitialSnapshot)
+			return compactRecoveryAuthorizationError(successor.InitialSnapshot, recovery.MaintainerAuthorization)
 		}
 	case RecoveryFinalVerificationRetry:
 		return validateCompactFinalVerificationRetryEdge(predecessor, successor)
@@ -706,12 +728,15 @@ func sameRecoveryProjection(left, right Projection) bool {
 	return left == right
 }
 
-func compactRecoveryAuthorizationError(snapshot Snapshot) error {
+func compactRecoveryAuthorizationError(snapshot Snapshot, authorization string) error {
 	projection := snapshot.Projection
 	if projection == "" {
 		projection = ProjectionWorkspace
 	}
-	return fmt.Errorf("%w (projection=%s target_identity=%s)", errCompactRecoveryAuthorizationInexact, projection, snapshot.Identity)
+	return &CompactRecoveryAuthorizationInexactError{
+		Projection: projection, TargetIdentity: snapshot.Identity,
+		Repairable: strings.HasPrefix(authorization, compactRecoveryAuthorizationSchema),
+	}
 }
 
 func compactRecoveryAddsGenesisPath(predecessor CompactState, live Snapshot) bool {

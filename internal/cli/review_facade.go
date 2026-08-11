@@ -2500,6 +2500,9 @@ func runReviewFacadeFinalize(ctx context.Context, args []string, stdout io.Write
 			current = current || leaf.StatePath() == store.StatePath()
 		}
 		if !current {
+			if blocked := reviewtransaction.CompactAuthorityLineageBlocked(ctx, root, *lineage); blocked != nil {
+				return blocked
+			}
 			return fmt.Errorf("review lineage %q is superseded", *lineage)
 		}
 	}
