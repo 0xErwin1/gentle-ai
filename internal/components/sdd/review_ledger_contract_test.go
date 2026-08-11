@@ -338,7 +338,11 @@ func TestKilocodeReviewSettingsMatchCurrentMainBaseline(t *testing.T) {
 	// the shared contract. Kilocode embeds it in the orchestrator prompt, so
 	// the hash moved. A rendered comparison against origin/main confirmed this
 	// is the only changed settings scalar.
-	const want = "c614460175fbf92a20d7b372c7e5a179ffac3dd46f54b92e5510ad5389816eae"
+	// The defect handoff's admissibility gate now tests what PRODUCED a failure
+	// instead of whether the workflow appeared blocked, so the automated report
+	// stops filing other projects' defects. Kilocode embeds the orchestrator in
+	// its settings, so the hash moved. Deliberate, not drift.
+	const want = "7538ff110911ed4941787dbb6b361a90a8ea673a25c57ad4c621f5fbeb1921fa"
 	if got != want {
 		t.Fatalf("Kilocode settings SHA-256 = %s, want current-main baseline %s", got, want)
 	}
