@@ -896,6 +896,14 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 		}
 		result := newReviewTargetStatusResultForContract(native, *contract)
 		result.intendedUntracked = intendedScope
+		if native.Decision.FrozenReviewing {
+			// Explicit reviewing resume keeps the immutable scope that the reviewer
+			// artifacts bind, rather than asking live workspace drift to select one.
+			intendedScope = reviewIntendedUntrackedScope{
+				Intended: append([]string{}, native.Projection.IntendedUntracked...), Declared: true,
+			}
+			result.intendedUntracked = intendedScope
+		}
 		// STATUS renders the core's executable decision, never the raw spelling
 		// the CLI parsed.
 		selector.Kind, selector.Projection = result.decision.Selector.Kind, result.decision.Selector.Projection
@@ -1043,7 +1051,7 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 			// superseded lineage still occupies the name this target derives, and
 			// a start naming nothing would answer blocked-scope-action at exit 0.
 			startLineage := strings.TrimSpace(*lineage)
-			if startLineage == "" && native.Applicability == reviewtransaction.TargetApplicabilityUnrelated {
+			if native.Applicability == reviewtransaction.TargetApplicabilityUnrelated && !reviewStartLineageAvailable(ctx, root, startLineage) {
 				startLineage = reviewAvailableStartLineage(ctx, root, native.TargetIdentity)
 			}
 			input := reviewNextTransitionInput{Gate: reviewtransaction.GateKind(*gate), Successor: *recoverySuccessor, Reason: *recoveryReason, Actor: *recoveryActor, Authorization: *recoveryAuthorization, RepairActor: *repairActor, RepairReason: *repairReason, RepairAuthorization: *repairAuthorization, StartLineage: startLineage, RuntimeAgent: runtime, Contract: *contract, RepositoryContext: repositoryContext, ValidationRequest: validationRequest, CorrectionRequest: correctionRequest, EvidenceErr: evidenceErr, CorrectionForecasted: correctionForecasted, CaptureContext: captureContext, Selector: selector, IntendedUntracked: intendedScope, RDDMode: result.rddMode, RDDModeResolved: result.rddModeResolved, PreCommitDeliveryAssessment: preCommitDeliveryAssessment}
