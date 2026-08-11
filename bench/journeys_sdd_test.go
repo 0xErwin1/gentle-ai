@@ -56,6 +56,7 @@ func TestPortableSDDFailClosedAuthorityJourneysAreRegistered(t *testing.T) {
 	// j93 proves #2822 classifies stale managed assets before START can persist;
 	// j94 proves #2031 executes recovery when escalated target scope changes;
 	// j95 proves #2945 corrected-tree inspection.
+	// j99 proves #2906 classifies missing FINALIZE contract flags before mutation.
 	// #1993 REMOVED two: j38 (the bound-passing-finish refusal routing to the
 	// review router) and j39 (the stranded-successor exit it named). Review
 	// acts after implementation and verification, so that refusal is gone and
@@ -66,8 +67,8 @@ func TestPortableSDDFailClosedAuthorityJourneysAreRegistered(t *testing.T) {
 	// j96 proves #2891 blocks an off-path sibling in a nested same-repository workspace.
 	// Bump this deliberately when a journey is added OR removed, and name it
 	// here: the count exists so a journey cannot appear or vanish unnoticed.
-	if got := len(seen); got != 93 {
-		t.Errorf("core journey count = %d, want 93", got)
+	if got := len(seen); got != 94 {
+		t.Errorf("core journey count = %d, want 94", got)
 	}
 	for id, found := range want {
 		if !found {
