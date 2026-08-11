@@ -110,18 +110,19 @@ type TargetStatusResult struct {
 }
 
 type targetStatusCandidate struct {
-	version            AuthorityVersion
-	lineage            string
-	compact            *CompactRecord
-	legacy             *ValidatedChain
-	legacyStore        *Store
-	receiptIdentity    string
-	receiptPublished   bool
-	receiptCanonical   bool
-	receiptReplayable  bool
-	pendingFinalize    bool
-	correctionRecovery bool
-	frozenReviewing    bool
+	version                     AuthorityVersion
+	lineage                     string
+	compact                     *CompactRecord
+	legacy                      *ValidatedChain
+	legacyStore                 *Store
+	receiptIdentity             string
+	receiptPublished            bool
+	receiptCanonical            bool
+	receiptReplayable           bool
+	pendingFinalize             bool
+	correctionRecovery          bool
+	frozenReviewing             bool
+	frozenReviewingPendingSlots bool
 	// selectorFreeAccountingOnlyRecovery is carried from the eligibility
 	// predicate so projection never guesses it from snapshot identity domains.
 	selectorFreeAccountingOnlyRecovery bool
@@ -236,12 +237,13 @@ func assessTargetStatusSnapshot(ctx context.Context, repo string, request Target
 		state := candidate.compact.State
 		if request.LineageID != "" && request.Target.Kind == TargetCurrentChanges && request.Target.Projection != ProjectionStaged &&
 			!compactLiveTargetMatchesValidatedSnapshot(state, live, true) {
-			eligible, eligibilityErr := explicitReviewingCompactCandidate(ctx, repo, candidate)
+			eligible, pendingSlots, eligibilityErr := explicitReviewingCompactCandidate(ctx, repo, candidate)
 			if eligibilityErr != nil {
 				return targetStatusFailure(base, eligibilityErr)
 			}
 			if eligible {
 				candidate.frozenReviewing = true
+				candidate.frozenReviewingPendingSlots = pendingSlots
 				candidates = append(candidates, candidate)
 				continue
 			}
@@ -439,43 +441,41 @@ func assessTargetStatusSnapshot(ctx context.Context, repo string, request Target
 
 // explicitReviewingCompactCandidate admits a drifted reviewing authority only
 // after its immutable review inputs and every canonical result slot are safe.
-func explicitReviewingCompactCandidate(ctx context.Context, repo string, candidate targetStatusCandidate) (bool, error) {
+// It also reports whether a reviewer result remains to be captured.
+func explicitReviewingCompactCandidate(ctx context.Context, repo string, candidate targetStatusCandidate) (bool, bool, error) {
 	if candidate.compact == nil {
-		return false, nil
+		return false, false, nil
 	}
 	state := candidate.compact.State
-	if state.State != StateReviewing || candidate.pendingFinalize || len(state.SelectedLenses) == 0 {
-		return false, nil
+	if state.State != StateReviewing || len(state.SelectedLenses) == 0 {
+		return false, false, nil
 	}
 	superseded, err := CompactLineageSuperseded(ctx, repo, state.LineageID)
 	if err != nil || superseded {
-		return false, err
+		return false, false, err
 	}
 	store, err := CompactAuthoritativeStore(ctx, repo, state.LineageID)
 	if err != nil {
-		return false, err
+		return false, false, err
 	}
 	pending := false
 	for order, lens := range state.SelectedLenses {
 		slot, err := ReadCompactReviewerResultSlot(store.Dir, order, lens)
 		if err != nil {
-			return false, err
+			return false, false, err
 		}
 		pending = pending || !slot.Occupied
 	}
-	if !pending {
-		return false, nil
-	}
 	frozen, err := (SnapshotBuilder{Repo: repo}).FrozenCandidateContext(ctx, state.InitialSnapshot)
 	if err != nil {
-		return false, err
+		return false, false, err
 	}
 	for order, lens := range state.SelectedLenses {
 		if _, err := NewArtifactSubject(state, candidate.compact.Revision, frozen, lens, order, ""); err != nil {
-			return false, err
+			return false, false, err
 		}
 	}
-	return true, nil
+	return true, pending, nil
 }
 
 func compactLocalBaseAdvanceCompatibility(ctx context.Context, repo string, state CompactState, target Target, live Snapshot) *BaseAdvanceCompatibility {
@@ -543,6 +543,10 @@ func targetStatusForCandidate(result TargetStatusResult, candidate targetStatusC
 		result.ReceiptIdentity = candidate.receiptIdentity
 		if candidate.pendingFinalize {
 			result.Action, result.Replayability = TargetStatusActionReconcileFinalize, ReplayabilityStatusRequired
+			return result
+		}
+		if candidate.frozenReviewing && !candidate.frozenReviewingPendingSlots {
+			result.Action, result.Replayability = TargetStatusActionStop, ReplayabilityManualActionRequired
 			return result
 		}
 		if candidate.finalVerificationRetry != nil {

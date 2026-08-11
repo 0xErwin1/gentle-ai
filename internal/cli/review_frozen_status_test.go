@@ -99,14 +99,15 @@ func TestExplicitFrozenReviewingStatusRejectsPartialSlotsAndStaleStartLineages(t
 		}
 	})
 
-	t.Run("occupied slots and stale selector start fresh", func(t *testing.T) {
+	t.Run("occupied slots retain the selected lineage", func(t *testing.T) {
 		repo, _, record := frozenReviewingStatusFixture(t, reviewtransaction.TargetCurrentChanges, nil)
 		captureFrozenReviewerResults(t, repo, record, len(record.State.SelectedLenses))
 		writeReviewStartCandidate(t, repo, "service-token.ts", "export const token = 'live drift'\n", 0o644)
 		stale := explicitFrozenReviewingStatus(t, repo, record.State.LineageID)
-		if stale.Applicability != reviewtransaction.TargetApplicabilityUnrelated || stale.NextTransition == nil ||
-			stale.NextTransition.Execute == nil || stale.NextTransition.Execute.Operation != "review.start" ||
-			stale.NextTransition.Execute.Binding.LineageID == record.State.LineageID {
+		if stale.Applicability != reviewtransaction.TargetApplicabilityCurrent || stale.Authority == nil ||
+			stale.Authority.LineageID != record.State.LineageID || stale.Action != reviewtransaction.TargetStatusActionStop ||
+			stale.Replayability != reviewtransaction.ReplayabilityManualActionRequired || stale.NextTransition == nil ||
+			stale.NextTransition.Kind != reviewNextTransitionStop || stale.NextTransition.ReasonCode != "native_stop_required" {
 			t.Fatalf("occupied stale status = %#v", stale)
 		}
 		fresh := explicitFrozenReviewingStatus(t, repo, "requested-new-lineage")
@@ -132,6 +133,9 @@ func TestExplicitFrozenReviewingStatusRejectsPartialSlotsAndStaleStartLineages(t
 func frozenReviewingStatusFixture(t *testing.T, kind reviewtransaction.TargetKind, intended []string) (string, reviewtransaction.CompactStore, reviewtransaction.CompactRecord) {
 	t.Helper()
 	if kind == reviewtransaction.TargetBaseWorkspaceOverlay {
+		if len(intended) != 0 {
+			t.Fatal("staged frozen fixture does not support intended untracked paths")
+		}
 		return frozenStagedReviewingStatusFixture(t)
 	}
 	reviewModeHome(t)
@@ -147,9 +151,6 @@ func frozenReviewingStatusFixture(t *testing.T, kind reviewtransaction.TargetKin
 		runReviewCLIGit(t, repo, "add", "service-token.ts")
 		runReviewCLIGit(t, repo, "commit", "-qm", "frozen base diff")
 		target.BaseRef = base
-	case reviewtransaction.TargetBaseWorkspaceOverlay:
-		runReviewCLIGit(t, repo, "add", "service-token.ts")
-		target.BaseRef, target.Projection = base, reviewtransaction.ProjectionStaged
 	}
 	builder := reviewtransaction.SnapshotBuilder{Repo: repo}
 	snapshot, err := builder.BuildStoredSnapshot(t.Context(), target)

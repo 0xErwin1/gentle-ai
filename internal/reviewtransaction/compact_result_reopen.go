@@ -81,6 +81,7 @@ type compactProviderReviewerResult struct {
 	Evidence    []string           `json:"evidence"`
 }
 
+// CompactReviewerResultSlot is one immutable reviewer-result publication slot.
 type CompactReviewerResultSlot struct {
 	Occupied bool
 	Payload  []byte
@@ -452,8 +453,9 @@ func readCompactReviewerArtifact(path string) ([]byte, string, error) {
 
 var readCompactReviewerResultSlotFile = readPrivateCompactReviewerFile
 
+// ReadCompactReviewerResultSlot reads and verifies one immutable result slot.
 func ReadCompactReviewerResultSlot(storeDir string, order int, lens string) (CompactReviewerResultSlot, error) {
-	if order < 0 || (lens != LensRisk && lens != LensResilience && lens != LensReadability && lens != LensReliability) {
+	if order < 0 || !isSupportedLens(lens) {
 		return CompactReviewerResultSlot{}, errors.New("reviewer result slot requires a selected order and lens") // refusal:by-design operator-knowledge: callers pass only the frozen selected order and lens
 	}
 	path := filepath.Join(storeDir, CompactReviewerResultsDir, fmt.Sprintf("%02d-%s.json", order, lens))
