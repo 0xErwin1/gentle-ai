@@ -2203,7 +2203,7 @@ func reviewConsentFollowUpBase(
 	parts := []string{
 		"gentle-ai review start",
 		"--contract " + contract,
-		"--cwd " + cwd,
+		"--cwd " + reviewTransitionShellWord(cwd),
 		"--target " + target,
 		"--projection " + string(projection),
 	}
@@ -2223,7 +2223,7 @@ func reviewConsentFollowUpBase(
 		parts = append(parts, "--workspace-overlay")
 	}
 	if policy != "" {
-		parts = append(parts, "--policy "+policy)
+		parts = append(parts, "--policy "+reviewTransitionShellWord(policy))
 	}
 	// The focus default never needs restating; only an explicit non-default
 	// focus changes what the answered start would select.
@@ -2231,7 +2231,7 @@ func reviewConsentFollowUpBase(
 		parts = append(parts, "--focus "+focus)
 	}
 	if trace != "" {
-		parts = append(parts, "--trace "+trace)
+		parts = append(parts, "--trace "+reviewTransitionShellWord(trace))
 	}
 	if locale != "" {
 		parts = append(parts, "--locale "+locale)
