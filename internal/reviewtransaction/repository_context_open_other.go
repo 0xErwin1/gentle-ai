@@ -4,6 +4,6 @@ package reviewtransaction
 
 import "os"
 
-func openReviewRepositoryContext(path string, openFile func(string) (*os.File, error)) (*os.File, error) {
-	return openFile(path)
+func openReviewRepositoryContext(path string) (*os.File, error) {
+	return os.Open(path)
 }
