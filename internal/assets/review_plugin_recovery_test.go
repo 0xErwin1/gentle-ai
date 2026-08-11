@@ -1,6 +1,8 @@
 package assets
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"os"
 	"os/exec"
@@ -150,12 +152,11 @@ const reviewPluginNativeTrustFailure = "git_repository_untrusted: provider-issue
 	"gentle-ai never provisions a safe.directory exception and never bypasses that protection. " +
 	"Restart the host process under a Git context that already trusts that repository, then retry the same exact binding"
 
-// reviewPluginStub configures the fake `gentle-ai` binary the harness runs
-// against. lensContext feeds the one native call the reduced plugin still
-// makes (`review lens-context`); stderr is the generic always-fail fallback
-// used by every scenario that needs a failing native binary. argvLog, when
-// set, records the exact argv of every invocation, one line per call --
-// proof of exactly which native command ran, and with which flags.
+// reviewPluginStub configures the exact fake binary that the harness records
+// as the runtime pin. lensContext feeds the one native call the reduced plugin
+// still makes (`review lens-context`); stderr is the generic always-fail
+// fallback used by every scenario that needs a failing native binary. argvLog,
+// when set, records the exact argv of every invocation, one line per call.
 type reviewPluginStub struct {
 	stderr      string
 	lensContext string
@@ -188,21 +189,43 @@ func runReviewPluginScenarioStub(t *testing.T, scenario string, stub reviewPlugi
 			t.Fatal(err)
 		}
 	}
-	// The stub answers `review lens-context` with one finished provider block,
+	// The stub answers `version` and `review lens-context`, matching the two
+	// non-semantic identity and transport calls the plugin makes.
+	//
+	// The lens-context response is one finished provider block,
 	// exactly like the real native command does for the frozen trees. It is
 	// the ONLY native subcommand the reduced plugin ever invokes: there is no
 	// capture-result or preserve-result branch left to stub, because the
 	// plugin no longer calls either -- it hands the model's raw final text
 	// back to its caller instead.
 	stubScript := "#!/bin/sh\n" +
-		"cat >/dev/null\n" +
 		"if [ -n \"$GENTLE_AI_STUB_ARGV_LOG\" ]; then printf '%s\\n' \"$*\" >> \"$GENTLE_AI_STUB_ARGV_LOG\"; fi\n" +
+		"cat >/dev/null\n" +
+		"if [ \"$1\" = \"version\" ]; then printf 'gentle-ai stub\\n'; exit 0; fi\n" +
 		"if [ \"$2\" = \"lens-context\" ] && [ -n \"$GENTLE_AI_STUB_LENS_CONTEXT\" ]; then\n" +
 		"  printf '%s\\n' \"$GENTLE_AI_STUB_LENS_CONTEXT\"\n" +
 		"  exit 0\n" +
 		"fi\n" +
 		"printf '%s\\n' \"$GENTLE_AI_STUB_STDERR\" >&2\nexit 1\n"
 	if err := os.WriteFile(filepath.Join(binDir, "gentle-ai"), []byte(stubScript), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	sum := sha256.Sum256([]byte(stubScript))
+	statePayload, err := json.Marshal(map[string]map[string]string{
+		"opencode_runtime_provenance": {
+			"executable": filepath.Join(binDir, "gentle-ai"),
+			"sha256":     "sha256:" + hex.EncodeToString(sum[:]),
+			"version":    "gentle-ai stub",
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	statePath := filepath.Join(root, ".gentle-ai", "state.json")
+	if err := os.MkdirAll(filepath.Dir(statePath), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(statePath, append(statePayload, '\n'), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(root, "plugin.mts"), []byte(source), 0o600); err != nil {
@@ -218,12 +241,15 @@ func runReviewPluginScenarioStub(t *testing.T, scenario string, stub reviewPlugi
 	// value the developer's own shell happens to carry must never mask that.
 	base := make([]string, 0, len(os.Environ()))
 	for _, entry := range os.Environ() {
-		if strings.HasPrefix(entry, "OPENCODE_DISABLE_PROJECT_CONFIG=") || strings.HasPrefix(entry, "OPENCODE_DISABLE_EXTERNAL_SKILLS=") {
+		if strings.HasPrefix(entry, "OPENCODE_DISABLE_PROJECT_CONFIG=") || strings.HasPrefix(entry, "OPENCODE_DISABLE_EXTERNAL_SKILLS=") ||
+			strings.HasPrefix(entry, "HOME=") || strings.HasPrefix(entry, "USERPROFILE=") {
 			continue
 		}
 		base = append(base, entry)
 	}
 	command.Env = append(base,
+		"HOME="+root,
+		"USERPROFILE="+root,
 		"PATH="+binDir+string(os.PathListSeparator)+os.Getenv("PATH"),
 		"GENTLE_AI_STUB_STDERR="+stub.stderr,
 		"GENTLE_AI_STUB_LENS_CONTEXT="+stub.lensContext,
