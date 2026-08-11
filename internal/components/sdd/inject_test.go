@@ -3082,6 +3082,72 @@ func TestInjectOpenCodeMultiModeWithModelAssignments(t *testing.T) {
 	}
 }
 
+func TestInjectOpenCodeMultiModeWithCustomAgentModelAssignment(t *testing.T) {
+	mockNoPackageManager(t)
+	home := t.TempDir()
+	settingsPath := filepath.Join(home, ".config", "opencode", "opencode.json")
+	if err := os.MkdirAll(filepath.Dir(settingsPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	seed := `{"agent":{"custom-refactor":{"mode":"subagent","model":"old/provider-model","description":"preserve me","variant":"high"}}}`
+	if err := os.WriteFile(settingsPath, []byte(seed), 0o644); err != nil {
+		t.Fatalf("WriteFile(opencode.json) error = %v", err)
+	}
+
+	assignments := map[string]model.ModelAssignment{
+		"custom-refactor": {ProviderID: "openai", ModelID: "gpt-5-mini"},
+		"missing-custom":  {ProviderID: "openai", ModelID: "gpt-5"},
+	}
+	if _, err := Inject(home, opencodeAdapter(), model.SDDModeMulti, InjectOptions{OpenCodeModelAssignments: assignments}); err != nil {
+		t.Fatalf("Inject(multi, custom assignment) error = %v", err)
+	}
+
+	content, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatalf("ReadFile(opencode.json) error = %v", err)
+	}
+	root := map[string]any{}
+	if err := json.Unmarshal(content, &root); err != nil {
+		t.Fatalf("Unmarshal(opencode.json) error = %v", err)
+	}
+	agents, ok := root["agent"].(map[string]any)
+	if !ok {
+		t.Fatal("opencode.json missing agent map")
+	}
+	custom, ok := agents["custom-refactor"].(map[string]any)
+	if !ok {
+		t.Fatal("custom-refactor agent missing after sync")
+	}
+	if custom["model"] != "openai/gpt-5-mini" {
+		t.Fatalf("custom-refactor model = %v, want openai/gpt-5-mini", custom["model"])
+	}
+	if custom["description"] != "preserve me" || custom["mode"] != "subagent" {
+		t.Fatalf("custom-refactor settings were not preserved: %v", custom)
+	}
+	if variant, ok := custom["variant"].(string); !ok || variant != "" {
+		t.Fatalf("custom-refactor variant = %v, want empty string", custom["variant"])
+	}
+	if _, exists := agents["missing-custom"]; exists {
+		t.Fatal("inject must not create a missing custom agent definition")
+	}
+
+	firstContent := append([]byte(nil), content...)
+	secondResult, err := Inject(home, opencodeAdapter(), model.SDDModeMulti, InjectOptions{OpenCodeModelAssignments: assignments})
+	if err != nil {
+		t.Fatalf("repeat Inject(multi, custom assignment) error = %v", err)
+	}
+	if secondResult.Changed {
+		t.Fatal("repeat Inject(multi, custom assignment) changed = true")
+	}
+	secondContent, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatalf("ReadFile(opencode.json) after repeat sync error = %v", err)
+	}
+	if !bytes.Equal(secondContent, firstContent) {
+		t.Fatalf("repeat sync changed opencode.json bytes:\nfirst:\n%s\nsecond:\n%s", firstContent, secondContent)
+	}
+}
+
 func TestInjectOpenCodeMultiModeNoAssignmentsNoModel(t *testing.T) {
 	mockNoPackageManager(t)
 	home := t.TempDir()
