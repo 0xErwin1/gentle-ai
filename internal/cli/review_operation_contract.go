@@ -265,6 +265,16 @@ var reviewPreflightUntrackedScopeReason = reviewPreflightReason{
 	NextAction: "stop",
 }
 
+// reviewPreflightManagedAssetsReason classifies a START that is refused before
+// any authority can be created because this binary's managed reviewer assets
+// differ from the recorded installation state. The exact sync remediation stays
+// in the cause because it is the existing operator-facing source of truth.
+var reviewPreflightManagedAssetsReason = reviewPreflightReason{
+	Code:       "managed_assets_outdated",
+	Message:    "Managed reviewer assets are outdated; synchronize them before starting review.",
+	NextAction: "stop",
+}
+
 // reviewPreflightDirectRouteUncompletableReason classifies a direct
 // (non-negotiated) `review start` that would select at least one lens.
 // Issue #2447: the direct route's own response type cannot carry
