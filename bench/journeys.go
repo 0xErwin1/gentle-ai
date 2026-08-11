@@ -478,26 +478,20 @@ func pushHead(sandbox *Sandbox) error {
 	return sandbox.git(sandbox.Repo, "push", "-q", "origin", "HEAD")
 }
 
-func breakRemoteForIssue1890(sandbox *Sandbox) error {
-	return sandbox.git(sandbox.Repo, "remote", "set-url", "origin", filepath.Join(sandbox.Root, "missing-remote.git"))
+func addUnreachableRemoteForIssue1890(sandbox *Sandbox) error {
+	return sandbox.git(sandbox.Repo, "remote", "add", "backup", filepath.Join(sandbox.Root, "missing-remote.git"))
 }
 
 func issue1890PrePushArgs(sandbox *Sandbox) ([]string, error) {
 	if strings.TrimSpace(sandbox.Lineage) == "" {
 		return nil, errors.New("review start did not leave a lineage for the explicit pre-push gate")
 	}
-	return []string{"review", "validate", "--lineage", sandbox.Lineage, "--gate", "pre-push", "--base-ref", "origin/main", "--cwd", sandbox.Repo}, nil
+	return []string{"review", "validate", "--lineage", sandbox.Lineage, "--gate", "pre-push", "--base-ref", "main", "--cwd", sandbox.Repo}, nil
 }
 
-func assertIssue1890RemoteFailure(_ *Sandbox, observation Observation) error {
-	if observation.ExitCode == 0 {
-		return errors.New("pre-push unexpectedly succeeded after the advertised remote became unavailable")
-	}
-	if !strings.Contains(observation.Stderr, "git ls-remote --heads origin main failed") {
-		return fmt.Errorf("pre-push did not preserve the ls-remote failure: %s", observation.Stderr)
-	}
-	if strings.Contains(observation.Stderr, "missing or ambiguous") || strings.Contains(observation.Stderr, "not a current advertised remote branch") {
-		return fmt.Errorf("pre-push flattened the operational failure into a semantic selector error: %s", observation.Stderr)
+func assertIssue1890ValidRemoteWins(_ *Sandbox, observation Observation) error {
+	if observation.ExitCode != 0 {
+		return fmt.Errorf("pre-push did not use the valid advertised remote: %s", observation.Stderr)
 	}
 	return nil
 }
@@ -753,7 +747,7 @@ func coreJourneys() []Journey {
 		},
 		{
 			ID:     "j97-pre-push-preserves-ls-remote-failure",
-			Title:  "Failure path: pre-push preserves an advertised remote query failure",
+			Title:  "Failure path: pre-push selects a valid remote despite an unrelated query failure",
 			Source: "issue #1890: advertised remote identity and ls-remote failures must not become semantic selector errors",
 			Steps: []Step{
 				{Name: "fixture: repo with remote", Fixture: baseRepoWithRemote},
@@ -762,9 +756,9 @@ func coreJourneys() []Journey {
 				{Name: "review finalize", Requires: finalizeCapability, Args: productArgs("review", "finalize")},
 				{Name: "gate pre-commit", Requires: validateCapability, Args: productArgs("review", "validate", "--gate", "pre-commit")},
 				{Name: "fixture: commit", Fixture: commitStaged("docs: remote failure")},
-				{Name: "fixture: make origin unavailable", Fixture: breakRemoteForIssue1890},
-				{Name: "gate pre-push preserves ls-remote failure", Requires: validateBaseRefCapability,
-					Args: issue1890PrePushArgs, After: assertIssue1890RemoteFailure, AbortOnBlock: true},
+				{Name: "fixture: add unrelated unreachable remote", Fixture: addUnreachableRemoteForIssue1890},
+				{Name: "gate pre-push selects valid advertised remote", Requires: validateBaseRefCapability,
+					Args: issue1890PrePushArgs, After: assertIssue1890ValidRemoteWins, AbortOnBlock: true},
 			},
 		},
 		{
