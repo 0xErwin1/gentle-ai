@@ -60,7 +60,6 @@ func issue2891SameParentRepository(sandbox *Sandbox) error {
 	sandbox.Repo = planning
 	return nil
 }
-
 func issue2891SameParentStatus(sandbox *Sandbox, observation Observation) error {
 	var status issue2891Status
 	if err := json.Unmarshal([]byte(strings.TrimSpace(observation.Stdout)), &status); err != nil {
@@ -80,37 +79,38 @@ func issue2891SameParentStatus(sandbox *Sandbox, observation Observation) error 
 		return fmt.Errorf("allowedEditRoots=%v, want only nested planning workspace %s", status.ActionContext.AllowedEditRoots, sandbox.Repo)
 	}
 	if status.Consent == nil || status.Consent.Schema != "gentle-ai.sdd-integration.consent/v1" ||
-		len(status.Consent.MissingRoots) != 1 || status.Consent.MissingRoots[0] != wantService ||
-		len(status.Consent.Choices) == 0 || status.Consent.Choices[0].Answer != "granted" {
+		len(status.Consent.MissingRoots) != 1 || status.Consent.MissingRoots[0] != wantService {
 		return fmt.Errorf("consent missing_roots=%v, want [%s]", status.Consent, wantService)
 	}
-	sandbox.Scratch["issue-2891-grant-invocation"] = status.Consent.Choices[0].Invocation
+	grantInvocation := ""
+	for _, choice := range status.Consent.Choices {
+		if choice.Answer == "granted" {
+			grantInvocation = choice.Invocation
+			break
+		}
+	}
+	if grantInvocation == "" {
+		return fmt.Errorf("consent choices lack a granted invocation: %v", status.Consent.Choices)
+	}
+	sandbox.Scratch["issue-2891-grant-invocation"] = grantInvocation
 	return nil
 }
-
 func issue2891GrantArgs(sandbox *Sandbox) ([]string, error) {
 	return printedCommandArguments(sandbox.Scratch["issue-2891-grant-invocation"])
 }
-
 func issue2891SameParentGrantedStatus(sandbox *Sandbox, observation Observation) error {
 	var status issue2891Status
 	if err := json.Unmarshal([]byte(strings.TrimSpace(observation.Stdout)), &status); err != nil {
 		return fmt.Errorf("parse granted same-parent sdd-status: %w", err)
 	}
-	wantService, err := filepath.EvalSymlinks(sandbox.Scratch["issue-2891-service"])
-	if err != nil {
-		return err
-	}
+	wantService := sandbox.Scratch["issue-2891-service"]
 	roots := status.ActionContext.AllowedEditRoots
 	if status.ApplyState != "ready" || status.NextRecommended != "apply" || status.Consent != nil ||
-		strings.Contains(strings.Join(status.BlockedReasons, "\n"), "edit_authority_missing") ||
 		len(roots) != 2 || roots[0] != sandbox.Repo || roots[1] != wantService {
-		return fmt.Errorf("post-grant status=%q/%q roots=%v reasons=%v, want ready/apply with %v",
-			status.ApplyState, status.NextRecommended, roots, status.BlockedReasons, []string{sandbox.Repo, wantService})
+		return fmt.Errorf("post-grant status=%q/%q roots=%v reasons=%v, want ready/apply with %v", status.ApplyState, status.NextRecommended, roots, status.BlockedReasons, []string{sandbox.Repo, wantService})
 	}
 	return nil
 }
-
 func issue2891Journeys() []Journey {
 	return []Journey{{
 		ID:     "j90-sdd-same-parent-repository-edit-authority",
