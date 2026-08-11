@@ -79,6 +79,10 @@ func RunArgs(args []string, stdout io.Writer) error {
 		case "help", "--help", "-h":
 			printHelp(stdout, Version)
 			return nil
+		case "bench-model-picker":
+			if handled, err := runBenchModelPickerCommand(args[1:], stdout); handled {
+				return err
+			}
 		case "uninstall":
 			if len(args) >= 2 && args[1] == "opencode-plugin" {
 				_, err := cli.RunUninstallOpenCodePlugin(args[2:], stdout)

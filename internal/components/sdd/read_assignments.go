@@ -13,6 +13,17 @@ import (
 // opencode.json. It includes SDD, Judgment Day, review, and coordinator agents.
 var configurableAgentSet = buildConfigurableAgentSet()
 
+// reservedAgentSet contains native and package-owned roles that must not be
+// reclassified as user-defined custom agents when their config entries exist.
+var reservedAgentSet = map[string]bool{
+	"general":             true,
+	"explore":             true,
+	"gentle-reviewer":     true,
+	"gentle-worker":       true,
+	"gentle-orchestrator": true,
+	"sdd-orchestrator":    true,
+}
+
 func buildConfigurableAgentSet() map[string]bool {
 	phases := opencode.ConfigurableAgentPhases()
 	set := make(map[string]bool, len(phases)+1)
@@ -124,7 +135,7 @@ func DiscoverCustomAgents(settingsPath string) ([]string, error) {
 
 	var custom []string
 	for name := range agentMap {
-		if !configurableAgentSet[name] && name != "sdd-orchestrator" && name != "gentle-orchestrator" {
+		if !configurableAgentSet[name] && !reservedAgentSet[name] {
 			custom = append(custom, name)
 		}
 	}

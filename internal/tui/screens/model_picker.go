@@ -268,7 +268,11 @@ func ModelPickerRowsForProfile() []string {
 // ModelPickerRowsForState returns model picker rows for a given ModelPickerState,
 // incorporating discovered custom agents and profile settings.
 func ModelPickerRowsForState(state ModelPickerState) []string {
-	return modelPickerRowsWithCustom(!state.ForProfile, state.CustomAgents)
+	customAgents := state.CustomAgents
+	if state.ForProfile {
+		customAgents = nil
+	}
+	return modelPickerRowsWithCustom(!state.ForProfile, customAgents)
 }
 
 func IsModelPickerSeparatorRow(row string) bool {
@@ -554,10 +558,17 @@ func compareVersionKeys(left, right []int) int {
 
 func applyAssignmentPreservingMatchingEffort(state ModelPickerState, assignments map[string]model.ModelAssignment, assignment model.ModelAssignment, preserveEffort bool) map[string]model.ModelAssignment {
 	phases := opencode.SDDPhases()
+	rows := ModelPickerRowsForState(state)
 	switch {
 	case state.SelectedPhaseIdx == 1:
 		for _, phase := range phases {
 			assignments[phase] = preserveMatchingEffort(assignments[phase], assignment, preserveEffort)
+		}
+	case state.SelectedPhaseIdx >= 0 &&
+		state.SelectedPhaseIdx < len(rows) &&
+		rows[state.SelectedPhaseIdx] == "Set all custom agents":
+		for _, agent := range state.CustomAgents {
+			assignments[agent] = preserveMatchingEffort(assignments[agent], assignment, preserveEffort)
 		}
 	default:
 		if key := selectedModelPickerAgent(state); key != "" {
