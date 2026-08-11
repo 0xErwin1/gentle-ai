@@ -330,6 +330,23 @@ func TestHistoricalFailedValidatorRequiresChangedTargetRecovery(t *testing.T) {
 	}
 }
 
+func TestEscalatedChangedTargetWithChangedScopeRecovers(t *testing.T) {
+	repo := initSnapshotRepo(t)
+	state := accountingOnlyEscalatedState(t, repo, "escalated-changed-scope-status")
+	_, record := persistEscalatedRecoveryFixture(t, repo, state)
+	writeSnapshotFile(t, repo, "tracked.txt", "changed recovery target\n")
+	writeSnapshotFile(t, repo, "added.txt", "added recovery scope\n")
+
+	status, err := AssessTargetStatus(context.Background(), repo, TargetStatusRequest{
+		Target: Target{Kind: TargetCurrentChanges, IntendedUntracked: []string{"added.txt"}}, LineageID: state.LineageID,
+	})
+	if err != nil || status.Applicability != TargetApplicabilityCurrent || status.State != StateEscalated ||
+		status.Action != TargetStatusActionRecover || status.ActionDisposition != RecoveryEscalated ||
+		status.LineageID != state.LineageID || status.Revision != record.Revision {
+		t.Fatalf("changed-target escalated scope recovery = %#v, %v", status, err)
+	}
+}
+
 // TestAccountingOnlyEscalationStatusOffersRecoveryInsteadOfDeadEndStop proves
 // the routing dead end: an escalated authority whose original review and
 // correction regression both passed, and whose target has not changed since
