@@ -26,6 +26,7 @@ func journeySources() []journeySource {
 		{"journeys_edge.go", edgeJourneys()},
 		{"journeys_sdd.go", sddJourneys()},
 		{"journeys_issue_2891.go", issue2891Journeys()},
+		{"journeys_issue2696.go", issue2696Journeys()},
 		{"journeys_sdd_chain.go", sddChainJourneys()},
 		{"journeys_handoff.go", handoffJourneys()},
 		{"journeys_capture_evidence_v5.go", captureEvidenceDescriptorJourneys()},
@@ -49,6 +50,7 @@ func journeySources() []journeySource {
 		{"journeys_issue1800.go", issue1800Journeys()},
 		{"journeys_issue2879.go", issue2879Journeys()},
 		{"journeys_managed_assets.go", managedAssetJourneys()},
+		{"journeys_issue2906.go", issue2906Journeys()},
 	}
 }
 

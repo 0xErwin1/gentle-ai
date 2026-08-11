@@ -52,15 +52,8 @@ func TestLegacyCloneOverrideStillDecides(t *testing.T) {
 		if entry.IsDir() || entry.Name() == rddModeLockName {
 			continue
 		}
-		payload, readErr := os.ReadFile(filepath.Join(current, entry.Name()))
-		if readErr != nil {
-			t.Fatal(readErr)
-		}
-		if writeErr := os.WriteFile(filepath.Join(legacy, entry.Name()), payload, 0o600); writeErr != nil {
-			t.Fatal(writeErr)
-		}
-		if rmErr := os.Remove(filepath.Join(current, entry.Name())); rmErr != nil {
-			t.Fatal(rmErr)
+		if renameErr := os.Rename(filepath.Join(current, entry.Name()), filepath.Join(legacy, entry.Name())); renameErr != nil {
+			t.Fatal(renameErr)
 		}
 		moved++
 	}

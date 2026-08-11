@@ -1655,6 +1655,12 @@ func resolveArtifactPaths(changeRoot string) (ArtifactPaths, error) {
 	if err != nil {
 		return ArtifactPaths{}, err
 	}
+	if len(specFiles) == 0 {
+		flatSpec := filepath.Join(changeRoot, "spec.md")
+		if hasContent(flatSpec) {
+			specFiles = []string{flatSpec}
+		}
+	}
 	paths.Specs = specFiles
 	return paths, nil
 }
@@ -1893,7 +1899,7 @@ func artifactBlockedReasons(artifacts map[string]ArtifactState, taskProgress Tas
 		reasons.expectedPlanning = append(reasons.expectedPlanning, "proposal.md is missing or partial.")
 	}
 	if artifacts["specs"] != ArtifactDone {
-		reasons.expectedPlanning = append(reasons.expectedPlanning, "specs/**/spec.md is missing or partial.")
+		reasons.expectedPlanning = append(reasons.expectedPlanning, "spec.md or specs/**/spec.md is missing or partial.")
 	}
 	if artifacts["design"] != ArtifactDone {
 		reasons.expectedPlanning = append(reasons.expectedPlanning, "design.md is missing or partial.")
@@ -2202,7 +2208,7 @@ func planningInstructionsForPhase(status Status, phase Phase) []string {
 		return []string{
 			fmt.Sprintf("Change: %s", change),
 			"Read proposal.md before writing specs.",
-			"Create specs/<domain>/spec.md with requirements and scenarios.",
+			"Create spec.md or specs/<domain>/spec.md with requirements and scenarios.",
 		}
 	case PhaseDesign:
 		return []string{
