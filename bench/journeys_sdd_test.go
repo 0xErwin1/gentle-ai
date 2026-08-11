@@ -57,6 +57,7 @@ func TestPortableSDDFailClosedAuthorityJourneysAreRegistered(t *testing.T) {
 	// j94 proves #2031 executes recovery when escalated target scope changes;
 	// j95 proves #2945 corrected-tree inspection.
 	// j99 proves #2906 classifies missing FINALIZE contract flags before mutation.
+	// j97 proves #2138 renders native OpenCode fallback boundaries through public install.
 	// #1993 REMOVED two: j38 (the bound-passing-finish refusal routing to the
 	// review router) and j39 (the stranded-successor exit it named). Review
 	// acts after implementation and verification, so that refusal is gone and
@@ -75,8 +76,9 @@ func TestPortableSDDFailClosedAuthorityJourneysAreRegistered(t *testing.T) {
 	// were green alone; merging both left 95 journeys under a baseline of 94
 	// and turned main red. The guard did exactly its job -- this is what a
 	// count catches that a per-PR suite cannot.
-	if got := len(seen); got != 95 {
-		t.Errorf("core journey count = %d, want 95", got)
+	// #2138 adds one journey on top of that current-main baseline.
+	if got := len(seen); got != 96 {
+		t.Errorf("core journey count = %d, want 96", got)
 	}
 	for id, found := range want {
 		if !found {
