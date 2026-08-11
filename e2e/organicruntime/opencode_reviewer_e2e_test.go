@@ -3,13 +3,16 @@ package organicruntime_test
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -139,6 +142,7 @@ func setupOpenCodePoisonedReview(t *testing.T, lineage string) openCodePoisonedR
 	if err := os.WriteFile(filepath.Join(harness.repo.worktree, "AGENTS.md"), []byte(agentsMd), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	writeOpenCodeRuntimeProvenance(t, home, pinnedOpenCodeRuntimePath(t))
 
 	return openCodePoisonedReviewSetup{
 		harness: harness, lineage: lineage, candidatePath: candidatePath,
@@ -153,14 +157,14 @@ func setupOpenCodePoisonedReview(t *testing.T, lineage string) openCodePoisonedR
 // ordinary-session adapter conformance proof.
 func (setup openCodePoisonedReviewSetup) openCodeReviewEnvironment(t *testing.T, configJSON string) []string {
 	t.Helper()
+	runtimePath := filepath.Dir(organicBinary)
+	if prefix := strings.TrimSpace(os.Getenv("GENTLE_AI_OPENCODE_PATH_PREFIX")); prefix != "" {
+		runtimePath = prefix + string(os.PathListSeparator) + runtimePath
+	}
 	return replaceOrganicEnvironment(organicEnvironment(setup.home), map[string]string{
-		// The OpenCode plugin's runNative spawns the bare "gentle-ai" name
-		// (never the full organicBinary path, since production callers never
-		// know it), so the built test binary's directory must resolve first
-		// on PATH -- otherwise a real, differently-configured `gentle-ai` on
-		// the operator's own PATH answers instead, against a repository
-		// state this test never touched.
-		"PATH":                                      filepath.Dir(organicBinary) + string(os.PathListSeparator) + os.Getenv("PATH"),
+		// PATH deliberately still contains the test binary for unrelated native
+		// calls. The reviewer plugin must select the synced pin instead.
+		"PATH":                                      runtimePath + string(os.PathListSeparator) + os.Getenv("PATH"),
 		"XDG_CONFIG_HOME":                           setup.configRoot,
 		"XDG_CACHE_HOME":                            t.TempDir(),
 		"OPENCODE_CONFIG_DIR":                       filepath.Join(setup.configRoot, "opencode"),
@@ -282,16 +286,195 @@ func TestRealOpenCodeReviewerOrdinarySessionInjectsFrozenContextAndAdmitsRawOutp
 		t.Fatalf("native admission refused the plugin's raw output: %v", err)
 	}
 
-	// The receipt materializes: finalize succeeds against the exact captured
-	// lineage and creates durable review authority. STATUS is not re-queried
-	// here: STATUS's fresh-target derivation always reflects the live
-	// workspace, which this test just deliberately poisoned, so it would
-	// derive a new, different target rather than recognizing the one already
-	// reviewing -- finalize itself needs no such re-derivation.
-	setup.harness.gentle("review", "finalize", "--cwd", setup.harness.repo.worktree, "--lineage", setup.lineage, "--captured-results=true")
+	// Finalization first moves the captured result into validation, then records
+	// the ordinary evidence needed for a terminal receipt. STATUS is not
+	// re-queried here: the live workspace is deliberately poisoned and would
+	// derive a different candidate than the one already reviewing.
+	if result := setup.harness.finalize(setup.lineage, "--captured-results=true"); result.State != organicStateValidating {
+		t.Fatalf("captured reviewer result did not reach validation: %#v", result)
+	}
+	if result := setup.harness.finalize(setup.lineage, "--evidence", setup.harness.writeEvidence()); result.ReceiptPath == "" {
+		t.Fatalf("finalization did not create a terminal receipt: %#v", result)
+	}
 	if _, err := os.Stat(filepath.Join(setup.harness.commonDir(), "gentle-ai", "review-transactions", "v2")); err != nil {
 		t.Fatalf("captured reviewer result never created review authority: %v", err)
 	}
+	setup.harness.git("checkout", "--", setup.candidatePath)
+	for _, path := range []string{"SECRET.txt", "AGENTS.md"} {
+		if err := os.Remove(filepath.Join(setup.harness.repo.worktree, path)); err != nil && !os.IsNotExist(err) {
+			t.Fatalf("remove poisoned %s: %v", path, err)
+		}
+	}
+	if gate := setup.harness.gate("pre-commit"); !gate.Allowed || gate.Result != organicGateAllow {
+		t.Fatalf("receipt-backed delivery gate = %#v, want allow", gate)
+	}
+}
+
+func TestRealOpenCodeReviewerUsesSyncedRuntimeInsteadOfPATHDecoy(t *testing.T) {
+	requireOpenCodeImmutableReviewExecutor(t)
+	if runtime.GOOS == "windows" {
+		t.Skip("the ordinary-session proof above exercises the spaced Windows executable pin")
+	}
+	setup := setupOpenCodePoisonedReview(t, "opencode-synced-runtime-path-decoy")
+	installedPlugin, err := os.ReadFile(filepath.Join(setup.configRoot, "opencode", "plugins", "review-result-artifacts.ts"))
+	if err != nil || !strings.Contains(string(installedPlugin), "opencode_runtime_provenance") {
+		t.Fatalf("installed reviewer plugin lacks runtime pin support: %v", err)
+	}
+	fixture := newOpenCodeReviewerFixture(t, setup.binding, setup.manifestPaths)
+	defer fixture.Close()
+
+	decoyDir := t.TempDir()
+	decoyCall := filepath.Join(decoyDir, "lens-context-called")
+	decoy := filepath.Join(decoyDir, "gentle-ai")
+	if err := os.WriteFile(decoy, []byte("#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$GENTLE_AI_DECOY_CALL\"\nexit 1\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	config := generatedOpenCodeReviewConfig(t, filepath.Join(setup.configRoot, "opencode", "opencode.json"), fixture.URL)
+	environment := setup.openCodeReviewEnvironment(t, config)
+	environment = replaceOrganicEnvironment(environment, map[string]string{
+		"GENTLE_AI_DECOY_CALL": decoyCall,
+		"PATH":                 decoyDir + string(os.PathListSeparator) + filepath.Dir(organicBinary) + string(os.PathListSeparator) + os.Getenv("PATH"),
+	})
+
+	transcript := runOpenCodeReview(t, setup, environment)
+	if called, err := os.ReadFile(decoyCall); err == nil && strings.Contains(string(called), "lens-context") {
+		t.Fatalf("PATH decoy received review lens-context: %s", called)
+	} else if err != nil && !os.IsNotExist(err) {
+		t.Fatalf("read PATH decoy call log: %v", err)
+	}
+	fixture.mu.Lock()
+	received := fixture.receivedContext
+	fixture.mu.Unlock()
+	if received == "" {
+		t.Fatalf("synced runtime did not inject reviewer context:\n%s", transcript)
+	}
+}
+
+func TestRealOpenCodeReviewerRefusesInvalidSyncedRuntimeBeforeReviewerLaunch(t *testing.T) {
+	requireOpenCodeImmutableReviewExecutor(t)
+	for _, scenario := range []struct {
+		name   string
+		mutate func(*testing.T, string)
+	}{
+		{
+			name: "missing",
+			mutate: func(t *testing.T, executable string) {
+				t.Helper()
+				if err := os.Remove(executable); err != nil {
+					t.Fatal(err)
+				}
+			},
+		},
+		{
+			name: "replaced",
+			mutate: func(t *testing.T, executable string) {
+				t.Helper()
+				replacement := executable + ".replacement"
+				if err := os.WriteFile(replacement, []byte("replacement"), 0o755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Rename(replacement, executable); err != nil {
+					t.Fatal(err)
+				}
+			},
+		},
+		{
+			name: "non executable",
+			mutate: func(t *testing.T, executable string) {
+				t.Helper()
+				if runtime.GOOS == "windows" {
+					t.Skip("Windows verifies executability by launching the exact .exe")
+				}
+				if err := os.Chmod(executable, 0o644); err != nil {
+					t.Fatal(err)
+				}
+			},
+		},
+	} {
+		t.Run(scenario.name, func(t *testing.T) {
+			setup := setupOpenCodePoisonedReview(t, "opencode-invalid-runtime-"+strings.ReplaceAll(scenario.name, " ", "-"))
+			executable := copyOpenCodeRuntime(t, "invalid runtime")
+			writeOpenCodeRuntimeProvenance(t, setup.home, executable)
+			scenario.mutate(t, executable)
+			fixture := newOpenCodeReviewerFixture(t, setup.binding, setup.manifestPaths)
+			defer fixture.Close()
+			config := generatedOpenCodeReviewConfig(t, filepath.Join(setup.configRoot, "opencode", "opencode.json"), fixture.URL)
+			runOpenCodeReview(t, setup, setup.openCodeReviewEnvironment(t, config))
+			fixture.mu.Lock()
+			received := fixture.receivedContext
+			fixture.mu.Unlock()
+			if received != "" {
+				t.Fatalf("invalid synced runtime launched a reviewer with context:\n%s", received)
+			}
+		})
+	}
+}
+
+func pinnedOpenCodeRuntimePath(t *testing.T) string {
+	t.Helper()
+	if runtime.GOOS != "windows" {
+		return organicBinary
+	}
+	return copyOpenCodeRuntime(t, "runtime path with spaces")
+}
+
+func copyOpenCodeRuntime(t *testing.T, directory string) string {
+	t.Helper()
+	name := filepath.Base(organicBinary)
+	destination := filepath.Join(t.TempDir(), directory, name)
+	if err := os.MkdirAll(filepath.Dir(destination), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	payload, err := os.ReadFile(organicBinary)
+	if err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(organicBinary)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(destination, payload, info.Mode().Perm()); err != nil {
+		t.Fatal(err)
+	}
+	return destination
+}
+
+func writeOpenCodeRuntimeProvenance(t *testing.T, home, executable string) {
+	t.Helper()
+	payload, err := os.ReadFile(executable)
+	if err != nil {
+		t.Fatal(err)
+	}
+	version := strings.TrimSpace(runOrganicCommandOutput(t, executable, "version"))
+	statePayload, err := json.Marshal(map[string]any{
+		"opencode_runtime_provenance": map[string]string{
+			"executable": executable,
+			"sha256":     fmt.Sprintf("sha256:%x", sha256.Sum256(payload)),
+			"version":    version,
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(home, ".gentle-ai", "state.json")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, append(statePayload, '\n'), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func runOrganicCommandOutput(t *testing.T, executable string, arguments ...string) string {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), organicLocalTimeout)
+	defer cancel()
+	command := organicCommandContext(ctx, executable, arguments...)
+	output, err := command.CombinedOutput()
+	if err != nil {
+		t.Fatalf("%s %v: %v\n%s", executable, arguments, err, output)
+	}
+	return string(output)
 }
 
 // organicCommandArguments removes POSIX shell quoting before passing Windows CWDs to Go flags.
