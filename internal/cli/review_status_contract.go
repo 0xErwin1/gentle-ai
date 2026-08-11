@@ -674,7 +674,7 @@ func (result ReviewTargetStatusResult) validateSubmissionDescriptors() error {
 			arguments["lineage"] != result.Authority.LineageID || arguments["expected-revision"] != result.Authority.Revision ||
 			arguments["target"] != result.ValidationRequest.CorrectionTargetIdentity || arguments["repository-context"] != context ||
 			reviewtransaction.ValidateReviewRepositoryContextHandle(arguments["repository-context"]) != nil ||
-			arguments["purpose"] != "targeted-validation" || arguments["request-hash"] != result.ValidationRequest.RequestHash {
+			arguments["purpose"] != reviewTargetedValidationPurpose || arguments["request-hash"] != result.ValidationRequest.RequestHash {
 			return errors.New("targeted validation transition lacks the corrected inspection binding") // refusal:by-design world-action: only STATUS can issue a complete corrected-candidate binding
 		}
 		want := reviewTargetedValidationSubmission(result.Contract, ReviewTransitionBinding{

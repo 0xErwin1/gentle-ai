@@ -19,7 +19,7 @@ const (
 var captureEvidenceDescriptorCapability = &Capability{Verb: []string{"review", "capture-evidence"},
 	Flags: []string{"--repository-context", "--lineage", "--target", "--expected-revision", "--outcome", "--input"}}
 var targetedInspectionCapability = &Capability{Verb: []string{"review", "inspect-candidate"},
-	Flags: []string{"--repository-context", "--lineage", "--target", "--expected-revision", "--purpose", "--request-hash"}}
+	Flags: []string{"--repository-context", "--lineage", "--target", "--expected-revision", "--purpose", "--request-hash", "--operation", "--path-index", "--side"}}
 
 // captureEvidenceDescriptorJourneys proves issue #2248's V5 contract at the
 // built-binary boundary. The runner executes only tokens published by STATUS;

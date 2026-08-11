@@ -365,6 +365,9 @@ func correctedInspectionFixture(t *testing.T, lineage string, outcome *Verificat
 	if err != nil {
 		t.Fatal(err)
 	}
+	if correction.Identity != request.CorrectionTargetIdentity {
+		t.Fatalf("correction identity = %s, want request target %s", correction.Identity, request.CorrectionTargetIdentity)
+	}
 	binding := ReviewRepositoryContextBinding{LineageID: state.LineageID, TargetIdentity: request.CorrectionTargetIdentity, Revision: revision}
 	handle, err := PublishReviewRepositoryContext(context.Background(), repo, binding)
 	if err != nil {

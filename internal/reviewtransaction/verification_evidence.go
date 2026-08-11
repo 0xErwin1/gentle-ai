@@ -237,7 +237,32 @@ func readCompactEvidenceFile(path string, limit int64) ([]byte, error) {
 }
 
 func ReadCapturedVerificationEvidence(storeDir, lineageID, authorityRevision string, target Snapshot) (CapturedVerificationEvidence, error) {
-	dir, err := compactFinalEvidenceCandidateDir(storeDir, target.Identity)
+	captured, err := readCapturedVerificationEvidenceArtifacts(storeDir, target.Identity)
+	if err != nil {
+		return CapturedVerificationEvidence{}, err
+	}
+	if captured.Record.ValidateBinding(lineageID, authorityRevision, target) != nil {
+		return CapturedVerificationEvidence{}, ErrCapturedVerificationEvidenceInvalid
+	}
+	return captured, nil
+}
+
+// ReadCapturedVerificationEvidenceByIdentity reads a passed evidence record
+// before its immutable tree can be reconstructed from the record itself.
+func ReadCapturedVerificationEvidenceByIdentity(storeDir, lineageID, authorityRevision, targetIdentity string) (CapturedVerificationEvidence, error) {
+	captured, err := readCapturedVerificationEvidenceArtifacts(storeDir, targetIdentity)
+	if err != nil {
+		return CapturedVerificationEvidence{}, err
+	}
+	if captured.Record.LineageID != lineageID || captured.Record.AuthorityRevision != authorityRevision ||
+		captured.Record.TargetIdentity != targetIdentity {
+		return CapturedVerificationEvidence{}, ErrCapturedVerificationEvidenceInvalid
+	}
+	return captured, nil
+}
+
+func readCapturedVerificationEvidenceArtifacts(storeDir, targetIdentity string) (CapturedVerificationEvidence, error) {
+	dir, err := compactFinalEvidenceCandidateDir(storeDir, targetIdentity)
 	if err != nil {
 		return CapturedVerificationEvidence{}, fmt.Errorf("%w: %v", ErrCapturedVerificationEvidenceInvalid, err)
 	}
@@ -254,10 +279,8 @@ func ReadCapturedVerificationEvidence(storeDir, lineageID, authorityRevision str
 	if dirErr != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 || !compactPrivateArtifactMode(info.Mode(), true) {
 		return CapturedVerificationEvidence{}, ErrCapturedVerificationEvidenceInvalid
 	}
-	rawPath := filepath.Join(dir, CompactFinalEvidenceFile)
-	recordPath := filepath.Join(dir, CompactFinalEvidenceRecordFile)
-	raw, rawErr := readCompactEvidenceFile(rawPath, verificationEvidencePayloadLimit)
-	recordPayload, recordErr := readCompactEvidenceFile(recordPath, verificationEvidenceRecordLimit)
+	raw, rawErr := readCompactEvidenceFile(filepath.Join(dir, CompactFinalEvidenceFile), verificationEvidencePayloadLimit)
+	recordPayload, recordErr := readCompactEvidenceFile(filepath.Join(dir, CompactFinalEvidenceRecordFile), verificationEvidenceRecordLimit)
 	if errors.Is(rawErr, os.ErrNotExist) && errors.Is(recordErr, os.ErrNotExist) {
 		return CapturedVerificationEvidence{}, ErrCapturedVerificationEvidenceMissing
 	}
@@ -268,36 +291,7 @@ func ReadCapturedVerificationEvidence(storeDir, lineageID, authorityRevision str
 		return CapturedVerificationEvidence{}, fmt.Errorf("%w: raw=%v metadata=%v", ErrCapturedVerificationEvidenceInvalid, rawErr, recordErr)
 	}
 	record, err := ParseVerificationEvidenceRecord(recordPayload)
-	if err != nil || record.ValidatePayload(raw) != nil || record.ValidateBinding(lineageID, authorityRevision, target) != nil {
-		return CapturedVerificationEvidence{}, ErrCapturedVerificationEvidenceInvalid
-	}
-	dirAfter, err := os.Lstat(dir)
-	if err != nil || !dirAfter.IsDir() || dirAfter.Mode()&os.ModeSymlink != 0 ||
-		!compactPrivateArtifactMode(dirAfter.Mode(), true) || !os.SameFile(info, dirAfter) {
-		return CapturedVerificationEvidence{}, ErrCapturedVerificationEvidenceInvalid
-	}
-	return CapturedVerificationEvidence{Record: record, Payload: raw}, nil
-}
-
-// ReadCapturedVerificationEvidenceByIdentity reads a passed evidence record
-// before its immutable tree can be reconstructed from the record itself.
-func ReadCapturedVerificationEvidenceByIdentity(storeDir, lineageID, authorityRevision, targetIdentity string) (CapturedVerificationEvidence, error) {
-	dir, err := compactFinalEvidenceCandidateDir(storeDir, targetIdentity)
-	if err != nil {
-		return CapturedVerificationEvidence{}, fmt.Errorf("%w: %v", ErrCapturedVerificationEvidenceInvalid, err)
-	}
-	info, dirErr := os.Lstat(dir)
-	if dirErr != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 || !compactPrivateArtifactMode(info.Mode(), true) {
-		return CapturedVerificationEvidence{}, ErrCapturedVerificationEvidenceInvalid
-	}
-	raw, rawErr := readCompactEvidenceFile(filepath.Join(dir, CompactFinalEvidenceFile), verificationEvidencePayloadLimit)
-	recordPayload, recordErr := readCompactEvidenceFile(filepath.Join(dir, CompactFinalEvidenceRecordFile), verificationEvidenceRecordLimit)
-	if rawErr != nil || recordErr != nil {
-		return CapturedVerificationEvidence{}, ErrCapturedVerificationEvidenceInvalid
-	}
-	record, err := ParseVerificationEvidenceRecord(recordPayload)
-	if err != nil || record.ValidatePayload(raw) != nil || record.LineageID != lineageID ||
-		record.AuthorityRevision != authorityRevision || record.TargetIdentity != targetIdentity {
+	if err != nil || record.ValidatePayload(raw) != nil {
 		return CapturedVerificationEvidence{}, ErrCapturedVerificationEvidenceInvalid
 	}
 	dirAfter, err := os.Lstat(dir)
