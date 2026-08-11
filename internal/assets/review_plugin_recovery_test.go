@@ -664,6 +664,58 @@ func TestReviewPluginSurfacesNativeGitTrustRefusal(t *testing.T) {
 	}
 }
 
+// reviewPluginNativeSkewFailure is what an OLDER gentle-ai on the runtime
+// PATH emits when it is handed a repository context whose authority a NEWER
+// build wrote. The wording is the pre-#3025 one on purpose: the process that
+// fails here is the old binary, so #3025's improved native message is exactly
+// the text that cannot appear.
+const reviewPluginNativeSkewFailure = "repository_context_unavailable: provider-issued review repository context operation failed; " +
+	`cause: json: unknown field "correction_budget_policy"; refresh the exact native next_transition before retrying`
+
+// TestReviewPluginNamesTheBinaryConflictItCanSee is #3049.
+//
+// The plugin resolves the CLI by bare name, so whatever `gentle-ai` PATH finds
+// first services reviewer calls -- including a build older than the one that
+// wrote the authority. #3025 made that failure legible natively and cannot
+// help here: its code ships in the new binary while the failing process is the
+// old one, so the caller keeps getting "refresh the exact native
+// next_transition", follows it, and loops. #2461's reporter did exactly that
+// across four reoffered reviewer slots.
+//
+// This plugin ships from the NEW build even when PATH resolves an old binary,
+// which makes it the only component in the loop that can still tell the truth.
+// It does not compare versions -- it has no reference to compare against, and
+// inventing one would be a guess. It states the fact the failure proves: the
+// binary that answered cannot read this authority, two builds are involved,
+// and PATH order is what decides which one answers.
+func TestReviewPluginNamesTheBinaryConflictItCanSee(t *testing.T) {
+	message := runReviewPluginScenario(t, "before-valid", reviewPluginNativeSkewFailure)
+	if message == "NO_ERROR" {
+		t.Fatal("preflight did not fail despite an always-failing native binary")
+	}
+	if strings.Contains(message, "next_transition") {
+		t.Fatalf("plugin forwarded the advice that loops the caller: %s", message)
+	}
+	if !strings.Contains(message, "which -a gentle-ai") {
+		t.Fatalf("plugin names no way to find the conflicting binaries: %s", message)
+	}
+	// The whole point is that two builds are in play. A message that does not
+	// say so reads as a corrupt repository.
+	for _, want := range []string{"older", "PATH"} {
+		if !strings.Contains(message, want) {
+			t.Fatalf("plugin does not name the version conflict (%q missing): %s", want, message)
+		}
+	}
+	if !strings.Contains(message, "The reviewer was not launched") {
+		t.Fatalf("plugin lost its pre-launch exactly-once guarantee: %s", message)
+	}
+	// Native text can embed local paths, so this classification is authored
+	// here like the Git trust refusal is, never forwarded.
+	if strings.Contains(message, "correction_budget_policy") {
+		t.Fatalf("plugin forwarded raw native cause text: %s", message)
+	}
+}
+
 // TestReviewPluginKeepsGenericOpaqueFailureOpaque proves an unstructured
 // native preflight failure is scrubbed, not forwarded verbatim, since native
 // failures can embed local paths.
