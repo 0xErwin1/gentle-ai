@@ -1392,13 +1392,48 @@ func TestAssessTargetStatusPropagatesOperationalAuthorityFailures(t *testing.T) 
 }
 
 func TestExplicitReviewingStatusRejectsSemanticAndIneligibleFrozenCandidates(t *testing.T) {
+	t.Run("pending finalize journal reconciles", func(t *testing.T) {
+		fixture := newCompactReviewerCaptureFixture(t, "frozen-pending-finalize")
+		request := finalizeAttemptTestRequest(fixture.state.LineageID, fixture.request.ExpectedRevision, "evidence")
+		request.CandidateDigest = FinalizeAttemptValueDigest("candidate", fixture.state.CurrentSnapshot)
+		request.RequestDigest = FinalizeAttemptRequestDigest(request)
+		if _, _, err := fixture.store.BeginFinalizeAttempt(context.Background(), request); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(fixture.store.repo, "internal", "a.go"), []byte("package internal\n\nfunc Value() int { return 3 }\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		status, err := AssessTargetStatus(context.Background(), fixture.store.repo, TargetStatusRequest{
+			Target: Target{Kind: TargetCurrentChanges, IntendedUntracked: []string{}}, LineageID: fixture.state.LineageID,
+		})
+		if err != nil || status.Action != TargetStatusActionReconcileFinalize || status.Replayability != ReplayabilityStatusRequired {
+			t.Fatalf("pending frozen finalize status = %#v, %v", status, err)
+		}
+	})
+	t.Run("fully occupied drifted candidate stops", func(t *testing.T) {
+		fixture := newCompactReviewerCaptureFixture(t, "frozen-complete")
+		if _, err := fixture.store.CaptureAdmittedReviewerResult(context.Background(), fixture.request); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(fixture.store.repo, "internal", "a.go"), []byte("package internal\n\nfunc Value() int { return 3 }\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		status, err := AssessTargetStatus(context.Background(), fixture.store.repo, TargetStatusRequest{
+			Target: Target{Kind: TargetCurrentChanges, IntendedUntracked: []string{}}, LineageID: fixture.state.LineageID,
+		})
+		if err != nil || status.Applicability != TargetApplicabilityCurrent || status.LineageID != fixture.state.LineageID ||
+			status.Action != TargetStatusActionStop || status.Replayability != ReplayabilityManualActionRequired {
+			t.Fatalf("fully occupied frozen status = %#v, %v", status, err)
+		}
+	})
+
 	t.Run("semantic frozen evidence", func(t *testing.T) {
 		repo := initSnapshotRepo(t)
 		writeSnapshotFile(t, repo, "tracked.txt", "candidate\n")
 		store := storeCompactStartAuthority(t, repo, newCompactTestState(t, repo, "frozen-semantic"))
 		record, _ := store.Load()
 		record.State.InitialSnapshot.Paths = []string{"missing.txt"}
-		eligible, err := explicitReviewingCompactCandidate(context.Background(), repo, targetStatusCandidate{compact: &record})
+		eligible, _, err := explicitReviewingCompactCandidate(context.Background(), repo, targetStatusCandidate{compact: &record})
 		status, statusErr := targetStatusFailure(TargetStatusResult{}, err)
 		if eligible || statusErr != nil || status.Applicability != TargetApplicabilityCorrupted || status.Action != TargetStatusActionRepairAuthority {
 			t.Fatalf("semantic frozen evidence = eligible %v status %#v error %v", eligible, status, statusErr)
@@ -1411,7 +1446,7 @@ func TestExplicitReviewingStatusRejectsSemanticAndIneligibleFrozenCandidates(t *
 		store := storeCompactStartAuthority(t, repo, newCompactTestState(t, repo, "frozen-not-reviewing"))
 		record, _ := store.Load()
 		record.State.State = StateInvalidated
-		if eligible, err := explicitReviewingCompactCandidate(context.Background(), repo, targetStatusCandidate{compact: &record}); eligible || err != nil {
+		if eligible, _, err := explicitReviewingCompactCandidate(context.Background(), repo, targetStatusCandidate{compact: &record}); eligible || err != nil {
 			t.Fatalf("non-reviewing candidate = eligible %v error %v", eligible, err)
 		}
 	})

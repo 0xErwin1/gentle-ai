@@ -239,6 +239,13 @@ func exerciseFrozenLineageResume(r *journeyRun) error {
 	if err := captureFrozenReviewerResult(r, resumed); err != nil {
 		return err
 	}
+	occupied, _, err := frozenLineageStatus(r, r.sandbox.Lineage)
+	if err != nil {
+		return err
+	}
+	if occupied.NextTransition.Kind != "stop" || occupied.NextTransition.ReasonCode != "native_stop_required" {
+		return fmt.Errorf("drifted occupied frozen status = %+v", occupied.NextTransition)
+	}
 	if err := r.sandbox.write(filepath.Join(r.sandbox.Repo, frozenLineageTracked), frozenLineageSource); err != nil {
 		return err
 	}
@@ -248,7 +255,9 @@ func exerciseFrozenLineageResume(r *journeyRun) error {
 	if err := os.Remove(filepath.Join(r.sandbox.Repo, frozenLineageDrift)); err != nil {
 		return err
 	}
-	ready, _, err := frozenLineageSelectedStatus(r, r.sandbox.Lineage, frozenLineageUntracked)
+	ready, _, err := frozenLineageStatus(r, r.sandbox.Lineage,
+		"--untracked-scope=select", "--expected-untracked-inventory="+initial.argument("expected_untracked_inventory"),
+		"--intended-untracked="+frozenLineageUntracked)
 	if err != nil || ready.NextTransition.Kind != "execute" || ready.NextTransition.Execute.Operation != "review.finalize" {
 		return fmt.Errorf("restored frozen finalize = %+v, %v", ready.NextTransition, err)
 	}
@@ -285,11 +294,14 @@ func exerciseFrozenLineageResume(r *journeyRun) error {
 		return err
 	}
 	drifted, driftedDocument, err := frozenLineageSelectedStatus(r, r.sandbox.Lineage, frozenLineageUntracked, frozenLineageDrift)
+	if err != nil {
+		return err
+	}
 	var receipt struct {
 		Status string `json:"status"`
 	}
 	_ = json.Unmarshal(driftedDocument["receipt"], &receipt)
-	if err != nil || receipt.Status != "not_applicable" || drifted.NextTransition.Kind != "execute" || drifted.NextTransition.Execute.Operation != "review.start" || drifted.executeArgument("lineage") == r.sandbox.Lineage {
+	if receipt.Status != "not_applicable" || drifted.NextTransition.Kind != "execute" || drifted.NextTransition.Execute.Operation != "review.start" || drifted.executeArgument("lineage") == r.sandbox.Lineage {
 		return fmt.Errorf("drifted receipt applicability = %+v receipt=%q err=%v", drifted.NextTransition, receipt.Status, err)
 	}
 	delivery := r.run([]string{"review", "validate", "--cwd", r.sandbox.Repo, "--lineage", r.sandbox.Lineage, "--gate", "post-apply"}, false)
