@@ -496,6 +496,23 @@ func newReviewIntegrationFailure(operation string, args []string, runErr error) 
 		failure.NextAction = "review.status"
 		return failure
 	}
+	var authorizationInexact *reviewtransaction.CompactRecoveryAuthorizationInexactError
+	if errors.As(runErr, &authorizationInexact) {
+		failure.Phase = "pre_native"
+		failure.Code = "escalated_recovery_authorization_inexact"
+		failure.MutationOutcome = ReviewMutationNotStarted
+		failure.AuthorityApplicability = "current_target"
+		failure.RetrySafe = false
+		failure.Replayability = reviewtransaction.ReplayabilityManualActionRequired
+		if authorizationInexact.Repairable {
+			failure.Message = "The escalated recovery authority carries a schema-prefixed authorization that does not match the exact binding; run review repair to derive the provider-owned disposition."
+			failure.NextAction = "review.repair"
+		} else {
+			failure.Message = "The escalated recovery authority carries an authorization that does not match the exact binding; no advertised repair operation admits this shape."
+			failure.NextAction = "stop"
+		}
+		return failure
+	}
 	var bindingConflict *sddstatus.BindingRevisionConflictError
 	if errors.As(runErr, &bindingConflict) {
 		failure.Phase = "pre_native"

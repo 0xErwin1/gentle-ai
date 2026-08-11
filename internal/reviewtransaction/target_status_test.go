@@ -460,7 +460,7 @@ func TestAccountingOnlyEscalationRecoveryStillRequiresMaintainerAuthorization(t 
 		Successor: successor, Disposition: RecoveryEscalated, Reason: reason, Actor: actor,
 		MaintainerAuthorization: "wrong-authorization",
 	})
-	if err == nil || !errors.Is(err, errCompactRecoveryAuthorizationInexact) {
+	if err == nil || !errors.Is(err, ErrCompactRecoveryAuthorizationInexact) {
 		t.Fatalf("accounting-only recovery without exact maintainer authorization = %v, want authorization error", err)
 	}
 }
