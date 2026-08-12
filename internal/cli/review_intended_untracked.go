@@ -74,7 +74,7 @@ func intendedUntrackedScopeForTarget(ctx context.Context, builder reviewtransact
 	case "select":
 		if len(selected) == 0 {
 			// refusal:by-design operator-knowledge: only the caller knows which eligible paths it intends to include.
-			return reviewIntendedUntrackedScope{}, fmt.Errorf("--untracked-scope=select requires at least one --intended-untracked; run `%s` to refresh the canonical inventory, then rerun `%s --untracked-scope=exclude`", inventoryCommand, selectionCommand)
+			return reviewIntendedUntrackedScope{}, fmt.Errorf("--untracked-scope=select requires at least one --intended-untracked; run `%s` to refresh the canonical inventory, then rerun `%s --untracked-scope=select --intended-untracked=<repo-relative-path> --expected-untracked-inventory=%s`", inventoryCommand, selectionCommand, digest)
 		}
 	default:
 		// refusal:by-design operator-knowledge: only the caller can choose the intended selection mode for its workspace.
