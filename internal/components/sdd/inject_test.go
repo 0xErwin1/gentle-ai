@@ -69,15 +69,22 @@ func TestSDDOrchestratorAssetSelectionCoversSupportedAgents(t *testing.T) {
 				"exactly three semantic choices in this order",
 				"`report_and_continue`, `continue_without_reporting`, `stop_here`",
 				"Only after explicit consent and that final privacy scan",
+				"If prohibited data is found, the scan fails, returns incomplete, ambiguous, or unknown, or safe redaction would alter the reporting decision",
+				"perform no GitHub search, write, comment, or create",
+				"jump directly to the Terminal report-outcome continuation below",
 				"search open and closed issues",
 				"newly-created issue identity/URL",
 				"Only a definitive lookup may branch to GitHub mutation",
-				"do not search, comment, update, create, or retry until the exact created issue identity is resolved",
+				"immediately stop further GitHub mutation and blind retries",
+				"without requiring identity resolution first",
+				"Do not continue through later report-routing bullets",
 				"do not add, remove, or change any labels on it",
-				"If the exact created issue identity cannot be proven, fail closed for identity recovery",
-				"Both continue choices execute that exact captured decline invocation exactly once",
+				"If the exact created issue identity cannot be proven, exact created-identity uncertainty remains only a veto on later recovery, retry, or duplicate mutation",
+				"Terminal report-outcome continuation: After a definitive successful report outcome, or report-side uncertainty, execute the shared candidate-scoped continuation exactly once",
+				"The shared candidate-scoped continuation executes that exact captured decline invocation exactly once for each continuing path",
 				"`consent: \"declined_this_candidate\"`",
 				"native negotiated STATUS",
+				"If that exact decline invocation fails to execute, returns malformed, incomplete, or ambiguous output, fails validation, or does not match the exact target, action, and consent, preserve all consumer state and STOP",
 			} {
 				if !strings.Contains(renderSDDOrchestratorAsset(tc.agent), required) {
 					t.Fatalf("rendered %s orchestrator missing provider-defect handoff clause %q", tc.agent, required)
@@ -85,6 +92,9 @@ func TestSDDOrchestratorAssetSelectionCoversSupportedAgents(t *testing.T) {
 			}
 			if strings.Contains(renderSDDOrchestratorAsset(tc.agent), "gentle-"+"report") {
 				t.Fatalf("rendered %s orchestrator retains a provider-defect label", tc.agent)
+			}
+			if strings.Contains(renderSDDOrchestratorAsset(tc.agent), "no-label") {
+				t.Fatalf("rendered %s orchestrator invents a provider-defect no-label interface", tc.agent)
 			}
 		})
 	}

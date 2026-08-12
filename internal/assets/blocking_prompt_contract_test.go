@@ -171,19 +171,20 @@ func TestCoordinatorOrchestratorsCarryGentleAIProviderDefectHandoff(t *testing.T
 		{name: "no output-only creation inference", text: "Never infer creation from output text alone."},
 		{name: "definitive lookup gate", text: "Only a definitive lookup may branch to GitHub mutation."},
 		{name: "uncertainty no further mutation", text: "perform no further GitHub mutation and no blind retry"},
-		{name: "uncertainty continuation", text: "execute the exact captured provider-owned decline invocation exactly once, validate it, re-enter native negotiated STATUS, and resume the already-held consumer continuation."},
+		{name: "named terminal report outcome", text: "Terminal report-outcome continuation"},
 		{name: "comment exact canonical", text: "on that exact canonical/equivalent issue"},
 		{name: "duplicate labels unchanged", text: "do not add, remove, or change any labels on it"},
-		{name: "unconfirmed creation continuation", text: "If creation fails, is ambiguous, incomplete, times out, lacks permission, or has an unknown outcome, preserve all consumer state; do not search, comment, update, create, or retry until the exact created issue identity is resolved, then use the uncertainty continuation below."},
-		{name: "unproven identity fails closed", text: "If the exact created issue identity cannot be proven, fail closed for identity recovery: no duplicate issue or comment."},
-		{name: "report outcome continuation", text: "After a definitive successful report outcome, or any report-side uncertainty after stopping further GitHub mutation, execute the shared candidate-scoped continuation below."},
+		{name: "creation uncertainty immediate continuation", text: "If creation fails, is ambiguous, incomplete, times out, lacks permission, or has an unknown outcome, immediately stop further GitHub mutation and blind retries; preserve all consumer state, mark this as report-side uncertainty, and jump directly to the Terminal report-outcome continuation below without requiring identity resolution first."},
+		{name: "unproven identity limits later mutation", text: "exact created-identity uncertainty remains only a veto on later recovery, retry, or duplicate mutation: no duplicate issue or comment."},
+		{name: "report outcome continuation", text: "Terminal report-outcome continuation: After a definitive successful report outcome, or report-side uncertainty, execute the shared candidate-scoped continuation exactly once."},
 		{name: "captured provider decline", text: "exact captured provider-owned `choices[answer=\"declined\"].invocation` from the `gentle-ai.review-integration.consent/v3` envelope"},
 		{name: "captured decline only", text: "Never synthesize the decline command, target, token, or consumer continuation from prose."},
 		{name: "missing decline context fails closed", text: "If the captured exact v3 decline invocation, exact target identity, or consumer continuation context is unavailable or ambiguous, fail closed with all consumer state preserved and do not run a substitute command."},
 		{name: "decline result validation", text: "validate `action: \"declined\"`, `consent: \"declined_this_candidate\"`, and the exact target identity match"},
+		{name: "decline execution failure stops", text: "If that exact decline invocation fails to execute, returns malformed, incomplete, or ambiguous output, fails validation, or does not match the exact target, action, and consent, preserve all consumer state and STOP; do not synthesize, retry, substitute, or resume a continuation."},
 		{name: "decline preserves ordinary delivery", text: "The result carries no lineage or receipt; ordinary delivery is unmanaged by the candidate choice, and the next candidate asks again."},
 		{name: "native negotiated status re-entry", text: "re-enter through native negotiated STATUS, then resume the already-held consumer continuation"},
-		{name: "continue paths reuse exact decline", text: "Both continue choices execute that exact captured decline invocation exactly once"},
+		{name: "continue paths reuse exact decline", text: "The shared candidate-scoped continuation executes that exact captured decline invocation exactly once for each continuing path"},
 		{name: "review mode disable prohibition", text: "Do not invoke `gentle-ai review mode disable` at clone or global scope within this handoff."},
 		{name: "rdd mode preservation", text: "Do not turn RDD off or on within this handoff."},
 		{name: "stop choice", text: "**Stop here**: Perform no GitHub operation and no decline invocation; preserve all consumer state and STOP."},
@@ -195,6 +196,8 @@ func TestCoordinatorOrchestratorsCarryGentleAIProviderDefectHandoff(t *testing.T
 		{name: "final privacy scan", text: "Immediately before the first GitHub operation, perform a final privacy scan"},
 		{name: "privacy ordering", text: "This scan precedes the definitive lookup, report creation, and occurrence comment"},
 		{name: "privacy exclusions", text: "raw argv, absolute paths, private project names, usernames, hostnames, credentials, diffs, source contents, and environment values"},
+		{name: "privacy failure fail closed", text: "If prohibited data is found, the scan fails, returns incomplete, ambiguous, or unknown, or safe redaction would alter the reporting decision, perform no GitHub search, write, comment, or create; preserve all consumer state, mark this as report-side uncertainty, and jump directly to the Terminal report-outcome continuation below."},
+		{name: "privacy failure keeps prohibited data private", text: "Do not expose or include prohibited data."},
 		{name: "published fix remains a normal resumption route", text: "an installed published fix"},
 		{name: "installed prerelease qualifies", text: "A published prerelease or release candidate the user installed satisfies this."},
 		{name: "maintainer-authorized native recovery", text: "an explicit maintainer-authorized, documented native recovery or reset that the runtime contract supports"},
@@ -277,17 +280,27 @@ func TestCoordinatorOrchestratorsCarryGentleAIProviderDefectHandoff(t *testing.T
 				{
 					name:   "confirmed creation identity and unresolved creation safety",
 					prefix: "Confirmed creation requires the GitHub create operation",
-					must:   []string{"newly-created issue identity/URL", "Never infer creation from output text alone", "If creation fails, is ambiguous, incomplete, times out, lacks permission, or has an unknown outcome", "preserve all consumer state", "do not search, comment, update, create, or retry until the exact created issue identity is resolved", "use the uncertainty continuation below"},
+					must:   []string{"newly-created issue identity/URL", "Never infer creation from output text alone", "If creation fails, is ambiguous, incomplete, times out, lacks permission, or has an unknown outcome", "immediately stop further GitHub mutation and blind retries", "preserve all consumer state", "mark this as report-side uncertainty", "jump directly to the Terminal report-outcome continuation", "without requiring identity resolution first"},
 				},
 				{
-					name:   "report uncertainty preserves consumer continuation",
+					name:   "broad report uncertainty jumps to terminal continuation",
 					prefix: "If search, comment, or creation fails, is ambiguous, incomplete, times out, lacks permission, or has an unknown outcome",
-					must:   []string{"perform no further GitHub mutation", "no blind retry", "preserve all consumer state", "exact captured provider-owned decline invocation exactly once", "validate it", "re-enter native negotiated STATUS", "already-held consumer continuation"},
+					must:   []string{"perform no further GitHub mutation", "no blind retry", "preserve all consumer state", "mark this as report-side uncertainty", "jump directly to the Terminal report-outcome continuation", "Do not continue through later report-routing bullets"},
 				},
 				{
-					name:   "unproven identity stops without a duplicate",
+					name:   "unproven identity only vetoes later duplicate mutation",
 					prefix: "If the exact created issue identity cannot be proven",
-					must:   []string{"fail closed for identity recovery", "no duplicate issue or comment"},
+					must:   []string{"only a veto on later recovery, retry, or duplicate mutation", "no duplicate issue or comment"},
+				},
+				{
+					name:   "privacy gate failure prevents every GitHub operation",
+					prefix: "If prohibited data is found",
+					must:   []string{"scan fails", "incomplete, ambiguous, or unknown", "safe redaction would alter the reporting decision", "perform no GitHub search, write, comment, or create", "preserve all consumer state", "mark this as report-side uncertainty", "jump directly to the Terminal report-outcome continuation", "Do not continue through later report-routing bullets"},
+				},
+				{
+					name:   "decline failure does not invent continuation",
+					prefix: "If that exact decline invocation fails to execute",
+					must:   []string{"malformed, incomplete, or ambiguous output", "fails validation", "exact target, action, and consent", "preserve all consumer state and STOP", "do not synthesize, retry, substitute, or resume a continuation"},
 				},
 			} {
 				t.Run(invariant.name, func(t *testing.T) {
@@ -299,6 +312,28 @@ func TestCoordinatorOrchestratorsCarryGentleAIProviderDefectHandoff(t *testing.T
 					}
 				})
 			}
+			terminal := providerDefectHandoffLine(t, contract, "Terminal report-outcome continuation:")
+			if count := strings.Count(contract, "Terminal report-outcome continuation:"); count != 1 {
+				t.Errorf("provider-defect handoff has %d terminal report-outcome execution clauses; want exactly 1", count)
+			}
+			if !strings.Contains(terminal, "execute the shared candidate-scoped continuation exactly once") {
+				t.Errorf("terminal report-outcome continuation must execute the shared continuation exactly once: %q", terminal)
+			}
+			if count := strings.Count(contract, "The shared candidate-scoped continuation executes that exact captured decline invocation exactly once for each continuing path"); count != 1 {
+				t.Errorf("provider-defect handoff has %d shared exact-decline execution clauses; want exactly 1", count)
+			}
+			for _, routePrefix := range []string{
+				"If prohibited data is found",
+				"If search, comment, or creation fails, is ambiguous, incomplete, times out, lacks permission, or has an unknown outcome",
+				"Confirmed creation requires the GitHub create operation",
+			} {
+				route := providerDefectHandoffLine(t, contract, routePrefix)
+				for _, prohibited := range []string{"execute", "decline invocation"} {
+					if strings.Contains(route, prohibited) {
+						t.Errorf("route-specific uncertainty %q must jump to terminal continuation without direct %q: %q", routePrefix, prohibited, route)
+					}
+				}
+			}
 			for _, ordering := range []struct {
 				name   string
 				before string
@@ -306,12 +341,16 @@ func TestCoordinatorOrchestratorsCarryGentleAIProviderDefectHandoff(t *testing.T
 			}{
 				{name: "consent before privacy scan", before: "for explicit consent to report the apparent defect", after: "Immediately before the first GitHub operation, perform a final privacy scan"},
 				{name: "privacy scan before definitive lookup", before: "Immediately before the first GitHub operation, perform a final privacy scan", after: "complete a definitive lookup across open and closed issues"},
+				{name: "privacy failure before definitive lookup", before: "If prohibited data is found", after: "complete a definitive lookup across open and closed issues"},
 				{name: "lookup before fix status", before: "complete a definitive lookup across open and closed issues", after: "If the equivalent has a verifiable relevant published fix"},
 				{name: "fix status before installed build", before: "If the equivalent has a verifiable relevant published fix", after: "If the installed build predates that release"},
 				{name: "definitive lookup before report creation", before: "Only a definitive lookup may branch to GitHub mutation", after: "create a new automated provider-defect report"},
 				{name: "definitive lookup before occurrence comment", before: "Only a definitive lookup may branch to GitHub mutation", after: "add exactly one occurrence comment"},
 				{name: "report creation before creation identity precondition", before: "create a new automated provider-defect report", after: "Confirmed creation requires the GitHub create operation"},
-				{name: "creation uncertainty before identity fail-closed", before: "If creation fails, is ambiguous, incomplete, times out, lacks permission, or has an unknown outcome", after: "If the exact created issue identity cannot be proven"},
+				{name: "creation uncertainty before later identity veto", before: "If creation fails, is ambiguous, incomplete, times out, lacks permission, or has an unknown outcome", after: "If the exact created issue identity cannot be proven"},
+				{name: "privacy uncertainty before terminal continuation", before: "If prohibited data is found", after: "Terminal report-outcome continuation:"},
+				{name: "broad uncertainty before terminal continuation", before: "If search, comment, or creation fails, is ambiguous, incomplete, times out, lacks permission, or has an unknown outcome", after: "Terminal report-outcome continuation:"},
+				{name: "creation uncertainty before terminal continuation", before: "If creation fails, is ambiguous, incomplete, times out, lacks permission, or has an unknown outcome", after: "Terminal report-outcome continuation:"},
 			} {
 				t.Run(ordering.name, func(t *testing.T) {
 					beforeIndex := strings.Index(contract, ordering.before)
