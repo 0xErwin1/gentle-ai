@@ -347,7 +347,9 @@ func TestKilocodeReviewSettingsMatchCurrentMainBaseline(t *testing.T) {
 	// phase result never dispatches, so the orchestrator must not read the
 	// replayed envelope as a fresh attempt. Kilocode embeds that orchestrator
 	// contract, so the hash moved. Deliberate, not drift.
-	const want = "39346a1213aad6d4b0bb6c84af66f830cfb41f2ebe55db3d932ac66369071cec"
+	// #3102 adds the empty_base_diff_bootstrap_required STOP continuation to
+	// the shared contract. Kilocode embeds that contract, so the hash moved.
+	const want = "9407e03e8fb03569bd4fcafef176489363a0046b8a4b1afe9cea598e2a728cc9"
 	if got != want {
 		t.Fatalf("Kilocode settings SHA-256 = %s, want current-main baseline %s", got, want)
 	}
@@ -578,8 +580,10 @@ func TestOpenCodeRenderedReviewProtocolCost(t *testing.T) {
 		// which is the direction this table exists to protect.
 		// #2758 adds one staged-delivery STOP continuation (383 rendered
 		// characters per row). The ceilings preserve the required 15% headroom.
-		{name: "standard", agents: []string{"review-reliability"}, beforeChars: 42_301, wantChars: 21_261, maxCharacters: 24_500},
-		{name: "full-4R", agents: []string{"review-risk", "review-resilience", "review-readability", "review-reliability"}, beforeChars: 106_998, wantChars: 33_606, maxCharacters: 38_700},
+		// #3102 adds one empty-base-diff bootstrap STOP continuation (448 rendered
+		// characters per row). The ceilings preserve the required 15% headroom.
+		{name: "standard", agents: []string{"review-reliability"}, beforeChars: 42_301, wantChars: 21_709, maxCharacters: 25_000},
+		{name: "full-4R", agents: []string{"review-risk", "review-resilience", "review-readability", "review-reliability"}, beforeChars: 106_998, wantChars: 34_054, maxCharacters: 39_200},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

@@ -133,6 +133,9 @@ var reviewStopReasonNarration = map[string]string{
 		"reopen their lenses over the same frozen content: run `gentle-ai review reopen-results --prepare --cwd <repo> --lineage <id> " +
 		"--expected-revision <revision> --target <target> --reason <reason> --actor <actor> --quarantine-lens <lens>` " +
 		"(repeat `--quarantine-lens` per affected lens) and follow its output.",
+	"empty_base_diff_bootstrap_required": "This selected committed base has no changes to review. " +
+		"If you are following the authorized first-publication bootstrap, a maintainer must first insert an empty root below the content commit. " +
+		"Then run `gentle-ai review status --cwd <repo> --contract gentle-ai.review-integration/v2 --agent " + reviewUndeclaredRuntimeIdentitySlot + " --next-transition --base-ref <empty-root> --committed-only`.",
 	"correction_repository_verification_failed": "Repository verification failed for this correction candidate. Change the candidate within the open correction, then re-run " +
 		"`gentle-ai review status --cwd <repo> --contract gentle-ai.review-integration/v2 --agent " + reviewUndeclaredRuntimeIdentitySlot + " --next-transition` " +
 		"to capture evidence for the new candidate.",
