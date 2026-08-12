@@ -651,6 +651,7 @@ func Journeys() []Journey {
 	journeys = append(journeys, waveFiveJourneys()...)
 	journeys = append(journeys, advisoryJourneys()...)
 	journeys = append(journeys, zeroDeltaJourneys()...)
+	journeys = append(journeys, lensContextBudgetJourneys()...)
 	journeys = append(journeys, localGateBaseAdvanceJourneys()...)
 	journeys = append(journeys, intendedUntrackedJourneys()...)
 	journeys = append(journeys, captureResultDryRunJourneys()...)
