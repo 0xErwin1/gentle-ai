@@ -426,6 +426,10 @@ type storeInspection struct {
 		LineageID string `json:"lineage_id"`
 		Problem   string `json:"problem"`
 	} `json:"entry_diagnostics"`
+	SanctionedExits []struct {
+		LineageID string `json:"successor_lineage_id"`
+		Operation string `json:"operation"`
+	} `json:"sanctioned_exits"`
 }
 
 // storeStatus is the subset of `review status` that says whether the store
@@ -435,12 +439,13 @@ type storeStatus struct {
 	Authoritative bool   `json:"authoritative"`
 	Status        string `json:"status"`
 	Entries       []struct {
-		LineageID        string   `json:"lineage_id"`
-		State            string   `json:"state"`
-		Status           string   `json:"status"`
-		Revision         string   `json:"revision"`
-		SnapshotIdentity string   `json:"snapshot_identity"`
-		Problems         []string `json:"problems"`
+		LineageID        string                 `json:"lineage_id"`
+		State            string                 `json:"state"`
+		Status           string                 `json:"status"`
+		Revision         string                 `json:"revision"`
+		SnapshotIdentity string                 `json:"snapshot_identity"`
+		DiscardedWork    authorityDiscardedWork `json:"discarded_work"`
+		Problems         []string               `json:"problems"`
 	} `json:"entries"`
 }
 
@@ -491,6 +496,8 @@ const (
 	scratchLiveRevision        = "damaged-store/live-revision"
 	scratchLiveSnapshot        = "damaged-store/live-snapshot"
 )
+
+const scratchDamagedAuthorityBeforeFinalize = "damaged-store/authority-before-finalize"
 
 // The successor names are the operator's to choose, so this axis chooses two
 // and keeps them stable across runs.
@@ -1002,10 +1009,9 @@ func halfWrittenSuccessor(sandbox *Sandbox) error {
 // Counted operator work
 // ---------------------------------------------------------------------------
 
-// abandonArgs assembles the exit that DOES clear a pristine damaged successor,
-// and it costs the same six-line hand-built binding `review abandon` always
-// costs — which is why every journey that reaches it also moves manual_tokens.
-func abandonArgs(lineageKey, revisionKey, snapshotKey, reason string) func(*Sandbox) ([]string, error) {
+// abandonArgs assembles the V2 exit from the product's current status row. The
+// summary must not be inferred from the fixture: it is part of the binding.
+func abandonArgs(lineageKey, revisionKey, snapshotKey, _ string) func(*Sandbox) ([]string, error) {
 	return func(sandbox *Sandbox) ([]string, error) {
 		lineage, err := scratchValue(sandbox, lineageKey)
 		if err != nil {
@@ -1019,23 +1025,33 @@ func abandonArgs(lineageKey, revisionKey, snapshotKey, reason string) func(*Sand
 		if err != nil {
 			return nil, err
 		}
-		const actor = "bench"
-		authorization := strings.Join([]string{
-			"gentle-ai.review-abandon-authorization/v1",
-			"lineage=" + lineage,
-			"revision=" + revision,
-			"snapshot_identity=" + snapshot,
-			"actor=" + actor,
-			"reason=" + reason,
-		}, "\n")
-		return []string{
-			"review", "abandon", "--cwd", sandbox.Repo,
-			"--lineage", lineage,
-			"--expected-revision", revision,
-			"--reason", reason,
-			"--actor", actor,
-			"--maintainer-authorization", authorization,
-		}, nil
+		status, err := proveStoreStatus(sandbox)
+		if err != nil {
+			return nil, err
+		}
+		for _, entry := range status.Entries {
+			if entry.LineageID != lineage {
+				continue
+			}
+			if entry.Revision != revision || entry.SnapshotIdentity != snapshot {
+				return nil, fmt.Errorf("review status changed %q from %q/%q to %q/%q before abandonment",
+					lineage, revision, snapshot, entry.Revision, entry.SnapshotIdentity)
+			}
+			const actor = "bench"
+			const reason = "operator_disposition"
+			authorization := renderAbandonAuthorization(authorityEntry{
+				LineageID: lineage, Revision: revision, SnapshotIdentity: snapshot, DiscardedWork: entry.DiscardedWork,
+			}, actor, reason)
+			return []string{
+				"review", "abandon", "--cwd", sandbox.Repo,
+				"--lineage", lineage,
+				"--expected-revision", revision,
+				"--reason", reason,
+				"--actor", actor,
+				"--maintainer-authorization", authorization,
+			}, nil
+		}
+		return nil, fmt.Errorf("review status no longer lists %q for abandonment", lineage)
 	}
 }
 
@@ -1169,7 +1185,49 @@ func proveStoreRecovered(r *journeyRun) error {
 // proveStoreStillDamaged is its mirror, for the steps that claim an operation
 // changed nothing.
 func proveStoreStillDamaged(r *journeyRun) error {
-	return requireDamagedStoreReportsItsDamage(r.sandbox)
+	if err := requireDamagedStoreReportsItsDamage(r.sandbox); err != nil {
+		return err
+	}
+	before, captured := r.sandbox.Scratch[scratchDamagedAuthorityBeforeFinalize]
+	if !captured {
+		return nil
+	}
+	lineage, err := scratchValue(r.sandbox, scratchSuccessor)
+	if err != nil {
+		return err
+	}
+	path, err := storeStatePath(r.sandbox, lineage)
+	if err != nil {
+		return err
+	}
+	after, err := os.ReadFile(path)
+	if err != nil {
+		return fmt.Errorf("read damaged authority after failed FINALIZE: %w", err)
+	}
+	if !bytes.Equal([]byte(before), after) {
+		return errors.New("failed FINALIZE changed the damaged authority bytes")
+	}
+	return nil
+}
+
+// captureDamagedAuthorityBytes records the exact persisted successor before
+// ds14 crosses the public FINALIZE boundary. The follow-up proof still checks
+// that the store remains invalid, then verifies this record was untouched.
+func captureDamagedAuthorityBytes(sandbox *Sandbox) error {
+	lineage, err := scratchValue(sandbox, scratchSuccessor)
+	if err != nil {
+		return err
+	}
+	path, err := storeStatePath(sandbox, lineage)
+	if err != nil {
+		return err
+	}
+	payload, err := os.ReadFile(path)
+	if err != nil {
+		return fmt.Errorf("read damaged authority before FINALIZE: %w", err)
+	}
+	sandbox.Scratch[scratchDamagedAuthorityBeforeFinalize] = string(payload)
+	return nil
 }
 
 // repairAssessment is the subset of `review repair --preflight` that says
@@ -1308,12 +1366,16 @@ func dispositionRepositoryBinding(sandbox *Sandbox) (string, error) {
 // (authority_disposition_plan.go) computes internally, mirroring how
 // reconcileArgs and abandonArgs above hand-render their own authorization
 // bindings rather than depending on an exported production helper.
-func dispositionAuthorization(binding, planDigest, inventoryRevision, actor, reason string) string {
+func dispositionAuthorization(binding, planDigest, inventoryRevision, actor, reason string, class ...string) string {
+	authorizationClass := contentMismatchedRecoveryAuthorizationClass
+	if len(class) == 1 {
+		authorizationClass = class[0]
+	}
 	return strings.Join([]string{
 		authorityDispositionAuthorizationSchema,
 		"schema=" + authorityDispositionPlanSchema,
 		"repository=" + binding,
-		"class=" + contentMismatchedRecoveryAuthorizationClass,
+		"class=" + authorizationClass,
 		"plan_digest=" + planDigest,
 		"inventory_revision=" + inventoryRevision,
 		"actor=" + actor,
@@ -1660,6 +1722,11 @@ var repairPreflightCapability = &Capability{
 var repairDispositionExecuteCapability = &Capability{
 	Verb:  []string{"review", "repair"},
 	Flags: []string{"--cwd", "--plan-digest", "--inventory-revision", "--actor", "--reason", "--authorization"},
+}
+
+var finalizeAuthorizationFailureCapability = &Capability{
+	Verb:  []string{"review", "finalize"},
+	Flags: []string{"--cwd", "--contract", "--lineage", "--captured-results"},
 }
 
 // ---------------------------------------------------------------------------
@@ -2013,7 +2080,59 @@ func damagedStoreJourneys() []Journey {
 						invalidEdgesWithNoAnomalyClass(1))},
 			},
 		},
+		{
+			ID:     "ds14-finalize-authorization-mismatch-is-typed",
+			Title:  "A real FINALIZE over a schema-prefixed authorization mismatch is typed before mutation and names review repair",
+			Source: "issue #1928: review finalize must classify pre-native recovery authorization failures and expose the current review.repair route",
+			// The fixture reproduces the issue's original boundary: the successor
+			// already contains product-captured reviewer output, but its recorded
+			// schema-prefixed authorization binds a reason different from the one
+			// persisted in the recovery provenance. FINALIZE must fail while
+			// validating that edge, not report operation_outcome_unknown after a
+			// mutation that never started.
+			Steps: []Step{
+				{Name: "fixture: non-pristine successor with a schema-prefixed mismatched authorization", Fixture: damagedEdgeWithResults},
+				{Name: "capture the damaged authority before FINALIZE", Fixture: captureDamagedAuthorityBytes},
+				{Name: "negotiate FINALIZE over the damaged successor", Requires: finalizeAuthorizationFailureCapability,
+					Args:  damagedSuccessorFinalizeArgs,
+					After: requireTypedAuthorizationMismatchFailure},
+				{Name: "the failed FINALIZE did not mutate the damaged authority", Composite: proveStoreStillDamaged},
+			},
+		},
 	}, closureDispositionJourneys()...)
+}
+
+func damagedSuccessorFinalizeArgs(sandbox *Sandbox) ([]string, error) {
+	lineage, err := scratchValue(sandbox, scratchSuccessor)
+	if err != nil {
+		return nil, err
+	}
+	return []string{"review", "finalize", "--contract", reviewContract, "--lineage", lineage, "--captured-results=true", "--cwd", sandbox.Repo}, nil
+}
+
+type typedAuthorizationMismatchFailure struct {
+	Operation       string `json:"operation"`
+	Code            string `json:"code"`
+	Phase           string `json:"phase"`
+	MutationOutcome string `json:"mutation_outcome"`
+	NextAction      string `json:"next_action"`
+	Cause           string `json:"cause"`
+}
+
+func requireTypedAuthorizationMismatchFailure(_ *Sandbox, observation Observation) error {
+	if observation.ExitCode == 0 {
+		return errors.New("review finalize succeeded over the damaged authorization")
+	}
+	var failure typedAuthorizationMismatchFailure
+	if err := json.Unmarshal([]byte(strings.TrimSpace(observation.Stdout)), &failure); err != nil {
+		return fmt.Errorf("parse negotiated finalize failure: %w (stderr: %s)", err, firstLine(observation.Stderr))
+	}
+	if failure.Operation != "review.finalize" || failure.Code != "escalated_recovery_authorization_inexact" ||
+		failure.Phase != "pre_native" || failure.MutationOutcome != "not_started" || failure.NextAction != "review.repair" ||
+		failure.Cause == "" || strings.Contains(observation.Stdout, "operation_outcome_unknown") || strings.Contains(observation.Stdout, "reconcile-authority") {
+		return fmt.Errorf("negotiated finalize failure = %#v, want typed pre-native repair route", failure)
+	}
+	return nil
 }
 
 // requireUnrelatedTargetIsRouted is ds13's measurement. The negotiated surface

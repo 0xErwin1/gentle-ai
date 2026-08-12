@@ -13,6 +13,10 @@ import (
 	"reflect"
 )
 
+// ErrCapturedReviewerResultSlotConflict reports an immutable reviewer result
+// slot occupied by different canonical bytes.
+var ErrCapturedReviewerResultSlotConflict = errors.New("captured reviewer result slot conflicts with different canonical bytes") // refusal:by-design world-action: transaction-layer capture cannot alter an immutable occupied slot
+
 // CompactAdmittedReviewerResultRequest contains one provider-observed reviewer
 // result and the exact native authority preimages that result must bind.
 type CompactAdmittedReviewerResultRequest struct {
@@ -133,13 +137,19 @@ func (store CompactStore) CaptureAdmittedReviewerResult(
 		)
 	}
 
+	canonicalInspection := request.Inspection
+	canonicalInspectionPaths, err := canonicalPaths(request.Inspection.Paths)
+	if err != nil {
+		return LensResult{}, err
+	}
+	canonicalInspection.Paths = canonicalInspectionPaths
 	canonicalResult, err := CanonicalCompactLensResult(request.Result)
 	if err != nil {
 		return LensResult{}, err
 	}
 	providerResult := compactProviderReviewerResult{
 		SubjectHash: request.ArtifactSubject.SubjectHash,
-		Inspection:  request.Inspection,
+		Inspection:  canonicalInspection,
 		Lens:        request.ArtifactSubject.Lens,
 		Findings:    canonicalResult.Findings,
 		Evidence:    canonicalResult.Evidence,
@@ -190,7 +200,7 @@ func (store CompactStore) CaptureAdmittedReviewerResult(
 					ExpectedSubject:           expected,
 					FrozenContext:             nativeContext,
 					EchoedSubjectHash:         providerResult.SubjectHash,
-					Inspection:                providerResult.Inspection,
+					Inspection:                canonicalInspection,
 					Result:                    canonicalResult,
 					CandidateCausalFindingIDs: request.CandidateCausalFindingIDs,
 					RawPayload:                request.RawPayload,
@@ -235,7 +245,7 @@ func (store CompactStore) CaptureAdmittedReviewerResult(
 		if errors.Is(err, ErrAuthorityLockTimeout) {
 			_, expectedAdmission, admissionErr := AdmitArtifact(ctx, ArtifactAdmissionRequest{
 				ExpectedSubject: request.ArtifactSubject, FrozenContext: request.FrozenContext,
-				EchoedSubjectHash: request.ArtifactSubject.SubjectHash, Inspection: request.Inspection,
+				EchoedSubjectHash: request.ArtifactSubject.SubjectHash, Inspection: canonicalInspection,
 				Result: request.Result, CandidateCausalFindingIDs: request.CandidateCausalFindingIDs,
 				RawPayload: request.RawPayload, CanonicalPayload: canonicalPayload,
 			})
@@ -356,9 +366,7 @@ func requireCompactReviewerSlotCompatible(
 		return err
 	}
 	if !bytes.Equal(existing, payload) {
-		return errors.New(
-			"captured reviewer result already exists with different canonical bytes",
-		)
+		return fmt.Errorf("%w: existing bytes differ from the requested payload", ErrCapturedReviewerResultSlotConflict)
 	}
 	return nil
 }

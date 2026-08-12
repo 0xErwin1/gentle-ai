@@ -415,7 +415,7 @@ func TestCheckInstalledAssetVersion_SkewWarning(t *testing.T) {
 func setStdioProbeForTest(t *testing.T, err error) {
 	t.Helper()
 	orig := engramProbeStdioFn
-	engramProbeStdioFn = func(context.Context, string, ...string) error { return err }
+	engramProbeStdioFn = func(context.Context, time.Duration, string, ...string) error { return err }
 	t.Cleanup(func() { engramProbeStdioFn = orig })
 }
 
@@ -598,7 +598,7 @@ func TestCheckEngramReachable_StdioUsesPersistedConfiguration(t *testing.T) {
 	var gotCommand string
 	var gotArgs []string
 	orig := engramProbeStdioFn
-	engramProbeStdioFn = func(_ context.Context, command string, args ...string) error {
+	engramProbeStdioFn = func(_ context.Context, _ time.Duration, command string, args ...string) error {
 		gotCommand = command
 		gotArgs = args
 		return nil
@@ -779,10 +779,11 @@ func TestRunDoctor_IntegrationAllMocked(t *testing.T) {
   [ok]  tool:engram                    engram found at /usr/local/bin/engram
   [ok]  tool:claude                    claude found at /usr/local/bin/claude
   [ok]  state:json                     state file OK — 1 agent(s) installed: claude-code
+  [ok]  installed:asset_version        no installed binary version recorded in state file — check skipped
   [ok]  engram:reachable               engram MCP (stdio) answered the initialize handshake for persisted configuration: %s
   [ok]  disk:space                     1024 MB free on %s filesystem
 
-Summary: 7 passed, 0 failed, 0 warnings
+Summary: 8 passed, 0 failed, 0 warnings
 Status:  healthy
 `, configPath, filepath.Join(homeDir, ".gentle-ai"))
 	if got := buf.String(); got != want {
