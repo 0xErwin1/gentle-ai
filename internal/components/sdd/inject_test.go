@@ -70,12 +70,11 @@ func TestSDDOrchestratorAssetSelectionCoversSupportedAgents(t *testing.T) {
 				"`report_and_continue`, `continue_without_reporting`, `stop_here`",
 				"Only after explicit consent and that final privacy scan",
 				"search open and closed issues",
-				"confirms a newly-created issue identity/URL",
+				"newly-created issue identity/URL",
 				"Only a definitive lookup may branch to GitHub mutation",
-				"do not create, comment, update, label, or retry automatically",
+				"do not search, comment, update, create, or retry until the exact created issue identity is resolved",
 				"do not add, remove, or change any labels on it",
-				"label application fails or has an ambiguous outcome",
-				"re-resolve that exact created issue identity",
+				"If the exact created issue identity cannot be proven, fail closed for identity recovery",
 				"Both continue choices execute that exact captured decline invocation exactly once",
 				"`consent: \"declined_this_candidate\"`",
 				"native negotiated STATUS",
@@ -83,6 +82,9 @@ func TestSDDOrchestratorAssetSelectionCoversSupportedAgents(t *testing.T) {
 				if !strings.Contains(renderSDDOrchestratorAsset(tc.agent), required) {
 					t.Fatalf("rendered %s orchestrator missing provider-defect handoff clause %q", tc.agent, required)
 				}
+			}
+			if strings.Contains(renderSDDOrchestratorAsset(tc.agent), "gentle-"+"report") {
+				t.Fatalf("rendered %s orchestrator retains a provider-defect label", tc.agent)
 			}
 		})
 	}
