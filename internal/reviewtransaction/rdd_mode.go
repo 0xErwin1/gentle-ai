@@ -258,6 +258,27 @@ func SetCloneLocalRDDMode(
 	if err != nil {
 		return failedClosedRDDModeStatus(RDDModeSourceCloneLocal), err
 	}
+	globalMode, globalErr := normalizeRDDMode(global.Value)
+	if globalErr != nil {
+		return failedClosedRDDModeStatus(RDDModeSourceGlobal), globalErr
+	}
+	currentStatus, currentErr := ResolveRDDMode(ctx, repo, global)
+	if currentErr == nil && strings.TrimSpace(expectedRevision) != currentStatus.Revision {
+		return failedClosedRDDModeStatus(RDDModeSourceCloneLocal), fmt.Errorf(
+			"%w: expected %q but the clone-local head is %q", ErrRDDModeRevisionMismatch, expectedRevision, currentStatus.Revision)
+	}
+	if currentErr == nil && mode == RDDModeUnset && globalMode == RDDModeOff {
+		// Clearing this clone's off-only override cannot enable review while the
+		// global source remains off, so refuse without publishing a generation.
+		return currentStatus, &RDDDisabledError{Operation: RDDOperationStart, Source: RDDModeSourceGlobal}
+	}
+	if currentErr == nil && ((mode == RDDModeOff && currentStatus.CloneLocal == RDDModeOff) ||
+		(mode == RDDModeUnset && currentStatus.CloneLocal == RDDModeUnset)) {
+		return currentStatus, nil
+	}
+	if currentErr != nil && !errors.Is(currentErr, ErrRDDModeCorrupt) {
+		return failedClosedRDDModeStatus(RDDModeSourceCloneLocal), currentErr
+	}
 	dir, err := cloneLocalRDDModeRoot(ctx, repo, true)
 	if err != nil {
 		return failedClosedRDDModeStatus(RDDModeSourceCloneLocal), err
@@ -320,10 +341,6 @@ func SetCloneLocalRDDMode(
 	// generation, so a lost race can never corrupt the head record.
 	if err := publishPrivateRARImmutable(filepath.Join(dir, rddModeGenerationName(record.Generation)), payload); err != nil {
 		return failedClosedRDDModeStatus(RDDModeSourceCloneLocal), err
-	}
-	globalMode, globalErr := normalizeRDDMode(global.Value)
-	if globalErr != nil {
-		return failedClosedRDDModeStatus(RDDModeSourceGlobal), globalErr
 	}
 	return rddModeStatus(globalMode, record, true), nil
 }
