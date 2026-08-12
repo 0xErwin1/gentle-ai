@@ -10,6 +10,44 @@ import (
 	"testing"
 )
 
+func TestRuntimeIntendedUntrackedRejectsInvalidPaths(t *testing.T) {
+	repo := initRuntimeLedgerRepo(t)
+	store, err := OpenRuntimeStore(context.Background(), repo, "reject-selected")
+	if err != nil {
+		t.Fatal(err)
+	}
+	tooMany := make([]string, maximumRuntimeIntendedUntracked+1)
+	for index := range tooMany {
+		tooMany[index] = fmt.Sprintf("path-%d.txt", index)
+	}
+	for _, test := range []struct {
+		name  string
+		paths []string
+	}{
+		{"absolute", []string{filepath.Join(repo, "outside.txt")}},
+		{"parent traversal", []string{"../outside.txt"}},
+		{"parent directory", []string{".."}},
+		{"current directory", []string{"."}},
+		{"non-clean separator", []string{"a//b.txt"}},
+		{"non-clean current directory", []string{"./a.txt"}},
+		{"duplicate", []string{"a.txt", "a.txt"}},
+		{"too many", tooMany},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if _, err := store.Begin(context.Background(), BeginAttemptRequest{
+				RequestID: "reject-begin", WorkUnit: "reject", EvidenceGoal: "reject invalid selected paths",
+				MaxAttempts: 2, MaxChangedLines: 20, IntendedUntracked: test.paths,
+			}); err == nil {
+				t.Fatalf("accepted invalid selection %v", test.paths)
+			}
+			status, err := store.Status()
+			if err != nil || status.Revision != "" || status.ActiveAttempt != nil || len(status.Attempts) != 0 {
+				t.Fatalf("invalid selection mutated authority: status=%#v err=%v", status, err)
+			}
+		})
+	}
+}
+
 func TestRuntimeSelectedUntrackedPopulationAccountsMixedCandidate(t *testing.T) {
 	repo := initRuntimeLedgerRepo(t)
 	if err := os.WriteFile(filepath.Join(repo, "selected.txt"), []byte("initial\n"), 0o644); err != nil {
@@ -150,7 +188,7 @@ func TestRuntimeLegacyEmptyPopulationStillReplays(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	snapshot, err := captureRuntimeCandidate(context.Background(), repo)
+	snapshot, err := captureRuntimeCandidate(context.Background(), repo, []string{})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -24,6 +24,7 @@ import (
 // authority" as Absent/unmanaged rather than as a resolution error.
 func seedVerifiedReadyChangeForOffer(t *testing.T, root string) {
 	t.Helper()
+	isolateReviewOfferMode(t)
 	changeRoot := seedReadyChange(t, root, "thin", "- [x] 1.1 Done\n")
 	write(t, changeRoot+"/verify-report.md", boundedVerifyEnvelope(shaID("a"), "pass"))
 	runSDDStatusGit(t, root, "init", "-q")
@@ -33,11 +34,19 @@ func seedVerifiedReadyChangeForOffer(t *testing.T, root string) {
 	runSDDStatusGit(t, root, "commit", "-qm", "base")
 }
 
+func isolateReviewOfferMode(t *testing.T) {
+	t.Helper()
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+}
+
 // TestReviewOfferBlockPresentWhenVerifiedAndEnabled proves the offer block
 // appears, carries an actionable invocation, and does not block Archive —
 // Archive stays whatever resolveDependencies already computed for a passing
 // verify report (Ready), never gated on the offer.
 func TestReviewOfferBlockPresentWhenVerifiedAndEnabled(t *testing.T) {
+	isolateReviewOfferMode(t)
 	root := t.TempDir()
 	changeRoot := seedReadyChange(t, root, "thin", "- [x] 1.1 Done\n")
 	write(t, filepath.Join(changeRoot, "verify-report.md"), boundedVerifyEnvelope(shaID("a"), "pass"))
@@ -200,6 +209,7 @@ func TestReviewOfferDeclineLeavesNoStateAndDoesNotSuppressLaterOffer(t *testing.
 // two different, both-correct dispositions that happen to agree on the one
 // property that matters for delivery: neither blocks archive.
 func TestReviewOfferDeclineNeverBlocksArchiveAtTheProjectionLevel(t *testing.T) {
+	isolateReviewOfferMode(t)
 	root := t.TempDir()
 	changeRoot := seedReadyChange(t, root, "thin", "- [x] 1.1 Done\n")
 	write(t, filepath.Join(changeRoot, "verify-report.md"), boundedVerifyEnvelope(shaID("a"), "pass"))

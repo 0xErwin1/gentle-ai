@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
@@ -26,6 +27,9 @@ func TestRunSDDAttemptAcquireRefusesUndeclaredEligibleUntrackedScopeBeforeToken(
 	}, &output)
 	if err == nil {
 		t.Fatalf("undeclared eligible untracked scope issued authority: %s", output.String())
+	}
+	if !strings.Contains(err.Error(), "gentle-ai review status --next-transition") || !strings.Contains(err.Error(), "gentle-ai sdd-attempt acquire") {
+		t.Fatalf("undeclared scope guidance = %q, want inventory then acquire commands", err)
 	}
 	status, statusErr := store.Status()
 	if statusErr != nil || status.Revision != "" || status.ActiveAttempt != nil || len(status.Attempts) != 0 {
@@ -127,15 +131,27 @@ func TestRunSDDAttemptBeginSelectsInventoryValidatedPaths(t *testing.T) {
 	}
 }
 
-func TestRunSDDAttemptSelectedUntrackedExcludesIgnoredSecretNestedAndUnrelatedPaths(t *testing.T) {
+func TestRunSDDAttemptSelectedUntrackedDoesNotSweepIgnoredOrUnrelatedPaths(t *testing.T) {
 	repo := initReviewCLIRepo(t)
 	writeUndeclaredWorkspaceFile(t, repo, "selected.txt", "selected\n", 0o644)
 	writeUndeclaredWorkspaceFile(t, repo, unrelatedCredentialPath, unrelatedCredentialContents, 0o600)
 	writeUndeclaredWorkspaceFile(t, repo, "ignored.txt", "ignored\n", 0o644)
 	writeUndeclaredWorkspaceFile(t, repo, ".gitignore", "ignored.txt\n", 0o644)
-	_, digest, err := (reviewtransaction.SnapshotBuilder{Repo: repo}).IntendedUntrackedInventory(context.Background())
+	inventory, digest, err := (reviewtransaction.SnapshotBuilder{Repo: repo}).IntendedUntrackedInventory(context.Background())
 	if err != nil {
 		t.Fatal(err)
+	}
+	credentialEligible := false
+	for _, candidate := range inventory {
+		if candidate == "ignored.txt" {
+			t.Fatalf("inventory admitted ignored path: %v", inventory)
+		}
+		if candidate == unrelatedCredentialPath {
+			credentialEligible = true
+		}
+	}
+	if !credentialEligible {
+		t.Fatalf("credential fixture is not eligible, so the test cannot prove it was not swept: %v", inventory)
 	}
 	var output bytes.Buffer
 	if err := RunSDDAttempt([]string{
@@ -154,16 +170,20 @@ func TestRunSDDAttemptSelectedUntrackedExcludesIgnoredSecretNestedAndUnrelatedPa
 		t.Fatalf("unselected paths entered attempt provenance: status=%#v err=%v", status, err)
 	}
 
+}
+
+func TestRunSDDAttemptRejectsNestedRepositoryUntrackedScope(t *testing.T) {
 	nestedRepo := initReviewCLIRepo(t)
 	nested := filepath.Join(nestedRepo, "nested")
 	if err := os.MkdirAll(nested, 0o755); err != nil {
 		t.Fatal(err)
 	}
 	runReviewCLIGit(t, nested, "init", "-q")
-	if err := RunSDDAttempt([]string{
+	err := RunSDDAttempt([]string{
 		"acquire", "--cwd", nestedRepo, "--change", "nested-untracked", "--request-id", "nested-acquire",
 		"--work-unit", "untracked scope", "--evidence-goal", "exclude nested repository", "--max-attempts", "2", "--max-changed-lines", "20",
-	}, &bytes.Buffer{}); err == nil {
-		t.Fatal("nested repository issued attempt authority")
+	}, &bytes.Buffer{})
+	if err == nil || !strings.Contains(err.Error(), "another Git repository") {
+		t.Fatalf("nested repository refusal = %v, want an untracked nested-repository refusal", err)
 	}
 }
