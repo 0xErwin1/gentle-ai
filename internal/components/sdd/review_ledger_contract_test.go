@@ -349,7 +349,9 @@ func TestKilocodeReviewSettingsMatchCurrentMainBaseline(t *testing.T) {
 	// contract, so the hash moved. Deliberate, not drift.
 	// #3102 adds the empty_base_diff_bootstrap_required STOP continuation to
 	// the shared contract. Kilocode embeds that contract, so the hash moved.
-	const want = "525b8fcabb5ea2023253dd209de83da3c421759544a3710780fca8bbefee1090"
+	// #2773 adds the lens_context_budget_exceeded STOP continuation. Kilocode
+	// embeds that contract, so the hash moved.
+	const want = "94a5921877824fc9b74b194c43d17c3f7f1ffd3f80199ce9f4b07bef1e47bdd3"
 	if got != want {
 		t.Fatalf("Kilocode settings SHA-256 = %s, want current-main baseline %s", got, want)
 	}
@@ -582,8 +584,10 @@ func TestOpenCodeRenderedReviewProtocolCost(t *testing.T) {
 		// characters per row). The ceilings preserve the required 15% headroom.
 		// #3102 adds one empty-base-diff bootstrap STOP continuation (448 rendered
 		// characters per row). The ceilings preserve the required 15% headroom.
-		{name: "standard", agents: []string{"review-reliability"}, beforeChars: 42_301, wantChars: 21_709, maxCharacters: 25_000},
-		{name: "full-4R", agents: []string{"review-risk", "review-resilience", "review-readability", "review-reliability"}, beforeChars: 106_998, wantChars: 34_054, maxCharacters: 39_200},
+		// #2773 adds one lens-context-budget terminal continuation (379 rendered
+		// characters per row). The ceilings preserve the required 15% headroom.
+		{name: "standard", agents: []string{"review-reliability"}, beforeChars: 42_301, wantChars: 22_088, maxCharacters: 26_000},
+		{name: "full-4R", agents: []string{"review-risk", "review-resilience", "review-readability", "review-reliability"}, beforeChars: 106_998, wantChars: 34_433, maxCharacters: 41_000},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
