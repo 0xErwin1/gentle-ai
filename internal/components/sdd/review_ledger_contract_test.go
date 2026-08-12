@@ -349,7 +349,12 @@ func TestKilocodeReviewSettingsMatchCurrentMainBaseline(t *testing.T) {
 	// contract, so the hash moved. Deliberate, not drift.
 	// #3102 adds the empty_base_diff_bootstrap_required STOP continuation to
 	// the shared contract. Kilocode embeds that contract, so the hash moved.
-	const want = "be035ad89ddb1905d1c8d2e4436a16ad09aaa0c63cf5e1e9f031840b109ac077"
+	// #2773 adds the lens_context_budget_exceeded STOP continuation. Kilocode
+	// embeds that contract, so the hash moved.
+	// Removing the report-label branches preserves the report-routing contract
+	// while changing the rendered orchestrator prompt, so the merged baseline
+	// is derived from this combined source rather than either parent.
+	const want = "201bb4bbbbfc2d9bce7d0dc70af34b7d3c543a2bad54be25234d40548c7d5d62"
 	if got != want {
 		t.Fatalf("Kilocode settings SHA-256 = %s, want current-main baseline %s", got, want)
 	}
@@ -582,8 +587,10 @@ func TestOpenCodeRenderedReviewProtocolCost(t *testing.T) {
 		// characters per row). The ceilings preserve the required 15% headroom.
 		// #3102 adds one empty-base-diff bootstrap STOP continuation (448 rendered
 		// characters per row). The ceilings preserve the required 15% headroom.
-		{name: "standard", agents: []string{"review-reliability"}, beforeChars: 42_301, wantChars: 21_709, maxCharacters: 25_000},
-		{name: "full-4R", agents: []string{"review-risk", "review-resilience", "review-readability", "review-reliability"}, beforeChars: 106_998, wantChars: 34_054, maxCharacters: 39_200},
+		// #2773 adds one lens-context-budget terminal continuation (379 rendered
+		// characters per row). The ceilings preserve the required 15% headroom.
+		{name: "standard", agents: []string{"review-reliability"}, beforeChars: 42_301, wantChars: 22_088, maxCharacters: 26_000},
+		{name: "full-4R", agents: []string{"review-risk", "review-resilience", "review-readability", "review-reliability"}, beforeChars: 106_998, wantChars: 34_433, maxCharacters: 41_000},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

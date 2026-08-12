@@ -80,6 +80,11 @@ var reviewStopInvariantClassification = map[string]reviewStopDisposition{
 		Justification: "the caller already selected an exact committed base but it produces no paths, so only the externally authorized empty-root bootstrap or another history shape can establish a reviewable delta",
 		ToolFault:     reviewStopToolFault(false),
 	},
+	"lens_context_budget_exceeded": {
+		Terminal:      true,
+		Justification: "the frozen reviewer evidence cannot fit without truncation, so no in-lineage reviewer action exists; a smaller candidate starts a new review",
+		ToolFault:     reviewStopToolFault(false),
+	},
 	"correction_repository_verification_failed": {
 		Terminal:      false,
 		Justification: "caller-continuable: the failed candidate evidence remains immutable while the same open correction may be adjusted; changing the candidate yields a new identity and a new evidence slot without consuming the correction attempt",
