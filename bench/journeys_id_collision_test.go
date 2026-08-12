@@ -36,6 +36,7 @@ func journeySources() []journeySource {
 		{"journeys_wave5.go", waveFiveJourneys()},
 		{"journeys_advisory.go", advisoryJourneys()},
 		{"journeys_zero_delta.go", zeroDeltaJourneys()},
+		{"journeys_lens_context_budget.go", lensContextBudgetJourneys()},
 		{"journeys_local_gate_advance.go", localGateBaseAdvanceJourneys()},
 		{"journeys_intended_untracked.go", intendedUntrackedJourneys()},
 		{"journeys_capture_result_dry_run.go", captureResultDryRunJourneys()},
