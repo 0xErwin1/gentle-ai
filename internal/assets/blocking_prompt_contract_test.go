@@ -177,8 +177,8 @@ func TestCoordinatorOrchestratorsCarryGentleAIProviderDefectHandoff(t *testing.T
 		{name: "unconfirmed creation continuation", text: "If creation fails, is ambiguous, incomplete, times out, lacks permission, or has an unknown outcome, preserve all consumer state; do not search, comment, update, label, or retry creation until the exact created issue identity is resolved, then use the uncertainty continuation below."},
 		{name: "partial success disclosure", text: "If creation is confirmed but label application fails or has an ambiguous outcome, surface the confirmed created issue identity/URL and the label failure separately."},
 		{name: "partial success honesty", text: "Be honest that report creation succeeded even when label application failed."},
-		{name: "partial success stop", text: "STOP with all consumer state preserved; do not create or comment again automatically."},
-		{name: "exact identity retry", text: "On retry, perform a fresh final privacy scan first, then re-resolve that exact created issue identity, inspect whether `gentle-report` is already present, and apply only a missing label idempotently."},
+		{name: "partial success no further mutation", text: "Perform no further GitHub mutation and no blind retry; do not create, comment, update, label, or retry automatically. Then execute the shared candidate-scoped continuation below."},
+		{name: "exact identity retry", text: "A later human-directed label recovery must first perform a fresh final privacy scan, then re-resolve that exact created issue identity, inspect whether `gentle-report` is already present, and apply only a missing label idempotently."},
 		{name: "no arbitrary retry labeling", text: "Never search and label an arbitrary equivalent/pre-existing issue."},
 		{name: "unproven identity stop", text: "If the exact created issue identity cannot be proven, STOP and require a human decision, with no label or duplicate issue/comment."},
 		{name: "label scope exclusions", text: "Do not apply `gentle-report` to manual issues, #2211, historical issues, pull requests, or reports created by unrelated workflows."},
@@ -288,13 +288,13 @@ func TestCoordinatorOrchestratorsCarryGentleAIProviderDefectHandoff(t *testing.T
 					must:   []string{"perform no further GitHub mutation", "no blind retry", "preserve all consumer state", "exact captured provider-owned decline invocation exactly once", "validate it", "re-enter native negotiated STATUS", "already-held consumer continuation"},
 				},
 				{
-					name:   "partial success is reported and stopped separately",
+					name:   "partial success continues after stopping mutations",
 					prefix: "If creation is confirmed but label application fails",
-					must:   []string{"confirmed created issue identity/URL", "label failure separately", "Be honest that report creation succeeded", "STOP with all consumer state preserved", "do not create or comment again automatically"},
+					must:   []string{"confirmed created issue identity/URL", "label failure separately", "Be honest that report creation succeeded", "Perform no further GitHub mutation", "no blind retry", "do not create, comment, update, label, or retry automatically", "Then execute the shared candidate-scoped continuation below."},
 				},
 				{
 					name:   "retry is exact-identity and idempotent",
-					prefix: "On retry, perform a fresh final privacy scan first",
+					prefix: "A later human-directed label recovery must first perform a fresh final privacy scan",
 					must:   []string{"re-resolve that exact created issue identity", "inspect whether `gentle-report` is already present", "apply only a missing label idempotently", "Never search and label an arbitrary equivalent/pre-existing issue"},
 				},
 				{
@@ -309,6 +309,9 @@ func TestCoordinatorOrchestratorsCarryGentleAIProviderDefectHandoff(t *testing.T
 						if !strings.Contains(line, required) {
 							t.Errorf("provider-defect handoff invariant %q omits %q from %q", invariant.name, required, line)
 						}
+					}
+					if invariant.name == "partial success continues after stopping mutations" && strings.Contains(line, "STOP") {
+						t.Errorf("provider-defect handoff invariant %q must not use terminal STOP wording: %q", invariant.name, line)
 					}
 				})
 			}
@@ -325,8 +328,9 @@ func TestCoordinatorOrchestratorsCarryGentleAIProviderDefectHandoff(t *testing.T
 				{name: "definitive lookup before occurrence comment", before: "Only a definitive lookup may branch to GitHub mutation", after: "add exactly one occurrence comment"},
 				{name: "report creation before label precondition", before: "create a new automated provider-defect report", after: "Confirmed creation is a HARD precondition for labeling"},
 				{name: "creation failure stop before partial-success handling", before: "If creation fails, is ambiguous, incomplete, times out, lacks permission, or has an unknown outcome", after: "If creation is confirmed but label application fails"},
-				{name: "partial-success handling before retry", before: "If creation is confirmed but label application fails", after: "On retry, perform a fresh final privacy scan first"},
-				{name: "retry before unproven-identity stop", before: "On retry, perform a fresh final privacy scan first", after: "If the exact created issue identity cannot be proven"},
+				{name: "partial-success handling before exact-identity recovery", before: "If creation is confirmed but label application fails", after: "A later human-directed label recovery must first perform a fresh final privacy scan"},
+				{name: "partial-success handling before shared continuation", before: "If creation is confirmed but label application fails", after: "After a definitive successful report outcome, or any report-side uncertainty after stopping further GitHub mutation, execute the shared candidate-scoped continuation below."},
+				{name: "exact-identity recovery before unproven-identity stop", before: "A later human-directed label recovery must first perform a fresh final privacy scan", after: "If the exact created issue identity cannot be proven"},
 			} {
 				t.Run(ordering.name, func(t *testing.T) {
 					beforeIndex := strings.Index(contract, ordering.before)
