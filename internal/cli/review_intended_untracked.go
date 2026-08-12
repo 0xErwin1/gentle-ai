@@ -62,19 +62,23 @@ func intendedUntrackedScopeForTarget(ctx context.Context, builder reviewtransact
 		return scope, nil
 	}
 	if !mode.set || !expectedDigest.set {
-		return reviewIntendedUntrackedScope{}, fmt.Errorf("untracked selection requires --untracked-scope and --expected-untracked-inventory; run `gentle-ai review status --next-transition` to obtain the canonical inventory, then rerun `gentle-ai %s`", strings.TrimPrefix(inventoryCommand, "gentle-ai "))
+		// refusal:by-design operator-knowledge: only the caller can choose whether to exclude or select the current untracked population.
+		return reviewIntendedUntrackedScope{}, fmt.Errorf("untracked selection requires --untracked-scope and --expected-untracked-inventory; run `%s` to obtain the canonical inventory, then rerun `%s`", inventoryCommand, selectionCommand)
 	}
 	switch mode.value {
 	case "exclude":
 		if len(selected) != 0 {
-			return reviewIntendedUntrackedScope{}, fmt.Errorf("--untracked-scope=exclude does not accept --intended-untracked; run `gentle-ai review status --next-transition` to refresh the canonical inventory, then rerun `gentle-ai %s --untracked-scope=select`", strings.TrimPrefix(selectionCommand, "gentle-ai "))
+			// refusal:by-design operator-knowledge: only the caller can decide whether the named paths should be selected or the population excluded.
+			return reviewIntendedUntrackedScope{}, fmt.Errorf("--untracked-scope=exclude does not accept --intended-untracked; run `%s` to refresh the canonical inventory, then rerun `%s --untracked-scope=select`", inventoryCommand, selectionCommand)
 		}
 	case "select":
 		if len(selected) == 0 {
-			return reviewIntendedUntrackedScope{}, fmt.Errorf("--untracked-scope=select requires at least one --intended-untracked; run `gentle-ai review status --next-transition` to refresh the canonical inventory, then rerun `gentle-ai %s --untracked-scope=exclude`", strings.TrimPrefix(selectionCommand, "gentle-ai "))
+			// refusal:by-design operator-knowledge: only the caller knows which eligible paths it intends to include.
+			return reviewIntendedUntrackedScope{}, fmt.Errorf("--untracked-scope=select requires at least one --intended-untracked; run `%s` to refresh the canonical inventory, then rerun `%s --untracked-scope=exclude`", inventoryCommand, selectionCommand)
 		}
 	default:
-		return reviewIntendedUntrackedScope{}, fmt.Errorf("--untracked-scope must be exclude or select, got %q; run `gentle-ai review status --next-transition` to obtain the canonical inventory, then rerun `gentle-ai %s`", mode.value, strings.TrimPrefix(inventoryCommand, "gentle-ai "))
+		// refusal:by-design operator-knowledge: only the caller can choose the intended selection mode for its workspace.
+		return reviewIntendedUntrackedScope{}, fmt.Errorf("--untracked-scope must be exclude or select, got %q; run `%s` to obtain the canonical inventory, then rerun `%s`", mode.value, inventoryCommand, selectionCommand)
 	}
 	intended, err := builder.ValidateIntendedUntrackedSelection(ctx, expectedDigest.value, selected)
 	if err != nil {
@@ -85,11 +89,12 @@ func intendedUntrackedScopeForTarget(ctx context.Context, builder reviewtransact
 }
 
 func reviewIntendedUntrackedSelectionRequired(scope reviewIntendedUntrackedScope) error {
-	return intendedUntrackedSelectionRequired(scope, "gentle-ai review status --next-transition")
+	return intendedUntrackedSelectionRequired(scope, "gentle-ai review status --next-transition", "gentle-ai review start")
 }
 
-func intendedUntrackedSelectionRequired(scope reviewIntendedUntrackedScope, inventoryCommand string) error {
-	return fmt.Errorf("untracked files require an explicit declaration; run `gentle-ai review status --next-transition` to obtain the canonical inventory, then rerun `gentle-ai %s` with --untracked-scope=exclude --expected-untracked-inventory=%s or --untracked-scope=select --intended-untracked=<repo-relative-path> --expected-untracked-inventory=%s", strings.TrimPrefix(inventoryCommand, "gentle-ai "), scope.Digest, scope.Digest)
+func intendedUntrackedSelectionRequired(scope reviewIntendedUntrackedScope, inventoryCommand, selectionCommand string) error {
+	// refusal:by-design operator-knowledge: only the caller can choose whether to exclude or select the eligible untracked paths.
+	return fmt.Errorf("untracked files require an explicit declaration; run `%s` to obtain the canonical inventory, then rerun `%s` with --untracked-scope=exclude --expected-untracked-inventory=%s or --untracked-scope=select --intended-untracked=<repo-relative-path> --expected-untracked-inventory=%s", inventoryCommand, selectionCommand, scope.Digest, scope.Digest)
 }
 
 func reviewIntendedUntrackedCollection(status ReviewTargetStatusResult, scope reviewIntendedUntrackedScope) ReviewNextTransition {
