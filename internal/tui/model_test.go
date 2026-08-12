@@ -42,6 +42,140 @@ func TestNavigationWelcomeToDetection(t *testing.T) {
 	}
 }
 
+func TestCodexCustomDiscoveryStartsAsCommandWithFallback(t *testing.T) {
+	originalDiscover := discoverCodexModels
+	t.Cleanup(func() { discoverCodexModels = originalDiscover })
+
+	called := false
+	discoverCodexModels = func(context.Context) []string {
+		called = true
+		return []string{"discovered-model"}
+	}
+
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenCodexModelPicker
+	m.CodexModelPicker = screens.NewCodexModelPickerState()
+	m.Cursor = 3 // Custom
+
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	state := updated.(Model)
+	if called {
+		t.Fatal("Custom entry ran Codex discovery synchronously")
+	}
+	if cmd == nil {
+		t.Fatal("Custom entry command = nil")
+	}
+	if state.CodexModelPicker.CustomMode != screens.CodexCustomModePhaseList {
+		t.Fatalf("CustomMode = %v, want phase list", state.CodexModelPicker.CustomMode)
+	}
+	if !slices.Equal(state.CodexModelPicker.AvailableModels, model.CodexAvailableModels()) {
+		t.Fatalf("AvailableModels = %v, want curated fallback", state.CodexModelPicker.AvailableModels)
+	}
+
+	msg := cmd()
+	if !called {
+		t.Fatal("discovery command did not run discovery")
+	}
+	updated, _ = state.Update(msg)
+	state = updated.(Model)
+	if !slices.Equal(state.CodexModelPicker.AvailableModels, []string{"discovered-model"}) {
+		t.Fatalf("AvailableModels = %v, want discovery result", state.CodexModelPicker.AvailableModels)
+	}
+}
+
+func TestCodexCustomDiscoveryIgnoresStaleOrIrrelevantResults(t *testing.T) {
+	tests := []struct {
+		name  string
+		setup func(*Model)
+		msg   CodexModelsDiscoveredMsg
+	}{
+		{
+			name: "after leaving Custom",
+			setup: func(m *Model) {
+				m.CodexModelPicker.CustomMode = screens.CodexCustomModeNone
+			},
+			msg: CodexModelsDiscoveredMsg{RequestID: 1, Models: []string{"late-model"}},
+		},
+		{
+			name: "after leaving picker",
+			setup: func(m *Model) {
+				m.Screen = ScreenWelcome
+			},
+			msg: CodexModelsDiscoveredMsg{RequestID: 1, Models: []string{"late-model"}},
+		},
+		{
+			name: "older request",
+			setup: func(m *Model) {
+				m.codexModelDiscoveryRequest = 2
+			},
+			msg: CodexModelsDiscoveredMsg{RequestID: 1, Models: []string{"old-model"}},
+		},
+		{
+			name: "current request",
+			setup: func(m *Model) {
+				m.codexModelDiscoveryRequest = 2
+			},
+			msg: CodexModelsDiscoveredMsg{RequestID: 2, Models: []string{"new-model"}},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := NewModel(system.DetectionResult{}, "dev")
+			m.Screen = ScreenCodexModelPicker
+			m.CodexModelPicker = screens.NewCodexModelPickerState()
+			m.CodexModelPicker.CustomMode = screens.CodexCustomModePhaseList
+			m.codexModelDiscoveryRequest = 1
+			fallback := append([]string(nil), m.CodexModelPicker.AvailableModels...)
+			tt.setup(&m)
+
+			updated, _ := m.Update(tt.msg)
+			state := updated.(Model)
+			if tt.name == "current request" {
+				if !slices.Equal(state.CodexModelPicker.AvailableModels, tt.msg.Models) {
+					t.Fatalf("AvailableModels = %v, want %v", state.CodexModelPicker.AvailableModels, tt.msg.Models)
+				}
+				return
+			}
+			if !slices.Equal(state.CodexModelPicker.AvailableModels, fallback) {
+				t.Fatalf("AvailableModels = %v, want unchanged %v", state.CodexModelPicker.AvailableModels, fallback)
+			}
+		})
+	}
+}
+
+func TestCodexCustomDiscoveryNewestRequestWins(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenCodexModelPicker
+	m.CodexModelPicker = screens.NewCodexModelPickerState()
+	m.Cursor = 3 // Custom
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	state := updated.(Model)
+	firstRequest := state.codexModelDiscoveryRequest
+
+	updated, _ = state.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	state = updated.(Model)
+	state.Cursor = 3 // Custom
+	updated, _ = state.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	state = updated.(Model)
+	secondRequest := state.codexModelDiscoveryRequest
+	if secondRequest <= firstRequest {
+		t.Fatalf("second request = %d, want greater than first request %d", secondRequest, firstRequest)
+	}
+
+	updated, _ = state.Update(CodexModelsDiscoveredMsg{RequestID: firstRequest, Models: []string{"old-model"}})
+	state = updated.(Model)
+	if slices.Equal(state.CodexModelPicker.AvailableModels, []string{"old-model"}) {
+		t.Fatal("older discovery result replaced the current catalog")
+	}
+	updated, _ = state.Update(CodexModelsDiscoveredMsg{RequestID: secondRequest, Models: []string{"new-model"}})
+	state = updated.(Model)
+	if !slices.Equal(state.CodexModelPicker.AvailableModels, []string{"new-model"}) {
+		t.Fatalf("AvailableModels = %v, want newest result", state.CodexModelPicker.AvailableModels)
+	}
+}
+
 func TestSanitizeKnownModelEfforts_ValidKnownEffortPreserved(t *testing.T) {
 	assignments := map[string]model.ModelAssignment{
 		"sdd-apply": {ProviderID: "anthropic", ModelID: "claude-opus-4", Effort: "high"},

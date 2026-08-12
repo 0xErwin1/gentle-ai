@@ -1,7 +1,6 @@
 package screens
 
 import (
-	"context"
 	"fmt"
 	"maps"
 	"strings"
@@ -206,7 +205,7 @@ func HandleCodexModelPickerNav(
 
 	// Custom row: index len(codexPresetOrder) = 3.
 	if cursor == len(codexPresetOrder) {
-		state.AvailableModels = model.DiscoverCodexModels(context.Background())
+		state.AvailableModels = model.CodexAvailableModels()
 		state.CustomMode = CodexCustomModePhaseList
 		state.CustomPhaseIdx = 0
 		state.CustomModelSearch = ""
