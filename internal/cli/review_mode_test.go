@@ -157,7 +157,7 @@ func TestReviewModeCloneScopeEnableRejectsGlobalOffWithoutLocalOverride(t *testi
 func TestReviewModeCloneScopeEnableRejectsLegacyInheritWhileGlobalOff(t *testing.T) {
 	home := reviewModeHome(t)
 	repo := initReviewCLIRepo(t)
-	global := reviewtransaction.RDDGlobalMode{Value: string(reviewtransaction.RDDModeOff)}
+	global := reviewtransaction.RDDGlobalMode{Value: string(reviewtransaction.RDDModeOn)}
 	disabled, err := reviewtransaction.SetCloneLocalRDDMode(context.Background(), repo, reviewtransaction.RDDModeOff, "", global)
 	if err != nil {
 		t.Fatalf("SetCloneLocalRDDMode(off) error = %v", err)
@@ -198,6 +198,54 @@ func TestReviewModeCloneScopeEnableRejectsLegacyInheritWhileGlobalOff(t *testing
 	if result := decodeReviewModeResult(t, output.Bytes()); result.Status.Revision != inherited.Revision ||
 		result.Status.Source != reviewtransaction.RDDModeSourceGlobal {
 		t.Fatalf("legacy inherit clone enable result = %#v", result.Status)
+	}
+}
+
+func TestReviewModeCloneScopeEnableRejectsExplicitOffWhileGlobalOff(t *testing.T) {
+	home := reviewModeHome(t)
+	repo := initReviewCLIRepo(t)
+	disabled, err := reviewtransaction.SetCloneLocalRDDMode(
+		context.Background(), repo, reviewtransaction.RDDModeOff, "", reviewtransaction.RDDGlobalMode{Value: string(reviewtransaction.RDDModeOn)})
+	if err != nil {
+		t.Fatalf("SetCloneLocalRDDMode(off) error = %v", err)
+	}
+	if err := state.Write(home, state.InstallState{RDDMode: string(reviewtransaction.RDDModeOff)}); err != nil {
+		t.Fatalf("state.Write error = %v", err)
+	}
+	record, err := reviewtransaction.CloneLocalRDDModeRecordPath(context.Background(), repo)
+	if err != nil {
+		t.Fatalf("CloneLocalRDDModeRecordPath error = %v", err)
+	}
+	before, err := os.ReadFile(record)
+	if err != nil {
+		t.Fatalf("read explicit-off record: %v", err)
+	}
+
+	var output bytes.Buffer
+	err = RunReviewMode([]string{"enable", "--cwd", repo, "--scope", "clone", "--json"}, &output)
+	var blocked *reviewtransaction.RDDDisabledError
+	if !errors.As(err, &blocked) || !errors.Is(err, reviewtransaction.ErrRDDDisabled) ||
+		blocked.Source != reviewtransaction.RDDModeSourceGlobal {
+		t.Fatalf("explicit-off clone enable error = %v, want global typed disabled error", err)
+	}
+	if !strings.Contains(err.Error(), "gentle-ai review mode enable --scope=global") {
+		t.Fatalf("explicit-off clone enable error does not name the global continuation: %v", err)
+	}
+	result := decodeReviewModeResult(t, output.Bytes())
+	if result.Status.Effective != reviewtransaction.RDDModeOff || result.Status.CloneLocal != reviewtransaction.RDDModeOff ||
+		result.Status.Revision != disabled.Revision {
+		t.Fatalf("explicit-off clone enable result = %#v", result.Status)
+	}
+	recordAfter, err := reviewtransaction.CloneLocalRDDModeRecordPath(context.Background(), repo)
+	if err != nil {
+		t.Fatalf("CloneLocalRDDModeRecordPath after rejected enable error = %v", err)
+	}
+	after, err := os.ReadFile(recordAfter)
+	if err != nil {
+		t.Fatalf("read explicit-off record after rejected enable: %v", err)
+	}
+	if recordAfter != record || !bytes.Equal(after, before) {
+		t.Fatalf("explicit-off clone enable published a new generation")
 	}
 }
 
