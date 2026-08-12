@@ -128,7 +128,7 @@ func TestOpaqueRepositoryContextCaptureNamesDistinctCauses(t *testing.T) {
 				}
 			},
 			code: reviewerResultSlotOccupiedCode,
-			want: "review dispose-result",
+			want: reviewNextTransitionRefreshCommandV21,
 		},
 		{
 			name: "results-directory-unusable",

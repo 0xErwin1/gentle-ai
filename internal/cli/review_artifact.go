@@ -27,24 +27,17 @@ const (
 	reviewResultArtifactLimit      = 4 << 20
 )
 
-// reviewerResultSlotConflictError gives immutable publication conflicts a
-// stable identity so discoverability guidance can wrap them with %w.
-var reviewerResultSlotConflictError = errors.New("captured reviewer result already exists with different canonical bytes")
-
 const (
 	// reviewerResultSlotOccupiedCode names the one cause that is neither a
 	// transport failure nor a bad binding: the slot holds a different reviewer
-	// result already. Distinct from repository_context_capture_failed because
-	// that code's whole instruction is to retry the same binding, which cannot
-	// succeed while the slot is occupied.
-	reviewerResultSlotOccupiedCode = "reviewer_result_slot_occupied"
-	// reviewerResultSlotOccupiedAction names the decision the operator has to
-	// make. Both exits already existed; they were just unreachable behind an
-	// action telling the caller to retry instead.
-	reviewerResultSlotOccupiedAction = "a different reviewer result already occupies this slot, so retrying the same binding cannot succeed; " +
-		"decide between `review dispose-result` (discard the occupying result) and " +
-		"`review preserve-result` (keep it and quarantine this new submission)"
+	// result already.
+	reviewerResultSlotOccupiedCode   = "reviewer_result_slot_occupied"
+	reviewerResultSlotOccupiedAction = "refresh the negotiated STATUS transition with " + reviewNextTransitionRefreshCommandV21 + " and follow its authoritative continuation"
 )
+
+func reviewReviewerResultSlotOccupiedFailure() error {
+	return reviewPreflightError(fmt.Errorf("%s: a different reviewer result already occupies this immutable slot; %s: %w", reviewerResultSlotOccupiedCode, reviewerResultSlotOccupiedAction, reviewtransaction.ErrCapturedReviewerResultSlotConflict))
+}
 
 // errCapturedFinalEvidenceMissing has the historical explicit-selector error
 // text, but a distinct identity so lineage-only discovery can distinguish an
@@ -457,16 +450,8 @@ func RunReviewCaptureResult(args []string, stdout io.Writer) error {
 		},
 	})
 	if err != nil {
-		// An occupied slot is a conflict about content, not a failure to reach
-		// the repository, and the two are not interchangeable to a caller.
-		// This branch used to build the message below and then wrap it in
-		// repository_context_capture_failed, whose action is "retry
-		// capture-result with the same exact binding" — precisely what fails
-		// again while the slot stays occupied. The exits it already knew about
-		// ended up buried inside a cause, under an action contradicting them,
-		// and #2411's rc.6 reporter followed that action and looped.
-		if strings.Contains(err.Error(), "different canonical bytes") {
-			return reviewOpaqueContextFailure(reviewerResultSlotOccupiedCode, reviewerResultSlotOccupiedAction)
+		if errors.Is(err, reviewtransaction.ErrCapturedReviewerResultSlotConflict) {
+			return reviewReviewerResultSlotOccupiedFailure()
 		}
 		if contextHandle != "" {
 			return reviewOpaqueContextCause("repository_context_capture_failed", "retry capture-result with the same exact binding or refresh status", err)
