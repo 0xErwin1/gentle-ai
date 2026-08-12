@@ -445,14 +445,15 @@ func DiscoverAgents(homeDir string) []model.AgentID {
 // It reuses backup/rollback infrastructure but only calls inject functions —
 // no agentInstallStep, no engram setup, no persona.
 type syncRuntime struct {
-	homeDir      string
-	workspaceDir string
-	selection    model.Selection
-	agentIDs     []model.AgentID
-	backupRoot   string
-	state        *runtimeState
-	managedPaths []string
-	changedFiles []string // accumulates candidate paths reported by component injectors
+	homeDir         string
+	workspaceDir    string
+	selection       model.Selection
+	agentIDs        []model.AgentID
+	backupRoot      string
+	state           *runtimeState
+	managedPaths    []string
+	changedFiles    []string // accumulates candidate paths reported by component injectors
+	openCodeRuntime *state.OpenCodeRuntimeProvenance
 }
 
 func newSyncRuntime(homeDir string, selection model.Selection) (*syncRuntime, error) {
@@ -464,14 +465,22 @@ func newSyncRuntime(homeDir string, selection model.Selection) (*syncRuntime, er
 		return nil, err
 	}
 
-	return &syncRuntime{
+	runtime := &syncRuntime{
 		homeDir:      homeDir,
 		workspaceDir: workspaceDir,
 		selection:    selection,
 		agentIDs:     selection.Agents,
 		backupRoot:   backupRoot,
 		state:        &runtimeState{compatibilityTransaction: compatibilityTransaction},
-	}, nil
+	}
+	if hasOpenCodeReviewerPlugin(selection.Agents) {
+		provenance, err := captureOpenCodeRuntimeProvenance()
+		if err != nil {
+			return nil, fmt.Errorf("capture OpenCode reviewer runtime provenance: %w", err)
+		}
+		runtime.openCodeRuntime = provenance
+	}
+	return runtime, nil
 }
 
 func (r *syncRuntime) stagePlan() pipeline.StagePlan {
@@ -1443,7 +1452,7 @@ func applyResolvedPersona(selection *model.Selection, persisted string) {
 			selection.Persona = id
 			return
 		}
-		// Sync entry points reject unknown persisted values before resolution.
+		// The sync entry points reject unknown persisted values before resolution.
 	}
 	// Default-safe fallback for state files written before persona persistence.
 	selection.Persona = model.PersonaNeutral
@@ -1471,6 +1480,7 @@ func migratePersistedPersonaAlias(homeDir string, persisted *state.InstallState,
 // A missing state file is allowed for fresh homes; a decoded state without a
 // persona remains compatible with legacy installations.
 func validatePersistedSyncState(persisted state.InstallState, readErr error) error {
+	// guard:population persisted-sync-state-integrity fail-closed: legitimate persisted sync state is a missing file or decoded state with an empty or supported persona; read/decode errors, whitespace-only values, and unsupported persona values remain excluded
 	if readErr != nil {
 		if os.IsNotExist(readErr) {
 			return nil
@@ -1586,14 +1596,14 @@ func RunSyncWithSelection(homeDir string, selection model.Selection) (SyncResult
 	if err != nil {
 		return result, fmt.Errorf("derive managed asset writer identity: %w", err)
 	}
-	if err := persistSyncManagedAssetState(homeDir, selection, writer); err != nil {
+	if err := persistSyncManagedAssetState(homeDir, selection, writer, rt.openCodeRuntime); err != nil {
 		return result, err
 	}
 
 	return result, nil
 }
 
-func persistSyncManagedAssetState(homeDir string, selection model.Selection, writer string) error {
+func persistSyncManagedAssetState(homeDir string, selection model.Selection, writer string, runtimeProvenance *state.OpenCodeRuntimeProvenance) error {
 	return withInstallStateLock(homeDir, func() error {
 		latest, err := state.Read(homeDir)
 		if errors.Is(err, os.ErrNotExist) {
@@ -1607,6 +1617,11 @@ func persistSyncManagedAssetState(homeDir string, selection model.Selection, wri
 		shouldWrite := false
 		if latest.ManagedAssetDigest != writer {
 			latest.ManagedAssetDigest = writer
+			shouldWrite = true
+		}
+		if runtimeProvenance != nil && (latest.OpenCodeRuntimeProvenance == nil || *latest.OpenCodeRuntimeProvenance != *runtimeProvenance) {
+			provenance := *runtimeProvenance
+			latest.OpenCodeRuntimeProvenance = &provenance
 			shouldWrite = true
 		}
 		if !latest.CommunityToolsConfigured && selection.CommunityTools != nil {

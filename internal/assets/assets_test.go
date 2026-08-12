@@ -482,7 +482,11 @@ func TestReviewResultArtifactsPluginContract(t *testing.T) {
 		t.Fatalf("Read(review-result-artifacts.ts) error = %v", err)
 	}
 	for _, want := range []string{
-		`spawn("gentle-ai"`,
+		`const RUNTIME_PROVENANCE`,
+		`opencode_runtime_provenance`,
+		`async function pinnedRuntime(`,
+		`return runNativeProcess(await pinnedRuntime(cwd), cwd, args, stdin)`,
+		`spawn(executable, args`,
 		`"review", "lens-context",`,
 		`"--repository-context", repositoryContext`,
 		// `--delivery runtime_interception` is not cosmetic: it is the
@@ -564,7 +568,7 @@ func TestReviewResultArtifactsPluginContract(t *testing.T) {
 	if strings.Contains(source, `reviewer task result is empty or contains a nested envelope`) {
 		t.Fatal("review-result-artifacts.ts regressed to the conflated empty/nested-envelope error message")
 	}
-	for _, forbidden := range []string{"writeFile", "link(", "chmod(", "createHash", "export {", "export const"} {
+	for _, forbidden := range []string{"spawn(\"gentle-ai\"", "writeFile", "link(", "chmod(", "export {", "export const"} {
 		if strings.Contains(source, forbidden) {
 			t.Fatalf("review-result-artifacts.ts must delegate native persistence; found %q", forbidden)
 		}
