@@ -1272,6 +1272,18 @@ func TestNewModelPickerStateCacheErrorStillDiscovers(t *testing.T) {
 	}
 }
 
+func TestNewModelPickerStateDiscoveryErrorAddsConfigWarning(t *testing.T) {
+	settingsPath := t.TempDir()
+	state := NewModelPickerState(writeTempFile(t, "models.json", catalogJSON), settingsPath)
+
+	if !strings.Contains(state.ConfigWarning, "Could not discover custom agents from opencode.json") {
+		t.Fatalf("ConfigWarning = %q, want custom-agent discovery error", state.ConfigWarning)
+	}
+	if len(state.CustomAgents) != 0 {
+		t.Fatalf("CustomAgents = %v, want empty after discovery error", state.CustomAgents)
+	}
+}
+
 // TestNewModelPickerStateCollisionCustomWins verifies that when a model ID exists
 // in both the catalog cache and opencode.json, the custom entry takes precedence.
 func TestNewModelPickerStateCollisionCustomWins(t *testing.T) {
@@ -1541,5 +1553,256 @@ func TestModelPickerRowsForProfile(t *testing.T) {
 				t.Fatalf("profile rows must use global reviewer %q, got: %v", reviewAgent, rows)
 			}
 		}
+	}
+}
+
+func TestModelPickerRowsForState_WithCustomAgents(t *testing.T) {
+	state := ModelPickerState{
+		CustomAgents: []string{"my-custom-agent-1", "my-custom-agent-2"},
+	}
+	rows := ModelPickerRowsForState(state)
+
+	var hasCustomSep, hasSetAllCustom, hasAgent1, hasAgent2 bool
+	for _, r := range rows {
+		if r == "--- Custom / Native agents ---" {
+			hasCustomSep = true
+		}
+		if r == "Set all custom agents" {
+			hasSetAllCustom = true
+		}
+		if r == "my-custom-agent-1" {
+			hasAgent1 = true
+		}
+		if r == "my-custom-agent-2" {
+			hasAgent2 = true
+		}
+	}
+
+	if !hasCustomSep || !hasSetAllCustom || !hasAgent1 || !hasAgent2 {
+		t.Fatalf("ModelPickerRowsForState() missing custom agent rows: got %v", rows)
+	}
+}
+
+func TestModelPickerRowsForState_ProfileExcludesCustomAgents(t *testing.T) {
+	state := ModelPickerState{
+		ForProfile:   true,
+		CustomAgents: []string{"custom-profile-agent"},
+	}
+	want := ModelPickerRowsForProfile()
+	got := ModelPickerRowsForState(state)
+
+	if len(got) != len(want) {
+		t.Fatalf("ModelPickerRowsForState(profile) len = %d, want %d; got %v", len(got), len(want), got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("ModelPickerRowsForState(profile)[%d] = %q, want %q; got %v", i, got[i], want[i], got)
+		}
+	}
+}
+
+func TestNewModelPickerState_DiscoversCustomAgents(t *testing.T) {
+	dir := t.TempDir()
+	settingsPath := filepath.Join(dir, "opencode.json")
+	cachePath := filepath.Join(dir, "models.json")
+
+	settings := `{
+  "agent": {
+    "gentle-orchestrator": { "model": "anthropic/claude-sonnet-4" },
+    "custom-coder-v1": { "model": "openai/gpt-4o-mini" }
+  }
+}`
+	if err := os.WriteFile(settingsPath, []byte(settings), 0o644); err != nil {
+		t.Fatalf("write settings: %v", err)
+	}
+	if err := os.WriteFile(cachePath, []byte("{}"), 0o644); err != nil {
+		t.Fatalf("write cache: %v", err)
+	}
+
+	state := NewModelPickerState(cachePath, settingsPath)
+	if len(state.CustomAgents) != 1 || state.CustomAgents[0] != "custom-coder-v1" {
+		t.Fatalf("NewModelPickerState CustomAgents = %v, want [custom-coder-v1]", state.CustomAgents)
+	}
+}
+
+func TestApplyAssignment_SetAllCustomAgents(t *testing.T) {
+	state := ModelPickerState{
+		CustomAgents:     []string{"custom-1", "custom-2"},
+		SelectedPhaseIdx: 0,
+	}
+	rows := ModelPickerRowsForState(state)
+	setAllIdx := -1
+	for i, r := range rows {
+		if r == "Set all custom agents" {
+			setAllIdx = i
+			break
+		}
+	}
+	if setAllIdx < 0 {
+		t.Fatalf("Set all custom agents row not found in %v", rows)
+	}
+
+	state.SelectedPhaseIdx = setAllIdx
+	assignments := make(map[string]model.ModelAssignment)
+	assigned := model.ModelAssignment{ProviderID: "anthropic", ModelID: "claude-3-5-haiku"}
+
+	res := applyAssignment(state, assignments, assigned)
+	if res["custom-1"] != assigned || res["custom-2"] != assigned {
+		t.Fatalf("applyAssignment Set all custom agents = %v, want assigned %v for custom-1 and custom-2", res, assigned)
+	}
+}
+
+func TestHandleModelPickerNav_SetAllCustomAgentsWithoutEffortAssignsEachAgent(t *testing.T) {
+	state := makeTestState(0)
+	state.CustomAgents = []string{"custom-1", "custom-2"}
+	for i, row := range ModelPickerRowsForState(*state) {
+		if row == "Set all custom agents" {
+			state.SelectedPhaseIdx = i
+			break
+		}
+	}
+
+	handled, assignments := HandleModelPickerNav("enter", state, nil)
+	want := model.ModelAssignment{ProviderID: "test-provider", ModelID: "model-alpha"}
+	if !handled || assignments["custom-1"] != want || assignments["custom-2"] != want {
+		t.Fatalf("HandleModelPickerNav() handled=%v assignments=%v, want each custom agent assigned %v", handled, assignments, want)
+	}
+	if state.AllCustomAgentsModel != want {
+		t.Fatalf("AllCustomAgentsModel = %v, want %v", state.AllCustomAgentsModel, want)
+	}
+}
+
+func TestClearModelPickerAssignment_SetAllCustomAgents(t *testing.T) {
+	state := ModelPickerState{
+		CustomAgents:         []string{"custom-1", "custom-2"},
+		AllCustomAgentsModel: model.ModelAssignment{ProviderID: "openai", ModelID: "gpt-4o-mini"},
+	}
+	rows := ModelPickerRowsForState(state)
+	setAllIdx := -1
+	for i, r := range rows {
+		if r == "Set all custom agents" {
+			setAllIdx = i
+			break
+		}
+	}
+	if setAllIdx < 0 {
+		t.Fatalf("Set all custom agents row not found in %v", rows)
+	}
+
+	state.SelectedPhaseIdx = setAllIdx
+	assignments := map[string]model.ModelAssignment{
+		"custom-1": {ProviderID: "openai", ModelID: "gpt-4o-mini"},
+		"custom-2": {ProviderID: "openai", ModelID: "gpt-4o-mini"},
+	}
+
+	res := ClearModelPickerAssignment(&state, assignments)
+	if _, ok := res["custom-1"]; ok {
+		t.Error("custom-1 should be cleared")
+	}
+	if _, ok := res["custom-2"]; ok {
+		t.Error("custom-2 should be cleared")
+	}
+	if state.AllCustomAgentsModel.ProviderID != "" {
+		t.Errorf("AllCustomAgentsModel = %v, want empty after clear", state.AllCustomAgentsModel)
+	}
+}
+
+func TestHandleModelPickerNav_CustomAgentLabelsDoNotChangeRowIdentity(t *testing.T) {
+	for _, tt := range []struct {
+		name      string
+		agentName string
+	}{
+		{name: "bulk label", agentName: "Set all custom agents"},
+		{name: "custom separator label", agentName: "--- Custom / Native agents ---"},
+		{name: "review separator label", agentName: "--- Review agents ---"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			state := makeTestState(0)
+			state.CustomAgents = []string{tt.agentName, "other-custom-agent"}
+			selectedIdx := -1
+			for index, row := range ModelPickerRowsForStateWithIdentity(*state) {
+				if row.Kind == ModelPickerRowKindAgent && row.AgentID == tt.agentName {
+					selectedIdx = index
+					break
+				}
+			}
+			if selectedIdx < 0 {
+				t.Fatalf("custom agent row %q not found", tt.agentName)
+			}
+			state.SelectedPhaseIdx = selectedIdx
+
+			old := model.ModelAssignment{ProviderID: "old-provider", ModelID: "old-model", Effort: "high"}
+			assignments := map[string]model.ModelAssignment{"other-custom-agent": old}
+			handled, got := HandleModelPickerNav("enter", state, assignments)
+			want := model.ModelAssignment{ProviderID: "test-provider", ModelID: "model-alpha"}
+			if !handled || got[tt.agentName] != want {
+				t.Fatalf("HandleModelPickerNav() handled=%v assignment=%v, want %v for %q", handled, got[tt.agentName], want, tt.agentName)
+			}
+			if got["other-custom-agent"] != old {
+				t.Fatalf("collision row changed another custom agent: got %v, want %v", got["other-custom-agent"], old)
+			}
+			if state.AllCustomAgentsModel != (model.ModelAssignment{}) {
+				t.Fatalf("custom agent row changed bulk state: %v", state.AllCustomAgentsModel)
+			}
+		})
+	}
+}
+
+func TestHandleModelPickerNav_CustomAgentBulkLabelPreservesEffortPath(t *testing.T) {
+	state := makeTestState(0)
+	state.CustomAgents = []string{"Set all custom agents", "other-custom-agent"}
+	state.SDDModels["test-provider"][0].Variants = []string{"low", "high"}
+	for index, row := range ModelPickerRowsForStateWithIdentity(*state) {
+		if row.Kind == ModelPickerRowKindAgent && row.AgentID == "Set all custom agents" {
+			state.SelectedPhaseIdx = index
+			break
+		}
+	}
+	old := model.ModelAssignment{ProviderID: "old-provider", ModelID: "old-model", Effort: "high"}
+	assignments := map[string]model.ModelAssignment{"other-custom-agent": old}
+
+	handled, assignments := HandleModelPickerNav("enter", state, assignments)
+	if !handled || state.Mode != ModeEffortSelect {
+		t.Fatalf("enter should open effort selection: handled=%v mode=%v", handled, state.Mode)
+	}
+	handled, assignments = HandleModelPickerNav("enter", state, assignments)
+	want := model.ModelAssignment{ProviderID: "test-provider", ModelID: "model-alpha"}
+	if !handled || assignments["Set all custom agents"] != want {
+		t.Fatalf("effort selection assignment = %v, want %v", assignments["Set all custom agents"], want)
+	}
+	if assignments["other-custom-agent"] != old {
+		t.Fatalf("effort selection changed another custom agent: got %v, want %v", assignments["other-custom-agent"], old)
+	}
+	if state.AllCustomAgentsModel != (model.ModelAssignment{}) {
+		t.Fatalf("effort selection changed bulk state: %v", state.AllCustomAgentsModel)
+	}
+}
+
+func TestClearModelPickerAssignment_CustomAgentBulkLabelPreservesOtherRows(t *testing.T) {
+	state := ModelPickerState{
+		CustomAgents:         []string{"Set all custom agents", "other-custom-agent"},
+		AllCustomAgentsModel: model.ModelAssignment{ProviderID: "openai", ModelID: "gpt-4o-mini"},
+	}
+	for index, row := range ModelPickerRowsForStateWithIdentity(state) {
+		if row.Kind == ModelPickerRowKindAgent && row.AgentID == "Set all custom agents" {
+			state.SelectedPhaseIdx = index
+			break
+		}
+	}
+	bulk := state.AllCustomAgentsModel
+	assignments := map[string]model.ModelAssignment{
+		"Set all custom agents": bulk,
+		"other-custom-agent":    bulk,
+	}
+
+	result := ClearModelPickerAssignment(&state, assignments)
+	if _, ok := result["Set all custom agents"]; ok {
+		t.Fatal("custom agent named like the bulk row should be cleared")
+	}
+	if result["other-custom-agent"] != bulk {
+		t.Fatalf("clear changed another custom agent: got %v, want %v", result["other-custom-agent"], bulk)
+	}
+	if state.AllCustomAgentsModel != bulk {
+		t.Fatalf("custom agent clear changed bulk state: got %v, want %v", state.AllCustomAgentsModel, bulk)
 	}
 }
