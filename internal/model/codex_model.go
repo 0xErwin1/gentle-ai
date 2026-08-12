@@ -34,7 +34,8 @@ func CodexAvailableModels() []string {
 	return out
 }
 
-const codexModelDiscoveryTimeout = 3 * time.Second
+var codexModelDiscoveryTimeout = 3 * time.Second
+
 const codexModelDiscoveryOutputLimit = 1 << 20
 
 var codexLookPath = exec.LookPath

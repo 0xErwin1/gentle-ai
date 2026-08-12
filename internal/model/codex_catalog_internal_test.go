@@ -3,20 +3,25 @@ package model
 import (
 	"context"
 	"errors"
+	"os"
 	"os/exec"
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestDiscoverCodexModels(t *testing.T) {
 	tests := []struct {
-		name         string
-		lookPathErr  error
-		command      func(context.Context, string, ...string) *exec.Cmd
-		want         []string
-		wantArgs     []string
-		wantLookPath bool
+		name        string
+		lookPathErr error
+		mode        string
+		output      string
+		cancel      bool
+		timeout     time.Duration
+		want        []string
+		wantArgs    []string
+		wantCommand bool
 	}{
 		{
 			name:        "missing executable",
@@ -24,67 +29,64 @@ func TestDiscoverCodexModels(t *testing.T) {
 			want:        CodexAvailableModels(),
 		},
 		{
-			name: "command failure",
-			command: func(context.Context, string, ...string) *exec.Cmd {
-				return exec.Command("false")
-			},
-			want:         CodexAvailableModels(),
-			wantArgs:     []string{"/fake/bin/codex", "debug", "models"},
-			wantLookPath: true,
+			name:        "command failure",
+			mode:        "error",
+			want:        CodexAvailableModels(),
+			wantArgs:    []string{"/fake/bin/codex", "debug", "models"},
+			wantCommand: true,
 		},
 		{
-			name: "invalid JSON",
-			command: func(context.Context, string, ...string) *exec.Cmd {
-				return exec.Command("printf", "%s", "not-json")
-			},
-			want:         CodexAvailableModels(),
-			wantArgs:     []string{"/fake/bin/codex", "debug", "models"},
-			wantLookPath: true,
+			name:        "invalid JSON",
+			mode:        "output",
+			output:      "not-json",
+			want:        CodexAvailableModels(),
+			wantArgs:    []string{"/fake/bin/codex", "debug", "models"},
+			wantCommand: true,
 		},
 		{
-			name: "empty output",
-			command: func(context.Context, string, ...string) *exec.Cmd {
-				return exec.Command("true")
-			},
-			want:         CodexAvailableModels(),
-			wantArgs:     []string{"/fake/bin/codex", "debug", "models"},
-			wantLookPath: true,
+			name:        "empty output",
+			want:        CodexAvailableModels(),
+			wantArgs:    []string{"/fake/bin/codex", "debug", "models"},
+			wantCommand: true,
 		},
 		{
-			name: "no selectable entries",
-			command: func(context.Context, string, ...string) *exec.Cmd {
-				return exec.Command("printf", "%s", `{"models":[{"slug":"hidden","visibility":"hide"},{"slug":"unsupported","supported_in_api":false}]}`)
-			},
-			want:         CodexAvailableModels(),
-			wantArgs:     []string{"/fake/bin/codex", "debug", "models"},
-			wantLookPath: true,
+			name:        "no selectable entries",
+			mode:        "output",
+			output:      `{"models":[{"slug":"hidden","visibility":"hide"},{"slug":"unsupported","supported_in_api":false}]}`,
+			want:        CodexAvailableModels(),
+			wantArgs:    []string{"/fake/bin/codex", "debug", "models"},
+			wantCommand: true,
 		},
 		{
-			name: "cancellation",
-			command: func(ctx context.Context, _ string, _ ...string) *exec.Cmd {
-				return exec.CommandContext(ctx, "sleep", "1")
-			},
-			want:         CodexAvailableModels(),
-			wantArgs:     []string{"/fake/bin/codex", "debug", "models"},
-			wantLookPath: true,
+			name:        "cancellation",
+			mode:        "wait",
+			cancel:      true,
+			want:        CodexAvailableModels(),
+			wantArgs:    []string{"/fake/bin/codex", "debug", "models"},
+			wantCommand: true,
 		},
 		{
-			name: "output cap",
-			command: func(context.Context, string, ...string) *exec.Cmd {
-				return exec.Command("printf", "%s", strings.Repeat("x", codexModelDiscoveryOutputLimit+1))
-			},
-			want:         CodexAvailableModels(),
-			wantArgs:     []string{"/fake/bin/codex", "debug", "models"},
-			wantLookPath: true,
+			name:        "timeout",
+			mode:        "wait",
+			timeout:     50 * time.Millisecond,
+			want:        CodexAvailableModels(),
+			wantArgs:    []string{"/fake/bin/codex", "debug", "models"},
+			wantCommand: true,
 		},
 		{
-			name: "optional fields, whitespace, and duplicates",
-			command: func(context.Context, string, ...string) *exec.Cmd {
-				return exec.Command("printf", "%s", `{"models":[{"slug":"  gpt-5.6  "},{"slug":"gpt-5.6","visibility":"list","supported_in_api":true},{"slug":"legacy"},{"slug":"codex-auto-review","visibility":"hide","supported_in_api":true},{"slug":"hidden","visibility":"hide"},{"slug":"unsupported","supported_in_api":false},{"slug":"   "}]}`)
-			},
-			want:         []string{"gpt-5.6", "legacy"},
-			wantArgs:     []string{"/fake/bin/codex", "debug", "models"},
-			wantLookPath: true,
+			name:        "output cap",
+			mode:        "output-limit",
+			want:        CodexAvailableModels(),
+			wantArgs:    []string{"/fake/bin/codex", "debug", "models"},
+			wantCommand: true,
+		},
+		{
+			name:        "optional fields, whitespace, and duplicates",
+			mode:        "output",
+			output:      `{"models":[{"slug":"  gpt-5.6  "},{"slug":"gpt-5.6","visibility":"list","supported_in_api":true},{"slug":"legacy"},{"slug":"codex-auto-review","visibility":"hide","supported_in_api":true},{"slug":"hidden","visibility":"hide"},{"slug":"unsupported","supported_in_api":false},{"slug":"   "}]}`,
+			want:        []string{"gpt-5.6", "legacy"},
+			wantArgs:    []string{"/fake/bin/codex", "debug", "models"},
+			wantCommand: true,
 		},
 	}
 
@@ -92,9 +94,11 @@ func TestDiscoverCodexModels(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			originalLookPath := codexLookPath
 			originalCommand := codexCommand
+			originalTimeout := codexModelDiscoveryTimeout
 			t.Cleanup(func() {
 				codexLookPath = originalLookPath
 				codexCommand = originalCommand
+				codexModelDiscoveryTimeout = originalTimeout
 			})
 
 			called := false
@@ -108,14 +112,14 @@ func TestDiscoverCodexModels(t *testing.T) {
 			codexCommand = func(ctx context.Context, path string, args ...string) *exec.Cmd {
 				called = true
 				gotArgs = append([]string{path}, args...)
-				if tt.command == nil {
-					return exec.CommandContext(ctx, "false")
-				}
-				return tt.command(ctx, path, args...)
+				return codexHelperCommand(ctx, tt.mode, tt.output)
+			}
+			if tt.timeout != 0 {
+				codexModelDiscoveryTimeout = tt.timeout
 			}
 
 			ctx := context.Background()
-			if tt.name == "cancellation" {
+			if tt.cancel {
 				var cancel context.CancelFunc
 				ctx, cancel = context.WithCancel(ctx)
 				cancel()
@@ -124,8 +128,8 @@ func TestDiscoverCodexModels(t *testing.T) {
 			if !reflect.DeepEqual(got, tt.want) {
 				t.Fatalf("DiscoverCodexModels() = %v, want %v", got, tt.want)
 			}
-			if called != tt.wantLookPath {
-				t.Fatalf("command called = %v, want %v", called, tt.wantLookPath)
+			if called != tt.wantCommand {
+				t.Fatalf("command called = %v, want %v", called, tt.wantCommand)
 			}
 			if tt.wantArgs != nil {
 				if !reflect.DeepEqual(tt.wantArgs, gotArgs) {
@@ -134,4 +138,28 @@ func TestDiscoverCodexModels(t *testing.T) {
 			}
 		})
 	}
+}
+
+func codexHelperCommand(ctx context.Context, mode, output string) *exec.Cmd {
+	cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestCodexDiscoveryHelperProcess$", "--")
+	cmd.Env = append(os.Environ(), "GO_WANT_CODEX_HELPER=1", "GO_CODEX_HELPER_MODE="+mode, "GO_CODEX_HELPER_OUTPUT="+output)
+	return cmd
+}
+
+func TestCodexDiscoveryHelperProcess(t *testing.T) {
+	if os.Getenv("GO_WANT_CODEX_HELPER") != "1" {
+		return
+	}
+
+	switch os.Getenv("GO_CODEX_HELPER_MODE") {
+	case "error":
+		os.Exit(1)
+	case "wait":
+		select {}
+	case "output-limit":
+		_, _ = os.Stdout.WriteString(strings.Repeat("x", codexModelDiscoveryOutputLimit+1))
+	default:
+		_, _ = os.Stdout.WriteString(os.Getenv("GO_CODEX_HELPER_OUTPUT"))
+	}
+	os.Exit(0)
 }
