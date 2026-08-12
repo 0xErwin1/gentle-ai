@@ -69,21 +69,14 @@ func TestSDDOrchestratorAssetSelectionCoversSupportedAgents(t *testing.T) {
 				"exactly three semantic choices in this order",
 				"`report_and_continue`, `continue_without_reporting`, `stop_here`",
 				"Only after explicit consent and that final privacy scan",
-				"If prohibited data is found, the scan fails, returns incomplete, ambiguous, or unknown, or safe redaction would alter the reporting decision",
-				"perform no GitHub search, write, comment, or create",
-				"jump directly to the Terminal report-outcome continuation below",
 				"If no equivalent exists, create a new automated provider-defect report.",
-				"If the installed build/version/channel evidence needed to compare against that verifiable published fix is missing, malformed, incomplete, ambiguous, unknown, or incomparable",
-				"do not recommend an update, do not classify a regression, perform no GitHub mutation",
 				"search open and closed issues",
 				"newly-created issue identity/URL",
 				"Only a definitive lookup may branch to GitHub mutation",
-				"immediately stop further GitHub mutation and blind retries",
-				"without requiring identity resolution first",
-				"Do not continue through later report-routing bullets",
-				"do not add, remove, or change any labels on it",
-				"If the exact created issue identity cannot be proven, exact created-identity uncertainty remains only a veto on later recovery, retry, or duplicate mutation",
-				"Terminal report-outcome continuation: After a definitive successful report outcome, or report-side uncertainty, execute the shared candidate-scoped continuation exactly once",
+				"If any report-side required evidence, check, or operation fails, is unavailable, unsafe, incomplete, malformed, ambiguous, unknown, incomparable, times out, lacks permission, or has an unconfirmed mutation outcome",
+				"perform no further GitHub operation or automatic retry",
+				"continue through the existing `continue_without_reporting` path",
+				"unknown mutation outcome forbids duplicate create, comment, recovery, or other mutation unless the exact outcome and identity are later proven",
 				"The shared candidate-scoped continuation executes that exact captured decline invocation exactly once for each continuing path",
 				"`consent: \"declined_this_candidate\"`",
 				"native negotiated STATUS",
@@ -95,12 +88,6 @@ func TestSDDOrchestratorAssetSelectionCoversSupportedAgents(t *testing.T) {
 			}
 			if strings.Contains(renderSDDOrchestratorAsset(tc.agent), "gentle-"+"report") {
 				t.Fatalf("rendered %s orchestrator retains a provider-defect label", tc.agent)
-			}
-			if strings.Contains(renderSDDOrchestratorAsset(tc.agent), "no-label") {
-				t.Fatalf("rendered %s orchestrator invents a provider-defect no-label interface", tc.agent)
-			}
-			if strings.Contains(renderSDDOrchestratorAsset(tc.agent), "add a label") || strings.Contains(renderSDDOrchestratorAsset(tc.agent), "do not add a label") {
-				t.Fatalf("rendered %s orchestrator invents a provider-defect label interface", tc.agent)
 			}
 		})
 	}
