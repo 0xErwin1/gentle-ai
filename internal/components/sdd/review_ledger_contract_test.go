@@ -349,7 +349,7 @@ func TestKilocodeReviewSettingsMatchCurrentMainBaseline(t *testing.T) {
 	// contract, so the hash moved. Deliberate, not drift.
 	// #3102 adds the empty_base_diff_bootstrap_required STOP continuation to
 	// the shared contract. Kilocode embeds that contract, so the hash moved.
-	const want = "fc5a0ad83fd3324d001da182ff859f6360b854d13da5fcc1c8a3be15354d02a9"
+	const want = "be035ad89ddb1905d1c8d2e4436a16ad09aaa0c63cf5e1e9f031840b109ac077"
 	if got != want {
 		t.Fatalf("Kilocode settings SHA-256 = %s, want current-main baseline %s", got, want)
 	}

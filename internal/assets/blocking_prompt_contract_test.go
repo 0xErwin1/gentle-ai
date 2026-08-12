@@ -167,21 +167,13 @@ func TestCoordinatorOrchestratorsCarryGentleAIProviderDefectHandoff(t *testing.T
 		{name: "outdated installed build", text: "If the installed build predates that release, recommend installing the published fix and reproducing; do not create or comment for that occurrence yet."},
 		{name: "regression routing", text: "If the installed build demonstrably contains the fix and still reproduces, treat it as a possible regression: reproduction on a build proven to contain that fix; comment on a suitable canonical tracker, or create a linked regression issue when that tracker is unsuitable. Never reopen automatically."},
 		{name: "create new automated report", text: "create a new automated provider-defect report"},
-		{name: "confirmed creation label precondition", text: "Confirmed creation is a HARD precondition for labeling: apply `gentle-report` only when the GitHub create operation confirms a newly-created issue identity/URL."},
+		{name: "confirmed creation identity", text: "Confirmed creation requires the GitHub create operation to confirm a newly-created issue identity/URL."},
 		{name: "no output-only creation inference", text: "Never infer creation from output text alone."},
 		{name: "definitive lookup gate", text: "Only a definitive lookup may branch to GitHub mutation."},
 		{name: "uncertainty no further mutation", text: "perform no further GitHub mutation and no blind retry"},
 		{name: "uncertainty continuation", text: "execute the exact captured provider-owned decline invocation exactly once, validate it, re-enter native negotiated STATUS, and resume the already-held consumer continuation."},
 		{name: "comment exact canonical", text: "on that exact canonical/equivalent issue"},
-		{name: "duplicate labels unchanged", text: "do not add, remove, or change any labels on it"},
-		{name: "unconfirmed creation continuation", text: "If creation fails, is ambiguous, incomplete, times out, lacks permission, or has an unknown outcome, preserve all consumer state; do not search, comment, update, label, or retry creation until the exact created issue identity is resolved, then use the uncertainty continuation below."},
-		{name: "partial success disclosure", text: "If creation is confirmed but label application fails or has an ambiguous outcome, surface the confirmed created issue identity/URL and the label failure separately."},
-		{name: "partial success honesty", text: "Be honest that report creation succeeded even when label application failed."},
-		{name: "partial success stop", text: "STOP with all consumer state preserved; do not create or comment again automatically."},
-		{name: "exact identity retry", text: "On retry, perform a fresh final privacy scan first, then re-resolve that exact created issue identity, inspect whether `gentle-report` is already present, and apply only a missing label idempotently."},
-		{name: "no arbitrary retry labeling", text: "Never search and label an arbitrary equivalent/pre-existing issue."},
-		{name: "unproven identity stop", text: "If the exact created issue identity cannot be proven, STOP and require a human decision, with no label or duplicate issue/comment."},
-		{name: "label scope exclusions", text: "Do not apply `gentle-report` to manual issues, #2211, historical issues, pull requests, or reports created by unrelated workflows."},
+		{name: "unconfirmed creation continuation", text: "If creation fails, is ambiguous, incomplete, times out, lacks permission, or has an unknown outcome, preserve all consumer state; do not search, comment, update, or retry creation until the exact created issue identity is resolved, then use the uncertainty continuation below."},
 		{name: "report outcome continuation", text: "After a definitive successful report outcome, or any report-side uncertainty after stopping further GitHub mutation, execute the shared candidate-scoped continuation below."},
 		{name: "captured provider decline", text: "exact captured provider-owned `choices[answer=\"declined\"].invocation` from the `gentle-ai.review-integration.consent/v3` envelope"},
 		{name: "captured decline only", text: "Never synthesize the decline command, target, token, or consumer continuation from prose."},
@@ -260,7 +252,7 @@ func TestCoordinatorOrchestratorsCarryGentleAIProviderDefectHandoff(t *testing.T
 					}
 				})
 			}
-			for _, prohibited := range []string{"Resume only after an installed published fix", "latest version"} {
+			for _, prohibited := range []string{"Resume only after an installed published fix", "latest version", "gentle-" + "report"} {
 				if strings.Contains(contract, prohibited) {
 					t.Errorf("provider-defect handoff must not make published fixes the only resumption route: %q", prohibited)
 				}
@@ -272,11 +264,8 @@ func TestCoordinatorOrchestratorsCarryGentleAIProviderDefectHandoff(t *testing.T
 				prefix string
 				must   []string
 			}{
-				{prefix: "Confirmed creation is a HARD precondition for labeling", must: []string{"apply `gentle-report` only when", "GitHub create operation confirms", "newly-created issue identity/URL", "Never infer creation from output text alone", "preserve all consumer state", "do not search, comment, update, label, or retry creation", "use the uncertainty continuation below"}},
+				{prefix: "Confirmed creation requires the GitHub create operation", must: []string{"newly-created issue identity/URL", "Never infer creation from output text alone", "preserve all consumer state", "do not search, comment, update, or retry creation", "use the uncertainty continuation below"}},
 				{prefix: "If search, comment, or creation fails, is ambiguous, incomplete, times out, lacks permission, or has an unknown outcome", must: []string{"perform no further GitHub mutation", "no blind retry", "preserve all consumer state", "exact captured provider-owned decline invocation exactly once", "validate it", "re-enter native negotiated STATUS", "already-held consumer continuation"}},
-				{prefix: "If creation is confirmed but label application fails", must: []string{"confirmed created issue identity/URL", "label failure separately", "Be honest that report creation succeeded", "STOP with all consumer state preserved", "do not create or comment again automatically"}},
-				{prefix: "On retry, perform a fresh final privacy scan first", must: []string{"re-resolve that exact created issue identity", "inspect whether `gentle-report` is already present", "apply only a missing label idempotently", "Never search and label an arbitrary equivalent/pre-existing issue"}},
-				{prefix: "If the exact created issue identity cannot be proven", must: []string{"STOP and require a human decision", "no label or duplicate issue/comment"}},
 			} {
 				line := providerDefectHandoffLine(t, contract, invariant.prefix)
 				for _, required := range invariant.must {
@@ -292,10 +281,7 @@ func TestCoordinatorOrchestratorsCarryGentleAIProviderDefectHandoff(t *testing.T
 				{"If the equivalent has a verifiable relevant published fix", "If the installed build predates that release"},
 				{"Only a definitive lookup may branch to GitHub mutation", "create a new automated provider-defect report"},
 				{"Only a definitive lookup may branch to GitHub mutation", "add exactly one occurrence comment"},
-				{"create a new automated provider-defect report", "Confirmed creation is a HARD precondition for labeling"},
-				{"If creation fails, is ambiguous, incomplete, times out, lacks permission, or has an unknown outcome", "If creation is confirmed but label application fails"},
-				{"If creation is confirmed but label application fails", "On retry, perform a fresh final privacy scan first"},
-				{"On retry, perform a fresh final privacy scan first", "If the exact created issue identity cannot be proven"},
+				{"create a new automated provider-defect report", "Confirmed creation requires the GitHub create operation"},
 			} {
 				if strings.Index(contract, pair[0]) >= strings.Index(contract, pair[1]) {
 					t.Errorf("provider-defect handoff must place %q before %q", pair[0], pair[1])
