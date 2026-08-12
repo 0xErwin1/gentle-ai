@@ -20,7 +20,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gentleman-programming/gentle-ai/v2/internal/advisoryreview"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/claude"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/components/sdd"
 )
 
 // claudePoisonMarker is planted, after the candidate freezes, into the
@@ -241,20 +242,18 @@ func setupClaudePoisonedReview(t *testing.T, lineage string) claudePoisonedRevie
 	}
 }
 
-// claudeAdvisoryPrompt fetches the exact canonical prompt for the claude-code
-// runtime through the CLI's own generic prompt/text seam
-// (`review advisory prompt`), the same command a real Claude-orchestrated
-// session would run from the collect input's own repository-context and lens.
-// It never builds a caller-authored request.
-func (setup claudePoisonedReviewSetup) claudeAdvisoryPrompt(t *testing.T) string {
+// claudeProviderCommandPrompt fetches the exact native bytes Claude's parent
+// must relay for a provider-command reviewer. It never builds a caller-authored
+// binding or evidence envelope.
+func (setup claudePoisonedReviewSetup) claudeProviderCommandPrompt(t *testing.T) string {
 	t.Helper()
 	payload := setup.harness.gentle(
-		"review", "advisory", "prompt",
+		"review", "lens-context",
 		"--repository-context", setup.binding["repository-context"],
 		"--lens", setup.binding["lens"],
-		"--runtime", "claude-code",
+		"--delivery", "provider_command",
 	)
-	return strings.TrimRight(string(payload), "\n")
+	return string(payload)
 }
 
 func writeClaudeReviewSSE(w http.ResponseWriter, result string) {
@@ -263,44 +262,77 @@ func writeClaudeReviewSSE(w http.ResponseWriter, result string) {
 	_, _ = fmt.Fprintf(w, "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_mock\",\"type\":\"message\",\"role\":\"assistant\",\"model\":\"claude-sonnet-5\",\"content\":[],\"stop_reason\":null,\"stop_sequence\":null,\"usage\":{\"input_tokens\":10,\"output_tokens\":1}}}\n\nevent: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\nevent: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":%s}}\n\nevent: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\nevent: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\",\"stop_sequence\":null},\"usage\":{\"output_tokens\":10}}\n\nevent: message_stop\ndata: {\"type\":\"message_stop\"}\n\n", text)
 }
 
-func requireCanonicalClaudeRequest(t *testing.T, setup claudePoisonedReviewSetup, prompt string) advisoryreview.Request {
+func installedClaudeReviewerDefinition(t *testing.T, lens string) string {
 	t.Helper()
-	_, input, found := strings.Cut(prompt, "Input:\n")
+	home := t.TempDir()
+	if _, err := sdd.Inject(home, claude.NewAdapter(), ""); err != nil {
+		t.Fatalf("install Claude reviewer: %v", err)
+	}
+	installed, err := os.ReadFile(filepath.Join(home, ".claude", "agents", lens+".md"))
+	if err != nil {
+		t.Fatalf("read installed Claude reviewer: %v", err)
+	}
+	parts := strings.SplitN(string(installed), "---", 3)
+	if len(parts) != 3 {
+		t.Fatalf("installed Claude reviewer %q has no frontmatter", lens)
+	}
+	agents, err := json.Marshal(map[string]any{
+		"gentle-ai-review-transport-e2e": map[string]any{
+			"description": "Exercises the installed Claude reviewer transport.",
+			"prompt":      strings.TrimSpace(parts[2]),
+			"model":       "sonnet",
+			"tools":       []string{},
+		},
+	})
+	if err != nil {
+		t.Fatalf("marshal installed Claude reviewer definition: %v", err)
+	}
+	return string(agents)
+}
+
+func requireClaudeProviderCommandPrompt(t *testing.T, setup claudePoisonedReviewSetup, prompt string) {
+	t.Helper()
+	lines := strings.SplitN(prompt, "\n", 3)
+	if len(lines) < 3 || !strings.HasPrefix(lines[0], "GENTLE_AI_REVIEW_BINDING ") {
+		t.Fatalf("native provider-command output does not begin with its binding:\n%s", prompt)
+	}
+	contextJSON, found := strings.CutPrefix(lines[1], "GENTLE_AI_REVIEW_CONTEXT ")
 	if !found {
-		t.Fatalf("canonical advisory prompt omitted its Input block:\n%s", prompt)
+		t.Fatalf("native provider-command output omits its canonical context header:\n%s", prompt)
 	}
-	payload, _, found := strings.Cut(input, "\n\nOutput schema:\n")
-	if !found {
-		t.Fatalf("canonical advisory prompt omitted its Output schema boundary:\n%s", prompt)
+	var contextBlock struct {
+		ArtifactSubject struct {
+			SubjectHash string `json:"subject_hash"`
+			Lens        string `json:"lens"`
+		} `json:"artifact_subject"`
+		ChangedPathManifest []struct {
+			Path string `json:"path"`
+		} `json:"changed_path_manifest"`
 	}
-	var request advisoryreview.Request
-	if err := json.Unmarshal([]byte(payload), &request); err != nil {
-		t.Fatalf("decode canonical advisory request: %v\n%s", err, payload)
+	if err := json.Unmarshal([]byte(contextJSON), &contextBlock); err != nil {
+		t.Fatalf("decode native provider context header: %v\n%s", err, prompt)
 	}
-	subject := request.ArtifactSubject
-	if subject.SubjectHash != setup.binding["subject-hash"] || subject.LineageID != setup.binding["lineage"] ||
-		subject.AuthorityRevision != setup.binding["expected-revision"] || subject.TargetIdentity != setup.binding["target"] ||
-		subject.Lens != setup.binding["lens"] || subject.BaseTree == "" || subject.CandidateTree == "" {
-		t.Fatalf("canonical advisory subject does not match the negotiated binding: subject=%+v binding=%v", subject, setup.binding)
+	if contextBlock.ArtifactSubject.SubjectHash != setup.binding["subject-hash"] || contextBlock.ArtifactSubject.Lens != setup.binding["lens"] {
+		t.Fatalf("native provider context does not match the negotiated binding: context=%+v binding=%v", contextBlock, setup.binding)
 	}
-	if len(request.ChangedPathManifest) != len(setup.manifestPaths) || len(request.Evidence) != len(setup.manifestPaths) {
-		t.Fatalf("canonical advisory scope is incomplete: manifest=%+v evidence=%+v want paths=%v", request.ChangedPathManifest, request.Evidence, setup.manifestPaths)
+	if len(contextBlock.ChangedPathManifest) != len(setup.manifestPaths) {
+		t.Fatalf("native provider context has incomplete manifest: %+v want paths=%v", contextBlock.ChangedPathManifest, setup.manifestPaths)
 	}
 	for index, path := range setup.manifestPaths {
-		if request.ChangedPathManifest[index].Path != path || request.Evidence[index].Path != path || strings.TrimSpace(request.Evidence[index].Content) == "" {
-			t.Fatalf("canonical advisory path %d is not bound to complete provider evidence: manifest=%+v evidence=%+v", index, request.ChangedPathManifest[index], request.Evidence[index])
+		if contextBlock.ChangedPathManifest[index].Path != path || !strings.Contains(prompt, "GENTLE_AI_REVIEW_PATCH "+fmt.Sprint(index)+" "+path) {
+			t.Fatalf("native provider context path %d is not bound to a patch: manifest=%+v", index, contextBlock.ChangedPathManifest)
 		}
 	}
-	if !strings.Contains(request.Evidence[0].Content, "func Compute(value int) int") ||
-		!strings.Contains(request.Evidence[0].Content, "return value * 2") || strings.Contains(request.Evidence[0].Content, claudePoisonMarker) {
-		t.Fatalf("canonical advisory evidence is not the frozen candidate content: %q", request.Evidence[0].Content)
+	if !strings.Contains(prompt, "GENTLE_AI_REVIEW_RESULT_SCHEMA") || !strings.Contains(prompt, "func Compute(value int) int") ||
+		!strings.Contains(prompt, "return value * 2") || strings.Contains(prompt, claudePoisonMarker) ||
+		!strings.HasSuffix(prompt, "GENTLE_AI_REVIEW_CONTEXT_END\n") {
+		t.Fatalf("native provider context is not complete frozen evidence:\n%s", prompt)
 	}
-	return request
 }
 
 func newClaudeReviewFixture(t *testing.T, setup claudePoisonedReviewSetup, prompt string) (*httptest.Server, *atomic.Int32) {
 	t.Helper()
-	canonicalRequest := requireCanonicalClaudeRequest(t, setup, prompt)
+	requireClaudeProviderCommandPrompt(t, setup, prompt)
 	result, err := json.Marshal(map[string]any{
 		"subject_hash": setup.binding["subject-hash"],
 		"inspection":   map[string]any{"status": "completed", "paths": setup.manifestPaths},
@@ -330,7 +362,7 @@ func newClaudeReviewFixture(t *testing.T, setup claudePoisonedReviewSetup, promp
 			return
 		}
 		calls.Add(1)
-		for _, required := range []string{canonicalRequest.ArtifactSubject.SubjectHash, canonicalRequest.ArtifactSubject.Lens, setup.candidatePath, "func Compute(value int) int", "return value * 2"} {
+		for _, required := range []string{setup.binding["subject-hash"], setup.binding["lens"], setup.candidatePath, "func Compute(value int) int", "return value * 2"} {
 			if !bytes.Contains(body, []byte(required)) {
 				t.Errorf("Claude request omitted provider-bound value %q", required)
 			}
@@ -353,7 +385,7 @@ type claudeReviewEnvelope struct {
 // runClaudeReview is test-local process wiring for the pinned runtime proof.
 // Production Claude transport remains session prompt-carried; this launcher
 // exists only to prove that the genuine CLI preserves that boundary.
-func runClaudeReview(ctx context.Context, binary, prompt string, environment []string) ([]byte, error) {
+func runClaudeReview(ctx context.Context, binary, prompt, agents string, environment []string) ([]byte, error) {
 	scratch, err := os.MkdirTemp("", "gentle-ai-claude-advisory-*")
 	if err != nil {
 		return nil, fmt.Errorf("claude advisory transport unavailable: create scratch directory: %w", err)
@@ -364,6 +396,8 @@ func runClaudeReview(ctx context.Context, binary, prompt string, environment []s
 		"--bare",
 		"--print",
 		"--output-format", "json",
+		"--agent", "gentle-ai-review-transport-e2e",
+		"--agents", agents,
 		"--tools", "",
 		"--permission-mode", "dontAsk",
 		"--setting-sources=",
@@ -428,9 +462,10 @@ func TestRealClaudeReviewerOrdinarySessionAdmitsRawOutput(t *testing.T) {
 	claude := requireClaudeNetworkNone(t)
 	setup := setupClaudePoisonedReview(t, "claude-poisoned-worktree-ordinary-session")
 
-	prompt := setup.claudeAdvisoryPrompt(t)
+	prompt := setup.claudeProviderCommandPrompt(t)
+	agents := installedClaudeReviewerDefinition(t, setup.binding["lens"])
 	if strings.Contains(prompt, claudePoisonMarker) {
-		t.Fatalf("poison marker leaked into the provider-rendered advisory prompt:\n%s", prompt)
+		t.Fatalf("poison marker leaked into native provider-command output:\n%s", prompt)
 	}
 
 	server, calls := newClaudeReviewFixture(t, setup, prompt)
@@ -448,7 +483,7 @@ func TestRealClaudeReviewerOrdinarySessionAdmitsRawOutput(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), organicAgentTimeout)
 	defer cancel()
-	raw, err := runClaudeReview(ctx, claude, prompt, environment)
+	raw, err := runClaudeReview(ctx, claude, prompt, agents, environment)
 	if err != nil {
 		t.Fatalf("real claude reviewer call failed: %v", err)
 	}
@@ -558,7 +593,8 @@ func (setup claudePoisonedReviewSetup) captureResult(inputPath string) (string, 
 func TestRealClaudeReviewerTransportFailureStrandsNothing(t *testing.T) {
 	requireClaudeBinary(t)
 	setup := setupClaudePoisonedReview(t, "claude-transport-failure")
-	prompt := setup.claudeAdvisoryPrompt(t)
+	prompt := setup.claudeProviderCommandPrompt(t)
+	agents := installedClaudeReviewerDefinition(t, setup.binding["lens"])
 
 	before := claudeReviewerCollectStatus(t, setup.harness, setup.lineage)
 	if before.NextTransition == nil || before.NextTransition.Kind != "collect" ||
@@ -573,7 +609,7 @@ func TestRealClaudeReviewerTransportFailureStrandsNothing(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Nanosecond)
 	defer cancel()
 	<-ctx.Done()
-	raw, err := runClaudeReview(ctx, claude, prompt, []string{"HOME=" + t.TempDir(), "PATH=" + os.Getenv("PATH")})
+	raw, err := runClaudeReview(ctx, claude, prompt, agents, []string{"HOME=" + t.TempDir(), "PATH=" + os.Getenv("PATH")})
 	if err == nil {
 		t.Fatalf("Review() with an already-expired context = %q, nil, want a transport failure", raw)
 	}

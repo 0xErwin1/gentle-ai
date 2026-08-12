@@ -16,6 +16,8 @@ import (
 	"testing"
 
 	"github.com/gentleman-programming/gentle-ai/v2/internal/advisoryreview"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/claude"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/components/sdd"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
 )
 
@@ -132,6 +134,46 @@ func TestReviewLensContextEmitsFinishedReviewerBlockFromTwoTokens(t *testing.T) 
 	}
 	if !strings.HasSuffix(block, "GENTLE_AI_REVIEW_CONTEXT_END\n") {
 		t.Fatalf("block is not terminated:\n%s", block)
+	}
+}
+
+// TestReviewLensContextMatchesInstalledClaudeReviewer crosses the native
+// producer and the installed Claude consumer. The context bytes must be usable
+// as-is: the parent has no legitimate field to rebuild or prefix.
+func TestReviewLensContextMatchesInstalledClaudeReviewer(t *testing.T) {
+	installHome := t.TempDir()
+	if _, err := sdd.Inject(installHome, claude.NewAdapter(), ""); err != nil {
+		t.Fatalf("install Claude reviewer: %v", err)
+	}
+	installed, err := os.ReadFile(filepath.Join(installHome, ".claude", "agents", "review-reliability.md"))
+	if err != nil {
+		t.Fatalf("read installed Claude reviewer: %v", err)
+	}
+
+	reviewModeHome(t)
+	repo := initReviewCLIRepo(t)
+	writeReviewStartCandidate(t, repo, "parser.go", "package parser\n\nfunc Parse() error { return nil }\n", 0o644)
+	started := runNegotiatedReviewStart(t, repo, "claude-native-context")
+	var output bytes.Buffer
+	if err := RunReview([]string{
+		"lens-context", "--repository-context", started.RepositoryContext.Handle,
+		"--lens", started.SelectedLenses[0], "--delivery", "provider_command",
+	}, &output); err != nil {
+		t.Fatalf("run native review lens-context: %v", err)
+	}
+
+	lines := strings.SplitN(output.String(), "\n", 3)
+	if len(lines) < 3 || !strings.HasPrefix(lines[0], "GENTLE_AI_REVIEW_BINDING ") {
+		t.Fatalf("native provider-command output does not begin with its binding: %q", output.String())
+	}
+	marker, _, found := strings.Cut(lines[1], " ")
+	if !found || !strings.HasPrefix(marker, "GENTLE_AI_REVIEW_CONTEXT") ||
+		!strings.Contains(output.String(), "GENTLE_AI_REVIEW_RESULT_SCHEMA\n") ||
+		!strings.HasSuffix(output.String(), marker+"_END\n") {
+		t.Fatalf("native provider-command output is not a complete canonical reviewer block:\n%s", output.String())
+	}
+	if !strings.Contains(string(installed), "one block from "+marker+" through "+marker+"_END") {
+		t.Fatalf("installed Claude reviewer does not accept the native marker %q", marker)
 	}
 }
 

@@ -29,12 +29,6 @@ func boundedReviewRequiredClausesFor(agent model.AgentID) []string {
 		"fresh `next_transition` reoffers the exact same bound slot",
 		"If STATUS discovers a committed capture, continue without relaunching",
 		"Never infer a retry from transcript or error text alone",
-		"exact literal prefix `GENTLE_AI_REVIEW_BINDING `",
-		"including the trailing space and never `=`",
-		"These are the prompt's first bytes",
-		"one-line JSON assembled only from that input",
-		"`revision` from `expected-revision`",
-		"`subject_hash` from `artifact_subject.subject_hash`",
 		"Capture follows the native transition",
 		"via repeated `--result-artifact-file <path>`",
 		"BOM-less UTF-8 on Windows PowerShell 5.1",
@@ -122,6 +116,28 @@ func TestBoundedReviewContractRequiresRuntimeBoundReviewerContext(t *testing.T) 
 	}
 	if strings.Contains(content, "`GENTLE_AI_REVIEW_BINDING=") {
 		t.Fatal("orchestrator contract permits equals-delimited reviewer bindings")
+	}
+}
+
+func TestClaudeProviderCommandRelayUsesNativeLensContext(t *testing.T) {
+	content := boundedReviewContract()
+	start := strings.Index(content, "### Claude `provider_command` Reviewer Relay")
+	if start < 0 {
+		t.Fatal("Claude provider-command relay section is absent")
+	}
+	section := content[start:]
+	for _, want := range []string{
+		"gentle-ai review lens-context --repository-context <provider-returned-handle> --lens <provider-returned-lens> --delivery provider_command",
+		"Relay all stdout byte-for-byte unchanged as the complete and sole Task prompt",
+		"Stdout already starts with `GENTLE_AI_REVIEW_BINDING `",
+		"do not launch Task, capture a result, reconstruct evidence, or fall back",
+		"re-query STATUS only through the exact typed continuation",
+		"do not prepend a binding, wrap, relabel, summarize, truncate, or reconstruct any part",
+		"Do not use `review advisory prompt`, `runtime_interception`, or Bash",
+	} {
+		if !strings.Contains(section, want) {
+			t.Errorf("Claude provider-command contract missing %q", want)
+		}
 	}
 }
 
@@ -265,7 +281,7 @@ func TestRenderedReviewersAreReadOnlyAndSingleResult(t *testing.T) {
 					// identical wording and differ only in which process
 					// supplies the block, so the reviewer input contract no
 					// longer names a Claude-specific nature for the context.
-					for _, want := range []string{"GENTLE_AI_CLAUDE_REVIEW_CONTEXT", "provider-injected context", "path evidence for every manifest index", "Missing, partial, reordered, mismatched, or unavailable evidence", "no execution tools"} {
+					for _, want := range []string{"GENTLE_AI_REVIEW_CONTEXT", "provider-injected context", "path evidence for every manifest index", "Missing, partial, reordered, mismatched, or unavailable evidence", "no execution tools"} {
 						if !strings.Contains(content, want) {
 							t.Errorf("%s missing Claude transport clause %q", path, want)
 						}

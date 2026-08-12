@@ -351,7 +351,10 @@ func TestKilocodeReviewSettingsMatchCurrentMainBaseline(t *testing.T) {
 	// the shared contract. Kilocode embeds that contract, so the hash moved.
 	// #2773 adds the lens_context_budget_exceeded STOP continuation. Kilocode
 	// embeds that contract, so the hash moved.
-	const want = "94a5921877824fc9b74b194c43d17c3f7f1ffd3f80199ce9f4b07bef1e47bdd3"
+	// #2777 replaces the parent-authored Claude binding with native
+	// provider_command render-and-relay instructions. Kilocode embeds the same
+	// shared contract, so the hash moved.
+	const want = "fcc0813893d50524bc564b0ad89527e45f08715168613438b67417d321ad26d2"
 	if got != want {
 		t.Fatalf("Kilocode settings SHA-256 = %s, want current-main baseline %s", got, want)
 	}
@@ -586,8 +589,10 @@ func TestOpenCodeRenderedReviewProtocolCost(t *testing.T) {
 		// characters per row). The ceilings preserve the required 15% headroom.
 		// #2773 adds one lens-context-budget terminal continuation (379 rendered
 		// characters per row). The ceilings preserve the required 15% headroom.
-		{name: "standard", agents: []string{"review-reliability"}, beforeChars: 42_301, wantChars: 22_088, maxCharacters: 26_000},
-		{name: "full-4R", agents: []string{"review-risk", "review-resilience", "review-readability", "review-reliability"}, beforeChars: 106_998, wantChars: 34_433, maxCharacters: 41_000},
+		// #2777 replaces parent-authored Claude bindings with the native
+		// provider_command relay contract (+471 rendered characters per row).
+		{name: "standard", agents: []string{"review-reliability"}, beforeChars: 42_301, wantChars: 22_559, maxCharacters: 26_000},
+		{name: "full-4R", agents: []string{"review-risk", "review-resilience", "review-readability", "review-reliability"}, beforeChars: 106_998, wantChars: 34_904, maxCharacters: 41_000},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

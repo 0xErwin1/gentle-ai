@@ -16,8 +16,7 @@ const boundedReviewContractAsset = "skills/_shared/review-ledger-contract.md"
 // prompt is what lets a reviewer resolve subject_hash from its own instructions
 // instead of depending on whatever context the orchestrator happened to carry.
 const reviewerBindingEnvironmentVariable = "GENTLE_AI_REVIEW_BINDING"
-const claudeReviewerContextMarker = "GENTLE_AI_CLAUDE_REVIEW_CONTEXT"
-const openCodeReviewContextMarker = "GENTLE_AI_REVIEW_CONTEXT"
+const nativeReviewerContextMarker = "GENTLE_AI_REVIEW_CONTEXT"
 
 const nativeReviewerResultSchema = `{"findings":[{"location":"path:line or path:start-end","severity":"CRITICAL","claim":"observable incorrect behavior","evidence_class":"deterministic","causal_disposition":"introduced","proof_refs":["concrete proof"]}],"evidence":["what was inspected"]}`
 const providerReviewerResultSchema = `{"subject_hash":"<artifact_subject.subject_hash>","inspection":{"status":"completed","paths":["<complete unique unordered set>"]},"findings":[{"location":"path:line or path:start-end","severity":"CRITICAL","claim":"observable incorrect behavior","evidence_class":"deterministic","causal_disposition":"introduced","proof_refs":["concrete proof"]}],"evidence":["what was inspected"]}`
@@ -188,7 +187,7 @@ type reviewerTransportInvocation struct {
 }
 
 var claudeReviewerInvocation = reviewerTransportInvocation{
-	contextMarker: claudeReviewerContextMarker,
+	contextMarker: nativeReviewerContextMarker,
 	supplier:      "the parent",
 }
 
@@ -200,7 +199,7 @@ var claudeReviewerInvocation = reviewerTransportInvocation{
 // agent holds no bash and no read tool, so that provider-injected block is
 // its only byte source for the reviewer's own turn.
 var openCodeReviewerInvocation = reviewerTransportInvocation{
-	contextMarker: openCodeReviewContextMarker,
+	contextMarker: nativeReviewerContextMarker,
 	supplier:      "the OpenCode host process",
 }
 
