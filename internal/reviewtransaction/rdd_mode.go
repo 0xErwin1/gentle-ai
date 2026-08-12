@@ -290,6 +290,7 @@ func SetCloneLocalRDDMode(
 	defer func() { _ = lock.release() }()
 
 	head, present, err := readCloneLocalRDDOverrideHead(dir)
+	repairingCurrentHead := false
 	if err != nil {
 		// An unreadable head is precisely what this command exists to replace,
 		// so it must not be able to block its own repair -- that left the
@@ -309,6 +310,29 @@ func SetCloneLocalRDDMode(
 			return failedClosedRDDModeStatus(RDDModeSourceCloneLocal), generationErr
 		}
 		head, present = rddModeOverrideRecord{Generation: generation}, false
+		repairingCurrentHead = true
+	}
+	if !present && !repairingCurrentHead {
+		// Legacy records are immutable forensic evidence. A valid one may advance
+		// only by publishing its successor in the switch-owned authority root;
+		// a damaged legacy record must never be shadowed by a fresh root.
+		legacy, legacyErr := cloneLocalRDDModeLegacyRoot(ctx, repo)
+		if legacyErr == nil {
+			// Writers before the relocation lock this path. Taking current then
+			// legacy serializes either version without a lock-order cycle.
+			legacyLock, lockErr := acquireRARAuthorityLock(ctx, filepath.Join(legacy, rddModeLockName))
+			if lockErr != nil {
+				return failedClosedRDDModeStatus(RDDModeSourceCloneLocal), lockErr
+			}
+			defer func() { _ = legacyLock.release() }()
+			legacyHead, legacyPresent, legacyHeadErr := readCloneLocalRDDOverrideHead(legacy)
+			if legacyHeadErr != nil {
+				return failedClosedRDDModeStatus(RDDModeSourceCloneLocal), legacyHeadErr
+			}
+			if legacyPresent {
+				head, present = legacyHead, true
+			}
+		}
 	}
 	current := ""
 	if present {
