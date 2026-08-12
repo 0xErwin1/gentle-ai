@@ -361,6 +361,65 @@ func TestCloneLocalRDDModeEnableRejectsGlobalOffWithoutChangingExplicitOff(t *te
 	}
 }
 
+func TestCloneLocalRDDModeEnableValidatesStaleRevisionBeforeGlobalOffRefusal(t *testing.T) {
+	repo := initSnapshotRepo(t)
+	ctx := context.Background()
+	disabled, err := SetCloneLocalRDDMode(ctx, repo, RDDModeOff, "", RDDGlobalMode{Value: "on"})
+	if err != nil {
+		t.Fatalf("SetCloneLocalRDDMode(off) error = %v", err)
+	}
+	record, err := CloneLocalRDDModeRecordPath(ctx, repo)
+	if err != nil {
+		t.Fatalf("CloneLocalRDDModeRecordPath error = %v", err)
+	}
+	before, err := os.ReadFile(record)
+	if err != nil {
+		t.Fatalf("read explicit-off record: %v", err)
+	}
+	dir, err := cloneLocalRDDModeRoot(ctx, repo, false)
+	if err != nil {
+		t.Fatalf("cloneLocalRDDModeRoot error = %v", err)
+	}
+	generation, err := cloneLocalRDDOverrideHeadGeneration(dir)
+	if err != nil {
+		t.Fatalf("cloneLocalRDDOverrideHeadGeneration error = %v", err)
+	}
+	assertUnchanged := func() {
+		t.Helper()
+		recordAfter, pathErr := CloneLocalRDDModeRecordPath(ctx, repo)
+		if pathErr != nil {
+			t.Fatalf("CloneLocalRDDModeRecordPath after refusal error = %v", pathErr)
+		}
+		after, readErr := os.ReadFile(recordAfter)
+		if readErr != nil {
+			t.Fatalf("read explicit-off record after refusal: %v", readErr)
+		}
+		generationAfter, generationErr := cloneLocalRDDOverrideHeadGeneration(dir)
+		if generationErr != nil {
+			t.Fatalf("cloneLocalRDDOverrideHeadGeneration after refusal error = %v", generationErr)
+		}
+		if recordAfter != record || !bytes.Equal(after, before) || generationAfter != generation {
+			t.Fatalf("refusal published a new generation: record %q, generation %d", recordAfter, generationAfter)
+		}
+	}
+
+	_, err = SetCloneLocalRDDMode(ctx, repo, RDDModeUnset, "stale-revision", RDDGlobalMode{Value: "off"})
+	if !errors.Is(err, ErrRDDModeRevisionMismatch) {
+		t.Fatalf("stale clear error = %v, want ErrRDDModeRevisionMismatch", err)
+	}
+	if errors.Is(err, ErrRDDDisabled) {
+		t.Fatalf("stale clear error = %v, must not report ErrRDDDisabled", err)
+	}
+	assertUnchanged()
+
+	_, err = SetCloneLocalRDDMode(ctx, repo, RDDModeUnset, disabled.Revision, RDDGlobalMode{Value: "off"})
+	var rejected *RDDDisabledError
+	if !errors.As(err, &rejected) || !errors.Is(err, ErrRDDDisabled) || rejected.Source != RDDModeSourceGlobal {
+		t.Fatalf("current clear error = %v, want global typed disabled error", err)
+	}
+	assertUnchanged()
+}
+
 func TestCloneLocalRDDModeTransitionsPublishExactlyOneGeneration(t *testing.T) {
 	repo := initSnapshotRepo(t)
 	ctx := context.Background()
