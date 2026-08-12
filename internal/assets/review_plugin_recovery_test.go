@@ -1,6 +1,8 @@
 package assets
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"os"
 	"os/exec"
@@ -150,12 +152,11 @@ const reviewPluginNativeTrustFailure = "git_repository_untrusted: provider-issue
 	"gentle-ai never provisions a safe.directory exception and never bypasses that protection. " +
 	"Restart the host process under a Git context that already trusts that repository, then retry the same exact binding"
 
-// reviewPluginStub configures the fake `gentle-ai` binary the harness runs
-// against. lensContext feeds the one native call the reduced plugin still
-// makes (`review lens-context`); stderr is the generic always-fail fallback
-// used by every scenario that needs a failing native binary. argvLog, when
-// set, records the exact argv of every invocation, one line per call --
-// proof of exactly which native command ran, and with which flags.
+// reviewPluginStub configures the exact fake binary that the harness records
+// as the runtime pin. lensContext feeds the one native call the reduced plugin
+// still makes (`review lens-context`); stderr is the generic always-fail
+// fallback used by every scenario that needs a failing native binary. argvLog,
+// when set, records the exact argv of every invocation, one line per call.
 type reviewPluginStub struct {
 	stderr      string
 	lensContext string
@@ -188,21 +189,43 @@ func runReviewPluginScenarioStub(t *testing.T, scenario string, stub reviewPlugi
 			t.Fatal(err)
 		}
 	}
-	// The stub answers `review lens-context` with one finished provider block,
+	// The stub answers `version` and `review lens-context`, matching the two
+	// non-semantic identity and transport calls the plugin makes.
+	//
+	// The lens-context response is one finished provider block,
 	// exactly like the real native command does for the frozen trees. It is
 	// the ONLY native subcommand the reduced plugin ever invokes: there is no
 	// capture-result or preserve-result branch left to stub, because the
 	// plugin no longer calls either -- it hands the model's raw final text
 	// back to its caller instead.
 	stubScript := "#!/bin/sh\n" +
-		"cat >/dev/null\n" +
 		"if [ -n \"$GENTLE_AI_STUB_ARGV_LOG\" ]; then printf '%s\\n' \"$*\" >> \"$GENTLE_AI_STUB_ARGV_LOG\"; fi\n" +
+		"cat >/dev/null\n" +
+		"if [ \"$1\" = \"version\" ]; then printf 'gentle-ai stub\\n'; exit 0; fi\n" +
 		"if [ \"$2\" = \"lens-context\" ] && [ -n \"$GENTLE_AI_STUB_LENS_CONTEXT\" ]; then\n" +
 		"  printf '%s\\n' \"$GENTLE_AI_STUB_LENS_CONTEXT\"\n" +
 		"  exit 0\n" +
 		"fi\n" +
 		"printf '%s\\n' \"$GENTLE_AI_STUB_STDERR\" >&2\nexit 1\n"
 	if err := os.WriteFile(filepath.Join(binDir, "gentle-ai"), []byte(stubScript), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	sum := sha256.Sum256([]byte(stubScript))
+	statePayload, err := json.Marshal(map[string]map[string]string{
+		"opencode_runtime_provenance": {
+			"executable": filepath.Join(binDir, "gentle-ai"),
+			"sha256":     "sha256:" + hex.EncodeToString(sum[:]),
+			"version":    "gentle-ai stub",
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	statePath := filepath.Join(root, ".gentle-ai", "state.json")
+	if err := os.MkdirAll(filepath.Dir(statePath), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(statePath, append(statePayload, '\n'), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(root, "plugin.mts"), []byte(source), 0o600); err != nil {
@@ -218,12 +241,15 @@ func runReviewPluginScenarioStub(t *testing.T, scenario string, stub reviewPlugi
 	// value the developer's own shell happens to carry must never mask that.
 	base := make([]string, 0, len(os.Environ()))
 	for _, entry := range os.Environ() {
-		if strings.HasPrefix(entry, "OPENCODE_DISABLE_PROJECT_CONFIG=") || strings.HasPrefix(entry, "OPENCODE_DISABLE_EXTERNAL_SKILLS=") {
+		if strings.HasPrefix(entry, "OPENCODE_DISABLE_PROJECT_CONFIG=") || strings.HasPrefix(entry, "OPENCODE_DISABLE_EXTERNAL_SKILLS=") ||
+			strings.HasPrefix(entry, "HOME=") || strings.HasPrefix(entry, "USERPROFILE=") {
 			continue
 		}
 		base = append(base, entry)
 	}
 	command.Env = append(base,
+		"HOME="+root,
+		"USERPROFILE="+root,
 		"PATH="+binDir+string(os.PathListSeparator)+os.Getenv("PATH"),
 		"GENTLE_AI_STUB_STDERR="+stub.stderr,
 		"GENTLE_AI_STUB_LENS_CONTEXT="+stub.lensContext,
@@ -661,6 +687,58 @@ func TestReviewPluginSurfacesNativeGitTrustRefusal(t *testing.T) {
 	}
 	if !strings.Contains(message, "The reviewer was not launched") {
 		t.Fatalf("plugin lost its pre-launch exactly-once guarantee: %s", message)
+	}
+}
+
+// reviewPluginNativeSkewFailure is what an OLDER gentle-ai on the runtime
+// PATH emits when it is handed a repository context whose authority a NEWER
+// build wrote. The wording is the pre-#3025 one on purpose: the process that
+// fails here is the old binary, so #3025's improved native message is exactly
+// the text that cannot appear.
+const reviewPluginNativeSkewFailure = "repository_context_unavailable: provider-issued review repository context operation failed; " +
+	`cause: json: unknown field "correction_budget_policy"; refresh the exact native next_transition before retrying`
+
+// TestReviewPluginNamesTheBinaryConflictItCanSee is #3049.
+//
+// The plugin resolves the CLI by bare name, so whatever `gentle-ai` PATH finds
+// first services reviewer calls -- including a build older than the one that
+// wrote the authority. #3025 made that failure legible natively and cannot
+// help here: its code ships in the new binary while the failing process is the
+// old one, so the caller keeps getting "refresh the exact native
+// next_transition", follows it, and loops. #2461's reporter did exactly that
+// across four reoffered reviewer slots.
+//
+// This plugin ships from the NEW build even when PATH resolves an old binary,
+// which makes it the only component in the loop that can still tell the truth.
+// It does not compare versions -- it has no reference to compare against, and
+// inventing one would be a guess. It states the fact the failure proves: the
+// binary that answered cannot read this authority, two builds are involved,
+// and PATH order is what decides which one answers.
+func TestReviewPluginNamesTheBinaryConflictItCanSee(t *testing.T) {
+	message := runReviewPluginScenario(t, "before-valid", reviewPluginNativeSkewFailure)
+	if message == "NO_ERROR" {
+		t.Fatal("preflight did not fail despite an always-failing native binary")
+	}
+	if strings.Contains(message, "next_transition") {
+		t.Fatalf("plugin forwarded the advice that loops the caller: %s", message)
+	}
+	if !strings.Contains(message, "which -a gentle-ai") {
+		t.Fatalf("plugin names no way to find the conflicting binaries: %s", message)
+	}
+	// The whole point is that two builds are in play. A message that does not
+	// say so reads as a corrupt repository.
+	for _, want := range []string{"older", "PATH"} {
+		if !strings.Contains(message, want) {
+			t.Fatalf("plugin does not name the version conflict (%q missing): %s", want, message)
+		}
+	}
+	if !strings.Contains(message, "The reviewer was not launched") {
+		t.Fatalf("plugin lost its pre-launch exactly-once guarantee: %s", message)
+	}
+	// Native text can embed local paths, so this classification is authored
+	// here like the Git trust refusal is, never forwarded.
+	if strings.Contains(message, "correction_budget_policy") {
+		t.Fatalf("plugin forwarded raw native cause text: %s", message)
 	}
 }
 
