@@ -54,6 +54,57 @@ func TestNegotiatedReviewFailuresUseOneEnvelopeAcrossRoutes(t *testing.T) {
 	}
 }
 
+func TestFinalizeActionEligibilityWithoutContractIsPreflightAndNonMutating(t *testing.T) {
+	tests := []struct {
+		name  string
+		flags []string
+	}{
+		{name: "action eligibility only", flags: []string{"--action-eligibility"}},
+		{name: "next transition only", flags: []string{"--next-transition"}},
+		{name: "both outputs", flags: []string{"--action-eligibility", "--next-transition"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			repo := initReviewCLIRepo(t)
+			beforeStatus := runReviewCLIGit(t, repo, "status", "--porcelain")
+			args := append([]string{"finalize", "--cwd", repo}, tt.flags...)
+			var output bytes.Buffer
+			err := RunReview(args, &output)
+			if err == nil {
+				t.Fatal("missing contract request succeeded")
+			}
+			var preflight *reviewIntegrationPreflightError
+			if !errors.As(err, &preflight) {
+				t.Fatalf("error = %T, want reviewIntegrationPreflightError: %v", err, err)
+			}
+			if err.Error() != reviewContractRequiredForActionEligibilityReason {
+				t.Fatalf("error = %q, want %q", err.Error(), reviewContractRequiredForActionEligibilityReason)
+			}
+			failure := newReviewIntegrationFailure(ReviewIntegrationOperationFinalize, args[1:], err)
+			if failure.Phase != "preflight" || failure.Code != "invalid_request" ||
+				failure.MutationOutcome != ReviewMutationNotStarted || !failure.RetrySafe {
+				t.Fatalf("failure = %#v", failure)
+			}
+			if output.Len() != 0 {
+				t.Fatalf("unnegotiated preflight wrote output: %q", output.String())
+			}
+			if afterStatus := runReviewCLIGit(t, repo, "status", "--porcelain"); afterStatus != beforeStatus {
+				t.Fatalf("working tree changed: before=%q after=%q", beforeStatus, afterStatus)
+			}
+			if _, statErr := os.Stat(reviewCLIAuthorityRoot(t, repo)); !os.IsNotExist(statErr) {
+				t.Fatalf("preflight created review authority: %v", statErr)
+			}
+			reportDir := reviewDefectReportDir(t, repo)
+			entries, readErr := os.ReadDir(reportDir)
+			if readErr == nil && len(entries) != 0 {
+				t.Fatalf("preflight generated defect reports: %v", entries)
+			} else if readErr != nil && !os.IsNotExist(readErr) {
+				t.Fatalf("inspect defect reports: %v", readErr)
+			}
+		})
+	}
+}
+
 func TestNegotiatedReviewContractFailuresArePreMutationAndLegacyErrorsStayCompatible(t *testing.T) {
 	tests := []struct {
 		name string
@@ -573,8 +624,8 @@ func TestNegotiatedGitFailuresAreTypedNonAmplifyingAndPreMutation(t *testing.T) 
 		code      string
 		causeText string
 	}{
-		{name: "timeout", err: &reviewtransaction.GitCommandTimeoutError{Timeout: 15 * time.Second}, code: "git_command_timeout"},
-		{name: "exit", err: &reviewtransaction.GitCommandError{ExitCode: 128}, code: "git_command_failed"},
+		{name: "timeout", err: &reviewtransaction.GitCommandTimeoutError{Timeout: 15 * time.Second}, code: "git_command_timeout", causeText: "15s"},
+		{name: "exit", err: &reviewtransaction.GitCommandError{Args: []string{"write-tree"}, ExitCode: 128, Output: "fatal: not a git repository"}, code: "git_command_failed", causeText: "git write-tree failed with exit code 128: fatal: not a git repository"},
 		{
 			name: "process control",
 			err: &reviewtransaction.GitProcessControlError{
@@ -590,7 +641,11 @@ func TestNegotiatedGitFailuresAreTypedNonAmplifyingAndPreMutation(t *testing.T) 
 				failure.RetrySafe || failure.Replayability != reviewtransaction.ReplayabilityManualActionRequired || failure.NextAction != "stop" {
 				t.Fatalf("git failure = %#v", failure)
 			}
-			if tt.causeText != "" && !strings.Contains(failure.Message, tt.causeText) {
+			if tt.causeText != "" && !strings.Contains(failure.Cause, tt.causeText) {
+				t.Fatalf("git failure cause field missing diagnostics %q: %q", tt.causeText, failure.Cause)
+			}
+			if tt.code == "git_command_failed" && tt.name == "process control" && !strings.Contains(failure.Message, tt.causeText) {
+				// Process control includes causeText in Message for immediate diagnosis
 				t.Fatalf("git failure message masks cause: %q", failure.Message)
 			}
 		})
@@ -740,7 +795,12 @@ func TestNegotiatedFinalizePostTransitionGitTimeoutRequiresStatus(t *testing.T) 
 			return err
 		}
 		defer func() { _ = os.Setenv("PATH", oldPath) }()
-		_, err := (reviewtransaction.SnapshotBuilder{Repo: hookRepo}).HasDirtyTrackedChanges(ctx)
+		// Bound only the injected post-commit probe. The committed transition is
+		// already durable, so its Git timeout keeps the required status-only shape
+		// without waiting for the production 15s per-command timeout.
+		hookCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+		defer cancel()
+		_, err := (reviewtransaction.SnapshotBuilder{Repo: hookRepo}).HasDirtyTrackedChanges(hookCtx)
 		return err
 	}
 	t.Cleanup(func() { reviewFacadeCommittedTransitionHook = oldTransitionHook })
@@ -1137,6 +1197,50 @@ func TestNewReviewIntegrationFailureCause(t *testing.T) {
 	}
 }
 
+func TestEscalatedRecoveryAuthorizationInexactUsesCurrentRepairRoute(t *testing.T) {
+	tests := []struct {
+		name           string
+		repairable     bool
+		wantNextAction string
+		wantMessage    string
+	}{
+		{
+			name:           "schema-prefixed content mismatch",
+			repairable:     true,
+			wantNextAction: "review.repair",
+			wantMessage:    "run review repair",
+		},
+		{
+			name:           "pre-contract authorization",
+			repairable:     false,
+			wantNextAction: "stop",
+			wantMessage:    "no advertised repair operation",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			runErr := fmt.Errorf("invalid compact authority graph: %w", &reviewtransaction.CompactRecoveryAuthorizationInexactError{
+				Projection: reviewtransaction.ProjectionWorkspace, TargetIdentity: "sha256:" + strings.Repeat("a", 64), Repairable: tt.repairable,
+			})
+			failure := newReviewIntegrationFailure(
+				ReviewIntegrationOperationFinalize,
+				[]string{"--lineage", "review-authorization-route"},
+				runErr,
+			)
+			if failure.Code != "escalated_recovery_authorization_inexact" || failure.Phase != "pre_native" ||
+				failure.MutationOutcome != ReviewMutationNotStarted || failure.AuthorityApplicability != "current_target" ||
+				failure.RetrySafe || failure.Replayability != reviewtransaction.ReplayabilityManualActionRequired ||
+				failure.NextAction != tt.wantNextAction || !strings.Contains(failure.Message, tt.wantMessage) ||
+				failure.NextAction == "reconcile-authority" || failure.Cause == "" {
+				t.Fatalf("authorization failure = %#v", failure)
+			}
+			if err := failure.Validate(); err != nil {
+				t.Fatalf("authorization failure validation = %v", err)
+			}
+		})
+	}
+}
+
 func decodeReviewIntegrationFailure(t *testing.T, payload []byte) ReviewIntegrationFailure {
 	t.Helper()
 	decoder := json.NewDecoder(bytes.NewReader(payload))
@@ -1149,4 +1253,46 @@ func decodeReviewIntegrationFailure(t *testing.T, payload []byte) ReviewIntegrat
 		t.Fatalf("validate failure envelope: %v\n%s", err, payload)
 	}
 	return failure
+}
+
+// TestNewReviewIntegrationFailureCauseIsUniversal is root 8's structural fix
+// (#2471): Cause used to be per-branch opt-in, and 17 of 25 return sites
+// forgot it, so a caller read a constant Message while the native reason sat
+// in the discarded typed error. Cause is now projected once at construction,
+// so a branch cannot forget it; this test pins two branches that carried no
+// cause before, plus the one branch whose contract REQUIRES staying
+// content-free.
+func TestNewReviewIntegrationFailureCauseIsUniversal(t *testing.T) {
+	// A branch matched via errors.Is: contention keeps its typed code and now
+	// carries the wrapped operational context too.
+	contention := fmt.Errorf("acquire compact authority for lineage %q: %w", "cause-universal", reviewtransaction.ErrStoreLockContended)
+	failure := newReviewIntegrationFailure("review.start", nil, contention)
+	if failure.Code != "authority_lock_contention" {
+		t.Fatalf("contention envelope code = %q", failure.Code)
+	}
+	if !strings.Contains(failure.Cause, "cause-universal") {
+		t.Fatalf("contention envelope discarded the typed cause: %#v", failure)
+	}
+	if err := failure.Validate(); err != nil {
+		t.Fatalf("contention envelope with cause validation = %v", err)
+	}
+
+	// The legacy read-only refusal: constant Message, and before this change
+	// no Cause at all, so the lineage the error names never reached the
+	// caller's machine-readable envelope.
+	legacy := &reviewtransaction.LegacyReadOnlyError{Operation: "review/start", LineageID: "cause-universal-legacy"}
+	failure = newReviewIntegrationFailure("review.start", nil, legacy)
+	if failure.Code != reviewtransaction.LegacyReadOnlyErrorCode {
+		t.Fatalf("legacy envelope code = %q", failure.Code)
+	}
+	if !strings.Contains(failure.Cause, "cause-universal-legacy") {
+		t.Fatalf("legacy envelope discarded the typed cause: %#v", failure)
+	}
+
+	// The read-only catch-all is the ONE branch whose contract is
+	// content-free retry; it must clear the universal default, not inherit it.
+	readOnly := newReviewIntegrationFailure("review.status", nil, errors.New("internal detail that must not leak"))
+	if readOnly.Code != "operation_failed" || readOnly.Cause != "" {
+		t.Fatalf("read-only catch-all = %#v, want content-free", readOnly)
+	}
 }

@@ -97,7 +97,10 @@ func requireDisabledUnmanagedSDDStatus(t *testing.T, status sddstatus.Status) {
 // The switch becomes unreadable, which is not the same as being off.
 func corruptCloneLocalReviewMode(t *testing.T, repo string) {
 	t.Helper()
-	root := filepath.Join(repo, ".git", "gentle-ai", "review-transactions")
+	// #2882 moved the switch out of the review authority tree so a damaged
+	// authority can no longer make the kill switch unreachable. The record
+	// this helper corrupts is the switch's own, wherever it now lives.
+	root := filepath.Join(repo, ".git", "gentle-ai", "review-mode")
 	corrupted := 0
 	if err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
 		if err != nil {
@@ -154,8 +157,8 @@ func TestSDDStatusArchiveGateBlocksWhileReviewIsEnabled(t *testing.T) {
 	root := t.TempDir()
 	seedScopeChangedApprovedSDDChange(t, root)
 
-	if reviewDrivenDevelopmentDisabled(context.Background(), root) {
-		t.Fatal("fixture is wrong: receipt-driven development is not enabled")
+	if disabled, err := reviewDrivenDevelopmentDisabled(context.Background(), root); err != nil || disabled {
+		t.Fatalf("fixture must enable receipt-driven development: disabled=%t err=%v", disabled, err)
 	}
 	status := resolveSDDStatusJSON(t, root)
 	if status.ReviewGate == nil || status.ReviewGate.Result != reviewtransaction.GateScopeChanged {
@@ -237,8 +240,8 @@ func TestSDDStatusArchiveGateEnforcesWhenTheSwitchIsUnreadable(t *testing.T) {
 	disableReviewForClone(t, root)
 	corruptCloneLocalReviewMode(t, root)
 
-	if reviewDrivenDevelopmentDisabled(context.Background(), root) {
-		t.Fatal("an unreadable switch resolved to disabled; it must fail closed to enabled")
+	if disabled, err := reviewDrivenDevelopmentDisabled(context.Background(), root); err != nil || disabled {
+		t.Fatalf("unreadable switch must fail closed to enabled: disabled=%t err=%v", disabled, err)
 	}
 	t.Chdir(root)
 	for _, args := range [][]string{

@@ -88,8 +88,8 @@ var reviewIntegrationOperationRegistry = []reviewIntegrationOperationMetadata{
 	{Command: "recover", Operation: "review.recover", Label: "Review RECOVER"},
 	{Command: "repair", Operation: "review.repair", Label: "Review REPAIR", Negotiated: true, ValueFlags: []string{"cwd", "class", "lineage", "expected-revision", "cause", "disposition", "repository-binding", "actor", "reason", "maintainer-authorization"}, BoolFlags: []string{"preflight"}, MutatesAuthority: true, JoinOnTimeout: true, ReadOnlyFlag: "preflight"},
 	{Command: "retry-final-verification", Operation: ReviewIntegrationOperationRetryFinalVerification, Label: "Review RETRY-FINAL-VERIFICATION", Negotiated: true, ValueFlags: []string{"cwd", "predecessor-lineage", "expected-predecessor-revision", "successor-lineage", "incident", "actor", "reason", "maintainer-authorization"}, MutatesAuthority: true, JoinOnTimeout: true},
-	{Command: "start", Operation: "review.start", Label: "Review START", Negotiated: true, ValueFlags: []string{"cwd", "agent", "target", "lineage", "policy", "focus", "base-ref", "projection", "trace", "consent", "locale"}, BoolFlags: []string{"committed-only", "workspace-overlay"}, MutatesAuthority: true},
-	{Command: "status", Operation: "review.status", Label: "Review STATUS", Negotiated: true, ValueFlags: []string{"cwd", "agent", "lineage", "projection", "base-ref", "base-tree", "gate", "recovery-successor-lineage", "recovery-reason", "recovery-actor", "recovery-authorization", "repair-actor", "repair-reason", "repair-authorization"}, BoolFlags: []string{"workspace-overlay", "action-eligibility", "next-transition"}},
+	{Command: "start", Operation: "review.start", Label: "Review START", Negotiated: true, ValueFlags: []string{"cwd", "agent", "target", "lineage", "policy", "focus", "base-ref", "projection", "trace", "consent", "locale", "untracked-scope", "intended-untracked", "expected-untracked-inventory"}, BoolFlags: []string{"committed-only", "workspace-overlay"}, MutatesAuthority: true},
+	{Command: "status", Operation: "review.status", Label: "Review STATUS", Negotiated: true, ValueFlags: []string{"cwd", "agent", "lineage", "projection", "base-ref", "base-tree", "gate", "recovery-successor-lineage", "recovery-reason", "recovery-actor", "recovery-authorization", "repair-actor", "repair-reason", "repair-authorization", "untracked-scope", "intended-untracked", "expected-untracked-inventory"}, BoolFlags: []string{"committed-only", "workspace-overlay", "action-eligibility", "next-transition"}},
 	{Command: "validate", Operation: ReviewIntegrationOperationValidate, Label: "Review VALIDATE", Negotiated: true, ValueFlags: []string{"cwd", "lineage", "gate", "base-ref", "pre-pr-ci-attestation", "policy", "release-configuration", "release-generated", "release-provenance", "release-publication-boundary", "release-evidence-freshness"}},
 }
 
@@ -265,6 +265,16 @@ var reviewPreflightUntrackedScopeReason = reviewPreflightReason{
 	NextAction: "stop",
 }
 
+// reviewPreflightManagedAssetsReason classifies a START that is refused before
+// any authority can be created because this binary's managed reviewer assets
+// differ from the recorded installation state. The exact sync remediation stays
+// in the cause because it is the existing operator-facing source of truth.
+var reviewPreflightManagedAssetsReason = reviewPreflightReason{
+	Code:       "managed_assets_outdated",
+	Message:    "Managed reviewer assets are outdated; synchronize them before starting review.",
+	NextAction: "stop",
+}
+
 // reviewPreflightDirectRouteUncompletableReason classifies a direct
 // (non-negotiated) `review start` that would select at least one lens.
 // Issue #2447: the direct route's own response type cannot carry
@@ -422,6 +432,14 @@ func newReviewIntegrationFailure(operation string, args []string, runErr error) 
 		failure.Schema, failure.Contract = ReviewIntegrationFailureSchemaV2, ReviewIntegrationContractV2
 	}
 	failure.LineageID = safeReviewIntegrationLineage(operation, args)
+	// Root 8 (#2471): the typed cause is projected ONCE, here, for every
+	// branch below. Before this, Cause was per-branch opt-in and 17 of 25
+	// return sites forgot it, so the caller read a constant Message with the
+	// native reason already in the tool's hands and discarded. The helper
+	// scrubs and bounds to the schema's own maxLength, and the field is
+	// additive, so no branch has a reason to suppress it; a branch that needs
+	// a MORE specific cause may still overwrite this default.
+	failure.Cause = reviewIntegrationFailureCause(runErr)
 	// Both branches below refuse inside authorizeReviewStart, strictly before
 	// any review authority is created or mutated (organic-dx Phase 3b task
 	// 3b.6). Falling through to the generic operation_outcome_unknown default
@@ -478,6 +496,23 @@ func newReviewIntegrationFailure(operation string, args []string, runErr error) 
 		failure.NextAction = "review.status"
 		return failure
 	}
+	var authorizationInexact *reviewtransaction.CompactRecoveryAuthorizationInexactError
+	if errors.As(runErr, &authorizationInexact) {
+		failure.Phase = "pre_native"
+		failure.Code = "escalated_recovery_authorization_inexact"
+		failure.MutationOutcome = ReviewMutationNotStarted
+		failure.AuthorityApplicability = "current_target"
+		failure.RetrySafe = false
+		failure.Replayability = reviewtransaction.ReplayabilityManualActionRequired
+		if authorizationInexact.Repairable {
+			failure.Message = "The escalated recovery authority carries a schema-prefixed authorization that does not match the exact binding; run review repair to derive the provider-owned disposition."
+			failure.NextAction = "review.repair"
+		} else {
+			failure.Message = "The escalated recovery authority carries an authorization that does not match the exact binding; no advertised repair operation admits this shape."
+			failure.NextAction = "stop"
+		}
+		return failure
+	}
 	var bindingConflict *sddstatus.BindingRevisionConflictError
 	if errors.As(runErr, &bindingConflict) {
 		failure.Phase = "pre_native"
@@ -521,6 +556,12 @@ func newReviewIntegrationFailure(operation string, args []string, runErr error) 
 			failure.RequestDigest = publication.RequestDigest
 			failure.RequiredInputs = []string{}
 			failure.NextAction = "explicit-maintainer-action"
+			// Publication errors wrap raw provider/subprocess bytes, which no
+			// scrubber can prove safe; this envelope already carries lineage,
+			// request digest and exact replayability, so it stays content-free
+			// like the read-only catch-all rather than inheriting the universal
+			// cause default.
+			failure.Cause = ""
 			return failure
 		}
 		failure.Code = "receipt_publication_pending"
@@ -532,6 +573,12 @@ func newReviewIntegrationFailure(operation string, args []string, runErr error) 
 		failure.RequestDigest = publication.RequestDigest
 		failure.RequiredInputs = []string{"lineage_id"}
 		failure.NextAction = "review.finalize"
+		// Publication errors wrap raw provider/subprocess bytes, which no
+		// scrubber can prove safe; this envelope already carries lineage,
+		// request digest and exact replayability, so it stays content-free
+		// like the read-only catch-all rather than inheriting the universal
+		// cause default.
+		failure.Cause = ""
 		return failure
 	}
 	var bindingPublication *sddstatus.ReviewBindingPublicationError
@@ -546,6 +593,12 @@ func newReviewIntegrationFailure(operation string, args []string, runErr error) 
 		failure.RequestDigest = facadeValueHash("bind-sdd-request", args)
 		failure.RequiredInputs = []string{"change", "lineage_id", "expected_binding_revision"}
 		failure.NextAction = ReviewIntegrationOperationBindSDD
+		// Publication errors wrap raw provider/subprocess bytes, which no
+		// scrubber can prove safe; this envelope already carries lineage,
+		// request digest and exact replayability, so it stays content-free
+		// like the read-only catch-all rather than inheriting the universal
+		// cause default.
+		failure.Cause = ""
 		return failure
 	}
 	var startContext *reviewStartContextError
@@ -748,6 +801,7 @@ func newReviewIntegrationFailure(operation string, args []string, runErr error) 
 		failure.RetrySafe = false
 		failure.Replayability = reviewtransaction.ReplayabilityManualActionRequired
 		failure.NextAction = "stop"
+		failure.Cause = reviewIntegrationFailureCause(gitTimeout)
 		return failure
 	}
 	var gitFailure *reviewtransaction.GitCommandError
@@ -760,6 +814,7 @@ func newReviewIntegrationFailure(operation string, args []string, runErr error) 
 		failure.RetrySafe = false
 		failure.Replayability = reviewtransaction.ReplayabilityManualActionRequired
 		failure.NextAction = "stop"
+		failure.Cause = reviewIntegrationFailureCause(gitFailure)
 		return failure
 	}
 	var gitControl *reviewtransaction.GitProcessControlError
@@ -772,6 +827,7 @@ func newReviewIntegrationFailure(operation string, args []string, runErr error) 
 		failure.RetrySafe = false
 		failure.Replayability = reviewtransaction.ReplayabilityManualActionRequired
 		failure.NextAction = "stop"
+		failure.Cause = reviewIntegrationFailureCause(gitControl)
 		return failure
 	}
 	if errors.Is(runErr, context.DeadlineExceeded) {
@@ -944,6 +1000,11 @@ func newReviewIntegrationFailure(operation string, args []string, runErr error) 
 		failure.RetrySafe = true
 		failure.Replayability = reviewtransaction.ReplayabilityNotReplayable
 		failure.NextAction = "retry"
+		// The read-only catch-all is deliberately content-free: it is the one
+		// envelope whose whole contract is "retry safely", so it clears the
+		// universal cause default rather than leaking an arbitrary internal
+		// error to a caller who has nothing to repair.
+		failure.Cause = ""
 		return failure
 	}
 	// The true operation_outcome_unknown default: no typed branch above

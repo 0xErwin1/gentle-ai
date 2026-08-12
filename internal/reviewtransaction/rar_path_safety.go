@@ -24,7 +24,53 @@ var (
 	errRARAuthorityPathReplaced = errors.New("RAR authority path changed during access")
 )
 
+// UnsafeRARPathError preserves the unsafe private RAR path for recovery.
+type UnsafeRARPathError struct {
+	Path      string
+	Directory bool
+	Cause     error
+}
+
+func (err *UnsafeRARPathError) Error() string {
+	kind := "file"
+	if err.Directory {
+		kind = "directory"
+	}
+	return fmt.Sprintf("unsafe private RAR %s %q: %v", kind, err.Path, err.Cause)
+}
+
+func (err *UnsafeRARPathError) Unwrap() error { return err.Cause }
+
+func unsafeRARPathError(path string, directory bool) error {
+	return &UnsafeRARPathError{Path: path, Directory: directory, Cause: errUnsafeRARAuthorityPath}
+}
+
 func ensureRARRepositoryRoot(commonDir, root string, create bool) error {
+	want := filepath.Join(
+		"gentle-ai",
+		"review-transactions",
+		rarAuthorityDirectory,
+		rarAuthorityVersion,
+	)
+	// rar-authority and every descendant are owner-only; gentle-ai and
+	// review-transactions are the shared ancestors above it.
+	return ensureRARDirectoryChain(commonDir, root, want, 2, create)
+}
+
+// ensureRARSwitchRoot validates the kill switch's own root, a sibling of
+// review-transactions under gentle-ai. It reuses this file's walk, permission
+// rules, and private-directory helpers unchanged; the only thing it does not
+// reuse is the authority tree itself, because #2882 showed the switch must not
+// be unreachable whenever that tree is damaged.
+func ensureRARSwitchRoot(commonDir, root string, create bool) error {
+	// The shape mirrors the authority path exactly -- two shared ancestors,
+	// then owner-only from rar-authority down -- so the switch inherits the
+	// proven permission layout and differs only in its second component.
+	want := filepath.Join("gentle-ai", rddModeSwitchDirectory, rarAuthorityDirectory, rarAuthorityVersion)
+	return ensureRARDirectoryChain(commonDir, root, want, 2, create)
+}
+
+func ensureRARDirectoryChain(commonDir, root, want string, privateFrom int, create bool) error {
 	commonDir = filepath.Clean(commonDir)
 	root = filepath.Clean(root)
 	relative, err := filepath.Rel(commonDir, root)
@@ -33,12 +79,6 @@ func ensureRARRepositoryRoot(commonDir, root string, create bool) error {
 		filepath.IsAbs(relative) {
 		return errors.New("RAR authority root escapes the Git common directory")
 	}
-	want := filepath.Join(
-		"gentle-ai",
-		"review-transactions",
-		rarAuthorityDirectory,
-		rarAuthorityVersion,
-	)
 	if relative != want {
 		return errors.New("RAR authority root is not the canonical Git-common-dir path")
 	}
@@ -53,7 +93,7 @@ func ensureRARRepositoryRoot(commonDir, root string, create bool) error {
 		}
 		parent := current
 		current = filepath.Join(current, part)
-		private := index >= 2 // rar-authority and every descendant are owner-only.
+		private := index >= privateFrom
 		_, statErr := os.Lstat(current)
 		if errors.Is(statErr, fs.ErrNotExist) && create {
 			if private {
@@ -136,7 +176,7 @@ func ensurePrivateRARDirectoryTree(base, dir string, create bool) error {
 			return statErr
 		}
 		if rarPathUnsafe(current, info) || !info.IsDir() {
-			return errUnsafeRARAuthorityPath
+			return unsafeRARPathError(current, true)
 		}
 		if err := validatePrivateRARDirectory(current); err != nil {
 			return fmt.Errorf("validate nested private RAR directory %q: %w", current, err)
@@ -197,7 +237,7 @@ func validatePrivateRARPath(path string, directory bool) error {
 	}
 	if rarPathUnsafe(path, before) || before.IsDir() != directory ||
 		!privateRARPathSafe(path, before) {
-		return errUnsafeRARAuthorityPath
+		return unsafeRARPathError(path, directory)
 	}
 	file, err := openRARPathNoFollow(path, directory)
 	if err != nil {
@@ -226,7 +266,7 @@ func readPrivateRARFile(path string) ([]byte, error) {
 	}
 	if rarPathUnsafe(path, before) || !before.Mode().IsRegular() ||
 		!privateRARPathSafe(path, before) {
-		return nil, errUnsafeRARAuthorityPath
+		return nil, unsafeRARPathError(path, false)
 	}
 	file, err := openRARPathNoFollow(path, false)
 	if err != nil {

@@ -419,9 +419,24 @@ func TestOrphanedSuccessorHasARunnableAbandonThatDoesNotBlockNewWork(t *testing.
 	if expectedRevision == nil || snapshotIdentity == nil {
 		t.Fatalf("the refusal renders no authorization template: %q", message)
 	}
-	const actor, reason = "maintainer@example.com", "its predecessor is gone"
+	const actor = "maintainer@example.com"
+	const reason = reviewtransaction.CompactAbandonReasonOperatorDisposition
+	report, err := reviewtransaction.InventoryAuthority(t.Context(), repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var discarded *reviewtransaction.CompactDiscardedWorkSummary
+	for _, entry := range report.Entries {
+		if entry.LineageID == successor {
+			discarded = entry.DiscardedWork
+			break
+		}
+	}
+	if discarded == nil {
+		t.Fatalf("review status publishes no discarded-work summary for %q", successor)
+	}
 	authorization := reviewtransaction.RenderCompactAbandonAuthorization(
-		successor, expectedRevision[1], snapshotIdentity[1], actor, reason)
+		successor, expectedRevision[1], snapshotIdentity[1], actor, reason, *discarded)
 	abandonArgs := append(tokens[1:], "--reason", reason, "--actor", actor, "--maintainer-authorization", authorization)
 	var abandoned bytes.Buffer
 	if err := RunReview(abandonArgs, &abandoned); err != nil {
@@ -465,5 +480,38 @@ func TestReclaimRefusalOverTruncatedRecordNamesDiagnosisNotReconcile(t *testing.
 		report.EntryDiagnostics[0].LineageID != successor ||
 		report.EntryDiagnostics[0].Problem != "malformed_compact_state" {
 		t.Fatalf("the named diagnosis does not answer with the claimed damage: %#v", report)
+	}
+}
+
+func TestNegotiatedFinalizeClassifiesNamedDamagedAuthorization(t *testing.T) {
+	reviewModeHome(t)
+	repo := initReviewCLIRepo(t)
+	_, successor := mintDamagedStoreRecoveryPair(t, repo)
+	forgeDamagedStoreRecoveryReason(t, repo, successor)
+	statePath := filepath.Join(damagedStoreLineageDir(t, repo, successor), "review-state.json")
+	before, err := os.ReadFile(statePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var output bytes.Buffer
+	runErr := RunReview([]string{"finalize", "--contract", ReviewIntegrationContractV1, "--cwd", repo, "--lineage", successor, "--captured-results"}, &output)
+	if runErr == nil {
+		t.Fatal("negotiated finalize accepted a named damaged authorization")
+	}
+	failure := decodeReviewIntegrationFailure(t, output.Bytes())
+	if failure.Operation != ReviewIntegrationOperationFinalize || failure.Code != "escalated_recovery_authorization_inexact" ||
+		failure.Phase != "pre_native" || failure.MutationOutcome != ReviewMutationNotStarted ||
+		failure.NextAction != "review.repair" || failure.RetrySafe ||
+		failure.Replayability != reviewtransaction.ReplayabilityManualActionRequired ||
+		strings.Contains(output.String(), "operation_outcome_unknown") || strings.Contains(output.String(), "reconcile-authority") {
+		t.Fatalf("named damaged authorization failure = %#v\n%s", failure, output.String())
+	}
+	after, err := os.ReadFile(statePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(before, after) {
+		t.Fatal("typed pre-native finalize changed the damaged authority bytes")
 	}
 }

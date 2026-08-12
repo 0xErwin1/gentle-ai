@@ -75,6 +75,16 @@ var reviewStopInvariantClassification = map[string]reviewStopDisposition{
 		Terminal:      false,
 		Justification: "caller-continuable: change the candidate content so it differs from the frozen original, then re-run `review status --next-transition` (or `review finalize`) — a concrete, flag-driven command, not a maintainer-only action; the docs row does not open with \"Terminal\", so pinning this terminal would contradict it (discoverability sweep finding beyond the three the audit named explicitly)",
 	},
+	"empty_base_diff_bootstrap_required": {
+		Terminal:      true,
+		Justification: "the caller already selected an exact committed base but it produces no paths, so only the externally authorized empty-root bootstrap or another history shape can establish a reviewable delta",
+		ToolFault:     reviewStopToolFault(false),
+	},
+	"lens_context_budget_exceeded": {
+		Terminal:      true,
+		Justification: "the frozen reviewer evidence cannot fit without truncation, so no in-lineage reviewer action exists; a smaller candidate starts a new review",
+		ToolFault:     reviewStopToolFault(false),
+	},
 	"correction_repository_verification_failed": {
 		Terminal:      false,
 		Justification: "caller-continuable: the failed candidate evidence remains immutable while the same open correction may be adjusted; changing the candidate yields a new identity and a new evidence slot without consuming the correction attempt",
@@ -117,17 +127,9 @@ var reviewStopInvariantClassification = map[string]reviewStopDisposition{
 		Terminal:      false,
 		Justification: "caller-continuable: re-run `review finalize --lineage <id>` with the exact original content-bound payload — a concrete, flag-driven command; design.md previously misclassified this as terminal (Phase 3 task 3.10 contradiction fix)",
 	},
-	"pre_pr_selector_unrepresentable": {
-		Terminal:      false,
-		Justification: "caller-continuable: pass a symbolic ref name for --base-ref instead of a raw commit SHA — a concrete, flag-driven fix; no in-process routing substitutes a different gate, because the caller explicitly chose the pre-pr gate and silently validating against a different gate would answer a different question than the one asked",
-	},
 	"recovery_scope_unchanged": {
 		Terminal:      false,
 		Justification: "caller-continuable: change the candidate so its target identity differs from the current authority's, then retry the same selector-scoped review.recover — a concrete, flag-driven command; design.md previously misclassified this as terminal (Phase 3 task 3.10 contradiction fix)",
-	},
-	"recovery_target_unrepresentable": {
-		Terminal:      false,
-		Justification: "caller-continuable: use one of the three representable recovery selector shapes — a concrete, flag-driven fix; design.md previously misclassified this as terminal (Phase 3 task 3.10 contradiction fix)",
 	},
 	"staged_workspace_overlay_recovery_unavailable": {
 		Terminal:      true,
@@ -142,6 +144,14 @@ var reviewStopInvariantClassification = map[string]reviewStopDisposition{
 		// User-decision: a legitimate, by-design business-rule terminal (one
 		// correction attempt is the designed limit), not a code defect.
 		ToolFault: reviewStopToolFault(false),
+	},
+	"rdd_disabled": {
+		Terminal:      false,
+		Justification: "caller-continuable: receipt-driven development is disabled; run `gentle-ai review mode enable` to turn it back on, then re-run the exact `review status --next-transition --contract <contract> <selector-args>` command that produced this stop — a concrete, flag-driven continuation; the same typed error the start gate already names",
+	},
+	"staged_delivery_candidate_required": {
+		Terminal:      false,
+		Justification: "caller-continuable: stage every reviewed path to restore the exact pre-commit candidate, then re-run explicit-lineage STATUS with `--projection staged`; the documented command is concrete and the index change neither mutates nor extends approval",
 	},
 }
 
@@ -190,6 +200,8 @@ func reviewStopToolFault(value bool) *bool { return &value }
 // entirely) or by adding a classified, docs-agreeing entry here — never by
 // exempting it from this test.
 func TestReviewStopInvariantReasonCodesAreClassified(t *testing.T) {
+	t.Parallel()
+
 	source, err := os.ReadFile("review_next_transition.go")
 	if err != nil {
 		t.Fatal(err)
@@ -233,6 +245,8 @@ func TestReviewStopInvariantReasonCodesAreClassified(t *testing.T) {
 // a code marked Terminal here whose docs row is not "Terminal"-prefixed, or a
 // code marked caller-continuable here whose docs row IS "Terminal"-prefixed.
 func TestReviewStopInvariantTerminalClassificationAgreesWithDocs(t *testing.T) {
+	t.Parallel()
+
 	docs, err := os.ReadFile("../../docs/review-integration.md")
 	if err != nil {
 		t.Fatal(err)
@@ -267,6 +281,8 @@ func TestReviewStopInvariantTerminalClassificationAgreesWithDocs(t *testing.T) {
 // way or the other, and the question must not apply to any caller-continuable
 // entry (Terminal: false), where ToolFault must stay nil.
 func TestReviewStopInvariantToolFaultColumnIsWellFormed(t *testing.T) {
+	t.Parallel()
+
 	for code, disposition := range reviewStopInvariantClassification {
 		if disposition.Terminal && disposition.ToolFault == nil {
 			t.Errorf("reason code %q is terminal but has no ToolFault classification (task 5.1 requires every terminal-proof row to get one of the two values)", code)
