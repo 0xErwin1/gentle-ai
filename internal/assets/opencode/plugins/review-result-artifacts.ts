@@ -1,5 +1,10 @@
 import type { Plugin } from "@opencode-ai/plugin"
 import { spawn } from "node:child_process"
+import { createHash } from "node:crypto"
+import { constants } from "node:fs"
+import { access, readFile, stat } from "node:fs/promises"
+import { homedir } from "node:os"
+import { isAbsolute, join } from "node:path"
 
 // This plugin has two independent responsibilities that happen to share one
 // OpenCode host: reviewer transport (below) and SDD phase task-result
@@ -38,6 +43,52 @@ const LENS_CONTEXT_DELIVERY = "runtime_interception"
 // is indistinguishable to a reviewer from a small candidate and would let a
 // truncated view be reported as a clean review.
 const LENS_CONTEXT_TERMINATOR = "GENTLE_AI_REVIEW_CONTEXT_END"
+
+const RUNTIME_PROVENANCE = {
+  RefusalCode: "opencode_runtime_provenance_invalid",
+  StateFile: [".gentle-ai", "state.json"],
+} as const
+
+interface OpenCodeRuntimeProvenance {
+  executable: string
+  sha256: string
+  version: string
+}
+
+// This temporary pin is deliberately only an invocation boundary. Native Go
+// continues to own authority, prompts, admission, receipts, and gates until
+// the native OpenCode transport replaces this managed plugin.
+function runtimeProvenanceRefusal(): Error {
+  return new Error(
+    `${RUNTIME_PROVENANCE.RefusalCode}: the synced OpenCode reviewer runtime is missing or no longer matches ` +
+    "the binary that installed this plugin. Run `gentle-ai sync` from the intended installation, then relaunch the reviewer.",
+  )
+}
+
+function runtimeProvenance(value: unknown): OpenCodeRuntimeProvenance | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined
+  const record = value as Record<string, unknown>
+  const executable = record.executable
+  const sha256 = record.sha256
+  const version = record.version
+  if (typeof executable !== "string" || !isAbsolute(executable) ||
+    typeof sha256 !== "string" || !/^sha256:[a-f0-9]{64}$/.test(sha256) ||
+    typeof version !== "string" || version === "") return undefined
+  return { executable, sha256, version }
+}
+
+async function readPinnedRuntime(): Promise<OpenCodeRuntimeProvenance> {
+  let state: unknown
+  try {
+    state = JSON.parse(await readFile(join(homedir(), ...RUNTIME_PROVENANCE.StateFile), "utf8")) as unknown
+  } catch {
+    throw runtimeProvenanceRefusal()
+  }
+  if (!state || typeof state !== "object" || Array.isArray(state)) throw runtimeProvenanceRefusal()
+  const provenance = runtimeProvenance((state as Record<string, unknown>).opencode_runtime_provenance)
+  if (!provenance) throw runtimeProvenanceRefusal()
+  return provenance
+}
 
 // LENS_CONTEXT_REFUSAL matches the typed, path-free refusal code the native
 // `review lens-context` command emits. Only the [a-z_]+ code token is
@@ -241,9 +292,9 @@ function captureCwd(worktree: string | undefined, directory: string): string {
   return worktree || directory
 }
 
-function runNative(cwd: string, args: string[], stdin: string): Promise<string> {
+function runNativeProcess(executable: string, cwd: string, args: string[], stdin: string): Promise<string> {
   return new Promise((resolve, reject) => {
-    const child = spawn("gentle-ai", args, { cwd, stdio: ["pipe", "pipe", "pipe"] })
+    const child = spawn(executable, args, { cwd, stdio: ["pipe", "pipe", "pipe"] })
     const stdout: Buffer[] = []
     const stderr: Buffer[] = []
     child.stdout.on("data", (chunk: Buffer) => stdout.push(chunk))
@@ -255,10 +306,31 @@ function runNative(cwd: string, args: string[], stdin: string): Promise<string> 
         resolve(Buffer.concat(stdout).toString("utf8").trim())
         return
       }
-      reject(new Error(`gentle-ai ${args[0]} ${args[1]} failed (${code ?? "signal"}): ${Buffer.concat(stderr).toString("utf8").trim()}`))
+      reject(new Error(`${args[0]} ${args[1]} failed (${code ?? "signal"}): ${Buffer.concat(stderr).toString("utf8").trim()}`))
     })
     child.stdin.end(stdin)
   })
+}
+
+async function pinnedRuntime(cwd: string): Promise<string> {
+  const provenance = await readPinnedRuntime()
+  try {
+    const info = await stat(provenance.executable)
+    if (!info.isFile()) throw runtimeProvenanceRefusal()
+    if (process.platform !== "win32") await access(provenance.executable, constants.X_OK)
+    const digest = `sha256:${createHash("sha256").update(await readFile(provenance.executable)).digest("hex")}`
+    if (digest !== provenance.sha256) throw runtimeProvenanceRefusal()
+    if ((await runNativeProcess(provenance.executable, cwd, ["version"], "")) !== provenance.version) {
+      throw runtimeProvenanceRefusal()
+    }
+    return provenance.executable
+  } catch {
+    throw runtimeProvenanceRefusal()
+  }
+}
+
+async function runNative(cwd: string, args: string[], stdin: string): Promise<string> {
+  return runNativeProcess(await pinnedRuntime(cwd), cwd, args, stdin)
 }
 
 function errorMessage(cause: unknown): string {
