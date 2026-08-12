@@ -75,6 +75,11 @@ var reviewStopInvariantClassification = map[string]reviewStopDisposition{
 		Terminal:      false,
 		Justification: "caller-continuable: change the candidate content so it differs from the frozen original, then re-run `review status --next-transition` (or `review finalize`) — a concrete, flag-driven command, not a maintainer-only action; the docs row does not open with \"Terminal\", so pinning this terminal would contradict it (discoverability sweep finding beyond the three the audit named explicitly)",
 	},
+	"empty_base_diff_bootstrap_required": {
+		Terminal:      true,
+		Justification: "the caller already selected an exact committed base but it produces no paths, so only the externally authorized empty-root bootstrap or another history shape can establish a reviewable delta",
+		ToolFault:     reviewStopToolFault(false),
+	},
 	"correction_repository_verification_failed": {
 		Terminal:      false,
 		Justification: "caller-continuable: the failed candidate evidence remains immutable while the same open correction may be adjusted; changing the candidate yields a new identity and a new evidence slot without consuming the correction attempt",

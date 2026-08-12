@@ -135,6 +135,14 @@ func newReviewNextTransition(status ReviewTargetStatusResult, selectedLenses []s
 				input.Selector.Projection == reviewtransaction.ProjectionStaged {
 				return reviewStopTransition("staged_workspace_overlay_recovery_unavailable")
 			}
+			// #3102: an explicitly selected base-diff with no paths reaches the
+			// same empty_candidate_scope preflight refusal as a clean workspace.
+			// The base is already provider-bound, so collecting it again cannot
+			// change the scope. Follow #1641's authorized empty-root bootstrap
+			// policy instead; STATUS must not advertise a START it knows fails.
+			if status.Projection.Kind == reviewtransaction.TargetBaseDiff && len(status.Projection.Paths) == 0 {
+				return reviewStopTransition("empty_base_diff_bootstrap_required")
+			}
 			// A workspace candidate that froze zero paths is the one fresh
 			// target whose START cannot succeed: the facade refuses it in
 			// preflight with empty_candidate_scope and names base_ref as the
@@ -1032,6 +1040,8 @@ func reviewReasonDescription(reason string) string {
 		return "The staged delivery candidate must exactly match the approved review"
 	case "staged_workspace_overlay_recovery_unavailable":
 		return "Staged workspace overlay recovery is unavailable"
+	case "empty_base_diff_bootstrap_required":
+		return "Committed base-diff has no paths; empty-root bootstrap is required"
 	case "corrupted_or_unverifiable_authority":
 		return "Review authority is corrupted or unverifiable"
 	case "missing_authority_binding":
