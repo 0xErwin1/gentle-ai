@@ -347,7 +347,7 @@ func TestKilocodeReviewSettingsMatchCurrentMainBaseline(t *testing.T) {
 	// phase result never dispatches, so the orchestrator must not read the
 	// replayed envelope as a fresh attempt. Kilocode embeds that orchestrator
 	// contract, so the hash moved. Deliberate, not drift.
-	const want = "fe134b3c3eb4bbc15b23cb214172dd48f9283e36e6f4bcfda0d1c29154e2a4b9"
+	const want = "933195ef87e23fb9f26374e412ec7aced5e05650b417901ed9733e15b53dc50e"
 	if got != want {
 		t.Fatalf("Kilocode settings SHA-256 = %s, want current-main baseline %s", got, want)
 	}
