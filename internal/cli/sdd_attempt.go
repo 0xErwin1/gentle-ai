@@ -113,6 +113,16 @@ func runSDDAttempt(ctx context.Context, args []string, stdout io.Writer) error {
 				return fmt.Errorf("sdd-attempt status: %w", err)
 			}
 		}
+		// Given the work-unit scope, status answers with the verdict acquire
+		// would reach for that exact request instead of the ledger-only view
+		// that reported next_action: "begin" while acquire blocked (#2114).
+		if presentSDDAttemptFlags(args[1:], "work-unit", "evidence-goal", "max-attempts", "max-changed-lines") != 0 {
+			result, err = store.AdmissionStatus(ctx, sddstatus.BeginAttemptRequest{
+				RequestID: "sdd-attempt-status-probe", WorkUnit: *workUnit, EvidenceGoal: *evidenceGoal,
+				MaxAttempts: *maxAttempts, MaxChangedLines: *maxChangedLines,
+			})
+			break
+		}
 		result, err = store.Status()
 	case "begin":
 		result, err = store.Begin(ctx, sddstatus.BeginAttemptRequest{
@@ -147,6 +157,10 @@ func runSDDAttempt(ctx context.Context, args []string, stdout io.Writer) error {
 		result, err = store.Rescope(ctx, sddstatus.RescopeObjectiveRequest{
 			ExpectedRevision: *expected, RequestID: *requestID, WorkUnit: *workUnit, EvidenceGoal: *evidenceGoal,
 			MaxAttempts: *maxAttempts, MaxChangedLines: *maxChangedLines, Reason: *reason, Actor: *actor,
+		})
+	case "repair":
+		result, err = store.RepairConsecutiveRescope(ctx, sddstatus.RepairConsecutiveRescopeRequest{
+			ExpectedRevision: *expected, RequestID: *requestID, Reason: *reason, Actor: *actor,
 		})
 	case "acquire":
 		result, err = store.Acquire(ctx, sddstatus.CompactAcquireRequest{
@@ -225,6 +239,15 @@ var sddAttemptOperationDefinitions = []sddAttemptOperationContract{
 	{name: "status", purpose: "Read the native runtime state", flags: []sddAttemptFlagDefinition{
 		sddAttemptCWDFlag, sddAttemptChangeFlag,
 		{name: "change-instance", usage: "optional; caller-owned token, at most 128 bytes; scopes granted_roots"},
+		// Naming acquire's work-unit scope turns status from "what does the
+		// ledger hold" into "would this exact acquire be admitted" (#2114),
+		// which is the question consumers were already asking it. All four
+		// stay optional; without them status answers the request-blind ledger
+		// question exactly as before.
+		{name: "work-unit", usage: "optional; single-line label, at most 160 bytes; reports the verdict acquire would return"},
+		{name: "evidence-goal", usage: "optional; single-line objective, at most 240 bytes; reports the verdict acquire would return"},
+		{name: "max-attempts", kind: sddAttemptIntFlag, usage: "optional; default 2, limit 1..100"},
+		{name: "max-changed-lines", kind: sddAttemptIntFlag, usage: "optional; default 200, limit 1..1000000"},
 	}},
 	{name: "begin", purpose: "Start a bounded runtime attempt", flags: []sddAttemptFlagDefinition{
 		sddAttemptCWDFlag, sddAttemptChangeFlag,
@@ -272,6 +295,13 @@ var sddAttemptOperationDefinitions = []sddAttemptOperationContract{
 		{name: "max-changed-lines", kind: sddAttemptIntFlag, required: true, usage: "required; explicit limit 1..1000000, cannot exceed current objective"},
 		{name: "reason", required: true, usage: "required; trimmed single-line text, at most 500 bytes"},
 		{name: "actor", required: true, usage: "required; trimmed single-line text, at most 128 bytes"},
+	}},
+	{name: "repair", purpose: "Repair the historical consecutive-rescope publication defect", flags: []sddAttemptFlagDefinition{
+		sddAttemptCWDFlag, sddAttemptChangeFlag,
+		{name: "expected-revision", required: true, usage: "required; exact unreadable sha256:<64 lowercase hex> runtime HEAD"},
+		{name: "request-id", required: true, usage: "required; lowercase idempotency key, at most 128 bytes"},
+		{name: "reason", required: true, usage: "required; trimmed single-line audit reason, at most 500 bytes"},
+		{name: "actor", required: true, usage: "required; trimmed single-line audit actor, at most 128 bytes"},
 	}},
 	{name: "acquire", purpose: "Claim a bounded attempt and return its token", flags: []sddAttemptFlagDefinition{
 		sddAttemptCWDFlag, sddAttemptChangeFlag,
