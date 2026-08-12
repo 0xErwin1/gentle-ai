@@ -84,8 +84,10 @@ func TestPortableSDDFailClosedAuthorityJourneysAreRegistered(t *testing.T) {
 	// baseline, which #1890 moved to 97 while this PR was open. The branch
 	// carried 96, derived from a main that had 95. Taking either side verbatim
 	// would have left the count describing a tree that does not exist.
-	if got := len(seen); got != 98 {
-		t.Errorf("core journey count = %d, want 98", got)
+	// 98 -> 99: #3102 adds j101, which drives the root-commit base-diff STATUS
+	// stop that must replace an otherwise unexecutable START transition.
+	if got := len(seen); got != 99 {
+		t.Errorf("core journey count = %d, want 99", got)
 	}
 	for id, found := range want {
 		if !found {
