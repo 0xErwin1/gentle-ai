@@ -72,6 +72,9 @@ func TestSDDOrchestratorAssetSelectionCoversSupportedAgents(t *testing.T) {
 				"If prohibited data is found, the scan fails, returns incomplete, ambiguous, or unknown, or safe redaction would alter the reporting decision",
 				"perform no GitHub search, write, comment, or create",
 				"jump directly to the Terminal report-outcome continuation below",
+				"If no equivalent exists, create a new automated provider-defect report.",
+				"If the installed build/version/channel evidence needed to compare against that verifiable published fix is missing, malformed, incomplete, ambiguous, unknown, or incomparable",
+				"do not recommend an update, do not classify a regression, perform no GitHub mutation",
 				"search open and closed issues",
 				"newly-created issue identity/URL",
 				"Only a definitive lookup may branch to GitHub mutation",
@@ -95,6 +98,9 @@ func TestSDDOrchestratorAssetSelectionCoversSupportedAgents(t *testing.T) {
 			}
 			if strings.Contains(renderSDDOrchestratorAsset(tc.agent), "no-label") {
 				t.Fatalf("rendered %s orchestrator invents a provider-defect no-label interface", tc.agent)
+			}
+			if strings.Contains(renderSDDOrchestratorAsset(tc.agent), "add a label") || strings.Contains(renderSDDOrchestratorAsset(tc.agent), "do not add a label") {
+				t.Fatalf("rendered %s orchestrator invents a provider-defect label interface", tc.agent)
 			}
 		})
 	}

@@ -166,7 +166,7 @@ func TestCoordinatorOrchestratorsCarryGentleAIProviderDefectHandoff(t *testing.T
 		{name: "unfixed equivalent occurrence", text: "If the equivalent has no verifiable relevant published fix, add exactly one occurrence comment"},
 		{name: "outdated installed build", text: "If the installed build predates that release, recommend installing the published fix and reproducing; do not create or comment for that occurrence yet."},
 		{name: "regression routing", text: "If the installed build demonstrably contains the fix and still reproduces, treat it as a possible regression: reproduction on a build proven to contain that fix; comment on a suitable canonical tracker, or create a linked regression issue when that tracker is unsuitable. Never reopen automatically."},
-		{name: "create new automated report", text: "create a new automated provider-defect report"},
+		{name: "no-equivalent creation condition", text: "If no equivalent exists, create a new automated provider-defect report."},
 		{name: "confirmed creation identity precondition", text: "Confirmed creation requires the GitHub create operation to return a newly-created issue identity/URL."},
 		{name: "no output-only creation inference", text: "Never infer creation from output text alone."},
 		{name: "definitive lookup gate", text: "Only a definitive lookup may branch to GitHub mutation."},
@@ -198,6 +198,7 @@ func TestCoordinatorOrchestratorsCarryGentleAIProviderDefectHandoff(t *testing.T
 		{name: "privacy exclusions", text: "raw argv, absolute paths, private project names, usernames, hostnames, credentials, diffs, source contents, and environment values"},
 		{name: "privacy failure fail closed", text: "If prohibited data is found, the scan fails, returns incomplete, ambiguous, or unknown, or safe redaction would alter the reporting decision, perform no GitHub search, write, comment, or create; preserve all consumer state, mark this as report-side uncertainty, and jump directly to the Terminal report-outcome continuation below."},
 		{name: "privacy failure keeps prohibited data private", text: "Do not expose or include prohibited data."},
+		{name: "incomparable installed evidence fails closed", text: "If the installed build/version/channel evidence needed to compare against that verifiable published fix is missing, malformed, incomplete, ambiguous, unknown, or incomparable, do not recommend an update, do not classify a regression, perform no GitHub mutation, preserve all consumer state, mark this as report-side uncertainty, and jump directly to the Terminal report-outcome continuation below. Do not continue through later report-routing bullets."},
 		{name: "published fix remains a normal resumption route", text: "an installed published fix"},
 		{name: "installed prerelease qualifies", text: "A published prerelease or release candidate the user installed satisfies this."},
 		{name: "maintainer-authorized native recovery", text: "an explicit maintainer-authorized, documented native recovery or reset that the runtime contract supports"},
@@ -298,6 +299,11 @@ func TestCoordinatorOrchestratorsCarryGentleAIProviderDefectHandoff(t *testing.T
 					must:   []string{"scan fails", "incomplete, ambiguous, or unknown", "safe redaction would alter the reporting decision", "perform no GitHub search, write, comment, or create", "preserve all consumer state", "mark this as report-side uncertainty", "jump directly to the Terminal report-outcome continuation", "Do not continue through later report-routing bullets"},
 				},
 				{
+					name:   "incomparable installed evidence prevents update regression and mutation",
+					prefix: "If the installed build/version/channel evidence needed to compare",
+					must:   []string{"missing, malformed, incomplete, ambiguous, unknown, or incomparable", "do not recommend an update", "do not classify a regression", "perform no GitHub mutation", "preserve all consumer state", "mark this as report-side uncertainty", "jump directly to the Terminal report-outcome continuation", "Do not continue through later report-routing bullets"},
+				},
+				{
 					name:   "decline failure does not invent continuation",
 					prefix: "If that exact decline invocation fails to execute",
 					must:   []string{"malformed, incomplete, or ambiguous output", "fails validation", "exact target, action, and consent", "preserve all consumer state and STOP", "do not synthesize, retry, substitute, or resume a continuation"},
@@ -322,10 +328,12 @@ func TestCoordinatorOrchestratorsCarryGentleAIProviderDefectHandoff(t *testing.T
 			if count := strings.Count(contract, "The shared candidate-scoped continuation executes that exact captured decline invocation exactly once for each continuing path"); count != 1 {
 				t.Errorf("provider-defect handoff has %d shared exact-decline execution clauses; want exactly 1", count)
 			}
+			assertProviderDefectTerminalStructure(t, contract)
 			for _, routePrefix := range []string{
 				"If prohibited data is found",
 				"If search, comment, or creation fails, is ambiguous, incomplete, times out, lacks permission, or has an unknown outcome",
 				"Confirmed creation requires the GitHub create operation",
+				"If the installed build/version/channel evidence needed to compare",
 			} {
 				route := providerDefectHandoffLine(t, contract, routePrefix)
 				for _, prohibited := range []string{"execute", "decline invocation"} {
@@ -344,6 +352,7 @@ func TestCoordinatorOrchestratorsCarryGentleAIProviderDefectHandoff(t *testing.T
 				{name: "privacy failure before definitive lookup", before: "If prohibited data is found", after: "complete a definitive lookup across open and closed issues"},
 				{name: "lookup before fix status", before: "complete a definitive lookup across open and closed issues", after: "If the equivalent has a verifiable relevant published fix"},
 				{name: "fix status before installed build", before: "If the equivalent has a verifiable relevant published fix", after: "If the installed build predates that release"},
+				{name: "installed evidence uncertainty before terminal continuation", before: "If the installed build/version/channel evidence needed to compare", after: "Terminal report-outcome continuation:"},
 				{name: "definitive lookup before report creation", before: "Only a definitive lookup may branch to GitHub mutation", after: "create a new automated provider-defect report"},
 				{name: "definitive lookup before occurrence comment", before: "Only a definitive lookup may branch to GitHub mutation", after: "add exactly one occurrence comment"},
 				{name: "report creation before creation identity precondition", before: "create a new automated provider-defect report", after: "Confirmed creation requires the GitHub create operation"},
@@ -362,6 +371,52 @@ func TestCoordinatorOrchestratorsCarryGentleAIProviderDefectHandoff(t *testing.T
 			}
 		})
 	}
+}
+
+func assertProviderDefectTerminalStructure(t *testing.T, contract string) {
+	t.Helper()
+	lines := strings.Split(contract, "\n")
+	choiceLines := make(map[string]int)
+	terminalLine := -1
+	for index, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		switch {
+		case strings.HasPrefix(trimmed, "1. **Report the Gentle AI defect and continue**:"):
+			choiceLines["report_and_continue"] = index
+		case strings.HasPrefix(trimmed, "2. **Continue without reporting**:"):
+			choiceLines["continue_without_reporting"] = index
+		case strings.HasPrefix(trimmed, "3. **Stop here**:"):
+			choiceLines["stop_here"] = index
+		case strings.HasPrefix(trimmed, "- Terminal report-outcome continuation:"):
+			terminalLine = index
+			if leadingSpaces(line) != 0 {
+				t.Errorf("terminal report-outcome continuation indentation = %d, want 0 shared-level spaces", leadingSpaces(line))
+			}
+		}
+	}
+	for route, line := range choiceLines {
+		if line < 0 {
+			t.Errorf("missing %s choice", route)
+		}
+	}
+	if terminalLine < 0 {
+		t.Fatal("terminal report-outcome continuation must be a shared-level bullet")
+	}
+	if terminalLine <= choiceLines["stop_here"] {
+		t.Errorf("terminal report-outcome continuation line %d must follow all three choices; stop_here is line %d", terminalLine+1, choiceLines["stop_here"]+1)
+	}
+	stopLine := lines[choiceLines["stop_here"]]
+	if !strings.Contains(stopLine, "no decline invocation") || !strings.Contains(stopLine, "STOP") {
+		t.Errorf("stop_here must exclude decline and terminal continuation: %q", stopLine)
+	}
+	continueLine := lines[choiceLines["continue_without_reporting"]]
+	if !strings.Contains(continueLine, "Terminal report-outcome continuation below") || strings.Contains(continueLine, "decline invocation") {
+		t.Errorf("continue_without_reporting must route exactly once to the shared terminal without direct decline: %q", continueLine)
+	}
+}
+
+func leadingSpaces(line string) int {
+	return len(line) - len(strings.TrimLeft(line, " "))
 }
 
 // TestCoordinatorOrchestratorsCarrySDDEditAuthorityConsentRelay is #2570's
