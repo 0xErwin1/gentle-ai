@@ -99,7 +99,7 @@ func TestCapturedVerificationEvidenceReadersClassifyMissingUnsafeAndCorruptArtif
 		}
 	}
 	assertReaders(ErrCapturedVerificationEvidenceMissing)
-	dir, err := compactFinalEvidenceCandidateDir(store.Dir, state.CurrentSnapshot.Identity)
+	dir, err := compactFinalEvidenceCandidateDir(store.Dir, revision, state.CurrentSnapshot.Identity)
 	if err != nil {
 		t.Fatal(err)
 	}

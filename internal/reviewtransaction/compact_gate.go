@@ -632,7 +632,7 @@ func compactGateInfrastructureFailure(err error) bool {
 	}
 	var command *GitCommandError
 	var processControl *GitProcessControlError
-	return errors.As(err, &command) || errors.As(err, &processControl)
+	return errors.As(err, &command) || errors.As(err, &processControl) || errors.Is(err, ErrMalformedAdvertisedRemoteOutput)
 }
 
 func buildCompactScopeChangeDiagnostics(ctx context.Context, repo string, state CompactState, revision string, actual Snapshot) (GateScopeChangeDiagnostics, error) {
