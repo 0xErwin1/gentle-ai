@@ -1,11 +1,13 @@
 package reviewtransaction
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -319,10 +321,50 @@ func TestCloneLocalRDDOverrideRejectsStaleExpectedRevision(t *testing.T) {
 	}
 }
 
+func TestCloneLocalRDDModeEnableRejectsGlobalOffWithoutChangingExplicitOff(t *testing.T) {
+	repo := initSnapshotRepo(t)
+	ctx := context.Background()
+	disabled, err := SetCloneLocalRDDMode(ctx, repo, RDDModeOff, "", RDDGlobalMode{Value: "on"})
+	if err != nil {
+		t.Fatalf("SetCloneLocalRDDMode(off) error = %v", err)
+	}
+	record, err := CloneLocalRDDModeRecordPath(ctx, repo)
+	if err != nil {
+		t.Fatalf("CloneLocalRDDModeRecordPath error = %v", err)
+	}
+	before, err := os.ReadFile(record)
+	if err != nil {
+		t.Fatalf("read explicit-off record: %v", err)
+	}
+
+	status, err := SetCloneLocalRDDMode(ctx, repo, RDDModeUnset, disabled.Revision, RDDGlobalMode{Value: "off"})
+	var rejected *RDDDisabledError
+	if !errors.As(err, &rejected) || !errors.Is(err, ErrRDDDisabled) || rejected.Source != RDDModeSourceGlobal {
+		t.Fatalf("clear explicit-off override error = %v, want global typed disabled error", err)
+	}
+	if !strings.Contains(err.Error(), "gentle-ai review mode enable --scope=global") {
+		t.Fatalf("clear explicit-off override error does not name the global continuation: %v", err)
+	}
+	if status.CloneLocal != RDDModeOff || status.Revision != disabled.Revision || status.Effective != RDDModeOff {
+		t.Fatalf("rejected clear changed the clone-local status: %#v", status)
+	}
+	recordAfter, err := CloneLocalRDDModeRecordPath(ctx, repo)
+	if err != nil {
+		t.Fatalf("CloneLocalRDDModeRecordPath after rejected clear error = %v", err)
+	}
+	after, err := os.ReadFile(recordAfter)
+	if err != nil {
+		t.Fatalf("read explicit-off record after rejected clear: %v", err)
+	}
+	if recordAfter != record || !bytes.Equal(after, before) {
+		t.Fatalf("rejected clear published a new generation")
+	}
+}
+
 func TestCloneLocalRDDModeTransitionsPublishExactlyOneGeneration(t *testing.T) {
 	repo := initSnapshotRepo(t)
 	ctx := context.Background()
-	global := RDDGlobalMode{Value: "off"}
+	global := RDDGlobalMode{Value: "on"}
 
 	disabled, err := SetCloneLocalRDDMode(ctx, repo, RDDModeOff, "", global)
 	if err != nil {
