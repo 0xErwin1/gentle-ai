@@ -189,6 +189,12 @@ func newReviewNextTransition(status ReviewTargetStatusResult, selectedLenses []s
 		bindingTarget = reviewAuthorityTargetIdentity(status)
 	}
 	binding := reviewTransitionBinding(status.Authority, bindingTarget, input.RepositoryContext)
+	if status.Authority.State == reviewtransaction.StateReviewing && artifactErr != nil {
+		return reviewStopTransition("captured_artifacts_unverifiable")
+	}
+	if status.Authority.State == reviewtransaction.StateReviewing && input.LensContextBudgetExceeded {
+		return reviewStopTransition("lens_context_budget_exceeded")
+	}
 	if status.Action == reviewtransaction.TargetStatusActionReconcileFinalize {
 		return reviewStopTransition("original_finalize_request_required")
 	}
@@ -509,6 +515,7 @@ type reviewNextTransitionInput struct {
 	IntendedUntracked                              reviewIntendedUntrackedScope
 	RDDMode                                        reviewtransaction.RDDModeStatus
 	RDDModeResolved                                bool
+	LensContextBudgetExceeded                      bool
 	PreCommitDeliveryAssessment                    *reviewtransaction.CompactGateTargetApplicability
 }
 
@@ -1042,6 +1049,8 @@ func reviewReasonDescription(reason string) string {
 		return "Staged workspace overlay recovery is unavailable"
 	case "empty_base_diff_bootstrap_required":
 		return "Committed base-diff has no paths; empty-root bootstrap is required"
+	case "lens_context_budget_exceeded":
+		return "Frozen reviewer context exceeds the native evidence budget"
 	case "corrupted_or_unverifiable_authority":
 		return "Review authority is corrupted or unverifiable"
 	case "missing_authority_binding":
