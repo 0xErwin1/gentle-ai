@@ -475,6 +475,17 @@ func TestReviewLensContextRefusesConflictingDeliveryForOneSlot(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "lens_context_emission_conflict") {
 		t.Fatalf("conflicting delivery error = %v", err)
 	}
+	// The exit has to name the mechanism the slot actually recorded: "use the
+	// same mechanism" is not runnable if the operator cannot tell which one
+	// that was (issue #2850).
+	for _, want := range []string{
+		string(reviewtransaction.ReviewerContextLevelProviderCommand),
+		"--delivery " + string(reviewtransaction.ReviewerContextLevelProviderCommand),
+	} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("conflict refusal does not name a runnable exit (%q): %v", want, err)
+		}
+	}
 	if output.Len() != 0 {
 		t.Fatalf("conflicting delivery emitted %d bytes", output.Len())
 	}
