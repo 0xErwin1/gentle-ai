@@ -2,6 +2,7 @@ package assets
 
 import (
 	"fmt"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -139,67 +140,162 @@ func TestNativeBlockingPromptRulesRetainInteractiveUIWithFailClosedFallback(t *t
 }
 
 func TestCoordinatorOrchestratorsCarryGentleAIProviderDefectHandoff(t *testing.T) {
-	allPaths := allSDDOrchestratorAssetPaths(t)
-	canonical := providerDefectHandoffSection(t, providerDefectHandoffCanonicalPath)
-	required := []string{
-		"`report_and_continue`, `continue_without_reporting`, `stop_here`",
-		"Immediately before the first GitHub operation, perform a final privacy scan",
-		"raw argv, absolute paths, private project names, usernames, hostnames, credentials, diffs, source contents, and environment values",
-		"complete a definitive lookup across open and closed issues",
-		"Only a definitive lookup may branch to GitHub mutation.",
-		"If no equivalent exists, create a new automated provider-defect report.",
-		"If the equivalent has no verifiable relevant published fix, add exactly one occurrence comment",
-		"If the installed build predates that release, recommend installing the published fix and reproducing; do not create or comment for that occurrence yet.",
-		"If the installed build demonstrably contains the fix and still reproduces, treat it as a possible regression",
-		"Never reopen automatically.",
-		"Confirmed creation requires the GitHub create operation to return a newly-created issue identity/URL",
-		"never infer creation from output text alone",
-		"If any report-side required evidence, check, or operation fails, is unavailable, unsafe, incomplete, malformed, ambiguous, unknown, incomparable, times out, lacks permission, or has an unconfirmed mutation outcome",
-		"perform no further GitHub operation or automatic retry",
-		"preserve state and private evidence, and continue through the existing `continue_without_reporting` path",
-		"unknown mutation outcome forbids duplicate create, comment, recovery, or other mutation unless the exact outcome and identity are later proven",
-		"Do not wait before continuing consumer work.",
-		"The shared candidate-scoped continuation executes that exact captured decline invocation exactly once for each continuing path",
-		"validate `action: \"declined\"`, `consent: \"declined_this_candidate\"`, and the exact target identity match",
-		"re-enter through native negotiated STATUS, then resume the already-held consumer continuation",
-		"If the captured exact v3 decline invocation, exact target identity, or consumer continuation context is unavailable or ambiguous, fail closed",
-		"**Stop here**: Perform no GitHub operation and no decline invocation; preserve all consumer state and STOP.",
+	requirements := []struct {
+		name string
+		text string
+	}{
+		{name: "admissibility before lossless relay", text: "Before losslessly relaying any blocking choice envelope, classify its semantic admissibility"},
+		{name: "direct repair prohibition", text: "never offer to switch to, inspect, modify, or directly repair the Gentle AI repository"},
+		{name: "invalid upstream envelope", text: "reject it as semantically inadmissible and issue this separate orchestrator-owned handoff envelope"},
+		{name: "localized consent", text: "Ask the user first, in the active orchestrator conversation language"},
+		{name: "explicit consent", text: "for explicit consent to report the apparent defect"},
+		{name: "exact choice shape", text: "one single-select blocking envelope with exactly three semantic choices in this order"},
+		{name: "exact answer tokens", text: "`report_and_continue`, `continue_without_reporting`, `stop_here`"},
+		{name: "localized labels", text: "Localize their labels and descriptions without changing these semantics"},
+		{name: "no internal labels", text: "do not expose machine or internal codes in user-facing labels"},
+		{name: "report and continue choice", text: "**Report the Gentle AI defect and continue**: Only after explicit consent and that final privacy scan"},
+		{name: "continue without reporting choice", text: "**Continue without reporting**: Perform no GitHub search, write, comment, or label, and no report-side privacy scan is required."},
+		{name: "fixed repository", text: "`Gentleman-Programming/gentle-ai`"},
+		{name: "definitive equivalent lookup", text: "complete a definitive lookup across open and closed issues for an equivalent defect or canonical tracker"},
+		{name: "equivalent definition", text: "same observable defect and affected contract, backed by concrete evidence rather than title similarity alone"},
+		{name: "canonical definition", text: "owns the causal class"},
+		{name: "published fix definition", text: "identified fix verifiably contained by a published release in the applicable installed channel"},
+		{name: "regression definition", text: "reproduction on a build proven to contain that fix"},
+		{name: "definitive definition", text: "completed open+closed lookup with a classifiable result; incomplete, error, or unknown is not definitive"},
+		{name: "published evidence exclusion", text: "A main-only commit, local/source build, unmerged PR, or unsupported assertion is not published-fix evidence."},
+		{name: "unfixed equivalent occurrence", text: "If the equivalent has no verifiable relevant published fix, add exactly one occurrence comment"},
+		{name: "outdated installed build", text: "If the installed build predates that release, recommend installing the published fix and reproducing; do not create or comment for that occurrence yet."},
+		{name: "regression routing", text: "If the installed build demonstrably contains the fix and still reproduces, treat it as a possible regression: reproduction on a build proven to contain that fix; comment on a suitable canonical tracker, or create a linked regression issue when that tracker is unsuitable. Never reopen automatically."},
+		{name: "create new automated report", text: "create a new automated provider-defect report"},
+		{name: "confirmed creation label precondition", text: "Confirmed creation is a HARD precondition for labeling: apply `gentle-report` only when the GitHub create operation confirms a newly-created issue identity/URL."},
+		{name: "no output-only creation inference", text: "Never infer creation from output text alone."},
+		{name: "definitive lookup gate", text: "Only a definitive lookup may branch to GitHub mutation."},
+		{name: "uncertainty no further mutation", text: "perform no further GitHub mutation and no blind retry"},
+		{name: "uncertainty continuation", text: "execute the exact captured provider-owned decline invocation exactly once, validate it, re-enter native negotiated STATUS, and resume the already-held consumer continuation."},
+		{name: "comment exact canonical", text: "on that exact canonical/equivalent issue"},
+		{name: "duplicate labels unchanged", text: "do not add, remove, or change any labels on it"},
+		{name: "unconfirmed creation continuation", text: "If creation fails, is ambiguous, incomplete, times out, lacks permission, or has an unknown outcome, preserve all consumer state; do not search, comment, update, label, or retry creation until the exact created issue identity is resolved, then use the uncertainty continuation below."},
+		{name: "partial success disclosure", text: "If creation is confirmed but label application fails or has an ambiguous outcome, surface the confirmed created issue identity/URL and the label failure separately."},
+		{name: "partial success honesty", text: "Be honest that report creation succeeded even when label application failed."},
+		{name: "partial success stop", text: "STOP with all consumer state preserved; do not create or comment again automatically."},
+		{name: "exact identity retry", text: "On retry, perform a fresh final privacy scan first, then re-resolve that exact created issue identity, inspect whether `gentle-report` is already present, and apply only a missing label idempotently."},
+		{name: "no arbitrary retry labeling", text: "Never search and label an arbitrary equivalent/pre-existing issue."},
+		{name: "unproven identity stop", text: "If the exact created issue identity cannot be proven, STOP and require a human decision, with no label or duplicate issue/comment."},
+		{name: "label scope exclusions", text: "Do not apply `gentle-report` to manual issues, #2211, historical issues, pull requests, or reports created by unrelated workflows."},
+		{name: "report outcome continuation", text: "After a definitive successful report outcome, or any report-side uncertainty after stopping further GitHub mutation, execute the shared candidate-scoped continuation below."},
+		{name: "captured provider decline", text: "exact captured provider-owned `choices[answer=\"declined\"].invocation` from the `gentle-ai.review-integration.consent/v3` envelope"},
+		{name: "captured decline only", text: "Never synthesize the decline command, target, token, or consumer continuation from prose."},
+		{name: "missing decline context fails closed", text: "If the captured exact v3 decline invocation, exact target identity, or consumer continuation context is unavailable or ambiguous, fail closed with all consumer state preserved and do not run a substitute command."},
+		{name: "decline result validation", text: "validate `action: \"declined\"`, `consent: \"declined_this_candidate\"`, and the exact target identity match"},
+		{name: "decline preserves ordinary delivery", text: "The result carries no lineage or receipt; ordinary delivery is unmanaged by the candidate choice, and the next candidate asks again."},
+		{name: "native negotiated status re-entry", text: "re-enter through native negotiated STATUS, then resume the already-held consumer continuation"},
+		{name: "continue paths reuse exact decline", text: "Both continue choices execute that exact captured decline invocation exactly once"},
+		{name: "review mode disable prohibition", text: "Do not invoke `gentle-ai review mode disable` at clone or global scope within this handoff."},
+		{name: "rdd mode preservation", text: "Do not turn RDD off or on within this handoff."},
+		{name: "stop choice", text: "**Stop here**: Perform no GitHub operation and no decline invocation; preserve all consumer state and STOP."},
+		{name: "observed evidence", text: "Report observed evidence, not an unconfirmed root cause"},
+		{name: "sanitized diagnostics", text: "sanitized version/build, OS/architecture/client"},
+		{name: "bounded evidence", text: "bounded attempts and outcomes, failure envelopes, mutation outcome"},
+		{name: "reproduction evidence", text: "expected and actual behavior, a minimal reproduction"},
+		{name: "opaque identifiers", text: "safe opaque reason/revision identifiers, and preserved-state evidence"},
+		{name: "final privacy scan", text: "Immediately before the first GitHub operation, perform a final privacy scan"},
+		{name: "privacy ordering", text: "This scan precedes the definitive lookup, report creation, and occurrence comment"},
+		{name: "privacy exclusions", text: "raw argv, absolute paths, private project names, usernames, hostnames, credentials, diffs, source contents, and environment values"},
+		{name: "published fix remains a normal resumption route", text: "an installed published fix"},
+		{name: "installed prerelease qualifies", text: "A published prerelease or release candidate the user installed satisfies this."},
+		{name: "maintainer-authorized native recovery", text: "an explicit maintainer-authorized, documented native recovery or reset that the runtime contract supports"},
+		{name: "no unpublished code resume", text: "Never resume against unpublished code: a source checkout, a local build, or an unmerged pull request"},
 	}
+	allPaths := allSDDOrchestratorAssetPaths(t)
+	canonicalFound := false
+	for _, path := range allPaths {
+		if path == providerDefectHandoffCanonicalPath {
+			canonicalFound = true
+			break
+		}
+	}
+	if !canonicalFound {
+		t.Fatalf("canonical provider-defect handoff source %q is not an orchestrator asset", providerDefectHandoffCanonicalPath)
+	}
+	canonical := providerDefectHandoffSection(t, providerDefectHandoffCanonicalPath)
+	semanticChoicePattern := regexp.MustCompile(`(?m)^[ \t]+[0-9]+\. \*\*[^*]+\*\*:`)
 	for _, path := range allPaths {
 		t.Run(path, func(t *testing.T) {
 			contract := providerDefectHandoffSection(t, path)
 			if contract != canonical {
 				t.Error("provider-defect handoff differs from the canonical cross-variant block")
 			}
-			lastChoice := -1
-			for _, choice := range []string{
+			choiceMatches := semanticChoicePattern.FindAllString(contract, -1)
+			if got := len(choiceMatches); got != 3 {
+				t.Errorf("provider-defect handoff has %d numbered semantic choices; want exactly 3", got)
+			}
+			for index, choice := range []string{
 				"  1. **Report the Gentle AI defect and continue**:",
 				"  2. **Continue without reporting**:",
 				"  3. **Stop here**:",
 			} {
-				index := strings.Index(contract, choice)
-				if index < 0 || strings.Count(contract, choice) != 1 || index <= lastChoice {
-					t.Errorf("provider-defect handoff must contain %q exactly once in order", choice)
+				if index >= len(choiceMatches) {
+					t.Errorf("provider-defect handoff is missing semantic choice %d: %q", index+1, choice)
+					continue
 				}
-				lastChoice = index
-			}
-			for _, clause := range required {
-				if !strings.Contains(contract, clause) {
-					t.Errorf("provider-defect handoff missing %q", clause)
+				if choiceMatches[index] != choice {
+					t.Errorf("provider-defect handoff semantic choice %d = %q, want %q", index+1, choiceMatches[index], choice)
 				}
 			}
-			if strings.Count(contract, "If any report-side required evidence, check, or operation") != 1 {
-				t.Error("provider-defect handoff must have one general report-side fallback")
+			lastTokenIndex := -1
+			for _, token := range []string{"report_and_continue", "continue_without_reporting", "stop_here"} {
+				tokenIndex := strings.Index(contract, "`"+token+"`")
+				if tokenIndex < 0 || tokenIndex <= lastTokenIndex {
+					t.Errorf("provider-defect handoff answer token %q is missing or out of order", token)
+				}
+				if count := strings.Count(contract, "`"+token+"`"); count != 1 {
+					t.Errorf("provider-defect handoff answer token %q appears %d times; want exactly once", token, count)
+				}
+				lastTokenIndex = tokenIndex
 			}
-			for _, prohibited := range []string{"Terminal report-outcome", "jump directly", "Do not continue through later", "goto", "gentle-" + "report", "latest version"} {
+			for _, requirement := range requirements {
+				t.Run(requirement.name, func(t *testing.T) {
+					if !strings.Contains(contract, requirement.text) {
+						t.Errorf("provider-defect handoff missing %q", requirement.text)
+					}
+				})
+			}
+			for _, prohibited := range []string{"Resume only after an installed published fix", "latest version"} {
 				if strings.Contains(contract, prohibited) {
-					t.Errorf("provider-defect handoff retains retired routing text %q", prohibited)
+					t.Errorf("provider-defect handoff must not make published fixes the only resumption route: %q", prohibited)
+				}
+			}
+			if count := strings.Count(contract, "gentle-ai review mode disable"); count != 1 {
+				t.Errorf("provider-defect handoff mentions review mode disable %d times; want exactly its prohibition", count)
+			}
+			for _, invariant := range []struct {
+				prefix string
+				must   []string
+			}{
+				{prefix: "Confirmed creation is a HARD precondition for labeling", must: []string{"apply `gentle-report` only when", "GitHub create operation confirms", "newly-created issue identity/URL", "Never infer creation from output text alone", "preserve all consumer state", "do not search, comment, update, label, or retry creation", "use the uncertainty continuation below"}},
+				{prefix: "If search, comment, or creation fails, is ambiguous, incomplete, times out, lacks permission, or has an unknown outcome", must: []string{"perform no further GitHub mutation", "no blind retry", "preserve all consumer state", "exact captured provider-owned decline invocation exactly once", "validate it", "re-enter native negotiated STATUS", "already-held consumer continuation"}},
+				{prefix: "If creation is confirmed but label application fails", must: []string{"confirmed created issue identity/URL", "label failure separately", "Be honest that report creation succeeded", "STOP with all consumer state preserved", "do not create or comment again automatically"}},
+				{prefix: "On retry, perform a fresh final privacy scan first", must: []string{"re-resolve that exact created issue identity", "inspect whether `gentle-report` is already present", "apply only a missing label idempotently", "Never search and label an arbitrary equivalent/pre-existing issue"}},
+				{prefix: "If the exact created issue identity cannot be proven", must: []string{"STOP and require a human decision", "no label or duplicate issue/comment"}},
+			} {
+				line := providerDefectHandoffLine(t, contract, invariant.prefix)
+				for _, required := range invariant.must {
+					if !strings.Contains(line, required) {
+						t.Errorf("provider-defect handoff invariant %q omits %q from %q", invariant.prefix, required, line)
+					}
 				}
 			}
 			for _, pair := range [][2]string{
+				{"for explicit consent to report the apparent defect", "Immediately before the first GitHub operation, perform a final privacy scan"},
 				{"Immediately before the first GitHub operation, perform a final privacy scan", "complete a definitive lookup across open and closed issues"},
 				{"complete a definitive lookup across open and closed issues", "If the equivalent has a verifiable relevant published fix"},
 				{"If the equivalent has a verifiable relevant published fix", "If the installed build predates that release"},
+				{"Only a definitive lookup may branch to GitHub mutation", "create a new automated provider-defect report"},
+				{"Only a definitive lookup may branch to GitHub mutation", "add exactly one occurrence comment"},
+				{"create a new automated provider-defect report", "Confirmed creation is a HARD precondition for labeling"},
+				{"If creation fails, is ambiguous, incomplete, times out, lacks permission, or has an unknown outcome", "If creation is confirmed but label application fails"},
+				{"If creation is confirmed but label application fails", "On retry, perform a fresh final privacy scan first"},
+				{"On retry, perform a fresh final privacy scan first", "If the exact created issue identity cannot be proven"},
 			} {
 				if strings.Index(contract, pair[0]) >= strings.Index(contract, pair[1]) {
 					t.Errorf("provider-defect handoff must place %q before %q", pair[0], pair[1])
@@ -207,6 +303,19 @@ func TestCoordinatorOrchestratorsCarryGentleAIProviderDefectHandoff(t *testing.T
 			}
 		})
 	}
+}
+
+func providerDefectHandoffLine(t *testing.T, contract, prefix string) string {
+	t.Helper()
+	start := strings.Index(contract, prefix)
+	if start < 0 {
+		t.Fatalf("provider-defect handoff missing invariant line starting %q", prefix)
+	}
+	end := strings.Index(contract[start:], "\n")
+	if end < 0 {
+		return contract[start:]
+	}
+	return contract[start : start+end]
 }
 
 // TestCoordinatorOrchestratorsCarrySDDEditAuthorityConsentRelay is #2570's

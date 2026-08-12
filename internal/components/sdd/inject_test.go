@@ -71,23 +71,22 @@ func TestSDDOrchestratorAssetSelectionCoversSupportedAgents(t *testing.T) {
 				"Only after explicit consent and that final privacy scan",
 				"If no equivalent exists, create a new automated provider-defect report.",
 				"search open and closed issues",
-				"newly-created issue identity/URL",
+				"confirms a newly-created issue identity/URL",
 				"Only a definitive lookup may branch to GitHub mutation",
-				"If any report-side required evidence, check, or operation fails, is unavailable, unsafe, incomplete, malformed, ambiguous, unknown, incomparable, times out, lacks permission, or has an unconfirmed mutation outcome",
-				"perform no further GitHub operation or automatic retry",
-				"continue through the existing `continue_without_reporting` path",
-				"unknown mutation outcome forbids duplicate create, comment, recovery, or other mutation unless the exact outcome and identity are later proven",
-				"The shared candidate-scoped continuation executes that exact captured decline invocation exactly once for each continuing path",
+				"If search, comment, or creation fails, is ambiguous, incomplete, times out, lacks permission, or has an unknown outcome",
+				"perform no further GitHub mutation and no blind retry",
+				"use the uncertainty continuation below",
+				"do not add, remove, or change any labels on it",
+				"label application fails or has an ambiguous outcome",
+				"re-resolve that exact created issue identity",
+				"After a definitive successful report outcome, or any report-side uncertainty after stopping further GitHub mutation, execute the shared candidate-scoped continuation below.",
+				"Both continue choices execute that exact captured decline invocation exactly once",
 				"`consent: \"declined_this_candidate\"`",
 				"native negotiated STATUS",
-				"If that exact decline invocation fails to execute, returns malformed, incomplete, or ambiguous output, fails validation, or does not match the exact target, action, and consent, preserve all consumer state and STOP",
 			} {
 				if !strings.Contains(renderSDDOrchestratorAsset(tc.agent), required) {
 					t.Fatalf("rendered %s orchestrator missing provider-defect handoff clause %q", tc.agent, required)
 				}
-			}
-			if strings.Contains(renderSDDOrchestratorAsset(tc.agent), "gentle-"+"report") {
-				t.Fatalf("rendered %s orchestrator retains a provider-defect label", tc.agent)
 			}
 		})
 	}
