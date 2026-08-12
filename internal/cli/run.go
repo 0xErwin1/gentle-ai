@@ -162,6 +162,13 @@ func RunInstall(args []string, detection system.DetectionResult) (InstallResult,
 				"will be written to each selected agent's global config directory and will affect ALL workspaces for those agents on this machine.\n"+
 				"To install only into the current workspace, rerun with --scope=workspace.\n\n")
 	}
+	var openCodeRuntime *state.OpenCodeRuntimeProvenance
+	if hasOpenCodeReviewerPlugin(input.Selection.Agents) {
+		openCodeRuntime, err = captureOpenCodeRuntimeProvenance()
+		if err != nil {
+			return result, fmt.Errorf("capture OpenCode reviewer runtime provenance: %w", err)
+		}
+	}
 
 	runtime, err := newInstallRuntime(homeDir, input.Scope, input.Channel, input.Selection, resolved, profile)
 	if err != nil {
@@ -226,6 +233,7 @@ func RunInstall(args []string, detection system.DetectionResult) (InstallResult,
 		CodexPhaseModelAssignments:  input.Selection.CodexPhaseModelAssignments,
 		ModelAssignments:            modelAssignmentsToState(input.Selection.ModelAssignments),
 		Persona:                     string(input.Selection.Persona),
+		OpenCodeRuntimeProvenance:   openCodeRuntime,
 	}
 	newState.SetSelection(input.Selection)
 	writer, err := managedAssetDigest()
@@ -300,6 +308,10 @@ func mergeExplicitAgentInstallState(homeDir string, newState state.InstallState,
 	}
 	if newState.CodexPhaseModelAssignments != nil {
 		merged.CodexPhaseModelAssignments = newState.CodexPhaseModelAssignments
+	}
+	if newState.OpenCodeRuntimeProvenance != nil {
+		provenance := *newState.OpenCodeRuntimeProvenance
+		merged.OpenCodeRuntimeProvenance = &provenance
 	}
 	if merged.SelectionConfigured {
 		if len(flags.Components) > 0 {
