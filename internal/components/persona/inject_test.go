@@ -1794,6 +1794,47 @@ func TestInjectClaude_SwitchGentlemanToNeutral_IsIdempotent(t *testing.T) {
 	}
 }
 
+func TestInjectClaudeCustomPreservesOutputStyleAndSettings(t *testing.T) {
+	home := t.TempDir()
+
+	if _, err := Inject(home, claudeAdapter(), model.PersonaGentleman); err != nil {
+		t.Fatalf("Inject(gentleman) error = %v", err)
+	}
+
+	stylePath := filepath.Join(home, ".claude", "output-styles", "gentleman.md")
+	settingsPath := filepath.Join(home, ".claude", "settings.json")
+	styleBefore, err := os.ReadFile(stylePath)
+	if err != nil {
+		t.Fatalf("ReadFile(gentleman output style) error = %v", err)
+	}
+	settingsBefore, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatalf("ReadFile(settings.json) error = %v", err)
+	}
+
+	result, err := Inject(home, claudeAdapter(), model.PersonaCustom)
+	if err != nil {
+		t.Fatalf("Inject(custom) error = %v", err)
+	}
+	if result.Changed {
+		t.Fatalf("Inject(custom) changed = true, want false")
+	}
+	styleAfter, err := os.ReadFile(stylePath)
+	if err != nil {
+		t.Fatalf("ReadFile(gentleman output style) after custom error = %v", err)
+	}
+	if string(styleAfter) != string(styleBefore) {
+		t.Fatal("custom persona changed the existing output style")
+	}
+	settingsAfter, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatalf("ReadFile(settings.json) after custom error = %v", err)
+	}
+	if string(settingsAfter) != string(settingsBefore) {
+		t.Fatal("custom persona changed the existing output-style setting")
+	}
+}
+
 func TestInjectOpenCode_SwitchGentlemanToNeutral_CleansAgentOverlay(t *testing.T) {
 	home := t.TempDir()
 

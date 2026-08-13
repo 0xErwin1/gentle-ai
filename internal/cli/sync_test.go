@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/gentleman-programming/gentle-ai/v2/internal/agents"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/claude"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/codex"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/assets"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/backup"
@@ -21,6 +22,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v2/internal/components/communitytool"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/components/engram"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/components/filemerge"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/components/persona"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/pipeline"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/planner"
@@ -3942,6 +3944,42 @@ func TestSyncBackupTargetsCaptureBothManagedOutputStyles(t *testing.T) {
 		if !containsPath(targets, neutral) {
 			t.Errorf("syncBackupTargets(%q) missing neutral.md; got %v", persona, targets)
 		}
+	}
+}
+
+func TestPersonaSyncOutputStyleSwitchIsIdempotent(t *testing.T) {
+	home := t.TempDir()
+	selection := model.Selection{
+		Agents:     []model.AgentID{model.AgentClaudeCode},
+		Components: []model.ComponentID{model.ComponentPersona},
+		Persona:    model.PersonaNeutral,
+	}
+	gentleman := filepath.Join(home, ".claude", "output-styles", "gentleman.md")
+
+	if _, err := persona.Inject(home, claude.NewAdapter(), model.PersonaGentleman); err != nil {
+		t.Fatalf("Inject(gentleman) error = %v", err)
+	}
+	if _, err := os.Stat(gentleman); err != nil {
+		t.Fatalf("precondition: gentleman output style missing: %v", err)
+	}
+
+	first, err := RunSyncWithSelection(home, selection)
+	if err != nil {
+		t.Fatalf("first RunSyncWithSelection() error = %v", err)
+	}
+	if first.FilesChanged == 0 || first.NoOp {
+		t.Fatalf("first sync files changed = %d, no-op = %t; want output-style switch", first.FilesChanged, first.NoOp)
+	}
+	if _, err := os.Stat(gentleman); !os.IsNotExist(err) {
+		t.Fatalf("first sync left retired gentleman output style: %v", err)
+	}
+
+	second, err := RunSyncWithSelection(home, selection)
+	if err != nil {
+		t.Fatalf("second RunSyncWithSelection() error = %v", err)
+	}
+	if second.FilesChanged != 0 || !second.NoOp {
+		t.Fatalf("second sync files changed = %d, no-op = %t; want idempotent no-op", second.FilesChanged, second.NoOp)
 	}
 }
 
