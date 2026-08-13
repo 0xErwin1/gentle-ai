@@ -119,6 +119,7 @@ var readProfilesFn = func(settingsPath string) ([]model.Profile, error) {
 	return sdd.DetectProfiles(settingsPath)
 }
 var removeProfileAgentsFn = sdd.RemoveProfileAgents
+var discoverCodexModels = model.DiscoverCodexModels
 
 func sanitizeKnownModelEfforts(assignments map[string]model.ModelAssignment, sddModels map[string][]opencode.Model) map[string]model.ModelAssignment {
 	if assignments == nil {
@@ -193,6 +194,12 @@ func containsString(values []string, target string) bool {
 
 // TickMsg drives the spinner animation on the installing screen.
 type TickMsg time.Time
+
+// CodexModelsDiscoveredMsg delivers one Custom picker catalog discovery result.
+type CodexModelsDiscoveredMsg struct {
+	RequestID uint64
+	Models    []string
+}
 
 func tickCmd() tea.Cmd {
 	return tea.Tick(100*time.Millisecond, func(t time.Time) tea.Msg {
@@ -498,6 +505,10 @@ type Model struct {
 
 	// pipelineRunning tracks whether the pipeline goroutine is active.
 	pipelineRunning bool
+
+	// codexModelDiscoveryRequest identifies the Custom picker catalog request that
+	// is allowed to update the current picker state.
+	codexModelDiscoveryRequest uint64
 
 	// TUI operations — set by startUpgrade / startSync / startUpgradeSync goroutines.
 
@@ -922,6 +933,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case screens.LMStudioDiscoveryMsg:
 		m.ModelPicker = m.ModelPicker.Update(msg)
 		return m, nil
+	case CodexModelsDiscoveredMsg:
+		if m.Screen != ScreenCodexModelPicker ||
+			m.CodexModelPicker.CustomMode == screens.CodexCustomModeNone ||
+			msg.RequestID != m.codexModelDiscoveryRequest {
+			return m, nil
+		}
+		m.CodexModelPicker.AvailableModels = msg.Models
+		return m, nil
 	case UpgradeDoneMsg:
 		if m.Screen != ScreenUpgrade && m.Screen != ScreenUpdatePrompt {
 			return m, nil
@@ -1341,6 +1360,11 @@ func (m Model) handleKeyPress(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 			if previousMode != m.CodexModelPicker.CustomMode {
 				m.Cursor = 0
 			}
+			if previousMode == screens.CodexCustomModeNone &&
+				m.CodexModelPicker.CustomMode == screens.CodexCustomModePhaseList {
+				m.codexModelDiscoveryRequest++
+				return m, m.codexModelDiscoveryCmd(m.codexModelDiscoveryRequest)
+			}
 			if assignments != nil {
 				m.Selection.CodexModelAssignments = assignments
 				// Derive carril model assignments from the selected preset so each
@@ -1614,6 +1638,15 @@ func (m Model) handleKeyPress(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 
 	return m, nil
+}
+
+func (m Model) codexModelDiscoveryCmd(requestID uint64) tea.Cmd {
+	return func() tea.Msg {
+		return CodexModelsDiscoveredMsg{
+			RequestID: requestID,
+			Models:    discoverCodexModels(context.Background()),
+		}
+	}
 }
 
 func (m *Model) clampAdvisoryScroll() {
