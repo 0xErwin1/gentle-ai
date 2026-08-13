@@ -205,12 +205,11 @@ func runReviewStartFollowingConsent(t *testing.T, tokens []string) string {
 		if choice.Answer != "granted" {
 			continue
 		}
-		fields := strings.Fields(choice.Invocation)
-		if len(fields) < 2 || fields[0] != "gentle-ai" {
-			t.Fatalf("granted invocation is not executable as returned: %q", choice.Invocation)
-		}
+		// Issue #3181: the rendered invocation quotes paths (Windows --cwd),
+		// so it must be tokenized by the shipped splitter, never by
+		// whitespace alone.
 		var granted bytes.Buffer
-		if err := RunReview(fields[2:], &granted); err != nil {
+		if err := RunReview(invocationArgs(t, choice.Invocation), &granted); err != nil {
 			t.Fatalf("the granted invocation the consent envelope named failed: %v\n%s", err, granted.String())
 		}
 		return granted.String()
