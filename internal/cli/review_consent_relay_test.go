@@ -46,11 +46,90 @@ func decodeConsentQuestion(t *testing.T, payload []byte) ReviewIntegrationConsen
 // literally runnable rather than merely descriptive.
 func invocationArgs(t *testing.T, invocation string) []string {
 	t.Helper()
-	fields := strings.Fields(invocation)
-	if len(fields) < 3 || fields[0] != "gentle-ai" || fields[1] != "review" || fields[2] != "start" {
+	words, err := SplitPrintedCommandWords(invocation)
+	if err != nil {
+		t.Fatalf("parse consent invocation: %v", err)
+	}
+	if len(words) < 3 || words[0] != "gentle-ai" || words[1] != "review" || words[2] != "start" {
 		t.Fatalf("consent invocation is not a runnable gentle-ai review start command: %q", invocation)
 	}
-	return fields[2:]
+	return words[2:]
+}
+
+func normalizeConsentFixtureCWD(t *testing.T, payload []byte, root string) []byte {
+	t.Helper()
+	var envelope struct {
+		Choices []struct {
+			Invocation string `json:"invocation"`
+		} `json:"choices"`
+	}
+	if err := json.Unmarshal(payload, &envelope); err != nil {
+		t.Fatalf("decode consent fixture: %v", err)
+	}
+
+	normalized := append([]byte(nil), payload...)
+	for _, choice := range envelope.Choices {
+		args := invocationArgs(t, choice.Invocation)
+		cwd := -1
+		for index, arg := range args {
+			if arg != "--cwd" {
+				continue
+			}
+			if cwd >= 0 {
+				t.Fatalf("consent invocation repeats --cwd: %q", choice.Invocation)
+			}
+			cwd = index
+		}
+		if cwd < 0 || cwd+1 >= len(args) || args[cwd+1] != root {
+			t.Fatalf("consent invocation CWD = %q, want %q: %q", args, root, choice.Invocation)
+		}
+		args[cwd+1] = "/repo"
+
+		words := append([]string{"gentle-ai", "review"}, args...)
+		for index, word := range words {
+			words[index] = reviewTransitionShellWord(word)
+		}
+		normalizedInvocation := strings.Join(words, " ")
+		encodedInvocation, err := json.Marshal(choice.Invocation)
+		if err != nil {
+			t.Fatalf("encode consent invocation: %v", err)
+		}
+		encodedNormalizedInvocation, err := json.Marshal(normalizedInvocation)
+		if err != nil {
+			t.Fatalf("encode normalized consent invocation: %v", err)
+		}
+		if next := bytes.ReplaceAll(normalized, encodedInvocation, encodedNormalizedInvocation); bytes.Equal(next, normalized) {
+			t.Fatalf("consent invocation not found in fixture payload: %q", choice.Invocation)
+		} else {
+			normalized = next
+		}
+	}
+	return normalized
+}
+
+func TestInvocationArgsParsesQuotedWindowsConsentFollowUp(t *testing.T) {
+	root := `C:\Users\Jane Doe\repo`
+	invocation := "gentle-ai review start --cwd '" + root + "' --contract " + ReviewIntegrationContractV1
+
+	want := []string{"start", "--cwd", root, "--contract", ReviewIntegrationContractV1}
+	if got := invocationArgs(t, invocation); strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("invocation args = %#v, want %#v", got, want)
+	}
+}
+
+func TestConsentFixtureNormalizationStripsRenderedWindowsCWDQuoting(t *testing.T) {
+	root := `C:\Users\Jane Doe\repo`
+	payload, err := json.Marshal(ReviewIntegrationConsentResult{Choices: []ReviewIntegrationConsentChoice{{
+		Invocation: "gentle-ai review start --cwd '" + root + "' --contract " + ReviewIntegrationContractV1,
+	}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	normalized := normalizeConsentFixtureCWD(t, payload, root)
+	if !bytes.Contains(normalized, []byte("--cwd /repo")) || bytes.Contains(normalized, []byte("--cwd '/repo'")) {
+		t.Fatalf("normalized fixture CWD = %s, want canonical --cwd /repo", normalized)
+	}
 }
 
 func TestNegotiatedHighRiskStartWithRelayDeclarationEmitsBlockingConsentQuestion(t *testing.T) {
@@ -229,8 +308,8 @@ func TestGlobalReviewModeOffRefusesBeforeV2Consent(t *testing.T) {
 
 	var output bytes.Buffer
 	startArgs := transitionStartArgs(repo, status)
-	if !strings.Contains(strings.Join(startArgs, " "), "--agent=claude-code") {
-		t.Fatalf("v2 disabled START lost its runtime identity: %v", startArgs)
+	if strings.Contains(strings.Join(startArgs, " "), "--agent=") {
+		t.Fatalf("manual v2 disabled START invented a runtime identity: %v", startArgs)
 	}
 	err := RunReview(startArgs, &output)
 	if err == nil || strings.Contains(output.String(), reviewConsentActionRequired) {
@@ -443,11 +522,7 @@ func TestConsentQuestionMatchesVersionedFixture(t *testing.T) {
 			if err := question.Validate(); err != nil {
 				t.Fatal(err)
 			}
-			encodedRoot, err := json.Marshal(root)
-			if err != nil {
-				t.Fatalf("encode fixture repository root: %v", err)
-			}
-			normalized := bytes.ReplaceAll(output.Bytes(), encodedRoot[1:len(encodedRoot)-1], []byte("/repo"))
+			normalized := normalizeConsentFixtureCWD(t, output.Bytes(), root)
 			fixturePath := filepath.Join("..", "..", "contracts", "review-integration", tt.fixture)
 			if os.Getenv("GENTLE_AI_CONSENT_FIXTURE_UPDATE") == "1" {
 				if err := os.WriteFile(fixturePath, normalized, 0o644); err != nil {
@@ -507,7 +582,7 @@ func TestV21ConsentInvocationMustMatchProviderOwnedRequest(t *testing.T) {
 	if err := json.Unmarshal(fixture, &question); err != nil {
 		t.Fatal(err)
 	}
-	base := reviewConsentFollowUpBase("/repo", question.TargetIdentity, question.Projection, "review-consent-fixture", "", "", "reliability", "", false, false, ReviewIntegrationContractV2, "claude-code", "")
+	base := reviewConsentFollowUpBase("/repo", question.TargetIdentity, question.Projection, "review-consent-fixture", "", "", "reliability", "", false, false, ReviewIntegrationContractV2, "", "", reviewIntendedUntrackedScope{})
 	if err := validateReviewConsentInvocations(question, base); err != nil {
 		t.Fatalf("canonical v2.1 consent invocation: %v", err)
 	}
@@ -516,10 +591,9 @@ func TestV21ConsentInvocationMustMatchProviderOwnedRequest(t *testing.T) {
 		name       string
 		invocation string
 	}{
-		{name: "missing agent", invocation: strings.Replace(question.Choices[0].Invocation, " --agent claude-code", "", 1)},
-		{name: "alternate agent", invocation: strings.Replace(question.Choices[0].Invocation, "--agent claude-code", "--agent opencode", 1)},
-		{name: "duplicate supported agent", invocation: strings.Replace(question.Choices[0].Invocation, "--agent claude-code", "--agent claude-code --agent claude-code", 1)},
-		{name: "duplicate alternate agent", invocation: strings.Replace(question.Choices[0].Invocation, "--agent claude-code", "--agent claude-code --agent opencode", 1)},
+		{name: "unexpected Claude agent", invocation: strings.Replace(question.Choices[0].Invocation, " --consent granted", " --agent claude-code --consent granted", 1)},
+		{name: "unexpected OpenCode agent", invocation: strings.Replace(question.Choices[0].Invocation, " --consent granted", " --agent opencode --consent granted", 1)},
+		{name: "duplicate unexpected agent", invocation: strings.Replace(question.Choices[0].Invocation, " --consent granted", " --agent claude-code --agent opencode --consent granted", 1)},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			mutated := question

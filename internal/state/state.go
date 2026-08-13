@@ -37,15 +37,27 @@ type ClaudePhaseAssignmentState struct {
 	Effort string `json:"effort,omitempty"`
 }
 
+// OpenCodeRuntimeProvenance identifies the exact gentle-ai binary that wrote
+// managed OpenCode reviewer assets. The temporary plugin adapter uses it only
+// to launch that binary; native Go remains the review authority owner.
+type OpenCodeRuntimeProvenance struct {
+	Executable string `json:"executable"`
+	SHA256     string `json:"sha256"`
+	Version    string `json:"version"`
+}
+
 // InstallState holds the persisted user selections from the last install run.
 type InstallState struct {
-	InstalledAgents     []string            `json:"installed_agents"`
-	SelectionConfigured bool                `json:"selection_configured,omitempty"`
-	Components          []model.ComponentID `json:"components,omitempty"`
-	Skills              []model.SkillID     `json:"skills,omitempty"`
-	Preset              model.PresetID      `json:"preset,omitempty"`
-	SDDMode             model.SDDModeID     `json:"sdd_mode,omitempty"`
-	StrictTDD           bool                `json:"strict_tdd,omitempty"`
+	InstalledAgents           []string                   `json:"installed_agents"`
+	InstalledBinaryVersion    string                     `json:"installed_binary_version,omitempty"`
+	ManagedAssetDigest        string                     `json:"managed_asset_digest,omitempty"`
+	OpenCodeRuntimeProvenance *OpenCodeRuntimeProvenance `json:"opencode_runtime_provenance,omitempty"`
+	SelectionConfigured       bool                       `json:"selection_configured,omitempty"`
+	Components                []model.ComponentID        `json:"components,omitempty"`
+	Skills                    []model.SkillID            `json:"skills,omitempty"`
+	Preset                    model.PresetID             `json:"preset,omitempty"`
+	SDDMode                   model.SDDModeID            `json:"sdd_mode,omitempty"`
+	StrictTDD                 bool                       `json:"strict_tdd,omitempty"`
 	// CommunityTools records optional tools explicitly selected in the Gentle AI
 	// installer. Configured distinguishes a completed empty selection from legacy
 	// state files that predate persistence of this choice.
@@ -98,6 +110,9 @@ type InstallState struct {
 	// Empty for state files written before persona persistence was added —
 	// callers fall back to PersonaGentleman in that case.
 	Persona string `json:"persona,omitempty"`
+	// PersonaPresent distinguishes an omitted legacy field from an explicit
+	// empty persona, which must fail closed during sync validation.
+	PersonaPresent bool `json:"-"`
 
 	// LastUpdateCheck records the last time a successful remote update check was
 	// performed. Used by the cooldown gate (UpdateCheckTTL = 6h) to avoid
@@ -129,6 +144,25 @@ type InstallState struct {
 	// recorded is authority, not a cosmetic audit field. Nil for state files
 	// written before the switch existed.
 	RDDModeRecordedAt *time.Time `json:"rdd_mode_recorded_at,omitempty"`
+}
+
+// UnmarshalJSON preserves whether the persisted persona field was present.
+// The value itself is still decoded into the public InstallState field.
+func (s *InstallState) UnmarshalJSON(data []byte) error {
+	type plainInstallState InstallState
+	var decoded plainInstallState
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		return err
+	}
+
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return err
+	}
+
+	*s = InstallState(decoded)
+	_, s.PersonaPresent = fields["persona"]
+	return nil
 }
 
 // Path returns the absolute path to the state file for the given home directory.
@@ -194,6 +228,9 @@ func MergeAgents(existing InstallState, newAgents []string) InstallState {
 
 	return InstallState{
 		InstalledAgents:             merged,
+		InstalledBinaryVersion:      existing.InstalledBinaryVersion,
+		ManagedAssetDigest:          existing.ManagedAssetDigest,
+		OpenCodeRuntimeProvenance:   existing.OpenCodeRuntimeProvenance,
 		SelectionConfigured:         existing.SelectionConfigured,
 		Components:                  existing.Components,
 		Skills:                      existing.Skills,
@@ -211,6 +248,7 @@ func MergeAgents(existing InstallState, newAgents []string) InstallState {
 		CodexCarrilModelAssignments: existing.CodexCarrilModelAssignments,
 		CodexPhaseModelAssignments:  existing.CodexPhaseModelAssignments,
 		Persona:                     existing.Persona,
+		PersonaPresent:              existing.PersonaPresent,
 		LastUpdateCheck:             existing.LastUpdateCheck,
 		PendingSync:                 existing.PendingSync,
 		RDDMode:                     existing.RDDMode,
