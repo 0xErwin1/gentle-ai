@@ -545,6 +545,8 @@ func updateCheckError(results []update.UpdateResult) error {
 }
 
 // tuiExecute creates a real install runtime and runs the pipeline with progress reporting.
+var appUserHomeDir = os.UserHomeDir
+
 func tuiExecute(
 	selection model.Selection,
 	resolved planner.ResolvedPlan,
@@ -565,7 +567,7 @@ func tuiExecuteWithBackground(
 	restoreCommandOutput := cli.SetCommandOutputStreaming(false)
 	defer restoreCommandOutput()
 
-	homeDir, err := os.UserHomeDir()
+	homeDir, err := appUserHomeDir()
 	if err != nil {
 		return pipeline.ExecutionResult{Err: fmt.Errorf("resolve user home directory: %w", err)}
 	}
@@ -587,6 +589,12 @@ func tuiExecuteWithBackground(
 			installState = state.InstallState{}
 		} else if readErr != nil {
 			execResult.Err = fmt.Errorf("read persisted install state: %w", readErr)
+			if orchestrator != nil {
+				rollback := orchestrator.Rollback(execResult)
+				if rollback.Err != nil {
+					execResult.Err = errors.Join(execResult.Err, rollback.Err)
+				}
+			}
 			return execResult
 		}
 		installState.InstalledAgents = agentIDs

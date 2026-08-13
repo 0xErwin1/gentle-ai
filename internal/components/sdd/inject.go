@@ -876,6 +876,11 @@ func inlineOpenCodeSDDPrompts(overlayBytes []byte, homeDir, settingsPath string,
 			}
 		}
 		if existingPrompt != "" {
+			if strings.Contains(existingPrompt, openCodeBackgroundPolicyMarker) || strings.Contains(existingPrompt, openCodeBackgroundPolicyEnd) {
+				if err := validateOpenCodeBackgroundPolicy(existingPrompt, false); err != nil {
+					return nil, fmt.Errorf("validate preserved OpenCode background policy: %w", err)
+				}
+			}
 			orchestratorMap["prompt"] = renderPreservedOpenCodeOrchestratorPrompt(existingPrompt, agent, renderOptions)
 		} else {
 			orchestratorMap["prompt"] = renderSDDOrchestratorAsset(agent, renderOptions)
@@ -1062,8 +1067,21 @@ func renderPreservedOpenCodeOrchestratorPrompt(
 	}
 	if policy := renderOpenCodeBackgroundPolicy(agent, renderOptions); policy != "" {
 		migrated = appendOpenCodeBackgroundPolicy(migrated, policy)
+	} else if strings.Contains(migrated, openCodeBackgroundPolicyMarker) || strings.Contains(migrated, openCodeBackgroundPolicyEnd) {
+		migrated = stripOpenCodeBackgroundPolicy(migrated)
 	}
 	return strings.ReplaceAll(migrated, runtimeAgentIDPlaceholder, string(agent))
+}
+
+// stripOpenCodeBackgroundPolicy removes only the complete Gentle AI-owned block.
+// Callers validate marker integrity before preserving a prompt from disk.
+func stripOpenCodeBackgroundPolicy(content string) string {
+	start := strings.Index(content, openCodeBackgroundPolicyMarker)
+	end := strings.Index(content, openCodeBackgroundPolicyEnd)
+	if start < 0 || end < start {
+		return content
+	}
+	return content[:start] + content[end+len(openCodeBackgroundPolicyEnd):]
 }
 
 func removeLegacyOpenCodePlainChatPreflightLines(prompt string) string {

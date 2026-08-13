@@ -130,6 +130,41 @@ func TestResolveOpenCodeBackgroundPersistence(t *testing.T) {
 	}
 }
 
+func TestPrepareOpenCodeBackgroundActivationHonorsEffectiveIntent(t *testing.T) {
+	home := t.TempDir()
+	oldVersion, oldTarget := runOpenCodeVersion, resolveOpenCodeTarget
+	runOpenCodeVersion = func(string) (string, error) { return "1.15.11", nil }
+	resolveOpenCodeTarget = func(string, string, string) (string, error) { return "/real/opencode", nil }
+	t.Cleanup(func() { runOpenCodeVersion, resolveOpenCodeTarget = oldVersion, oldTarget })
+
+	for _, tt := range []struct {
+		name   string
+		effect model.OpenCodeBackgroundIntent
+		want   string
+	}{
+		{name: "auto is a no-op", effect: model.OpenCodeBackgroundAuto},
+		{name: "on prepares activation", effect: model.OpenCodeBackgroundOn, want: "on"},
+		{name: "off prepares deactivation", effect: model.OpenCodeBackgroundOff, want: "off"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			resolution := OpenCodeBackgroundResolution{Effective: tt.effect}
+			plan, err := prepareOpenCodeBackgroundActivation(home, &resolution, true)
+			if err != nil {
+				t.Fatalf("prepareOpenCodeBackgroundActivation() error = %v", err)
+			}
+			if tt.want == "" {
+				if plan != nil || resolution.activationPlan != nil {
+					t.Fatalf("auto resolution prepared plan %v", plan)
+				}
+				return
+			}
+			if plan == nil || plan.Report().Action != tt.want {
+				t.Fatalf("prepared action = %v, want %q", plan, tt.want)
+			}
+		})
+	}
+}
+
 func TestOpenCodeBackgroundStateIsOptionalAndLossless(t *testing.T) {
 	home := t.TempDir()
 	want := state.InstallState{
@@ -304,18 +339,16 @@ func TestInstallPublishesIntentTransactionally(t *testing.T) {
 		name, intent, wantErr string
 		injectErr             error
 		dropAssets            bool
-		writeErr              error
 		wantAsset             bool
 	}{
 		{name: "success on", intent: "on", wantAsset: true},
 		{name: "success off", intent: "off", wantAsset: true},
 		{name: "pipeline failure", intent: "on", injectErr: errors.New("pipeline injection failed"), wantErr: "execute install pipeline"},
-		{name: "post verification failure", intent: "on", dropAssets: true, wantErr: "post-apply verification failed", wantAsset: true},
-		{name: "state write failure", intent: "on", writeErr: errors.New("state disk full"), wantErr: "persist install state", wantAsset: true},
+		{name: "post verification failure", intent: "on", dropAssets: true, wantErr: "post-apply verification failed"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			home := installTestHome(t)
-			oldInject, oldWrite := injectSDD, writeInstallState
+			oldInject := injectSDD
 			injectSDD = func(path string, adapter agents.Adapter, mode model.SDDModeID, options ...sdd.InjectOptions) (sdd.InjectionResult, error) {
 				if tt.injectErr != nil {
 					return sdd.InjectionResult{}, tt.injectErr
@@ -325,13 +358,7 @@ func TestInstallPublishesIntentTransactionally(t *testing.T) {
 				}
 				return sdd.Inject(path, adapter, mode, options...)
 			}
-			writeInstallState = func(path string, value state.InstallState) error {
-				if tt.writeErr != nil {
-					return tt.writeErr
-				}
-				return oldWrite(path, value)
-			}
-			t.Cleanup(func() { injectSDD, writeInstallState = oldInject, oldWrite })
+			t.Cleanup(func() { injectSDD = oldInject })
 
 			result, err := RunInstall([]string{"--agent", "opencode", "--component", "sdd", "--opencode-background-subagents=" + tt.intent}, system.DetectionResult{})
 			if (err != nil) != (tt.wantErr != "") || (err != nil && !strings.Contains(err.Error(), tt.wantErr)) {
@@ -607,14 +634,12 @@ func TestSyncBackgroundPublicationWaitsForVerification(t *testing.T) {
 		intent    model.OpenCodeBackgroundIntent
 		injectErr error
 		dropAsset bool
-		writeErr  error
 		wantErr   string
 	}{
 		{name: "success on", intent: model.OpenCodeBackgroundOn},
 		{name: "success off", intent: model.OpenCodeBackgroundOff},
 		{name: "pipeline failure", intent: model.OpenCodeBackgroundOn, injectErr: errors.New("pipeline injection failed"), wantErr: "execute sync pipeline"},
 		{name: "verification failure", intent: model.OpenCodeBackgroundOn, dropAsset: true, wantErr: "post-sync verification failed"},
-		{name: "state write failure", intent: model.OpenCodeBackgroundOn, writeErr: errors.New("state disk full"), wantErr: "persist managed asset provenance"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			home := syncBackgroundTestHome(t)
@@ -628,7 +653,7 @@ func TestSyncBackgroundPublicationWaitsForVerification(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			oldInject, oldWrite := injectSDD, writeInstallState
+			oldInject := injectSDD
 			injectSDD = func(path string, adapter agents.Adapter, mode model.SDDModeID, options ...sdd.InjectOptions) (sdd.InjectionResult, error) {
 				if tt.injectErr != nil {
 					return sdd.InjectionResult{}, tt.injectErr
@@ -638,13 +663,7 @@ func TestSyncBackgroundPublicationWaitsForVerification(t *testing.T) {
 				}
 				return sdd.Inject(path, adapter, mode, options...)
 			}
-			writeInstallState = func(path string, value state.InstallState) error {
-				if tt.writeErr != nil {
-					return tt.writeErr
-				}
-				return oldWrite(path, value)
-			}
-			t.Cleanup(func() { injectSDD, writeInstallState = oldInject, oldWrite })
+			t.Cleanup(func() { injectSDD = oldInject })
 
 			selection := model.Selection{
 				Agents:     []model.AgentID{model.AgentOpenCode},

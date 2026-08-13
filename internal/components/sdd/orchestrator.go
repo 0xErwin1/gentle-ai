@@ -1,6 +1,7 @@
 package sdd
 
 import (
+	"fmt"
 	"strings"
 
 	"github.com/gentleman-programming/gentle-ai/v2/internal/assets"
@@ -50,7 +51,9 @@ func renderOpenCodeBackgroundPolicy(agent model.AgentID, options ...Orchestrator
 
 func mustReadOpenCodeBackgroundPolicy() string {
 	content := assets.MustRead(openCodeBackgroundPolicyAsset)
-	validateOpenCodeBackgroundPolicy(content, true)
+	if err := validateOpenCodeBackgroundPolicy(content, true); err != nil {
+		panic(err.Error())
+	}
 	return content
 }
 
@@ -58,15 +61,19 @@ func appendOpenCodeBackgroundPolicy(content, policy string) string {
 	markerCount := strings.Count(content, openCodeBackgroundPolicyMarker)
 	endCount := strings.Count(content, openCodeBackgroundPolicyEnd)
 	if markerCount != 0 || endCount != 0 {
-		validateOpenCodeBackgroundPolicy(content, false)
+		if err := validateOpenCodeBackgroundPolicy(content, false); err != nil {
+			panic(err.Error())
+		}
 		return content
 	}
 
-	validateOpenCodeBackgroundPolicy(policy, true)
+	if err := validateOpenCodeBackgroundPolicy(policy, true); err != nil {
+		panic(err.Error())
+	}
 	return strings.TrimRight(content, "\n") + "\n\n" + policy + "\n"
 }
 
-func validateOpenCodeBackgroundPolicy(content string, standalone bool) {
+func validateOpenCodeBackgroundPolicy(content string, standalone bool) error {
 	trimmed := strings.TrimSpace(content)
 	start := strings.Index(trimmed, openCodeBackgroundPolicyMarker)
 	end := strings.Index(trimmed, openCodeBackgroundPolicyEnd)
@@ -76,14 +83,15 @@ func validateOpenCodeBackgroundPolicy(content string, standalone bool) {
 		(end > 0 && trimmed[end-1] != '\n') ||
 		(start > 0 && trimmed[start-1] != '\n') ||
 		(end+len(openCodeBackgroundPolicyEnd) < len(trimmed) && trimmed[end+len(openCodeBackgroundPolicyEnd)] != '\n') {
-		panic("sdd: inconsistently marked OpenCode background policy")
+		return fmt.Errorf("sdd: inconsistently marked OpenCode background policy")
 	}
 	if standalone && (start != 0 || end+len(openCodeBackgroundPolicyEnd) != len(trimmed)) {
-		panic("assets: OpenCode background policy must contain only its marked section")
+		return fmt.Errorf("assets: OpenCode background policy must contain only its marked section")
 	}
 	if strings.TrimSpace(trimmed[start+len(openCodeBackgroundPolicyMarker):end]) == "" {
-		panic("sdd: empty OpenCode background policy")
+		return fmt.Errorf("sdd: empty OpenCode background policy")
 	}
+	return nil
 }
 
 // sddOrchestratorAsset returns the embedded asset path for the SDD orchestrator

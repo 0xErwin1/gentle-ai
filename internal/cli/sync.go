@@ -1507,7 +1507,19 @@ func validatePersistedSyncState(persisted state.InstallState, readErr error) err
 // and a fully-built Selection (agents + components + options).
 // This is the function the TUI calls directly to avoid CLI flag parsing.
 func RunSyncWithSelection(homeDir string, selection model.Selection) (SyncResult, error) {
-	return runSyncWithSelection(homeDir, selection, OpenCodeBackgroundResolution{})
+	persistedState, persistedStateErr := state.Read(homeDir)
+	if persistedStateErr != nil && !os.IsNotExist(persistedStateErr) {
+		return SyncResult{Agents: selection.Agents, Selection: selection}, fmt.Errorf("read persisted installation state: %w", persistedStateErr)
+	}
+	background, err := resolveOpenCodeBackgroundCLI(false, "", persistedState)
+	if err != nil {
+		return SyncResult{Agents: selection.Agents, Selection: selection}, err
+	}
+	background.activationPlan, err = prepareOpenCodeBackgroundActivation(homeDir, &background, containsAgent(selection.Agents, model.AgentOpenCode))
+	if err != nil {
+		return SyncResult{Agents: selection.Agents, Selection: selection, Background: background}, fmt.Errorf("prepare OpenCode background activation: %w", err)
+	}
+	return runSyncWithSelection(homeDir, selection, background)
 }
 
 func runSyncWithSelection(homeDir string, selection model.Selection, background OpenCodeBackgroundResolution) (SyncResult, error) {
