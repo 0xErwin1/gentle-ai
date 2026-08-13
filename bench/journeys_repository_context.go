@@ -127,7 +127,7 @@ func leaksRepositoryPath(output, repo string) bool {
 
 func repositoryContextJourneys() []Journey {
 	return []Journey{{
-		ID:     "j103-repository-context-survives-fresh-process",
+		ID:     "j104-repository-context-survives-fresh-process",
 		Title:  "Repository context reconciliation survives fresh START and STATUS processes",
 		Source: "issue #1875: one committed repository_context event must reconcile path-free and replay idempotently across native CLI processes",
 		Steps: []Step{

@@ -20,6 +20,7 @@ import (
 const (
 	compactRecordSchema                 = "gentle-ai.review-state-record/v2"
 	CompactEffectClassRepositoryContext = "repository_context"
+	compactEffectClassRequestedTrace    = "requested_trace"
 )
 
 // Compact store entry artifact names. Every file the compact store writes
@@ -1381,7 +1382,7 @@ func StartCompactAuthority(ctx context.Context, repo string, request CompactStar
 	}
 	if request.RepositoryContext {
 		if _, err := ReconcileCompactRepositoryContext(ctx, requestedStore, record); err != nil {
-			return CompactStartResult{}, fmt.Errorf("reconcile review start repository context: %w", err)
+			return CompactStartResult{Record: record, Action: CompactStartCreated, LensesRequired: len(request.State.SelectedLenses) > 0}, fmt.Errorf("reconcile review start repository context: %w", err)
 		}
 	}
 	if request.TracePath != "" {
@@ -2435,7 +2436,7 @@ func validateCompactEffectIntents(record CompactRecord) error {
 }
 
 func validCompactEffectIntentFields(intent CompactEffectIntent) bool {
-	return (intent.Class == "repository_context" || intent.Class == "requested_trace") &&
+	return (intent.Class == CompactEffectClassRepositoryContext || intent.Class == compactEffectClassRequestedTrace) &&
 		strings.TrimSpace(intent.Destination) != "" && validSHA256(intent.PayloadHash)
 }
 

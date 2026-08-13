@@ -1605,6 +1605,7 @@ func TestCompactRecordWithoutIntentsRetainsHistoricalIdentityAndBytes(t *testing
 }
 
 func TestCompactEffectIntentMismatchBlocksSuccessor(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
 	repo := initSnapshotRepo(t)
 	state := newCompactTestState(t, repo, "effect-intent-schema-only")
 	store, err := CompactAuthoritativeStore(context.Background(), repo, state.LineageID)
@@ -1636,6 +1637,29 @@ func TestCompactEffectIntentMismatchBlocksSuccessor(t *testing.T) {
 	loaded, err := store.Load()
 	if err != nil || loaded.Revision != record.Revision {
 		t.Fatalf("authority after refusal = %#v, %v", loaded, err)
+	}
+}
+
+func TestCompactStartReturnsCommittedRecordWhenRepositoryContextReconciliationFails(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	repo := initSnapshotRepo(t)
+	state := newCompactTestState(t, repo, "start-post-commit-effect-failure")
+	if err := os.WriteFile(filepath.Join(home, ".gentle-ai"), []byte("blocked"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := StartCompactAuthority(context.Background(), repo, CompactStartRequest{State: state, RepositoryContext: true})
+	if err == nil || result.Action != CompactStartCreated || result.Record.State.LineageID != state.LineageID {
+		t.Fatalf("start result = %#v, %v", result, err)
+	}
+	store, storeErr := CompactAuthoritativeStore(context.Background(), repo, state.LineageID)
+	if storeErr != nil {
+		t.Fatal(storeErr)
+	}
+	committed, loadErr := store.Load()
+	if loadErr != nil || committed.Revision != result.Record.Revision {
+		t.Fatalf("committed record = %#v, %v", committed, loadErr)
 	}
 }
 

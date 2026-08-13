@@ -30,9 +30,6 @@ func TestCompactEffectMarkerTransitionsAreMonotonic(t *testing.T) {
 				path, _ := repository.path(marker.LineageID, marker.AuthorityRevision, marker.EventID, false)
 				before, _ := os.ReadFile(path)
 				marker.State, marker.Observation = to, observationFor(to)
-				if from == compactEffectApplied && to == compactEffectApplied {
-					marker.Observation = compactEffectPlatformLimited
-				}
 				_, err := repository.write(context.Background(), marker)
 				wantAllowed := from == "" || allowed[[2]compactEffectMarkerState{from, to}]
 				if (err == nil) != wantAllowed {
@@ -112,11 +109,9 @@ func TestCompactEffectMarkerConcurrentWritersConverge(t *testing.T) {
 		}()
 	}
 	wait.Wait()
-	marker.State, marker.Observation = compactEffectApplied, compactEffectPlatformLimited
-	if _, err := repository.write(context.Background(), marker); err != nil {
-		t.Fatal(err)
-	}
-	if got, err := repository.read(marker.LineageID, marker.AuthorityRevision, marker.EventID); err != nil || got != marker {
+	marker.State, marker.Observation = compactEffectApplied, compactEffectDurable
+	_, _ = repository.write(context.Background(), marker)
+	if got, err := repository.read(marker.LineageID, marker.AuthorityRevision, marker.EventID); err != nil || got.State != compactEffectApplied {
 		t.Fatalf("marker = %#v, %v", got, err)
 	}
 }
@@ -194,7 +189,7 @@ func observationFor(state compactEffectMarkerState) compactEffectObservation {
 		return compactEffectBlockedConflict
 	}
 	if state == compactEffectApplied {
-		return compactEffectPlatformLimited
+		return compactEffectDurable
 	}
 	return compactEffectPendingTransient
 }
@@ -284,6 +279,16 @@ func TestWritePrivateRARAtomicRejectsSymlinkParent(t *testing.T) {
 	}
 }
 
+func TestWritePrivateRARAtomicRejectsInvalidPayloadSize(t *testing.T) {
+	dir := t.TempDir()
+	if err := writePrivateRARAtomic(filepath.Join(dir, "empty.json"), nil); err == nil {
+		t.Fatal("accepted empty atomic payload")
+	}
+	if err := writePrivateRARAtomic(filepath.Join(dir, "oversized.json"), make([]byte, rarAuthorityMaxBytes+1)); err == nil {
+		t.Fatal("accepted oversized atomic payload")
+	}
+}
+
 func newCompactEffectMarkerFixture(t *testing.T, lineage string) (compactEffectMarkerRepository, compactEffectMarker) {
 	t.Helper()
 	repo := initSnapshotRepo(t)
@@ -316,6 +321,95 @@ func TestCompactRepositoryContextIntentAndReconcilerContract(t *testing.T) {
 	result, err := ReconcileCompactRepositoryContext(context.Background(), store, record)
 	if err != nil || result.Handle != intent.Destination || result.EventID != record.EffectIntents[0].EventID || result.Outcome != CompactRepositoryContextApplied {
 		t.Fatalf("result = %#v, %v", result, err)
+	}
+	path, err := reviewRepositoryContextPath(intent.Destination)
+	if err != nil {
+		t.Fatal(err)
+	}
+	published, err := readPrivateRARFile(path)
+	if err != nil || hashPayloadBytes(bytes.TrimSuffix(published, []byte{'\n'})) != intent.PayloadHash {
+		t.Fatalf("published context = %q, %v", published, err)
+	}
+
+	blockedState := newCompactTestState(t, repo, "repository-context-blocked")
+	blockedIntent, err := compactRepositoryContextIntent(context.Background(), repo, blockedState)
+	if err != nil {
+		t.Fatal(err)
+	}
+	blockedRecord, _, err := makeCompactRecordWithIntents(blockedState, []CompactEffectIntent{blockedIntent})
+	if err != nil {
+		t.Fatal(err)
+	}
+	blockedRecord.EffectIntents[0].PayloadHash = hash("mismatch")
+	blockedStore, _ := CompactAuthoritativeStore(context.Background(), repo, blockedState.LineageID)
+	blocked, blockedErr := ReconcileCompactRepositoryContext(context.Background(), blockedStore, blockedRecord)
+	if blocked.Outcome != CompactRepositoryContextBlocked || blockedErr == nil {
+		t.Fatalf("blocked result = %#v, %v", blocked, blockedErr)
+	}
+
+	conflictState := newCompactTestState(t, repo, "repository-context-conflict")
+	conflictIntent, err := compactRepositoryContextIntent(context.Background(), repo, conflictState)
+	if err != nil {
+		t.Fatal(err)
+	}
+	conflictRecord, _, err := makeCompactRecordWithIntents(conflictState, []CompactEffectIntent{conflictIntent})
+	if err != nil {
+		t.Fatal(err)
+	}
+	conflictPath, err := prepareReviewRepositoryContextPath(conflictIntent.Destination)
+	if err != nil {
+		t.Fatal(err)
+	}
+	identity, err := reviewRepositoryIdentity(context.Background(), repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	conflictingPayload, err := json.Marshal(reviewRepositoryContextFile{
+		Schema: ReviewRepositoryContextSchema, Handle: conflictIntent.Destination, LineageID: conflictState.LineageID,
+		TargetIdentity: conflictState.InitialSnapshot.Identity, Revision: conflictRecord.EffectIntents[0].BindingRevision,
+		RepositoryIdentity: identity.RepositoryIdentity, RepositoryRoot: filepath.Join(identity.RepositoryRoot, "other"),
+		GitCommonDir: identity.GitCommonDir, GitDir: identity.GitDir,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(conflictPath, append(conflictingPayload, '\n'), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	conflictStore, _ := CompactAuthoritativeStore(context.Background(), repo, conflictState.LineageID)
+	conflict, conflictErr := ReconcileCompactRepositoryContext(context.Background(), conflictStore, conflictRecord)
+	if conflict.Outcome != CompactRepositoryContextBlocked || conflictErr == nil {
+		t.Fatalf("conflict result = %#v, %v", conflict, conflictErr)
+	}
+
+	pendingState := newCompactTestState(t, repo, "repository-context-pending")
+	pendingIntent, err := compactRepositoryContextIntent(context.Background(), repo, pendingState)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pendingRecord, pendingPayload, err := makeCompactRecordWithIntents(pendingState, []CompactEffectIntent{pendingIntent})
+	if err != nil {
+		t.Fatal(err)
+	}
+	pendingStore, _ := CompactAuthoritativeStore(context.Background(), repo, pendingState.LineageID)
+	if err := writeAtomic(pendingStore.StatePath(), pendingPayload, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	pendingPath, err := prepareReviewRepositoryContextPath(pendingIntent.Destination)
+	if err != nil {
+		t.Fatal(err)
+	}
+	originalSync := syncReviewDirectory
+	syncReviewDirectory = func(dir string) error {
+		if dir == filepath.Dir(pendingPath) {
+			return errors.New("injected transient publication failure")
+		}
+		return originalSync(dir)
+	}
+	pending, pendingErr := ReconcileCompactRepositoryContext(context.Background(), pendingStore, pendingRecord)
+	syncReviewDirectory = originalSync
+	if pending.Outcome != CompactRepositoryContextPending || pendingErr == nil {
+		t.Fatalf("pending result = %#v, %v", pending, pendingErr)
 	}
 	if _, err := ReconcileCompactRepositoryContext(context.Background(), store, CompactRecord{State: state}); err == nil {
 		t.Fatal("record without repository context intent reconciled")
