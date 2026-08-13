@@ -67,7 +67,11 @@ func ReconcileCompactRepositoryContext(ctx context.Context, store CompactStore, 
 	if readErr != nil {
 		return CompactRepositoryContextResult{}, errors.Join(err, readErr)
 	}
-	return CompactRepositoryContextResult{Handle: selected.Destination, EventID: selected.EventID, Outcome: CompactRepositoryContextOutcome(marker.State)}, err
+	outcome := CompactRepositoryContextOutcome(marker.State)
+	if marker.State == compactEffectApplied && marker.Observation == compactEffectPlatformLimited {
+		outcome = CompactRepositoryContextDurabilityLimited
+	}
+	return CompactRepositoryContextResult{Handle: selected.Destination, EventID: selected.EventID, Outcome: outcome}, err
 }
 
 func reconcileCompactRepositoryContext(ctx context.Context, store CompactStore, record CompactRecord) error {
@@ -113,29 +117,41 @@ func reconcileCompactRepositoryContext(ctx context.Context, store CompactStore, 
 			return writeCompactRepositoryContextMarker(ctx, markers, marker, compactEffectBlocked, compactEffectBlockedConflict,
 				errors.New("repository context effect binding or payload does not match committed intent")) // refusal:by-design world-action: committed effect identity cannot be rewritten by an operator
 		}
-		path, err := reviewRepositoryContextPath(handle)
-		if err == nil {
-			var home string
-			home, err = reviewRepositoryContextHome()
-			if err == nil {
-				var root string
-				root, err = ensureReviewRepositoryContextStorageRoot(home, true)
-				if err == nil {
-					err = ensurePrivateLocatorDirectory(root, filepath.Dir(path))
-				}
-			}
-		}
+		path, err := prepareReviewRepositoryContextPath(handle)
 		if err == nil {
 			err = publishReviewRepositoryContext(path, append(payload, '\n'))
 		}
 		if err != nil {
+			var conflict *RARAuthorityConflictError
+			if errors.As(err, &conflict) {
+				return writeCompactRepositoryContextMarker(ctx, markers, marker, compactEffectBlocked, compactEffectBlockedConflict, err)
+			}
 			return writeCompactRepositoryContextMarker(ctx, markers, marker, compactEffectPending, compactEffectPendingTransient, err)
 		}
-		if err := writeCompactRepositoryContextMarker(ctx, markers, marker, compactEffectApplied, compactEffectPlatformLimited, nil); err != nil {
+		if err := writeCompactRepositoryContextMarker(ctx, markers, marker, compactEffectApplied, compactEffectDurable, nil); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+func prepareReviewRepositoryContextPath(handle string) (string, error) {
+	path, err := reviewRepositoryContextPath(handle)
+	if err != nil {
+		return "", err
+	}
+	home, err := reviewRepositoryContextHome()
+	if err != nil {
+		return "", err
+	}
+	root, err := ensureReviewRepositoryContextStorageRoot(home, true)
+	if err != nil {
+		return "", err
+	}
+	if err := ensurePrivateLocatorDirectory(root, filepath.Dir(path)); err != nil {
+		return "", err
+	}
+	return path, nil
 }
 
 func writeCompactRepositoryContextMarker(ctx context.Context, repository compactEffectMarkerRepository, marker compactEffectMarker, state compactEffectMarkerState, observation compactEffectObservation, cause error) error {
@@ -148,6 +164,9 @@ func writeCompactRepositoryContextMarker(ctx context.Context, repository compact
 		return cause
 	}
 	if publication.DurabilityLimited {
+		if marker.State == compactEffectApplied {
+			return nil
+		}
 		return errors.New("repository context marker durability is limited") // refusal:by-design world-action: the platform could not prove directory durability; retrying the same event may promote it
 	}
 	return nil

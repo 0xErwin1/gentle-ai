@@ -329,6 +329,9 @@ func publishPrivateRARImmutable(path string, payload []byte) error {
 }
 
 func writePrivateRARAtomic(path string, payload []byte) error {
+	if len(payload) == 0 || len(payload) > rarAuthorityMaxBytes {
+		return errors.New("RAR atomic payload size is invalid") // refusal:by-design operator-knowledge: callers must supply a non-empty payload within the closed authority size bound
+	}
 	dir := filepath.Dir(path)
 	if err := validatePrivateRARDirectory(dir); err != nil {
 		return err

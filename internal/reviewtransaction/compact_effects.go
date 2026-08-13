@@ -22,6 +22,7 @@ const (
 	compactEffectApplied          compactEffectMarkerState = "applied"
 	compactEffectPendingTransient compactEffectObservation = "pending_transient"
 	compactEffectBlockedConflict  compactEffectObservation = "blocked_conflict"
+	compactEffectDurable          compactEffectObservation = "durable"
 	compactEffectPlatformLimited  compactEffectObservation = "platform_durability_limited"
 )
 
@@ -81,6 +82,13 @@ func (repository compactEffectMarkerRepository) write(ctx context.Context, marke
 			return publication, err
 		}
 		publication.DurabilityLimited = true
+		if marker.State == compactEffectApplied {
+			marker.Observation = compactEffectPlatformLimited
+			payload, _ = json.Marshal(marker)
+			if rewriteErr := writePrivateRARAtomic(path, append(payload, '\n')); rewriteErr != nil && !errors.As(rewriteErr, &syncErr) {
+				return publication, errors.Join(err, rewriteErr)
+			}
+		}
 		publicationErr = err
 	}
 	got, err := repository.read(marker.LineageID, marker.AuthorityRevision, marker.EventID)
@@ -118,7 +126,7 @@ func (repository compactEffectMarkerRepository) read(lineageID, revision, eventI
 func validateCompactEffectMarker(marker compactEffectMarker, lineageID, revision, eventID string) error {
 	validPair := marker.State == compactEffectPending && marker.Observation == compactEffectPendingTransient ||
 		marker.State == compactEffectBlocked && marker.Observation == compactEffectBlockedConflict ||
-		marker.State == compactEffectApplied && marker.Observation == compactEffectPlatformLimited
+		marker.State == compactEffectApplied && (marker.Observation == compactEffectDurable || marker.Observation == compactEffectPlatformLimited)
 	if marker.Schema != compactEffectMarkerSchema || marker.LineageID != lineageID || marker.AuthorityRevision != revision || marker.EventID != eventID || !validPair {
 		return errors.New("invalid compact effect marker") // refusal:by-design operator-knowledge: marker schema, binding, state, and observation are closed
 	}

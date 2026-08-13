@@ -282,6 +282,9 @@ func resolveReviewRepositoryContext(ctx context.Context, handle string) (string,
 	return root, binding, nil
 }
 
+// resolveReviewRepositoryContextLoadedHook is a test-only observation hook for
+// the post-load window. Tests replacing this mutable package variable must not
+// run in parallel.
 var resolveReviewRepositoryContextLoadedHook = func() {}
 
 // resolveOpaqueReviewRepositoryContext proves the private locator still names
@@ -509,7 +512,7 @@ func publishReviewRepositoryContext(path string, payload []byte) error {
 	existing, err := readReviewRepositoryContext(path)
 	if err == nil {
 		if !reviewRepositoryContextPayloadEqual(existing, payload) {
-			return errors.New("existing review repository context differs")
+			return &RARAuthorityConflictError{Slot: path}
 		}
 		return SyncReviewDirectory(filepath.Dir(path))
 	}
@@ -537,8 +540,11 @@ func publishReviewRepositoryContext(path string, payload []byte) error {
 		return err
 	}
 	existing, err = readReviewRepositoryContext(path)
-	if err != nil || !reviewRepositoryContextPayloadEqual(existing, payload) {
-		return errors.New("concurrent review repository context differs")
+	if err != nil {
+		return err
+	}
+	if !reviewRepositoryContextPayloadEqual(existing, payload) {
+		return &RARAuthorityConflictError{Slot: path}
 	}
 	return SyncReviewDirectory(filepath.Dir(path))
 }
