@@ -11,6 +11,37 @@ type blockingPromptRoute struct {
 	nativeTool string
 }
 
+type providerDefectFixRoute string
+
+const (
+	providerDefectRecommendPublishedFix providerDefectFixRoute = "recommend_published_fix"
+	providerDefectAddOccurrenceComment  providerDefectFixRoute = "add_occurrence_comment"
+	providerDefectPossibleRegression    providerDefectFixRoute = "possible_regression"
+)
+
+// providerDefectEvidenceChannel models the prompt contract only. It deliberately
+// has no production caller: this PR defines evidence relevance, not installation
+// or updater-channel behavior.
+func providerDefectEvidenceChannel(installedBuild string) string {
+	if strings.Contains(installedBuild, "-rc.") || strings.Contains(installedBuild, "-main.") {
+		return "prerelease"
+	}
+	return "stable"
+}
+
+func providerDefectRouteForPublishedFix(installedBuild, fixChannel string, published, predatesFix, containsFixAndReproduces bool) providerDefectFixRoute {
+	if !published || providerDefectEvidenceChannel(installedBuild) != fixChannel {
+		return providerDefectAddOccurrenceComment
+	}
+	if predatesFix {
+		return providerDefectRecommendPublishedFix
+	}
+	if containsFixAndReproduces {
+		return providerDefectPossibleRegression
+	}
+	return providerDefectAddOccurrenceComment
+}
+
 // generic is the provider-neutral source that every agent-specific handoff must project.
 const providerDefectHandoffCanonicalPath = "generic/sdd-orchestrator.md"
 
@@ -159,11 +190,14 @@ func TestCoordinatorOrchestratorsCarryGentleAIProviderDefectHandoff(t *testing.T
 		{name: "definitive equivalent lookup", text: "complete a definitive lookup across open and closed issues for an equivalent defect or canonical tracker"},
 		{name: "equivalent definition", text: "same observable defect and affected contract, backed by concrete evidence rather than title similarity alone"},
 		{name: "canonical definition", text: "owns the causal class"},
-		{name: "published fix definition", text: "identified fix verifiably contained by a published release in the applicable installed channel"},
+		{name: "published fix ordering", text: "First establish that the equivalent has an identified fix verifiably contained by a published release. Then determine the installed build and derive its evidence channel only from its build string: the contract's recognized prerelease tags are `-rc.` and `-main.`; every other build is stable. That release is a relevant published fix only when it is in the installed build's evidence channel."},
 		{name: "regression definition", text: "reproduction on a build proven to contain that fix"},
 		{name: "definitive definition", text: "completed open+closed lookup with a classifiable result; incomplete, error, or unknown is not definitive"},
-		{name: "published evidence exclusion", text: "A main-only commit, local/source build, unmerged PR, or unsupported assertion is not published-fix evidence."},
+		{name: "published evidence exclusion", text: "A main-only commit, local/source build, unmerged PR, or unsupported assertion is not published-fix evidence, including for prerelease or main builds."},
 		{name: "unfixed equivalent occurrence", text: "If the equivalent has no verifiable relevant published fix, add exactly one occurrence comment"},
+		{name: "other-channel occurrence", text: "A fix published only to the other evidence channel is not a relevant published fix for this occurrence: add exactly one occurrence comment"},
+		{name: "other-channel location note", text: "note where the fix is published"},
+		{name: "channel choice ownership", text: "Do not recommend switching channels; channel choice is the user's."},
 		{name: "outdated installed build", text: "If the installed build predates that release, recommend installing the published fix and reproducing; do not create or comment for that occurrence yet."},
 		{name: "regression routing", text: "If the installed build demonstrably contains the fix and still reproduces, treat it as a possible regression: reproduction on a build proven to contain that fix; comment on a suitable canonical tracker, or create a linked regression issue when that tracker is unsuitable. Never reopen automatically."},
 		{name: "create new automated report", text: "create a new automated provider-defect report"},
@@ -277,8 +311,9 @@ func TestCoordinatorOrchestratorsCarryGentleAIProviderDefectHandoff(t *testing.T
 			for _, pair := range [][2]string{
 				{"for explicit consent to report the apparent defect", "Immediately before the first GitHub operation, perform a final privacy scan"},
 				{"Immediately before the first GitHub operation, perform a final privacy scan", "complete a definitive lookup across open and closed issues"},
-				{"complete a definitive lookup across open and closed issues", "If the equivalent has a verifiable relevant published fix"},
-				{"If the equivalent has a verifiable relevant published fix", "If the installed build predates that release"},
+				{"complete a definitive lookup across open and closed issues", "First establish that the equivalent has an identified fix verifiably contained by a published release"},
+				{"First establish that the equivalent has an identified fix verifiably contained by a published release", "Then determine the installed build"},
+				{"Then determine the installed build", "That release is a relevant published fix only when it is in the installed build's evidence channel"},
 				{"Only a definitive lookup may branch to GitHub mutation", "create a new automated provider-defect report"},
 				{"Only a definitive lookup may branch to GitHub mutation", "add exactly one occurrence comment"},
 				{"create a new automated provider-defect report", "Confirmed creation requires the GitHub create operation"},
@@ -286,6 +321,46 @@ func TestCoordinatorOrchestratorsCarryGentleAIProviderDefectHandoff(t *testing.T
 				if strings.Index(contract, pair[0]) >= strings.Index(contract, pair[1]) {
 					t.Errorf("provider-defect handoff must place %q before %q", pair[0], pair[1])
 				}
+			}
+		})
+	}
+}
+
+func TestProviderDefectPublishedFixEvidenceChannelRouting(t *testing.T) {
+	cases := []struct {
+		name                     string
+		installedBuild           string
+		fixChannel               string
+		published                bool
+		predatesFix              bool
+		containsFixAndReproduces bool
+		want                     providerDefectFixRoute
+	}{
+		{name: "stable build receives newer stable fix", installedBuild: "2.4.0", fixChannel: "stable", published: true, predatesFix: true, want: providerDefectRecommendPublishedFix},
+		{name: "stable build does not switch to RC-only fix", installedBuild: "2.4.0", fixChannel: "prerelease", published: true, predatesFix: true, want: providerDefectAddOccurrenceComment},
+		{name: "prerelease build receives newer prerelease fix", installedBuild: "2.5.0-rc.1", fixChannel: "prerelease", published: true, predatesFix: true, want: providerDefectRecommendPublishedFix},
+		{name: "main-only fix remains unpublished", installedBuild: "2.5.0-main.1", fixChannel: "prerelease", published: false, predatesFix: true, want: providerDefectAddOccurrenceComment},
+		{name: "matching published fix that still reproduces is a possible regression", installedBuild: "2.5.0-rc.2", fixChannel: "prerelease", published: true, containsFixAndReproduces: true, want: providerDefectPossibleRegression},
+	}
+
+	contract := providerDefectHandoffSection(t, providerDefectHandoffCanonicalPath)
+	for _, required := range []string{
+		"First establish that the equivalent has an identified fix verifiably contained by a published release. Then determine the installed build and derive its evidence channel only from its build string: the contract's recognized prerelease tags are `-rc.` and `-main.`; every other build is stable. That release is a relevant published fix only when it is in the installed build's evidence channel.",
+		"A fix published only to the other evidence channel is not a relevant published fix for this occurrence: add exactly one occurrence comment",
+		"note where the fix is published",
+		"Do not recommend switching channels; channel choice is the user's.",
+		"A main-only commit, local/source build, unmerged PR, or unsupported assertion is not published-fix evidence, including for prerelease or main builds.",
+		"If the installed build predates that release, recommend installing the published fix and reproducing",
+	} {
+		if !strings.Contains(contract, required) {
+			t.Fatalf("canonical provider-defect handoff missing channel-routing rule %q", required)
+		}
+	}
+
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := providerDefectRouteForPublishedFix(tt.installedBuild, tt.fixChannel, tt.published, tt.predatesFix, tt.containsFixAndReproduces); got != tt.want {
+				t.Fatalf("route = %q, want %q", got, tt.want)
 			}
 		})
 	}
