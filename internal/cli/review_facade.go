@@ -1012,9 +1012,28 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 								lensContextBudgetExceeded = reviewLensContextStatusBudgetExhausted(ctx, root, record.State, record.Revision)
 							}
 							if artifactErr == nil && !lensContextBudgetExceeded {
-								repositoryContext, artifactErr = reviewtransaction.PublishReviewRepositoryContext(ctx, root, reviewtransaction.ReviewRepositoryContextBinding{
-									LineageID: record.State.LineageID, TargetIdentity: record.State.InitialSnapshot.Identity, Revision: record.Revision,
-								})
+								if hasRepositoryContextIntent(record.EffectIntents) {
+									var reconciled reviewtransaction.CompactRepositoryContextResult
+									reconciled, artifactErr = reviewtransaction.ReconcileCompactRepositoryContext(ctx, store, record)
+									if artifactErr == nil {
+										repositoryContext = reconciled.Handle
+										result.RepositoryContext = &ReviewRepositoryContextReference{
+											Capability: reviewtransaction.ReviewRepositoryContextCapability, Handle: reconciled.Handle,
+											Revision: record.Revision, TargetIdentity: record.State.InitialSnapshot.Identity,
+											EventID: reconciled.EventID, Outcome: reconciled.Outcome,
+										}
+									}
+								} else {
+									repositoryContext, artifactErr = reviewtransaction.PublishReviewRepositoryContext(ctx, root, reviewtransaction.ReviewRepositoryContextBinding{
+										LineageID: record.State.LineageID, TargetIdentity: record.State.InitialSnapshot.Identity, Revision: record.Revision,
+									})
+									if artifactErr == nil && *contract == ReviewIntegrationContractV2 {
+										result.RepositoryContext = &ReviewRepositoryContextReference{
+											Capability: reviewtransaction.ReviewRepositoryContextCapability, Handle: repositoryContext,
+											Revision: record.Revision, TargetIdentity: record.State.InitialSnapshot.Identity,
+										}
+									}
+								}
 							}
 							if artifactErr == nil && !lensContextBudgetExceeded {
 								contextBuilder := reviewtransaction.SnapshotBuilder{Repo: root}
@@ -1118,6 +1137,15 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 		return fmt.Errorf("inventory review authority: %w", err)
 	}
 	return encodeReviewJSON(stdout, report)
+}
+
+func hasRepositoryContextIntent(intents []reviewtransaction.CompactEffectIntent) bool {
+	for _, intent := range intents {
+		if intent.Class == reviewtransaction.CompactEffectClassRepositoryContext {
+			return true
+		}
+	}
+	return false
 }
 
 func RunReviewRecover(args []string, stdout io.Writer) error {
@@ -1970,7 +1998,7 @@ func runReviewFacadeStart(ctx context.Context, args []string, stdout io.Writer) 
 		return nil
 	}
 	started, err := reviewtransaction.StartCompactAuthority(ctx, root, reviewtransaction.CompactStartRequest{
-		State: state, TracePath: strings.TrimSpace(*tracePath), ExplicitLineage: explicitLineage, BeforeCreate: beforeCreate,
+		State: state, TracePath: strings.TrimSpace(*tracePath), ExplicitLineage: explicitLineage, RepositoryContext: *contract == ReviewIntegrationContractV2, BeforeCreate: beforeCreate,
 	})
 	if err != nil {
 		return fmt.Errorf("start compact facade review: %w", err)
@@ -2034,18 +2062,27 @@ func runReviewFacadeStart(ctx context.Context, args []string, stdout io.Writer) 
 	var repositoryContext *ReviewRepositoryContextReference
 	if authority.State == reviewtransaction.StateReviewing &&
 		(started.Action == reviewtransaction.CompactStartCreated || started.Action == reviewtransaction.CompactStartResumed) {
-		binding := reviewtransaction.ReviewRepositoryContextBinding{
-			LineageID: authority.LineageID, TargetIdentity: authority.InitialSnapshot.Identity, Revision: started.Record.Revision,
+		var reconciled reviewtransaction.CompactRepositoryContextResult
+		var contextErr error
+		if hasRepositoryContextIntent(started.Record.EffectIntents) {
+			var store reviewtransaction.CompactStore
+			store, contextErr = reviewtransaction.CompactAuthoritativeStore(ctx, root, authority.LineageID)
+			if contextErr == nil {
+				reconciled, contextErr = reviewtransaction.ReconcileCompactRepositoryContext(ctx, store, started.Record)
+			}
+		} else {
+			reconciled.Handle, contextErr = reviewtransaction.PublishReviewRepositoryContext(ctx, root, reviewtransaction.ReviewRepositoryContextBinding{
+				LineageID: authority.LineageID, TargetIdentity: authority.InitialSnapshot.Identity, Revision: started.Record.Revision,
+			})
 		}
-		handle, contextErr := reviewtransaction.PublishReviewRepositoryContext(ctx, root, binding)
 		if contextErr != nil {
 			return &reviewStartContextError{
 				AuthoritySelected: true, LineageID: authority.LineageID, StoreRevision: started.Record.Revision, Cause: contextErr,
 			}
 		}
 		repositoryContext = &ReviewRepositoryContextReference{
-			Capability: reviewtransaction.ReviewRepositoryContextCapability, Handle: handle, Revision: started.Record.Revision,
-			TargetIdentity: authority.InitialSnapshot.Identity,
+			Capability: reviewtransaction.ReviewRepositoryContextCapability, Handle: reconciled.Handle, Revision: started.Record.Revision,
+			TargetIdentity: authority.InitialSnapshot.Identity, EventID: reconciled.EventID, Outcome: reconciled.Outcome,
 		}
 	}
 	negotiatedResult, err := newReviewIntegrationStartResult(legacyResult, assessment, authority.InitialSnapshot.Kind, frozenContext, repositoryContext, *contract)
