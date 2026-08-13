@@ -171,15 +171,16 @@ func assertCurrentOpenCodeOrchestratorContract(t *testing.T, label string, conte
 		}
 		lastMarker = markerIndex
 		sectionBody := content[markerIndex+len(section.marker):]
+		nearestFollowing := len(sectionBody)
 		for _, following := range currentOpenCodeOrchestratorSections {
 			if following.marker == section.marker {
 				continue
 			}
-			if followingIndex := strings.Index(sectionBody, following.marker); followingIndex >= 0 && followingIndex < len(sectionBody) {
-				sectionBody = sectionBody[:followingIndex]
-				break
+			if followingIndex := strings.Index(sectionBody, following.marker); followingIndex >= 0 && followingIndex < nearestFollowing {
+				nearestFollowing = followingIndex
 			}
 		}
+		sectionBody = sectionBody[:nearestFollowing]
 		for _, sentinel := range section.sentinels {
 			if profileName != "" {
 				for _, phase := range ProfilePhaseOrder() {
@@ -337,8 +338,7 @@ func TestKilocodeOrchestratorBaselineSharesHistoricalAssetWithoutBackgroundAdden
 	// Reserve the later composition seam's marker as a negative control. This
 	// slice freezes Kilocode's baseline; it does not claim Kilocode should gain
 	// OpenCode's future background-subagent policy.
-	const openCodeBackgroundAddendumMarker = "<!-- gentle-ai:opencode-background-subagents -->"
-	if strings.Contains(content, openCodeBackgroundAddendumMarker) {
+	if strings.Contains(content, openCodeBackgroundPolicyMarker) {
 		t.Fatalf("Kilocode baseline received an OpenCode-only background addendum")
 	}
 }

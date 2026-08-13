@@ -777,7 +777,7 @@ func (r *installRuntime) stagePlan() pipeline.StagePlan {
 			channel:      r.channel,
 			state:        r.state,
 		}
-		step.backgroundPolicy = r.runtimeReady && r.background.Effective == model.OpenCodeBackgroundOn
+		step.backgroundPolicy = r.backgroundActivation != nil && r.backgroundActivation.Capability().Ready() && r.background.Effective == model.OpenCodeBackgroundOn
 		apply = append(apply, step)
 	}
 	// Routing guidance is scheduled per agent and outside the component loop:

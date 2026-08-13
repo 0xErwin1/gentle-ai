@@ -133,7 +133,7 @@ var runOpenCodeVersion = opencodeactivation.RunVersion
 var resolveOpenCodeTarget = opencodeactivation.ResolveTarget
 
 func prepareOpenCodeBackgroundActivation(homeDir string, resolution *OpenCodeBackgroundResolution, hasOpenCode bool) (*opencodeactivation.ActivationPlan, error) {
-	if resolution == nil || !hasOpenCode || resolution.Effective == "" {
+	if resolution == nil || !hasOpenCode || resolution.Effective == "" || resolution.Effective == model.OpenCodeBackgroundAuto {
 		return nil, nil
 	}
 

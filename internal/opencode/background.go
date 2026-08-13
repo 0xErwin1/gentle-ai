@@ -48,17 +48,21 @@ const (
 
 // Version is a parsed OpenCode semantic version.
 type Version struct {
-	Major      int
-	Minor      int
-	Patch      int
-	PreRelease string
+	Major         int
+	Minor         int
+	Patch         int
+	PreRelease    string
+	BuildMetadata string
 }
 
-// String returns the canonical numeric version with its pre-release suffix.
+// String returns the canonical numeric version with its pre-release and build suffixes.
 func (v Version) String() string {
 	value := fmt.Sprintf("%d.%d.%d", v.Major, v.Minor, v.Patch)
 	if v.PreRelease != "" {
 		value += v.PreRelease
+	}
+	if v.BuildMetadata != "" {
+		value += "+" + v.BuildMetadata
 	}
 	return value
 }
@@ -70,23 +74,27 @@ func (v Version) AtLeast(other Version) bool {
 			return pair[0] > pair[1]
 		}
 	}
-	if v.PreRelease == other.PreRelease {
+	aPreRelease := strings.TrimPrefix(v.PreRelease, "-")
+	bPreRelease := strings.TrimPrefix(other.PreRelease, "-")
+	if aPreRelease == bPreRelease {
 		return true
 	}
-	if v.PreRelease == "" {
+	if aPreRelease == "" {
 		return true
 	}
-	if other.PreRelease == "" {
+	if bPreRelease == "" {
 		return false
 	}
-	return v.PreRelease > other.PreRelease
+	return comparePreRelease(aPreRelease, bPreRelease) >= 0
 }
 
 // MinimumBackgroundVersion is the first version whose specific environment
 // override semantics are safe for managed activation.
 var MinimumBackgroundVersion = Version{Major: minimumMajor, Minor: minimumMinor, Patch: minimumPatch}
 
-var versionPattern = regexp.MustCompile(`(?i)(?:^|[^0-9])v?([0-9]+)\.([0-9]+)\.([0-9]+)([-+][0-9a-z.-]+)?(?:$|[^0-9])`)
+// versionPattern accepts complete SemVer tokens only. Version output can contain
+// labels and punctuation, but a path or identifier continuation is not a boundary.
+var versionPattern = regexp.MustCompile(`(?i)(?:^|[^0-9a-z.+/_-])v?(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)((?:-[0-9a-z-]+(?:\.[0-9a-z-]+)*)?(?:\+[0-9a-z-]+(?:\.[0-9a-z-]+)*)?)(?:$|[\t\r\n ,;:)\]}])`)
 
 // ParseVersion parses a semantic version such as "v1.15.11".
 func ParseVersion(raw string) (Version, error) {
@@ -116,6 +124,14 @@ func ParseVersionOutput(output string) (Version, error) {
 }
 
 func versionFromMatch(match []string) (Version, error) {
+	preRelease, buildMetadata := match[4], ""
+	if index := strings.IndexByte(preRelease, '+'); index >= 0 {
+		preRelease, buildMetadata = preRelease[:index], preRelease[index+1:]
+	}
+	if preRelease != "" && !validSemVerIdentifiers(strings.TrimPrefix(preRelease, "-"), true) ||
+		strings.Contains(match[4], "+") && !validSemVerIdentifiers(buildMetadata, false) {
+		return Version{}, errors.New("invalid OpenCode semantic version identifiers")
+	}
 	major, err := strconv.Atoi(match[1])
 	if err != nil {
 		return Version{}, err
@@ -128,7 +144,76 @@ func versionFromMatch(match []string) (Version, error) {
 	if err != nil {
 		return Version{}, err
 	}
-	return Version{Major: major, Minor: minor, Patch: patch, PreRelease: match[4]}, nil
+	return Version{Major: major, Minor: minor, Patch: patch, PreRelease: preRelease, BuildMetadata: buildMetadata}, nil
+}
+
+func validSemVerIdentifiers(value string, rejectLeadingZeroes bool) bool {
+	if value == "" {
+		return false
+	}
+	for _, identifier := range strings.Split(value, ".") {
+		if identifier == "" || rejectLeadingZeroes && len(identifier) > 1 && identifier[0] == '0' && isNumericIdentifier(identifier) {
+			return false
+		}
+		for _, char := range identifier {
+			if char != '-' && (char < '0' || char > '9') && (char < 'a' || char > 'z') && (char < 'A' || char > 'Z') {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+func comparePreRelease(a, b string) int {
+	aIDs := strings.Split(a, ".")
+	bIDs := strings.Split(b, ".")
+	for i := 0; i < len(aIDs) && i < len(bIDs); i++ {
+		aID, bID := aIDs[i], bIDs[i]
+		aNumeric, bNumeric := isNumericIdentifier(aID), isNumericIdentifier(bID)
+		switch {
+		case aNumeric && bNumeric:
+			if comparison := compareNumericIdentifier(aID, bID); comparison != 0 {
+				return comparison
+			}
+		case aNumeric:
+			return -1
+		case bNumeric:
+			return 1
+		case aID < bID:
+			return -1
+		case aID > bID:
+			return 1
+		}
+	}
+	if len(aIDs) < len(bIDs) {
+		return -1
+	}
+	if len(aIDs) > len(bIDs) {
+		return 1
+	}
+	return 0
+}
+
+func isNumericIdentifier(value string) bool {
+	if value == "" {
+		return false
+	}
+	for _, char := range value {
+		if char < '0' || char > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+func compareNumericIdentifier(a, b string) int {
+	if len(a) < len(b) || len(a) == len(b) && a < b {
+		return -1
+	}
+	if len(a) > len(b) || a > b {
+		return 1
+	}
+	return 0
 }
 
 // CapabilityResolution records the version/capability decision and the
@@ -209,13 +294,16 @@ func RunVersion(target string) (string, error) {
 // ActivationOptions supplies platform and process seams for activation. Zero
 // values use the current process and the real system PATH implementation.
 type ActivationOptions struct {
-	OS            string
-	Path          string
-	RunVersion    VersionRunner
-	AddToUserPath func(string) error
-	ResolveTarget func(homeDir, goos, pathValue string) (string, error)
-	WriteFile     func(path string, content []byte, mode os.FileMode) error
-	RemoveFile    func(path string) error
+	OS                       string
+	Path                     string
+	RunVersion               VersionRunner
+	AddToUserPath            func(string) error
+	RemoveFromUserPath       func(string) error
+	AddToUserPathWithResult  func(string) (system.UserPathAddition, error)
+	RollbackUserPathAddition func(string, system.UserPathAddition) error
+	ResolveTarget            func(homeDir, goos, pathValue string) (string, error)
+	WriteFile                func(path string, content []byte, mode os.FileMode) error
+	RemoveFile               func(path string) error
 }
 
 func (o ActivationOptions) normalized() ActivationOptions {
@@ -230,6 +318,15 @@ func (o ActivationOptions) normalized() ActivationOptions {
 	}
 	if o.AddToUserPath == nil {
 		o.AddToUserPath = system.AddToUserPath
+	}
+	if o.RemoveFromUserPath == nil {
+		o.RemoveFromUserPath = system.RemoveFromUserPath
+	}
+	if o.AddToUserPathWithResult == nil {
+		o.AddToUserPathWithResult = system.AddToUserPathWithResult
+	}
+	if o.RollbackUserPathAddition == nil {
+		o.RollbackUserPathAddition = system.RollbackUserPathAddition
 	}
 	if o.ResolveTarget == nil {
 		o.ResolveTarget = ResolveTarget
@@ -283,10 +380,11 @@ func ResolveTarget(homeDir, goos, pathValue string) (string, error) {
 		return "", fmt.Errorf("resolve managed OpenCode bin directory: %w", err)
 	}
 	for _, entry := range splitPath(pathValue, goos) {
-		if entry == "" {
-			entry = "."
+		entry = strings.Trim(strings.TrimSpace(entry), `"`)
+		if entry == "" || !filepath.IsAbs(entry) {
+			continue
 		}
-		entry, err = filepath.Abs(strings.Trim(strings.TrimSpace(entry), `"`))
+		entry, err = filepath.Abs(entry)
 		if err != nil {
 			continue
 		}
@@ -301,11 +399,11 @@ func ResolveTarget(homeDir, goos, pathValue string) (string, error) {
 			}
 			realPath, evalErr := filepath.EvalSymlinks(candidate)
 			if evalErr != nil {
-				return "", fmt.Errorf("resolve OpenCode target %q: %w", candidate, evalErr)
+				continue
 			}
-			realPath, err = filepath.Abs(realPath)
-			if err != nil {
-				return "", err
+			realPath, absErr := filepath.Abs(realPath)
+			if absErr != nil {
+				continue
 			}
 			if pathUnder(realPath, managedDir, goos) {
 				continue
@@ -317,7 +415,7 @@ func ResolveTarget(homeDir, goos, pathValue string) (string, error) {
 }
 
 func splitPath(value, goos string) []string {
-	separator := string(os.PathListSeparator)
+	separator := ":"
 	if goos == "windows" {
 		separator = ";"
 	}
@@ -374,16 +472,18 @@ type launcherSnapshot struct {
 // resolves the target, checks capability, and rejects collisions before Apply
 // mutates any launcher or PATH state.
 type ActivationPlan struct {
-	homeDir    string
-	goos       string
-	options    ActivationOptions
-	action     activationAction
-	capability CapabilityResolution
-	paths      []string
-	desired    map[string][]byte
-	before     map[string]launcherSnapshot
-	changed    []string
-	applied    bool
+	homeDir      string
+	goos         string
+	options      ActivationOptions
+	action       activationAction
+	capability   CapabilityResolution
+	paths        []string
+	desired      map[string][]byte
+	before       map[string]launcherSnapshot
+	changed      []string
+	pathAddition system.UserPathAddition
+	pathAdded    bool
+	applied      bool
 }
 
 // PrepareActivation resolves capability and preflights all owned launcher
@@ -417,7 +517,6 @@ func PrepareActivation(homeDir string, options ActivationOptions) (*ActivationPl
 	if !plan.capability.Ready() {
 		return plan, nil
 	}
-
 	for _, path := range paths {
 		snapshot, err := readLauncherSnapshot(path)
 		if err != nil {
@@ -579,7 +678,14 @@ func (p *ActivationPlan) Apply() error {
 				return p.failAndRollback(fmt.Errorf("write managed OpenCode launcher %q: %w", path, err))
 			}
 		}
-		if err := p.options.AddToUserPath(BinDir(p.homeDir)); err != nil {
+		if p.goos == "windows" {
+			addition, err := p.options.AddToUserPathWithResult(BinDir(p.homeDir))
+			p.pathAddition = addition
+			p.pathAdded = addition.ProcessAdded || addition.PersistentAdded
+			if err != nil {
+				return p.failAndRollback(fmt.Errorf("add managed OpenCode bin directory %q to PATH: %w", BinDir(p.homeDir), err))
+			}
+		} else if err := p.options.AddToUserPath(BinDir(p.homeDir)); err != nil {
 			return p.failAndRollback(fmt.Errorf("add managed OpenCode bin directory %q to PATH: %w", BinDir(p.homeDir), err))
 		}
 		p.applied = true
@@ -607,7 +713,8 @@ func (p *ActivationPlan) failAndRollback(cause error) error {
 	return cause
 }
 
-// Rollback restores only paths changed by this plan.
+// Rollback restores only paths changed by this plan and removes a user PATH
+// entry only when this plan added it.
 func (p *ActivationPlan) Rollback() error {
 	if p == nil {
 		return nil
@@ -624,6 +731,13 @@ func (p *ActivationPlan) Rollback() error {
 		}
 		if err := p.options.WriteFile(path, snapshot.data, snapshot.mode); err != nil {
 			rollbackErr = errors.Join(rollbackErr, fmt.Errorf("rollback restore managed OpenCode launcher %q: %w", path, err))
+		}
+	}
+	if p.pathAdded {
+		if err := p.options.RollbackUserPathAddition(BinDir(p.homeDir), p.pathAddition); err != nil {
+			rollbackErr = errors.Join(rollbackErr, fmt.Errorf("rollback remove managed OpenCode bin directory %q from PATH: %w", BinDir(p.homeDir), err))
+		} else {
+			p.pathAdded = false
 		}
 	}
 	if rollbackErr == nil {
@@ -679,9 +793,11 @@ func posixLauncher(target string) string {
 }
 
 func windowsCMDLauncher(target string) string {
+	// cmd expands %VAR% in target paths; resolved targets containing % are unsupported.
 	quotedTarget := strings.ReplaceAll(target, `"`, `""`)
 	invoke := `"` + quotedTarget + `" %*`
 	if strings.EqualFold(filepath.Ext(target), ".ps1") {
+		// Bypass applies only to this already-resolved target, never arbitrary input.
 		invoke = `powershell -NoProfile -ExecutionPolicy Bypass -File "` + quotedTarget + `" %*`
 	}
 	return "@echo off\r\n" +

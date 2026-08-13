@@ -3,6 +3,7 @@ package sdd
 import (
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -213,6 +214,83 @@ func TestOpenCodeBackgroundPolicyPreservesPromptBranches(t *testing.T) {
 				t.Fatalf("fallback retained unrecognized custom prompt: %q", prompt)
 			}
 		})
+	}
+}
+
+func TestOpenCodeBackgroundPolicyPreservedPromptFollowsOnOffTransitions(t *testing.T) {
+	home := t.TempDir()
+	adapter := opencodeAdapter()
+	settingsPath := adapter.SettingsPath(home)
+	if err := os.MkdirAll(filepath.Dir(settingsPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll(settings) error = %v", err)
+	}
+	if err := os.WriteFile(settingsPath, []byte(`{"agent":{"gentle-orchestrator":{"prompt":"CUSTOM_CONTENT"}}}`), 0o644); err != nil {
+		t.Fatalf("WriteFile(settings) error = %v", err)
+	}
+
+	inject := func(include bool) string {
+		t.Helper()
+		if _, err := Inject(home, adapter, model.SDDModeSingle, InjectOptions{
+			IncludeOpenCodeBackgroundPolicy:    include,
+			PreserveOpenCodeOrchestratorPrompt: true,
+		}); err != nil {
+			t.Fatalf("Inject(include=%t) error = %v", include, err)
+		}
+		return agentPrompt(t, readOpenCodeAgents(t, settingsPath), "gentle-orchestrator")
+	}
+
+	if prompt := inject(false); strings.Contains(prompt, openCodeBackgroundPolicyMarker) || !strings.Contains(prompt, "CUSTOM_CONTENT") {
+		t.Fatalf("off prompt = %q, want custom content without policy", prompt)
+	}
+	if prompt := inject(true); strings.Count(prompt, openCodeBackgroundPolicyMarker) != 1 || !strings.Contains(prompt, "CUSTOM_CONTENT") {
+		t.Fatalf("on prompt = %q, want one policy block and custom content", prompt)
+	}
+	if prompt := inject(false); strings.Contains(prompt, openCodeBackgroundPolicyMarker) || strings.Contains(prompt, openCodeBackgroundPolicyEnd) || !strings.Contains(prompt, "CUSTOM_CONTENT") {
+		t.Fatalf("final off prompt = %q, want custom content without policy", prompt)
+	}
+}
+
+func TestOpenCodeBackgroundPolicyOffRemovesSeededOwnedBlockOnly(t *testing.T) {
+	home := t.TempDir()
+	adapter := opencodeAdapter()
+	settingsPath := adapter.SettingsPath(home)
+	if err := os.MkdirAll(filepath.Dir(settingsPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll(settings) error = %v", err)
+	}
+	seedPrompt := "BEFORE_CUSTOM\n\n" + mustReadOpenCodeBackgroundPolicy() + "\n\nAFTER_CUSTOM"
+	seed := `{"agent":{"gentle-orchestrator":{"prompt":` + strconv.Quote(seedPrompt) + `}}}`
+	if err := os.WriteFile(settingsPath, []byte(seed), 0o644); err != nil {
+		t.Fatalf("WriteFile(settings) error = %v", err)
+	}
+
+	if _, err := Inject(home, adapter, model.SDDModeSingle, InjectOptions{PreserveOpenCodeOrchestratorPrompt: true}); err != nil {
+		t.Fatalf("Inject() error = %v", err)
+	}
+	prompt := agentPrompt(t, readOpenCodeAgents(t, settingsPath), "gentle-orchestrator")
+	if strings.Contains(prompt, openCodeBackgroundPolicyMarker) || strings.Contains(prompt, openCodeBackgroundPolicyEnd) || !strings.Contains(prompt, "BEFORE_CUSTOM") || !strings.Contains(prompt, "AFTER_CUSTOM") {
+		t.Fatalf("off prompt = %q, want both custom regions without policy", prompt)
+	}
+}
+
+func TestOpenCodeBackgroundPolicyMalformedPreservedPromptReturnsError(t *testing.T) {
+	home := t.TempDir()
+	adapter := opencodeAdapter()
+	settingsPath := adapter.SettingsPath(home)
+	if err := os.MkdirAll(filepath.Dir(settingsPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll(settings) error = %v", err)
+	}
+	seed := `{"agent":{"gentle-orchestrator":{"prompt":"` + openCodeBackgroundPolicyMarker + `\nuser content"}}}`
+	if err := os.WriteFile(settingsPath, []byte(seed), 0o644); err != nil {
+		t.Fatalf("WriteFile(settings) error = %v", err)
+	}
+
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			t.Fatalf("Inject() panicked on malformed preserved prompt: %v", recovered)
+		}
+	}()
+	if _, err := Inject(home, adapter, model.SDDModeSingle, InjectOptions{PreserveOpenCodeOrchestratorPrompt: true}); err == nil || !strings.Contains(err.Error(), "validate preserved OpenCode background policy") {
+		t.Fatalf("Inject() error = %v, want preserved-policy validation error", err)
 	}
 }
 
