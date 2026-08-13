@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/gentleman-programming/gentle-ai/v2/internal/agents"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/backup"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/components/sdd"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/state"
@@ -371,5 +372,271 @@ func TestInstallBackgroundInvalidSourcesFailBeforeMutation(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func syncBackgroundTestHome(t *testing.T) string {
+	home := t.TempDir()
+	oldHome, oldBackup, oldRun, oldLookPath := osUserHomeDir, backup.UserHomeDirFn, runCommand, cmdLookPath
+	osUserHomeDir = func() (string, error) { return home, nil }
+	backup.UserHomeDirFn = func() (string, error) { return home, nil }
+	runCommand = func(string, ...string) error { return nil }
+	cmdLookPath = func(name string) (string, error) { return "/usr/bin/" + name, nil }
+	t.Cleanup(func() {
+		osUserHomeDir, backup.UserHomeDirFn, runCommand, cmdLookPath = oldHome, oldBackup, oldRun, oldLookPath
+	})
+	return home
+}
+
+func TestSyncBackgroundFlagAndHelp(t *testing.T) {
+	flags, err := ParseSyncFlags([]string{"--opencode-background-subagents=on"})
+	if err != nil || !flags.OpenCodeBackgroundSubagentsSet || flags.OpenCodeBackgroundSubagents != "on" {
+		t.Fatalf("sync background flag = %#v, error = %v", flags, err)
+	}
+	var help strings.Builder
+	PrintSyncHelp(&help)
+	if !strings.Contains(help.String(), "--opencode-background-subagents=auto|on|off") || !strings.Contains(help.String(), OpenCodeBackgroundSubagentsEnv) {
+		t.Fatalf("sync help omits background contract: %s", help.String())
+	}
+}
+
+func TestSyncBackgroundPrecedenceAndDryRunReporting(t *testing.T) {
+	for _, tt := range []struct {
+		name        string
+		args        []string
+		env         string
+		prior       model.OpenCodeBackgroundIntent
+		wantIntent  model.OpenCodeBackgroundIntent
+		wantEffect  model.OpenCodeBackgroundIntent
+		wantPersist model.OpenCodeBackgroundIntent
+	}{
+		{name: "cli outranks environment and prior", args: []string{"--opencode-background-subagents=on"}, env: "off", prior: model.OpenCodeBackgroundOff, wantIntent: model.OpenCodeBackgroundOn, wantEffect: model.OpenCodeBackgroundOn, wantPersist: model.OpenCodeBackgroundOn},
+		{name: "environment outranks prior", env: "on", prior: model.OpenCodeBackgroundOff, wantIntent: model.OpenCodeBackgroundOn, wantEffect: model.OpenCodeBackgroundOn, wantPersist: model.OpenCodeBackgroundOn},
+		{name: "prior state is inherited", prior: model.OpenCodeBackgroundOff, wantIntent: model.OpenCodeBackgroundOff, wantEffect: model.OpenCodeBackgroundOff},
+		{name: "unresolved auto stays foreground", wantIntent: model.OpenCodeBackgroundAuto, wantEffect: model.OpenCodeBackgroundOff},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			home := syncBackgroundTestHome(t)
+			var before []byte
+			if tt.prior != "" {
+				if err := state.Write(home, state.InstallState{InstalledAgents: []string{"opencode"}, BackgroundIntent: tt.prior}); err != nil {
+					t.Fatal(err)
+				}
+				before, _ = os.ReadFile(state.Path(home))
+			}
+			t.Setenv(OpenCodeBackgroundSubagentsEnv, tt.env)
+			args := []string{"--agents", "opencode", "--dry-run"}
+			args = append(args, tt.args...)
+			result, err := RunSync(args)
+			if err != nil {
+				t.Fatalf("RunSync() error = %v", err)
+			}
+			if result.Background.Intent != tt.wantIntent || result.Background.Effective != tt.wantEffect || result.Background.Persist != tt.wantPersist {
+				t.Fatalf("background resolution = %#v, want intent=%q effective=%q persist=%q", result.Background, tt.wantIntent, tt.wantEffect, tt.wantPersist)
+			}
+			report := RenderSyncReport(result)
+			if tt.wantEffect == model.OpenCodeBackgroundOn && (!strings.Contains(report, "activation: pending") || !strings.Contains(report, "runtime remains foreground")) {
+				t.Fatalf("untruthful sync report: %s", report)
+			}
+			after, readErr := os.ReadFile(state.Path(home))
+			if tt.prior == "" {
+				if !os.IsNotExist(readErr) {
+					t.Fatalf("dry-run state error = %v, want no state file", readErr)
+				}
+			} else if readErr != nil {
+				t.Fatalf("dry-run state read error = %v", readErr)
+			} else if !reflect.DeepEqual(after, before) {
+				t.Fatal("dry-run changed prior state")
+			}
+		})
+	}
+}
+
+func TestSyncBackgroundInvalidSourcesFailBeforeMutation(t *testing.T) {
+	for _, tt := range []struct {
+		name  string
+		args  []string
+		env   string
+		prior model.OpenCodeBackgroundIntent
+	}{
+		{name: "invalid CLI", args: []string{"--opencode-background-subagents=maybe"}},
+		{name: "invalid environment", env: "maybe"},
+		{name: "invalid prior state", prior: model.OpenCodeBackgroundIntent("maybe")},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			home := syncBackgroundTestHome(t)
+			oldInject := injectSDD
+			injectCalls := 0
+			injectSDD = func(string, agents.Adapter, model.SDDModeID, ...sdd.InjectOptions) (sdd.InjectionResult, error) {
+				injectCalls++
+				return sdd.InjectionResult{}, nil
+			}
+			t.Cleanup(func() { injectSDD = oldInject })
+			t.Setenv(OpenCodeBackgroundSubagentsEnv, tt.env)
+			var before []byte
+			if tt.prior != "" {
+				if err := state.Write(home, state.InstallState{InstalledAgents: []string{"opencode"}, BackgroundIntent: tt.prior}); err != nil {
+					t.Fatal(err)
+				}
+				before, _ = os.ReadFile(state.Path(home))
+			}
+			args := append([]string{"--agents", "opencode", "--sdd-mode", "single"}, tt.args...)
+			if _, err := RunSync(args); err == nil {
+				t.Fatal("RunSync() error = nil, want preflight rejection")
+			}
+			if injectCalls != 0 {
+				t.Fatalf("inject calls = %d, want validation before pipeline", injectCalls)
+			}
+			if _, err := os.Stat(filepath.Join(home, ".config", "opencode")); !os.IsNotExist(err) {
+				t.Fatalf("asset mutation = %v", err)
+			}
+			if tt.prior != "" {
+				after, _ := os.ReadFile(state.Path(home))
+				if !reflect.DeepEqual(after, before) {
+					t.Fatalf("prior state mutated: before %s after %s", before, after)
+				}
+			}
+		})
+	}
+}
+
+func TestSyncBackgroundPolicyForwardingIsOpenCodeOnly(t *testing.T) {
+	oldInject := injectSDD
+	t.Cleanup(func() { injectSDD = oldInject })
+	for _, tt := range []struct {
+		agent model.AgentID
+		want  bool
+	}{{model.AgentOpenCode, true}, {model.AgentKilocode, false}} {
+		t.Run(string(tt.agent), func(t *testing.T) {
+			var got bool
+			injectSDD = func(_ string, adapter agents.Adapter, _ model.SDDModeID, options ...sdd.InjectOptions) (sdd.InjectionResult, error) {
+				if adapter.Agent() != tt.agent {
+					t.Fatalf("adapter = %q, want %q", adapter.Agent(), tt.agent)
+				}
+				if len(options) > 0 {
+					got = options[0].IncludeOpenCodeBackgroundPolicy
+				}
+				return sdd.InjectionResult{}, nil
+			}
+			if err := (componentSyncStep{
+				component: model.ComponentSDD,
+				homeDir:   t.TempDir(), workspaceDir: t.TempDir(),
+				agents:           []model.AgentID{tt.agent},
+				selection:        model.Selection{SDDMode: model.SDDModeSingle},
+				backgroundPolicy: true,
+			}).Run(); err != nil {
+				t.Fatal(err)
+			}
+			if got != tt.want {
+				t.Fatalf("policy = %t, want %t", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestSyncBackgroundPublicationWaitsForVerification(t *testing.T) {
+	for _, tt := range []struct {
+		name      string
+		intent    model.OpenCodeBackgroundIntent
+		injectErr error
+		dropAsset bool
+		writeErr  error
+		wantErr   string
+	}{
+		{name: "success on", intent: model.OpenCodeBackgroundOn},
+		{name: "success off", intent: model.OpenCodeBackgroundOff},
+		{name: "pipeline failure", intent: model.OpenCodeBackgroundOn, injectErr: errors.New("pipeline injection failed"), wantErr: "execute sync pipeline"},
+		{name: "verification failure", intent: model.OpenCodeBackgroundOn, dropAsset: true, wantErr: "post-sync verification failed"},
+		{name: "state write failure", intent: model.OpenCodeBackgroundOn, writeErr: errors.New("state disk full"), wantErr: "persist managed asset provenance"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			home := syncBackgroundTestHome(t)
+			lastUpdate := time.Date(2026, time.August, 12, 10, 0, 0, 0, time.UTC)
+			if tt.wantErr == "" {
+				prior := model.OpenCodeBackgroundOff
+				if tt.intent == model.OpenCodeBackgroundOff {
+					prior = model.OpenCodeBackgroundOn
+				}
+				if err := state.Write(home, state.InstallState{InstalledAgents: []string{"opencode"}, LastUpdateCheck: &lastUpdate, PendingSync: true, RDDMode: "off", BackgroundIntent: prior}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			oldInject, oldWrite := injectSDD, writeInstallState
+			injectSDD = func(path string, adapter agents.Adapter, mode model.SDDModeID, options ...sdd.InjectOptions) (sdd.InjectionResult, error) {
+				if tt.injectErr != nil {
+					return sdd.InjectionResult{}, tt.injectErr
+				}
+				if tt.dropAsset {
+					return sdd.InjectionResult{}, nil
+				}
+				return sdd.Inject(path, adapter, mode, options...)
+			}
+			writeInstallState = func(path string, value state.InstallState) error {
+				if tt.writeErr != nil {
+					return tt.writeErr
+				}
+				return oldWrite(path, value)
+			}
+			t.Cleanup(func() { injectSDD, writeInstallState = oldInject, oldWrite })
+
+			selection := model.Selection{
+				Agents:     []model.AgentID{model.AgentOpenCode},
+				Components: []model.ComponentID{model.ComponentSDD, model.ComponentPersona},
+				SDDMode:    model.SDDModeSingle,
+				Persona:    model.PersonaNeutral,
+			}
+			background := OpenCodeBackgroundResolution{Intent: tt.intent, Effective: tt.intent, Persist: tt.intent}
+			result, err := runSyncWithSelection(home, selection, background)
+			if (err != nil) != (tt.wantErr != "") || (err != nil && !strings.Contains(err.Error(), tt.wantErr)) {
+				t.Fatalf("sync error = %v, want %q", err, tt.wantErr)
+			}
+			if tt.wantErr == "" {
+				if !result.Verify.Ready || result.BackgroundPolicyEnabled || (tt.intent == model.OpenCodeBackgroundOn && !strings.Contains(result.Verify.FinalNote, "activation remains pending")) {
+					t.Fatalf("success result = %#v, want verified pending foreground activation", result)
+				}
+				got, readErr := state.Read(home)
+				if readErr != nil || got.BackgroundIntent != tt.intent || !got.PendingSync || got.RDDMode != "off" || got.LastUpdateCheck == nil || !got.LastUpdateCheck.Equal(lastUpdate) {
+					t.Fatalf("published intent = %q, read error = %v", got.BackgroundIntent, readErr)
+				}
+			} else {
+				got, readErr := state.Read(home)
+				if !os.IsNotExist(readErr) || got.BackgroundIntent != "" {
+					t.Fatalf("state after %s = %#v, read error = %v; want no published intent", tt.name, got, readErr)
+				}
+			}
+		})
+	}
+}
+
+func TestSyncBackgroundNoOpStillPublishesExplicitIntent(t *testing.T) {
+	home := syncBackgroundTestHome(t)
+	selection := model.Selection{
+		Agents:     []model.AgentID{model.AgentOpenCode},
+		Components: []model.ComponentID{model.ComponentSDD, model.ComponentPersona},
+		SDDMode:    model.SDDModeSingle,
+		Persona:    model.PersonaNeutral,
+	}
+	background := OpenCodeBackgroundResolution{Intent: model.OpenCodeBackgroundOn, Effective: model.OpenCodeBackgroundOn, Persist: model.OpenCodeBackgroundOn}
+	if _, err := runSyncWithSelection(home, selection, background); err != nil {
+		t.Fatalf("initial sync error = %v", err)
+	}
+	persisted, err := state.Read(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	persisted.BackgroundIntent = ""
+	if err := state.Write(home, persisted); err != nil {
+		t.Fatal(err)
+	}
+	result, err := runSyncWithSelection(home, selection, background)
+	if err != nil {
+		t.Fatalf("no-op sync error = %v", err)
+	}
+	if !result.NoOp || result.FilesChanged != 0 {
+		t.Fatalf("no-op result = NoOp %t, FilesChanged %d", result.NoOp, result.FilesChanged)
+	}
+	persisted, err = state.Read(home)
+	if err != nil || persisted.BackgroundIntent != model.OpenCodeBackgroundOn {
+		t.Fatalf("no-op published intent = %q, error = %v", persisted.BackgroundIntent, err)
 	}
 }

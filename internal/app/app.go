@@ -126,6 +126,11 @@ func RunArgs(args []string, stdout io.Writer) error {
 				cli.PrintInstallHelp(stdout)
 				return nil
 			}
+		case "sync":
+			if hasHelpFlag(args[1:]) {
+				cli.PrintSyncHelp(stdout)
+				return nil
+			}
 		}
 	}
 
