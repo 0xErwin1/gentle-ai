@@ -1204,8 +1204,18 @@ func RunReviewRecover(args []string, stdout io.Writer) error {
 		}
 	}
 	// Issue #2394: a recovery successor declares scope exactly the way a fresh
-	// START does, so it never re-sweeps the worktree either.
+	// START does, so it never re-sweeps the worktree either. Issue #3159:
+	// inheriting the predecessor's frozen, explicitly authorized declaration
+	// is not a sweep — those exact paths were human-selected and frozen into
+	// the authority being recovered, and dropping them silently rebinds the
+	// successor to a partial candidate. Only the current-changes successor
+	// carries the declaration forward; base-diff, overlay, and release
+	// scopes never hold intended-untracked paths.
 	intended := []string{}
+	if !*releaseScope && !*committedOnly && !stagedScopeOverlay && !overlay &&
+		predecessorRecord.State.InitialSnapshot.Kind == reviewtransaction.TargetCurrentChanges {
+		intended = append(intended, predecessorRecord.State.InitialSnapshot.IntendedUntracked...)
+	}
 	target := reviewtransaction.Target{Kind: reviewtransaction.TargetCurrentChanges, Projection: projection, IntendedUntracked: intended}
 	if *committedOnly {
 		target.Kind, target.BaseRef = reviewtransaction.TargetBaseDiff, base
