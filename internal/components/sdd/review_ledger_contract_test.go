@@ -354,7 +354,12 @@ func TestKilocodeReviewSettingsMatchCurrentMainBaseline(t *testing.T) {
 	// Removing the report-label branches preserves the report-routing contract
 	// while changing the rendered orchestrator prompt, so the merged baseline
 	// is derived from this combined source rather than either parent.
-	const want = "201bb4bbbbfc2d9bce7d0dc70af34b7d3c543a2bad54be25234d40548c7d5d62"
+	// The provider-defect handoff now derives evidence relevance from the
+	// installed build string, routes other-channel fixes as occurrences without
+	// recommending a channel switch, and keeps main-only evidence unpublished.
+	// Kilocode embeds that shared contract, so the hash moved. Deliberate, not
+	// drift.
+	const want = "eb756b1316ec83b123d65e131eb22b605fd9ee92b905ef085a4d75f1d2aabbc6"
 	if got != want {
 		t.Fatalf("Kilocode settings SHA-256 = %s, want current-main baseline %s", got, want)
 	}
