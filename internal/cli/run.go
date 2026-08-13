@@ -1864,10 +1864,14 @@ func backupTargets(homeDir, workspaceDir string, scope InstallScope, selection m
 		// selected one, so a failed persona switch can restore the file its
 		// cleanup removed. Backup-only: verification stays on the selected file.
 		if component == model.ComponentPersona {
-			for _, path := range managedOutputStyleBackupPaths(selection, adapters, func(a agents.Adapter) string {
-				return a.OutputStyleDir(componentPathDirScoped(homeDir, workspaceDir, scope, a, model.ComponentPersona))
-			}) {
-				paths[path] = struct{}{}
+			plan := persona.ResourcePlanFor(selection.Persona)
+			for _, adapter := range adapters {
+				if !adapter.SupportsOutputStyles() {
+					continue
+				}
+				for _, path := range plan.OutputStylePaths(adapter.OutputStyleDir(componentPathDirScoped(homeDir, workspaceDir, scope, adapter, model.ComponentPersona))).Backup {
+					paths[path] = struct{}{}
+				}
 			}
 		}
 	}
@@ -2160,9 +2164,9 @@ func componentPathsWithWorkspaceScoped(homeDir, workspaceDir string, scope Insta
 			if adapter.SupportsSystemPrompt() && adapter.SystemPromptStrategy() != model.StrategyJinjaModules {
 				paths = append(paths, adapter.SystemPromptFile(targetDir))
 			}
-			if managedOutputStyleName(selection.Persona) != "" {
-				if adapter.SupportsOutputStyles() {
-					paths = append(paths, filepath.Join(adapter.OutputStyleDir(targetDir), managedOutputStyleFile(selection.Persona)))
+			if adapter.SupportsOutputStyles() {
+				if stylePaths := persona.ResourcePlanFor(selection.Persona).OutputStylePaths(adapter.OutputStyleDir(targetDir)); stylePaths.Write != "" {
+					paths = append(paths, stylePaths.Write)
 					if p := adapter.SettingsPath(targetDir); p != "" {
 						paths = append(paths, p)
 					}
