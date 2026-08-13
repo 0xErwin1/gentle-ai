@@ -260,9 +260,6 @@ func (store RuntimeStore) Acquire(ctx context.Context, request CompactAcquireReq
 // the authority; callers name a successor only when review approved a distinct
 // lineage.
 func (store RuntimeStore) Settle(ctx context.Context, request CompactSettleRequest) (CompactAttemptResult, error) {
-	if err := normalizeCompactSettleRequest(request); err != nil {
-		return CompactAttemptResult{}, err
-	}
 	replay, err := store.load()
 	if err != nil {
 		return compactBlockedByUnreadableAuthority(err), nil
@@ -280,6 +277,9 @@ func (store RuntimeStore) Settle(ctx context.Context, request CompactSettleReque
 			return store.compactMutationFailure(err, true, BeginAttemptRequest{}), nil
 		}
 		return store.compactSettleResult()
+	}
+	if err := normalizeCompactSettleRequest(request); err != nil {
+		return CompactAttemptResult{}, err
 	}
 
 	// Settle asks the same predicate the same question and interprets the same
