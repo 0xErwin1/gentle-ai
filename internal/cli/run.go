@@ -36,6 +36,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v2/internal/components/theme"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/installcmd"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
+	opencodeactivation "github.com/gentleman-programming/gentle-ai/v2/internal/opencode"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/pipeline"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/planner"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/state"
@@ -153,9 +154,16 @@ func RunInstall(args []string, detection system.DetectionResult) (InstallResult,
 	if err != nil {
 		return InstallResult{}, err
 	}
+	backgroundActivation, err := prepareOpenCodeBackgroundActivation(homeDir, &background, containsAgent(resolved.Agents, model.AgentOpenCode))
+	if err != nil {
+		return InstallResult{}, fmt.Errorf("prepare OpenCode background activation: %w", err)
+	}
 
 	review := planner.BuildReviewPayload(input.Selection, resolved)
 	stagePlan := buildStagePlan(input.Selection, resolved)
+	if backgroundActivation != nil {
+		stagePlan.Apply = append(stagePlan.Apply, noopStep{id: "opencode:background-activation"})
+	}
 
 	result := InstallResult{
 		Selection:    input.Selection,
@@ -165,6 +173,11 @@ func RunInstall(args []string, detection system.DetectionResult) (InstallResult,
 		Dependencies: detection.Dependencies,
 		DryRun:       input.DryRun,
 		Background:   background,
+	}
+	result.Background.activationPlan = backgroundActivation
+	if backgroundActivation != nil {
+		result.Background.Activation = backgroundActivation.Report()
+		result.BackgroundPolicyEnabled = backgroundActivation.Capability().Ready() && background.Effective == model.OpenCodeBackgroundOn
 	}
 
 	if input.DryRun {
@@ -199,6 +212,8 @@ func RunInstall(args []string, detection system.DetectionResult) (InstallResult,
 			system.FormatMissingDepsMessage(detection.Dependencies))
 	}
 	runtime.background = background
+	runtime.backgroundActivation = backgroundActivation
+	runtime.runtimeReady = backgroundActivation != nil && backgroundActivation.Capability().Ready()
 
 	stagePlan = runtime.stagePlan()
 	result.Plan = stagePlan
@@ -220,7 +235,11 @@ func RunInstall(args []string, detection system.DetectionResult) (InstallResult,
 	})
 	result.Verify = withPostInstallNotes(result.Verify, resolved)
 	result.Verify = withOpenCodeBackgroundPending(result.Verify, background, runtime.runtimeReady, resolved.Agents)
+	result.Verify = withOpenCodeBackgroundActivationNote(result.Verify, background, resolved.Agents)
 	result.BackgroundPolicyEnabled = runtime.runtimeReady && background.Effective == model.OpenCodeBackgroundOn
+	if backgroundActivation != nil {
+		result.Background.Activation = backgroundActivation.Report()
+	}
 	if !result.Verify.Ready {
 		verificationErr := fmt.Errorf("post-apply verification failed:\n%s", verify.RenderReport(result.Verify))
 		rollback := orchestrator.Rollback(result.Execution)
@@ -399,7 +418,6 @@ func withPostInstallNotes(report verify.Report, resolved planner.ResolvedPlan) v
 		report.FinalNote = report.FinalNote + "\n\nGGA is now installed globally. To enable project hooks, run in each repo:\n- gga init\n- gga install"
 	}
 	report = withGoInstallPathNote(report, resolved)
-	report = withOpenCodeExperimentalNote(report, resolved)
 	return report
 }
 
@@ -468,21 +486,6 @@ func runnableAgentCommands(agentIDs []model.AgentID) []string {
 		}
 	}
 	return commands
-}
-
-// withOpenCodeExperimentalNote appends guidance to enable OpenCode
-// experimental features, but only when OpenCode is among the selected agents.
-// It only prints copy-paste guidance — it never writes to the user's shell
-// config — mirroring the engram PATH guidance pattern.
-func withOpenCodeExperimentalNote(report verify.Report, resolved planner.ResolvedPlan) verify.Report {
-	if !containsAgent(resolved.Agents, model.AgentOpenCode) {
-		return report
-	}
-	report.FinalNote = report.FinalNote + fmt.Sprintf(
-		"\n\nTo enable OpenCode experimental features, add this to your shell:\n  %s",
-		openCodeExperimentalGuidance(os.Getenv("SHELL")),
-	)
-	return report
 }
 
 // withGoInstallPathNote appends a PATH guidance note when engram was installed
@@ -636,8 +639,9 @@ type installRuntime struct {
 	backupRoot   string
 	state        *runtimeState
 
-	background   OpenCodeBackgroundResolution
-	runtimeReady bool
+	background           OpenCodeBackgroundResolution
+	runtimeReady         bool
+	backgroundActivation *opencodeactivation.ActivationPlan
 }
 
 type runtimeState struct {
@@ -733,6 +737,9 @@ func (r *installRuntime) stagePlan() pipeline.StagePlan {
 
 	apply := make([]pipeline.Step, 0, len(r.resolved.Agents)+len(r.selection.CommunityTools)+len(r.resolved.OrderedComponents)+1)
 	apply = append(apply, rollbackRestoreStep{id: "apply:rollback-restore", state: r.state, homeDir: r.homeDir, workspaceDir: r.workspaceDir})
+	if r.backgroundActivation != nil {
+		apply = append(apply, openCodeBackgroundActivationStep{id: "opencode:background-activation", plan: r.backgroundActivation, state: r.state, ready: &r.runtimeReady})
+	}
 
 	// Before installing components, ensure modular agents have their system prompt hub.
 	// This ensures that SDD or Engram can inject their modules even if Persona is skipped.
@@ -770,7 +777,7 @@ func (r *installRuntime) stagePlan() pipeline.StagePlan {
 			channel:      r.channel,
 			state:        r.state,
 		}
-		step.backgroundPolicy = r.background.Effective == model.OpenCodeBackgroundOn
+		step.backgroundPolicy = r.runtimeReady && r.background.Effective == model.OpenCodeBackgroundOn
 		apply = append(apply, step)
 	}
 	// Routing guidance is scheduled per agent and outside the component loop:
@@ -1133,6 +1140,27 @@ type rollbackRestoreStep struct {
 	homeDir      string
 	workspaceDir string
 }
+
+type openCodeBackgroundActivationStep struct {
+	id    string
+	plan  *opencodeactivation.ActivationPlan
+	state *runtimeState
+	ready *bool
+}
+
+func (s openCodeBackgroundActivationStep) ID() string { return s.id }
+
+func (s openCodeBackgroundActivationStep) Run() error {
+	if err := s.plan.Apply(); err != nil {
+		return fmt.Errorf("apply managed OpenCode background activation: %w", err)
+	}
+	if s.ready != nil {
+		*s.ready = s.plan.Capability().Ready()
+	}
+	return nil
+}
+
+func (s openCodeBackgroundActivationStep) Rollback() error { return s.plan.Rollback() }
 
 func (s rollbackRestoreStep) ID() string {
 	return s.id
@@ -1988,6 +2016,11 @@ func backupTargets(homeDir, workspaceDir string, scope InstallScope, selection m
 	for _, path := range pluginPaths {
 		paths[path] = struct{}{}
 	}
+	if containsAgent(resolved.Agents, model.AgentOpenCode) {
+		for _, path := range opencodeactivation.LauncherPaths(homeDir, runtime.GOOS) {
+			paths[path] = struct{}{}
+		}
+	}
 
 	targets := make([]string, 0, len(paths))
 	for path := range paths {
@@ -2618,23 +2651,6 @@ func engramPathGuidance(shellPath string) string {
 		return fmt.Sprintf("echo 'export PATH=\"%s:$PATH\"' >> ~/.bashrc && source ~/.bashrc", binDir)
 	}
 	return fmt.Sprintf("Add %s to your shell PATH and restart the terminal.", binDir)
-}
-
-// openCodeExperimentalGuidance returns shell-aware copy-paste guidance to
-// persist OPENCODE_EXPERIMENTAL=true. It only produces a command string and
-// never writes to the user's shell config files.
-func openCodeExperimentalGuidance(shellPath string) string {
-	if strings.Contains(shellPath, "fish") {
-		return "set -Ux OPENCODE_EXPERIMENTAL true"
-	}
-	if strings.Contains(shellPath, "zsh") {
-		return "echo 'export OPENCODE_EXPERIMENTAL=true' >> ~/.zshrc && source ~/.zshrc"
-	}
-	if strings.Contains(shellPath, "bash") {
-		return "echo 'export OPENCODE_EXPERIMENTAL=true' >> ~/.bashrc && source ~/.bashrc"
-	}
-	return "Set the OPENCODE_EXPERIMENTAL=true environment variable " +
-		"(on Windows PowerShell: [Environment]::SetEnvironmentVariable('OPENCODE_EXPERIMENTAL','true','User'))."
 }
 
 // checkDependenciesStep verifies that required system dependencies are present.

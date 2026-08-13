@@ -13,6 +13,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v2/internal/backup"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/components/sdd"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
+	opencodeactivation "github.com/gentleman-programming/gentle-ai/v2/internal/opencode"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/state"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/system"
 )
@@ -184,8 +185,14 @@ func TestDryRunReportsBackgroundIntentWithoutWritingState(t *testing.T) {
 	}
 	home := t.TempDir()
 	original := osUserHomeDir
+	originalVersion, originalTarget := runOpenCodeVersion, resolveOpenCodeTarget
 	osUserHomeDir = func() (string, error) { return home, nil }
+	runOpenCodeVersion = func(string) (string, error) { return "development", nil }
+	resolveOpenCodeTarget = func(string, string, string) (string, error) {
+		return filepath.Join(home, "opencode-real"), nil
+	}
 	t.Cleanup(func() { osUserHomeDir = original })
+	t.Cleanup(func() { runOpenCodeVersion, resolveOpenCodeTarget = originalVersion, originalTarget })
 	result, err := RunInstall([]string{"--dry-run", "--agent", "opencode", "--opencode-background-subagents=on"}, system.DetectionResult{})
 	if err != nil {
 		t.Fatal(err)
@@ -200,8 +207,50 @@ func TestDryRunReportsBackgroundIntentWithoutWritingState(t *testing.T) {
 		t.Fatalf("dry-run asset directory error = %v, want no assets", err)
 	}
 	report := RenderDryRun(result)
-	if !strings.Contains(report, "policy effective: on") || !strings.Contains(report, "runtime ready: false") || !strings.Contains(report, "activation: pending") || !strings.Contains(report, "runtime remains foreground") {
+	if !strings.Contains(report, "policy effective: on") || !strings.Contains(report, "runtime ready: false") || !strings.Contains(report, "activation status: unknown") {
 		t.Fatalf("untruthful dry-run report: %s", report)
+	}
+}
+
+func TestInstallActivationCapabilityControlsPolicyAndReport(t *testing.T) {
+	for _, tt := range []struct {
+		name       string
+		version    string
+		wantStatus string
+		wantReady  bool
+		wantPolicy bool
+		wantNote   string
+	}{
+		{name: "ready", version: "1.15.11", wantStatus: "ready", wantReady: true, wantPolicy: true},
+		{name: "unsupported", version: "1.15.10", wantStatus: "unsupported", wantNote: "execution stays foreground"},
+		{name: "unknown", version: "development", wantStatus: "unknown", wantNote: "execution stays foreground"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			home := installTestHome(t)
+			oldVersion, oldTarget, oldPath := runOpenCodeVersion, resolveOpenCodeTarget, addUserPath
+			runOpenCodeVersion = func(string) (string, error) { return tt.version, nil }
+			realTarget := filepath.Join(home, "opencode-real")
+			if err := os.WriteFile(realTarget, []byte("real"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			resolveOpenCodeTarget = func(string, string, string) (string, error) { return realTarget, nil }
+			addUserPath = func(string) error { return nil }
+			t.Cleanup(func() { runOpenCodeVersion, resolveOpenCodeTarget, addUserPath = oldVersion, oldTarget, oldPath })
+
+			result, err := RunInstall([]string{"--agent", "opencode", "--component", "sdd", "--opencode-background-subagents=on"}, system.DetectionResult{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(result.Background.Activation.Capability.Status) != tt.wantStatus || result.BackgroundPolicyEnabled != tt.wantPolicy {
+				t.Fatalf("activation = %#v policy=%t, want status=%q policy=%t", result.Background.Activation, result.BackgroundPolicyEnabled, tt.wantStatus, tt.wantPolicy)
+			}
+			if result.Background.Activation.Capability.Ready() != tt.wantReady {
+				t.Fatalf("capability ready = %t, want %t", result.Background.Activation.Capability.Ready(), tt.wantReady)
+			}
+			if tt.wantNote != "" && !strings.Contains(result.Verify.FinalNote, tt.wantNote) {
+				t.Fatalf("verification note = %q, want %q", result.Verify.FinalNote, tt.wantNote)
+			}
+		})
 	}
 }
 
@@ -235,11 +284,17 @@ func installTestHome(t *testing.T) string {
 	t.Helper()
 	home := t.TempDir()
 	oldHome, oldRun, oldLookPath := osUserHomeDir, runCommand, cmdLookPath
+	oldVersion, oldTarget := runOpenCodeVersion, resolveOpenCodeTarget
 	osUserHomeDir = func() (string, error) { return home, nil }
 	runCommand = func(string, ...string) error { return nil }
 	cmdLookPath = missingBinaryLookPath
+	runOpenCodeVersion = func(string) (string, error) { return "development", nil }
+	resolveOpenCodeTarget = func(string, string, string) (string, error) {
+		return filepath.Join(home, "opencode-real"), nil
+	}
 	t.Cleanup(func() {
 		osUserHomeDir, runCommand, cmdLookPath = oldHome, oldRun, oldLookPath
+		runOpenCodeVersion, resolveOpenCodeTarget = oldVersion, oldTarget
 	})
 	return home
 }
@@ -282,8 +337,8 @@ func TestInstallPublishesIntentTransactionally(t *testing.T) {
 			if (err != nil) != (tt.wantErr != "") || (err != nil && !strings.Contains(err.Error(), tt.wantErr)) {
 				t.Fatalf("RunInstall() error = %v, want %q", err, tt.wantErr)
 			}
-			if tt.wantErr == "" && (!result.Verify.Ready || result.BackgroundPolicyEnabled || (tt.intent == "on" && !strings.Contains(result.Verify.FinalNote, "activation remains pending"))) {
-				t.Fatalf("success report = %#v, want pending foreground activation", result)
+			if tt.wantErr == "" && (!result.Verify.Ready || result.BackgroundPolicyEnabled || (tt.intent == "on" && !strings.Contains(result.Verify.FinalNote, "execution stays foreground"))) {
+				t.Fatalf("success report = %#v, want foreground fallback when capability is unknown", result)
 			}
 			got, readErr := state.Read(home)
 			if tt.wantErr == "" {
@@ -378,12 +433,18 @@ func TestInstallBackgroundInvalidSourcesFailBeforeMutation(t *testing.T) {
 func syncBackgroundTestHome(t *testing.T) string {
 	home := t.TempDir()
 	oldHome, oldBackup, oldRun, oldLookPath := osUserHomeDir, backup.UserHomeDirFn, runCommand, cmdLookPath
+	oldVersion, oldTarget := runOpenCodeVersion, resolveOpenCodeTarget
 	osUserHomeDir = func() (string, error) { return home, nil }
 	backup.UserHomeDirFn = func() (string, error) { return home, nil }
 	runCommand = func(string, ...string) error { return nil }
 	cmdLookPath = func(name string) (string, error) { return "/usr/bin/" + name, nil }
+	runOpenCodeVersion = func(string) (string, error) { return "development", nil }
+	resolveOpenCodeTarget = func(string, string, string) (string, error) {
+		return filepath.Join(home, "opencode-real"), nil
+	}
 	t.Cleanup(func() {
 		osUserHomeDir, backup.UserHomeDirFn, runCommand, cmdLookPath = oldHome, oldBackup, oldRun, oldLookPath
+		runOpenCodeVersion, resolveOpenCodeTarget = oldVersion, oldTarget
 	})
 	return home
 }
@@ -417,6 +478,12 @@ func TestSyncBackgroundPrecedenceAndDryRunReporting(t *testing.T) {
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			home := syncBackgroundTestHome(t)
+			oldVersion, oldTarget := runOpenCodeVersion, resolveOpenCodeTarget
+			runOpenCodeVersion = func(string) (string, error) { return "development", nil }
+			resolveOpenCodeTarget = func(string, string, string) (string, error) {
+				return filepath.Join(home, "opencode-real"), nil
+			}
+			t.Cleanup(func() { runOpenCodeVersion, resolveOpenCodeTarget = oldVersion, oldTarget })
 			var before []byte
 			if tt.prior != "" {
 				if err := state.Write(home, state.InstallState{InstalledAgents: []string{"opencode"}, BackgroundIntent: tt.prior}); err != nil {
@@ -435,7 +502,7 @@ func TestSyncBackgroundPrecedenceAndDryRunReporting(t *testing.T) {
 				t.Fatalf("background resolution = %#v, want intent=%q effective=%q persist=%q", result.Background, tt.wantIntent, tt.wantEffect, tt.wantPersist)
 			}
 			report := RenderSyncReport(result)
-			if tt.wantEffect == model.OpenCodeBackgroundOn && (!strings.Contains(report, "activation: pending") || !strings.Contains(report, "runtime remains foreground")) {
+			if tt.wantEffect == model.OpenCodeBackgroundOn && (!strings.Contains(report, "activation status: unknown") || !strings.Contains(report, "runtime ready: false")) {
 				t.Fatalf("untruthful sync report: %s", report)
 			}
 			after, readErr := os.ReadFile(state.Path(home))
@@ -591,8 +658,8 @@ func TestSyncBackgroundPublicationWaitsForVerification(t *testing.T) {
 				t.Fatalf("sync error = %v, want %q", err, tt.wantErr)
 			}
 			if tt.wantErr == "" {
-				if !result.Verify.Ready || result.BackgroundPolicyEnabled || (tt.intent == model.OpenCodeBackgroundOn && !strings.Contains(result.Verify.FinalNote, "activation remains pending")) {
-					t.Fatalf("success result = %#v, want verified pending foreground activation", result)
+				if !result.Verify.Ready || result.BackgroundPolicyEnabled || (tt.intent == model.OpenCodeBackgroundOn && !strings.Contains(result.Verify.FinalNote, "execution stays foreground")) {
+					t.Fatalf("success result = %#v, want verified foreground fallback when capability is unknown", result)
 				}
 				got, readErr := state.Read(home)
 				if readErr != nil || got.BackgroundIntent != tt.intent || !got.PendingSync || got.RDDMode != "off" || got.LastUpdateCheck == nil || !got.LastUpdateCheck.Equal(lastUpdate) {
@@ -606,6 +673,51 @@ func TestSyncBackgroundPublicationWaitsForVerification(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestSyncReportsManagedLauncherChanges(t *testing.T) {
+	home := syncBackgroundTestHome(t)
+	target := filepath.Join(home, "opencode-real")
+	if err := os.WriteFile(target, []byte("real"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	oldVersion, oldTarget, oldPath := runOpenCodeVersion, resolveOpenCodeTarget, addUserPath
+	runOpenCodeVersion = func(string) (string, error) { return "1.15.11", nil }
+	resolveOpenCodeTarget = func(string, string, string) (string, error) { return target, nil }
+	addUserPath = func(string) error { return nil }
+	t.Cleanup(func() { runOpenCodeVersion, resolveOpenCodeTarget, addUserPath = oldVersion, oldTarget, oldPath })
+
+	background := OpenCodeBackgroundResolution{
+		Intent:    model.OpenCodeBackgroundOn,
+		Effective: model.OpenCodeBackgroundOn,
+		Persist:   model.OpenCodeBackgroundOn,
+	}
+	if _, err := prepareOpenCodeBackgroundActivation(home, &background, true); err != nil {
+		t.Fatal(err)
+	}
+	selection := model.Selection{
+		Agents:     []model.AgentID{model.AgentOpenCode},
+		Components: []model.ComponentID{model.ComponentSDD, model.ComponentPersona},
+		SDDMode:    model.SDDModeSingle,
+		Persona:    model.PersonaNeutral,
+	}
+	result, err := runSyncWithSelection(home, selection, background)
+	if err != nil {
+		t.Fatal(err)
+	}
+	launcher := opencodeactivation.POSIXLauncherPath(home)
+	if result.NoOp || !contains(result.ChangedFiles, launcher) || result.FilesChanged == 0 {
+		t.Fatalf("sync result = NoOp %t, FilesChanged %d, ChangedFiles %v; want launcher change", result.NoOp, result.FilesChanged, result.ChangedFiles)
+	}
+}
+
+func contains(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
 }
 
 func TestSyncBackgroundNoOpStillPublishesExplicitIntent(t *testing.T) {
