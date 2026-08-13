@@ -2109,6 +2109,40 @@ func TestInjectForSync_ClaudeGentlemanToNeutral_CleansOutputStyle(t *testing.T) 
 	}
 }
 
+func TestInjectForSync_ClaudeLegacyNeutralAliasIsIdempotent(t *testing.T) {
+	home := t.TempDir()
+	adapter := claudeAdapter()
+
+	if _, err := Inject(home, adapter, model.PersonaGentleman); err != nil {
+		t.Fatalf("Inject(gentleman) error = %v", err)
+	}
+
+	first, err := InjectForSync(home, adapter, model.PersonaGentlemanNeutralArtifacts)
+	if err != nil {
+		t.Fatalf("InjectForSync(legacy neutral alias) first error = %v", err)
+	}
+	if !first.Changed {
+		t.Fatal("InjectForSync(legacy neutral alias) first changed = false")
+	}
+
+	second, err := InjectForSync(home, adapter, model.PersonaGentlemanNeutralArtifacts)
+	if err != nil {
+		t.Fatalf("InjectForSync(legacy neutral alias) second error = %v", err)
+	}
+	if second.Changed {
+		t.Fatal("InjectForSync(legacy neutral alias) second changed = true")
+	}
+
+	neutralPath := filepath.Join(home, ".claude", "output-styles", "neutral.md")
+	if _, err := os.Stat(neutralPath); err != nil {
+		t.Fatalf("neutral.md not written by legacy neutral alias: %v", err)
+	}
+	gentlemanPath := filepath.Join(home, ".claude", "output-styles", "gentleman.md")
+	if _, err := os.Stat(gentlemanPath); !os.IsNotExist(err) {
+		t.Fatalf("gentleman.md still present after legacy neutral alias sync: %v", err)
+	}
+}
+
 // --- Hermes persona tests (T-29, T-30) ---
 
 // availableSkillsIsAuthoritative is the pattern from the generic persona assets
