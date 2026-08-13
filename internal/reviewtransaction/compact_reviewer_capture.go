@@ -292,65 +292,7 @@ func publishCompactAdmittedReviewerResult(
 	subject ArtifactSubject,
 	payload []byte,
 ) error {
-	dir := filepath.Join(storeDir, CompactReviewerResultsDir)
-	_, err := createPrivateRARDirectory(dir)
-	if err != nil {
-		return fmt.Errorf("create private reviewer result directory: %w", err)
-	}
-	// Sync on every attempt rather than only the creating attempt. If a prior
-	// parent sync was interrupted, exact replay must repair that durability
-	// boundary before publishing either child artifact.
-	if err := SyncReviewDirectory(storeDir); err != nil {
-		return fmt.Errorf(
-			"sync reviewer result parent directory: %w",
-			err,
-		)
-	}
-	path := filepath.Join(
-		dir,
-		fmt.Sprintf("%02d-%s.json", subject.SelectedOrder, subject.Lens),
-	)
-	digestPayload := []byte(compactPreservedPayloadDigest(payload) + "\n")
-
-	// Preflight both immutable slots so a known sidecar conflict cannot leave a
-	// newly published payload without its matching digest.
-	if err := requireCompactReviewerSlotCompatible(
-		path,
-		payload,
-		compactReviewerResultSizeLimit,
-	); err != nil {
-		return err
-	}
-	if err := requireCompactReviewerSlotCompatible(
-		path+".sha256",
-		digestPayload,
-		256,
-	); err != nil {
-		return err
-	}
-	if err := publishPrivateCompactReviewerFile(
-		path,
-		payload,
-		compactReviewerResultSizeLimit,
-	); err != nil {
-		return fmt.Errorf("publish admitted reviewer result: %w", err)
-	}
-	if err := publishPrivateCompactReviewerFile(
-		path+".sha256",
-		digestPayload,
-		256,
-	); err != nil {
-		return fmt.Errorf("publish admitted reviewer result digest: %w", err)
-	}
-	readBack, digest, err := readCompactReviewerArtifact(path)
-	if err != nil {
-		return fmt.Errorf("read back admitted reviewer result: %w", err)
-	}
-	if !bytes.Equal(readBack, payload) ||
-		digest != compactPreservedPayloadDigest(payload) {
-		return errors.New("admitted reviewer result readback mismatch")
-	}
-	return nil
+	return publishCompactRoleResultSlot(storeDir, compactLensRoleResultSlotKey(subject.SelectedOrder, subject.Lens), payload)
 }
 
 func requireCompactReviewerSlotCompatible(
