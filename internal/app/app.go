@@ -547,15 +547,6 @@ func updateCheckError(results []update.UpdateResult) error {
 // tuiExecute creates a real install runtime and runs the pipeline with progress reporting.
 var appUserHomeDir = os.UserHomeDir
 
-func tuiExecute(
-	selection model.Selection,
-	resolved planner.ResolvedPlan,
-	detection system.DetectionResult,
-	onProgress pipeline.ProgressFunc,
-) pipeline.ExecutionResult {
-	return tuiExecuteWithBackground(selection, resolved, detection, "", "", onProgress)
-}
-
 func tuiExecuteWithBackground(
 	selection model.Selection,
 	resolved planner.ResolvedPlan,
