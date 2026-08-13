@@ -353,6 +353,9 @@ func unmanagedRemediationSettleable(status RuntimeStatus, failedEvidence string)
 }
 
 func normalizeCompactSettleRequest(request CompactSettleRequest) error {
+	if request.Outcome == AttemptInterrupted && request.EvidenceRevision != "" {
+		return errors.New("interrupted evidence_revision must be empty; rerun `gentle-ai sdd-attempt settle` without --evidence-revision")
+	}
 	_, err := normalizeFinishAttemptRequest(FinishAttemptRequest{
 		ExpectedRevision: request.Token, RequestID: request.RequestID, Outcome: request.Outcome,
 		EvidenceRevision: request.EvidenceRevision, Diagnosis: request.Diagnosis,
