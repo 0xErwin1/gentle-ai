@@ -2165,6 +2165,163 @@ func TestRunArgs_NoPendingSync_NoSyncCall(t *testing.T) {
 	}
 }
 
+// TestRunArgs_PendingSync_PrintsDoctorAdvisory verifies the TUI self-update
+// deferred path: when the new binary starts and observes PendingSync=true, it
+// prints the doctor advisory after the deferred sync attempt (success or
+// failure). The advisory lets the user verify ecosystem health against the
+// post-upgrade state. Per #1901, this reuses the existing PendingSync signal
+// rather than introducing a new persisted flag.
+func TestRunArgs_PendingSync_PrintsDoctorAdvisory(t *testing.T) {
+	home := t.TempDir()
+	setupMockHome(t, home)
+
+	if err := state.Write(home, state.InstallState{
+		InstalledAgents: []string{"claude-code"},
+		PendingSync:     true,
+	}); err != nil {
+		t.Fatalf("state.Write() error = %v", err)
+	}
+
+	origSelf := selfUpdateFn
+	origEnsure := ensureCurrentOSSupported
+	origDetect := detectSystem
+	origRunTUI := runTUI
+	origDeferredSync := deferredSyncFn
+	t.Cleanup(func() {
+		selfUpdateFn = origSelf
+		ensureCurrentOSSupported = origEnsure
+		detectSystem = origDetect
+		runTUI = origRunTUI
+		deferredSyncFn = origDeferredSync
+	})
+
+	selfUpdateFn = func(_ context.Context, _ string, _ system.PlatformProfile, _ io.Writer) error {
+		return nil
+	}
+	ensureCurrentOSSupported = func() error { return nil }
+	detectSystem = func(context.Context) (system.DetectionResult, error) {
+		return system.DetectionResult{System: system.SystemInfo{Supported: true, Profile: system.PlatformProfile{OS: "darwin", PackageManager: "brew", Supported: true}}}, nil
+	}
+	runTUI = func(m tea.Model, _ ...tea.ProgramOption) (tea.Model, error) {
+		return m, nil
+	}
+
+	deferredSyncFn = func() error {
+		return nil // successful sync
+	}
+
+	var buf bytes.Buffer
+	if err := RunArgs(nil, &buf); err != nil {
+		t.Fatalf("RunArgs(nil) error = %v", err)
+	}
+
+	out := buf.String()
+	if !strings.Contains(out, "Run 'gentle-ai doctor' to verify ecosystem health after upgrade") {
+		t.Errorf("stdout = %q, want doctor advisory when PendingSync=true on launch", out)
+	}
+}
+
+// TestRunArgs_PendingSync_PrintsDoctorAdvisoryEvenOnSyncFailure verifies that
+// the doctor advisory is printed regardless of deferred sync outcome. The
+// advisory is informational and complements the sync outcome (not a replacement).
+func TestRunArgs_PendingSync_PrintsDoctorAdvisoryEvenOnSyncFailure(t *testing.T) {
+	home := t.TempDir()
+	setupMockHome(t, home)
+
+	if err := state.Write(home, state.InstallState{
+		InstalledAgents: []string{"claude-code"},
+		PendingSync:     true,
+	}); err != nil {
+		t.Fatalf("state.Write() error = %v", err)
+	}
+
+	origSelf := selfUpdateFn
+	origEnsure := ensureCurrentOSSupported
+	origDetect := detectSystem
+	origRunTUI := runTUI
+	origDeferredSync := deferredSyncFn
+	t.Cleanup(func() {
+		selfUpdateFn = origSelf
+		ensureCurrentOSSupported = origEnsure
+		detectSystem = origDetect
+		runTUI = origRunTUI
+		deferredSyncFn = origDeferredSync
+	})
+
+	selfUpdateFn = func(_ context.Context, _ string, _ system.PlatformProfile, _ io.Writer) error {
+		return nil
+	}
+	ensureCurrentOSSupported = func() error { return nil }
+	detectSystem = func(context.Context) (system.DetectionResult, error) {
+		return system.DetectionResult{System: system.SystemInfo{Supported: true, Profile: system.PlatformProfile{OS: "darwin", PackageManager: "brew", Supported: true}}}, nil
+	}
+	runTUI = func(m tea.Model, _ ...tea.ProgramOption) (tea.Model, error) {
+		return m, nil
+	}
+
+	deferredSyncFn = func() error {
+		return fmt.Errorf("simulated network error")
+	}
+
+	var buf bytes.Buffer
+	if err := RunArgs(nil, &buf); err != nil {
+		t.Fatalf("RunArgs(nil) error = %v (deferred sync failure must be non-fatal)", err)
+	}
+
+	out := buf.String()
+	if !strings.Contains(out, "Run 'gentle-ai doctor' to verify ecosystem health after upgrade") {
+		t.Errorf("stdout = %q, want doctor advisory even when deferred sync fails", out)
+	}
+}
+
+// TestRunArgs_NoPendingSync_DoesNotPrintDoctorAdvisory verifies that the
+// doctor advisory is NOT printed on a normal launch where PendingSync=false.
+// The advisory is gated strictly on the post-upgrade signal.
+func TestRunArgs_NoPendingSync_DoesNotPrintDoctorAdvisory(t *testing.T) {
+	home := t.TempDir()
+	setupMockHome(t, home)
+
+	if err := state.Write(home, state.InstallState{
+		InstalledAgents: []string{"claude-code"},
+		PendingSync:     false,
+	}); err != nil {
+		t.Fatalf("state.Write() error = %v", err)
+	}
+
+	origSelf := selfUpdateFn
+	origEnsure := ensureCurrentOSSupported
+	origDetect := detectSystem
+	origRunTUI := runTUI
+	origDeferredSync := deferredSyncFn
+	t.Cleanup(func() {
+		selfUpdateFn = origSelf
+		ensureCurrentOSSupported = origEnsure
+		detectSystem = origDetect
+		runTUI = origRunTUI
+		deferredSyncFn = origDeferredSync
+	})
+
+	selfUpdateFn = func(_ context.Context, _ string, _ system.PlatformProfile, _ io.Writer) error {
+		return nil
+	}
+	ensureCurrentOSSupported = func() error { return nil }
+	detectSystem = func(context.Context) (system.DetectionResult, error) {
+		return system.DetectionResult{System: system.SystemInfo{Supported: true, Profile: system.PlatformProfile{OS: "darwin", PackageManager: "brew", Supported: true}}}, nil
+	}
+	runTUI = func(m tea.Model, _ ...tea.ProgramOption) (tea.Model, error) {
+		return m, nil
+	}
+
+	var buf bytes.Buffer
+	if err := RunArgs(nil, &buf); err != nil {
+		t.Fatalf("RunArgs(nil) error = %v", err)
+	}
+
+	if strings.Contains(buf.String(), "ecosystem health after upgrade") {
+		t.Errorf("stdout must NOT contain doctor advisory on a normal launch (PendingSync=false):\n%s", buf.String())
+	}
+}
+
 func TestCustomSyncClearsPersistedCodexOrchestratorAssignment(t *testing.T) {
 	home := t.TempDir()
 	if err := state.Write(home, state.InstallState{
