@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
@@ -197,7 +198,7 @@ func TestReviewProviderRefuterCapturesTransactionWideBatch(t *testing.T) {
 			if !bytes.Contains(invocation.Prompt(), []byte(record.State.LineageID)) {
 				t.Fatal("provider refuter request omitted the reviewing lineage")
 			}
-			return []byte(`{"results":[{"finding_id":"R3-001","outcome":"corroborated","proof_refs":["independent reproduction"]}]}`), nil
+			return []byte(`{"refuter_request_hash":"` + reviewProviderRequestHashForTest(t, invocation.Prompt()) + `","results":[{"finding_id":"R3-001","outcome":"corroborated","proof_refs":["independent reproduction"]}]}`), nil
 		}), nil
 	}
 
@@ -208,6 +209,63 @@ func TestReviewProviderRefuterCapturesTransactionWideBatch(t *testing.T) {
 	if slot, err := reviewtransaction.ReadCompactRefuterResultSlot(store.Dir); err != nil || !slot.Occupied {
 		t.Fatalf("provider refuter slot = %#v, %v", slot, err)
 	}
+}
+
+func TestReviewProviderOpenCodeStatusIssuesBoundRefuterTask(t *testing.T) {
+	repo, started, _, record := newArtifactReview(t, false)
+	result := admittedReviewerResultForTest(t, repo, record, record.State.SelectedLenses[0], 0)
+	result.Findings = []facadeFinding{{
+		ID: "R3-001", Location: "tracked.txt:1", Severity: "CRITICAL", Claim: "candidate failure",
+		ProofRefs: []string{"tracked.txt:1 candidate-specific proof"}, EvidenceClass: reviewtransaction.EvidenceInferential,
+		CausalDisposition: reviewtransaction.CausalBehaviorActivated,
+	}}
+	input := filepath.Join(t.TempDir(), "result.json")
+	writeReviewCLIJSON(t, input, result)
+	if err := RunReviewCaptureResult([]string{
+		"--cwd", repo, "--lineage", started.LineageID, "--target", record.State.InitialSnapshot.Identity,
+		"--lens", record.State.SelectedLenses[0], "--order", "0", "--input", input,
+	}, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	var output bytes.Buffer
+	if err := RunReview([]string{
+		"status", "--cwd", repo, "--lineage", started.LineageID, "--contract", ReviewIntegrationContractV2,
+		"--agent", string(model.AgentOpenCode), "--next-transition",
+	}, &output); err != nil {
+		t.Fatal(err)
+	}
+	var status ReviewTargetStatusResult
+	decodeStrictReviewJSON(t, output.Bytes(), &status)
+	if err := status.Validate(); err != nil {
+		t.Fatalf("OpenCode provider role status is invalid: %v", err)
+	}
+	if status.NextTransition == nil || status.NextTransition.ReasonCode != "provider_refuter_required" || status.NextTransition.Collect == nil || len(status.NextTransition.Collect.Inputs) != 1 {
+		t.Fatalf("OpenCode provider role transition = %#v", status.NextTransition)
+	}
+	task := status.NextTransition.Collect.Inputs[0].ProviderTask
+	if task == nil || task.Agent != "review-refuter" || task.Role != string(reviewerprovider.RoleRefuter) || !strings.HasPrefix(task.Prompt, reviewProviderTaskBindingHeader+" ") {
+		t.Fatalf("OpenCode provider task = %#v", task)
+	}
+}
+
+func reviewProviderRequestHashForTest(t *testing.T, prompt []byte) string {
+	t.Helper()
+	input := bytes.SplitN(prompt, []byte("\n\nInput:\n"), 2)
+	if len(input) != 2 {
+		t.Fatalf("provider prompt does not contain input: %s", prompt)
+	}
+	payload := bytes.SplitN(input[1], []byte("\n\nOutput schema:\n"), 2)
+	if len(payload) != 2 {
+		t.Fatalf("provider prompt does not contain output schema: %s", prompt)
+	}
+	var request reviewProviderRefuterRequest
+	if err := json.Unmarshal(payload[0], &request); err != nil {
+		t.Fatal(err)
+	}
+	if request.RequestHash == "" {
+		t.Fatal("provider refuter request hash is empty")
+	}
+	return request.RequestHash
 }
 
 type providerTestAdapter struct {

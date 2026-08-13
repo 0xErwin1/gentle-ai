@@ -17,6 +17,78 @@ import (
 
 var errReviewProviderRefuterNotRequired = errors.New("provider refuter request has no inferential findings; continue with `gentle-ai review finalize --captured-results`")
 
+type reviewProviderRole = reviewerprovider.Role
+
+const reviewProviderTaskBindingHeader = "GENTLE_AI_REVIEW_PROVIDER_TASK"
+
+type reviewProviderTaskBinding struct {
+	LineageID         string `json:"lineage_id"`
+	Revision          string `json:"revision"`
+	TargetIdentity    string `json:"target_identity"`
+	RepositoryContext string `json:"repository_context"`
+	Role              string `json:"role"`
+}
+
+// newReviewProviderTask produces an opaque host task that only Go may
+// materialize and admit through the live OpenCode relay.
+func newReviewProviderTask(role reviewProviderRole, binding ReviewTransitionBinding) (ReviewProviderTask, error) {
+	agent := reviewProviderRoleOpenCodeAgent(role)
+	if agent == "" || binding.LineageID == "" || !providerSHA256(binding.Revision) || !providerSHA256(binding.TargetIdentity) ||
+		reviewtransaction.ValidateReviewRepositoryContextHandle(binding.RepositoryContext) != nil {
+		return ReviewProviderTask{}, errors.New("provider role task binding is incomplete") // refusal:by-design world-action: only a Go-issued STATUS transition may bind a managed provider role task
+	}
+	payload, err := json.Marshal(reviewProviderTaskBinding{
+		LineageID: binding.LineageID, Revision: binding.Revision, TargetIdentity: binding.TargetIdentity,
+		RepositoryContext: binding.RepositoryContext, Role: string(role),
+	})
+	if err != nil {
+		return ReviewProviderTask{}, err
+	}
+	return ReviewProviderTask{Agent: agent, Role: string(role), Prompt: reviewProviderTaskBindingHeader + " " + string(payload)}, nil
+}
+
+func reviewProviderRoleOpenCodeAgent(role reviewProviderRole) string {
+	switch role {
+	case reviewerprovider.RoleRefuter:
+		return "review-refuter"
+	case reviewerprovider.RoleTargetedValidator:
+		return "review-validator"
+	default:
+		return ""
+	}
+}
+
+func reviewProviderRoleTaskSchema(role reviewProviderRole) string {
+	contract, err := reviewerprovider.ContractFor(role)
+	if err != nil {
+		return ""
+	}
+	return string(contract.ResultSchema)
+}
+
+func reviewProviderRoleTaskRequest(ctx context.Context, repo, storeDir string, state reviewtransaction.CompactState, revision string, role reviewProviderRole) (reviewerprovider.Invocation, error) {
+	switch role {
+	case reviewerprovider.RoleRefuter:
+		request, err := reviewProviderNewRefuterRequest(ctx, repo, storeDir, state, revision)
+		if err != nil {
+			return reviewerprovider.Invocation{}, err
+		}
+		return request.Invocation, nil
+	case reviewerprovider.RoleTargetedValidator:
+		correction, err := reviewProviderTargetedValidatorCorrection(ctx, repo, state)
+		if err != nil {
+			return reviewerprovider.Invocation{}, err
+		}
+		request, err := reviewProviderNewTargetedValidatorRequest(ctx, repo, state, revision, correction)
+		if err != nil {
+			return reviewerprovider.Invocation{}, err
+		}
+		return request.Invocation, nil
+	default:
+		return reviewerprovider.Invocation{}, fmt.Errorf("unsupported provider role task %q", role) // refusal:by-design world-action: OpenCode may invoke only compiled provider roles
+	}
+}
+
 type reviewProviderRefuterRequest struct {
 	Schema           string                           `json:"schema"`
 	RequestHash      string                           `json:"request_hash"`
@@ -171,7 +243,7 @@ func reviewProviderMaterializeEvidence(ctx context.Context, repo string, snapsho
 	}
 	defer deps.close(inspector)
 	frozen := inspector.FrozenCandidateContext()
-	if len(frozen.ChangedPathManifest) > 32 {
+	if len(frozen.ChangedPathManifest) > reviewProviderMaxEvidenceEntries {
 		return nil, reviewLensContextRefusal("lens_context_budget_exceeded", reviewLensContextCapacityAction(len(frozen.ChangedPathManifest)))
 	}
 	budget := reviewLensContextByteBudget
@@ -225,8 +297,8 @@ func reviewProviderAdmitRefuterRaw(request reviewProviderRefuterRequest, raw []b
 	if err := decodeFacadeJSONBytes(payload, &result); err != nil {
 		return facadeRefuterResult{}, fmt.Errorf("decode provider refuter result: %w", err)
 	}
-	if result.Results == nil {
-		return facadeRefuterResult{}, errors.New("provider refuter result requires an explicit results array") // refusal:by-design operator-knowledge: runtime output must declare every batch result
+	if result.RequestHash != request.RequestHash || result.Results == nil {
+		return facadeRefuterResult{}, errors.New("provider refuter result does not bind the requested batch") // refusal:by-design operator-knowledge: return the exact request hash and complete results array from the Go-issued batch
 	}
 	expected := make(map[string]struct{}, len(claims))
 	for _, claim := range claims {
