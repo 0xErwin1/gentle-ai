@@ -2600,7 +2600,7 @@ func normalizeFinishAttemptRequest(request FinishAttemptRequest) (FinishAttemptR
 		return FinishAttemptRequest{}, errors.New("outcome must be failed, interrupted, or passed")
 	}
 	if request.Outcome == AttemptInterrupted && request.EvidenceRevision != "" && !runtimeRevisionPattern.MatchString(request.EvidenceRevision) {
-		return FinishAttemptRequest{}, errors.New("interrupted evidence_revision must be empty or a canonical legacy sha256 revision")
+		return FinishAttemptRequest{}, errors.New("interrupted evidence_revision must be empty or a canonical legacy sha256 revision; rerun `gentle-ai sdd-attempt finish` or `gentle-ai sdd-attempt settle` with --outcome interrupted and without --evidence-revision")
 	}
 	if request.Outcome != AttemptInterrupted && !runtimeRevisionPattern.MatchString(request.EvidenceRevision) {
 		return FinishAttemptRequest{}, fmt.Errorf(
