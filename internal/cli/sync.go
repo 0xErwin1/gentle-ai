@@ -7,6 +7,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -47,6 +48,9 @@ type SyncFlags struct {
 	IncludePermissions bool
 	IncludeTheme       bool
 	DryRun             bool
+
+	OpenCodeBackgroundSubagents    string
+	OpenCodeBackgroundSubagentsSet bool
 	// Profiles holds named SDD profiles parsed from --profile flags.
 	// Each entry is populated by parseProfileFlag and augmented by
 	// parseProfilePhaseFlag.
@@ -82,6 +86,9 @@ type SyncResult struct {
 	// processed during this sync. Paths appear once even when multiple
 	// components touch the same file. It is nil when no files changed.
 	ChangedFiles []string
+
+	Background              OpenCodeBackgroundResolution
+	BackgroundPolicyEnabled bool
 }
 
 // ParseSyncFlags parses the CLI arguments for the sync subcommand.
@@ -106,6 +113,7 @@ func ParseSyncFlags(args []string) (SyncFlags, error) {
 	fs.BoolVar(&opts.StrictTDD, "strict-tdd", false, "enable strict TDD mode for SDD agents (RED → GREEN → REFACTOR)")
 	fs.BoolVar(&opts.IncludePermissions, "include-permissions", false, "include permissions component in sync")
 	fs.BoolVar(&opts.IncludeTheme, "include-theme", false, "include theme component in sync")
+	fs.StringVar(&opts.OpenCodeBackgroundSubagents, "opencode-background-subagents", "", "--opencode-background-subagents=auto|on|off; env: GENTLE_AI_OPENCODE_BACKGROUND_SUBAGENTS; on remains foreground pending activation")
 	fs.BoolVar(&opts.DryRun, "dry-run", false, "preview plan without executing")
 	registerListFlag(fs, "profile", &opts.rawProfiles)
 	registerListFlag(fs, "profile-phase", &opts.rawProfilePhases)
@@ -136,6 +144,8 @@ func ParseSyncFlags(args []string) (SyncFlags, error) {
 			opts.permissionsSet = true
 		case "include-theme":
 			opts.themeSet = true
+		case "opencode-background-subagents":
+			opts.OpenCodeBackgroundSubagentsSet = true
 		}
 	})
 
@@ -159,6 +169,28 @@ func ParseSyncFlags(args []string) (SyncFlags, error) {
 	}
 
 	return opts, nil
+}
+
+func PrintSyncHelp(w io.Writer) {
+	fmt.Fprint(w, `USAGE
+  gentle-ai sync [flags]
+
+FLAGS
+  --agent, --agents <list>           Agents to sync
+  --skill, --skills <list>           Skills to sync
+  --sdd-mode single|multi            SDD orchestrator mode
+  --sdd-profile-strategy <strategy>  OpenCode SDD profile sync strategy
+  --strict-tdd                       Enable strict TDD mode for SDD agents
+  --include-permissions              Include permissions component
+  --include-theme                    Include theme component
+  --profile <name:provider/model>    Sync a named SDD profile
+  --profile-phase <name:phase:model> Sync a named SDD profile phase
+  --opencode-background-subagents=auto|on|off
+                                     Prepare OpenCode background policy; env: GENTLE_AI_OPENCODE_BACKGROUND_SUBAGENTS
+                                     auto inherits managed on/off, on prepares but stays foreground pending activation, off stays foreground
+  --dry-run                          Preview plan without executing
+  --help, -h                         Show this help
+`)
 }
 
 func parseProfileSyncStrategy(raw string) (model.SDDProfileStrategyID, error) {
@@ -445,15 +477,16 @@ func DiscoverAgents(homeDir string) []model.AgentID {
 // It reuses backup/rollback infrastructure but only calls inject functions —
 // no agentInstallStep, no engram setup, no persona.
 type syncRuntime struct {
-	homeDir         string
-	workspaceDir    string
-	selection       model.Selection
-	agentIDs        []model.AgentID
-	backupRoot      string
-	state           *runtimeState
-	managedPaths    []string
-	changedFiles    []string // accumulates candidate paths reported by component injectors
-	openCodeRuntime *state.OpenCodeRuntimeProvenance
+	homeDir          string
+	workspaceDir     string
+	selection        model.Selection
+	agentIDs         []model.AgentID
+	backupRoot       string
+	state            *runtimeState
+	managedPaths     []string
+	changedFiles     []string // accumulates candidate paths reported by component injectors
+	openCodeRuntime  *state.OpenCodeRuntimeProvenance
+	backgroundPolicy bool
 }
 
 func newSyncRuntime(homeDir string, selection model.Selection) (*syncRuntime, error) {
@@ -509,13 +542,14 @@ func (r *syncRuntime) stagePlan() pipeline.StagePlan {
 
 	for _, component := range r.selection.Components {
 		apply = append(apply, componentSyncStep{
-			id:           "sync:component:" + string(component),
-			component:    component,
-			homeDir:      r.homeDir,
-			workspaceDir: r.workspaceDir,
-			agents:       r.agentIDs,
-			selection:    r.selection,
-			changedFiles: &r.changedFiles,
+			id:               "sync:component:" + string(component),
+			component:        component,
+			homeDir:          r.homeDir,
+			workspaceDir:     r.workspaceDir,
+			agents:           r.agentIDs,
+			selection:        r.selection,
+			changedFiles:     &r.changedFiles,
+			backgroundPolicy: r.backgroundPolicy,
 		})
 	}
 	if needsCompatibilitySkillsRefresh(r.selection.Components) {
@@ -787,6 +821,8 @@ type componentSyncStep struct {
 	agents       []model.AgentID
 	selection    model.Selection
 	changedFiles *[]string // accumulates absolute paths of files that actually changed
+
+	backgroundPolicy bool
 }
 
 type codeGraphGuidanceSyncStep struct {
@@ -1051,7 +1087,12 @@ func (s componentSyncStep) Run() error {
 				Profiles:                           profiles,
 				CodeGraphGuidanceMarkdown:          codeGraphGuidanceMarkdownForSDD(s.homeDir, s.selection.CommunityTools),
 			}
-			res, err := sdd.Inject(targetDir, adapter, sddMode, opts)
+			opts.IncludeOpenCodeBackgroundPolicy = s.backgroundPolicy && adapter.Agent() == model.AgentOpenCode
+			inject := sdd.Inject
+			if s.backgroundPolicy {
+				inject = injectSDD
+			}
+			res, err := inject(targetDir, adapter, sddMode, opts)
 			if err != nil {
 				return fmt.Errorf("sync sdd for %q: %w", adapter.Agent(), err)
 			}
@@ -1455,6 +1496,10 @@ func validatePersistedSyncState(persisted state.InstallState, readErr error) err
 // and a fully-built Selection (agents + components + options).
 // This is the function the TUI calls directly to avoid CLI flag parsing.
 func RunSyncWithSelection(homeDir string, selection model.Selection) (SyncResult, error) {
+	return runSyncWithSelection(homeDir, selection, OpenCodeBackgroundResolution{})
+}
+
+func runSyncWithSelection(homeDir string, selection model.Selection, background OpenCodeBackgroundResolution) (SyncResult, error) {
 	agentIDs := selection.Agents
 	// The read error is captured, not discarded: the persona alias migration
 	// below must not rewrite state it could not read. Managed-asset provenance
@@ -1485,8 +1530,9 @@ func RunSyncWithSelection(homeDir string, selection model.Selection) (SyncResult
 	}
 
 	result := SyncResult{
-		Agents:    agentIDs,
-		Selection: selection,
+		Agents:     agentIDs,
+		Selection:  selection,
+		Background: background,
 	}
 
 	result, noOp, err := zeroAgentSyncNoOp(homeDir, selection, result)
@@ -1499,6 +1545,7 @@ func RunSyncWithSelection(homeDir string, selection model.Selection) (SyncResult
 		return result, err
 	}
 	defer rt.state.cleanupCompatibilityTransaction()
+	rt.backgroundPolicy = background.Effective == model.OpenCodeBackgroundOn
 
 	stagePlan := rt.stagePlan()
 	result.Plan = stagePlan
@@ -1536,6 +1583,7 @@ func RunSyncWithSelection(homeDir string, selection model.Selection) (SyncResult
 	// Post-apply verification reuses the same component paths as install.
 	result.Verify = runPostSyncVerification(homeDir, rt.workspaceDir, selection)
 	result.Verify = withFailedSyncVerificationNote(result.Verify)
+	result.Verify = withOpenCodeBackgroundPending(result.Verify, background, false, agentIDs)
 	if !result.Verify.Ready {
 		verificationErr := fmt.Errorf("post-sync verification failed:\n%s", verify.RenderReport(result.Verify))
 		rollback := orchestrator.Rollback(result.Execution)
@@ -1548,7 +1596,7 @@ func RunSyncWithSelection(homeDir string, selection model.Selection) (SyncResult
 	if err != nil {
 		return result, fmt.Errorf("derive managed asset writer identity: %w", err)
 	}
-	if err := persistSyncManagedAssetState(homeDir, selection, writer, rt.openCodeRuntime); err != nil {
+	if err := persistSyncManagedAssetStateWithBackground(homeDir, selection, writer, rt.openCodeRuntime, background.Persist); err != nil {
 		persistErr := fmt.Errorf("persist sync managed asset state: %w", err)
 		rollback := orchestrator.Rollback(result.Execution)
 		if rollback.Err != nil {
@@ -1561,6 +1609,10 @@ func RunSyncWithSelection(homeDir string, selection model.Selection) (SyncResult
 }
 
 func persistSyncManagedAssetState(homeDir string, selection model.Selection, writer string, runtimeProvenance *state.OpenCodeRuntimeProvenance) error {
+	return persistSyncManagedAssetStateWithBackground(homeDir, selection, writer, runtimeProvenance, "")
+}
+
+func persistSyncManagedAssetStateWithBackground(homeDir string, selection model.Selection, writer string, runtimeProvenance *state.OpenCodeRuntimeProvenance, background model.OpenCodeBackgroundIntent) error {
 	return withInstallStateLock(homeDir, func() error {
 		latest, err := state.Read(homeDir)
 		if errors.Is(err, os.ErrNotExist) {
@@ -1591,6 +1643,10 @@ func persistSyncManagedAssetState(homeDir string, selection model.Selection, wri
 		if !latest.CommunityToolsConfigured && selection.CommunityTools != nil {
 			latest.CommunityTools = communityToolIDsToStrings(selection.CommunityTools)
 			latest.CommunityToolsConfigured = true
+			shouldWrite = true
+		}
+		if background != "" && latest.BackgroundIntent != background {
+			latest.BackgroundIntent = background
 			shouldWrite = true
 		}
 		if !shouldWrite {
@@ -1637,6 +1693,10 @@ func RunSync(args []string) (SyncResult, error) {
 	// errors stop sync before any persona mutation or asset write.
 	persistedState, persistedStateErr := state.Read(homeDir)
 	if err := validatePersistedSyncState(persistedState, persistedStateErr); err != nil {
+		return SyncResult{Agents: agentIDs, Selection: selection}, err
+	}
+	background, err := resolveOpenCodeBackgroundCLI(flags.OpenCodeBackgroundSubagentsSet, flags.OpenCodeBackgroundSubagents, persistedState)
+	if err != nil {
 		return SyncResult{Agents: agentIDs, Selection: selection}, err
 	}
 	RestorePersistedSelection(&selection, persistedState, flags)
@@ -1719,9 +1779,10 @@ func RunSync(args []string) (SyncResult, error) {
 	if flags.DryRun {
 		// Build the plan for inspection, skip execution.
 		result := SyncResult{
-			Agents:    agentIDs,
-			Selection: selection,
-			DryRun:    true,
+			Agents:     agentIDs,
+			Selection:  selection,
+			DryRun:     true,
+			Background: background,
 		}
 		result, noOp, err := zeroAgentSyncNoOp(homeDir, selection, result)
 		if err != nil || noOp {
@@ -1732,6 +1793,7 @@ func RunSync(args []string) (SyncResult, error) {
 			return result, err
 		}
 		defer rt.state.cleanupCompatibilityTransaction()
+		rt.backgroundPolicy = background.Effective == model.OpenCodeBackgroundOn
 		result.Plan = rt.stagePlan()
 		for _, step := range result.Plan.Prepare {
 			if prepare, ok := step.(prepareBackupStep); ok && prepare.targetErr != nil {
@@ -1741,7 +1803,7 @@ func RunSync(args []string) (SyncResult, error) {
 		return result, nil
 	}
 
-	result, err := RunSyncWithSelection(homeDir, selection)
+	result, err := runSyncWithSelection(homeDir, selection, background)
 	if err != nil {
 		return result, err
 	}
@@ -1814,6 +1876,16 @@ func hasManagedPiCodeGraphManifest(homeDir string) bool {
 //   - All managed assets were already current (NoOp=true, FilesChanged=0).
 func RenderSyncReport(result SyncResult) string {
 	var b strings.Builder
+	backgroundReport := func() {
+		if !containsAgent(result.Agents, model.AgentOpenCode) || result.Background.Intent == "" {
+			return
+		}
+		fmt.Fprintf(&b, "OpenCode background intent: %s (policy effective: %s)\n", result.Background.Intent, result.Background.Effective)
+		if result.Background.Effective == model.OpenCodeBackgroundOn {
+			fmt.Fprintf(&b, "OpenCode background runtime ready: %t\n", result.BackgroundPolicyEnabled)
+			fmt.Fprintln(&b, "OpenCode background activation: pending; runtime remains foreground until capability activation is available")
+		}
+	}
 
 	if result.NoOp {
 		fmt.Fprintln(&b, "gentle-ai sync — no managed sync actions needed")
@@ -1823,6 +1895,7 @@ func RenderSyncReport(result SyncResult) string {
 			fmt.Fprintf(&b, "Agents: %s\n", joinAgentIDs(result.Agents))
 			fmt.Fprintln(&b, "All managed assets are already up to date. No files changed.")
 		}
+		backgroundReport()
 		return strings.TrimRight(b.String(), "\n")
 	}
 
@@ -1839,6 +1912,7 @@ func RenderSyncReport(result SyncResult) string {
 		}
 		fmt.Fprintf(&b, "Prepare steps: %d\n", len(result.Plan.Prepare))
 		fmt.Fprintf(&b, "Apply steps: %d\n", len(result.Plan.Apply))
+		backgroundReport()
 		return strings.TrimRight(b.String(), "\n")
 	}
 
@@ -1869,6 +1943,7 @@ func RenderSyncReport(result SyncResult) string {
 		fmt.Fprintln(&b, "Post-sync verification:")
 		fmt.Fprint(&b, verify.RenderReport(result.Verify))
 	}
+	backgroundReport()
 
 	return strings.TrimRight(b.String(), "\n")
 }
