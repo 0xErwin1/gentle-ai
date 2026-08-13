@@ -359,7 +359,13 @@ func TestKilocodeReviewSettingsMatchCurrentMainBaseline(t *testing.T) {
 	// recommending a channel switch, and keeps main-only evidence unpublished.
 	// Kilocode embeds that shared contract, so the hash moved. Deliberate, not
 	// drift.
-	const want = "eb756b1316ec83b123d65e131eb22b605fd9ee92b905ef085a4d75f1d2aabbc6"
+	// #2492 adds the "Terminal — " marker to the 12 terminal rows of the
+	// shipped stop-reason table, so the invariant guard can cross-check the
+	// contract consumers receive instead of only the docs copy. Kilocode
+	// embeds that contract, so the hash moved. Deliberate, not drift.
+	// The merged tree combines both moves, so the baseline derives from
+	// this combined source rather than either parent.
+	const want = "62b25d7c5b5bb3b588c892becc6b383abed3ca6721cbd4fe3d7cd00245e96438"
 	if got != want {
 		t.Fatalf("Kilocode settings SHA-256 = %s, want current-main baseline %s", got, want)
 	}
@@ -594,8 +600,12 @@ func TestOpenCodeRenderedReviewProtocolCost(t *testing.T) {
 		// characters per row). The ceilings preserve the required 15% headroom.
 		// #2773 adds one lens-context-budget terminal continuation (379 rendered
 		// characters per row). The ceilings preserve the required 15% headroom.
-		{name: "standard", agents: []string{"review-reliability"}, beforeChars: 42_301, wantChars: 22_088, maxCharacters: 26_000},
-		{name: "full-4R", agents: []string{"review-risk", "review-resilience", "review-readability", "review-reliability"}, beforeChars: 106_998, wantChars: 34_433, maxCharacters: 41_000},
+		// #2492: the 12 terminal rows of the shipped stop-reason table gained
+		// the "Terminal — " marker so the invariant guard can cross-check the
+		// contract itself (+132 characters in both renderings, ~33 tokens,
+		// still over 15% headroom). Deliberate, not drift.
+		{name: "standard", agents: []string{"review-reliability"}, beforeChars: 42_301, wantChars: 22_220, maxCharacters: 26_000},
+		{name: "full-4R", agents: []string{"review-risk", "review-resilience", "review-readability", "review-reliability"}, beforeChars: 106_998, wantChars: 34_565, maxCharacters: 41_000},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

@@ -209,6 +209,12 @@ func RunArgs(args []string, stdout io.Writer) error {
 					_, _ = fmt.Fprintf(stdout, "Warning: failed to clear PendingSync flag: %v\n", writeErr)
 				}
 			}
+			// TUI self-update path: the previous launch completed a gentle-ai
+			// self-upgrade under the old binary and set PendingSync=true. We are
+			// now running under the new binary; print the doctor advisory so the
+			// user can verify ecosystem health against the post-upgrade state.
+			// Print regardless of sync outcome — the advisory is informational.
+			printPostUpgradeDoctorAdvisory(stdout)
 		}
 
 		m := tui.NewModel(result, Version, installedState)
@@ -511,7 +517,14 @@ func runUpgrade(ctx context.Context, args upgradeArgs, detection system.Detectio
 	}
 	if !dryRun {
 		if latestVersion, ok := gentleAIUpgradeSucceeded(report); ok {
-			return restartAfterGentleAIUpgrade(latestVersion, stdout)
+			if err := restartAfterGentleAIUpgrade(latestVersion, stdout); err != nil {
+				return err
+			}
+			// CLI upgrade path: print the doctor advisory so the user can verify
+			// ecosystem health against the post-upgrade state. Informational only;
+			// does not run any checks or change exit status.
+			printPostUpgradeDoctorAdvisory(stdout)
+			return nil
 		}
 	}
 	return nil
@@ -544,7 +557,7 @@ func tuiExecute(
 	profile := cli.ResolveInstallProfile(detection)
 	resolved.PlatformDecision = planner.PlatformDecisionFromProfile(profile)
 
-	execResult := cli.ExecuteTUIInstall(homeDir, selection, resolved, profile, onProgress)
+	execResult, orchestrator := cli.ExecuteTUIInstallWithOrchestrator(homeDir, selection, resolved, profile, onProgress)
 	if execResult.Err == nil {
 		// Persist the user's agent selection and model assignments so that future
 		// `sync` runs target only the installed agents and preserve model choices.
@@ -568,8 +581,14 @@ func tuiExecute(
 			Persona:                     string(selection.Persona),
 		}
 		installState.SetSelection(selection)
-		if writeErr := state.Write(homeDir, installState); writeErr != nil {
+		if writeErr := state.WriteReconciled(homeDir, installState); writeErr != nil {
 			execResult.Err = fmt.Errorf("persist install state: %w", writeErr)
+			if orchestrator != nil {
+				rollback := orchestrator.Rollback(execResult)
+				if rollback.Err != nil {
+					execResult.Err = errors.Join(execResult.Err, rollback.Err)
+				}
+			}
 		}
 	}
 

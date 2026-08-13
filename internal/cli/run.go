@@ -205,7 +205,12 @@ func RunInstall(args []string, detection system.DetectionResult) (InstallResult,
 	})
 	result.Verify = withPostInstallNotes(result.Verify, resolved)
 	if !result.Verify.Ready {
-		return result, fmt.Errorf("post-apply verification failed:\n%s", verify.RenderReport(result.Verify))
+		verificationErr := fmt.Errorf("post-apply verification failed:\n%s", verify.RenderReport(result.Verify))
+		rollback := orchestrator.Rollback(result.Execution)
+		if rollback.Err != nil {
+			verificationErr = errors.Join(verificationErr, rollback.Err)
+		}
+		return result, verificationErr
 	}
 
 	// Persist the user's agent selection and model assignments so that future
@@ -222,6 +227,7 @@ func RunInstall(args []string, detection system.DetectionResult) (InstallResult,
 	claudePhaseState := claudePhaseAssignmentsToState(input.Selection.ClaudePhaseAssignments)
 	newState := state.InstallState{
 		InstalledAgents:             agentIDs,
+		InstalledBinaryVersion:      AppVersion,
 		CommunityTools:              communityToolIDsToStrings(input.Selection.CommunityTools),
 		CommunityToolsConfigured:    true,
 		ClaudeModelAssignments:      claudeLegacyAssignmentsForState(input.Selection.ClaudeModelAssignments, claudePhaseState),
@@ -241,7 +247,12 @@ func RunInstall(args []string, detection system.DetectionResult) (InstallResult,
 		return result, fmt.Errorf("derive managed asset writer identity: %w", err)
 	}
 	if err := persistInstallState(homeDir, newState, agentIDs, flags, writer); err != nil {
-		return result, fmt.Errorf("persist install state: %w", err)
+		persistErr := fmt.Errorf("persist install state: %w", err)
+		rollback := orchestrator.Rollback(result.Execution)
+		if rollback.Err != nil {
+			persistErr = errors.Join(persistErr, rollback.Err)
+		}
+		return result, persistErr
 	}
 
 	return result, nil
@@ -257,7 +268,7 @@ func persistInstallState(homeDir string, newState state.InstallState, agentIDs [
 			newState = merged
 		}
 		newState.ManagedAssetDigest = writer
-		return state.Write(homeDir, newState)
+		return state.WriteReconciled(homeDir, newState)
 	})
 }
 
@@ -1702,18 +1713,19 @@ func windowsGoCandidates() []string {
 	}
 }
 
-// ExecuteTUIInstall runs the same install runtime as the CLI and carries
-// non-fatal Pi CodeGraph manual actions into the TUI completion result.
 // The seam lets native tests add a post-publication failure while still using
 // the public TUI execution boundary and the real compatibility writer.
 var tuiInstallStagePlan = func(runtime *installRuntime) pipeline.StagePlan {
 	return runtime.stagePlan()
 }
 
-func ExecuteTUIInstall(homeDir string, selection model.Selection, resolved planner.ResolvedPlan, profile system.PlatformProfile, onProgress pipeline.ProgressFunc) pipeline.ExecutionResult {
+// ExecuteTUIInstallWithOrchestrator runs a TUI install and returns the
+// orchestrator so a downstream state-persistence failure can be compensated.
+// Carries non-fatal Pi CodeGraph manual actions into the TUI completion result.
+func ExecuteTUIInstallWithOrchestrator(homeDir string, selection model.Selection, resolved planner.ResolvedPlan, profile system.PlatformProfile, onProgress pipeline.ProgressFunc) (pipeline.ExecutionResult, *pipeline.Orchestrator) {
 	runtime, err := newInstallRuntime(homeDir, ScopeGlobal, ChannelStable, selection, resolved, profile)
 	if err != nil {
-		return pipeline.ExecutionResult{Err: err}
+		return pipeline.ExecutionResult{Err: err}, nil
 	}
 	defer runtime.state.cleanupCompatibilityTransaction()
 	orchestrator := pipeline.NewOrchestrator(pipeline.DefaultRollbackPolicy(), pipeline.WithFailurePolicy(pipeline.ContinueOnError), pipeline.WithProgressFunc(onProgress))
@@ -1722,7 +1734,7 @@ func ExecuteTUIInstall(homeDir string, selection model.Selection, resolved plann
 	if runtime.state.piCodeGraph != nil {
 		result.ManualActions = append(result.ManualActions, runtime.state.piCodeGraph.ManualActions...)
 	}
-	return result
+	return result, orchestrator
 }
 
 // RenderInstallManualActions renders non-fatal completion actions after the
