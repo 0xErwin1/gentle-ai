@@ -688,6 +688,14 @@ func TestSkillRegistryPluginContract(t *testing.T) {
 	if strings.Contains(src, "exec(") {
 		t.Fatal("skill-registry.ts must use execFile, not shell exec")
 	}
+	worktreeIdx := strings.Index(src, "input.worktree")
+	directoryIdx := strings.Index(src, "input.directory")
+	if worktreeIdx == -1 || directoryIdx == -1 {
+		t.Fatal("skill-registry.ts must contain both input.worktree and input.directory")
+	}
+	if worktreeIdx >= directoryIdx {
+		t.Errorf("skill-registry.ts must use input.worktree before input.directory; got worktree@%d >= directory@%d", worktreeIdx, directoryIdx)
+	}
 }
 
 func TestClaudeEmbeddedAssetLayout(t *testing.T) {
