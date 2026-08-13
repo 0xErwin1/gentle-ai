@@ -328,6 +328,40 @@ func publishPrivateRARImmutable(path string, payload []byte) error {
 	return SyncReviewDirectory(dir)
 }
 
+func writePrivateRARAtomic(path string, payload []byte) error {
+	dir := filepath.Dir(path)
+	if err := validatePrivateRARDirectory(dir); err != nil {
+		return err
+	}
+	temp, err := createPrivateRARTempFile(dir)
+	if err != nil {
+		return err
+	}
+	tempPath := temp.Name()
+	defer os.Remove(tempPath)
+	if _, err := temp.Write(payload); err != nil {
+		_ = temp.Close()
+		return err
+	}
+	if err := temp.Sync(); err != nil {
+		_ = temp.Close()
+		return err
+	}
+	if err := temp.Close(); err != nil {
+		return err
+	}
+	if err := replaceFileAtomic(tempPath, path); err != nil {
+		return err
+	}
+	if err := validatePrivateRARFile(path); err != nil {
+		return err
+	}
+	if err := SyncReviewDirectory(dir); err != nil {
+		return &directorySyncError{path: path, cause: err}
+	}
+	return nil
+}
+
 func createPrivateRARTempFile(dir string) (*os.File, error) {
 	for attempt := 0; attempt < 100; attempt++ {
 		token, err := randomAuthorityToken()
