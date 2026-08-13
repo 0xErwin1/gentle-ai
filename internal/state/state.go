@@ -1,7 +1,9 @@
 package state
 
 import (
+	"bytes"
 	"encoding/json"
+	"log"
 	"os"
 	"path/filepath"
 	"time"
@@ -263,10 +265,36 @@ func Write(homeDir string, s InstallState) error {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
-	data, err := json.MarshalIndent(s, "", "  ")
+	data, err := marshal(s)
 	if err != nil {
 		return err
 	}
-	_, err = filemerge.WriteFileAtomic(Path(homeDir), append(data, '\n'), 0o644)
+	_, err = filemerge.WriteFileAtomic(Path(homeDir), data, 0o644)
 	return err
+}
+
+// WriteReconciled persists install state and treats an atomic-write error as
+// successful when the requested bytes are visible on disk after the error.
+func WriteReconciled(homeDir string, s InstallState) error {
+	err := Write(homeDir, s)
+	if err == nil {
+		return nil
+	}
+
+	data, marshalErr := marshal(s)
+	if marshalErr == nil {
+		if visible, readErr := os.ReadFile(Path(homeDir)); readErr == nil && bytes.Equal(visible, data) {
+			log.Printf("state: write returned %v but requested state is visible; treating persistence as successful", err)
+			return nil
+		}
+	}
+	return err
+}
+
+func marshal(s InstallState) ([]byte, error) {
+	data, err := json.MarshalIndent(s, "", "  ")
+	if err != nil {
+		return nil, err
+	}
+	return append(data, '\n'), nil
 }

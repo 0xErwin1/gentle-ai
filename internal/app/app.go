@@ -544,7 +544,7 @@ func tuiExecute(
 	profile := cli.ResolveInstallProfile(detection)
 	resolved.PlatformDecision = planner.PlatformDecisionFromProfile(profile)
 
-	execResult := cli.ExecuteTUIInstall(homeDir, selection, resolved, profile, onProgress)
+	execResult, orchestrator := cli.ExecuteTUIInstallWithOrchestrator(homeDir, selection, resolved, profile, onProgress)
 	if execResult.Err == nil {
 		// Persist the user's agent selection and model assignments so that future
 		// `sync` runs target only the installed agents and preserve model choices.
@@ -568,8 +568,14 @@ func tuiExecute(
 			Persona:                     string(selection.Persona),
 		}
 		installState.SetSelection(selection)
-		if writeErr := state.Write(homeDir, installState); writeErr != nil {
+		if writeErr := state.WriteReconciled(homeDir, installState); writeErr != nil {
 			execResult.Err = fmt.Errorf("persist install state: %w", writeErr)
+			if orchestrator != nil {
+				rollback := orchestrator.Rollback(execResult)
+				if rollback.Err != nil {
+					execResult.Err = errors.Join(execResult.Err, rollback.Err)
+				}
+			}
 		}
 	}
 
