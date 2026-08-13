@@ -88,8 +88,8 @@ func TestPortableSDDFailClosedAuthorityJourneysAreRegistered(t *testing.T) {
 	// stop that must replace an otherwise unexecutable START transition. 99 ->
 	// 100: #2773 adds j102, which drives the immutable reviewer-context capacity
 	// terminal instead of accepting an impossible reviewer slot.
-	if got := len(seen); got != 100 {
-		t.Errorf("core journey count = %d, want 100", got)
+	if got := len(seen); got != 101 {
+		t.Errorf("core journey count = %d, want 101", got)
 	}
 	for id, found := range want {
 		if !found {

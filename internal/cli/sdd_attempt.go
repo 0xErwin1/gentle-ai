@@ -263,7 +263,7 @@ var sddAttemptOperationDefinitions = []sddAttemptOperationContract{
 		{name: "expected-revision", required: true, usage: "required; exact sha256:<64 lowercase hex> runtime revision"},
 		{name: "request-id", required: true, usage: "required; lowercase idempotency key, at most 128 bytes"},
 		{name: "outcome", required: true, usage: "required; failed, interrupted, or passed"},
-		{name: "evidence-revision", required: true, usage: "required; sha256:<64 lowercase hex>, never none"},
+		{name: "evidence-revision", usage: "required for failed/passed; omit for interrupted"},
 		{name: "diagnosis", required: true, usage: "required; trimmed single-line text, at most 500 bytes"},
 		{name: "harness-disposition", required: true, usage: "required; reused or invalidated"},
 		{name: "cleanup-evidence", required: true, usage: "required; trimmed single-line text, at most 500 bytes"},
@@ -318,7 +318,7 @@ var sddAttemptOperationDefinitions = []sddAttemptOperationContract{
 		{name: "token", required: true, usage: "required; opaque token returned by acquire"},
 		{name: "request-id", required: true, usage: "required; lowercase idempotency key, at most 128 bytes"},
 		{name: "outcome", required: true, usage: "required; failed, interrupted, or passed"},
-		{name: "evidence-revision", required: true, usage: "required; sha256:<64 lowercase hex>, never none"},
+		{name: "evidence-revision", usage: "required for failed/passed; omit for interrupted"},
 		{name: "diagnosis", required: true, usage: "required; trimmed single-line text, at most 500 bytes"},
 		{name: "harness-disposition", required: true, usage: "required; reused or invalidated"},
 		{name: "cleanup-evidence", required: true, usage: "required; trimmed single-line text, at most 500 bytes"},
@@ -537,7 +537,29 @@ func missingSDDAttemptOperationFlags(args []string, operation string) []string {
 			names = append(names, flagDefinition.name)
 		}
 	}
+	if (operation == "finish" || operation == "settle") && sddAttemptFlagValue(args, "outcome") == "interrupted" {
+		filtered := names[:0]
+		for _, name := range names {
+			if name != "evidence-revision" {
+				filtered = append(filtered, name)
+			}
+		}
+		names = filtered
+	}
 	return missingSDDAttemptFlags(args, names...)
+}
+
+func sddAttemptFlagValue(args []string, name string) string {
+	for index, argument := range args {
+		prefix := "--" + name + "="
+		if strings.HasPrefix(argument, prefix) {
+			return strings.TrimSpace(strings.TrimPrefix(argument, prefix))
+		}
+		if argument == "--"+name && index+1 < len(args) {
+			return strings.TrimSpace(args[index+1])
+		}
+	}
+	return ""
 }
 
 func missingSDDAttemptOperationError(operation string, missing []string) error {
