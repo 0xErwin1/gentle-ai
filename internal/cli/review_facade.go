@@ -3435,6 +3435,10 @@ func discoverCompactFacadeGateReview(ctx context.Context, repo, lineage string, 
 		preCommitBaseline      reviewtransaction.CompactPreCommitDiscoveryBaseline
 		preCommitBaselineOK    bool
 		preCommitBaselineTried bool
+		// issue #1886: same bounded-discovery optimization for pre-push
+		prePushBaseline      CompactPrePushDiscoveryBaseline
+		prePushBaselineOK    bool
+		prePushBaselineTried bool
 	)
 	for _, store := range stores {
 		record, loadErr := store.Load()
@@ -3463,6 +3467,18 @@ func discoverCompactFacadeGateReview(ctx context.Context, repo, lineage string, 
 				}
 			}
 			if preCommitBaselineOK && reviewtransaction.CompactLeafProvablyUnrelatedToPreCommitBaseline(record.State, preCommitBaseline) {
+				continue
+			}
+		}
+		// issue #1886: skip provably-unrelated pre-push leaves from per-leaf gate assessment
+		if input.Gate == reviewtransaction.GatePrePush && strings.TrimSpace(input.LineageID) == "" {
+			if !prePushBaselineTried {
+				prePushBaselineTried = true
+				if baseline, baselineErr := BuildCompactPrePushDiscoveryBaseline(ctx, repo); baselineErr == nil {
+					prePushBaseline, prePushBaselineOK = baseline, true
+				}
+			}
+			if prePushBaselineOK && CompactLeafProvablyUnrelatedToPrePushCandidate(record.State, prePushBaseline.PushBaseRef, prePushBaseline.Paths) {
 				continue
 			}
 		}
