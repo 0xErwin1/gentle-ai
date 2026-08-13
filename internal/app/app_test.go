@@ -632,7 +632,7 @@ func TestTUIExecutePersistsConfiguredSelection(t *testing.T) {
 	home := t.TempDir()
 	setupMockHome(t, home)
 	selection := model.Selection{Preset: model.PresetCustom, Components: []model.ComponentID{}, Skills: []model.SkillID{}, SDDMode: model.SDDModeMulti, StrictTDD: true}
-	result := tuiExecute(selection, planner.ResolvedPlan{}, system.DetectionResult{}, nil)
+	result := tuiExecuteWithBackground(selection, planner.ResolvedPlan{}, system.DetectionResult{}, "", "", nil)
 	got, err := state.Read(home)
 	if result.Err != nil || err != nil || !got.SelectionConfigured || got.Preset != model.PresetCustom || got.SDDMode != model.SDDModeMulti || !got.StrictTDD || len(got.Components) != 0 || len(got.Skills) != 0 {
 		t.Fatalf("persisted selection = %#v, execute err = %v, read err = %v", got, result.Err, err)

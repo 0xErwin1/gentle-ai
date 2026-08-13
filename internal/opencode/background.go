@@ -96,22 +96,6 @@ var MinimumBackgroundVersion = Version{Major: minimumMajor, Minor: minimumMinor,
 // labels and punctuation, but a path or identifier continuation is not a boundary.
 var versionPattern = regexp.MustCompile(`(?i)(?:^|[^0-9a-z.+/_-])v?(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)((?:-[0-9a-z-]+(?:\.[0-9a-z-]+)*)?(?:\+[0-9a-z-]+(?:\.[0-9a-z-]+)*)?)(?:$|[\t\r\n ,;:)\]}])`)
 
-// ParseVersion parses a semantic version such as "v1.15.11".
-func ParseVersion(raw string) (Version, error) {
-	value := strings.TrimSpace(raw)
-	if value == "" {
-		return Version{}, errors.New("OpenCode version is empty")
-	}
-	if strings.HasPrefix(value, "v") || strings.HasPrefix(value, "V") {
-		value = value[1:]
-	}
-	match := versionPattern.FindStringSubmatch(" " + value + " ")
-	if match == nil || strings.TrimSpace(match[0]) != value {
-		return Version{}, fmt.Errorf("invalid OpenCode version %q", raw)
-	}
-	return versionFromMatch(match)
-}
-
 // ParseVersionOutput extracts the first semantic version from `opencode
 // --version` output. OpenCode releases have emitted both bare versions and
 // "opencode <version>" forms, so the command label is deliberately ignored.
@@ -552,30 +536,6 @@ func PrepareDeactivation(homeDir string, options ActivationOptions) (*Activation
 			return nil, err
 		}
 		plan.before[path] = snapshot
-	}
-	return plan, nil
-}
-
-// Activate prepares and applies a managed activation transaction.
-func Activate(homeDir string, options ActivationOptions) (*ActivationPlan, error) {
-	plan, err := PrepareActivation(homeDir, options)
-	if err != nil {
-		return nil, err
-	}
-	if err := plan.Apply(); err != nil {
-		return plan, err
-	}
-	return plan, nil
-}
-
-// Deactivate prepares and applies a managed deactivation transaction.
-func Deactivate(homeDir string, options ActivationOptions) (*ActivationPlan, error) {
-	plan, err := PrepareDeactivation(homeDir, options)
-	if err != nil {
-		return nil, err
-	}
-	if err := plan.Apply(); err != nil {
-		return plan, err
 	}
 	return plan, nil
 }

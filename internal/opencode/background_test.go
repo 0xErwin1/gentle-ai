@@ -2,6 +2,7 @@ package opencode
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -494,4 +495,47 @@ func TestWindowsActivationPersistentPathFailurePreservesPreexistingProcessEntry(
 	if rollbackCalled || !preexistingProcessPath {
 		t.Fatalf("process PATH compensation called=%t preexisting=%t, want pre-existing entry preserved", rollbackCalled, preexistingProcessPath)
 	}
+}
+
+// The transaction and parsing conveniences below are test-scoped: production
+// callers drive Prepare*/Apply through the pipeline step, so keeping these in
+// the shipped package would be dead code under the ratchet.
+// Activate prepares and applies a managed activation transaction.
+func Activate(homeDir string, options ActivationOptions) (*ActivationPlan, error) {
+	plan, err := PrepareActivation(homeDir, options)
+	if err != nil {
+		return nil, err
+	}
+	if err := plan.Apply(); err != nil {
+		return plan, err
+	}
+	return plan, nil
+}
+
+// Deactivate prepares and applies a managed deactivation transaction.
+func Deactivate(homeDir string, options ActivationOptions) (*ActivationPlan, error) {
+	plan, err := PrepareDeactivation(homeDir, options)
+	if err != nil {
+		return nil, err
+	}
+	if err := plan.Apply(); err != nil {
+		return plan, err
+	}
+	return plan, nil
+}
+
+// ParseVersion parses a semantic version such as "v1.15.11".
+func ParseVersion(raw string) (Version, error) {
+	value := strings.TrimSpace(raw)
+	if value == "" {
+		return Version{}, errors.New("OpenCode version is empty")
+	}
+	if strings.HasPrefix(value, "v") || strings.HasPrefix(value, "V") {
+		value = value[1:]
+	}
+	match := versionPattern.FindStringSubmatch(" " + value + " ")
+	if match == nil || strings.TrimSpace(match[0]) != value {
+		return Version{}, fmt.Errorf("invalid OpenCode version %q", raw)
+	}
+	return versionFromMatch(match)
 }

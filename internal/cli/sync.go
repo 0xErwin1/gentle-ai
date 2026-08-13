@@ -1646,10 +1646,6 @@ func runSyncWithSelection(homeDir string, selection model.Selection, background 
 	return result, nil
 }
 
-func persistSyncManagedAssetState(homeDir string, selection model.Selection, writer string, runtimeProvenance *state.OpenCodeRuntimeProvenance) error {
-	return persistSyncManagedAssetStateWithBackground(homeDir, selection, writer, runtimeProvenance, "")
-}
-
 func persistSyncManagedAssetStateWithBackground(homeDir string, selection model.Selection, writer string, runtimeProvenance *state.OpenCodeRuntimeProvenance, background model.OpenCodeBackgroundIntent) error {
 	return withInstallStateLock(homeDir, func() error {
 		latest, err := state.Read(homeDir)

@@ -70,7 +70,6 @@ var (
 	installCommunityTool         = communitytool.Install
 	installCommunityToolWithHome = communitytool.InstallWithHome
 	injectSDD                    = sdd.Inject
-	writeInstallState            = state.Write
 	pathEnvEntries               = func(profile system.PlatformProfile) []string {
 		return splitPathForOS(os.Getenv("PATH"), profile.OS)
 	}
@@ -1802,19 +1801,6 @@ func windowsGoCandidates() []string {
 // the public TUI execution boundary and the real compatibility writer.
 var tuiInstallStagePlan = func(runtime *installRuntime) pipeline.StagePlan {
 	return runtime.stagePlan()
-}
-
-func ExecuteTUIInstall(homeDir string, selection model.Selection, resolved planner.ResolvedPlan, profile system.PlatformProfile, onProgress pipeline.ProgressFunc) pipeline.ExecutionResult {
-	result, _ := executeTUIInstallWithBackground(homeDir, selection, resolved, profile, "", onProgress)
-	return result
-}
-
-// ExecuteTUIInstallWithBackground runs the TUI install transaction with the
-// selected OpenCode background policy. State publication remains in the app
-// layer so the choice is committed only after this transaction succeeds.
-func ExecuteTUIInstallWithBackground(homeDir string, selection model.Selection, resolved planner.ResolvedPlan, profile system.PlatformProfile, background model.OpenCodeBackgroundIntent, onProgress pipeline.ProgressFunc) pipeline.ExecutionResult {
-	result, _ := executeTUIInstallWithBackground(homeDir, selection, resolved, profile, background, onProgress)
-	return result
 }
 
 // ExecuteTUIInstallWithBackgroundAndOrchestrator runs a TUI install and returns
