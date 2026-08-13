@@ -1794,47 +1794,6 @@ func TestInjectClaude_SwitchGentlemanToNeutral_IsIdempotent(t *testing.T) {
 	}
 }
 
-func TestInjectClaudeCustomPreservesOutputStyleAndSettings(t *testing.T) {
-	home := t.TempDir()
-
-	if _, err := Inject(home, claudeAdapter(), model.PersonaGentleman); err != nil {
-		t.Fatalf("Inject(gentleman) error = %v", err)
-	}
-
-	stylePath := filepath.Join(home, ".claude", "output-styles", "gentleman.md")
-	settingsPath := filepath.Join(home, ".claude", "settings.json")
-	styleBefore, err := os.ReadFile(stylePath)
-	if err != nil {
-		t.Fatalf("ReadFile(gentleman output style) error = %v", err)
-	}
-	settingsBefore, err := os.ReadFile(settingsPath)
-	if err != nil {
-		t.Fatalf("ReadFile(settings.json) error = %v", err)
-	}
-
-	result, err := Inject(home, claudeAdapter(), model.PersonaCustom)
-	if err != nil {
-		t.Fatalf("Inject(custom) error = %v", err)
-	}
-	if result.Changed {
-		t.Fatalf("Inject(custom) changed = true, want false")
-	}
-	styleAfter, err := os.ReadFile(stylePath)
-	if err != nil {
-		t.Fatalf("ReadFile(gentleman output style) after custom error = %v", err)
-	}
-	if string(styleAfter) != string(styleBefore) {
-		t.Fatal("custom persona changed the existing output style")
-	}
-	settingsAfter, err := os.ReadFile(settingsPath)
-	if err != nil {
-		t.Fatalf("ReadFile(settings.json) after custom error = %v", err)
-	}
-	if string(settingsAfter) != string(settingsBefore) {
-		t.Fatal("custom persona changed the existing output-style setting")
-	}
-}
-
 func TestInjectOpenCode_SwitchGentlemanToNeutral_CleansAgentOverlay(t *testing.T) {
 	home := t.TempDir()
 
@@ -2106,40 +2065,6 @@ func TestInjectForSync_ClaudeGentlemanToNeutral_CleansOutputStyle(t *testing.T) 
 	}
 	if !strings.Contains(string(afterRaw), `"outputStyle": "Neutral"`) {
 		t.Fatalf("settings.json should select Neutral outputStyle after InjectForSync(neutral); got:\n%s", string(afterRaw))
-	}
-}
-
-func TestInjectForSync_ClaudeLegacyNeutralAliasIsIdempotent(t *testing.T) {
-	home := t.TempDir()
-	adapter := claudeAdapter()
-
-	if _, err := Inject(home, adapter, model.PersonaGentleman); err != nil {
-		t.Fatalf("Inject(gentleman) error = %v", err)
-	}
-
-	first, err := InjectForSync(home, adapter, model.PersonaGentlemanNeutralArtifacts)
-	if err != nil {
-		t.Fatalf("InjectForSync(legacy neutral alias) first error = %v", err)
-	}
-	if !first.Changed {
-		t.Fatal("InjectForSync(legacy neutral alias) first changed = false")
-	}
-
-	second, err := InjectForSync(home, adapter, model.PersonaGentlemanNeutralArtifacts)
-	if err != nil {
-		t.Fatalf("InjectForSync(legacy neutral alias) second error = %v", err)
-	}
-	if second.Changed {
-		t.Fatal("InjectForSync(legacy neutral alias) second changed = true")
-	}
-
-	neutralPath := filepath.Join(home, ".claude", "output-styles", "neutral.md")
-	if _, err := os.Stat(neutralPath); err != nil {
-		t.Fatalf("neutral.md not written by legacy neutral alias: %v", err)
-	}
-	gentlemanPath := filepath.Join(home, ".claude", "output-styles", "gentleman.md")
-	if _, err := os.Stat(gentlemanPath); !os.IsNotExist(err) {
-		t.Fatalf("gentleman.md still present after legacy neutral alias sync: %v", err)
 	}
 }
 

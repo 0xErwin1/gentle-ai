@@ -3959,7 +3959,7 @@ func TestPersonaSyncOutputStyleSwitchIsIdempotent(t *testing.T) {
 	selection := model.Selection{
 		Agents:     []model.AgentID{model.AgentClaudeCode},
 		Components: []model.ComponentID{model.ComponentPersona},
-		Persona:    model.PersonaNeutral,
+		Persona:    model.PersonaGentlemanNeutralArtifacts,
 	}
 	gentleman := filepath.Join(home, ".claude", "output-styles", "gentleman.md")
 
