@@ -34,8 +34,16 @@ var managedOutputStyles = []OutputStyle{
 	{Name: "Neutral", File: "neutral.md", AssetPath: "claude/output-style-neutral.md"},
 }
 
+func canonicalPersona(persona model.PersonaID) model.PersonaID {
+	if persona == model.PersonaGentlemanNeutralArtifacts {
+		return model.PersonaNeutral
+	}
+	return persona
+}
+
 // ResourcePlanFor returns the managed resources selected by persona.
 func ResourcePlanFor(persona model.PersonaID) ResourcePlan {
+	persona = canonicalPersona(persona)
 	switch {
 	case isGentlemanConversationPersona(persona):
 		return ResourcePlan{outputStyle: &managedOutputStyles[0]}

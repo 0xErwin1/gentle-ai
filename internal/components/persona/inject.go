@@ -98,14 +98,7 @@ func InjectForSync(homeDir string, adapter agents.Adapter, persona model.Persona
 // syncManaged is the internal flag previously called `markdownOnly`.
 // When true the OpenCode/Kilocode agent overlay is skipped (see InjectForSync).
 func injectInternal(homeDir string, adapter agents.Adapter, persona model.PersonaID, syncManaged bool) (InjectionResult, error) {
-	// Normalize the legacy alias at the single entry point so every branch
-	// below (persona content, output-style write, Kimi module selection,
-	// cleanup) sees one canonical neutral identity. CLI callers already pass
-	// normalized IDs (cli.normalizePersona, internal/cli/validate.go); this
-	// guards direct callers.
-	if persona == model.PersonaGentlemanNeutralArtifacts {
-		persona = model.PersonaNeutral
-	}
+	persona = canonicalPersona(persona)
 	if !adapter.SupportsSystemPrompt() {
 		return InjectionResult{}, nil
 	}
@@ -524,8 +517,9 @@ func residualChannel(adapter agents.Adapter) bool {
 
 // personaContent returns the persona asset for the given agent and persona.
 func personaContent(agent model.AgentID, persona model.PersonaID, residualContentAvailable bool) string {
+	persona = canonicalPersona(persona)
 	switch persona {
-	case model.PersonaNeutral, model.PersonaGentlemanNeutralArtifacts:
+	case model.PersonaNeutral:
 		return neutralPersonaContent(agent, residualContentAvailable)
 	case model.PersonaCustom:
 		return ""

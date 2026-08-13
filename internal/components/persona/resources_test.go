@@ -37,6 +37,15 @@ func TestResourcePlanOutputStylePaths(t *testing.T) {
 			},
 		},
 		{
+			name:    "legacy neutral alias writes neutral and removes retired gentleman",
+			persona: model.PersonaGentlemanNeutralArtifacts,
+			want: persona.OutputStylePaths{
+				Write:  neutral,
+				Backup: []string{gentleman, neutral},
+				Remove: []string{gentleman},
+			},
+		},
+		{
 			name:    "custom manages no output styles",
 			persona: model.PersonaCustom,
 			want:    persona.OutputStylePaths{},

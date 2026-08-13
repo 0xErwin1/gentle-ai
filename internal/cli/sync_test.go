@@ -3899,6 +3899,13 @@ func TestSyncPersonaPathsDeclareManagedClaudeOutputStyle(t *testing.T) {
 			unwanted:   filepath.Join(home, ".claude", "output-styles", "gentleman.md"),
 			wantConfig: filepath.Join(home, ".claude", "settings.json"),
 		},
+		{
+			name:       "legacy neutral alias",
+			persona:    model.PersonaGentlemanNeutralArtifacts,
+			wantStyle:  filepath.Join(home, ".claude", "output-styles", "neutral.md"),
+			unwanted:   filepath.Join(home, ".claude", "output-styles", "gentleman.md"),
+			wantConfig: filepath.Join(home, ".claude", "settings.json"),
+		},
 	}
 
 	for _, tt := range tests {
