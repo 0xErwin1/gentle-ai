@@ -351,11 +351,21 @@ func TestKilocodeReviewSettingsMatchCurrentMainBaseline(t *testing.T) {
 	// the shared contract. Kilocode embeds that contract, so the hash moved.
 	// #2773 adds the lens_context_budget_exceeded STOP continuation. Kilocode
 	// embeds that contract, so the hash moved.
+	// Removing the report-label branches preserves the report-routing contract
+	// while changing the rendered orchestrator prompt, so the merged baseline
+	// is derived from this combined source rather than either parent.
+	// The provider-defect handoff now derives evidence relevance from the
+	// installed build string, routes other-channel fixes as occurrences without
+	// recommending a channel switch, and keeps main-only evidence unpublished.
+	// Kilocode embeds that shared contract, so the hash moved. Deliberate, not
+	// drift.
 	// #2492 adds the "Terminal — " marker to the 12 terminal rows of the
 	// shipped stop-reason table, so the invariant guard can cross-check the
 	// contract consumers receive instead of only the docs copy. Kilocode
 	// embeds that contract, so the hash moved. Deliberate, not drift.
-	const want = "16cdb2d2e890cb5e19281e93fd2a3b80c68651d05c9752c4be3ec794f9882874"
+	// The merged tree combines both moves, so the baseline derives from
+	// this combined source rather than either parent.
+	const want = "62b25d7c5b5bb3b588c892becc6b383abed3ca6721cbd4fe3d7cd00245e96438"
 	if got != want {
 		t.Fatalf("Kilocode settings SHA-256 = %s, want current-main baseline %s", got, want)
 	}
