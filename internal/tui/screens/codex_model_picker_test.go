@@ -79,10 +79,15 @@ func TestCodexModelPickerOptionCount_PhaseListMode(t *testing.T) {
 func TestCodexCustomModelSelect_UsesStateCatalog(t *testing.T) {
 	state := screens.NewCodexModelPickerState()
 	state.CustomMode = screens.CodexCustomModeModelSelect
-	state.AvailableModels = []string{"gpt-5.6", "gpt-5.6-mini"}
+	state.AvailableModels = []string{"state-model-a", "state-model-b"}
 
 	out := screens.RenderCodexModelPicker(state, 0)
-	if !strings.Contains(out, "gpt-5.6") || strings.Contains(out, "gpt-5.5") {
+	for _, id := range state.AvailableModels {
+		if !strings.Contains(out, id) {
+			t.Fatalf("custom model picker missing state model %q; output:\n%s", id, out)
+		}
+	}
+	if strings.Contains(out, "gpt-5.5") {
 		t.Fatalf("custom model picker should use state catalog; output:\n%s", out)
 	}
 }
