@@ -7,6 +7,7 @@ import (
 
 	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/pathquote"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewerprovider"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
 )
 
@@ -53,6 +54,7 @@ type ReviewTransitionInput struct {
 	Schema              string                                        `json:"schema"`
 	CaptureOperation    string                                        `json:"capture_operation"`
 	Arguments           []ReviewTransitionArgument                    `json:"arguments"`
+	ProviderTask        *ReviewProviderTask                           `json:"provider_task,omitempty"`
 	Submission          *ReviewTransitionSubmission                   `json:"submission,omitempty"`
 	ArtifactSubject     *reviewtransaction.ArtifactSubject            `json:"artifact_subject,omitempty"`
 	CandidateDiff       *reviewtransaction.FrozenCandidateDiff        `json:"candidate_diff,omitempty"`
@@ -60,6 +62,14 @@ type ReviewTransitionInput struct {
 	CandidateTree       string                                        `json:"candidate_tree,omitempty"`
 	ChangedPathManifest *[]reviewtransaction.ChangedPathManifestEntry `json:"changed_path_manifest,omitempty"`
 	ValidationRequest   *reviewtransaction.TargetedValidationRequest  `json:"validation_request,omitempty"`
+}
+
+// ReviewProviderTask is a Go-issued host task. OpenCode relays its opaque
+// prompt and final bytes through one live child process; Go owns admission.
+type ReviewProviderTask struct {
+	Agent  string `json:"agent"`
+	Role   string `json:"role"`
+	Prompt string `json:"prompt"`
 }
 
 // ReviewTransitionSubmission is the provider-owned argv template. Consumers
@@ -215,6 +225,9 @@ func newReviewNextTransition(status ReviewTargetStatusResult, selectedLenses []s
 		if len(artifacts) != len(selectedLenses) {
 			return reviewMissingCaptureTransition(binding, selectedLenses, artifacts, input.CaptureContext, input.RuntimeAgent)
 		}
+		if input.ProviderRole == reviewerprovider.RoleRefuter {
+			return reviewProviderRoleTransition("provider_refuter_required", binding, input.ProviderRole)
+		}
 		arguments := []ReviewTransitionArgument{
 			{Name: "lineage", Value: binding.LineageID}, {Name: "captured_results", Value: "true"},
 		}
@@ -235,6 +248,9 @@ func newReviewNextTransition(status ReviewTargetStatusResult, selectedLenses []s
 					return reviewStopTransition("captured_verification_evidence_invalid")
 				}
 				return reviewCollectTransition("correction_repository_verification_required", reviewCaptureEvidenceInput(input.Contract, validationBinding))
+			}
+			if input.ProviderRole == reviewerprovider.RoleTargetedValidator {
+				return reviewProviderRoleTransition("targeted_validation_required", validationBinding, input.ProviderRole)
 			}
 			if capturedEvidence == nil {
 				return reviewCollectTransition("correction_repository_verification_required", reviewCaptureEvidenceInput(input.Contract, validationBinding))
@@ -371,6 +387,21 @@ func newReviewNextTransition(status ReviewTargetStatusResult, selectedLenses []s
 		}
 		return reviewStopTransition("manual_intervention_required")
 	}
+}
+
+func reviewProviderRoleTransition(reason string, binding ReviewTransitionBinding, role reviewProviderRole) ReviewNextTransition {
+	task, err := newReviewProviderTask(role, binding)
+	if err != nil {
+		return reviewStopTransition("captured_artifacts_unverifiable")
+	}
+	return reviewCollectTransition(reason, ReviewTransitionInput{
+		Name: "provider_" + string(role), Schema: reviewProviderRoleTaskSchema(role), CaptureOperation: "external.run_provider_role",
+		Arguments: append(reviewBindingArguments(binding),
+			ReviewTransitionArgument{Name: "repository-context", Value: binding.RepositoryContext},
+			ReviewTransitionArgument{Name: "agent", Value: string(model.AgentOpenCode)},
+			ReviewTransitionArgument{Name: "role", Value: string(role)}),
+		ProviderTask: &task,
+	})
 }
 
 type reviewFinalizeTransitionContext struct {
@@ -520,6 +551,7 @@ type reviewNextTransitionInput struct {
 	RepairActor, RepairReason, RepairAuthorization string
 	StartLineage                                   string
 	RuntimeAgent                                   model.AgentID
+	ProviderRole                                   reviewProviderRole
 	Contract                                       string
 	RepositoryContext                              string
 	ValidationRequest                              *reviewtransaction.TargetedValidationRequest

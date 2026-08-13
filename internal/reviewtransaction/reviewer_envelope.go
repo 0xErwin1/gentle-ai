@@ -58,53 +58,6 @@ func (err *reviewerResultShapeError) Error() string {
 	return err.message
 }
 
-// ValidateReviewerResultBinding verifies the provider-owned binding that a
-// reviewer result must echo. It does not inspect repository contents.
-func ValidateReviewerResultBinding(subject ArtifactSubject, manifest []ChangedPathManifestEntry) error {
-	if err := ValidateArtifactSubject(subject); err != nil {
-		return err
-	}
-	manifestDigest, err := ChangedPathManifestDigest(manifest)
-	if err != nil || manifestDigest != subject.ChangedPathManifestSHA256 {
-		// refusal:by-design world-action: the caller must rebuild the subject and manifest from current frozen authority, not run a command
-		return fmt.Errorf("frozen changed-path manifest does not match the artifact subject")
-	}
-	return nil
-}
-
-// ValidateReviewerResult strictly decodes one reviewer result and verifies the
-// native schema, signed subject, selected lens, and complete frozen manifest.
-// Repository-derived causality remains the responsibility of AdmitArtifact.
-func ValidateReviewerResult(payload []byte, subject ArtifactSubject, manifest []ChangedPathManifestEntry) (ReviewerResult, error) {
-	if err := ValidateReviewerResultBinding(subject, manifest); err != nil {
-		return ReviewerResult{}, err
-	}
-
-	result, fields, err := decodeReviewerResult(payload)
-	if err != nil {
-		return ReviewerResult{}, err
-	}
-	if !requiredReviewerResultFields(fields) {
-		// refusal:by-design world-action: the reviewer must resubmit a schema-conformant result, not run a command
-		return ReviewerResult{}, fmt.Errorf("reviewer result does not match the required schema fields")
-	}
-	if result.SubjectHash != subject.SubjectHash {
-		// refusal:by-design world-action: the reviewer must bind to the exact requested subject, not run a command
-		return ReviewerResult{}, fmt.Errorf("reviewer result does not match the requested subject")
-	}
-	if result.Inspection.Status != ArtifactInspectionCompleted {
-		// refusal:by-design world-action: the reviewer must complete inspection of the full frozen manifest, not run a command
-		return ReviewerResult{}, fmt.Errorf("reviewer result does not report completed inspection of the frozen candidate")
-	}
-	if coverage, err := validateCompleteInspectionCoverage(result.Inspection.Paths, manifest); err != nil {
-		if coverage != nil {
-			return ReviewerResult{}, coverage
-		}
-		return ReviewerResult{}, fmt.Errorf("reviewer inspection paths are not canonical candidate paths") // refusal:by-design operator-knowledge: resubmit the exact complete unique manifest set from the binding
-	}
-	return canonicalizeReviewerResult(result, fields, subject.Lens)
-}
-
 // CanonicalizeReviewerResult shares lens-form canonicalization; authority admission remains caller-owned.
 func CanonicalizeReviewerResult(payload []byte, expectedLens string) (ReviewerResult, error) {
 	result, fields, err := decodeReviewerResult(payload)
@@ -194,15 +147,6 @@ func validateExplicitReviewerFindingFields(raw json.RawMessage) error {
 
 func isPublishedReviewerFindingLens(lens string) bool {
 	return isSupportedLens(lens) || isSupportedLens("review-"+lens)
-}
-
-func requiredReviewerResultFields(fields map[string]json.RawMessage) bool {
-	for _, name := range []string{"subject_hash", "inspection", "findings", "evidence"} {
-		if _, found := fields[name]; !found {
-			return false
-		}
-	}
-	return true
 }
 
 // findingIDPrefixByLens is the single authoritative lens-to-finding-ID-prefix

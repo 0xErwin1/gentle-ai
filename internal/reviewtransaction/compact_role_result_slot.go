@@ -235,9 +235,6 @@ func (store CompactStore) captureRoleResult(expectedRevision, operation string, 
 }
 
 func compactRoleResultSlotPath(storeDir string, key compactRoleResultSlotKey) (string, error) {
-	if !filepath.IsAbs(storeDir) {
-		return "", errors.New("provider role result store directory is not absolute") // refusal:by-design world-action: compact stores derive this private root from repository authority
-	}
 	contract, err := reviewerprovider.ContractFor(reviewerprovider.Role(key.kind))
 	if err != nil {
 		return "", fmt.Errorf("resolve provider role storage: %w", err)

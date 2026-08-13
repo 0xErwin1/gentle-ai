@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"path/filepath"
 	"testing"
 )
 
@@ -53,6 +54,26 @@ func TestCompactRoleResultSlotsPreserveImmutablePublicationSemantics(t *testing.
 				t.Fatalf("conflicting publication changed bytes: %#v, %v", last, err)
 			}
 		})
+	}
+}
+
+func TestCompactRoleResultSlotAcceptsCompatibleRelativeStoreRoot(t *testing.T) {
+	workingDirectory, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	storeDir, err := filepath.Rel(workingDirectory, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload := []byte(`{"results":[]}` + "\n")
+	key := compactRefuterRoleResultSlotKey()
+	if err := publishCompactRoleResultSlot(storeDir, key, payload); err != nil {
+		t.Fatal(err)
+	}
+	slot, err := ReadCompactRoleResultSlot(storeDir, key)
+	if err != nil || !slot.Occupied || !bytes.Equal(slot.Payload, payload) {
+		t.Fatalf("relative-root slot = %#v, %v", slot, err)
 	}
 }
 
