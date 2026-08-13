@@ -2310,7 +2310,8 @@ func validateRuntimeRecordShape(record runtimeRecord) error {
 		event := record.Finish
 		if event.Ordinal < 1 || !validTerminalAttemptOutcome(event.Outcome) || event.ChangedLines < 0 ||
 			event.ChangedLines > maximumRuntimeChangedLines ||
-			(event.Outcome != AttemptInterrupted && !runtimeRevisionPattern.MatchString(event.EvidenceRevision)) ||
+			((event.Outcome == AttemptInterrupted && event.EvidenceRevision != "" && !runtimeRevisionPattern.MatchString(event.EvidenceRevision)) ||
+				(event.Outcome != AttemptInterrupted && !runtimeRevisionPattern.MatchString(event.EvidenceRevision))) ||
 			!runtimeRevisionPattern.MatchString(event.FinishCandidateIdentity) || !runtimeGitTreePattern.MatchString(event.FinishCandidateTree) ||
 			validateRuntimeText(event.Diagnosis, 500) != nil || !validHarnessDisposition(event.HarnessDisposition) ||
 			validateRuntimeText(event.CleanupEvidence, 500) != nil || validateRuntimeText(event.ProcessEvidence, 500) != nil ||

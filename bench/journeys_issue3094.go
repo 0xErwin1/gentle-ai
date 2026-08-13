@@ -68,6 +68,16 @@ func issue3094SettleInterrupted(r *journeyRun) error {
 	if err := r.sandbox.write(filepath.Join(r.sandbox.Repo, ".issue3094-expected-revision"), status.Revision); err != nil {
 		return err
 	}
+	legacyEvidence := "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	interruptedArgs := append([]string{"--outcome", "interrupted", "--evidence-revision", legacyEvidence}, sddTerminalEvidence...)
+	observation := r.run(sddAttemptArgs(r, "finish", status.Revision, "issue3094-finish", interruptedArgs...), false)
+	if observation.ExitCode == 0 {
+		return fmt.Errorf("interrupted settle with caller evidence was accepted")
+	}
+	unchanged, err := readRuntimeStatus(r)
+	if err != nil || unchanged.Revision != status.Revision || unchanged.ActiveAttempt == nil {
+		return fmt.Errorf("evidence-bearing interrupted refusal mutated runtime: before=%#v after=%#v err=%v", status, unchanged, err)
+	}
 	_, err = issue3094Run(r, sddAttemptArgs(r, "finish", status.Revision, "issue3094-finish", append([]string{"--outcome", "interrupted"}, sddTerminalEvidence...)...))
 	return err
 }
