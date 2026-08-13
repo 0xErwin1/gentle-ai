@@ -318,7 +318,7 @@ var sddAttemptOperationDefinitions = []sddAttemptOperationContract{
 		{name: "token", required: true, usage: "required; opaque token returned by acquire"},
 		{name: "request-id", required: true, usage: "required; lowercase idempotency key, at most 128 bytes"},
 		{name: "outcome", required: true, usage: "required; failed, interrupted, or passed"},
-		{name: "evidence-revision", required: true, usage: "required for failed/passed; empty or canonical legacy sha256 revision for interrupted"},
+		{name: "evidence-revision", required: true, usage: "required for failed/passed; omit for interrupted"},
 		{name: "diagnosis", required: true, usage: "required; trimmed single-line text, at most 500 bytes"},
 		{name: "harness-disposition", required: true, usage: "required; reused or invalidated"},
 		{name: "cleanup-evidence", required: true, usage: "required; trimmed single-line text, at most 500 bytes"},
