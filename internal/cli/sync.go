@@ -32,6 +32,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v2/internal/components/skills"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/components/theme"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
+	opencodeactivation "github.com/gentleman-programming/gentle-ai/v2/internal/opencode"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/pipeline"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/state"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/system"
@@ -113,7 +114,7 @@ func ParseSyncFlags(args []string) (SyncFlags, error) {
 	fs.BoolVar(&opts.StrictTDD, "strict-tdd", false, "enable strict TDD mode for SDD agents (RED → GREEN → REFACTOR)")
 	fs.BoolVar(&opts.IncludePermissions, "include-permissions", false, "include permissions component in sync")
 	fs.BoolVar(&opts.IncludeTheme, "include-theme", false, "include theme component in sync")
-	fs.StringVar(&opts.OpenCodeBackgroundSubagents, "opencode-background-subagents", "", "--opencode-background-subagents=auto|on|off; env: GENTLE_AI_OPENCODE_BACKGROUND_SUBAGENTS; on remains foreground pending activation")
+	fs.StringVar(&opts.OpenCodeBackgroundSubagents, "opencode-background-subagents", "", "--opencode-background-subagents=auto|on|off; env: GENTLE_AI_OPENCODE_BACKGROUND_SUBAGENTS; eligible versions use a managed launcher")
 	fs.BoolVar(&opts.DryRun, "dry-run", false, "preview plan without executing")
 	registerListFlag(fs, "profile", &opts.rawProfiles)
 	registerListFlag(fs, "profile-phase", &opts.rawProfilePhases)
@@ -186,8 +187,8 @@ FLAGS
   --profile <name:provider/model>    Sync a named SDD profile
   --profile-phase <name:phase:model> Sync a named SDD profile phase
   --opencode-background-subagents=auto|on|off
-                                     Prepare OpenCode background policy; env: GENTLE_AI_OPENCODE_BACKGROUND_SUBAGENTS
-                                     auto inherits managed on/off, on prepares but stays foreground pending activation, off stays foreground
+                                     Resolve OpenCode capability and manage a launcher when eligible; env: GENTLE_AI_OPENCODE_BACKGROUND_SUBAGENTS
+                                     auto inherits managed on/off, unsupported/unknown stays foreground, off removes only owned launchers
   --dry-run                          Preview plan without executing
   --help, -h                         Show this help
 `)
@@ -477,16 +478,18 @@ func DiscoverAgents(homeDir string) []model.AgentID {
 // It reuses backup/rollback infrastructure but only calls inject functions —
 // no agentInstallStep, no engram setup, no persona.
 type syncRuntime struct {
-	homeDir          string
-	workspaceDir     string
-	selection        model.Selection
-	agentIDs         []model.AgentID
-	backupRoot       string
-	state            *runtimeState
-	managedPaths     []string
-	changedFiles     []string // accumulates candidate paths reported by component injectors
-	openCodeRuntime  *state.OpenCodeRuntimeProvenance
-	backgroundPolicy bool
+	homeDir              string
+	workspaceDir         string
+	selection            model.Selection
+	agentIDs             []model.AgentID
+	backupRoot           string
+	state                *runtimeState
+	managedPaths         []string
+	changedFiles         []string // accumulates candidate paths reported by component injectors
+	openCodeRuntime      *state.OpenCodeRuntimeProvenance
+	backgroundPolicy     bool
+	backgroundActivation *opencodeactivation.ActivationPlan
+	runtimeReady         bool
 }
 
 func newSyncRuntime(homeDir string, selection model.Selection) (*syncRuntime, error) {
@@ -538,6 +541,9 @@ func (r *syncRuntime) stagePlan() pipeline.StagePlan {
 
 	apply := []pipeline.Step{
 		rollbackRestoreStep{id: "apply:rollback-restore", state: r.state, homeDir: r.homeDir, workspaceDir: r.workspaceDir},
+	}
+	if r.backgroundActivation != nil {
+		apply = append(apply, openCodeBackgroundActivationStep{id: "sync:opencode:background-activation", plan: r.backgroundActivation, state: r.state, ready: &r.runtimeReady})
 	}
 
 	for _, component := range r.selection.Components {
@@ -695,6 +701,11 @@ func syncBackupTargets(homeDir, workspaceDir string, selection model.Selection, 
 	}
 	for _, path := range communitytool.PiCodeGraphPaths(homeDir, workspaceDir) {
 		paths[path] = struct{}{}
+	}
+	if containsAgent(selection.Agents, model.AgentOpenCode) {
+		for _, path := range opencodeactivation.LauncherPaths(homeDir, runtime.GOOS) {
+			paths[path] = struct{}{}
+		}
 	}
 
 	targets := make([]string, 0, len(paths))
@@ -1545,7 +1556,15 @@ func runSyncWithSelection(homeDir string, selection model.Selection, background 
 		return result, err
 	}
 	defer rt.state.cleanupCompatibilityTransaction()
-	rt.backgroundPolicy = background.Effective == model.OpenCodeBackgroundOn
+	rt.backgroundActivation = background.activationPlan
+	if rt.backgroundActivation != nil {
+		rt.runtimeReady = rt.backgroundActivation.Capability().Ready()
+		rt.backgroundPolicy = rt.runtimeReady && background.Effective == model.OpenCodeBackgroundOn
+	} else {
+		// Preserve the programmatic/TUI seam's historical behavior. CLI sync
+		// supplies an activation plan; direct callers do not.
+		rt.backgroundPolicy = background.Effective == model.OpenCodeBackgroundOn
+	}
 
 	stagePlan := rt.stagePlan()
 	result.Plan = stagePlan
@@ -1570,6 +1589,9 @@ func runSyncWithSelection(homeDir string, selection model.Selection, background 
 		return result, err
 	}
 	result.ChangedFiles = dedupPaths(append(result.ChangedFiles, compatibilityChanged...))
+	if background.activationPlan != nil {
+		result.ChangedFiles = dedupPaths(append(result.ChangedFiles, background.activationPlan.ChangedPaths()...))
+	}
 	result.FilesChanged = len(result.ChangedFiles)
 
 	// True no-op: agents were discovered but all managed assets were already
@@ -1583,7 +1605,11 @@ func runSyncWithSelection(homeDir string, selection model.Selection, background 
 	// Post-apply verification reuses the same component paths as install.
 	result.Verify = runPostSyncVerification(homeDir, rt.workspaceDir, selection)
 	result.Verify = withFailedSyncVerificationNote(result.Verify)
-	result.Verify = withOpenCodeBackgroundPending(result.Verify, background, false, agentIDs)
+	result.BackgroundPolicyEnabled = rt.runtimeReady && background.Effective == model.OpenCodeBackgroundOn
+	if background.activationPlan != nil {
+		result.Background.Activation = background.activationPlan.Report()
+	}
+	result.Verify = withOpenCodeBackgroundPending(result.Verify, background, rt.runtimeReady, agentIDs)
 	if !result.Verify.Ready {
 		verificationErr := fmt.Errorf("post-sync verification failed:\n%s", verify.RenderReport(result.Verify))
 		rollback := orchestrator.Rollback(result.Execution)
@@ -1793,7 +1819,16 @@ func RunSync(args []string) (SyncResult, error) {
 			return result, err
 		}
 		defer rt.state.cleanupCompatibilityTransaction()
-		rt.backgroundPolicy = background.Effective == model.OpenCodeBackgroundOn
+		backgroundActivation, activationErr := prepareOpenCodeBackgroundActivation(homeDir, &background, containsAgent(agentIDs, model.AgentOpenCode))
+		if activationErr != nil {
+			return result, fmt.Errorf("prepare OpenCode background activation: %w", activationErr)
+		}
+		background.activationPlan = backgroundActivation
+		rt.backgroundActivation = backgroundActivation
+		rt.runtimeReady = backgroundActivation != nil && backgroundActivation.Capability().Ready()
+		rt.backgroundPolicy = rt.runtimeReady && background.Effective == model.OpenCodeBackgroundOn
+		result.Background = background
+		result.BackgroundPolicyEnabled = rt.backgroundPolicy
 		result.Plan = rt.stagePlan()
 		for _, step := range result.Plan.Prepare {
 			if prepare, ok := step.(prepareBackupStep); ok && prepare.targetErr != nil {
@@ -1803,6 +1838,11 @@ func RunSync(args []string) (SyncResult, error) {
 		return result, nil
 	}
 
+	backgroundActivation, err := prepareOpenCodeBackgroundActivation(homeDir, &background, containsAgent(agentIDs, model.AgentOpenCode))
+	if err != nil {
+		return SyncResult{Agents: agentIDs, Selection: selection, Background: background}, fmt.Errorf("prepare OpenCode background activation: %w", err)
+	}
+	background.activationPlan = backgroundActivation
 	result, err := runSyncWithSelection(homeDir, selection, background)
 	if err != nil {
 		return result, err
@@ -1883,7 +1923,9 @@ func RenderSyncReport(result SyncResult) string {
 		fmt.Fprintf(&b, "OpenCode background intent: %s (policy effective: %s)\n", result.Background.Intent, result.Background.Effective)
 		if result.Background.Effective == model.OpenCodeBackgroundOn {
 			fmt.Fprintf(&b, "OpenCode background runtime ready: %t\n", result.BackgroundPolicyEnabled)
-			fmt.Fprintln(&b, "OpenCode background activation: pending; runtime remains foreground until capability activation is available")
+			fmt.Fprintln(&b, renderOpenCodeBackgroundActivation(result.Background))
+		} else if result.Background.Effective == model.OpenCodeBackgroundOff && len(result.Background.Activation.LauncherPaths) > 0 {
+			fmt.Fprintln(&b, renderOpenCodeBackgroundActivation(result.Background))
 		}
 	}
 

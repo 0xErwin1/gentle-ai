@@ -3,8 +3,11 @@ package cli
 import (
 	"fmt"
 	"os"
+	"runtime"
+	"strings"
 
 	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
+	opencodeactivation "github.com/gentleman-programming/gentle-ai/v2/internal/opencode"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/state"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/verify"
 )
@@ -27,10 +30,12 @@ type OpenCodeBackgroundResolveInput struct {
 // runtime outcome. Persist is non-empty only for a newly supplied on/off
 // choice; prior state is consulted by auto but is never republished here.
 type OpenCodeBackgroundResolution struct {
-	Intent      model.OpenCodeBackgroundIntent
-	Effective   model.OpenCodeBackgroundIntent
-	Persist     model.OpenCodeBackgroundIntent
-	NeedsPrompt bool
+	Intent         model.OpenCodeBackgroundIntent
+	Effective      model.OpenCodeBackgroundIntent
+	Persist        model.OpenCodeBackgroundIntent
+	NeedsPrompt    bool
+	Activation     opencodeactivation.ActivationReport
+	activationPlan *opencodeactivation.ActivationPlan
 }
 
 // ResolveOpenCodeBackground applies CLI > non-empty env > prior managed state
@@ -110,10 +115,89 @@ func resolveOpenCodeBackgroundCLI(set bool, raw string, persisted state.InstallS
 	})
 }
 
+var runOpenCodeVersion = opencodeactivation.RunVersion
+var resolveOpenCodeTarget = opencodeactivation.ResolveTarget
+
+func prepareOpenCodeBackgroundActivation(homeDir string, resolution *OpenCodeBackgroundResolution, hasOpenCode bool) (*opencodeactivation.ActivationPlan, error) {
+	if resolution == nil || !hasOpenCode || resolution.Effective == "" {
+		return nil, nil
+	}
+
+	options := opencodeactivation.ActivationOptions{
+		OS:            runtime.GOOS,
+		Path:          os.Getenv("PATH"),
+		RunVersion:    runOpenCodeVersion,
+		AddToUserPath: addUserPath,
+		ResolveTarget: resolveOpenCodeTarget,
+	}
+	var (
+		plan *opencodeactivation.ActivationPlan
+		err  error
+	)
+	if resolution.Effective == model.OpenCodeBackgroundOn {
+		plan, err = opencodeactivation.PrepareActivation(homeDir, options)
+	} else {
+		plan, err = opencodeactivation.PrepareDeactivation(homeDir, options)
+	}
+	if err != nil {
+		return nil, err
+	}
+	resolution.Activation = plan.Report()
+	resolution.activationPlan = plan
+	return plan, nil
+}
+
 func withOpenCodeBackgroundPending(report verify.Report, resolution OpenCodeBackgroundResolution, runtimeReady bool, agents []model.AgentID) verify.Report {
 	if !containsAgent(agents, model.AgentOpenCode) || resolution.Effective != model.OpenCodeBackgroundOn || runtimeReady {
 		return report
 	}
-	report.FinalNote += " OpenCode background policy is prepared but runtime activation remains pending; execution stays foreground until upstream capability activation is available."
+	capability := resolution.Activation.Capability
+	switch capability.Status {
+	case opencodeactivation.CapabilityUnsupported:
+		report.FinalNote += fmt.Sprintf(" OpenCode background activation is unsupported (%s); execution stays foreground.", capability.Reason)
+	case opencodeactivation.CapabilityUnknown:
+		report.FinalNote += fmt.Sprintf(" OpenCode background activation status is unknown (%s); execution stays foreground.", capability.Reason)
+	default:
+		report.FinalNote += " OpenCode background policy is prepared but runtime activation remains pending; execution stays foreground until managed activation succeeds."
+	}
 	return report
+}
+
+func withOpenCodeBackgroundActivationNote(report verify.Report, resolution OpenCodeBackgroundResolution, agents []model.AgentID) verify.Report {
+	if !containsAgent(agents, model.AgentOpenCode) || resolution.Activation.Capability.Status == "" {
+		return report
+	}
+	return reportWithNote(report, renderOpenCodeBackgroundActivation(resolution))
+}
+
+func reportWithNote(report verify.Report, note string) verify.Report {
+	if strings.TrimSpace(note) == "" {
+		return report
+	}
+	report.FinalNote += "\n\n" + note
+	return report
+}
+
+func renderOpenCodeBackgroundActivation(resolution OpenCodeBackgroundResolution) string {
+	activation := resolution.Activation
+	status := string(activation.Capability.Status)
+	if status == "" {
+		status = "unknown"
+	}
+	paths := "none"
+	if len(activation.LauncherPaths) > 0 {
+		paths = strings.Join(activation.LauncherPaths, ", ")
+	}
+	restart := "false"
+	if activation.Capability.RestartRequired {
+		restart = "true"
+	}
+	lines := fmt.Sprintf("OpenCode background activation status: %s\nOpenCode background launcher paths: %s\nOpenCode background restart required: %s", status, paths, restart)
+	if activation.Capability.Reason != "" {
+		lines += "\nOpenCode background capability reason: " + activation.Capability.Reason
+	}
+	if activation.Capability.RestartGuidance != "" {
+		lines += "\nOpenCode background restart guidance: " + activation.Capability.RestartGuidance
+	}
+	return lines
 }
