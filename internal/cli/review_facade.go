@@ -3478,7 +3478,7 @@ func discoverCompactFacadeGateReview(ctx context.Context, repo, lineage string, 
 					prePushBaseline, prePushBaselineOK = baseline, true
 				}
 			}
-			if prePushBaselineOK && CompactLeafProvablyUnrelatedToPrePushCandidate(record.State, prePushBaseline.PushBaseRef, prePushBaseline.Paths) {
+			if prePushBaselineOK && CompactLeafProvablyUnrelatedToPrePushCandidate(record.State, prePushBaseline.PushBaseTree, prePushBaseline.Paths) {
 				continue
 			}
 		}
