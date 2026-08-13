@@ -49,6 +49,7 @@ type OpenCodeRuntimeProvenance struct {
 // InstallState holds the persisted user selections from the last install run.
 type InstallState struct {
 	InstalledAgents           []string                   `json:"installed_agents"`
+	InstalledBinaryVersion    string                     `json:"installed_binary_version,omitempty"`
 	ManagedAssetDigest        string                     `json:"managed_asset_digest,omitempty"`
 	OpenCodeRuntimeProvenance *OpenCodeRuntimeProvenance `json:"opencode_runtime_provenance,omitempty"`
 	SelectionConfigured       bool                       `json:"selection_configured,omitempty"`
@@ -227,6 +228,7 @@ func MergeAgents(existing InstallState, newAgents []string) InstallState {
 
 	return InstallState{
 		InstalledAgents:             merged,
+		InstalledBinaryVersion:      existing.InstalledBinaryVersion,
 		ManagedAssetDigest:          existing.ManagedAssetDigest,
 		OpenCodeRuntimeProvenance:   existing.OpenCodeRuntimeProvenance,
 		SelectionConfigured:         existing.SelectionConfigured,
