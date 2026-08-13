@@ -601,10 +601,14 @@ func syncBackupTargets(homeDir, workspaceDir string, selection model.Selection, 
 			}
 		}
 		if component == model.ComponentPersona {
-			for _, path := range managedOutputStyleBackupPaths(selection, adapters, func(a agents.Adapter) string {
-				return a.OutputStyleDir(componentInjectionDir(homeDir, workspaceDir, a))
-			}) {
-				paths[path] = struct{}{}
+			plan := persona.ResourcePlanFor(selection.Persona)
+			for _, adapter := range adapters {
+				if !adapter.SupportsOutputStyles() {
+					continue
+				}
+				for _, path := range plan.OutputStylePaths(adapter.OutputStyleDir(componentInjectionDir(homeDir, workspaceDir, adapter))).Backup {
+					paths[path] = struct{}{}
+				}
 			}
 		}
 	}
@@ -756,70 +760,13 @@ func syncPersonaPathsWithWorkspace(homeDir, workspaceDir string, selection model
 		if adapter.SystemPromptStrategy() != model.StrategyJinjaModules {
 			paths = append(paths, adapter.SystemPromptFile(targetDir))
 		}
-		if managedOutputStyleName(selection.Persona) != "" && adapter.SupportsOutputStyles() {
-			paths = append(paths, filepath.Join(adapter.OutputStyleDir(targetDir), managedOutputStyleFile(selection.Persona)))
-			if p := adapter.SettingsPath(targetDir); p != "" {
-				paths = append(paths, p)
+		if adapter.SupportsOutputStyles() {
+			if stylePaths := persona.ResourcePlanFor(selection.Persona).OutputStylePaths(adapter.OutputStyleDir(targetDir)); stylePaths.Write != "" {
+				paths = append(paths, stylePaths.Write)
+				if p := adapter.SettingsPath(targetDir); p != "" {
+					paths = append(paths, p)
+				}
 			}
-		}
-	}
-	return paths
-}
-
-func managedOutputStyleName(persona model.PersonaID) string {
-	switch {
-	case isGentlemanConversationPersona(persona):
-		return "Gentleman"
-	// The legacy alias never reaches here: both producers of selection.Persona
-	// (normalizePersona for flags, applyResolvedPersona for persisted state)
-	// remap it to neutral first, so a case for it would be decoration that no
-	// test can reach.
-	case persona == model.PersonaNeutral:
-		return "Neutral"
-	default:
-		return ""
-	}
-}
-
-func managedOutputStyleFile(persona model.PersonaID) string {
-	switch managedOutputStyleName(persona) {
-	case "Gentleman":
-		return "gentleman.md"
-	case "Neutral":
-		return "neutral.md"
-	default:
-		return ""
-	}
-}
-
-// managedOutputStyleFiles returns every managed output-style filename.
-func managedOutputStyleFiles() []string {
-	return []string{"gentleman.md", "neutral.md"}
-}
-
-// managedOutputStyleBackupPaths returns the full set of managed output-style
-// file paths for the adapters. Backup enumeration needs all of them, not only
-// the selected persona's: switching personas removes the previously selected
-// file (persona inject step 3b), so the pre-run snapshot must hold it to roll a
-// failed switch back. This is intentionally backup-only. Post-apply
-// verification keeps declaring just the selected persona's file, since the other
-// one is correctly absent after a switch. outputStyleDir resolves the adapter's
-// output-style directory in the caller's scope (install and sync differ).
-func managedOutputStyleBackupPaths(selection model.Selection, adapters []agents.Adapter, outputStyleDir func(agents.Adapter) string) []string {
-	if managedOutputStyleName(selection.Persona) == "" {
-		return nil
-	}
-	var paths []string
-	for _, adapter := range adapters {
-		if !adapter.SupportsOutputStyles() {
-			continue
-		}
-		dir := outputStyleDir(adapter)
-		if dir == "" {
-			continue
-		}
-		for _, styleFile := range managedOutputStyleFiles() {
-			paths = append(paths, filepath.Join(dir, styleFile))
 		}
 	}
 	return paths
