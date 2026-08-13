@@ -489,7 +489,7 @@ func TestCodexCustomModelSelect_EnterSelectsThirdModel(t *testing.T) {
 	}
 
 	// The pending model must be the third model in the list, not the second.
-	allModels := model.FilterCodexModels("")
+	allModels := model.FilterCodexModelList(model.CodexAvailableModels(), "")
 	if len(allModels) < 3 {
 		t.Skip("fewer than 3 models available")
 	}

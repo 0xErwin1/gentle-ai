@@ -296,6 +296,7 @@ func handleCustomPhaseListNav(key string, state *CodexModelPickerState, cursor i
 
 func handleCustomModelSelectNav(key string, state *CodexModelPickerState) (bool, map[string]model.CodexEffort) {
 	models := filteredCodexModels(*state)
+	state.CustomModelCursor = min(max(0, state.CustomModelCursor), max(0, len(models)-1))
 
 	switch key {
 	case "up", "k":

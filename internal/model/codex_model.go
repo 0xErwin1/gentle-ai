@@ -113,12 +113,6 @@ func DiscoverCodexModels(ctx context.Context) []string {
 	return models
 }
 
-// FilterCodexModels returns the subset of the fallback catalog whose ID contains
-// query as a case-insensitive substring. An empty query returns all models.
-func FilterCodexModels(query string) []string {
-	return FilterCodexModelList(CodexAvailableModels(), query)
-}
-
 // FilterCodexModelList returns the subset of models whose ID contains query as a
 // case-insensitive substring. An empty query returns a copy of models.
 func FilterCodexModelList(models []string, query string) []string {

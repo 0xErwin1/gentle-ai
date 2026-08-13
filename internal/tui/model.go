@@ -1363,7 +1363,7 @@ func (m Model) handleKeyPress(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 			if previousMode == screens.CodexCustomModeNone &&
 				m.CodexModelPicker.CustomMode == screens.CodexCustomModePhaseList {
 				m.codexModelDiscoveryRequest++
-				return m, m.discoverCodexModels(m.codexModelDiscoveryRequest)
+				return m, m.codexModelDiscoveryCmd(m.codexModelDiscoveryRequest)
 			}
 			if assignments != nil {
 				m.Selection.CodexModelAssignments = assignments
@@ -1640,7 +1640,7 @@ func (m Model) handleKeyPress(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m Model) discoverCodexModels(requestID uint64) tea.Cmd {
+func (m Model) codexModelDiscoveryCmd(requestID uint64) tea.Cmd {
 	return func() tea.Msg {
 		return CodexModelsDiscoveredMsg{
 			RequestID: requestID,

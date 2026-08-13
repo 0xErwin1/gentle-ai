@@ -87,9 +87,10 @@ func TestCodexCustomDiscoveryStartsAsCommandWithFallback(t *testing.T) {
 
 func TestCodexCustomDiscoveryIgnoresStaleOrIrrelevantResults(t *testing.T) {
 	tests := []struct {
-		name  string
-		setup func(*Model)
-		msg   CodexModelsDiscoveredMsg
+		name        string
+		setup       func(*Model)
+		msg         CodexModelsDiscoveredMsg
+		wantApplied bool
 	}{
 		{
 			name: "after leaving Custom",
@@ -117,7 +118,8 @@ func TestCodexCustomDiscoveryIgnoresStaleOrIrrelevantResults(t *testing.T) {
 			setup: func(m *Model) {
 				m.codexModelDiscoveryRequest = 2
 			},
-			msg: CodexModelsDiscoveredMsg{RequestID: 2, Models: []string{"new-model"}},
+			msg:         CodexModelsDiscoveredMsg{RequestID: 2, Models: []string{"new-model"}},
+			wantApplied: true,
 		},
 	}
 
@@ -133,7 +135,7 @@ func TestCodexCustomDiscoveryIgnoresStaleOrIrrelevantResults(t *testing.T) {
 
 			updated, _ := m.Update(tt.msg)
 			state := updated.(Model)
-			if tt.name == "current request" {
+			if tt.wantApplied {
 				if !slices.Equal(state.CodexModelPicker.AvailableModels, tt.msg.Models) {
 					t.Fatalf("AvailableModels = %v, want %v", state.CodexModelPicker.AvailableModels, tt.msg.Models)
 				}
@@ -143,6 +145,30 @@ func TestCodexCustomDiscoveryIgnoresStaleOrIrrelevantResults(t *testing.T) {
 				t.Fatalf("AvailableModels = %v, want unchanged %v", state.CodexModelPicker.AvailableModels, fallback)
 			}
 		})
+	}
+}
+
+func TestCodexCustomDiscoveryClampsModelSelectCursorBeforeEnter(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenCodexModelPicker
+	m.CodexModelPicker = screens.NewCodexModelPickerState()
+	m.CodexModelPicker.CustomMode = screens.CodexCustomModeModelSelect
+	m.CodexModelPicker.CustomModelCursor = len(m.CodexModelPicker.AvailableModels) - 1
+	m.codexModelDiscoveryRequest = 1
+
+	updated, _ := m.Update(CodexModelsDiscoveredMsg{
+		RequestID: 1,
+		Models:    []string{"discovered-model-1", "discovered-model-2"},
+	})
+	state := updated.(Model)
+
+	updated, _ = state.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	state = updated.(Model)
+	if state.CodexModelPicker.CustomMode != screens.CodexCustomModeEffortSelect {
+		t.Fatalf("CustomMode = %v, want %v", state.CodexModelPicker.CustomMode, screens.CodexCustomModeEffortSelect)
+	}
+	if state.CodexModelPicker.CustomPendingModel != "discovered-model-2" {
+		t.Fatalf("CustomPendingModel = %q, want %q", state.CodexModelPicker.CustomPendingModel, "discovered-model-2")
 	}
 }
 
