@@ -638,6 +638,43 @@ func TestTUIExecutePersistsConfiguredSelection(t *testing.T) {
 	}
 }
 
+func TestTUIExecuteWithBackgroundPublishesChoiceAndPreservesState(t *testing.T) {
+	home := t.TempDir()
+	setupMockHome(t, home)
+	lastCheck := time.Now().UTC().Add(-time.Hour)
+	if err := state.Write(home, state.InstallState{
+		InstalledAgents:    []string{"claude-code"},
+		ManagedAssetDigest: "existing-writer",
+		LastUpdateCheck:    &lastCheck,
+		PendingSync:        true,
+		RDDMode:            "off",
+		BackgroundIntent:   model.OpenCodeBackgroundOff,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	selection := model.Selection{
+		Agents:     []model.AgentID{model.AgentOpenCode},
+		Components: []model.ComponentID{},
+		Preset:     model.PresetCustom,
+	}
+	result := tuiExecuteWithBackground(selection, planner.ResolvedPlan{}, system.DetectionResult{}, model.OpenCodeBackgroundOn, model.OpenCodeBackgroundOn, nil)
+	if result.Err != nil {
+		t.Fatalf("tuiExecuteWithBackground() error = %v", result.Err)
+	}
+
+	got, err := state.Read(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.BackgroundIntent != model.OpenCodeBackgroundOn {
+		t.Fatalf("BackgroundIntent = %q, want on", got.BackgroundIntent)
+	}
+	if got.ManagedAssetDigest != "existing-writer" || got.LastUpdateCheck == nil || !got.LastUpdateCheck.Equal(lastCheck) || !got.PendingSync || got.RDDMode != "off" {
+		t.Fatalf("unrelated state was not preserved: %#v", got)
+	}
+}
+
 func TestDeferredSyncIncludesCodexPermissionsArgs(t *testing.T) {
 	home := t.TempDir()
 	if err := state.Write(home, state.InstallState{InstalledAgents: []string{string(model.AgentCodex)}}); err != nil {

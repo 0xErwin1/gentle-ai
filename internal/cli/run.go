@@ -1804,15 +1804,42 @@ var tuiInstallStagePlan = func(runtime *installRuntime) pipeline.StagePlan {
 	return runtime.stagePlan()
 }
 
-// ExecuteTUIInstallWithOrchestrator runs a TUI install and returns the
-// orchestrator so a downstream state-persistence failure can be compensated.
-// Carries non-fatal Pi CodeGraph manual actions into the TUI completion result.
-func ExecuteTUIInstallWithOrchestrator(homeDir string, selection model.Selection, resolved planner.ResolvedPlan, profile system.PlatformProfile, onProgress pipeline.ProgressFunc) (pipeline.ExecutionResult, *pipeline.Orchestrator) {
+func ExecuteTUIInstall(homeDir string, selection model.Selection, resolved planner.ResolvedPlan, profile system.PlatformProfile, onProgress pipeline.ProgressFunc) pipeline.ExecutionResult {
+	result, _ := executeTUIInstallWithBackground(homeDir, selection, resolved, profile, "", onProgress)
+	return result
+}
+
+// ExecuteTUIInstallWithBackground runs the TUI install transaction with the
+// selected OpenCode background policy. State publication remains in the app
+// layer so the choice is committed only after this transaction succeeds.
+func ExecuteTUIInstallWithBackground(homeDir string, selection model.Selection, resolved planner.ResolvedPlan, profile system.PlatformProfile, background model.OpenCodeBackgroundIntent, onProgress pipeline.ProgressFunc) pipeline.ExecutionResult {
+	result, _ := executeTUIInstallWithBackground(homeDir, selection, resolved, profile, background, onProgress)
+	return result
+}
+
+// ExecuteTUIInstallWithBackgroundAndOrchestrator runs a TUI install and returns
+// the orchestrator so a downstream state-persistence failure can be compensated.
+func ExecuteTUIInstallWithBackgroundAndOrchestrator(homeDir string, selection model.Selection, resolved planner.ResolvedPlan, profile system.PlatformProfile, background model.OpenCodeBackgroundIntent, onProgress pipeline.ProgressFunc) (pipeline.ExecutionResult, *pipeline.Orchestrator) {
+	return executeTUIInstallWithBackground(homeDir, selection, resolved, profile, background, onProgress)
+}
+
+func executeTUIInstallWithBackground(homeDir string, selection model.Selection, resolved planner.ResolvedPlan, profile system.PlatformProfile, background model.OpenCodeBackgroundIntent, onProgress pipeline.ProgressFunc) (pipeline.ExecutionResult, *pipeline.Orchestrator) {
 	runtime, err := newInstallRuntime(homeDir, ScopeGlobal, ChannelStable, selection, resolved, profile)
 	if err != nil {
 		return pipeline.ExecutionResult{Err: err}, nil
 	}
 	defer runtime.state.cleanupCompatibilityTransaction()
+	backgroundResolution := OpenCodeBackgroundResolution{
+		Intent:    background,
+		Effective: background,
+	}
+	backgroundActivation, err := prepareOpenCodeBackgroundActivation(homeDir, &backgroundResolution, containsAgent(resolved.Agents, model.AgentOpenCode))
+	if err != nil {
+		return pipeline.ExecutionResult{Err: fmt.Errorf("prepare OpenCode background activation: %w", err)}, nil
+	}
+	runtime.background = backgroundResolution
+	runtime.backgroundActivation = backgroundActivation
+	runtime.runtimeReady = backgroundActivation != nil && backgroundActivation.Capability().Ready()
 	orchestrator := pipeline.NewOrchestrator(pipeline.DefaultRollbackPolicy(), pipeline.WithFailurePolicy(pipeline.ContinueOnError), pipeline.WithProgressFunc(onProgress))
 	result := orchestrator.Execute(tuiInstallStagePlan(runtime))
 	runtime.state.cleanupRollbackSnapshot()
