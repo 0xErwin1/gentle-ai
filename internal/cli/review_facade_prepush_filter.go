@@ -19,8 +19,12 @@ import (
 // push base is the commit the remote tracking branch points to, resolved via
 // the configured upstream ref.
 type CompactPrePushDiscoveryBaseline struct {
-	PushBaseRef string   // commit OID of the remote tracking base (the push base)
-	Paths       []string // live changed paths between PushBaseRef and HEAD
+	// PushBaseTree is the TREE oid of the remote tracking base (the push
+	// base). It must be a tree, not the commit, because leaf snapshots store
+	// BaseTree as `rev-parse <ref>^{tree}` — issue #3176: comparing the
+	// commit oid here made the fast path permanently inert.
+	PushBaseTree string
+	Paths        []string // live changed paths between the push base and HEAD
 }
 
 // BuildCompactPrePushDiscoveryBaseline resolves the baseline once. A non-nil
@@ -41,7 +45,7 @@ func BuildCompactPrePushDiscoveryBaseline(ctx context.Context, repo string) (Com
 	if err != nil {
 		return CompactPrePushDiscoveryBaseline{}, err
 	}
-	return CompactPrePushDiscoveryBaseline{PushBaseRef: baseRef, Paths: snapshot.Paths}, nil
+	return CompactPrePushDiscoveryBaseline{PushBaseTree: snapshot.BaseTree, Paths: snapshot.Paths}, nil
 }
 
 // resolvePrePushBaseCommit resolves the push base commit (the commit the remote
@@ -87,7 +91,7 @@ func runGit(ctx context.Context, repo string, args ...string) (string, error) {
 }
 
 // CompactLeafProvablyUnrelatedToPrePushCandidate reports whether state provably
-// cannot govern the live pre-push candidate described by liveBaseRef and
+// cannot govern the live pre-push candidate described by liveBaseTree and
 // liveChangedPaths. Mirrors the byte-identity argument from
 // CompactLeafProvablyUnrelatedToPreCommitBaseline but for pre-push so we do not
 // pay for an extra SnapshotBuilder.Build per leaf.
@@ -95,7 +99,7 @@ func runGit(ctx context.Context, repo string, args ...string) (string, error) {
 // Returns true (skip the leaf's AssessCompactGateTarget call) when ALL hold:
 //   - Kind == TargetBaseDiff
 //   - GenesisPaths != nil
-//   - CurrentSnapshot.BaseTree == liveBaseRef
+//   - CurrentSnapshot.BaseTree == liveBaseTree
 //   - state.GenesisPaths are disjoint from liveChangedPaths
 //
 // Returns false otherwise (and for TargetBaseWorkspaceOverlay, TargetCurrentChanges,
@@ -105,7 +109,7 @@ func runGit(ctx context.Context, repo string, args ...string) (string, error) {
 // before calling this predicate. This function assumes the CompactState has already
 // passed validation in the caller's context (discoverCompactFacadeGateReview calls
 // store.Load() which validates before this predicate is reached).
-func CompactLeafProvablyUnrelatedToPrePushCandidate(state reviewtransaction.CompactState, liveBaseRef string, liveChangedPaths []string) bool {
+func CompactLeafProvablyUnrelatedToPrePushCandidate(state reviewtransaction.CompactState, liveBaseTree string, liveChangedPaths []string) bool {
 	current := state.CurrentSnapshot
 	if current.Kind != reviewtransaction.TargetBaseDiff {
 		return false
@@ -113,7 +117,7 @@ func CompactLeafProvablyUnrelatedToPrePushCandidate(state reviewtransaction.Comp
 	if len(state.GenesisPaths) == 0 {
 		return false
 	}
-	if current.BaseTree != liveBaseRef {
+	if current.BaseTree != liveBaseTree {
 		return false
 	}
 	return pathsAreDisjoint(state.GenesisPaths, liveChangedPaths)
