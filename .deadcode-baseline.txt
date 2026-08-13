@@ -27,6 +27,11 @@ internal/cli/review_narration.go	reviewNarrationStripCodeSpans
 internal/cli/review_operation_contract.go	reviewNamedArgument
 internal/cli/review_printed_command.go	ReviewOperationFlagSurface
 internal/cli/review_printed_command.go	SplitPrintedCommandWords
+internal/cli/review_provider.go	reviewProviderAdmitLensRaw
+internal/cli/review_provider.go	reviewProviderExtractRoleRaw
+internal/cli/review_provider.go	reviewProviderMaterialize
+internal/cli/review_provider.go	reviewProviderRoleContractFor
+internal/cli/review_provider.go	reviewProviderRoleContracts
 internal/cli/run.go	componentPathDir
 internal/cli/run.go	componentPaths
 internal/cli/run.go	ensureGoAvailableAfterInstall
@@ -61,6 +66,12 @@ internal/installcmd/resolver.go	validateGoForModuleInstall
 internal/installcmd/testhelper.go	OverrideGetenv
 internal/installcmd/testhelper.go	OverrideGoVersion
 internal/installcmd/testhelper.go	OverrideLookPath
+internal/reviewerprovider/claude_adapter.go	ClaudeAdapter.Review
+internal/reviewerprovider/claude_adapter.go	NewClaudeAdapter
+internal/reviewerprovider/codex_adapter.go	CodexAdapter.Review
+internal/reviewerprovider/codex_adapter.go	NewCodexAdapter
+internal/reviewerprovider/invocation.go	Invocation.Prompt
+internal/reviewerprovider/invocation.go	NewInvocation
 internal/reviewtransaction/authority_repair.go	AssessAuthorityRepair
 internal/reviewtransaction/candidate_decline.go	CandidateDeclineAuthorization.validate
 internal/reviewtransaction/candidate_decline.go	candidateDeclineDigest
