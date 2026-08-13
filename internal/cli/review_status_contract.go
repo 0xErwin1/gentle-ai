@@ -1128,11 +1128,15 @@ func (transition ReviewNextTransition) Validate() error {
 				if nativeGitTransport {
 					argumentCount = 7
 				}
+				providerRuntime := model.AgentID(arguments["agent"])
+				if providerRuntime != "" && reviewProviderCaptureRuntime(providerRuntime) {
+					argumentCount++
+				}
 				if len(arguments) != argumentCount || !reviewStartSupportedLens(arguments["lens"]) || orderErr != nil || order < 0 ||
 					!validReviewCapabilitySHA256(arguments["expected-revision"]) || !validReviewCapabilitySHA256(arguments["target"]) ||
 					strings.TrimSpace(arguments["lineage"]) == "" || reviewtransaction.ValidateReviewRepositoryContextHandle(arguments["repository-context"]) != nil ||
 					input.ArtifactSubject == nil || input.ChangedPathManifest == nil ||
-					nativeGitTransport && arguments["subject-hash"] != input.ArtifactSubject.SubjectHash ||
+					nativeGitTransport && arguments["subject-hash"] != input.ArtifactSubject.SubjectHash || providerRuntime != "" && !reviewProviderCaptureRuntime(providerRuntime) ||
 					legacyTransport && input.CandidateDiff == nil || nativeGitTransport && (!validReviewGitTree(input.BaseTree) || !validReviewGitTree(input.CandidateTree)) ||
 					(!legacyTransport && !nativeGitTransport) {
 					return errors.New("review capture transition lacks an exact repository and authority binding")

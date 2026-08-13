@@ -12,51 +12,21 @@ import (
 )
 
 const (
-	reviewProviderRoleLens              = "lens"
-	reviewProviderRoleRefuter           = "refuter"
-	reviewProviderRoleTargetedValidator = "targeted-validator"
-
-	reviewProviderTransportCapability = "gentle-ai.provider-transport/v1"
-	reviewProviderResultLimit         = 4 << 20
+	reviewProviderRoleLens              = string(reviewerprovider.RoleLens)
+	reviewProviderRoleRefuter           = string(reviewerprovider.RoleRefuter)
+	reviewProviderRoleTargetedValidator = string(reviewerprovider.RoleTargetedValidator)
 )
+
+const reviewProviderTransportCapability = reviewerprovider.TransportCapability
 
 // reviewProviderRoleContract is the Go-owned registry for every provider role.
 // Runtime adapters receive only its materialized Invocation and never select a
 // prompt, schema, byte policy, admission rule, or durable slot.
-type reviewProviderRoleContract struct {
-	ID                   string
-	RequestSchemaID      string
-	ResultSchemaID       string
-	ResultSchema         []byte
-	Slot                 string
-	RequiredCapabilities []string
-}
+type reviewProviderRoleContract = reviewerprovider.Contract
 
 func reviewProviderRoleContractFor(role string) (reviewProviderRoleContract, error) {
-	var contract reviewProviderRoleContract
-	switch role {
-	case reviewProviderRoleLens:
-		contract = reviewProviderRoleContract{
-			ID: reviewProviderRoleLens, RequestSchemaID: "gentle-ai.review-lens-context/v1",
-			ResultSchemaID: "https://gentle-ai.dev/schema/review/reviewer/v1",
-			ResultSchema:   []byte(reviewtransaction.ReviewerResultSchema), Slot: "lens",
-			RequiredCapabilities: []string{reviewProviderTransportCapability},
-		}
-	case reviewProviderRoleRefuter:
-		contract = reviewProviderRoleContract{
-			ID: reviewProviderRoleRefuter, RequestSchemaID: "gentle-ai.review-refuter-request/v1",
-			ResultSchemaID: "https://gentle-ai.dev/schema/review/refuter/v1",
-			ResultSchema:   append([]byte(nil), reviewInputSchemas["refuter"]...), Slot: "refuter",
-			RequiredCapabilities: []string{reviewProviderTransportCapability},
-		}
-	case reviewProviderRoleTargetedValidator:
-		contract = reviewProviderRoleContract{
-			ID: reviewProviderRoleTargetedValidator, RequestSchemaID: reviewtransaction.TargetedValidationRequestSchema,
-			ResultSchemaID: "https://gentle-ai.dev/schema/review/validator/v1",
-			ResultSchema:   append([]byte(nil), reviewInputSchemas["validator"]...), Slot: "targeted-validator",
-			RequiredCapabilities: []string{reviewProviderTransportCapability},
-		}
-	default:
+	contract, err := reviewerprovider.ContractFor(reviewerprovider.Role(role))
+	if err != nil {
 		return reviewProviderRoleContract{}, fmt.Errorf("unsupported review provider role %q; add its Go-owned contract before it can be invoked", role) // refusal:by-design world-action: provider roles are compiled authority, not runtime-selected extensions
 	}
 	if !json.Valid(contract.ResultSchema) {
@@ -66,16 +36,7 @@ func reviewProviderRoleContractFor(role string) (reviewProviderRoleContract, err
 }
 
 func reviewProviderRoleContracts() []reviewProviderRoleContract {
-	roles := []string{reviewProviderRoleLens, reviewProviderRoleRefuter, reviewProviderRoleTargetedValidator}
-	contracts := make([]reviewProviderRoleContract, 0, len(roles))
-	for _, role := range roles {
-		contract, err := reviewProviderRoleContractFor(role)
-		if err != nil {
-			panic(err)
-		}
-		contracts = append(contracts, contract)
-	}
-	return contracts
+	return reviewerprovider.Contracts()
 }
 
 // reviewProviderRequest is the materialized lens invocation. Its fields remain
@@ -86,6 +47,17 @@ type reviewProviderRequest struct {
 	Subject    reviewtransaction.ArtifactSubject
 	Frozen     reviewtransaction.FrozenCandidateContext
 	Invocation reviewerprovider.Invocation
+}
+
+// reviewProviderAdmittedResult is the complete native interpretation of raw
+// reviewer bytes before immutable capture selects the role slot.
+type reviewProviderAdmittedResult struct {
+	Frozen                    reviewtransaction.FrozenCandidateContext
+	Subject                   reviewtransaction.ArtifactSubject
+	Result                    facadeReviewerResult
+	NativeResult              reviewtransaction.LensResult
+	CandidateCausalFindingIDs []string
+	Admission                 reviewtransaction.ArtifactAdmission
 }
 
 // reviewProviderMaterialize deliberately delegates to the current lens-context
@@ -116,9 +88,9 @@ func reviewProviderExtractRoleRaw(role string, raw []byte) ([]byte, error) {
 	if err := validateReviewerResultPayload(raw); err != nil {
 		return nil, err
 	}
-	payload, decision, err := reviewtransaction.ExtractBoundedSingleJSONObject(raw, reviewProviderResultLimit)
+	payload, decision, err := reviewtransaction.ExtractBoundedSingleJSONObject(raw, contract.ResultLimit)
 	if err != nil {
-		return nil, fmt.Errorf("%s provider result admission %s: %w", contract.ID, decision, err)
+		return nil, fmt.Errorf("%s provider result admission %s: %w", contract.Role, decision, err)
 	}
 	if len(bytes.TrimSpace(payload)) == 0 {
 		return nil, errors.New("review provider result contains no JSON object; return exactly one JSON object and retry capture") // refusal:by-design operator-knowledge: the runtime must provide its final structured result
@@ -129,20 +101,64 @@ func reviewProviderExtractRoleRaw(role string, raw []byte) ([]byte, error) {
 // reviewProviderAdmitLensRaw preserves the native pre-capture semantics while
 // keeping durable capture outside this materialization and admission slice.
 func reviewProviderAdmitLensRaw(ctx context.Context, root string, state reviewtransaction.CompactState, revision string, frozen reviewtransaction.FrozenCandidateContext, subject reviewtransaction.ArtifactSubject, raw []byte) (reviewtransaction.ReviewerResult, error) {
+	admitted, err := reviewProviderAdmitRaw(ctx, root, state, revision, frozen, subject, raw)
+	if err != nil {
+		return reviewtransaction.ReviewerResult{}, err
+	}
+	return reviewtransaction.ReviewerResult{SubjectHash: admitted.Result.SubjectHash, Inspection: admitted.Result.Inspection, Lens: admitted.NativeResult.Lens, Findings: admitted.NativeResult.Findings, Evidence: admitted.NativeResult.Evidence}, nil
+}
+
+// reviewProviderAdmitRaw preserves capture-result's strict native admission
+// without publishing bytes or mutating authority.
+func reviewProviderAdmitRaw(ctx context.Context, root string, state reviewtransaction.CompactState, revision string, frozen reviewtransaction.FrozenCandidateContext, subject reviewtransaction.ArtifactSubject, raw []byte) (reviewProviderAdmittedResult, error) {
 	payload, err := reviewProviderExtractRoleRaw(reviewProviderRoleLens, raw)
 	if err != nil {
-		return reviewtransaction.ReviewerResult{}, err
+		return reviewProviderAdmittedResult{}, err
 	}
-	result, err := reviewtransaction.ValidateReviewerResult(payload, subject, frozen.ChangedPathManifest)
+	var result facadeReviewerResult
+	if err := decodeFacadeJSONBytes(payload, &result); err != nil {
+		return reviewProviderAdmittedResult{}, fmt.Errorf("decode reviewer result: %w", err)
+	}
+	if result.Findings == nil || result.Evidence == nil {
+		return reviewProviderAdmittedResult{}, errors.New("reviewer result requires explicit findings and evidence arrays") // refusal:by-design operator-knowledge: reviewers must resubmit explicit findings and evidence arrays
+	}
+	if result.SubjectHash != subject.SubjectHash {
+		legacyFrozen, legacyErr := (reviewtransaction.SnapshotBuilder{Repo: root}).WithLegacyCandidateDiff(ctx, state.InitialSnapshot, frozen)
+		if legacyErr == nil {
+			legacySubject, subjectErr := reviewtransaction.NewLegacyArtifactSubject(state, revision, legacyFrozen, subject.Lens, subject.SelectedOrder, "")
+			if subjectErr == nil && result.SubjectHash == legacySubject.SubjectHash {
+				frozen, subject = legacyFrozen, legacySubject
+			}
+		}
+	}
+	if _, err := prepareCompactReviewerResults(reviewtransaction.CompactState{SelectedLenses: []string{subject.Lens}}, []facadeReviewerResult{result}, facadeRefuterResult{}); err != nil {
+		return reviewProviderAdmittedResult{}, err
+	}
+	canonical, err := reviewtransaction.CanonicalizeReviewerResult(payload, subject.Lens)
 	if err != nil {
-		return reviewtransaction.ReviewerResult{}, err
+		return reviewProviderAdmittedResult{}, err
 	}
-	if _, _, err := reviewtransaction.AdmitArtifact(ctx, reviewtransaction.ArtifactAdmissionRequest{
+	canonicalPayload, err := json.Marshal(canonical)
+	if err != nil {
+		return reviewProviderAdmittedResult{}, err
+	}
+	canonicalPayload = append(canonicalPayload, '\n')
+	native := reviewtransaction.LensResult{Lens: canonical.Lens, Findings: canonical.Findings, Evidence: canonical.Evidence}
+	canonicalForCausality, err := reviewtransaction.CanonicalCompactLensResult(native)
+	if err != nil {
+		return reviewProviderAdmittedResult{}, fmt.Errorf("canonicalize reviewer result: %w", err)
+	}
+	candidateCausalIDs, err := verifiedCandidateCausalFindingIDs(ctx, root, state.InitialSnapshot, canonicalForCausality)
+	if err != nil {
+		return reviewProviderAdmittedResult{}, err
+	}
+	_, admission, err := reviewtransaction.AdmitArtifact(ctx, reviewtransaction.ArtifactAdmissionRequest{
 		ExpectedSubject: subject, FrozenContext: frozen, EchoedSubjectHash: result.SubjectHash,
-		Inspection: result.Inspection, Result: reviewtransaction.LensResult{Lens: result.Lens, Findings: result.Findings, Evidence: result.Evidence},
-		RawPayload: raw, CanonicalPayload: payload,
-	}); err != nil {
-		return reviewtransaction.ReviewerResult{}, err
+		Inspection: result.Inspection, Result: native, CandidateCausalFindingIDs: candidateCausalIDs,
+		RawPayload: raw, CanonicalPayload: canonicalPayload,
+	})
+	if err != nil {
+		return reviewProviderAdmittedResult{}, err
 	}
-	return result, nil
+	return reviewProviderAdmittedResult{Frozen: frozen, Subject: subject, Result: result, NativeResult: native, CandidateCausalFindingIDs: candidateCausalIDs, Admission: admission}, nil
 }

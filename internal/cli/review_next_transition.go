@@ -213,11 +213,15 @@ func newReviewNextTransition(status ReviewTargetStatusResult, selectedLenses []s
 			return reviewStopTransition("captured_artifacts_unverifiable")
 		}
 		if len(artifacts) != len(selectedLenses) {
-			return reviewMissingCaptureTransition(binding, selectedLenses, artifacts, input.CaptureContext)
+			return reviewMissingCaptureTransition(binding, selectedLenses, artifacts, input.CaptureContext, input.RuntimeAgent)
 		}
-		return reviewExecuteTransition("captured_results_ready", "review.finalize", []ReviewTransitionArgument{
+		arguments := []ReviewTransitionArgument{
 			{Name: "lineage", Value: binding.LineageID}, {Name: "captured_results", Value: "true"},
-		}, []ReviewTransitionArgument{{Name: "state", Value: "reviewing"}, {Name: "captured_artifacts", Value: "complete"}}, binding, artifacts)
+		}
+		if reviewProviderCaptureRuntime(input.RuntimeAgent) {
+			arguments = append(arguments, ReviewTransitionArgument{Name: "agent", Value: string(input.RuntimeAgent)})
+		}
+		return reviewExecuteTransition("captured_results_ready", "review.finalize", arguments, []ReviewTransitionArgument{{Name: "state", Value: "reviewing"}, {Name: "captured_artifacts", Value: "complete"}}, binding, artifacts)
 	case reviewtransaction.StateCorrectionRequired:
 		if status.Action == reviewtransaction.TargetStatusActionRecover {
 			return reviewRecoveryCollection(status, binding, input)
@@ -372,6 +376,7 @@ func newReviewNextTransition(status ReviewTargetStatusResult, selectedLenses []s
 type reviewFinalizeTransitionContext struct {
 	Contract          string
 	RepositoryContext string
+	RuntimeAgent      model.AgentID
 	ValidationRequest *reviewtransaction.TargetedValidationRequest
 	CorrectionRequest *reviewtransaction.CorrectionPlanRequest
 	CaptureContext    *reviewCaptureContext
@@ -403,19 +408,27 @@ func reviewFinalizeNextTransition(state reviewtransaction.CompactState, revision
 		transitionContext.CorrectionRequest = &request
 	}
 	if state.State == reviewtransaction.StateReviewing && artifactErr == nil && len(artifacts) != len(state.SelectedLenses) {
-		return reviewMissingCaptureTransition(reviewTransitionBinding(status.Authority, status.TargetIdentity, transitionContext.RepositoryContext), state.SelectedLenses, artifacts, transitionContext.CaptureContext)
+		return reviewMissingCaptureTransition(reviewTransitionBinding(status.Authority, status.TargetIdentity, transitionContext.RepositoryContext), state.SelectedLenses, artifacts, transitionContext.CaptureContext, transitionContext.RuntimeAgent)
 	}
 	if state.State == reviewtransaction.StateReviewing && artifactErr == nil {
-		return reviewExecuteTransition("captured_results_ready", "review.finalize", []ReviewTransitionArgument{{Name: "lineage", Value: state.LineageID}, {Name: "captured_results", Value: "true"}}, []ReviewTransitionArgument{{Name: "state", Value: "reviewing"}, {Name: "captured_artifacts", Value: "complete"}}, reviewTransitionBinding(status.Authority, status.TargetIdentity), artifacts)
+		arguments := []ReviewTransitionArgument{{Name: "lineage", Value: state.LineageID}, {Name: "captured_results", Value: "true"}}
+		if reviewProviderCaptureRuntime(transitionContext.RuntimeAgent) {
+			arguments = append(arguments, ReviewTransitionArgument{Name: "agent", Value: string(transitionContext.RuntimeAgent)})
+		}
+		return reviewExecuteTransition("captured_results_ready", "review.finalize", arguments, []ReviewTransitionArgument{{Name: "state", Value: "reviewing"}, {Name: "captured_artifacts", Value: "complete"}}, reviewTransitionBinding(status.Authority, status.TargetIdentity), artifacts)
 	}
 	return newReviewNextTransition(status, state.SelectedLenses, artifacts, transitionContext.CapturedEvidence, artifactErr, reviewNextTransitionInput{
 		Contract: transitionContext.Contract, RepositoryContext: transitionContext.RepositoryContext, ValidationRequest: transitionContext.ValidationRequest,
 		CorrectionRequest: transitionContext.CorrectionRequest, EvidenceErr: transitionContext.EvidenceErr, CorrectionForecasted: state.ProposedCorrectionLines != nil,
-		CaptureContext: transitionContext.CaptureContext,
+		CaptureContext: transitionContext.CaptureContext, RuntimeAgent: transitionContext.RuntimeAgent,
 	})
 }
 
-func reviewMissingCaptureTransition(binding ReviewTransitionBinding, selectedLenses []string, artifacts []ReviewTransitionArtifact, context *reviewCaptureContext) ReviewNextTransition {
+func reviewMissingCaptureTransition(binding ReviewTransitionBinding, selectedLenses []string, artifacts []ReviewTransitionArtifact, context *reviewCaptureContext, runtime ...model.AgentID) ReviewNextTransition {
+	providerRuntime := model.AgentID("")
+	if len(runtime) > 0 && reviewProviderCaptureRuntime(runtime[0]) {
+		providerRuntime = runtime[0]
+	}
 	captured := make(map[int]bool, len(artifacts))
 	for _, artifact := range artifacts {
 		captured[artifact.SelectedOrder] = true
@@ -423,7 +436,7 @@ func reviewMissingCaptureTransition(binding ReviewTransitionBinding, selectedLen
 	inputs := make([]ReviewTransitionInput, 0)
 	for order, lens := range selectedLenses {
 		if !captured[order] {
-			inputs = append(inputs, reviewCaptureInput(binding, lens, order, context))
+			inputs = append(inputs, reviewCaptureInput(binding, lens, order, context, providerRuntime))
 		}
 	}
 	if len(inputs) == 0 {
@@ -470,7 +483,7 @@ func reviewCaptureResultCommandName() string {
 	return reviewTransitionCommandTool + " review " + verb
 }
 
-func reviewCaptureInput(binding ReviewTransitionBinding, lens string, order int, context *reviewCaptureContext) ReviewTransitionInput {
+func reviewCaptureInput(binding ReviewTransitionBinding, lens string, order int, context *reviewCaptureContext, runtime ...model.AgentID) ReviewTransitionInput {
 	arguments := reviewBindingArguments(binding)
 	if binding.RepositoryContext != "" {
 		arguments = append(arguments, ReviewTransitionArgument{Name: "repository-context", Value: binding.RepositoryContext})
@@ -494,6 +507,9 @@ func reviewCaptureInput(binding ReviewTransitionBinding, lens string, order int,
 			input.Arguments = append(input.Arguments, ReviewTransitionArgument{Name: "subject-hash", Value: subject.SubjectHash})
 			input.BaseTree, input.CandidateTree = context.FrozenContext.BaseTree, context.FrozenContext.CandidateTree
 		}
+	}
+	if len(runtime) > 0 && reviewProviderCaptureRuntime(runtime[0]) {
+		input.Arguments = append(input.Arguments, ReviewTransitionArgument{Name: "agent", Value: string(runtime[0])})
 	}
 	return input
 }
