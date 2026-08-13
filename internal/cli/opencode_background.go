@@ -115,6 +115,20 @@ func resolveOpenCodeBackgroundCLI(set bool, raw string, persisted state.InstallS
 	})
 }
 
+// ResolveOpenCodeBackgroundInteractive resolves the TUI's environment and
+// persisted sources with interactive auto behavior. CLI flags are absent from
+// the TUI flow, so a missing prior and missing environment decision is the
+// only case that requests the TUI choice screen.
+func ResolveOpenCodeBackgroundInteractive(prior model.OpenCodeBackgroundIntent) (OpenCodeBackgroundResolution, error) {
+	envValue, envSet := os.LookupEnv(OpenCodeBackgroundSubagentsEnv)
+	return ResolveOpenCodeBackground(OpenCodeBackgroundResolveInput{
+		EnvSet:       envSet,
+		EnvValue:     envValue,
+		PriorManaged: prior,
+		Interactive:  true,
+	})
+}
+
 var runOpenCodeVersion = opencodeactivation.RunVersion
 var resolveOpenCodeTarget = opencodeactivation.ResolveTarget
 
