@@ -2350,6 +2350,7 @@ func runReviewFacadeFinalize(ctx context.Context, args []string, stdout io.Write
 	flags := newReviewFlagSet("review finalize", stdout, "Canonicalize reviewer output and evidence, perform required native transitions, and materialize the terminal receipt.")
 	cwd := flags.String("cwd", ".", "repository path")
 	contract := flags.String("contract", "", "optional negotiated review integration contract")
+	runtimeAgent := flags.String("agent", "", "generated registered runtime identity for native provider-role execution")
 	expectedSubmissionRevision := flags.String("expected-revision", "", "provider-issued compact authority revision for a submission descriptor")
 	targetIdentity := flags.String("target", "", "provider-issued target identity for a submission descriptor")
 	requestHash := flags.String("request-hash", "", "provider-issued correction or validation request hash")
@@ -2389,6 +2390,20 @@ func runReviewFacadeFinalize(ctx context.Context, args []string, stdout io.Write
 	if (*actionEligibility || *nextTransition) && !negotiated {
 		return reviewPreflightError(errors.New(reviewContractRequiredForActionEligibilityReason))
 	}
+	providerRuntime := model.AgentID("")
+	if reviewRuntimeAgentCount(args) != 0 {
+		if !negotiated || *contract != ReviewIntegrationContractV2 || reviewRuntimeAgentCount(args) != 1 {
+			return reviewPreflightError(errors.New("review finalize --agent requires exactly one negotiated v2 runtime identity; refresh with `gentle-ai review status --contract gentle-ai.review-integration/v2 --next-transition`"))
+		}
+		resolved, runtimeErr := reviewRuntimeWithImmutableTransport(*runtimeAgent)
+		if runtimeErr != nil {
+			return reviewPreflightError(runtimeErr)
+		}
+		if !reviewProviderCaptureRuntime(resolved) {
+			return reviewPreflightError(fmt.Errorf("review finalize provider runtime %q is host-mediated; use its live transport collection", resolved)) // refusal:by-design world-action: host-mediated runtimes do not use subprocess finalization
+		}
+		providerRuntime = resolved
+	}
 	submissionBindingProvided := reviewFinalizeFlagProvided(args, "expected-revision") || reviewFinalizeFlagProvided(args, "target") ||
 		reviewFinalizeFlagProvided(args, "request-hash") || reviewFinalizeFlagProvided(args, "repository-context")
 	if submissionBindingProvided && (!negotiated || *contract != ReviewIntegrationContractV2 || strings.TrimSpace(*expectedSubmissionRevision) == "" ||
@@ -2410,6 +2425,9 @@ func runReviewFacadeFinalize(ctx context.Context, args []string, stdout io.Write
 	}
 	if reviewerResultSources > 1 || (*capturedEvidence && strings.TrimSpace(*evidencePath) != "") {
 		return reviewPreflightError(errors.New("review finalize accepts exactly one reviewer-result source and one final-evidence source"))
+	}
+	if providerRuntime != "" && (strings.TrimSpace(*refuterPath) != "" || strings.TrimSpace(*validationPath) != "") {
+		return reviewPreflightError(errors.New("review finalize --agent materializes provider refuter and validator requests; omit --refuter and --validation")) // refusal:by-design operator-knowledge: a provider runtime must receive the Go-materialized request rather than caller-authored role output
 	}
 	// Refused before any repository or authority work, so the rejection cannot
 	// advance the lineage or consume a lens slot. reviewUnadmittedResultRefusal
@@ -2537,7 +2555,7 @@ func runReviewFacadeFinalize(ctx context.Context, args []string, stdout io.Write
 			return err
 		}
 	}
-	if terminalAtEntry && !facadeFinalizeReplayInputsEmpty(resultPaths, resultArtifacts, resultArtifactFiles, *capturedResults, *capturedEvidence, *validationPath, *refuterPath, *evidencePath, *correctionLines, *failed, *tracePath) {
+	if terminalAtEntry && !facadeFinalizeReplayInputsEmpty(resultPaths, resultArtifacts, resultArtifactFiles, *capturedResults, *capturedEvidence, *validationPath, *refuterPath, *evidencePath, *correctionLines, *failed, *tracePath, providerRuntime) {
 		return errors.New("terminal review finalize accepts no review inputs; exact replay requires only --lineage")
 	}
 	// --captured-results is deliberately absent from this guard. The artifact
@@ -2635,6 +2653,23 @@ func runReviewFacadeFinalize(ctx context.Context, args []string, stdout io.Write
 		if err := readFacadeJSON(*refuterPath, &refuter); err != nil {
 			return reviewPreflightError(fmt.Errorf("read refuter outcomes: %w", err))
 		}
+	} else if providerRuntime != "" && *capturedResults && state.State == reviewtransaction.StateReviewing {
+		slot, slotErr := reviewtransaction.ReadCompactRefuterResultSlot(store.Dir)
+		if slotErr != nil {
+			return reviewPreflightError(fmt.Errorf("read captured provider refuter result: %w", slotErr))
+		}
+		if slot.Occupied {
+			refuter, err = readCapturedProviderRefuterResult(ctx, root, store.Dir, state, record.Revision)
+		} else {
+			var captured bool
+			_, captured, err = reviewProviderCaptureRefuter(ctx, root, store, state, record.Revision, providerRuntime)
+			if err == nil && captured {
+				refuter, err = readCapturedProviderRefuterResult(ctx, root, store.Dir, state, record.Revision)
+			}
+		}
+		if err != nil {
+			return reviewPreflightError(err)
+		}
 	}
 	var evidence []byte
 	var capturedVerification *reviewtransaction.CapturedVerificationEvidence
@@ -2661,6 +2696,18 @@ func runReviewFacadeFinalize(ctx context.Context, args []string, stdout io.Write
 			return reviewPreflightError(errors.New("--failed conflicts with captured verification evidence outcome")) // refusal:by-design operator-knowledge: callers must omit the legacy boolean or make it agree with the immutable captured outcome
 		}
 		effectiveFailed = derivedFailed
+	}
+	if providerRuntime != "" && state.State == reviewtransaction.StateCorrectionRequired && capturedVerification != nil &&
+		capturedVerification.Record.Outcome == reviewtransaction.VerificationOutcomePassed && validation == nil {
+		capturedValidation, readErr := readCapturedProviderTargetedValidatorResult(ctx, root, store.Dir, state, record.Revision)
+		if readErr != nil {
+			var captureErr error
+			capturedValidation, _, captureErr = reviewProviderCaptureTargetedValidator(ctx, root, store, state, record.Revision, providerRuntime)
+			if captureErr != nil {
+				return reviewPreflightError(captureErr)
+			}
+		}
+		validation = &capturedValidation
 	}
 	// A lineage-only finalize call at StateValidating with no request evidence
 	// must not silently ignore canonical evidence a separate `review
@@ -3101,9 +3148,9 @@ func facadeTerminalState(state reviewtransaction.State) bool {
 	return state == reviewtransaction.StateApproved || state == reviewtransaction.StateEscalated
 }
 
-func facadeFinalizeReplayInputsEmpty(results, artifacts, artifactFiles []string, capturedResults, capturedEvidence bool, validation, refuter, evidence string, correctionLines int, failed bool, trace string) bool {
+func facadeFinalizeReplayInputsEmpty(results, artifacts, artifactFiles []string, capturedResults, capturedEvidence bool, validation, refuter, evidence string, correctionLines int, failed bool, trace string, providerRuntime model.AgentID) bool {
 	return len(results) == 0 && len(artifacts) == 0 && len(artifactFiles) == 0 && !capturedResults && !capturedEvidence && strings.TrimSpace(validation) == "" && strings.TrimSpace(refuter) == "" &&
-		strings.TrimSpace(evidence) == "" && correctionLines == 0 && !failed && strings.TrimSpace(trace) == ""
+		strings.TrimSpace(evidence) == "" && correctionLines == 0 && !failed && strings.TrimSpace(trace) == "" && providerRuntime == ""
 }
 
 func inspectCompactFacadeReceipt(path string, expected reviewtransaction.CompactReceipt) (bool, error) {

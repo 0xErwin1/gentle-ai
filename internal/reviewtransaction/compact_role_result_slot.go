@@ -7,8 +7,11 @@ import (
 	"fmt"
 	"io/fs"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"time"
+
+	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewerprovider"
 )
 
 const (
@@ -21,9 +24,9 @@ const (
 type compactRoleResultSlotKind string
 
 const (
-	compactRoleResultSlotLens              compactRoleResultSlotKind = "lens"
-	compactRoleResultSlotRefuter           compactRoleResultSlotKind = "refuter"
-	compactRoleResultSlotTargetedValidator compactRoleResultSlotKind = "targeted-validator"
+	compactRoleResultSlotLens              compactRoleResultSlotKind = compactRoleResultSlotKind(reviewerprovider.RoleLens)
+	compactRoleResultSlotRefuter           compactRoleResultSlotKind = compactRoleResultSlotKind(reviewerprovider.RoleRefuter)
+	compactRoleResultSlotTargetedValidator compactRoleResultSlotKind = compactRoleResultSlotKind(reviewerprovider.RoleTargetedValidator)
 )
 
 // compactRoleResultSlotKey has typed constructors below. It is intentionally
@@ -76,10 +79,9 @@ type CompactRefuterResultSlot = CompactRoleResultSlot
 // CompactAdmittedTargetedValidatorResultRequest contains Go-admitted bytes
 // for one corrected target. Publication alone never advances correction state.
 type CompactAdmittedTargetedValidatorResultRequest struct {
-	ExpectedRevision   string
-	TargetIdentity     string
+	ExpectedRequest    TargetedValidationRequest
 	Payload            []byte
-	PreparePublication func(CompactState) error
+	PreparePublication func(CompactState, TargetedValidationRequest) error
 }
 
 // CompactTargetedValidatorResultSlot is the typed readback wrapper for a
@@ -107,19 +109,35 @@ func ReadCompactRefuterResultSlot(storeDir string) (CompactRefuterResultSlot, er
 // CaptureAdmittedTargetedValidatorResult captures a validator verdict against
 // an open correction without consuming the correction attempt.
 func (store CompactStore) CaptureAdmittedTargetedValidatorResult(ctx context.Context, request CompactAdmittedTargetedValidatorResultRequest) error {
-	return store.captureAdmittedRoleResult(ctx, "review/capture-targeted-validator-result", request.ExpectedRevision, request.TargetIdentity, request.Payload,
+	if err := ValidateTargetedValidationRequest(request.ExpectedRequest); err != nil {
+		return err
+	}
+	if request.PreparePublication == nil {
+		return errors.New("targeted validator capture requires lock-held native request revalidation") // refusal:by-design world-action: only native revalidation can publish a correction-bound validator result
+	}
+	return store.captureAdmittedRoleResult(ctx, "review/capture-targeted-validator-result", request.ExpectedRequest.ExpectedRevision, request.ExpectedRequest.CorrectionTargetIdentity, request.Payload,
 		func(state CompactState) (compactRoleResultSlotKey, error) {
-			if state.State != StateCorrectionRequired || state.ProposedCorrectionLines == nil || state.CorrectionAttemptConsumed() {
+			authoritative, err := BuildTargetedValidationRequest(ctx, store.repo, state, request.ExpectedRequest.ExpectedRevision)
+			if err != nil || !reflect.DeepEqual(authoritative, request.ExpectedRequest) {
 				return compactRoleResultSlotKey{}, errors.New("targeted validator capture binding does not match the current open correction authority") // refusal:by-design operator-knowledge: refresh the open correction before capturing its validator result
 			}
-			return compactTargetedValidatorRoleResultSlotKey(request.ExpectedRevision, request.TargetIdentity), nil
-		}, request.PreparePublication)
+			return compactTargetedValidatorRoleResultSlotKey(authoritative.ExpectedRevision, authoritative.CorrectionTargetIdentity), nil
+		}, func(state CompactState) error {
+			authoritative, err := BuildTargetedValidationRequest(ctx, store.repo, state, request.ExpectedRequest.ExpectedRevision)
+			if err != nil || !reflect.DeepEqual(authoritative, request.ExpectedRequest) {
+				return errors.New("targeted validator capture request changed while awaiting the authority lock") // refusal:by-design operator-knowledge: refresh the exact native validator request before capture
+			}
+			return request.PreparePublication(state, authoritative)
+		})
 }
 
 // ReadCompactTargetedValidatorResultSlot reads one correction-bound typed
 // validator wrapper without changing correction accounting.
-func ReadCompactTargetedValidatorResultSlot(storeDir, authorityRevision, targetIdentity string) (CompactTargetedValidatorResultSlot, error) {
-	return ReadCompactRoleResultSlot(storeDir, compactTargetedValidatorRoleResultSlotKey(authorityRevision, targetIdentity))
+func ReadCompactTargetedValidatorResultSlot(storeDir string, request TargetedValidationRequest) (CompactTargetedValidatorResultSlot, error) {
+	if err := ValidateTargetedValidationRequest(request); err != nil {
+		return CompactTargetedValidatorResultSlot{}, err
+	}
+	return ReadCompactRoleResultSlot(storeDir, compactTargetedValidatorRoleResultSlotKey(request.ExpectedRevision, request.CorrectionTargetIdentity))
 }
 
 // captureAdmittedRoleResult is the common lock, replay, state predicate, and
@@ -220,22 +238,26 @@ func compactRoleResultSlotPath(storeDir string, key compactRoleResultSlotKey) (s
 	if !filepath.IsAbs(storeDir) {
 		return "", errors.New("provider role result store directory is not absolute") // refusal:by-design world-action: compact stores derive this private root from repository authority
 	}
-	switch key.kind {
-	case compactRoleResultSlotLens:
+	contract, err := reviewerprovider.ContractFor(reviewerprovider.Role(key.kind))
+	if err != nil {
+		return "", fmt.Errorf("resolve provider role storage: %w", err)
+	}
+	switch contract.StorageSlot {
+	case "selected-lens":
 		if key.selectedOrder < 0 || !isSupportedLens(key.lens) {
 			return "", errors.New("lens role result slot requires a selected order and lens") // refusal:by-design world-action: only frozen selected-lens authority may address this slot
 		}
 		return filepath.Join(storeDir, CompactReviewerResultsDir, fmt.Sprintf("%02d-%s.json", key.selectedOrder, key.lens)), nil
-	case compactRoleResultSlotRefuter:
+	case "transaction-refuter-batch":
 		return filepath.Join(storeDir, compactRefuterResultsDir, compactRefuterResultFile), nil
-	case compactRoleResultSlotTargetedValidator:
+	case "correction-targeted-validator":
 		if !validSHA256(key.authorityRevision) || !validSHA256(key.targetIdentity) {
 			return "", errors.New("targeted validator role result identity is invalid") // refusal:by-design world-action: only a current correction authority can define a validator slot
 		}
 		return filepath.Join(storeDir, compactTargetedValidatorResultsDir, strings.TrimPrefix(key.targetIdentity, "sha256:"),
 			strings.TrimPrefix(key.authorityRevision, "sha256:"), compactTargetedValidatorResultFile), nil
 	default:
-		return "", errors.New("provider role result slot kind is unsupported") // refusal:by-design world-action: every role must have a compiled storage binding
+		return "", fmt.Errorf("provider role %q has unsupported storage binding %q", contract.Role, contract.StorageSlot) // refusal:by-design world-action: every role must have a compiled storage binding
 	}
 }
 
