@@ -1289,7 +1289,8 @@ func (m Model) handleKeyPress(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.ModelPicker.Mode == screens.ModePhaseList && keyStr == "backspace" &&
 		len(m.ModelPicker.AvailableIDs) > 0 {
 		rows := screens.ModelPickerRowsForProfile()
-		if m.Cursor < len(rows) && !screens.IsModelPickerSeparatorRow(rows[m.Cursor]) {
+		row, ok := screens.ModelPickerRowAt(m.ModelPicker, m.Cursor)
+		if m.Cursor < len(rows) && ok && row.Kind != screens.ModelPickerRowKindSeparator {
 			m.ModelPicker.SelectedPhaseIdx = m.Cursor
 			m.Selection.ModelAssignments = screens.ClearModelPickerAssignment(&m.ModelPicker, m.Selection.ModelAssignments)
 			return m, nil
@@ -1662,11 +1663,8 @@ func (m Model) shouldSkipModelPickerSeparator() bool {
 }
 
 func (m Model) isModelPickerSeparatorCursor() bool {
-	rows := screens.ModelPickerRows()
-	if m.ModelPicker.ForProfile {
-		rows = screens.ModelPickerRowsForProfile()
-	}
-	return m.Cursor >= 0 && m.Cursor < len(rows) && screens.IsModelPickerSeparatorRow(rows[m.Cursor])
+	row, ok := screens.ModelPickerRowAt(m.ModelPicker, m.Cursor)
+	return ok && row.Kind == screens.ModelPickerRowKindSeparator
 }
 
 func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
@@ -2225,10 +2223,10 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		}
-		rows := screens.ModelPickerRows()
+		rows := screens.ModelPickerRowsForState(m.ModelPicker)
 		if m.Cursor < len(rows) {
 			// Skip separator row — it is not actionable.
-			if screens.IsModelPickerSeparatorRow(rows[m.Cursor]) {
+			if row, ok := screens.ModelPickerRowAt(m.ModelPicker, m.Cursor); ok && row.Kind == screens.ModelPickerRowKindSeparator {
 				return m, nil
 			}
 			// Enter sub-selection: pick provider then model.
@@ -2942,6 +2940,7 @@ func runCommunityToolCommand(name string, args ...string) error {
 
 func executeExternalCommand(commandFn func(string, ...string) *exec.Cmd, name string, args ...string) error {
 	cmd := commandFn(name, args...)
+	system.EnsureCommandDir(cmd)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		if len(output) > 0 {
@@ -3620,7 +3619,7 @@ func (m Model) optionCount() int {
 		if len(m.ModelPicker.AvailableIDs) == 0 {
 			return 2 // Continue with defaults + Back
 		}
-		return len(screens.ModelPickerRows()) + 2 // rows + Continue + Back
+		return len(screens.ModelPickerRowsForState(m.ModelPicker)) + 2 // rows + Continue + Back
 	case ScreenDependencyTree:
 		if m.Selection.Preset == model.PresetCustom {
 			return len(screens.AllComponents()) + len(screens.DependencyTreeOptions())
@@ -4620,7 +4619,7 @@ func (m Model) confirmProfileCreate() (tea.Model, tea.Cmd) {
 		}
 		rows := screens.ModelPickerRowsForProfile()
 		if m.Cursor < len(rows) {
-			if screens.IsModelPickerSeparatorRow(rows[m.Cursor]) {
+			if row, ok := screens.ModelPickerRowAt(m.ModelPicker, m.Cursor); ok && row.Kind == screens.ModelPickerRowKindSeparator {
 				return m, nil
 			}
 			// Enter sub-selection: pick provider then model.

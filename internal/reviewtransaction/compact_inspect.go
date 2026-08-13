@@ -9,12 +9,20 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+
+	"github.com/gentleman-programming/gentle-ai/v2/internal/pathquote"
 )
 
 const (
 	compactInspectionEntryMissing    = "missing_compact_state"
 	compactInspectionEntryUnreadable = "unreadable_compact_state"
 	compactInspectionEntryMalformed  = "malformed_compact_state"
+	// compactInspectionEntryOutdated classifies a record whose bytes parse
+	// intact but whose frozen snapshot identity was computed by an earlier
+	// release's retired formula (#2743). It is historical, not damaged:
+	// gate-invalid under the clean-break policy, preserved unrewritten for
+	// forensics, and never a verdict on any other lineage.
+	compactInspectionEntryOutdated   = "outdated_compact_state"
 	compactInspectionEntryUnexpected = "unexpected_authority_root_entry"
 )
 
@@ -24,6 +32,7 @@ type CompactRecoveryInspectionReport struct {
 	Totals           CompactRecoveryInspectionTotals  `json:"totals"`
 	Edges            []CompactRecoveryEdgeInspection  `json:"edges"`
 	EntryDiagnostics []CompactRecoveryEntryDiagnostic `json:"entry_diagnostics"`
+	historical       map[string]historicalCompactForensicRecord
 }
 type CompactRecoveryInspectionTotals struct {
 	CompactEntries   int `json:"compact_entries"`
@@ -37,14 +46,24 @@ type CompactRecoveryInspectionTotals struct {
 // The closed vocabulary of operations that admit one invalid recovery edge.
 // An empty operation means no advertised surface accepts the edge, and the
 // exit then carries Blocked instead.
+//
+// CompactRecoveryEdgeExitReconcile ("review reconcile-authority") retired in
+// Wave 7 S3a along with the verb it named: reconciliation's two anomaly
+// classes (unchanged_target, malformed_recovery_authorization) have no
+// surviving admitting operation — `review repair`'s disposition machinery
+// covers only the disjoint content_mismatched_recovery_authorization class
+// (authority_disposition_plan.go), never reconciliation's own two. An edge
+// classified into either of reconciliation's classes now falls through to
+// Blocked, honestly: the operation that used to admit it no longer exists,
+// and naming a dead command is worse than naming none (design decision 2,
+// rdd-legacy-retirement).
 const (
-	CompactRecoveryEdgeExitReconcile = "review reconcile-authority"
-	CompactRecoveryEdgeExitAbandon   = "review abandon"
+	CompactRecoveryEdgeExitAbandon = "review abandon"
 	// CompactRecoveryEdgeExitRepair names the existing `review repair` verb
 	// (Wave 2 Slice S3, rdd-authority-disposition-plan) as the sanctioned exit
 	// for a closed content_mismatched_recovery_authorization leaf: derivation
 	// (deriveAuthorityDispositionPlanAtRepo) and leaf admission
-	// (admitLeafDisposition) both accept the edge, so the operation this names
+	// (admitClosureDisposition) both accept the edge, so the operation this names
 	// will actually run. Unlike CompactRecoveryEdgeExitAbandon, this is never
 	// gated on the successor's pristine state — quarantine byte-preserves the
 	// whole entry, so nothing captured is discarded.
@@ -110,7 +129,7 @@ func InspectCompactRecoveryEdges(ctx context.Context, repo string) (CompactRecov
 // down one level with InspectCompactRecoveryEdges left as a thin wrapper: no
 // inspection semantics or JSON output changed by this extraction.
 var loadCompactRecoveryRecords = func(ctx context.Context, repo string) (CompactRecoveryInspectionReport, map[string]CompactRecord, error) {
-	report := CompactRecoveryInspectionReport{Complete: true, Valid: true, Edges: []CompactRecoveryEdgeInspection{}, EntryDiagnostics: []CompactRecoveryEntryDiagnostic{}}
+	report := CompactRecoveryInspectionReport{Complete: true, Valid: true, Edges: []CompactRecoveryEdgeInspection{}, EntryDiagnostics: []CompactRecoveryEntryDiagnostic{}, historical: map[string]historicalCompactForensicRecord{}}
 	base, root, err := reviewAuthorityRoot(ctx, repo)
 	if err != nil {
 		return report, nil, err
@@ -144,6 +163,11 @@ var loadCompactRecoveryRecords = func(ctx context.Context, repo string) (Compact
 			lockPath: filepath.Join(versionRoot, "LOCK"), maintenanceLockPath: compactMaintenanceLockPath(base)}
 		record, loadErr := store.Load()
 		if loadErr != nil {
+			if payload, err := os.ReadFile(store.StatePath()); err == nil {
+				if historical, ok := forensicHistoricalCompactRecord(payload, entry.Name()); ok {
+					report.historical[entry.Name()] = historical
+				}
+			}
 			report.EntryDiagnostics = append(report.EntryDiagnostics, CompactRecoveryEntryDiagnostic{
 				LineageID: entry.Name(), Problem: compactRecoveryEntryProblem(loadErr),
 			})
@@ -161,12 +185,18 @@ var loadCompactRecoveryRecords = func(ctx context.Context, repo string) (Compact
 // read-only, takes no lock, and is the operator-facing companion to the
 // inspection rather than part of its binding identity.
 //
-// An edge reconciliation already classified into an anomaly class is
-// reconcilable by construction. Everything else — corrupt authorizations,
-// forks, cycles, dangling predecessors — is offered `review abandon` only when
-// the abandonment gate's own read-only prediction accepts the successor, so
-// this surface can never advertise a continuation that would then refuse.
-// When neither answers, the exit says so and names the diagnostic instead of a
+// Before Wave 7 S3a, an edge reconciliation classified into an anomaly class
+// (edge.AnomalyClasses non-empty) took `review reconcile-authority`
+// unconditionally, ahead of every other check. That verb retired with no
+// replacement (its two classes, unchanged_target and
+// malformed_recovery_authorization, are disjoint from `review repair`'s own
+// closed content_mismatched_recovery_authorization class) — an
+// anomaly-classified edge now falls through to the SAME eligibility checks
+// every other invalid edge does: `review abandon` only when the abandonment
+// gate's own read-only prediction accepts the successor, `review repair`
+// only for the disjoint disposition-plan class, and otherwise Blocked. This
+// surface can never advertise a continuation that would then refuse. When
+// nothing answers, the exit says so and names the diagnostic instead of a
 // command that would not resolve the block.
 func SanctionedCompactRecoveryExits(ctx context.Context, repo string, report CompactRecoveryInspectionReport) ([]CompactRecoverySanctionedExit, error) {
 	exits := []CompactRecoverySanctionedExit{}
@@ -174,16 +204,21 @@ func SanctionedCompactRecoveryExits(ctx context.Context, repo string, report Com
 	if err != nil {
 		return nil, err
 	}
-	// dispositionSeed names the one leaf successor (if any) whose closed
+	// dispositionSeed names the one seed successor (if any) whose closed
 	// content-mismatch classification both derives an AuthorityDispositionPlan
-	// and admits as a cardinality-one leaf. A derivation refusal (no eligible
-	// edge, more than one, or an incomplete inspection) is not propagated —
+	// and admits through admitClosureDisposition (N=1 leaf or a Wave 6 N>=2
+	// closure). A derivation refusal (no eligible edge, more than one, or an
+	// incomplete inspection) is not propagated —
 	// it just means no edge advertises review repair this round, exactly like
 	// InspectCompactPristineAbandonment's per-edge eligibility below never
 	// aborts the whole exit computation.
 	dispositionSeed := ""
-	if plan, planErr := deriveAuthorityDispositionPlanAtRepo(ctx, repo, "", ""); planErr == nil && admitLeafDisposition(plan) == nil {
-		dispositionSeed = plan.SeedSet[0]
+	if plan, planErr := deriveAuthorityDispositionPlanAtRepo(ctx, repo, "", ""); planErr == nil && admitClosureDisposition(plan) == nil {
+		if plan.AnomalyClass == compactHistoricalSnapshotIdentityClass {
+			exits = append(exits, CompactRecoverySanctionedExit{SuccessorLineageID: plan.SeedSet[0], Operation: CompactRecoveryEdgeExitRepair})
+		} else {
+			dispositionSeed = plan.SeedSet[0]
+		}
 	}
 	for _, edge := range report.Edges {
 		if err := ctx.Err(); err != nil {
@@ -193,34 +228,29 @@ func SanctionedCompactRecoveryExits(ctx context.Context, repo string, report Com
 			continue
 		}
 		exit := CompactRecoverySanctionedExit{SuccessorLineageID: edge.SuccessorLineageID}
+		eligibility, err := InspectCompactPristineAbandonment(ctx, root, edge.SuccessorLineageID)
+		if err != nil {
+			return nil, err
+		}
 		switch {
-		case len(edge.AnomalyClasses) > 0:
-			exit.Operation = CompactRecoveryEdgeExitReconcile
+		case eligibility.Eligible:
+			// A pristine successor already has a sanctioned exit today —
+			// review repair's disposition-plan quarantine is byte-preserving
+			// like abandon, so this ordering does not change what a pristine
+			// forged edge advertises (`otherwise existing Blocked prose
+			// stands unchanged`; abandon is not Blocked prose).
+			exit.Operation = CompactRecoveryEdgeExitAbandon
+		case dispositionSeed != "" && edge.SuccessorLineageID == dispositionSeed:
+			// Only reached once abandon's own prediction refuses — a
+			// non-pristine (captured review or correction data) successor
+			// whose recovery edge closes on the content-mismatch class.
+			// This is #2014's "nothing applies" gap: neither reconcile nor
+			// abandon accepted the edge before Wave 2's disposition plan.
+			exit.Operation = CompactRecoveryEdgeExitRepair
 		default:
-			eligibility, err := InspectCompactPristineAbandonment(ctx, root, edge.SuccessorLineageID)
-			if err != nil {
-				return nil, err
-			}
-			switch {
-			case eligibility.Eligible:
-				// A pristine successor already has a sanctioned exit today —
-				// review repair's disposition-plan quarantine is byte-preserving
-				// like abandon, so this ordering does not change what a pristine
-				// forged edge advertises (`otherwise existing Blocked prose
-				// stands unchanged`; abandon is not Blocked prose).
-				exit.Operation = CompactRecoveryEdgeExitAbandon
-			case dispositionSeed != "" && edge.SuccessorLineageID == dispositionSeed:
-				// Only reached once abandon's own prediction refuses — a
-				// non-pristine (captured review or correction data) successor
-				// whose recovery edge closes on the content-mismatch class.
-				// This is #2014's "nothing applies" gap: neither reconcile nor
-				// abandon accepted the edge before Wave 2's disposition plan.
-				exit.Operation = CompactRecoveryEdgeExitRepair
-			default:
-				exit.Blocked = "no advertised operation admits this edge: reconciliation does not classify it into a supported anomaly class, and `review abandon` does not accept the successor. " +
-					"Nothing quarantines this shape today, so no command clears it and the entry stays exactly as persisted. " +
-					"This report, with non_reconcilable_reason, is the artifact to escalate"
-			}
+			exit.Blocked = "no advertised operation admits this edge: `review abandon` does not accept the successor, and no other operation applies to this anomaly class. " +
+				"Nothing quarantines this shape today, so no command clears it and the entry stays exactly as persisted. " +
+				"This report, with non_reconcilable_reason (or anomaly_classes, for a class reconciliation used to admit before it retired), is the artifact to escalate"
 		}
 		exits = append(exits, exit)
 	}
@@ -239,7 +269,9 @@ func CompactAuthorityDamageKinds(report CompactRecoveryInspectionReport) []strin
 	for _, diagnostic := range report.EntryDiagnostics {
 		switch diagnostic.Problem {
 		case compactInspectionEntryMalformed:
-			kinds = append(kinds, fmt.Sprintf("store entry %q holds a record that does not parse (%s), which an interrupted write leaves behind", diagnostic.LineageID, diagnostic.Problem))
+			kinds = append(kinds, fmt.Sprintf("store entry %q holds a record that does not load (%s): either its bytes do not parse — what an interrupted write leaves behind — or its persisted state is semantically invalid", diagnostic.LineageID, diagnostic.Problem))
+		case compactInspectionEntryOutdated:
+			kinds = append(kinds, fmt.Sprintf("store entry %q holds authority frozen by an earlier release under a retired snapshot-identity formula (%s); it is outdated — gate-invalid, preserved for forensics — not damaged, and it never blocks another lineage's operation", diagnostic.LineageID, diagnostic.Problem))
 		case compactInspectionEntryMissing:
 			kinds = append(kinds, fmt.Sprintf("store entry %q holds no compact state (%s)", diagnostic.LineageID, diagnostic.Problem))
 		case compactInspectionEntryUnreadable:
@@ -254,7 +286,7 @@ func CompactAuthorityDamageKinds(report CompactRecoveryInspectionReport) []strin
 		}
 		switch {
 		case len(edge.AnomalyClasses) > 0:
-			kinds = append(kinds, fmt.Sprintf("the recovery edge onto successor %q classifies as %s, which review reconcile-authority admits", edge.SuccessorLineageID, strings.Join(edge.AnomalyClasses, ",")))
+			kinds = append(kinds, fmt.Sprintf("the recovery edge onto successor %q classifies as %s, an anomaly class no advertised operation admits since reconciliation retired", edge.SuccessorLineageID, strings.Join(edge.AnomalyClasses, ",")))
 		case edge.NonReconcilableReason != "":
 			kinds = append(kinds, edge.NonReconcilableReason)
 		case anyCompactProblemContains(edge.Problems, "missing predecessor"):
@@ -277,11 +309,11 @@ func anyCompactProblemContains(problems []string, fragment string) bool {
 
 // compactStartInvalidGraphRefusal turns the bare invalid-graph refusal REVIEW
 // START used to emit into one that names the sanctioned exit the read-only
-// inspection proves, following the same rule the reconcile refusal follows: a
-// specific operation is named only when the operation's own prediction accepts
-// it, so the command printed never turns around and refuses. When no edge has
-// a sanctioned exit, only the diagnosis is named — naming a dead end is worse
-// than naming nothing.
+// inspection proves, following the same rule SanctionedCompactRecoveryExits
+// itself follows: a specific operation is named only when the operation's own
+// prediction accepts it, so the command printed never turns around and
+// refuses. When no edge has a sanctioned exit, only the diagnosis is named —
+// naming a dead end is worse than naming nothing.
 func compactStartInvalidGraphRefusal(ctx context.Context, repo string, records map[string]CompactRecord, cause error) error {
 	report, inspectErr := inspectCompactRecoveryRecordSet(ctx, records, CompactRecoveryInspectionReport{
 		Complete: true, Valid: true, Edges: []CompactRecoveryEdgeInspection{}, EntryDiagnostics: []CompactRecoveryEntryDiagnostic{},
@@ -303,16 +335,6 @@ func compactStartInvalidGraphRefusal(ctx context.Context, repo string, records m
 			}
 			fmt.Fprintf(&continuation, " Successor %q is pristine, so quarantining it whole clears its graph defect: %s",
 				exit.SuccessorLineageID, compactAbandonCommandText(repo, exit.SuccessorLineageID, eligibility))
-		case CompactRecoveryEdgeExitReconcile:
-			for _, edge := range report.Edges {
-				if edge.SuccessorLineageID != exit.SuccessorLineageID || len(edge.AnomalyClasses) == 0 {
-					continue
-				}
-				fmt.Fprintf(&continuation, " The recovery edge onto successor %q classifies as %s, which reconciliation admits: %s",
-					edge.SuccessorLineageID, strings.Join(edge.AnomalyClasses, ","),
-					compactReconcileCommandText(repo, edge.PredecessorLineageID, edge.ObservedPredecessorRevision, edge.SuccessorLineageID, edge.SuccessorRevision, edge.AnomalyClasses))
-				break
-			}
 		case CompactRecoveryEdgeExitRepair:
 			// Re-derive with the same empty actor/reason `review repair
 			// --preflight` always uses (SanctionedCompactRecoveryExits'
@@ -321,15 +343,15 @@ func compactStartInvalidGraphRefusal(ctx context.Context, repo string, records m
 			// above already follow, so this never advertises a plan whose own
 			// re-derivation would then refuse.
 			plan, planErr := deriveAuthorityDispositionPlanAtRepo(ctx, repo, "", "")
-			if planErr != nil || admitLeafDisposition(plan) != nil || len(plan.SeedSet) != 1 || plan.SeedSet[0] != exit.SuccessorLineageID {
+			if planErr != nil || admitClosureDisposition(plan) != nil || len(plan.SeedSet) != 1 || plan.SeedSet[0] != exit.SuccessorLineageID {
 				continue
 			}
 			fmt.Fprintf(&continuation, " Successor %q closes the content-mismatched-recovery-authorization class, so `review repair` quarantines it whole without discarding its captured review data: %s",
 				exit.SuccessorLineageID, compactRepairCommandText(repo, plan))
 		}
 	}
-	return fmt.Errorf("%v.%s Capture the complete machine-readable diagnosis for every affected lineage with `gentle-ai review inspect-authority --cwd %q`",
-		cause, continuation.String(), repo)
+	return fmt.Errorf("%v.%s Capture the complete machine-readable diagnosis for every affected lineage with `gentle-ai review inspect-authority --cwd %s`",
+		cause, continuation.String(), pathquote.Quote(repo))
 }
 
 // inspectCompactRecoveryRecordSet applies the canonical all-edge inspection to
@@ -415,6 +437,10 @@ func compactRecoveryEntryProblem(err error) string {
 	var pathErr *os.PathError
 	if errors.As(err, &pathErr) {
 		return compactInspectionEntryUnreadable
+	}
+	var semantic *CompactSemanticStateError
+	if errors.As(err, &semantic) && semantic.OutdatedIdentity {
+		return compactInspectionEntryOutdated
 	}
 	return compactInspectionEntryMalformed
 }

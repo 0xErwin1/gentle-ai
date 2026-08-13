@@ -60,6 +60,9 @@ func TestCoordinatorOrchestratorsCarryLosslessBlockingPromptRule(t *testing.T) {
 				"Do not choose, default, infer, launch dependent work, or continue",
 				"Accept an answer only when each response belongs to the exact allowed-answer domain",
 				"free text or multi-select only when the original prompt allowed it",
+				"request for information, not a candidate answer",
+				"answer it directly from the envelope already held",
+				"re-present the complete choice envelope and keep waiting",
 				"invalid or ambiguous",
 				"same blocked actor exactly once",
 			} {
@@ -146,10 +149,12 @@ func TestCoordinatorOrchestratorsCarryGentleAIProviderDefectHandoff(t *testing.T
 		{name: "invalid upstream envelope", text: "reject it as semantically inadmissible and issue this separate orchestrator-owned handoff envelope"},
 		{name: "localized consent", text: "Ask the user first, in the active orchestrator conversation language"},
 		{name: "explicit consent", text: "for explicit consent to report the apparent defect"},
-		{name: "exact choice shape", text: "one single-select blocking envelope with exactly two semantic choices"},
+		{name: "exact choice shape", text: "one single-select blocking envelope with exactly three semantic choices in this order"},
+		{name: "exact answer tokens", text: "`report_and_continue`, `continue_without_reporting`, `stop_here`"},
 		{name: "localized labels", text: "Localize their labels and descriptions without changing these semantics"},
 		{name: "no internal labels", text: "do not expose machine or internal codes in user-facing labels"},
-		{name: "report choice", text: "**Report the Gentle AI defect**: Only after explicit consent and that final privacy scan"},
+		{name: "report and continue choice", text: "**Report the Gentle AI defect and continue**: Only after explicit consent and that final privacy scan"},
+		{name: "continue without reporting choice", text: "**Continue without reporting**: Perform no GitHub search, write, comment, or label, and no report-side privacy scan is required."},
 		{name: "fixed repository", text: "`Gentleman-Programming/gentle-ai`"},
 		{name: "open and closed duplicate search", text: "search open and closed issues"},
 		{name: "create new automated report", text: "create a new automated provider-defect report"},
@@ -168,8 +173,18 @@ func TestCoordinatorOrchestratorsCarryGentleAIProviderDefectHandoff(t *testing.T
 		{name: "no arbitrary retry labeling", text: "Never search and label an arbitrary equivalent/pre-existing issue."},
 		{name: "unproven identity stop", text: "If the exact created issue identity cannot be proven, STOP and require a human decision, with no label or duplicate issue/comment."},
 		{name: "label scope exclusions", text: "Do not apply `gentle-report` to manual issues, #2211, historical issues, pull requests, or reports created by unrelated workflows."},
-		{name: "reported path preserves state", text: "Then STOP with all consumer state preserved"},
-		{name: "stop choice", text: "**Stop here**: Create no GitHub issue or comment, preserve all consumer state, and STOP"},
+		{name: "report ambiguity prevents decline", text: "Any report ambiguity or failure is a hard stop: preserve all consumer state and do not execute the decline invocation."},
+		{name: "report success gates continuation", text: "Only after a definitive successful report outcome, execute the shared candidate-scoped continuation below."},
+		{name: "captured provider decline", text: "exact captured provider-owned `choices[answer=\"declined\"].invocation` from the `gentle-ai.review-integration.consent/v3` envelope"},
+		{name: "captured decline only", text: "Never synthesize the decline command, target, token, or consumer continuation from prose."},
+		{name: "missing decline context fails closed", text: "If the captured exact v3 decline invocation, exact target identity, or consumer continuation context is unavailable or ambiguous, fail closed with all consumer state preserved and do not run a substitute command."},
+		{name: "decline result validation", text: "validate `action: \"declined\"`, `consent: \"declined_this_candidate\"`, and the exact target identity match"},
+		{name: "decline preserves ordinary delivery", text: "The result carries no lineage or receipt; ordinary delivery is unmanaged by the candidate choice, and the next candidate asks again."},
+		{name: "native negotiated status re-entry", text: "re-enter through native negotiated STATUS, then resume the already-held consumer continuation"},
+		{name: "continue paths reuse exact decline", text: "Both continue choices execute that exact captured decline invocation exactly once"},
+		{name: "review mode disable prohibition", text: "Do not invoke `gentle-ai review mode disable` at clone or global scope within this handoff."},
+		{name: "rdd mode preservation", text: "Do not turn RDD off or on within this handoff."},
+		{name: "stop choice", text: "**Stop here**: Perform no GitHub operation and no decline invocation; preserve all consumer state and STOP."},
 		{name: "observed evidence", text: "Report observed evidence, not an unconfirmed root cause"},
 		{name: "sanitized diagnostics", text: "sanitized version/build, OS/architecture/client"},
 		{name: "bounded evidence", text: "bounded attempts and outcomes, failure envelopes, mutation outcome"},
@@ -178,9 +193,10 @@ func TestCoordinatorOrchestratorsCarryGentleAIProviderDefectHandoff(t *testing.T
 		{name: "final privacy scan", text: "Immediately before the first GitHub operation, perform a final privacy scan"},
 		{name: "privacy ordering", text: "This scan precedes the duplicate search, report creation, and occurrence comment"},
 		{name: "privacy exclusions", text: "raw argv, absolute paths, private project names, usernames, hostnames, credentials, diffs, source contents, and environment values"},
-		{name: "released fix only", text: "Resume only after an installed released fix"},
-		{name: "native status re-entry", text: "re-enter through native status"},
-		{name: "no source checkout resume", text: "Never resume against a source checkout or unmerged pull request"},
+		{name: "published fix remains a normal resumption route", text: "an installed published fix"},
+		{name: "installed prerelease qualifies", text: "A published prerelease or release candidate the user installed satisfies this."},
+		{name: "maintainer-authorized native recovery", text: "an explicit maintainer-authorized, documented native recovery or reset that the runtime contract supports"},
+		{name: "no unpublished code resume", text: "Never resume against unpublished code: a source checkout, a local build, or an unmerged pull request"},
 	}
 
 	allPaths := allSDDOrchestratorAssetPaths(t)
@@ -202,8 +218,33 @@ func TestCoordinatorOrchestratorsCarryGentleAIProviderDefectHandoff(t *testing.T
 			if contract != canonical {
 				t.Error("provider-defect handoff differs from the canonical cross-variant block")
 			}
-			if got := len(semanticChoicePattern.FindAllString(contract, -1)); got != 2 {
-				t.Errorf("provider-defect handoff has %d numbered semantic choices; want exactly 2", got)
+			choiceMatches := semanticChoicePattern.FindAllString(contract, -1)
+			if got := len(choiceMatches); got != 3 {
+				t.Errorf("provider-defect handoff has %d numbered semantic choices; want exactly 3", got)
+			}
+			for index, choice := range []string{
+				"  1. **Report the Gentle AI defect and continue**:",
+				"  2. **Continue without reporting**:",
+				"  3. **Stop here**:",
+			} {
+				if index >= len(choiceMatches) {
+					t.Errorf("provider-defect handoff is missing semantic choice %d: %q", index+1, choice)
+					continue
+				}
+				if choiceMatches[index] != choice {
+					t.Errorf("provider-defect handoff semantic choice %d = %q, want %q", index+1, choiceMatches[index], choice)
+				}
+			}
+			lastTokenIndex := -1
+			for _, token := range []string{"report_and_continue", "continue_without_reporting", "stop_here"} {
+				tokenIndex := strings.Index(contract, "`"+token+"`")
+				if tokenIndex < 0 || tokenIndex <= lastTokenIndex {
+					t.Errorf("provider-defect handoff answer token %q is missing or out of order", token)
+				}
+				if count := strings.Count(contract, "`"+token+"`"); count != 1 {
+					t.Errorf("provider-defect handoff answer token %q appears %d times; want exactly once", token, count)
+				}
+				lastTokenIndex = tokenIndex
 			}
 			for _, requirement := range requirements {
 				t.Run(requirement.name, func(t *testing.T) {
@@ -211,6 +252,16 @@ func TestCoordinatorOrchestratorsCarryGentleAIProviderDefectHandoff(t *testing.T
 						t.Errorf("provider-defect handoff missing %q", requirement.text)
 					}
 				})
+			}
+			for _, prohibited := range []string{
+				"Resume only after an installed published fix",
+			} {
+				if strings.Contains(contract, prohibited) {
+					t.Errorf("provider-defect handoff must not make published fixes the only resumption route: %q", prohibited)
+				}
+			}
+			if count := strings.Count(contract, "gentle-ai review mode disable"); count != 1 {
+				t.Errorf("provider-defect handoff mentions review mode disable %d times; want exactly its prohibition", count)
 			}
 			for _, invariant := range []struct {
 				name   string
@@ -278,6 +329,68 @@ func TestCoordinatorOrchestratorsCarryGentleAIProviderDefectHandoff(t *testing.T
 	}
 }
 
+// TestCoordinatorOrchestratorsCarrySDDEditAuthorityConsentRelay is #2570's
+// (S6 of #2540) guard: every orchestrator variant teaches the lossless relay
+// of the typed SDD edit-authority consent envelope that native status emits
+// on blocked(edit_authority_missing) (#2563), byte-identical across variants
+// like the provider-defect handoff above.
+func TestCoordinatorOrchestratorsCarrySDDEditAuthorityConsentRelay(t *testing.T) {
+	requirements := []string{
+		"When native SDD status reports `blocked(edit_authority_missing)`",
+		"typed `gentle-ai.sdd-integration.consent/v1` envelope",
+		"optional `consent` block",
+		"Treat that envelope as a Lossless Blocking Prompt under this contract",
+		"same discipline as the review consent relay",
+		"Present the complete envelope once in the active conversation language",
+		"faithfully translate the headline, reason, `value`, the missing-root evidence, choice labels, every choice `effect`, and the off-path note",
+		"preserving the original choices, order, selection mode, exact allowed-answer domain, and answer tokens",
+		"Never translate or alter the machine answer tokens (`granted`, `declined`), commands, paths, or invocations",
+		"Never summarize, reshape, reorder, merge, or omit any part",
+		"never answer on the human's behalf and never run the grant unprompted",
+		"Only after the human's explicit `granted` answer",
+		"execute the envelope's exact grant invocation verbatim, exactly once",
+		"then re-enter through native status",
+		"granted roots project into `allowedEditRoots`",
+		"per-change, audited, and dies with archive",
+		"run the envelope's decline invocation",
+		"nothing is persisted",
+		"names both exits",
+		"edit tasks.md so every work unit stays inside the authorized edit roots, or grant this change edit authority",
+		"A blocked status without a `consent` block names the same two exits; relay them and stop.",
+	}
+
+	for _, path := range allSDDOrchestratorAssetPaths(t) {
+		t.Run(path, func(t *testing.T) {
+			contract := sddConsentRelaySection(t, path)
+			if canonical := sddConsentRelaySection(t, providerDefectHandoffCanonicalPath); contract != canonical {
+				t.Error("SDD edit-authority consent relay differs from the canonical cross-variant block")
+			}
+			for _, required := range requirements {
+				if !strings.Contains(contract, required) {
+					t.Errorf("SDD edit-authority consent relay missing %q", required)
+				}
+			}
+		})
+	}
+}
+
+func sddConsentRelaySection(t *testing.T, path string) string {
+	t.Helper()
+	const heading = "#### SDD Edit-Authority Consent Relay (MANDATORY)"
+	content := MustRead(path)
+	start := strings.Index(content, heading)
+	if start == -1 {
+		t.Fatalf("%s missing %q", path, heading)
+	}
+	contract := content[start:]
+	const endMarker = "A blocked status without a `consent` block names the same two exits; relay them and stop."
+	end := strings.Index(contract, endMarker)
+	if end == -1 {
+		t.Fatalf("%s SDD edit-authority consent relay missing terminal boundary", path)
+	}
+	return strings.TrimSpace(contract[:end+len(endMarker)])
+}
+
 func providerDefectHandoffLine(t *testing.T, contract, prefix string) string {
 	t.Helper()
 	start := strings.Index(contract, prefix)
@@ -300,7 +413,7 @@ func providerDefectHandoffSection(t *testing.T, path string) string {
 		t.Fatalf("%s missing %q", path, heading)
 	}
 	contract := content[start:]
-	const endMarker = "Never resume against a source checkout or unmerged pull request."
+	const endMarker = "Never resume against unpublished code: a source checkout, a local build, or an unmerged pull request."
 	end := strings.Index(contract, endMarker)
 	if end == -1 {
 		t.Fatalf("%s provider-defect handoff missing terminal release boundary", path)
