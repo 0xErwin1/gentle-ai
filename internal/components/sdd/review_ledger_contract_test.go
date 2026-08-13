@@ -347,7 +347,15 @@ func TestKilocodeReviewSettingsMatchCurrentMainBaseline(t *testing.T) {
 	// phase result never dispatches, so the orchestrator must not read the
 	// replayed envelope as a fresh attempt. Kilocode embeds that orchestrator
 	// contract, so the hash moved. Deliberate, not drift.
-	const want = "ef8f2a833e8d0757a6967c8ebef0625e9a33716167c7490fdd67d5184f9f35b6"
+	// #3102 adds the empty_base_diff_bootstrap_required STOP continuation to
+	// the shared contract. Kilocode embeds that contract, so the hash moved.
+	// #2773 adds the lens_context_budget_exceeded STOP continuation. Kilocode
+	// embeds that contract, so the hash moved.
+	// #2492 adds the "Terminal — " marker to the 12 terminal rows of the
+	// shipped stop-reason table, so the invariant guard can cross-check the
+	// contract consumers receive instead of only the docs copy. Kilocode
+	// embeds that contract, so the hash moved. Deliberate, not drift.
+	const want = "16cdb2d2e890cb5e19281e93fd2a3b80c68651d05c9752c4be3ec794f9882874"
 	if got != want {
 		t.Fatalf("Kilocode settings SHA-256 = %s, want current-main baseline %s", got, want)
 	}
@@ -578,8 +586,16 @@ func TestOpenCodeRenderedReviewProtocolCost(t *testing.T) {
 		// which is the direction this table exists to protect.
 		// #2758 adds one staged-delivery STOP continuation (383 rendered
 		// characters per row). The ceilings preserve the required 15% headroom.
-		{name: "standard", agents: []string{"review-reliability"}, beforeChars: 42_301, wantChars: 21_261, maxCharacters: 24_500},
-		{name: "full-4R", agents: []string{"review-risk", "review-resilience", "review-readability", "review-reliability"}, beforeChars: 106_998, wantChars: 33_606, maxCharacters: 38_700},
+		// #3102 adds one empty-base-diff bootstrap STOP continuation (448 rendered
+		// characters per row). The ceilings preserve the required 15% headroom.
+		// #2773 adds one lens-context-budget terminal continuation (379 rendered
+		// characters per row). The ceilings preserve the required 15% headroom.
+		// #2492: the 12 terminal rows of the shipped stop-reason table gained
+		// the "Terminal — " marker so the invariant guard can cross-check the
+		// contract itself (+132 characters in both renderings, ~33 tokens,
+		// still over 15% headroom). Deliberate, not drift.
+		{name: "standard", agents: []string{"review-reliability"}, beforeChars: 42_301, wantChars: 22_220, maxCharacters: 26_000},
+		{name: "full-4R", agents: []string{"review-risk", "review-resilience", "review-readability", "review-reliability"}, beforeChars: 106_998, wantChars: 34_565, maxCharacters: 41_000},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
