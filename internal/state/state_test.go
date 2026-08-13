@@ -11,7 +11,39 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
 )
 
-// TestMergeAgents verifies that MergeAgents appends new agents to existing
+// TestWriteReconciledAcceptsDesiredStateVisibleAfterWriteError verifies that
+// a persistence error is reconciled against the bytes visible on disk.
+func TestWriteReconciledAcceptsDesiredStateVisibleAfterWriteError(t *testing.T) {
+	home := t.TempDir()
+	desired := InstallState{InstalledAgents: []string{"opencode"}}
+	if err := Write(home, desired); err != nil {
+		t.Fatal(err)
+	}
+	statePath := Path(home)
+	data, err := os.ReadFile(statePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(home, ".gentle-ai", "persisted-state.json")
+	if err := os.Rename(statePath, target); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, statePath); err != nil {
+		t.Skipf("state symlink unavailable: %v", err)
+	}
+
+	if err := WriteReconciled(home, desired); err != nil {
+		t.Fatalf("WriteReconciled() error = %v", err)
+	}
+	visible, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(visible) != string(data) {
+		t.Fatalf("visible state changed:\n got %s\nwant %s", visible, data)
+	}
+}
+
 // installed_agents with deduplication and preserves all other fields.
 func TestMergeAgents(t *testing.T) {
 	existingAssignments := map[string]ModelAssignmentState{
