@@ -58,6 +58,7 @@ internal/installcmd/resolver.go	validateGoForModuleInstall
 internal/installcmd/testhelper.go	OverrideGetenv
 internal/installcmd/testhelper.go	OverrideGoVersion
 internal/installcmd/testhelper.go	OverrideLookPath
+internal/reviewerprovider/runtimes.go	RegisteredRuntimeIdentities
 internal/reviewtransaction/authority_repair.go	AssessAuthorityRepair
 internal/reviewtransaction/candidate_decline.go	CandidateDeclineAuthorization.validate
 internal/reviewtransaction/candidate_decline.go	candidateDeclineDigest

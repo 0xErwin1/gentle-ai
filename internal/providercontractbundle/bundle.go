@@ -64,6 +64,7 @@ type manifest struct {
 	Schema              string         `json:"schema"`
 	ContractSemver      string         `json:"contract_semver"`
 	TransportCapability string         `json:"transport_capability"`
+	Runtimes            []string       `json:"runtimes"`
 	README              fileReference  `json:"readme"`
 	Roles               []roleManifest `json:"roles"`
 }
@@ -76,7 +77,8 @@ This data-only bundle describes the provider result contracts admitted by Gentle
 
 1. Verify the signed release checksum manifest before using this archive.
 2. Verify every listed file hash and the transport capability before activation.
-3. Pass the Go-materialized opaque prompt to the provider and return only raw output or an error.
+3. Confirm your runtime identity appears in the manifest's registered runtimes before trusting the layout.
+4. Pass the Go-materialized opaque prompt to the provider and return only raw output or an error.
 
 Go remains the admission authority for prompts, results, receipts, and delivery gates.
 `)
@@ -156,6 +158,7 @@ func generatedFiles(contractSemver string) (map[string][]byte, error) {
 		Schema:              bundleSchema,
 		ContractSemver:      contractSemver,
 		TransportCapability: reviewerprovider.TransportCapability,
+		Runtimes:            reviewerprovider.RegisteredRuntimeIdentities(),
 		README:              fileReference{Path: "README.md", SHA256: hash(files["README.md"])},
 		Roles:               roles,
 	}, "", "  ")
@@ -398,6 +401,9 @@ func validateEntries(entries map[string][]byte) error {
 	}
 	if decoded.Schema != bundleSchema || !contractSemverPattern.MatchString(decoded.ContractSemver) || decoded.TransportCapability != reviewerprovider.TransportCapability {
 		return fmt.Errorf("%w: manifest identity is unsupported", errInvalidBundle)
+	}
+	if !slices.Equal(decoded.Runtimes, reviewerprovider.RegisteredRuntimeIdentities()) {
+		return fmt.Errorf("%w: manifest runtime inventory does not match the registered runtime identities", errInvalidBundle)
 	}
 	contracts, err := canonicalContracts()
 	if err != nil {

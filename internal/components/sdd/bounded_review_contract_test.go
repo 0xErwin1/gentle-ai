@@ -97,7 +97,7 @@ func TestBoundedReviewContractRequiresRuntimeBoundReviewerContext(t *testing.T) 
 	for _, want := range []string{
 		"The active host/orchestrator and fresh reviewer executor are distinct roles",
 		"Prompt prose coordinates launch; it never proves isolation",
-		"Claude Code, OpenCode, and Codex advertise immutable reviewer execution",
+		"Claude Code, OpenCode, Codex, and Pi advertise immutable reviewer execution",
 		"Claude's generated reviewer has no live tools",
 		"OpenCode relays one host Task through one live Go transport process",
 		"Codex launches a provider-bound `codex exec` process",

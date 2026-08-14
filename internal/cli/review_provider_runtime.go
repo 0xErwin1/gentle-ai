@@ -34,6 +34,8 @@ var reviewProviderAdapterFor = func(contract reviewerprovider.Contract, agent mo
 		return reviewerprovider.NewCodexAdapter(), nil
 	case model.AgentOpenCode:
 		return nil, fmt.Errorf("reviewer provider runtime %q is host-mediated; launch the provider-issued OpenCode reviewer task", agent) // refusal:by-design world-action: OpenCode must relay through its ordinary managed host
+	case model.AgentPi:
+		return nil, fmt.Errorf("reviewer provider runtime %q is host-mediated; launch the provider-issued Pi reviewer task", agent) // refusal:by-design world-action: Pi's launcher lives in gentle-pi and relays the Go-issued opaque task
 	default:
 		return nil, fmt.Errorf("reviewer provider runtime %q has no registered adapter", agent) // refusal:by-design world-action: immutable reviewer execution requires a compiled adapter binding
 	}
