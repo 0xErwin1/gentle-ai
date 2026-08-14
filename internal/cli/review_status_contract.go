@@ -701,6 +701,31 @@ func (result ReviewTargetStatusResult) validateSubmissionDescriptors() error {
 			return errors.New("submission descriptor transition must contain exactly one input") // refusal:by-design world-action: only a provider code fix can produce the required single input
 		}
 		input := transition.Collect.Inputs[0]
+		if input.CaptureOperation == "external.run_provider_role" {
+			// The OpenCode host-mediated form: a Go-issued provider validator
+			// task whose exact binding validateReviewProviderTaskInput above
+			// already verified. It carries no submission descriptor. Before
+			// this branch existed, STATUS refused the very transition it had
+			// just rendered for OpenCode and answered operation_failed.
+			if input.ProviderTask == nil || input.Submission != nil {
+				return errors.New("targeted validation submission descriptor has no provider request") // refusal:by-design world-action: only a provider code fix can bind the validation request
+			}
+			return nil
+		}
+		if input.CaptureOperation == reviewCaptureValidationCaptureOperation {
+			// The pi host-relay form: a self-contained executable vector with
+			// no submission descriptor; bind it here to this exact authority
+			// and its frozen validation request.
+			arguments, err := reviewTransitionArgumentMap(input.Arguments)
+			if err != nil || result.Authority == nil || result.ValidationRequest == nil || input.Submission != nil ||
+				!reviewProviderHostRelayMaterializeRuntime(model.AgentID(arguments["agent"])) ||
+				arguments["lineage"] != result.Authority.LineageID || arguments["expected-revision"] != result.Authority.Revision ||
+				arguments["target"] != result.ValidationRequest.CorrectionTargetIdentity ||
+				arguments["request-hash"] != result.ValidationRequest.RequestHash {
+				return errors.New("targeted validation submission descriptor has no provider request") // refusal:by-design world-action: only a provider code fix can bind the validation request
+			}
+			return nil
+		}
 		if input.CaptureOperation != "external.run_targeted_validation" || result.Authority == nil || result.ValidationRequest == nil || input.Submission == nil {
 			return errors.New("targeted validation submission descriptor has no provider request") // refusal:by-design world-action: only a provider code fix can bind the validation request
 		}
@@ -722,7 +747,7 @@ func (result ReviewTargetStatusResult) validateSubmissionDescriptors() error {
 		if want == nil || !reflect.DeepEqual(*input.Submission, *want) {
 			return errors.New("targeted validation submission descriptor is not provider-bound") // refusal:by-design world-action: only a provider code fix can bind descriptor tokens to its request
 		}
-	case "reviewer_results_required":
+	case "reviewer_results_required", "provider_refuter_required":
 		// Only the pi host-relay capture input carries a submission: its
 		// materialize arguments are a non-advancing prelude, so the --input
 		// descriptor is what advances authority. Transition.Validate() above
@@ -1263,6 +1288,36 @@ func (transition ReviewNextTransition) Validate() error {
 			} else if input.ArtifactSubject != nil || input.CandidateDiff != nil || input.BaseTree != "" || input.CandidateTree != "" || input.ChangedPathManifest != nil {
 				return errors.New("non-reviewer collection transition contains frozen reviewer context")
 			}
+			if input.CaptureOperation == reviewCaptureRefuterCaptureOperation || input.CaptureOperation == reviewCaptureValidationCaptureOperation {
+				// A pi host-relay role capture input is a self-contained
+				// executable vector: exactly the binding arguments plus
+				// --agent and --execute=true. Go materializes the role
+				// request, spawns its own locked-down pi process, and admits
+				// the raw bytes, so no submission descriptor may exist for a
+				// caller to author a verdict through.
+				providerRuntime := model.AgentID(arguments["agent"])
+				argumentCount, schema := 6, reviewRefuterSchemaID
+				if input.CaptureOperation == reviewCaptureValidationCaptureOperation {
+					argumentCount, schema = 7, reviewValidatorSchemaID
+				}
+				// Fail closed on the argument count BEFORE any arithmetic over
+				// it: a hostile envelope with a truncated (or empty) argument
+				// vector must produce this refusal, never a panic.
+				if len(input.Arguments) != argumentCount || len(arguments) != argumentCount {
+					return errors.New("provider role capture transition lacks an exact host-relay binding") // refusal:by-design world-action: only a provider code fix can make the rendered transition advance authority
+				}
+				if input.CaptureOperation == reviewCaptureValidationCaptureOperation &&
+					(input.ValidationRequest == nil || arguments["request-hash"] != input.ValidationRequest.RequestHash) {
+					return errors.New("provider validation capture transition lacks its frozen request binding") // refusal:by-design world-action: only STATUS can bind the frozen correction request
+				}
+				if input.Schema != schema ||
+					!reviewProviderHostRelayMaterializeRuntime(providerRuntime) || arguments["execute"] != "true" ||
+					strings.TrimSpace(arguments["lineage"]) == "" || !validReviewCapabilitySHA256(arguments["expected-revision"]) ||
+					!validReviewCapabilitySHA256(arguments["target"]) || reviewtransaction.ValidateReviewRepositoryContextHandle(arguments["repository-context"]) != nil ||
+					input.Submission != nil {
+					return errors.New("provider role capture transition lacks an exact host-relay binding") // refusal:by-design world-action: only a provider code fix can make the rendered transition advance authority
+				}
+			}
 			if input.CaptureOperation == "review.capture-evidence" &&
 				((input.Schema != reviewtransaction.VerificationEvidenceRecordSchema || len(arguments) != 3) &&
 					(input.Schema != reviewVerificationEvidenceSchemaID || len(arguments) != 4 ||
@@ -1276,7 +1331,9 @@ func (transition ReviewNextTransition) Validate() error {
 			}
 			if input.ValidationRequest != nil {
 				request := input.ValidationRequest
-				if input.Schema != reviewtransaction.TargetedValidationRequestSchema || input.CaptureOperation != "external.run_targeted_validation" ||
+				externalForm := input.CaptureOperation == "external.run_targeted_validation" && input.Schema == reviewtransaction.TargetedValidationRequestSchema
+				hostRelayForm := input.CaptureOperation == reviewCaptureValidationCaptureOperation
+				if !externalForm && !hostRelayForm ||
 					arguments["lineage"] != request.LineageID || arguments["expected-revision"] != request.ExpectedRevision ||
 					arguments["target"] != request.CorrectionTargetIdentity || reviewtransaction.ValidateTargetedValidationRequest(*request) != nil {
 					return errors.New("targeted validation transition request is invalid")

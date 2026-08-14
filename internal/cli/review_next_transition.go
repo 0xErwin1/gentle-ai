@@ -226,7 +226,7 @@ func newReviewNextTransition(status ReviewTargetStatusResult, selectedLenses []s
 			return reviewMissingCaptureTransition(binding, selectedLenses, artifacts, input.CaptureContext, input.RuntimeAgent)
 		}
 		if input.ProviderRole == reviewerprovider.RoleRefuter {
-			return reviewProviderRoleTransition("provider_refuter_required", binding, input.ProviderRole)
+			return reviewProviderRoleTransition("provider_refuter_required", binding, input.ProviderRole, input.RuntimeAgent, nil)
 		}
 		arguments := []ReviewTransitionArgument{
 			{Name: "lineage", Value: binding.LineageID}, {Name: "captured_results", Value: "true"},
@@ -255,7 +255,7 @@ func newReviewNextTransition(status ReviewTargetStatusResult, selectedLenses []s
 				return reviewCollectTransition("correction_repository_verification_required", reviewCaptureEvidenceInput(input.Contract, validationBinding))
 			}
 			if input.ProviderRole == reviewerprovider.RoleTargetedValidator {
-				return reviewProviderRoleTransition("targeted_validation_required", validationBinding, input.ProviderRole)
+				return reviewProviderRoleTransition("targeted_validation_required", validationBinding, input.ProviderRole, input.RuntimeAgent, input.ValidationRequest)
 			}
 			if capturedEvidence == nil {
 				return reviewCollectTransition("correction_repository_verification_required", reviewCaptureEvidenceInput(input.Contract, validationBinding))
@@ -394,7 +394,14 @@ func newReviewNextTransition(status ReviewTargetStatusResult, selectedLenses []s
 	}
 }
 
-func reviewProviderRoleTransition(reason string, binding ReviewTransitionBinding, role reviewProviderRole) ReviewNextTransition {
+func reviewProviderRoleTransition(reason string, binding ReviewTransitionBinding, role reviewProviderRole, runtime model.AgentID, validation *reviewtransaction.TargetedValidationRequest) ReviewNextTransition {
+	if reviewProviderHostRelayMaterializeRuntime(runtime) {
+		input, err := reviewProviderHostRelayRoleInput(binding, role, runtime, validation)
+		if err != nil {
+			return reviewStopTransition("captured_artifacts_unverifiable")
+		}
+		return reviewCollectTransition(reason, input)
+	}
 	task, err := newReviewProviderTask(role, binding)
 	if err != nil {
 		return reviewStopTransition("captured_artifacts_unverifiable")
@@ -407,6 +414,49 @@ func reviewProviderRoleTransition(reason string, binding ReviewTransitionBinding
 			ReviewTransitionArgument{Name: "role", Value: string(role)}),
 		ProviderTask: &task,
 	})
+}
+
+// reviewCaptureRefuterCaptureOperation and its validation twin name the two
+// native non-lens role capture operations the pi host relay collects through.
+// Like reviewCaptureResultCaptureOperation they are the single wording source:
+// the collect transition, its submission operation token, and the runnable
+// CLI verb all derive from the same constants.
+const (
+	reviewCaptureRefuterCaptureOperation    = "review.capture-refuter"
+	reviewCaptureValidationCaptureOperation = "review.capture-validation"
+)
+
+// reviewProviderHostRelayRoleInput renders the one pi host-relay collection
+// input for a Go-issued non-lens provider role. The vector is self-contained:
+// its --execute form materializes the role request in Go, runs the Go-owned
+// locked-down pi process on it, and admits the raw bytes -- so the rendered
+// arguments themselves advance authority and no submission descriptor exists
+// for a caller to author a verdict through.
+func reviewProviderHostRelayRoleInput(binding ReviewTransitionBinding, role reviewProviderRole, runtime model.AgentID, validation *reviewtransaction.TargetedValidationRequest) (ReviewTransitionInput, error) {
+	if binding.LineageID == "" || !providerSHA256(binding.Revision) || !providerSHA256(binding.TargetIdentity) ||
+		reviewtransaction.ValidateReviewRepositoryContextHandle(binding.RepositoryContext) != nil {
+		return ReviewTransitionInput{}, errors.New("provider role host-relay binding is incomplete") // refusal:by-design world-action: only a Go-issued STATUS transition may bind a host-relay provider role input
+	}
+	arguments := append(reviewBindingArguments(binding),
+		ReviewTransitionArgument{Name: "repository-context", Value: binding.RepositoryContext})
+	input := ReviewTransitionInput{Name: "provider_" + string(role)}
+	switch role {
+	case reviewerprovider.RoleRefuter:
+		input.Schema, input.CaptureOperation = reviewRefuterSchemaID, reviewCaptureRefuterCaptureOperation
+	case reviewerprovider.RoleTargetedValidator:
+		if validation == nil {
+			return ReviewTransitionInput{}, errors.New("provider targeted validator host-relay input requires the frozen validation request") // refusal:by-design world-action: only STATUS can bind the frozen correction request
+		}
+		arguments = append(arguments, ReviewTransitionArgument{Name: "request-hash", Value: validation.RequestHash})
+		input.Schema, input.CaptureOperation = reviewValidatorSchemaID, reviewCaptureValidationCaptureOperation
+		input.ValidationRequest = validation
+	default:
+		return ReviewTransitionInput{}, fmt.Errorf("unsupported host-relay provider role %q", role) // refusal:by-design world-action: the pi host relay may collect only compiled provider roles
+	}
+	input.Arguments = append(arguments,
+		ReviewTransitionArgument{Name: "agent", Value: string(runtime)},
+		ReviewTransitionArgument{Name: "execute", Value: "true"})
+	return input, nil
 }
 
 type reviewFinalizeTransitionContext struct {
