@@ -554,11 +554,24 @@ func reviewCaptureInput(binding ReviewTransitionBinding, lens string, order int,
 		case reviewProviderCaptureRuntime(runtime[0]):
 			input.Arguments = append(input.Arguments, ReviewTransitionArgument{Name: "agent", Value: string(runtime[0])})
 		case reviewProviderHostRelayMaterializeRuntime(runtime[0]):
-			// The Pi host relay learns the whole flow from these two tokens:
-			// it first runs this exact materialize form to receive the
-			// Go-issued opaque prompt bytes, relays them through its fresh
-			// locked-down reviewer subprocess, and then submits the raw
-			// result through the existing --input path with the same binding.
+			// The Pi host relay learns the whole flow from this one input: the
+			// materialize arguments are only the prelude that prints the
+			// Go-issued opaque prompt bytes for its fresh locked-down reviewer
+			// subprocess, and the submission descriptor -- the same binding
+			// tokens with the raw result substituted into --input -- is what
+			// actually advances reviewing authority.
+			tokens := make([]string, 0, len(input.Arguments)+1)
+			for _, argument := range input.Arguments {
+				tokens = append(tokens, reviewTransitionArgumentToken(argument))
+			}
+			tokens = append(tokens, "--input="+reviewSubmissionValuePlaceholder)
+			input.Submission = &ReviewTransitionSubmission{
+				OperationToken: "capture-result", ArgumentTokens: tokens,
+				Value: &ReviewTransitionSubmissionValue{
+					Slot: "reviewer_result", Domain: "artifact_path_or_stdin", Schema: reviewReviewerSchemaID,
+					SubstitutionLocation: len(tokens) - 1,
+				},
+			}
 			input.Arguments = append(input.Arguments,
 				ReviewTransitionArgument{Name: "agent", Value: string(runtime[0])},
 				ReviewTransitionArgument{Name: "materialize", Value: "true"})

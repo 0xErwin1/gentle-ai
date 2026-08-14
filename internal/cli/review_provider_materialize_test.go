@@ -196,6 +196,20 @@ func TestNegotiatedStatusRendersPiHostRelayMaterializeCaptureInput(t *testing.T)
 	if tokens["agent"] != "--agent="+string(model.AgentPi) || tokens["materialize"] != "--materialize=true" {
 		t.Fatalf("pi host relay capture arguments = %#v", input.Arguments)
 	}
+	wantTokens := make([]string, 0, len(input.Arguments)-1)
+	for _, argument := range input.Arguments {
+		if argument.Name != "agent" && argument.Name != "materialize" {
+			wantTokens = append(wantTokens, argument.Token)
+		}
+	}
+	wantTokens = append(wantTokens, "--input={{value}}")
+	if input.Submission == nil || input.Submission.OperationToken != "capture-result" ||
+		!slices.Equal(input.Submission.ArgumentTokens, wantTokens) || len(input.Submission.Values) != 0 ||
+		input.Submission.Value == nil || input.Submission.Value.Slot != "reviewer_result" ||
+		input.Submission.Value.Domain != "artifact_path_or_stdin" || input.Submission.Value.Schema != reviewReviewerSchemaID ||
+		input.Submission.Value.SubstitutionLocation != len(wantTokens)-1 {
+		t.Fatalf("pi host relay submission = %#v, want tokens %v", input.Submission, wantTokens)
+	}
 
 	var compiled bytes.Buffer
 	if err := RunReview([]string{
@@ -214,7 +228,8 @@ func TestNegotiatedStatusRendersPiHostRelayMaterializeCaptureInput(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, leaked := compiledArguments["materialize"]; leaked || compiledArguments["agent"] != string(model.AgentClaudeCode) {
-		t.Fatalf("compiled runtime capture arguments changed: %#v", compiledStatus.NextTransition.Collect.Inputs[0].Arguments)
+	if _, leaked := compiledArguments["materialize"]; leaked || compiledArguments["agent"] != string(model.AgentClaudeCode) ||
+		compiledStatus.NextTransition.Collect.Inputs[0].Submission != nil {
+		t.Fatalf("compiled runtime capture rendering changed: %#v", compiledStatus.NextTransition.Collect.Inputs[0])
 	}
 }
