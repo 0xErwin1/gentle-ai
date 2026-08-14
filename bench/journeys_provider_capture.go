@@ -20,7 +20,7 @@ var providerCaptureRetryCapability = &Capability{Verb: []string{"review", "captu
 
 func providerCaptureRetryJourneys() []Journey {
 	return []Journey{{
-		ID:     "j104-compiled-provider-capture-retries-same-binding",
+		ID:     "j105-compiled-provider-capture-retries-same-binding",
 		Title:  "Compiled provider capture retries the same pending binding after a transport failure",
 		Source: "issue #3138: Go owns provider capture binding and retry lifecycle",
 		Steps: []Step{
