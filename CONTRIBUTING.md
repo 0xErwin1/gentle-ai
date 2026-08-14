@@ -50,6 +50,8 @@ An issue **without** that label is usually waiting on information (`status:needs
 - [ ] Confirm the change matches the approved issue scope.
 - [ ] Inspect every changed line.
 - [ ] Remove invented, unverifiable, or unrelated output.
+- [ ] Identify the responsible cause or invariant; confirm the fix resolves it rather than masking or shifting the symptom.
+- [ ] Remove duplicate authority, unnecessary abstractions, and unrelated complexity; keep the fix proportionate.
 - [ ] Run applicable tests and report the actual outcomes.
 - [ ] Be ready to explain the design and tradeoffs.
 - [ ] Disclose material AI assistance in the PR.

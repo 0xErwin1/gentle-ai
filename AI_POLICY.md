@@ -43,11 +43,15 @@ Assistance used to produce a contribution is distinct from Gentle AI advisory re
 
 ## Submission Quality
 
-Review is based on observable submission quality, not on whether text or code appears to be AI-generated. Unacceptable behavior includes:
+Review is based on observable submission quality, not on whether text or code appears to be AI-generated. Before proposing a fix, contributors should identify the underlying cause and the responsible invariant, then explain and defend why the change is proportionate. Prefer the smallest change that restores that invariant without adding duplicate authority, unnecessary abstractions, or unrelated complexity. This does not require broad or architectural work when a focused fix is sufficient.
+
+Unacceptable behavior includes:
 
 - Submitting output that the contributor has not reviewed.
 - Making claims that cannot be verified or reporting results that did not occur.
 - Inventing APIs, paths, behavior, evidence, or test results.
+- Masking a symptom, shifting the failure elsewhere, or leaving the responsible invariant broken.
+- Adding duplicate authority, unnecessary abstractions, or unrelated complexity that creates likely regressions.
 - Including broad or unrelated changes outside the approved scope.
 - Copying output without confidence in its provenance or license compatibility.
 - Being unable to explain the change, its design, or its consequences.
