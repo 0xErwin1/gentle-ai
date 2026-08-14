@@ -142,20 +142,19 @@ func ForAgent(agent model.AgentID) (AgentCapabilityManifest, error) {
 }
 
 // reviewTransportExposureByAgent is the adapter's own self-declared
-// capability to carry the review protocol at all (design.md decision 5's
-// Wave-0 trace citation: "Pi declares only AutoInstall|SystemPrompt|MCP
-// today (no FileSubAgents, no Skills), so its lens transport is genuinely
-// unavailable"). Every other in-repo adapter advertises it; a map miss
-// (an agent with no entry) defaults to the Go zero value of
+// capability to carry the review protocol at all. Pi advertised nothing
+// while its lens transport was genuinely unavailable; since gentle-pi owns
+// a host relay that forwards the Go-issued opaque provider task to a fresh
+// locked-down pi subprocess and returns raw bytes (gentle-pi#311,
+// gentle-ai#3249), Pi advertises alongside every other in-repo adapter.
+// A map miss (an agent with no entry) defaults to the Go zero value of
 // ContractExposure (""), which Advertises treats as not advertised —
-// the same fail-closed default the map's absence of a Pi override would
-// otherwise silently paper over.
+// the fail-closed default for unknown agents.
 var reviewTransportExposureByAgent = func() map[model.AgentID]ContractExposure {
 	exposure := make(map[model.AgentID]ContractExposure, len(featureClaimsByAgent))
 	for agent := range featureClaimsByAgent {
 		exposure[agent] = ContractExposureAdvertised
 	}
-	exposure[model.AgentPi] = ContractExposureDormant
 	return exposure
 }()
 
@@ -168,8 +167,13 @@ var reviewTransportExposureByAgent = func() map[model.AgentID]ContractExposure {
 // user-visible session, or `OPENCODE_DISABLE_*` variable (rdd-advisory-
 // transport SKILL.md). Capability advertisement records the provider contract
 // that can reach Go-owned admission; organic runtime proof is recorded by the
-// provider's own execution tests. Kilo and every other runtime remain
-// explicitly dormant until they own an equivalent native boundary.
+// provider's own execution tests. Pi advertises through gentle-pi's host
+// relay: the launcher reads the negotiated collection input, spawns a
+// brand-new print-mode pi subprocess in an empty scratch directory with
+// every discovery surface disabled, forwards the Go-issued opaque prompt
+// untouched, and returns raw final bytes (gentle-pi#311, gentle-ai#3249).
+// Kilo and every other runtime remain explicitly dormant until they own an
+// equivalent native boundary.
 var immutableReviewExecutorExposureByAgent = func() map[model.AgentID]ContractExposure {
 	exposure := make(map[model.AgentID]ContractExposure, len(featureClaimsByAgent))
 	for agent := range featureClaimsByAgent {
@@ -178,6 +182,7 @@ var immutableReviewExecutorExposureByAgent = func() map[model.AgentID]ContractEx
 	exposure[model.AgentClaudeCode] = ContractExposureAdvertised
 	exposure[model.AgentOpenCode] = ContractExposureAdvertised
 	exposure[model.AgentCodex] = ContractExposureAdvertised
+	exposure[model.AgentPi] = ContractExposureAdvertised
 	return exposure
 }()
 

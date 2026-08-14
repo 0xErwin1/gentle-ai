@@ -27,7 +27,7 @@ func TestBoundedReviewContractLeavesCanonicalizationToNativeGo(t *testing.T) {
 	for _, want := range []string{
 		"Native Go owns validation, canonicalization, persistence, hashing, reopening, and binding",
 		"Only candidate-caused severe findings block",
-		"Claude Code, OpenCode, and Codex advertise immutable reviewer execution",
+		"Claude Code, OpenCode, Codex, and Pi advertise immutable reviewer execution",
 		"Kilo remains dormant",
 		"read-only native Git commands",
 	} {
@@ -346,7 +346,10 @@ func TestKilocodeReviewSettingsMatchCurrentMainBaseline(t *testing.T) {
 	// embeds that contract, so the hash moved. Deliberate, not drift.
 	// #3070 amends the closed single-select clauses with the symmetric
 	// ordinal-alias domain, so the hash moved. Deliberate, not drift.
-	const want = "97987b78ad81f6c07a2718f86b6ae7391d07ab973fe22324ee4dc0a67e945ada"
+	// #3249 registers Pi as an immutable-reviewer runtime in the shared
+	// contract's advertised-runtimes paragraph, so the hash moved.
+	// Deliberate, not drift.
+	const want = "c478b283aeceb83e3c5d74453a0ecd7a66d154ed2d7ef84337f8ccc60a916966"
 	if got != want {
 		t.Fatalf("Kilocode settings SHA-256 = %s, want current-main baseline %s", got, want)
 	}
@@ -558,8 +561,11 @@ func TestOpenCodeRenderedReviewProtocolCost(t *testing.T) {
 		// the "Terminal — " marker so the invariant guard can cross-check the
 		// contract itself (+132 characters in both renderings, ~33 tokens,
 		// still over 15% headroom). Deliberate, not drift.
-		{name: "standard", agents: []string{"review-reliability"}, beforeChars: 42_301, wantChars: 21_932, maxCharacters: 26_000},
-		{name: "full-4R", agents: []string{"review-risk", "review-resilience", "review-readability", "review-reliability"}, beforeChars: 106_998, wantChars: 34_277, maxCharacters: 41_000},
+		// #3249: the advertised-runtimes paragraph gains Pi's host relay
+		// (+247 characters in both renderings, ~62 tokens, still over 15%
+		// headroom). Deliberate, not drift.
+		{name: "standard", agents: []string{"review-reliability"}, beforeChars: 42_301, wantChars: 22_179, maxCharacters: 26_000},
+		{name: "full-4R", agents: []string{"review-risk", "review-resilience", "review-readability", "review-reliability"}, beforeChars: 106_998, wantChars: 34_524, maxCharacters: 41_000},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
