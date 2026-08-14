@@ -81,21 +81,30 @@ func TestVersionPreReleasePrecedenceIgnoresBuildMetadata(t *testing.T) {
 	}
 }
 
+// resolveTargetCandidateName is the host-native candidate filename: Windows
+// has no execute bit, so the fixture must be PATHEXT-shaped there (#3209).
+func resolveTargetCandidateName() string {
+	if runtime.GOOS == "windows" {
+		return "opencode.cmd"
+	}
+	return "opencode"
+}
+
 func TestResolveTargetSkipsManagedBinAndPreventsRecursion(t *testing.T) {
 	home := t.TempDir()
 	managed := BinDir(home)
-	real := filepath.Join(t.TempDir(), "opencode")
+	real := filepath.Join(t.TempDir(), resolveTargetCandidateName())
 	if err := os.MkdirAll(managed, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(managed, "opencode"), []byte("managed"), 0o755); err != nil {
+	if err := os.WriteFile(filepath.Join(managed, resolveTargetCandidateName()), []byte("managed"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(real, []byte("real"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 
-	got, err := ResolveTarget(home, "linux", managed+string(os.PathListSeparator)+filepath.Dir(real))
+	got, err := ResolveTarget(home, runtime.GOOS, managed+string(os.PathListSeparator)+filepath.Dir(real))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -123,16 +132,18 @@ func TestResolveTargetContinuesAfterBrokenCandidate(t *testing.T) {
 	home := t.TempDir()
 	brokenDir := t.TempDir()
 	validDir := t.TempDir()
-	broken := filepath.Join(brokenDir, "opencode")
-	if err := os.Symlink(filepath.Join(brokenDir, "missing"), broken); err != nil {
+	// A directory with the candidate name is a broken candidate on every OS:
+	// stat succeeds and IsRegular fails, so resolution must continue. A broken
+	// symlink would prove the same only where symlinks are creatable (#3209).
+	if err := os.MkdirAll(filepath.Join(brokenDir, resolveTargetCandidateName()), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	valid := filepath.Join(validDir, "opencode")
+	valid := filepath.Join(validDir, resolveTargetCandidateName())
 	if err := os.WriteFile(valid, []byte("valid"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 
-	got, err := ResolveTarget(home, "linux", strings.Join([]string{brokenDir, validDir}, ":"))
+	got, err := ResolveTarget(home, runtime.GOOS, strings.Join([]string{brokenDir, validDir}, string(os.PathListSeparator)))
 	if err != nil {
 		t.Fatal(err)
 	}
