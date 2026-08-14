@@ -137,10 +137,11 @@ func TestCoordinatorOrchestratorsCarryClosedSingleSelectDomainContract(t *testin
 				"EXACTLY ONE presented option",
 				"reject zero matches and reject multiple matches",
 				"canonical internal token once",
-				"Accepted ordinal aliases",
-				"`1`",
-				"`first`",
-				"`la 1`",
+				"Accepted ordinal aliases, for each presented option index N",
+				"the bare numeral `N`",
+				"`la N`",
+				"`opción N`",
+				"`first` is additionally accepted for index 1",
 			} {
 				if !strings.Contains(contract, required) {
 					t.Errorf("%s missing closed-domain amendment %q", path, required)
