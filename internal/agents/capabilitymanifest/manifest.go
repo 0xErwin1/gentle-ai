@@ -162,7 +162,8 @@ var reviewTransportExposureByAgent = func() map[model.AgentID]ContractExposure {
 // immutableReviewExecutorExposureByAgent declares only providers with an
 // enforceable fresh-reviewer boundary. Claude launches a generated subagent
 // with no live tools and receives only the native prompt-carried evidence;
-// OpenCode replaces the task prompt through its provider plugin from an
+// OpenCode relays one host Task through a Go-native transport process, which
+// materializes the bound prompt and captures matching raw output from an
 // ordinary already-running session -- no restart, child process, special
 // user-visible session, or `OPENCODE_DISABLE_*` variable (rdd-advisory-
 // transport SKILL.md). Capability advertisement records the provider contract

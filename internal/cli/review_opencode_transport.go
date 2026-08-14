@@ -233,16 +233,8 @@ func openCodeTransportComplete(ctx context.Context, session openCodeTransportSes
 	if err != nil {
 		return openCodeTransportEnvelope{}, openCodeTransportFailure("opencode_reviewer_result_refused")
 	}
-	if err := reviewtransaction.PublishLensContextEmission(store.Dir, reviewtransaction.LensContextEmission{
-		Schema: reviewtransaction.LensContextEmissionSchema, LineageID: session.lensRequest.Binding.Lineage,
-		TargetIdentity: session.lensRequest.Binding.Target, AuthorityRevision: session.lensRequest.Binding.Revision,
-		Lens: session.lensRequest.Binding.Lens, SelectedOrder: session.lensRequest.Binding.Order, SubjectHash: session.lensRequest.Binding.SubjectHash,
-		Level: reviewtransaction.ReviewerContextLevelProviderContract,
-	}); err != nil {
-		return openCodeTransportEnvelope{}, openCodeTransportFailure("opencode_review_transport_emission_unavailable")
-	}
 	path := filepath.Join(store.Dir, reviewResultArtifactPath(session.lensRequest.Binding.Order, session.lensRequest.Binding.Lens))
-	_, err = store.CaptureAdmittedReviewerResult(ctx, reviewtransaction.CompactAdmittedReviewerResultRequest{
+	captured, err := store.CaptureAdmittedReviewerResult(ctx, reviewtransaction.CompactAdmittedReviewerResultRequest{
 		ExpectedRevision: record.Revision, TargetIdentity: session.lensRequest.Binding.Target, FrozenContext: admitted.Frozen,
 		ArtifactSubject: admitted.Subject, Inspection: admitted.Result.Inspection, Result: admitted.NativeResult,
 		CandidateCausalFindingIDs: admitted.CandidateCausalFindingIDs, RawPayload: hostOutput,
@@ -253,15 +245,19 @@ func openCodeTransportComplete(ctx context.Context, session openCodeTransportSes
 	if err != nil {
 		return openCodeTransportEnvelope{}, openCodeTransportFailure("opencode_review_transport_capture_failed")
 	}
-	published, _, err := readPrivateReviewerFile(path, reviewResultArtifactLimit)
-	if err != nil {
-		return openCodeTransportEnvelope{}, openCodeTransportFailure("opencode_review_transport_capture_failed")
+	if err := reviewtransaction.PublishLensContextEmission(store.Dir, reviewtransaction.LensContextEmission{
+		Schema: reviewtransaction.LensContextEmissionSchema, LineageID: session.lensRequest.Binding.Lineage,
+		TargetIdentity: session.lensRequest.Binding.Target, AuthorityRevision: session.lensRequest.Binding.Revision,
+		Lens: session.lensRequest.Binding.Lens, SelectedOrder: session.lensRequest.Binding.Order, SubjectHash: captured.Subject.SubjectHash,
+		Level: reviewtransaction.ReviewerContextLevelProviderContract,
+	}); err != nil {
+		return openCodeTransportEnvelope{}, openCodeTransportFailure("opencode_review_transport_emission_unavailable")
 	}
 	artifact := reviewResultArtifact{
 		Schema: reviewResultArtifactSchema, Capability: reviewResultArtifactCapability,
-		SHA256: facadePayloadHash(published), LineageID: session.lensRequest.Binding.Lineage,
+		SHA256: captured.Slot.Digest, LineageID: session.lensRequest.Binding.Lineage,
 		TargetIdentity: session.lensRequest.Binding.Target, Lens: session.lensRequest.Binding.Lens, SelectedOrder: session.lensRequest.Binding.Order,
-		SubjectHash: admitted.Subject.SubjectHash, AdmissionDecision: admitted.Admission.Decision,
+		SubjectHash: captured.Subject.SubjectHash, AdmissionDecision: captured.Admission.Decision,
 	}
 	artifact.Reference = reviewResultReference(artifact)
 	payload, err := json.Marshal(artifact)

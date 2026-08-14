@@ -23,14 +23,18 @@ func TestCompactRoleResultSlotsPreserveImmutablePublicationSemantics(t *testing.
 		t.Run(test.name, func(t *testing.T) {
 			storeDir := t.TempDir()
 			payload := []byte(`{"result":"admitted"}` + "\n")
-			if err := publishCompactRoleResultSlot(storeDir, test.key, payload); err != nil {
+			first, err := publishCompactRoleResultSlot(storeDir, test.key, payload)
+			if err != nil {
 				t.Fatal(err)
 			}
-			first, err := ReadCompactRoleResultSlot(storeDir, test.key)
+			if !first.Occupied || first.Digest != compactPreservedPayloadDigest(payload) || !bytes.Equal(first.Payload, payload) {
+				t.Fatalf("durable readback = %#v", first)
+			}
+			first, err = ReadCompactRoleResultSlot(storeDir, test.key)
 			if err != nil || !first.Occupied || !bytes.Equal(first.Payload, payload) || first.Digest != compactPreservedPayloadDigest(payload) {
 				t.Fatalf("first slot = %#v, %v", first, err)
 			}
-			if err := publishCompactRoleResultSlot(storeDir, test.key, payload); err != nil {
+			if _, err := publishCompactRoleResultSlot(storeDir, test.key, payload); err != nil {
 				t.Fatalf("exact replay: %v", err)
 			}
 			path, err := compactRoleResultSlotPath(storeDir, test.key)
@@ -43,10 +47,10 @@ func TestCompactRoleResultSlotsPreserveImmutablePublicationSemantics(t *testing.
 			if _, err := ReadCompactRoleResultSlot(storeDir, test.key); err == nil {
 				t.Fatal("partial publication was accepted")
 			}
-			if err := publishCompactRoleResultSlot(storeDir, test.key, payload); err != nil {
+			if _, err := publishCompactRoleResultSlot(storeDir, test.key, payload); err != nil {
 				t.Fatalf("repair missing digest: %v", err)
 			}
-			if err := publishCompactRoleResultSlot(storeDir, test.key, []byte(`{"result":"conflict"}`+"\n")); !errors.Is(err, ErrCapturedReviewerResultSlotConflict) {
+			if _, err := publishCompactRoleResultSlot(storeDir, test.key, []byte(`{"result":"conflict"}`+"\n")); !errors.Is(err, ErrCapturedReviewerResultSlotConflict) {
 				t.Fatalf("conflicting publication error = %v", err)
 			}
 			last, err := ReadCompactRoleResultSlot(storeDir, test.key)
@@ -68,7 +72,7 @@ func TestCompactRoleResultSlotAcceptsCompatibleRelativeStoreRoot(t *testing.T) {
 	}
 	payload := []byte(`{"results":[]}` + "\n")
 	key := compactRefuterRoleResultSlotKey()
-	if err := publishCompactRoleResultSlot(storeDir, key, payload); err != nil {
+	if _, err := publishCompactRoleResultSlot(storeDir, key, payload); err != nil {
 		t.Fatal(err)
 	}
 	slot, err := ReadCompactRoleResultSlot(storeDir, key)

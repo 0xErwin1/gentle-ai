@@ -6,9 +6,9 @@ Gentle AI exposes two negotiated review contracts. `gentle-ai.review-integration
 
 ## Advisory Model Review
 
-Go owns the reviewer provider contract for Claude Code, OpenCode, and Codex. OpenCode relays one ordinary host Task through one live `gentle-ai review opencode-transport` process; Go materializes the prompt, validates the completion, admits raw output, and captures authority. The adapter never parses bindings, schemas, or reviewer output.
+Go owns the reviewer provider contract for Claude Code, OpenCode, and Codex. OpenCode relays one ordinary host Task through one live `gentle-ai review opencode-transport` process; Go materializes the prompt, validates the completion, admits raw output, and captures authority. Only after immutable slot capture and readback does Go publish the `provider_contract` descriptor and emit the result frame. The descriptor means Go-materialized and Go-admitted output reached the live provider transport; it is not UI provenance. The adapter never parses bindings, schemas, or reviewer output.
 
-The OpenCode relay is proven by a Node-executed plugin test that drives one Task request and completion through the Go transport. The plugin is an opaque frame relay: it neither reads repository state nor interprets reviewer output.
+The OpenCode relay is proven by a Node-executed plugin test and a pinned OpenCode ordinary-session runtime proof. The runtime proof injects a poisoned host Task prompt through a controlled loopback model and verifies that the reviewer receives only Go-materialized canonical context before its result is admitted. The plugin is an opaque frame relay: it neither reads repository state nor interprets reviewer output.
 
 The OpenCode relay accepts only two strict frames over its private standard input: a host Task prompt and its matching one-time completion. The repository context, lineage, target, revision, role, lens, evidence, schema, and storage slot are all re-derived from frozen native authority. There is no caller-authored provider request or capture file.
 

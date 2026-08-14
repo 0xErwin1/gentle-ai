@@ -51,6 +51,89 @@ func TestOpenCodeReviewTransportRelaysOneLiveTaskAndCapturesHostOutput(t *testin
 	}
 }
 
+func TestOpenCodeReviewTransportPublishesProvenanceOnlyAfterDurableCapture(t *testing.T) {
+	for _, test := range []struct {
+		name           string
+		beforeComplete func(*testing.T, string, reviewtransaction.CompactStore, reviewtransaction.CompactRecord, string)
+		wantSlot       bool
+	}{
+		{
+			name: "capture conflict leaves neither provenance nor frame",
+			beforeComplete: func(t *testing.T, repo string, store reviewtransaction.CompactStore, record reviewtransaction.CompactRecord, lens string) {
+				t.Helper()
+				raw := admittedReviewerPayloadForTest(t, repo, record, lens, 0)
+				admitted, err := reviewProviderAdmitRaw(t.Context(), repo, record.State, record.Revision,
+					mustFrozenContext(t, repo, record), mustArtifactSubject(t, repo, record, lens, 0), append([]byte("transport prose\n"), raw...))
+				if err != nil {
+					t.Fatal(err)
+				}
+				if _, err := store.CaptureAdmittedReviewerResult(t.Context(), reviewtransaction.CompactAdmittedReviewerResultRequest{
+					ExpectedRevision: record.Revision, TargetIdentity: record.State.InitialSnapshot.Identity, FrozenContext: admitted.Frozen,
+					ArtifactSubject: admitted.Subject, Inspection: admitted.Result.Inspection, Result: admitted.NativeResult,
+					CandidateCausalFindingIDs: admitted.CandidateCausalFindingIDs, RawPayload: append([]byte("transport prose\n"), raw...),
+				}); err != nil {
+					t.Fatal(err)
+				}
+			},
+		},
+		{
+			name: "provenance failure preserves durable slot without frame",
+			beforeComplete: func(t *testing.T, repo string, store reviewtransaction.CompactStore, record reviewtransaction.CompactRecord, lens string) {
+				t.Helper()
+				if err := reviewtransaction.PublishLensContextEmission(store.Dir, reviewtransaction.LensContextEmission{
+					Schema: reviewtransaction.LensContextEmissionSchema, LineageID: record.State.LineageID,
+					TargetIdentity: record.State.InitialSnapshot.Identity, AuthorityRevision: record.Revision,
+					Lens: lens, SelectedOrder: 0, SubjectHash: mustArtifactSubject(t, repo, record, lens, 0).SubjectHash,
+					Level: reviewtransaction.ReviewerContextLevelProviderCommand,
+				}); err != nil {
+					t.Fatal(err)
+				}
+			},
+			wantSlot: true,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			repo, _, store, record := newArtifactReview(t, false)
+			lens := record.State.SelectedLenses[0]
+			relay := startOpenCodeTransportRelay(t, openCodeLensTransportStart(t, repo, record, lens))
+			if test.beforeComplete != nil {
+				test.beforeComplete(t, repo, store, record, lens)
+			}
+			raw := admittedReviewerPayloadForTest(t, repo, record, lens, 0)
+			hostOutput := string(raw)
+			if _, err := relay.complete(openCodeTransportEnvelope{
+				Schema: openCodeReviewTransportSchema, Operation: "complete", Nonce: relay.prompt.Nonce, Output: &hostOutput,
+			}); err == nil {
+				t.Fatal("relay completion unexpectedly emitted a result frame")
+			}
+
+			subject := mustArtifactSubject(t, repo, record, lens, 0)
+			emission, found := reviewtransaction.ReadLensContextEmission(store.Dir, record.State.LineageID,
+				record.State.InitialSnapshot.Identity, record.Revision, lens, 0, subject.SubjectHash)
+			if test.wantSlot {
+				if !found || emission.Level != reviewtransaction.ReviewerContextLevelProviderCommand {
+					t.Fatalf("provenance conflict was not preserved exactly: %#v found=%v", emission, found)
+				}
+				if _, resolved, err := store.ResolveAdmittedReviewerResult(context.Background(), record.Revision,
+					record.State.InitialSnapshot.Identity, mustFrozenContext(t, repo, record), subject); err != nil || !resolved {
+					t.Fatalf("durable capture did not survive provenance failure: resolved=%v err=%v", resolved, err)
+				}
+				return
+			}
+			if found {
+				if emission.Level == reviewtransaction.ReviewerContextLevelProviderContract {
+					t.Fatalf("failed capture recorded provider-contract provenance: %#v", emission)
+				}
+				return
+			}
+			if _, resolved, err := store.ResolveAdmittedReviewerResult(context.Background(), record.Revision,
+				record.State.InitialSnapshot.Identity, mustFrozenContext(t, repo, record), subject); err != nil || !resolved {
+				t.Fatalf("pre-existing conflicting slot was not preserved: resolved=%v err=%v", resolved, err)
+			}
+		})
+	}
+}
+
 func TestOpenCodeReviewTransportRefusesStandaloneCompletionWithoutAuthorityMutation(t *testing.T) {
 	repo, _, store, record := newArtifactReview(t, false)
 	lens := record.State.SelectedLenses[0]

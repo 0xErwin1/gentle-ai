@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -37,11 +38,17 @@ func TestCodexAdapterUsesStdinAndReturnsUntouchedRawOutput(t *testing.T) {
 	t.Setenv(codexAdapterHelperEnvironment, "1")
 	t.Setenv(codexAdapterPromptPathEnvironment, promptPath)
 	t.Setenv(codexAdapterArgumentsPathEnvironment, argumentsPath)
+	t.Setenv(codexReviewerLoopbackBaseURLEnvironment, "")
 
+	var commandArguments []string
+	var commandEnvironment []string
 	adapter := &CodexAdapter{
 		LookPath: func(string) (string, error) { return "codex", nil },
 		commandContext: func(ctx context.Context, _ string, arguments ...string) *exec.Cmd {
-			return exec.CommandContext(ctx, os.Args[0], append([]string{"-test.run=^TestCodexAdapterHelperProcess$", "--"}, arguments...)...)
+			commandArguments = append([]string(nil), arguments...)
+			command := exec.CommandContext(ctx, os.Args[0], append([]string{"-test.run=^TestCodexAdapterHelperProcess$", "--"}, arguments...)...)
+			commandEnvironment = command.Env
+			return command
 		},
 	}
 	prompt := []byte("provider prompt\nwith bytes")
@@ -62,10 +69,101 @@ func TestCodexAdapterUsesStdinAndReturnsUntouchedRawOutput(t *testing.T) {
 	if strings.Contains(string(arguments), string(prompt)) {
 		t.Fatalf("codex arguments carried provider prompt: %q", arguments)
 	}
-	for _, flag := range []string{"exec", "--skip-git-repo-check", "--ignore-user-config", "--sandbox", "read-only", "--output-last-message"} {
-		if !strings.Contains(string(arguments), flag) {
-			t.Fatalf("codex arguments = %q, missing %q", arguments, flag)
-		}
+	wantArguments := []string{
+		"exec", "--skip-git-repo-check", "--ignore-user-config", "--sandbox", "read-only", "-C", commandArguments[6],
+		"--output-last-message", commandArguments[8],
+	}
+	if !slices.Equal(commandArguments, wantArguments) {
+		t.Fatalf("default codex arguments = %q, want %q", commandArguments, wantArguments)
+	}
+	if commandEnvironment != nil {
+		t.Fatalf("default Codex environment = %q, want inherited environment", commandEnvironment)
+	}
+}
+
+func TestCodexAdapterConfiguresApprovedLoopbackProvider(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("the helper process uses POSIX argument handling")
+	}
+	t.Setenv(codexAdapterHelperEnvironment, "1")
+	t.Setenv(codexAdapterPromptPathEnvironment, filepath.Join(t.TempDir(), "prompt"))
+	t.Setenv(codexAdapterArgumentsPathEnvironment, filepath.Join(t.TempDir(), "arguments"))
+	const baseURL = "http://127.0.0.1:43123/v1"
+	t.Setenv(codexReviewerLoopbackBaseURLEnvironment, baseURL)
+
+	var commandArguments []string
+	adapter := &CodexAdapter{
+		LookPath: func(string) (string, error) { return "codex", nil },
+		commandContext: func(ctx context.Context, _ string, arguments ...string) *exec.Cmd {
+			commandArguments = append([]string(nil), arguments...)
+			return exec.CommandContext(ctx, os.Args[0], append([]string{"-test.run=^TestCodexAdapterHelperProcess$", "--"}, arguments...)...)
+		},
+	}
+	if _, err := adapter.Review(context.Background(), NewInvocation([]byte("provider prompt"))); err != nil {
+		t.Fatal(err)
+	}
+
+	wantArguments := []string{
+		"exec", "--skip-git-repo-check", "--ignore-user-config", "--sandbox", "read-only", "-C", commandArguments[6],
+		"--output-last-message", commandArguments[8],
+		"--config", `model_provider="gentle_ai_reviewer_loopback"`,
+		"--config", `model_providers.gentle_ai_reviewer_loopback={name="Gentle AI reviewer loopback",base_url="http://127.0.0.1:43123/v1",wire_api="responses"}`,
+	}
+	if !slices.Equal(commandArguments, wantArguments) {
+		t.Fatalf("loopback Codex arguments = %q, want %q", commandArguments, wantArguments)
+	}
+}
+
+func TestCodexAdapterRejectsUnsafeLoopbackProvider(t *testing.T) {
+	t.Setenv(codexReviewerLoopbackBaseURLEnvironment, "http://127.0.0.1:43123/v1?next=https://example.com")
+	adapter := &CodexAdapter{
+		LookPath: func(string) (string, error) { return "codex", nil },
+		commandContext: func(context.Context, string, ...string) *exec.Cmd {
+			t.Fatal("Codex process invoked for an unsafe loopback URL")
+			return nil
+		},
+	}
+	raw, err := adapter.Review(context.Background(), NewInvocation([]byte("provider prompt")))
+	if err == nil || !strings.Contains(err.Error(), "loopback base URL must not include a query or fragment") {
+		t.Fatalf("Review() error = %v, want unsafe loopback rejection", err)
+	}
+	if raw != nil {
+		t.Fatalf("Review() raw = %q, want no result bytes", raw)
+	}
+}
+
+func TestCodexReviewerLoopbackBaseURLRejectsUnsafeEndpoints(t *testing.T) {
+	for _, endpoint := range []string{
+		"ftp://127.0.0.1:43123/v1",
+		"http://user@127.0.0.1:43123/v1",
+		"http://example.com:43123/v1",
+		"http://localhost:43123/v1",
+		"http://127.0.0.1:0/v1",
+		"http://127.0.0.1:43123/redirect",
+		"http://127.0.0.1:43123/v1/",
+		"http://127.0.0.1:43123/%76%31",
+		"http://127.0.0.1:43123/v1?redirect=https://example.com",
+		"http://127.0.0.1:43123/v1#redirect",
+	} {
+		t.Run(endpoint, func(t *testing.T) {
+			if _, enabled, err := codexReviewerLoopbackBaseURL(endpoint); err == nil || enabled {
+				t.Fatalf("codexReviewerLoopbackBaseURL(%q) = enabled=%t, err=%v; want rejection", endpoint, enabled, err)
+			}
+		})
+	}
+}
+
+func TestCodexReviewerLoopbackBaseURLAcceptsNumericLoopbackV1Endpoint(t *testing.T) {
+	for _, endpoint := range []string{
+		"http://127.0.0.1:43123/v1",
+		"https://[::1]:43123/v1",
+	} {
+		t.Run(endpoint, func(t *testing.T) {
+			got, enabled, err := codexReviewerLoopbackBaseURL(endpoint)
+			if err != nil || !enabled || got != endpoint {
+				t.Fatalf("codexReviewerLoopbackBaseURL(%q) = %q, %t, %v; want %q, true, nil", endpoint, got, enabled, err, endpoint)
+			}
+		})
 	}
 }
 

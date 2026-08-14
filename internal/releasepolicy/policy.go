@@ -583,14 +583,26 @@ archives:
     files:
       - src: .goreleaser-provider-contract/README.md
         strip_parent: true
+        info:
+          mode: 0644
+          mtime: "1970-01-01T00:00:00Z"
       - src: .goreleaser-provider-contract/manifest.json
         strip_parent: true
+        info:
+          mode: 0644
+          mtime: "1970-01-01T00:00:00Z"
       - src: .goreleaser-provider-contract/schemas/*.schema.json
         dst: schemas
         strip_parent: true
+        info:
+          mode: 0644
+          mtime: "1970-01-01T00:00:00Z"
       - src: .goreleaser-provider-contract/vectors/*.json
         dst: vectors
         strip_parent: true
+        info:
+          mode: 0644
+          mtime: "1970-01-01T00:00:00Z"
 checksum:
   name_template: "checksums.txt"
   algorithm: sha256

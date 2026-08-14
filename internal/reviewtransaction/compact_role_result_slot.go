@@ -177,7 +177,8 @@ func (store CompactStore) captureAdmittedRoleResult(
 		if err := prepare(state); err != nil {
 			return err
 		}
-		return publishCompactRoleResultSlot(store.Dir, key, payload)
+		_, err = publishCompactRoleResultSlot(store.Dir, key, payload)
+		return err
 	}
 	err := store.captureRoleResult(expectedRevision, operation, publish)
 	if !errors.Is(err, ErrAuthorityLockTimeout) {
@@ -291,41 +292,41 @@ func ReadCompactRoleResultSlot(storeDir string, key compactRoleResultSlotKey) (C
 // publishCompactRoleResultSlot is the one durable publication path for all
 // provider role results. Existing equal bytes replay; conflicting bytes leave
 // the occupied slot untouched.
-func publishCompactRoleResultSlot(storeDir string, key compactRoleResultSlotKey, payload []byte) error {
+func publishCompactRoleResultSlot(storeDir string, key compactRoleResultSlotKey, payload []byte) (CompactRoleResultSlot, error) {
 	path, err := compactRoleResultSlotPath(storeDir, key)
 	if err != nil {
-		return err
+		return CompactRoleResultSlot{}, err
 	}
 	if len(payload) == 0 || len(payload) > compactReviewerResultSizeLimit {
-		return errors.New("provider role result is empty or outside the native size bound") // refusal:by-design world-action: provider results are never truncated to fit immutable storage
+		return CompactRoleResultSlot{}, errors.New("provider role result is empty or outside the native size bound") // refusal:by-design world-action: provider results are never truncated to fit immutable storage
 	}
 	if err := createCompactRoleResultDirectories(storeDir, filepath.Dir(path)); err != nil {
-		return fmt.Errorf("create provider role result directory: %w", err)
+		return CompactRoleResultSlot{}, fmt.Errorf("create provider role result directory: %w", err)
 	}
 	if err := SyncReviewDirectory(storeDir); err != nil {
-		return fmt.Errorf("sync provider role result parent directory: %w", err)
+		return CompactRoleResultSlot{}, fmt.Errorf("sync provider role result parent directory: %w", err)
 	}
 	digestPayload := []byte(compactPreservedPayloadDigest(payload) + "\n")
 	if err := requireCompactRoleResultSlotCompatible(path, payload); err != nil {
-		return err
+		return CompactRoleResultSlot{}, err
 	}
 	if err := requireCompactRoleResultSlotCompatible(path+".sha256", digestPayload); err != nil {
-		return err
+		return CompactRoleResultSlot{}, err
 	}
 	if err := publishPrivateCompactReviewerFile(path, payload, compactReviewerResultSizeLimit); err != nil {
-		return fmt.Errorf("publish provider role result: %w", err)
+		return CompactRoleResultSlot{}, fmt.Errorf("publish provider role result: %w", err)
 	}
 	if err := publishPrivateCompactReviewerFile(path+".sha256", digestPayload, 256); err != nil {
-		return fmt.Errorf("publish provider role result digest: %w", err)
+		return CompactRoleResultSlot{}, fmt.Errorf("publish provider role result digest: %w", err)
 	}
 	readBack, err := ReadCompactRoleResultSlot(storeDir, key)
 	if err != nil {
-		return fmt.Errorf("read back provider role result: %w", err)
+		return CompactRoleResultSlot{}, fmt.Errorf("read back provider role result: %w", err)
 	}
 	if !readBack.Occupied || !bytes.Equal(readBack.Payload, payload) || readBack.Digest != compactPreservedPayloadDigest(payload) {
-		return errors.New("provider role result readback mismatch") // refusal:by-design human-authority: immutable evidence storage failed readback verification
+		return CompactRoleResultSlot{}, errors.New("provider role result readback mismatch") // refusal:by-design human-authority: immutable evidence storage failed readback verification
 	}
-	return nil
+	return readBack, nil
 }
 
 func createCompactRoleResultDirectories(storeDir, directory string) error {
