@@ -345,27 +345,11 @@ jobs:
         # advises "latest" too (see internal/installcmd/resolver.go).
         run: npm install --global @anthropic-ai/claude-code@latest
 
-      - name: Verify OpenCode reviewer support E2E is registered
+      - name: Install pinned Codex runtime
         shell: pwsh
         run: |
-          $tests = go test -list '^TestRealOpenCodeReviewerOrdinarySessionInjectsFrozenContextAndAdmitsRawOutput$' ./e2e/organicruntime
-          if ($LASTEXITCODE -ne 0 -or $tests -notcontains 'TestRealOpenCodeReviewerOrdinarySessionInjectsFrozenContextAndAdmitsRawOutput') {
-            throw 'OpenCode reviewer support E2E is missing'
-          }
-
-      - name: Verify Codex reviewer support E2E is registered
-        # Unlike the OpenCode step above, this only proves the organic proof
-        # is still registered by name -- it does not install a codex binary
-        # or an authenticated account, so TestRealCodexReviewerOrdinarySessionAdmitsRawOutput
-        # itself skips in "Run organic journeys" below rather than actually
-        # executing. Codex's activation proof is maintainer-executed locally
-        # today; continuous CI execution of the real Codex proof is tracked
-        # in https://github.com/Gentleman-Programming/gentle-ai/issues/2662.
-        shell: pwsh
-        run: |
-          $tests = go test -list '^TestRealCodexReviewerOrdinarySessionAdmitsRawOutput$' ./e2e/organicruntime
-          if ($LASTEXITCODE -ne 0 -or $tests -notcontains 'TestRealCodexReviewerOrdinarySessionAdmitsRawOutput') {
-            throw 'Codex reviewer support E2E is missing'
+          if ($env:RUNNER_OS -eq 'Linux') {
+            npm install --global @openai/codex@0.147.0
           }
 
       - name: Verify real-agent detection E2E is registered
@@ -392,6 +376,9 @@ jobs:
         # `go test ./...` never does — see that file's build-tag comment.
         env:
           GENTLE_AI_REAL_AGENT_E2E: "1"
+          # The Linux-only Codex journey invokes the registered adapter through
+          # the product CLI under a process-scoped denying proxy and strace.
+          GENTLE_AI_CODEX_RUNTIME_E2E: ${{ matrix.os == 'ubuntu-latest' && '1' || '0' }}
           # The large-workspace journey spawns one Git subprocess per intended
           # untracked path, so its cost is dominated by process creation. Linux
           # absorbs it; Windows does not, and gating it here keeps the real
