@@ -25,11 +25,17 @@ type reviewProviderRoleCaptureArtifact struct {
 	Captured       bool   `json:"captured"`
 }
 
+// reviewProviderRoleHostAdapter is the one seam through which role capture
+// spawns the Go-owned pi process. Tests substitute a fake transport here; the
+// lens path keeps its host-mediated refusal in reviewProviderAdapterFor.
+var reviewProviderRoleHostAdapter = func() reviewerprovider.Adapter { return reviewerprovider.NewPiAdapter() }
+
 // reviewProviderRoleCaptureBinding is the parsed, mode-validated invocation of
 // one non-lens provider role capture command. Both commands share exactly two
-// modes, mirroring the #3261 lens shape: --materialize (read-only, pi host
-// relay only) prints the Go-materialized opaque role prompt, and --input
-// submits the raw provider bytes for Go-owned admission into the compact slot.
+// modes: --materialize (read-only) prints the Go-materialized opaque role
+// prompt, and --execute runs a fresh Go-owned locked-down pi process on that
+// exact request and admits its raw bytes into the compact slot, so the
+// adversarial verdict is never caller-authored.
 type reviewProviderRoleCaptureBinding struct {
 	command           string
 	repositoryContext string
@@ -39,7 +45,7 @@ type reviewProviderRoleCaptureBinding struct {
 	requestHash       string
 	runtime           model.AgentID
 	materialize       bool
-	input             string
+	execute           bool
 	root              string
 }
 
@@ -58,9 +64,9 @@ func parseReviewProviderRoleCapture(command string, args []string, stdout io.Wri
 	if withRequestHash {
 		requestHash = flags.String("request-hash", "", "provider-issued frozen targeted validation request hash")
 	}
-	runtimeAgent := flags.String("agent", "", "host-relay runtime identity, required for both --materialize and --input; compiled runtimes materialize this role internally through `gentle-ai review finalize --agent`")
-	materialize := flags.Bool("materialize", false, "print the exact Go-materialized opaque provider role task for a host-relay --agent runtime without capturing anything; mutually exclusive with --input")
-	input := flags.String("input", "", "raw provider role result JSON file or - for stdin")
+	runtimeAgent := flags.String("agent", "", "host-relay runtime identity, required for both --materialize and --execute; compiled runtimes materialize this role internally through `gentle-ai review finalize --agent`")
+	materialize := flags.Bool("materialize", false, "print the exact Go-materialized opaque provider role task without capturing anything; mutually exclusive with --execute")
+	execute := flags.Bool("execute", false, "run the Go-owned locked-down pi process on the Go-materialized role request and capture its raw result")
 	if err := parseReviewFlags(flags, args); err != nil {
 		return nil, err
 	}
@@ -70,23 +76,23 @@ func parseReviewProviderRoleCapture(command string, args []string, stdout io.Wri
 	binding := &reviewProviderRoleCaptureBinding{
 		command: command, repositoryContext: strings.TrimSpace(*repositoryContext),
 		lineage: strings.TrimSpace(*lineage), target: strings.TrimSpace(*target), revision: strings.TrimSpace(*revision),
-		runtime: model.AgentID(strings.TrimSpace(*runtimeAgent)), materialize: *materialize, input: strings.TrimSpace(*input),
+		runtime: model.AgentID(strings.TrimSpace(*runtimeAgent)), materialize: *materialize, execute: *execute,
 	}
 	if requestHash != nil {
 		binding.requestHash = strings.TrimSpace(*requestHash)
 	}
-	if binding.materialize && binding.input != "" {
-		return nil, reviewPreflightError(fmt.Errorf("review %s --materialize only prints the Go-materialized provider task and cannot be combined with --input", command)) // refusal:by-design world-action: materialization is read-only and never authors or admits provider role output
+	if binding.materialize && binding.execute {
+		return nil, reviewPreflightError(fmt.Errorf("review %s --materialize only prints the Go-materialized provider task and cannot be combined with --execute", command)) // refusal:by-design world-action: materialization is read-only and never authors or admits provider role output
 	}
 	if flags.NArg() != 0 || binding.lineage == "" || binding.target == "" || binding.revision == "" ||
-		(!binding.materialize && binding.input == "") {
-		return nil, reviewPreflightError(fmt.Errorf("review %s requires --lineage, --target, --expected-revision, --agent, and either --materialize or --input; `gentle-ai review status --contract %s --next-transition` prints the exact bindings", command, ReviewIntegrationContractV2))
+		(!binding.materialize && !binding.execute) {
+		return nil, reviewPreflightError(fmt.Errorf("review %s requires --lineage, --target, --expected-revision, --agent, and either --materialize or --execute; `gentle-ai review status --contract %s --next-transition` prints the exact bindings", command, ReviewIntegrationContractV2))
 	}
 	if binding.runtime == "" {
 		// Both modes require the identified host-relay runtime: a raw provider
 		// verdict is only admissible from the runtime the negotiated
 		// transition bound, never from an unidentified caller.
-		return nil, reviewPreflightError(fmt.Errorf("review %s requires --agent naming the host-relay runtime", command)) // refusal:by-design operator-knowledge: only a compiled host-relay runtime identity selects the materialize and submission forms
+		return nil, reviewPreflightError(fmt.Errorf("review %s requires --agent naming the host-relay runtime", command)) // refusal:by-design operator-knowledge: only a compiled host-relay runtime identity selects the materialize and execute forms
 	}
 	if withRequestHash && binding.requestHash == "" {
 		return nil, reviewPreflightError(fmt.Errorf("review %s requires --request-hash binding the frozen targeted validation request", command)) // refusal:by-design operator-knowledge: the validator result applies only to one exact frozen correction request
@@ -125,7 +131,7 @@ func parseReviewProviderRoleCapture(command string, args []string, stdout io.Wri
 		}
 	}
 	// --materialize is read-only and stays reachable under a frozen switch;
-	// a submission publishes provider role bytes into the store.
+	// an execution publishes provider role bytes into the store.
 	if !binding.materialize {
 		if err := authorizeReviewAuthorityMutation(ctx, binding.root); err != nil {
 			return nil, err
@@ -148,11 +154,11 @@ func (binding *reviewProviderRoleCaptureBinding) discover(ctx context.Context) (
 	return store, record, nil
 }
 
-// RunReviewCaptureRefuter materializes or captures the one transaction-wide
-// provider refuter batch. The pi host relay first prints the Go-materialized
-// opaque prompt (`--agent=pi --materialize=true`), runs its own fresh
-// locked-down subprocess on those bytes, then submits the raw result through
-// --input with the same binding; admission and canonicalization stay in Go.
+// RunReviewCaptureRefuter materializes or executes the one transaction-wide
+// provider refuter batch. --materialize prints the Go-materialized opaque
+// prompt raw; --execute runs a fresh Go-owned locked-down pi process on that
+// exact request and admits its raw bytes, so adversarial provenance mirrors
+// the compiled claude/codex path; admission and canonicalization stay in Go.
 func RunReviewCaptureRefuter(args []string, stdout io.Writer) error {
 	binding, err := parseReviewProviderRoleCapture("capture-refuter", args, stdout, false)
 	if err != nil || binding == nil {
@@ -167,23 +173,20 @@ func RunReviewCaptureRefuter(args []string, stdout io.Writer) error {
 	if state.State != reviewtransaction.StateReviewing || state.InitialSnapshot.Identity != binding.target {
 		return reviewPreflightError(errors.New("review capture-refuter requires the exact reviewing authority target; refresh the binding with gentle-ai review status --cwd <repo> --contract gentle-ai.review-integration/v2 --next-transition"))
 	}
+	request, err := reviewProviderNewRefuterRequest(ctx, binding.root, store.Dir, state, record.Revision)
+	if err != nil {
+		return reviewPreflightError(err)
+	}
 	if binding.materialize {
-		request, materializeErr := reviewProviderNewRefuterRequest(ctx, binding.root, store.Dir, state, record.Revision)
-		if materializeErr != nil {
-			return reviewPreflightError(materializeErr)
-		}
-		// The host relay pipes these exact bytes verbatim into its fresh
-		// locked-down reviewer subprocess, so they leave here raw: no JSON
-		// envelope, no trailing newline, and nothing captured, consumed, or
-		// mutated. Submission returns through --input with this same binding.
+		// Raw bytes: no JSON envelope, no trailing newline, nothing captured.
 		if _, err := stdout.Write(request.Invocation.Prompt()); err != nil {
 			return fmt.Errorf("write materialized provider refuter task: %w", err)
 		}
 		return nil
 	}
-	raw, err := readFacadeBytes(binding.input)
+	raw, err := reviewProviderRoleHostAdapter().Review(ctx, request.Invocation)
 	if err != nil {
-		return reviewPreflightError(fmt.Errorf("read provider refuter result: %w", err))
+		return reviewPreflightError(fmt.Errorf("invoke provider refuter: %w", err))
 	}
 	if _, err := reviewProviderCaptureRefuterRaw(ctx, binding.root, store, state, record.Revision, raw); err != nil {
 		return reviewPreflightError(err)
@@ -223,16 +226,15 @@ func RunReviewCaptureValidation(args []string, stdout io.Writer) error {
 		return reviewPreflightError(errors.New("review capture-validation request hash does not match the frozen targeted validation request; refresh the binding with gentle-ai review status --cwd <repo> --contract gentle-ai.review-integration/v2 --next-transition"))
 	}
 	if binding.materialize {
-		// Raw prompt bytes, exactly as for the refuter above: the pi host
-		// relay owns nothing but transport.
+		// Raw prompt bytes, exactly as for the refuter above.
 		if _, err := stdout.Write(request.Invocation.Prompt()); err != nil {
 			return fmt.Errorf("write materialized provider targeted validator task: %w", err)
 		}
 		return nil
 	}
-	raw, err := readFacadeBytes(binding.input)
+	raw, err := reviewProviderRoleHostAdapter().Review(ctx, request.Invocation)
 	if err != nil {
-		return reviewPreflightError(fmt.Errorf("read provider targeted validator result: %w", err))
+		return reviewPreflightError(fmt.Errorf("invoke provider targeted validator: %w", err))
 	}
 	if _, _, err := reviewProviderCaptureTargetedValidatorRaw(ctx, binding.root, store, state, record.Revision, raw); err != nil {
 		return reviewPreflightError(err)

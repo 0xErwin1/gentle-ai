@@ -120,25 +120,27 @@ func TestReviewCaptureRefuterMaterializeRefusesWithoutInferentialFindings(t *tes
 	}
 }
 
-func TestReviewCaptureRefuterSubmitsRawBytesAndHostMediatedFinalizeDiscoversSlot(t *testing.T) {
+// overrideProviderRoleHostAdapter substitutes the Go-owned pi spawn seam with
+// a fake transport for one test.
+func overrideProviderRoleHostAdapter(t *testing.T, adapter reviewerprovider.Adapter) {
+	t.Helper()
+	previous := reviewProviderRoleHostAdapter
+	t.Cleanup(func() { reviewProviderRoleHostAdapter = previous })
+	reviewProviderRoleHostAdapter = func() reviewerprovider.Adapter { return adapter }
+}
+
+func TestReviewCaptureRefuterExecutesGoOwnedPiAndHostMediatedFinalizeDiscoversSlot(t *testing.T) {
 	t.Setenv(reviewPiHostRelayContractEnvironment, reviewPiHostRelayContract)
 	repo, store, record, handle := piRefuterReview(t)
 	binding := piRefuterBinding(record, handle)
-	if err := RunReview(append(append([]string{"capture-refuter"}, binding...), "--agent", string(model.AgentPi), "--materialize=true"), &bytes.Buffer{}); err != nil {
-		t.Fatal(err)
-	}
-	raw := piRefuterRawResult(t, repo, store, record)
-	input := filepath.Join(t.TempDir(), "refuter.json")
-	if err := os.WriteFile(input, raw, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	// A submission without the identified host-relay runtime is refused; the
+	// An execution without the identified host-relay runtime is refused; the
 	// gate is symmetric with the materialize form.
-	if err := RunReview(append(append([]string{"capture-refuter"}, binding...), "--input", input), io.Discard); err == nil || !strings.Contains(err.Error(), "requires --agent") {
-		t.Fatalf("agent-free refuter submission refusal = %v", err)
+	if err := RunReview(append(append([]string{"capture-refuter"}, binding...), "--execute=true"), io.Discard); err == nil || !strings.Contains(err.Error(), "requires --agent") {
+		t.Fatalf("agent-free refuter execution refusal = %v", err)
 	}
+	overrideProviderRoleHostAdapter(t, providerTestAdapter{raw: piRefuterRawResult(t, repo, store, record)})
 	var output bytes.Buffer
-	if err := RunReview(append(append([]string{"capture-refuter"}, binding...), "--agent", string(model.AgentPi), "--input", input), &output); err != nil {
+	if err := RunReview(append(append([]string{"capture-refuter"}, binding...), "--agent", string(model.AgentPi), "--execute=true"), &output); err != nil {
 		t.Fatal(err)
 	}
 	var artifact reviewProviderRoleCaptureArtifact
@@ -193,9 +195,14 @@ func TestReviewCaptureRefuterRefusals(t *testing.T) {
 			want: "is host-mediated; use its live transport collection",
 		},
 		{
-			name: "combined with input", env: reviewPiHostRelayContract,
-			argv: append(slices.Clone(fakeBinding), "--agent", string(model.AgentPi), "--materialize=true", "--input", "-"),
-			want: "cannot be combined with --input",
+			name: "materialize combined with execute", env: reviewPiHostRelayContract,
+			argv: append(slices.Clone(fakeBinding), "--agent", string(model.AgentPi), "--materialize=true", "--execute=true"),
+			want: "cannot be combined with --execute",
+		},
+		{
+			name: "retired caller-authored input flag", env: reviewPiHostRelayContract,
+			argv: append(slices.Clone(fakeBinding), "--agent", string(model.AgentPi), "--input", "-"),
+			want: "not defined: -input",
 		},
 		{
 			name: "without agent", env: reviewPiHostRelayContract,
@@ -217,32 +224,32 @@ func TestReviewCaptureRefuterRefusals(t *testing.T) {
 			argv: slices.Clone(fakeBinding),
 			want: "either --materialize",
 		},
-		// The submission form is gated exactly like the materialize form: a
-		// raw provider verdict is only admissible from the identified
-		// host-relay runtime, never from an unidentified or compiled caller.
+		// The execute form is gated exactly like the materialize form: the
+		// Go-owned adversarial spawn runs only for the identified host-relay
+		// runtime, never for an unidentified or compiled caller.
 		{
-			name: "submission without agent", env: reviewPiHostRelayContract,
-			argv: append(slices.Clone(fakeBinding), "--input", "-"),
+			name: "execution without agent", env: reviewPiHostRelayContract,
+			argv: append(slices.Clone(fakeBinding), "--execute=true"),
 			want: "requires --agent",
 		},
 		{
-			name: "submission from compiled claude-code runtime", env: reviewPiHostRelayContract,
-			argv: append(slices.Clone(fakeBinding), "--agent", string(model.AgentClaudeCode), "--input", "-"),
+			name: "execution from compiled claude-code runtime", env: reviewPiHostRelayContract,
+			argv: append(slices.Clone(fakeBinding), "--agent", string(model.AgentClaudeCode), "--execute=true"),
 			want: "materializes internally",
 		},
 		{
-			name: "submission from compiled codex runtime", env: reviewPiHostRelayContract,
-			argv: append(slices.Clone(fakeBinding), "--agent", string(model.AgentCodex), "--input", "-"),
+			name: "execution from compiled codex runtime", env: reviewPiHostRelayContract,
+			argv: append(slices.Clone(fakeBinding), "--agent", string(model.AgentCodex), "--execute=true"),
 			want: "materializes internally",
 		},
 		{
-			name: "submission from opencode", env: reviewPiHostRelayContract,
-			argv: append(slices.Clone(fakeBinding), "--agent", string(model.AgentOpenCode), "--input", "-"),
+			name: "execution from opencode", env: reviewPiHostRelayContract,
+			argv: append(slices.Clone(fakeBinding), "--agent", string(model.AgentOpenCode), "--execute=true"),
 			want: "is host-mediated; use its live transport collection",
 		},
 		{
-			name: "submission without relay handshake", env: "",
-			argv: append(slices.Clone(fakeBinding), "--agent", string(model.AgentPi), "--input", "-"),
+			name: "execution without relay handshake", env: "",
+			argv: append(slices.Clone(fakeBinding), "--agent", string(model.AgentPi), "--execute=true"),
 			want: "not eligible for immutable receipt review",
 		},
 	}
@@ -327,29 +334,18 @@ func TestNegotiatedStatusRendersPiHostRelayRefuterCollectInput(t *testing.T) {
 	if input.CaptureOperation != "review.capture-refuter" || input.Name != "provider_refuter" || input.Schema != reviewRefuterSchemaID || input.ProviderTask != nil {
 		t.Fatalf("pi host relay refuter input = %#v", input)
 	}
+	// The rendered vector is self-contained and name-based: every token is
+	// re-derived from the input's own arguments, and no submission descriptor
+	// exists for a caller to author a verdict through.
 	tokens := map[string]string{}
 	for _, argument := range input.Arguments {
+		if argument.Token != reviewTransitionArgumentToken(argument) {
+			t.Fatalf("pi host relay refuter token %q diverged from its own argument", argument.Token)
+		}
 		tokens[argument.Name] = argument.Token
 	}
-	if tokens["agent"] != "--agent="+string(model.AgentPi) || tokens["materialize"] != "--materialize=true" {
-		t.Fatalf("pi host relay refuter arguments = %#v", input.Arguments)
-	}
-	// The submission repeats every binding token INCLUDING --agent (the
-	// verdict is only admissible from the identified host-relay runtime) and
-	// drops only the read-only --materialize prelude selector.
-	wantTokens := make([]string, 0, len(input.Arguments))
-	for _, argument := range input.Arguments {
-		if argument.Name != "materialize" {
-			wantTokens = append(wantTokens, argument.Token)
-		}
-	}
-	wantTokens = append(wantTokens, "--input={{value}}")
-	if input.Submission == nil || input.Submission.OperationToken != "capture-refuter" ||
-		!slices.Equal(input.Submission.ArgumentTokens, wantTokens) || len(input.Submission.Values) != 0 ||
-		input.Submission.Value == nil || input.Submission.Value.Slot != "refuter_result" ||
-		input.Submission.Value.Domain != "artifact_path_or_stdin" || input.Submission.Value.Schema != reviewRefuterSchemaID ||
-		input.Submission.Value.SubstitutionLocation != len(wantTokens)-1 {
-		t.Fatalf("pi host relay refuter submission = %#v, want tokens %v", input.Submission, wantTokens)
+	if tokens["agent"] != "--agent="+string(model.AgentPi) || tokens["execute"] != "--execute=true" || input.Submission != nil {
+		t.Fatalf("pi host relay refuter arguments = %#v, submission = %#v", input.Arguments, input.Submission)
 	}
 
 	// The OpenCode rendering stays byte-identical: a Go-issued provider task,
@@ -376,34 +372,19 @@ func TestNegotiatedStatusRendersPiHostRelayRefuterCollectInput(t *testing.T) {
 		t.Fatalf("OpenCode refuter rendering changed: %#v", opencodeInput)
 	}
 
-	// The rendered transition is executable exactly as issued: the materialize
-	// prelude prints the Go-issued prompt, the submission advances authority.
-	prelude := []string{"capture-refuter"}
+	// The rendered transition is executable exactly as issued: the vector
+	// itself materializes, spawns the Go-owned pi process, and admits.
+	overrideProviderRoleHostAdapter(t, providerTestAdapter{raw: piRefuterRawResult(t, repo, store, record)})
+	execute := []string{"capture-refuter"}
 	for _, argument := range input.Arguments {
-		prelude = append(prelude, argument.Token)
+		execute = append(execute, argument.Token)
 	}
-	var prompt bytes.Buffer
-	if err := RunReview(prelude, &prompt); err != nil {
-		t.Fatal(err)
-	}
-	if !bytes.Contains(prompt.Bytes(), []byte(record.State.LineageID)) {
-		t.Fatal("rendered materialize prelude omitted the reviewing lineage")
-	}
-	raw := piRefuterRawResult(t, repo, store, record)
-	inputPath := filepath.Join(t.TempDir(), "refuter.json")
-	if err := os.WriteFile(inputPath, raw, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	submission := []string{input.Submission.OperationToken}
-	for _, token := range input.Submission.ArgumentTokens {
-		submission = append(submission, strings.ReplaceAll(token, reviewSubmissionValuePlaceholder, inputPath))
-	}
-	if err := RunReview(submission, &bytes.Buffer{}); err != nil {
+	if err := RunReview(execute, &bytes.Buffer{}); err != nil {
 		t.Fatal(err)
 	}
 	slot, err := reviewtransaction.ReadCompactRefuterResultSlot(store.Dir)
 	if err != nil || !slot.Occupied {
-		t.Fatalf("rendered submission did not occupy the refuter result slot: %#v, %v", slot, err)
+		t.Fatalf("rendered execution did not occupy the refuter result slot: %#v, %v", slot, err)
 	}
 }
 
@@ -428,7 +409,7 @@ func TestNegotiatedStatusPiRefuterSlotOccupiedKeepsCompiledRenderings(t *testing
 	}
 }
 
-func TestReviewCaptureValidationMaterializesSubmitsAndFinalizeDiscovers(t *testing.T) {
+func TestReviewCaptureValidationMaterializesExecutesAndFinalizeDiscovers(t *testing.T) {
 	t.Setenv(reviewPiHostRelayContractEnvironment, reviewPiHostRelayContract)
 	repo, lineage, request := providerCorrectionReady(t)
 	store, err := reviewtransaction.CompactAuthoritativeStore(t.Context(), repo, lineage)
@@ -469,33 +450,20 @@ func TestReviewCaptureValidationMaterializesSubmitsAndFinalizeDiscovers(t *testi
 		tokens[argument.Name] = argument.Token
 	}
 	if arguments["request-hash"] != request.RequestHash || arguments["target"] != request.CorrectionTargetIdentity ||
-		tokens["agent"] != "--agent="+string(model.AgentPi) || tokens["materialize"] != "--materialize=true" {
-		t.Fatalf("pi host relay validation arguments = %#v", input.Arguments)
-	}
-	// The submission repeats every binding token INCLUDING --agent (the
-	// verdict is only admissible from the identified host-relay runtime) and
-	// drops only the read-only --materialize prelude selector.
-	wantTokens := make([]string, 0, len(input.Arguments))
-	for _, argument := range input.Arguments {
-		if argument.Name != "materialize" {
-			wantTokens = append(wantTokens, argument.Token)
-		}
-	}
-	wantTokens = append(wantTokens, "--input={{value}}")
-	if input.Submission == nil || input.Submission.OperationToken != "capture-validation" ||
-		!slices.Equal(input.Submission.ArgumentTokens, wantTokens) || len(input.Submission.Values) != 0 ||
-		input.Submission.Value == nil || input.Submission.Value.Slot != "validation_result" ||
-		input.Submission.Value.Domain != "artifact_path_or_stdin" || input.Submission.Value.Schema != reviewValidatorSchemaID ||
-		input.Submission.Value.SubstitutionLocation != len(wantTokens)-1 {
-		t.Fatalf("pi host relay validation submission = %#v, want tokens %v", input.Submission, wantTokens)
+		tokens["agent"] != "--agent="+string(model.AgentPi) || tokens["execute"] != "--execute=true" || input.Submission != nil {
+		t.Fatalf("pi host relay validation arguments = %#v, submission = %#v", input.Arguments, input.Submission)
 	}
 
-	// Materialize prelude: idempotent, byte-identical to the Go-materialized
-	// validator request, and slot-free.
+	// Materialize form of the same rendered binding: idempotent,
+	// byte-identical to the Go-materialized validator request, slot-free.
 	prelude := []string{"capture-validation"}
 	for _, argument := range input.Arguments {
+		if argument.Name == "execute" {
+			continue
+		}
 		prelude = append(prelude, argument.Token)
 	}
+	prelude = append(prelude, "--materialize=true")
 	var first bytes.Buffer
 	if err := RunReview(slices.Clone(prelude), &first); err != nil {
 		t.Fatal(err)
@@ -523,18 +491,16 @@ func TestReviewCaptureValidationMaterializesSubmitsAndFinalizeDiscovers(t *testi
 		t.Fatalf("validator materialize occupied the result slot: %#v, %v", slot, err)
 	}
 
-	// Submission: the raw provider bytes are admitted in Go and occupy the
-	// compact validator slot; the host-mediated finalize then discovers it.
-	inputPath := filepath.Join(t.TempDir(), "validation.json")
-	if err := os.WriteFile(inputPath, providerTargetedValidationPayload(t, request), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	submission := []string{input.Submission.OperationToken}
-	for _, token := range input.Submission.ArgumentTokens {
-		submission = append(submission, strings.ReplaceAll(token, reviewSubmissionValuePlaceholder, inputPath))
+	// Execution: the rendered vector spawns the Go-owned pi transport and the
+	// raw bytes are admitted into the compact validator slot; the
+	// host-mediated finalize then discovers it.
+	overrideProviderRoleHostAdapter(t, providerTestAdapter{raw: providerTargetedValidationPayload(t, request)})
+	execute := []string{"capture-validation"}
+	for _, argument := range input.Arguments {
+		execute = append(execute, argument.Token)
 	}
 	var captured bytes.Buffer
-	if err := RunReview(submission, &captured); err != nil {
+	if err := RunReview(execute, &captured); err != nil {
 		t.Fatal(err)
 	}
 	var artifact reviewProviderRoleCaptureArtifact
@@ -545,7 +511,7 @@ func TestReviewCaptureValidationMaterializesSubmitsAndFinalizeDiscovers(t *testi
 	}
 	slot, err = reviewtransaction.ReadCompactTargetedValidatorResultSlot(store.Dir, request)
 	if err != nil || !slot.Occupied {
-		t.Fatalf("validator submission did not occupy the result slot: %#v, %v", slot, err)
+		t.Fatalf("validator execution did not occupy the result slot: %#v, %v", slot, err)
 	}
 	if err := RunReviewFacadeFinalize([]string{"--cwd", repo, "--lineage", lineage, "--captured-evidence=true"}, &bytes.Buffer{}); err != nil {
 		t.Fatalf("host-mediated finalize did not discover the captured validator slot: %v", err)
