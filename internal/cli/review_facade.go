@@ -639,7 +639,7 @@ func (err *reviewStartContextError) Unwrap() error { return err.Cause }
 
 func RunReview(args []string, stdout io.Writer) error {
 	if len(args) == 0 || args[0] == "help" || args[0] == "-h" || args[0] == "--help" {
-		_, _ = fmt.Fprintln(stdout, "Usage: gentle-ai review <capture-result|lens-context|capture-evidence|preserve-result|capabilities|start|finalize|validate|status|repair|invalidate|abandon|recover|retry-final-verification|reclaim|inspect-authority|inspect-candidate|dispose-result|reopen-results|schema|opencode-transport|bind-sdd> [flags]\n\nOrdinary review facade; repository scope, authority, canonical artifacts, and lifecycle transitions are derived by Go. Provider transports relay opaque bytes only; Go materializes, admits, captures, and decides delivery. Use review retry-final-verification only for a provider-proven completed failed final-verification tooling incident. Generic review recover remains unchanged. Use review repair --preflight for provider-owned classified authority repair.")
+		_, _ = fmt.Fprintln(stdout, "Usage: gentle-ai review <capture-result|capture-refuter|capture-validation|lens-context|capture-evidence|preserve-result|capabilities|start|finalize|validate|status|repair|invalidate|abandon|recover|retry-final-verification|reclaim|inspect-authority|inspect-candidate|dispose-result|reopen-results|schema|opencode-transport|bind-sdd> [flags]\n\nOrdinary review facade; repository scope, authority, canonical artifacts, and lifecycle transitions are derived by Go. Provider transports relay opaque bytes only; Go materializes, admits, captures, and decides delivery. Use review retry-final-verification only for a provider-proven completed failed final-verification tooling incident. Generic review recover remains unchanged. Use review repair --preflight for provider-owned classified authority repair.")
 		return nil
 	}
 	operation, negotiated, preflightFailure := reviewIntegrationFailureRoute(args)
@@ -729,6 +729,10 @@ func runReviewCommand(args []string, stdout io.Writer) error {
 	switch args[0] {
 	case "capture-result":
 		return RunReviewCaptureResult(args[1:], stdout)
+	case "capture-refuter":
+		return RunReviewCaptureRefuter(args[1:], stdout)
+	case "capture-validation":
+		return RunReviewCaptureValidation(args[1:], stdout)
 	case "inspect-candidate":
 		return RunReviewInspectCandidate(args[1:], stdout)
 	case "lens-context":
@@ -1079,7 +1083,12 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 									capturedEvidence = &recordCopy
 								}
 							}
-							if runtime == model.AgentOpenCode && record.State.State == reviewtransaction.StateReviewing && len(artifacts) == len(record.State.SelectedLenses) {
+							// OpenCode relays Go-issued role tasks through its live
+							// transport; the pi host relay collects the same roles
+							// through the printed materialize + submission route.
+							// Both discover pending roles identically here.
+							providerRoleHost := runtime == model.AgentOpenCode || reviewProviderHostRelayMaterializeRuntime(runtime)
+							if providerRoleHost && record.State.State == reviewtransaction.StateReviewing && len(artifacts) == len(record.State.SelectedLenses) {
 								slot, slotErr := reviewtransaction.ReadCompactRefuterResultSlot(store.Dir)
 								if slotErr != nil {
 									artifactErr = slotErr
@@ -1094,7 +1103,7 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 									}
 								}
 							}
-							if runtime == model.AgentOpenCode && validationRequest != nil && capturedEvidence != nil && capturedEvidence.Outcome == reviewtransaction.VerificationOutcomePassed {
+							if providerRoleHost && validationRequest != nil && capturedEvidence != nil && capturedEvidence.Outcome == reviewtransaction.VerificationOutcomePassed {
 								slot, slotErr := reviewtransaction.ReadCompactTargetedValidatorResultSlot(store.Dir, *validationRequest)
 								if slotErr != nil {
 									artifactErr = slotErr
@@ -2722,14 +2731,20 @@ func runReviewFacadeFinalize(ctx context.Context, args []string, stdout io.Write
 		if err := readFacadeJSON(*refuterPath, &refuter); err != nil {
 			return reviewPreflightError(fmt.Errorf("read refuter outcomes: %w", err))
 		}
-	} else if providerRuntime != "" && *capturedResults && state.State == reviewtransaction.StateReviewing {
+	} else if *capturedResults && state.State == reviewtransaction.StateReviewing {
+		// The slot READ is deliberately not gated on a compiled --agent: a
+		// host-mediated finalize (OpenCode's transport or the pi host relay's
+		// capture-refuter submission) occupies the same compact slot, and the
+		// ordinary `--captured-results` finalize must discover it identically.
+		// Only the in-process provider CAPTURE below stays compiled-only.
 		slot, slotErr := reviewtransaction.ReadCompactRefuterResultSlot(store.Dir)
 		if slotErr != nil {
 			return reviewPreflightError(fmt.Errorf("read captured provider refuter result: %w", slotErr))
 		}
-		if slot.Occupied {
+		switch {
+		case slot.Occupied:
 			refuter, err = readCapturedProviderRefuterResult(ctx, root, store.Dir, state, record.Revision)
-		} else {
+		case providerRuntime != "":
 			var captured bool
 			_, captured, err = reviewProviderCaptureRefuter(ctx, root, store, state, record.Revision, providerRuntime)
 			if err == nil && captured {
@@ -2775,17 +2790,29 @@ func runReviewFacadeFinalize(ctx context.Context, args []string, stdout io.Write
 		}
 		effectiveFailed = derivedFailed
 	}
-	if providerRuntime != "" && state.State == reviewtransaction.StateCorrectionRequired && capturedVerification != nil &&
+	if state.State == reviewtransaction.StateCorrectionRequired && capturedVerification != nil &&
 		capturedVerification.Record.Outcome == reviewtransaction.VerificationOutcomePassed && validation == nil {
+		// Discovery of an occupied validator slot is host-mediated-safe: the
+		// pi host relay's capture-validation submission occupies the same
+		// compact slot the compiled path does, so the ordinary finalize (no
+		// --agent) reads it back here. Only the in-process provider CAPTURE
+		// stays compiled-only, and a host-mediated finalize with no captured
+		// slot keeps its ordinary --validation route.
 		capturedValidation, readErr := readCapturedProviderTargetedValidatorResult(ctx, root, store.Dir, state, record.Revision)
-		if readErr != nil {
+		switch {
+		case readErr == nil:
+			validation = &capturedValidation
+		case providerRuntime != "":
 			var captureErr error
 			capturedValidation, _, captureErr = reviewProviderCaptureTargetedValidator(ctx, root, store, state, record.Revision, providerRuntime)
 			if captureErr != nil {
 				return reviewPreflightError(captureErr)
 			}
+			validation = &capturedValidation
+		case errors.Is(readErr, errReviewProviderTargetedValidatorResultNotCaptured):
+		default:
+			return reviewPreflightError(readErr)
 		}
-		validation = &capturedValidation
 	}
 	// A lineage-only finalize call at StateValidating with no request evidence
 	// must not silently ignore canonical evidence a separate `review
