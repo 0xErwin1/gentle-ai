@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -724,9 +725,15 @@ func TestSyncReportsManagedLauncherChanges(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	launcher := opencodeactivation.POSIXLauncherPath(home)
-	if result.NoOp || !contains(result.ChangedFiles, launcher) || result.FilesChanged == 0 {
-		t.Fatalf("sync result = NoOp %t, FilesChanged %d, ChangedFiles %v; want launcher change", result.NoOp, result.FilesChanged, result.ChangedFiles)
+	if result.NoOp || result.FilesChanged == 0 {
+		t.Fatalf("sync result = NoOp %t, FilesChanged %d; want launcher change", result.NoOp, result.FilesChanged)
+	}
+	// Issue #3209: the managed launcher set is host-dependent (POSIX script vs
+	// cmd+ps1 pair), so the assertion must name the host's launchers.
+	for _, launcher := range opencodeactivation.ManagedLauncherPaths(home, runtime.GOOS) {
+		if !contains(result.ChangedFiles, launcher) {
+			t.Fatalf("sync ChangedFiles %v missing managed launcher %q", result.ChangedFiles, launcher)
+		}
 	}
 }
 
