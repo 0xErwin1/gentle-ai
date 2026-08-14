@@ -5,8 +5,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -90,8 +92,15 @@ func TestCompactEffectMarkerIsPrivateSeparateAndStable(t *testing.T) {
 	if !bytes.Equal(before, after) || !info.ModTime().Equal(afterInfo.ModTime()) || !bytes.Equal(beforeAuthority, afterAuthority) {
 		t.Fatal("exact replay or separate authority bytes changed")
 	}
-	if info.Mode().Perm() != 0o600 {
-		t.Fatalf("marker mode = %o", info.Mode().Perm())
+	// Windows cannot represent 0600: Chmod honors only the write bit and
+	// Stat reports 0666; ownership privacy is enforced by the RAR security
+	// descriptor checks instead (#3231).
+	wantMarkerMode := fs.FileMode(0o600)
+	if runtime.GOOS == "windows" {
+		wantMarkerMode = 0o666
+	}
+	if info.Mode().Perm() != wantMarkerMode {
+		t.Fatalf("marker mode = %o, want %o", info.Mode().Perm(), wantMarkerMode)
 	}
 }
 
