@@ -2,8 +2,10 @@
 package config
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 
 	"github.com/gentleman-programming/gentle-ai/v2/internal/catalog"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
@@ -63,11 +65,26 @@ type DesiredState struct {
 // Decode converts a JSON document into canonical desired state without side effects.
 func Decode(input []byte) (DesiredState, []Diagnostic) {
 	var document Document
-	if err := json.Unmarshal(input, &document); err != nil {
+	decoder := json.NewDecoder(bytes.NewReader(input))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&document); err != nil {
+		return DesiredState{}, []Diagnostic{decodeDiagnostic(err)}
+	}
+	if err := decoder.Decode(&struct{}{}); err != io.EOF {
 		return DesiredState{}, []Diagnostic{diagnostic("config.document.malformed", "$", "configuration must be valid JSON")}
 	}
 
 	return Normalize(document)
+}
+
+func decodeDiagnostic(err error) Diagnostic {
+	if _, ok := err.(*json.UnmarshalTypeError); ok {
+		return diagnostic("config.document.malformed", "$", "configuration must be valid JSON")
+	}
+	if bytes.Contains([]byte(err.Error()), []byte("unknown field")) {
+		return diagnostic("config.document.unknown-field", "$", "configuration contains an unknown field")
+	}
+	return diagnostic("config.document.malformed", "$", "configuration must be valid JSON")
 }
 
 // Admit invokes action only when decoding and validation complete without diagnostics.
