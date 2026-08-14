@@ -60,7 +60,7 @@ func RunConfig(args []string, stdout io.Writer) error {
 	previous := configdomain.DesiredState{}
 	if operation == "apply" || operation == "reconcile" {
 		if *home == "" {
-			return fmt.Errorf("config %s requires --home for persisted desired state", operation)
+			return fmt.Errorf("config %s requires --home for persisted desired state; run gentle-ai config %s --config <path> --home <path> --destination <path> --stage <path>", operation, operation)
 		}
 		previous, err = readConfigDesired(*home)
 		if err != nil {
