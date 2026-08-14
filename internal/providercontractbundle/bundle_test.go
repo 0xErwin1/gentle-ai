@@ -7,8 +7,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"testing"
 )
@@ -44,8 +46,16 @@ func TestGenerateIsDeterministicAndVerifiable(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if info.Mode().Perm() != bundleFileMode || !info.ModTime().Equal(bundleTimestamp) {
-			t.Fatalf("generated %s metadata = %s %s, want %04o %s", name, info.Mode(), info.ModTime(), bundleFileMode, bundleTimestamp)
+		// Windows cannot represent 0644: Chmod only honors the write bit and
+		// Stat reports 0666. Bundle determinism is content-level (asserted
+		// above) and published archives build on Linux; the staging mode is
+		// best-effort metadata, so the expectation is per-OS (#3229).
+		wantMode := fs.FileMode(bundleFileMode)
+		if runtime.GOOS == "windows" {
+			wantMode = 0o666
+		}
+		if info.Mode().Perm() != wantMode || !info.ModTime().Equal(bundleTimestamp) {
+			t.Fatalf("generated %s metadata = %s %s, want %04o %s", name, info.Mode(), info.ModTime(), wantMode, bundleTimestamp)
 		}
 	}
 	if err := VerifyStaging(first); err != nil {

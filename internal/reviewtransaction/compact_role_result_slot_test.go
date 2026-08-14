@@ -62,12 +62,12 @@ func TestCompactRoleResultSlotsPreserveImmutablePublicationSemantics(t *testing.
 }
 
 func TestCompactRoleResultSlotAcceptsCompatibleRelativeStoreRoot(t *testing.T) {
-	workingDirectory, err := os.Getwd()
-	if err != nil {
-		t.Fatal(err)
-	}
-	storeDir, err := filepath.Rel(workingDirectory, t.TempDir())
-	if err != nil {
+	// filepath.Rel(package cwd, t.TempDir()) is impossible across Windows
+	// volumes (runner temp C: vs workspace D:), so the relative root is
+	// built by construction under a same-volume working directory (#3229).
+	t.Chdir(t.TempDir())
+	storeDir := filepath.Join("nested", "role-result-store")
+	if err := os.MkdirAll(storeDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
 	payload := []byte(`{"results":[]}` + "\n")
