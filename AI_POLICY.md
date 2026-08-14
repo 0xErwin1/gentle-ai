@@ -29,7 +29,7 @@ For material assistance, the pull request declaration must state:
 
 Raw prompts and private conversation logs are not required by default.
 
-Trivial formatting, spelling corrections, minor autocomplete, search or navigation, and mechanical transformations do not require disclosure.
+Trivial formatting, spelling corrections, minor autocomplete, search or navigation, and trivial, non-substantive mechanical transformations do not require disclosure.
 
 ## Review and Attribution
 
@@ -39,7 +39,7 @@ AI tools must not receive human attribution, including `Co-Authored-By`, `Review
 
 ## Advisory Review and RDD
 
-Assistance used to produce a contribution is distinct from Gentle AI advisory review and receipt-driven development (RDD). Automated review or a review receipt does not replace human authorship, provenance, consent, testing, or legal responsibility.
+Assistance used to produce a contribution is distinct from AI-assisted advisory review and receipt-driven development (RDD). Although materially substantive AI-assisted advisory review remains subject to the disclosure rules above, it remains distinct from contribution authorship. Automated review or RDD receipts do not replace human authorship, provenance, consent, testing, or legal responsibility.
 
 ## Submission Quality
 
