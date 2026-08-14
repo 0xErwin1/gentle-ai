@@ -44,3 +44,15 @@ var reviewProviderAdapterFor = func(contract reviewerprovider.Contract, agent mo
 func reviewProviderCaptureRuntime(agent model.AgentID) bool {
 	return agent == model.AgentClaudeCode || agent == model.AgentCodex
 }
+
+// reviewProviderHostRelayMaterializeRuntime reports whether the runtime's
+// compiled immutable transport is the Pi host relay: the one transport whose
+// host first prints the exact Go-materialized opaque provider task
+// (`review capture-result ... --agent=pi --materialize=true`), runs its own
+// fresh locked-down reviewer subprocess on those bytes, and then submits the
+// raw result through the existing --input path with the same binding. The
+// answer stays false without the exact relay handshake, so materialization is
+// never offered to a Pi installation whose launcher cannot collect it.
+func reviewProviderHostRelayMaterializeRuntime(agent model.AgentID) bool {
+	return reviewImmutableRuntimeCapability(agent).Transport == reviewImmutableTransportPiHostRelay
+}
