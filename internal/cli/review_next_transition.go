@@ -232,7 +232,12 @@ func newReviewNextTransition(status ReviewTargetStatusResult, selectedLenses []s
 			{Name: "lineage", Value: binding.LineageID}, {Name: "captured_results", Value: "true"},
 		}
 		if reviewProviderCaptureRuntime(input.RuntimeAgent) {
-			arguments = append(arguments, ReviewTransitionArgument{Name: "agent", Value: string(input.RuntimeAgent)})
+			// Finalize's preflight refuses --agent outside the negotiated v2
+			// contract, so the rendered transition must carry the contract
+			// its own consumer will demand.
+			arguments = append(arguments,
+				ReviewTransitionArgument{Name: "contract", Value: input.Contract},
+				ReviewTransitionArgument{Name: "agent", Value: string(input.RuntimeAgent)})
 		}
 		return reviewExecuteTransition("captured_results_ready", "review.finalize", arguments, []ReviewTransitionArgument{{Name: "state", Value: "reviewing"}, {Name: "captured_artifacts", Value: "complete"}}, binding, artifacts)
 	case reviewtransaction.StateCorrectionRequired:
@@ -444,7 +449,12 @@ func reviewFinalizeNextTransition(state reviewtransaction.CompactState, revision
 	if state.State == reviewtransaction.StateReviewing && artifactErr == nil {
 		arguments := []ReviewTransitionArgument{{Name: "lineage", Value: state.LineageID}, {Name: "captured_results", Value: "true"}}
 		if reviewProviderCaptureRuntime(transitionContext.RuntimeAgent) {
-			arguments = append(arguments, ReviewTransitionArgument{Name: "agent", Value: string(transitionContext.RuntimeAgent)})
+			// Finalize's preflight refuses --agent outside the negotiated v2
+			// contract, so the rendered transition must carry the contract
+			// its own consumer will demand.
+			arguments = append(arguments,
+				ReviewTransitionArgument{Name: "contract", Value: transitionContext.Contract},
+				ReviewTransitionArgument{Name: "agent", Value: string(transitionContext.RuntimeAgent)})
 		}
 		return reviewExecuteTransition("captured_results_ready", "review.finalize", arguments, []ReviewTransitionArgument{{Name: "state", Value: "reviewing"}, {Name: "captured_artifacts", Value: "complete"}}, reviewTransitionBinding(status.Authority, status.TargetIdentity), artifacts)
 	}
