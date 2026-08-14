@@ -2687,6 +2687,13 @@ func TestInjectOpenCodeNativeFallbackAgentsPromptsAlignedWithGentlePi(t *testing
 			}
 
 			agentMap := root["agent"].(map[string]any)
+			if rootTools, ok := root["tools"].(map[string]any); ok {
+				for _, forbidden := range []string{"codegraph_*", "codegraph_codegraph_explore"} {
+					if _, exists := rootTools[forbidden]; exists {
+						t.Fatalf("root tools unexpectedly grant %q", forbidden)
+					}
+				}
+			}
 			for _, fallbackAgent := range []string{"general", "explore"} {
 				agent, ok := agentMap[fallbackAgent].(map[string]any)
 				if !ok {
@@ -2726,14 +2733,50 @@ func TestInjectOpenCodeNativeFallbackAgentsPromptsAlignedWithGentlePi(t *testing
 					"bash":  fallbackAgent == "general",
 					"task":  false,
 				}
+				if fallbackAgent == "explore" {
+					wantTools["codegraph_codegraph_explore"] = true
+				}
 				for tool, want := range wantTools {
 					got, exists := tools[tool].(bool)
 					if !exists || got != want {
 						t.Errorf("agent %q tool %q = %v, want %t", fallbackAgent, tool, tools[tool], want)
 					}
 				}
+				if fallbackAgent == "explore" {
+					for _, forbidden := range []string{"codegraph_*", "apply_patch"} {
+						if _, exists := tools[forbidden]; exists {
+							t.Errorf("explore tools unexpectedly configure %q", forbidden)
+						}
+					}
+				}
 			}
 		})
+	}
+}
+
+func TestInjectOpenCodePreservesExploreCodeGraphDenyAndCustomTool(t *testing.T) {
+	mockNoPackageManager(t)
+	home := t.TempDir()
+	settingsPath := opencodeAdapter().SettingsPath(home)
+	if err := os.MkdirAll(filepath.Dir(settingsPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	seed := `{"agent":{"explore":{"tools":{"custom_readonly":true},"permission":{"codegraph_codegraph_explore":"deny"}}}}`
+	if err := os.WriteFile(settingsPath, []byte(seed), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Inject(home, opencodeAdapter(), model.SDDModeSingle); err != nil {
+		t.Fatal(err)
+	}
+
+	explore := readOpenCodeAgents(t, settingsPath)["explore"].(map[string]any)
+	tools := explore["tools"].(map[string]any)
+	if tools["codegraph_codegraph_explore"] != true || tools["custom_readonly"] != true {
+		t.Fatalf("explore tools lost managed or custom key: %#v", tools)
+	}
+	// OpenCode 1.18.18 normalizes agent tools before agent permission.
+	if got := explore["permission"].(map[string]any)["codegraph_codegraph_explore"]; got != "deny" {
+		t.Fatalf("agent CodeGraph permission = %v, want deny", got)
 	}
 }
 
@@ -4348,6 +4391,9 @@ func TestInjectKilocodeKeepsLegacyBackgroundAgentsPluginAndRemovesOpenCodeReview
 	}
 	if _, exists := agentMap["gentle-orchestrator"]; !exists {
 		t.Fatalf("Kilocode settings must retain gentle-orchestrator agent: %v", agentMap)
+	}
+	if strings.Contains(string(settings), "codegraph_codegraph_explore") {
+		t.Fatal("Kilocode settings must not receive the OpenCode CodeGraph grant")
 	}
 	for _, fallbackAgent := range []string{"general", "explore"} {
 		if _, exists := agentMap[fallbackAgent]; exists {
@@ -7075,7 +7121,7 @@ func TestRefreshInstalledOpenCodePluginsSkipsSymlinksAndDirectories(t *testing.T
 	if err := os.WriteFile(userFile, userContent, 0o644); err != nil {
 		t.Fatalf("WriteFile(user file) error = %v", err)
 	}
-	symlinkPath := filepath.Join(pluginsDir, "review-result-artifacts.ts")
+	symlinkPath := filepath.Join(pluginsDir, "opencode-review-transport.ts")
 	if err := os.Symlink(userFile, symlinkPath); err != nil {
 		t.Skipf("symlinks not supported on this platform: %v", err)
 	}
