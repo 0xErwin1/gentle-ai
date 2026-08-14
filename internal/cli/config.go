@@ -143,14 +143,26 @@ func exportConfig(stdout io.Writer, configPath, home string) error {
 		Code: "config.export.loss.legacy-operational", Path: "$", Severity: configdomain.Error,
 		Message: "legacy install state omits runtime and provenance fields from desired configuration",
 	})
+	if !legacy.SelectionConfigured {
+		result.Diagnostics = append(result.Diagnostics, configdomain.Diagnostic{
+			Code: "config.export.loss.ambiguous-intent", Path: "$", Severity: configdomain.Error,
+			Message: "legacy install state cannot distinguish inferred defaults from an explicit selection",
+		})
+	}
+	if legacy.RDDMode != "" {
+		result.Diagnostics = append(result.Diagnostics, configdomain.Diagnostic{
+			Code: "config.export.loss.user-owned", Path: "$.rdd_mode", Severity: configdomain.Error,
+			Message: "user-owned review policy remains local and is excluded from desired configuration",
+		})
+	}
 	result.Lossless = false
 	return writeConfigResult(stdout, result)
 }
 
 func legacyAgentIDs(values []string) []model.AgentID {
-	agents := make([]model.AgentID, 0, len(values))
-	for _, value := range values {
-		agents = append(agents, model.AgentID(value))
+	agents := make([]model.AgentID, len(values))
+	for index, value := range values {
+		agents[index] = model.AgentID(value)
 	}
 	return agents
 }

@@ -93,11 +93,7 @@ type SyncResult struct {
 	BackgroundPolicyEnabled bool
 }
 
-// ValidateSyncConfigFlags rejects invalid declarative invocations before detection.
-func ValidateSyncConfigFlags(args []string) error {
-	_, err := ParseSyncFlags(args)
-	return err
-}
+func ValidateSyncConfigFlags(args []string) error { _, err := ParseSyncFlags(args); return err }
 
 // ParseSyncFlags parses the CLI arguments for the sync subcommand.
 func ParseSyncFlags(args []string) (SyncFlags, error) {

@@ -8,7 +8,6 @@ type ExportResult struct {
 	Lossless    bool         `json:"lossless"`
 }
 
-// Export returns the common desired intent and diagnoses any omitted provider data.
 func Export(state DesiredState) ExportResult {
 	result := ExportResult{
 		Document: Document{

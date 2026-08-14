@@ -23,7 +23,6 @@ type InstallFlags struct {
 	OpenCodeBackgroundSubagentsSet bool
 }
 
-// HasConfigFlag reports whether arguments select the declarative configuration path.
 func HasConfigFlag(args []string) bool {
 	for _, arg := range args {
 		if arg == "--config" || strings.HasPrefix(arg, "--config=") {
@@ -33,11 +32,7 @@ func HasConfigFlag(args []string) bool {
 	return false
 }
 
-// ValidateInstallConfigFlags rejects invalid declarative invocations before detection.
-func ValidateInstallConfigFlags(args []string) error {
-	_, err := ParseInstallFlags(args)
-	return err
-}
+func ValidateInstallConfigFlags(args []string) error { _, err := ParseInstallFlags(args); return err }
 
 const installChannelHelp = "Gentle AI channel: stable (default), beta, or nightly (alias for beta) — env: GENTLE_AI_CHANNEL"
 

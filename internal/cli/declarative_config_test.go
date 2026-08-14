@@ -2,7 +2,6 @@ package cli
 
 import (
 	"bytes"
-	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -17,7 +16,6 @@ func TestConfigFlagsRejectSemanticSelectionAndKeepOperationalFlags(t *testing.T)
 	if err := os.WriteFile(configPath, []byte(`{"version":"v1","selection":{"agents":["opencode"]}}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
-
 	for _, test := range []struct {
 		name  string
 		parse func([]string) error
@@ -81,32 +79,34 @@ func TestConfigBackedInstallAndSyncUseDesiredSelection(t *testing.T) {
 }
 
 func TestConfigExportReportsLegacyLoss(t *testing.T) {
-	home := t.TempDir()
-	if err := state.Write(home, state.InstallState{
-		InstalledAgents:        []string{"opencode"},
-		SelectionConfigured:    true,
-		ManagedAssetDigest:     "runtime-digest",
-		InstalledBinaryVersion: "v2",
-	}); err != nil {
-		t.Fatal(err)
-	}
+	for _, test := range []struct {
+		name  string
+		state state.InstallState
+		codes []string
+	}{
+		{"operational", state.InstallState{InstalledAgents: []string{"opencode"}, SelectionConfigured: true, ManagedAssetDigest: "runtime-digest", InstalledBinaryVersion: "v2"}, []string{"config.export.loss.legacy-operational"}},
+		{"ambiguous intent", state.InstallState{InstalledAgents: []string{"opencode"}}, []string{"config.export.loss.legacy-operational", "config.export.loss.ambiguous-intent"}},
+		{"user owned", state.InstallState{InstalledAgents: []string{"opencode"}, SelectionConfigured: true, RDDMode: "off"}, []string{"config.export.loss.legacy-operational", "config.export.loss.user-owned"}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			home := t.TempDir()
+			if err := state.Write(home, test.state); err != nil {
+				t.Fatal(err)
+			}
 
-	var output bytes.Buffer
-	if err := RunConfig([]string{"export", "--home", home}, &output); err != nil {
-		t.Fatalf("RunConfig(export) error = %v", err)
-	}
-
-	var result struct {
-		Lossless    bool `json:"lossless"`
-		Diagnostics []struct {
-			Code string `json:"code"`
-		} `json:"diagnostics"`
-	}
-	if err := json.Unmarshal(output.Bytes(), &result); err != nil {
-		t.Fatal(err)
-	}
-	if result.Lossless || len(result.Diagnostics) == 0 || result.Diagnostics[0].Code != "config.export.loss.legacy-operational" {
-		t.Fatalf("export = %s, want loss diagnostic", output.String())
+			var output bytes.Buffer
+			if err := RunConfig([]string{"export", "--home", home}, &output); err != nil {
+				t.Fatalf("RunConfig(export) error = %v", err)
+			}
+			for _, code := range test.codes {
+				if !strings.Contains(output.String(), code) {
+					t.Fatalf("export = %s, want %s", output.String(), code)
+				}
+			}
+			if !strings.Contains(output.String(), `"lossless": false`) {
+				t.Fatalf("export = %s, want lossless false", output.String())
+			}
+		})
 	}
 }
 
