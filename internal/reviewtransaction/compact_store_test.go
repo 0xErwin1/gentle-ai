@@ -1528,7 +1528,12 @@ func TestCompactRecordEffectIntentIdentity(t *testing.T) {
 		t.Fatalf("parse intent record = %#v, %v; want revision/intents %#v", parsed, err, record)
 	}
 	legacy, _, err := makeCompactRecord(state)
-	if err != nil || legacy.Revision != bindingRevision || legacy.Revision == record.Revision || record.EffectIntents[0].BindingRevision != bindingRevision {
+	// The record revision is a pure function of state: a lineage with intents
+	// and one without share the revision, because every re-deriver in the
+	// tree (provider role requests, invalidation-evidence validation,
+	// recovery-chain composition, FINALIZE planning) recomputes it from state
+	// alone. Intents ride outside the revision with their own bound identity.
+	if err != nil || legacy.Revision != bindingRevision || legacy.Revision != record.Revision || record.EffectIntents[0].BindingRevision != bindingRevision {
 		t.Fatalf("legacy revision = %q, intent revision = %q, err = %v", legacy.Revision, record.Revision, err)
 	}
 
@@ -1545,13 +1550,6 @@ func TestCompactRecordEffectIntentIdentity(t *testing.T) {
 		}},
 		{"invalid event hash", func(candidate *CompactRecord) { candidate.EffectIntents[0].EventID = "invalid" }},
 		{"forged binding revision", func(candidate *CompactRecord) { candidate.EffectIntents[0].BindingRevision = hash("forged") }},
-		{"coordinated binding and event forgery", func(candidate *CompactRecord) {
-			intent := &candidate.EffectIntents[0]
-			intent.BindingRevision = hash("forged")
-			eventPayload, _ := json.Marshal([]string{candidate.State.LineageID, intent.BindingRevision, intent.Class, intent.Destination, intent.PayloadHash})
-			eventSum := sha256.Sum256(append([]byte("gentle-ai.review-effect-event/v1\x00"), eventPayload...))
-			intent.EventID = "sha256:" + hex.EncodeToString(eventSum[:])
-		}},
 		{"forged event identity", func(candidate *CompactRecord) { candidate.EffectIntents[0].EventID = hash("forged") }},
 		{"noncanonical order", func(candidate *CompactRecord) {
 			candidate.EffectIntents[0], candidate.EffectIntents[1] = candidate.EffectIntents[1], candidate.EffectIntents[0]
@@ -1572,8 +1570,35 @@ func TestCompactRecordEffectIntentIdentity(t *testing.T) {
 	invalidBuilder.EffectIntents = append([]CompactEffectIntent(nil), record.EffectIntents...)
 	invalidBuilder.EffectIntents[0].BindingRevision = hash("forged")
 	invalidPayload, _ := json.Marshal(invalidBuilder)
-	if _, err := parseCompactRecord(invalidPayload, state.LineageID); err == nil || !strings.Contains(err.Error(), "invalid compact required effect binding") {
+	if _, err := parseCompactRecord(invalidPayload, state.LineageID); err == nil || !strings.Contains(err.Error(), "invalid compact required effect identity") {
 		t.Fatalf("builder error = %v; want exact effect-authority evidence", err)
+	}
+
+	// A coordinated binding+event rewrite stays self-consistent, so parse
+	// admits it — content addressing is integrity, not authentication. The
+	// effect layer is the authority that blocks it: reconciliation recomputes
+	// the committed handle and payload from the intent's own frozen binding
+	// and the repository identity, and a rewritten binding cannot reproduce
+	// the committed destination.
+	forged := record
+	forged.EffectIntents = append([]CompactEffectIntent(nil), record.EffectIntents...)
+	forgedIntent := &forged.EffectIntents[0]
+	forgedIntent.BindingRevision = hash("f")
+	forgedEventPayload, _ := json.Marshal([]string{forged.State.LineageID, forgedIntent.BindingRevision, forgedIntent.Class, forgedIntent.Destination, forgedIntent.PayloadHash})
+	forgedEventSum := sha256.Sum256(append([]byte("gentle-ai.review-effect-event/v1\x00"), forgedEventPayload...))
+	forgedIntent.EventID = "sha256:" + hex.EncodeToString(forgedEventSum[:])
+	forgedPayload, _ := json.Marshal(forged)
+	parsedForged, err := parseCompactRecord(forgedPayload, state.LineageID)
+	if err != nil {
+		t.Fatalf("self-consistent rewrite must parse (integrity, not authentication): %v", err)
+	}
+	forgedStore, err := CompactAuthoritativeStore(context.Background(), repo, state.LineageID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reconcileErr := reconcileCompactRepositoryContext(context.Background(), forgedStore, parsedForged); reconcileErr == nil ||
+		!strings.Contains(reconcileErr.Error(), "does not match committed intent") {
+		t.Fatalf("effect layer verdict = %v; want committed-intent conflict for the rewritten binding", reconcileErr)
 	}
 	otherState := state
 	otherState.LineageID = "effect-intent-other-lineage"

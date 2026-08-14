@@ -1956,7 +1956,15 @@ func (store CompactStore) replaceContextGuarded(ctx context.Context, expectedRev
 			return "", fmt.Errorf("reconcile compact predecessor effects: %w", err)
 		}
 	}
-	record, payload, err := makeCompactRecord(next)
+	var carriedIntents []CompactEffectIntent
+	if current != nil {
+		// Intents are immutable for the lineage lifetime and carried verbatim,
+		// identity included: the committed effect binds the state that created
+		// it, and reconciliation verifies exactly that frozen identity
+		// (issue #1875).
+		carriedIntents = append(carriedIntents, current.EffectIntents...)
+	}
+	record, payload, err := makeCompactRecordWithIntents(next, carriedIntents)
 	if err != nil {
 		return "", err
 	}
@@ -2303,28 +2311,25 @@ func makeCompactRecordWithIntents(state CompactState, intents []CompactEffectInt
 		return CompactRecord{}, nil, err
 	}
 	bindingRevision := compactStateRevision(statePayload)
+	// The record revision is a pure function of state. Every re-deriver in the
+	// tree (CompactRevisionForState for provider role requests and FINALIZE
+	// planning, invalidation-evidence validation, recovery-chain composition)
+	// recomputes it from state alone, so folding intents into it makes a
+	// lineage with intents unverifiable the moment any of them runs — j90's
+	// captured_artifacts_unverifiable regression. Intents ride the record as
+	// carried data instead: BindingRevision freezes the state identity that
+	// created them and EventID must stay derivable from the visible fields.
 	revision := bindingRevision
 	if len(intents) > 0 {
-		semantic := make([]struct {
-			Class       string `json:"class"`
-			Destination string `json:"destination"`
-			PayloadHash string `json:"payload_hash"`
-		}, len(intents))
-		for index, intent := range intents {
-			semantic[index].Class = intent.Class
-			semantic[index].Destination = intent.Destination
-			semantic[index].PayloadHash = intent.PayloadHash
-		}
-		semanticPayload, marshalErr := json.Marshal(semantic)
-		if marshalErr != nil {
-			return CompactRecord{}, nil, marshalErr
-		}
-		sum := sha256.Sum256(bytes.Join([][]byte{[]byte("gentle-ai.review-state-effects/v1\x00"), statePayload, semanticPayload}, []byte{0}))
-		revision = "sha256:" + hex.EncodeToString(sum[:])
 		for index := range intents {
 			if intents[index].BindingRevision == "" {
 				intents[index].BindingRevision = bindingRevision
-			} else if intents[index].BindingRevision != bindingRevision {
+			} else if intents[index].EventID == "" && intents[index].BindingRevision != bindingRevision {
+				// Creation must bind the enclosing state. A carried intent
+				// (EventID already minted) keeps the binding of the state that
+				// created it: reconciliation verifies that frozen identity
+				// against the committed effect, so a rewritten binding lands
+				// on a blocked_conflict marker instead of a silent rebind.
 				return CompactRecord{}, nil, errors.New("invalid compact required effect binding") // refusal:by-design operator-knowledge: caller-supplied binding cannot override the enclosing state identity
 			}
 			eventPayload, _ := json.Marshal([]string{state.LineageID, intents[index].BindingRevision, intents[index].Class, intents[index].Destination, intents[index].PayloadHash})
@@ -2412,6 +2417,20 @@ func validateCompactEffectIntents(record CompactRecord) error {
 		if !validCompactEffectIntentFields(intent) {
 			// refusal:by-design operator-knowledge: persisted authority is corrupt and cannot be repaired by an operator command
 			return errors.New("invalid compact required effect intent")
+		}
+		// A persisted intent must arrive with its complete minted identity and
+		// that identity must be self-consistent. Rewrites that keep the event
+		// self-consistent are then caught semantically by reconciliation,
+		// which verifies the frozen binding against the committed effect.
+		if !validSHA256(intent.BindingRevision) || !validSHA256(intent.EventID) {
+			// refusal:by-design operator-knowledge: persisted authority is corrupt and cannot be repaired by an operator command
+			return errors.New("invalid compact required effect identity")
+		}
+		eventPayload, _ := json.Marshal([]string{record.State.LineageID, intent.BindingRevision, intent.Class, intent.Destination, intent.PayloadHash})
+		eventSum := sha256.Sum256(append([]byte("gentle-ai.review-effect-event/v1\x00"), eventPayload...))
+		if intent.EventID != "sha256:"+hex.EncodeToString(eventSum[:]) {
+			// refusal:by-design operator-knowledge: persisted authority is corrupt and cannot be repaired by an operator command
+			return errors.New("invalid compact required effect identity")
 		}
 		if index > 0 {
 			previous := record.EffectIntents[index-1]
