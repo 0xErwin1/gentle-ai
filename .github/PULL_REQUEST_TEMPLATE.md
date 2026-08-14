@@ -41,10 +41,10 @@ What kind of change does this PR introduce?
 
 ## 🤖 AI Assistance
 
-Select one:
+Select exactly one option. Do not check both options.
 
 - [ ] **None** — No material AI assistance was used.
-- [ ] **Material assistance used** — Complete the declaration below.
+- [ ] **Material assistance used** — Complete all applicable declaration fields below.
 
 **Tool/model (if known):**
 
@@ -114,7 +114,7 @@ The following checks run automatically on this PR:
 - [ ] I have updated documentation if necessary
 - [ ] My commits follow [Conventional Commits](https://www.conventionalcommits.org/) format
 - [ ] I understand, reviewed, and take responsibility for the complete submission
-- [ ] I have disclosed all material AI assistance above, or selected **None**
+- [ ] I selected exactly one AI-assistance option and, if material assistance was used, completed all applicable declaration fields
 - [ ] My commits do not include `Co-Authored-By` trailers
 
 ---
