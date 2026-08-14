@@ -722,6 +722,20 @@ func (result ReviewTargetStatusResult) validateSubmissionDescriptors() error {
 		if want == nil || !reflect.DeepEqual(*input.Submission, *want) {
 			return errors.New("targeted validation submission descriptor is not provider-bound") // refusal:by-design world-action: only a provider code fix can bind descriptor tokens to its request
 		}
+	case "reviewer_results_required":
+		// Only the pi host-relay capture input carries a submission: its
+		// materialize arguments are a non-advancing prelude, so the --input
+		// descriptor is what advances authority. Transition.Validate() above
+		// already pinned the descriptor tokens to the reviewed binding.
+		for _, input := range transition.Collect.Inputs {
+			if input.Submission == nil {
+				continue
+			}
+			arguments, err := reviewTransitionArgumentMap(input.Arguments)
+			if err != nil || !reviewProviderHostRelayMaterializeRuntime(model.AgentID(arguments["agent"])) {
+				return errors.New("submission descriptor is attached to an unrelated collection input") // refusal:by-design world-action: only a provider code fix can remove the unrelated descriptor
+			}
+		}
 	case "verification_evidence_required", "correction_repository_verification_required":
 		if result.Schema == ReviewIntegrationStatusSchemaV4 {
 			for _, input := range transition.Collect.Inputs {
@@ -1177,7 +1191,7 @@ func (transition ReviewNextTransition) Validate() error {
 			if err != nil {
 				return err
 			}
-			submissionAllowed := input.CaptureOperation == "external.plan_correction" || input.CaptureOperation == "external.run_targeted_validation" || input.CaptureOperation == "review.capture-evidence"
+			submissionAllowed := input.CaptureOperation == "external.plan_correction" || input.CaptureOperation == "external.run_targeted_validation" || input.CaptureOperation == "review.capture-evidence" || input.CaptureOperation == "review.capture-result"
 			if input.Submission != nil && !submissionAllowed {
 				return errors.New("collection transition submission placement is invalid") // refusal:by-design world-action: only a provider code fix can place a descriptor on a supported input
 			}
@@ -1195,14 +1209,36 @@ func (transition ReviewNextTransition) Validate() error {
 					argumentCount = 7
 				}
 				providerRuntime := model.AgentID(arguments["agent"])
-				if providerRuntime != "" && reviewProviderCaptureRuntime(providerRuntime) {
+				providerCapture := providerRuntime != "" && reviewProviderCaptureRuntime(providerRuntime)
+				hostRelayMaterialize := providerRuntime != "" && reviewProviderHostRelayMaterializeRuntime(providerRuntime)
+				if providerCapture {
 					argumentCount++
+				}
+				if hostRelayMaterialize {
+					// A host-relay capture input carries both --agent and
+					// --materialize=true: the host materializes first, then
+					// advances authority through the submission descriptor.
+					argumentCount += 2
+					expected := make([]string, 0, len(input.Arguments)-1)
+					for _, argument := range input.Arguments {
+						if argument.Name != "agent" && argument.Name != "materialize" {
+							expected = append(expected, reviewTransitionArgumentToken(argument))
+						}
+					}
+					expected = append(expected, "--input="+reviewSubmissionValuePlaceholder)
+					if input.Submission == nil || !reflect.DeepEqual(input.Submission.ArgumentTokens, expected) {
+						return errors.New("host-relay capture transition submission does not advance the reviewed binding") // refusal:by-design world-action: only a provider code fix can make the rendered transition advance authority
+					}
+				} else if input.Submission != nil {
+					return errors.New("collection transition submission placement is invalid") // refusal:by-design world-action: only a provider code fix can place a descriptor on a supported input
 				}
 				if len(arguments) != argumentCount || !reviewStartSupportedLens(arguments["lens"]) || orderErr != nil || order < 0 ||
 					!validReviewCapabilitySHA256(arguments["expected-revision"]) || !validReviewCapabilitySHA256(arguments["target"]) ||
 					strings.TrimSpace(arguments["lineage"]) == "" || reviewtransaction.ValidateReviewRepositoryContextHandle(arguments["repository-context"]) != nil ||
 					input.ArtifactSubject == nil || input.ChangedPathManifest == nil ||
-					nativeGitTransport && arguments["subject-hash"] != input.ArtifactSubject.SubjectHash || providerRuntime != "" && !reviewProviderCaptureRuntime(providerRuntime) ||
+					nativeGitTransport && arguments["subject-hash"] != input.ArtifactSubject.SubjectHash ||
+					providerRuntime != "" && !providerCapture && !hostRelayMaterialize ||
+					hostRelayMaterialize && arguments["materialize"] != "true" ||
 					legacyTransport && input.CandidateDiff == nil || nativeGitTransport && (!validReviewGitTree(input.BaseTree) || !validReviewGitTree(input.CandidateTree)) ||
 					(!legacyTransport && !nativeGitTransport) {
 					return errors.New("review capture transition lacks an exact repository and authority binding")
@@ -1294,6 +1330,9 @@ func (input ReviewTransitionInput) submissionRepositoryContext() (string, error)
 }
 
 func (submission ReviewTransitionSubmission) Validate() error {
+	if submission.OperationToken == "capture-result" {
+		return submission.validateCaptureResult()
+	}
 	if submission.Value != nil {
 		return submission.validateFinalize()
 	}
@@ -1325,6 +1364,29 @@ func (submission ReviewTransitionSubmission) Validate() error {
 	}) || input.Slot != "input" || input.Domain != "artifact_path_or_stdin" || input.Schema != reviewVerificationEvidenceSchemaID ||
 		input.Minimum != 0 || input.Maximum != 0 || len(input.AllowedValues) != 0 || input.SubstitutionLocation != 5 {
 		return errors.New("verification evidence submission descriptor values are invalid") // refusal:by-design world-action: only a provider code fix can restore the capture value domains
+	}
+	return nil
+}
+
+// validateCaptureResult is the pi host-relay reviewer-result submission: the
+// materialize arguments only obtain the prompt bytes, so this descriptor --
+// the same binding tokens with the raw result substituted into --input -- is
+// the part of the rendered transition that advances reviewing authority.
+func (submission ReviewTransitionSubmission) validateCaptureResult() error {
+	if submission.Value == nil || len(submission.Values) != 0 || len(submission.ArgumentTokens) < 7 ||
+		submission.Value.SubstitutionLocation != len(submission.ArgumentTokens)-1 {
+		return errors.New("submission descriptor identity is incomplete") // refusal:by-design world-action: only a provider code fix can restore descriptor identity
+	}
+	for _, token := range submission.ArgumentTokens {
+		if strings.TrimSpace(token) == "" || !strings.HasPrefix(token, "--") || strings.ContainsAny(token, " \t\r\n") || strings.HasPrefix(token, "--cwd=") {
+			return errors.New("submission descriptor contains an unsafe argument token") // refusal:by-design world-action: only a provider code fix can emit safe argv tokens
+		}
+	}
+	if submission.ArgumentTokens[len(submission.ArgumentTokens)-1] != "--input="+reviewSubmissionValuePlaceholder ||
+		submission.Value.Slot != "reviewer_result" || submission.Value.Domain != "artifact_path_or_stdin" ||
+		submission.Value.Schema != reviewReviewerSchemaID || submission.Value.Minimum != 0 ||
+		submission.Value.Maximum != 0 || len(submission.Value.AllowedValues) != 0 {
+		return errors.New("reviewer result submission descriptor value is invalid") // refusal:by-design world-action: only a provider code fix can restore the capture value domain
 	}
 	return nil
 }
