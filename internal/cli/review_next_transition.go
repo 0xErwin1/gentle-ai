@@ -427,11 +427,11 @@ const (
 )
 
 // reviewProviderHostRelayRoleInput renders the one pi host-relay collection
-// input for a Go-issued non-lens provider role, mirroring reviewCaptureInput's
-// host-relay lens shape exactly: the materialize arguments are only the
-// prelude that prints the Go-materialized opaque role prompt, and the
-// submission descriptor -- the same binding tokens with the raw provider
-// result substituted into --input -- is what actually advances authority.
+// input for a Go-issued non-lens provider role. The vector is self-contained:
+// its --execute form materializes the role request in Go, runs the Go-owned
+// locked-down pi process on it, and admits the raw bytes -- so the rendered
+// arguments themselves advance authority and no submission descriptor exists
+// for a caller to author a verdict through.
 func reviewProviderHostRelayRoleInput(binding ReviewTransitionBinding, role reviewProviderRole, runtime model.AgentID, validation *reviewtransaction.TargetedValidationRequest) (ReviewTransitionInput, error) {
 	if binding.LineageID == "" || !providerSHA256(binding.Revision) || !providerSHA256(binding.TargetIdentity) ||
 		reviewtransaction.ValidateReviewRepositoryContextHandle(binding.RepositoryContext) != nil {
@@ -440,41 +440,22 @@ func reviewProviderHostRelayRoleInput(binding ReviewTransitionBinding, role revi
 	arguments := append(reviewBindingArguments(binding),
 		ReviewTransitionArgument{Name: "repository-context", Value: binding.RepositoryContext})
 	input := ReviewTransitionInput{Name: "provider_" + string(role)}
-	slot := ""
 	switch role {
 	case reviewerprovider.RoleRefuter:
-		input.Schema, input.CaptureOperation, slot = reviewRefuterSchemaID, reviewCaptureRefuterCaptureOperation, "refuter_result"
+		input.Schema, input.CaptureOperation = reviewRefuterSchemaID, reviewCaptureRefuterCaptureOperation
 	case reviewerprovider.RoleTargetedValidator:
 		if validation == nil {
 			return ReviewTransitionInput{}, errors.New("provider targeted validator host-relay input requires the frozen validation request") // refusal:by-design world-action: only STATUS can bind the frozen correction request
 		}
 		arguments = append(arguments, ReviewTransitionArgument{Name: "request-hash", Value: validation.RequestHash})
-		input.Schema, input.CaptureOperation, slot = reviewValidatorSchemaID, reviewCaptureValidationCaptureOperation, "validation_result"
+		input.Schema, input.CaptureOperation = reviewValidatorSchemaID, reviewCaptureValidationCaptureOperation
 		input.ValidationRequest = validation
 	default:
 		return ReviewTransitionInput{}, fmt.Errorf("unsupported host-relay provider role %q", role) // refusal:by-design world-action: the pi host relay may collect only compiled provider roles
 	}
-	// The submission repeats every binding token INCLUDING --agent -- the raw
-	// verdict is only admissible from the identified host-relay runtime -- and
-	// drops only the read-only --materialize prelude selector.
-	tokens := make([]string, 0, len(arguments)+2)
-	for _, argument := range arguments {
-		tokens = append(tokens, reviewTransitionArgumentToken(argument))
-	}
-	tokens = append(tokens,
-		reviewTransitionArgumentToken(ReviewTransitionArgument{Name: "agent", Value: string(runtime)}),
-		"--input="+reviewSubmissionValuePlaceholder)
-	verb, _ := reviewNativeCaptureVerb(input.CaptureOperation)
-	input.Submission = &ReviewTransitionSubmission{
-		OperationToken: verb, ArgumentTokens: tokens,
-		Value: &ReviewTransitionSubmissionValue{
-			Slot: slot, Domain: "artifact_path_or_stdin", Schema: input.Schema,
-			SubstitutionLocation: len(tokens) - 1,
-		},
-	}
 	input.Arguments = append(arguments,
 		ReviewTransitionArgument{Name: "agent", Value: string(runtime)},
-		ReviewTransitionArgument{Name: "materialize", Value: "true"})
+		ReviewTransitionArgument{Name: "execute", Value: "true"})
 	return input, nil
 }
 
