@@ -367,6 +367,15 @@ jobs:
             throw 'Real-agent detection E2E is missing'
           }
 
+      - name: Verify live OpenCode provider isolation E2E is registered
+        shell: pwsh
+        run: |
+          if ($env:RUNNER_OS -ne 'Linux') { exit 0 }
+          $tests = go test -list '^TestOpenCodeRuntimeIsPinnedForTheLiveProviderTransport$' ./e2e/organicruntime
+          if ($LASTEXITCODE -ne 0 -or $tests -notcontains 'TestOpenCodeRuntimeIsPinnedForTheLiveProviderTransport') {
+            throw 'Live OpenCode provider isolation E2E is missing'
+          }
+
       - name: Run organic journeys
         # No -run filter: a renamed test must fail this job loudly, never let
         # go test exit 0 having matched nothing. The gated real-agent journey
@@ -379,6 +388,9 @@ jobs:
           # The Linux-only Codex journey invokes the registered adapter through
           # the product CLI under a process-scoped denying proxy and strace.
           GENTLE_AI_CODEX_RUNTIME_E2E: ${{ matrix.os == 'ubuntu-latest' && '1' || '0' }}
+          # The live OpenCode transport stays on Ubuntu because its process-scoped
+          # loopback denying proxy and strace proof require Linux.
+          GENTLE_AI_OPENCODE_RUNTIME_E2E: ${{ matrix.os == 'ubuntu-latest' && '1' || '0' }}
           # The large-workspace journey spawns one Git subprocess per intended
           # untracked path, so its cost is dominated by process creation. Linux
           # absorbs it; Windows does not, and gating it here keeps the real

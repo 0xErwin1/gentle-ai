@@ -20,6 +20,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -389,22 +390,7 @@ func TestCodexProviderAdapterUsesPinnedLocalRuntime(t *testing.T) {
 	}))
 	defer server.Close()
 
-	var proxyLock sync.Mutex
-	proxyRequests := 0
-	proxy := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		if !codexProxyTargetIsExternal(request) {
-			t.Errorf("denying proxy received a loopback or missing target: %s %q", request.Method, request.Host)
-			writer.WriteHeader(http.StatusBadRequest)
-			return
-		}
-		proxyLock.Lock()
-		proxyRequests++
-		proxyLock.Unlock()
-		// The proxy is process-scoped through this command's environment. Any
-		// attempted external request receives an explicit refusal instead of a
-		// route to the host network.
-		writer.WriteHeader(http.StatusForbidden)
-	}))
+	proxy := newLoopbackDenyingProxy(t)
 	defer proxy.Close()
 
 	traceBase := filepath.Join(t.TempDir(), "codex-connect")
@@ -412,16 +398,16 @@ func TestCodexProviderAdapterUsesPinnedLocalRuntime(t *testing.T) {
 	wrapper := filepath.Join(bin, "codex")
 	if err := os.WriteFile(wrapper, []byte(`#!/bin/sh
 set -eu
-exec "$GENTLE_AI_CODEX_TRACE_BINARY" -ff -o "$GENTLE_AI_CODEX_TRACE_LOG" -e trace=connect "$GENTLE_AI_CODEX_TRACE_TARGET" "$@"
+exec "$GENTLE_AI_RUNTIME_TRACE_BINARY" -ff -o "$GENTLE_AI_RUNTIME_TRACE_LOG" -e trace=connect "$GENTLE_AI_RUNTIME_TRACE_TARGET" "$@"
 `), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	environment := append(harness.environment(),
 		"PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"),
 		"GENTLE_AI_CODEX_REVIEWER_LOOPBACK_BASE_URL="+server.URL+"/v1",
-		"GENTLE_AI_CODEX_TRACE_BINARY="+strace,
-		"GENTLE_AI_CODEX_TRACE_LOG="+traceBase,
-		"GENTLE_AI_CODEX_TRACE_TARGET="+binary,
+		"GENTLE_AI_RUNTIME_TRACE_BINARY="+strace,
+		"GENTLE_AI_RUNTIME_TRACE_LOG="+traceBase,
+		"GENTLE_AI_RUNTIME_TRACE_TARGET="+binary,
 		"HTTP_PROXY="+proxy.URL,
 		"HTTPS_PROXY="+proxy.URL,
 		"ALL_PROXY="+proxy.URL,
@@ -442,9 +428,7 @@ exec "$GENTLE_AI_CODEX_TRACE_BINARY" -ff -o "$GENTLE_AI_CODEX_TRACE_LOG" -e trac
 	if responseRequests != 1 {
 		t.Fatalf("registered Codex loopback made %d root, %d model, and %d Responses requests; want exactly one Responses request", rootRequests, modelRequests, responseRequests)
 	}
-	proxyLock.Lock()
-	denied := proxyRequests
-	proxyLock.Unlock()
+	denied := proxy.deniedRequests()
 	if denied == 0 {
 		t.Fatal("Codex made no externally addressed request through the denying proxy; the external-refusal path was not exercised")
 	}
@@ -527,7 +511,53 @@ func codexTracedConnectAddress(line string) (netip.Addr, bool, error) {
 	return address, true, nil
 }
 
-func codexProxyTargetIsExternal(request *http.Request) bool {
+type loopbackDenyingProxy struct {
+	*httptest.Server
+	lock     sync.Mutex
+	requests int
+}
+
+func newLoopbackDenyingProxy(t *testing.T) *loopbackDenyingProxy {
+	t.Helper()
+	proxy := &loopbackDenyingProxy{}
+	proxy.Server = httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if !denyingProxyTargetIsExternal(request) {
+			forwarded := request.Clone(request.Context())
+			forwarded.RequestURI = ""
+			transport := http.DefaultTransport.(*http.Transport).Clone()
+			transport.Proxy = nil
+			defer transport.CloseIdleConnections()
+			response, err := transport.RoundTrip(forwarded)
+			if err != nil {
+				http.Error(writer, fmt.Sprintf("loopback proxy forward: %v", err), http.StatusBadGateway)
+				return
+			}
+			defer response.Body.Close()
+			for name, values := range response.Header {
+				writer.Header()[name] = append([]string{}, values...)
+			}
+			writer.WriteHeader(response.StatusCode)
+			_, _ = io.Copy(writer, response.Body)
+			return
+		}
+		proxy.lock.Lock()
+		proxy.requests++
+		proxy.lock.Unlock()
+		// The proxy is process-scoped through a command's environment. Any
+		// attempted external request receives an explicit refusal instead of a
+		// route to the host network.
+		writer.WriteHeader(http.StatusForbidden)
+	}))
+	return proxy
+}
+
+func (proxy *loopbackDenyingProxy) deniedRequests() int {
+	proxy.lock.Lock()
+	defer proxy.lock.Unlock()
+	return proxy.requests
+}
+
+func denyingProxyTargetIsExternal(request *http.Request) bool {
 	host := request.URL.Hostname()
 	if host == "" {
 		host = request.Host
@@ -609,10 +639,20 @@ func TestOpenCodeRuntimeIsPinnedForTheLiveProviderTransport(t *testing.T) {
 	if testing.Short() || strings.TrimSpace(os.Getenv("GENTLE_AI_OPENCODE_RUNTIME_E2E")) != "1" {
 		t.Skip("set GENTLE_AI_OPENCODE_RUNTIME_E2E=1 to verify the pinned ordinary OpenCode runtime")
 	}
-	binary := "/home/gentleman/.npm-global/bin/opencode"
+	if runtime.GOOS != "linux" {
+		t.Fatal("OpenCode egress isolation requires Linux")
+	}
+	strace, err := exec.LookPath("strace")
+	if err != nil {
+		t.Fatalf("OpenCode egress isolation unavailable: strace is required: %v", err)
+	}
+	binary, err := exec.LookPath("opencode")
+	if err != nil {
+		t.Fatal(err)
+	}
 	version, err := exec.Command(binary, "--version").Output()
-	if err != nil || strings.TrimSpace(string(version)) != "1.18.10" {
-		t.Fatalf("OpenCode version = %q, %v", strings.TrimSpace(string(version)), err)
+	if err != nil || strings.TrimSpace(string(version)) != pinnedOpenCodeVersion {
+		t.Fatalf("OpenCode version = %q, want %q (error %v)", strings.TrimSpace(string(version)), pinnedOpenCodeVersion, err)
 	}
 
 	harness := newOrganicHarness(t)
@@ -700,6 +740,25 @@ func TestOpenCodeRuntimeIsPinnedForTheLiveProviderTransport(t *testing.T) {
 		writeOpenCodeChatText(writer, "review task complete")
 	}))
 	defer server.Close()
+	proxy := newLoopbackDenyingProxy(t)
+	defer proxy.Close()
+	proxyURL, err := url.Parse(proxy.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	probe := &http.Client{Transport: &http.Transport{Proxy: http.ProxyURL(proxyURL)}}
+	response, err := probe.Get("http://opencode-egress-proof.invalid/")
+	if err != nil {
+		t.Fatalf("loopback denying proxy probe: %v", err)
+	}
+	if response.StatusCode != http.StatusForbidden {
+		_ = response.Body.Close()
+		t.Fatalf("loopback denying proxy probe status = %d, want %d", response.StatusCode, http.StatusForbidden)
+	}
+	_ = response.Body.Close()
+	if proxy.deniedRequests() != 1 {
+		t.Fatal("loopback denying proxy did not refuse the external egress probe")
+	}
 
 	pluginSource, err := assets.Read("opencode/plugins/opencode-review-transport.ts")
 	if err != nil {
@@ -734,12 +793,32 @@ func TestOpenCodeRuntimeIsPinnedForTheLiveProviderTransport(t *testing.T) {
 	}
 	context, cancel := context.WithTimeout(t.Context(), organicAgentTimeout)
 	defer cancel()
-	command := exec.CommandContext(context, binary, "run", "--format", "json", "--dir", harness.repo.worktree, "--model", "loopback/loopback", "start the Go-bound reviewer task")
+	traceBase := filepath.Join(t.TempDir(), "opencode-connect")
+	bin := t.TempDir()
+	wrapper := filepath.Join(bin, "opencode")
+	if err := os.WriteFile(wrapper, []byte(`#!/bin/sh
+set -eu
+exec "$GENTLE_AI_RUNTIME_TRACE_BINARY" -ff -o "$GENTLE_AI_RUNTIME_TRACE_LOG" -e trace=connect "$GENTLE_AI_RUNTIME_TRACE_TARGET" "$@"
+`), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	command := exec.CommandContext(context, wrapper, "run", "--format", "json", "--dir", harness.repo.worktree, "--model", "loopback/loopback", "start the Go-bound reviewer task")
 	command.Dir = harness.repo.worktree
 	command.Env = append(harness.environment(),
 		"OPENCODE_CONFIG_DIR="+configDirectory,
 		"OPENCODE_CONFIG_CONTENT="+string(config),
-		"PATH="+filepath.Dir(organicBinary)+string(os.PathListSeparator)+os.Getenv("PATH"),
+		"PATH="+bin+string(os.PathListSeparator)+filepath.Dir(organicBinary)+string(os.PathListSeparator)+os.Getenv("PATH"),
+		"GENTLE_AI_RUNTIME_TRACE_BINARY="+strace,
+		"GENTLE_AI_RUNTIME_TRACE_LOG="+traceBase,
+		"GENTLE_AI_RUNTIME_TRACE_TARGET="+binary,
+		"HTTP_PROXY="+proxy.URL,
+		"HTTPS_PROXY="+proxy.URL,
+		"ALL_PROXY="+proxy.URL,
+		"http_proxy="+proxy.URL,
+		"https_proxy="+proxy.URL,
+		"all_proxy="+proxy.URL,
+		"NO_PROXY=127.0.0.1,localhost,::1",
+		"no_proxy=127.0.0.1,localhost,::1",
 	)
 	output, runErr := command.CombinedOutput()
 	lock.Lock()
@@ -754,6 +833,16 @@ func TestOpenCodeRuntimeIsPinnedForTheLiveProviderTransport(t *testing.T) {
 	if !issued || !seen || calls == 0 {
 		t.Fatalf("ordinary OpenCode transport task=%t canonical=%t provider_requests=%d\n%s", issued, seen, calls, output)
 	}
+	connections, err := codexTracedConnectAddresses(traceBase)
+	if err != nil {
+		t.Fatalf("OpenCode egress trace is unavailable: %v", err)
+	}
+	for _, address := range connections {
+		if !address.IsLoopback() {
+			t.Fatalf("OpenCode bypassed egress isolation with a non-loopback connect to %s", address)
+		}
+	}
+	t.Logf("OpenCode egress proof: %d external attempts denied by the loopback proxy; strace observed %d Internet-socket connects, all loopback: %v", proxy.deniedRequests(), len(connections), connections)
 	if result := harness.finalize(lineage, "--captured-results=true"); result.State != organicStateValidating {
 		t.Fatalf("OpenCode capture did not enter validation: %#v", result)
 	}
