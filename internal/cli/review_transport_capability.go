@@ -31,6 +31,14 @@ const (
 	// reviewImmutableTransportCodexAdvisoryScratchProcess retains the canonical
 	// Go-owned provider contract across a fresh Codex subprocess boundary.
 	reviewImmutableTransportCodexAdvisoryScratchProcess reviewImmutableTransport = "codex_advisory_scratch_process"
+	// reviewImmutableTransportPiHostRelay is host-mediated like OpenCode's
+	// transport, but with the launcher owned by gentle-pi: the Pi host reads
+	// the negotiated collection input, launches a brand-new print-mode pi
+	// subprocess in an empty scratch directory with every discovery surface
+	// disabled, forwards the Go-issued opaque prompt untouched, and returns
+	// the raw final bytes through the exact capture operation. Go keeps
+	// prompt materialization, admission, budgets, receipts, and gates.
+	reviewImmutableTransportPiHostRelay reviewImmutableTransport = "pi_host_relay"
 )
 
 type reviewImmutableRuntimePolicy struct {
@@ -51,6 +59,8 @@ func reviewImmutableRuntimeCapability(agent model.AgentID) reviewImmutableRuntim
 		policy.Eligible = true
 	case model.AgentOpenCode:
 		policy.Eligible = true
+	case model.AgentPi:
+		policy.Eligible = true
 	default:
 		return policy
 	}
@@ -65,6 +75,8 @@ func reviewImmutableRuntimeCapability(agent model.AgentID) reviewImmutableRuntim
 		policy.Transport = reviewImmutableTransportOpenCodeProviderInjected
 	case model.AgentCodex:
 		policy.Transport = reviewImmutableTransportCodexAdvisoryScratchProcess
+	case model.AgentPi:
+		policy.Transport = reviewImmutableTransportPiHostRelay
 	}
 	return policy
 }
@@ -72,7 +84,8 @@ func reviewImmutableRuntimeCapability(agent model.AgentID) reviewImmutableRuntim
 func (capability reviewImmutableRuntimePolicy) supportsImmutableReceiptReview() bool {
 	return capability.Transport == reviewImmutableTransportClaudePromptCarried ||
 		capability.Transport == reviewImmutableTransportOpenCodeProviderInjected ||
-		capability.Transport == reviewImmutableTransportCodexAdvisoryScratchProcess
+		capability.Transport == reviewImmutableTransportCodexAdvisoryScratchProcess ||
+		capability.Transport == reviewImmutableTransportPiHostRelay
 }
 
 // reviewTransportSupportedRuntimeIDs derives the actionable runtime list from
