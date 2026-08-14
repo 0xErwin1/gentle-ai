@@ -52,7 +52,7 @@ Select exactly one option. Do not check both options.
 
 **Verification performed:**
 
-Trivial formatting, spelling, minor autocomplete, search/navigation, and mechanical transformations do not need to be itemized. See [AI_POLICY.md](../AI_POLICY.md) for the canonical policy.
+Trivial formatting, spelling, minor autocomplete, search/navigation, and trivial, non-substantive mechanical transformations do not need to be itemized. See [AI_POLICY.md](../AI_POLICY.md) for the canonical policy.
 
 ---
 
