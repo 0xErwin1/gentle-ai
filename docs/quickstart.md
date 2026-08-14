@@ -85,9 +85,26 @@ gentle-ai version
 Only use `main` when testing changes that are not part of a release yet:
 
 ```bash
+# macOS / Linux
 go install github.com/gentleman-programming/gentle-ai/v2/cmd/gentle-ai@main
 gentle-ai version
+
+# Windows (PowerShell)
+$env:GENTLE_AI_CHANNEL="beta"; go install github.com/gentleman-programming/gentle-ai/v2/cmd/gentle-ai@main
+gentle-ai version
 ```
+
+To upgrade managed tool dependencies on the beta channel later:
+
+```bash
+# macOS / Linux
+GENTLE_AI_CHANNEL=beta gentle-ai upgrade
+
+# Windows (PowerShell)
+$env:GENTLE_AI_CHANNEL="beta"; gentle-ai upgrade
+```
+
+> **Go module proxy cache**: `proxy.golang.org` can lag behind new commits on `main` for up to several hours. If `go install ...@main` exits without updating to the newest commit, bypass the cache with `GOPROXY=direct` (PowerShell: `$env:GOPROXY="direct"; go install github.com/gentleman-programming/gentle-ai/v2/cmd/gentle-ai@main`).
 
 The managed install scripts select the latest version for their chosen channel and do not accept arbitrary release pins. Use `go install` with an exact tag when you need a reproducible prerelease or stable version.
 

@@ -164,6 +164,19 @@ curl -fsSL https://raw.githubusercontent.com/Gentleman-Programming/gentle-ai/mai
 $env:GENTLE_AI_CHANNEL="beta"; go install github.com/gentleman-programming/gentle-ai/v2/cmd/gentle-ai@main
 ```
 
+To upgrade managed tool dependencies on the beta channel later:
+
+```bash
+# macOS / Linux
+GENTLE_AI_CHANNEL=beta gentle-ai upgrade
+
+# Windows (PowerShell)
+$env:GENTLE_AI_CHANNEL="beta"; gentle-ai upgrade
+```
+
+> [!NOTE]
+> **Beta channel binary updates & Go proxy caching**: `gentle-ai upgrade` refreshes managed auxiliary tools (Engram, plugins, etc.). To advance the `gentle-ai` binary itself on the development/beta channel, re-run `go install ...@main` or the installer script. Because the Go module proxy (`proxy.golang.org`) may cache `@main` commits for up to a few hours, bypass proxy caching with `GOPROXY=direct` (PowerShell: `$env:GOPROXY="direct"; go install github.com/gentleman-programming/gentle-ai/v2/cmd/gentle-ai@main`) if `go install` does not pick up recent commits.
+
 ### RDD version policy
 
 Receipt-Driven Development (RDD) started in `gentle-ai` `v1.47.0` on 2026-07-10, with the first bounded native review transactions, and became the supported stable path in `v2.2.0`. Those are historical milestones; the negotiated public review contract was published in `v2.1.6`.
