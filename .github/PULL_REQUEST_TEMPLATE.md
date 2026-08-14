@@ -39,6 +39,23 @@ What kind of change does this PR introduce?
 
 ---
 
+## 🤖 AI Assistance
+
+Select one:
+
+- [ ] **None** — No material AI assistance was used.
+- [ ] **Material assistance used** — Complete the declaration below.
+
+**Tool/model (if known):**
+
+**Material scope:**
+
+**Verification performed:**
+
+Trivial formatting, spelling, minor autocomplete, search/navigation, and mechanical transformations do not need to be itemized. See [AI_POLICY.md](../AI_POLICY.md) for the canonical policy.
+
+---
+
 ## 🧪 Test Plan
 
 **Unit Tests**
@@ -96,6 +113,8 @@ The following checks run automatically on this PR:
 - [ ] Benchmark validation completed, or this change is not applicable to the benchmark (explain why in the Test Plan).
 - [ ] I have updated documentation if necessary
 - [ ] My commits follow [Conventional Commits](https://www.conventionalcommits.org/) format
+- [ ] I understand, reviewed, and take responsibility for the complete submission
+- [ ] I have disclosed all material AI assistance above, or selected **None**
 - [ ] My commits do not include `Co-Authored-By` trailers
 
 ---
