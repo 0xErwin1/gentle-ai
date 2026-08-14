@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"time"
 
 	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewerprovider"
@@ -29,6 +30,14 @@ type reviewProviderRoleCaptureArtifact struct {
 // spawns the Go-owned pi process. Tests substitute a fake transport here; the
 // lens path keeps its host-mediated refusal in reviewProviderAdapterFor.
 var reviewProviderRoleHostAdapter = func() reviewerprovider.Adapter { return reviewerprovider.NewPiAdapter() }
+
+// reviewProviderRoleCaptureTimeout bounds one role capture operation, sized
+// like reviewFacadeFinalizeProviderOperationTimeout so a full Go-owned
+// adversarial pi run fits while a stalled provider cannot hang --execute
+// forever: on expiry the adapter surfaces its typed transport refusal,
+// nothing is captured, and STATUS reoffers the same collection input. A var
+// only as the test seam.
+var reviewProviderRoleCaptureTimeout = 600 * time.Second
 
 // reviewProviderRoleCaptureBinding is the parsed, mode-validated invocation of
 // one non-lens provider role capture command. Both commands share exactly two
@@ -164,7 +173,8 @@ func RunReviewCaptureRefuter(args []string, stdout io.Writer) error {
 	if err != nil || binding == nil {
 		return err
 	}
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(context.Background(), reviewProviderRoleCaptureTimeout)
+	defer cancel()
 	store, record, err := binding.discover(ctx)
 	if err != nil {
 		return err
@@ -205,7 +215,8 @@ func RunReviewCaptureValidation(args []string, stdout io.Writer) error {
 	if err != nil || binding == nil {
 		return err
 	}
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(context.Background(), reviewProviderRoleCaptureTimeout)
+	defer cancel()
 	store, record, err := binding.discover(ctx)
 	if err != nil {
 		return err

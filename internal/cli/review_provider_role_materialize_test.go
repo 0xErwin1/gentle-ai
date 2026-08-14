@@ -6,9 +6,11 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	goruntime "runtime"
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewerprovider"
@@ -164,6 +166,32 @@ func TestReviewCaptureRefuterExecutesGoOwnedPiAndHostMediatedFinalizeDiscoversSl
 	}
 	if final.State.State != reviewtransaction.StateCorrectionRequired {
 		t.Fatalf("finalize state = %q, want corroborated blocking finding to require correction", final.State.State)
+	}
+}
+
+// TestReviewCaptureRefuterExecuteDeadlineFailsClosedWithoutCapture stalls a
+// real spawned fake pi (its grandchild holds the inherited stdout pipe) past
+// the shrunken deadline: typed refusal, untouched slot, no hang.
+func TestReviewCaptureRefuterExecuteDeadlineFailsClosedWithoutCapture(t *testing.T) {
+	if goruntime.GOOS == "windows" {
+		t.Skip("the stalled fake pi is a POSIX shell script")
+	}
+	t.Setenv(reviewPiHostRelayContractEnvironment, reviewPiHostRelayContract)
+	_, store, record, handle := piRefuterReview(t)
+	previous := reviewProviderRoleCaptureTimeout
+	t.Cleanup(func() { reviewProviderRoleCaptureTimeout = previous })
+	reviewProviderRoleCaptureTimeout = 100 * time.Millisecond
+	stalled := filepath.Join(t.TempDir(), "stalled-pi")
+	if err := os.WriteFile(stalled, []byte("#!/bin/sh\nsleep 10\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	overrideProviderRoleHostAdapter(t, &reviewerprovider.PiAdapter{LookPath: func(string) (string, error) { return stalled, nil }})
+	err := RunReview(append(append([]string{"capture-refuter"}, piRefuterBinding(record, handle)...), "--agent", string(model.AgentPi), "--execute=true"), io.Discard)
+	if err == nil || !strings.Contains(err.Error(), "pi reviewer transport failed") || !strings.Contains(err.Error(), "context deadline exceeded") {
+		t.Fatalf("stalled pi deadline refusal = %v", err)
+	}
+	if slot, err := reviewtransaction.ReadCompactRefuterResultSlot(store.Dir); err != nil || slot.Occupied {
+		t.Fatalf("stalled pi execution mutated the refuter slot: %#v, %v", slot, err)
 	}
 }
 

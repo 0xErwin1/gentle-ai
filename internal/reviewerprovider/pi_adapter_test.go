@@ -33,11 +33,13 @@ func TestPiAdapterUsesStdinLockedDownArgumentsAndReturnsUntouchedRawOutput(t *te
 	t.Setenv(piAdapterHelperEnvironment, "1")
 	t.Setenv(piAdapterPromptPathEnvironment, promptPath)
 	var commandArguments []string
+	var command *exec.Cmd
 	adapter := &PiAdapter{
 		LookPath: func(string) (string, error) { return "pi", nil },
 		commandContext: func(ctx context.Context, _ string, arguments ...string) *exec.Cmd {
 			commandArguments = append([]string(nil), arguments...)
-			return exec.CommandContext(ctx, os.Args[0], append([]string{"-test.run=^TestPiAdapterHelperProcess$", "--"}, arguments...)...)
+			command = exec.CommandContext(ctx, os.Args[0], append([]string{"-test.run=^TestPiAdapterHelperProcess$", "--"}, arguments...)...)
+			return command
 		},
 	}
 	prompt := []byte("provider prompt\nwith bytes")
@@ -56,6 +58,9 @@ func TestPiAdapterUsesStdinLockedDownArgumentsAndReturnsUntouchedRawOutput(t *te
 		"--no-skills", "--no-prompt-templates", "--no-themes", "--no-context-files", "--no-approve",
 	}; !slices.Equal(commandArguments, want) {
 		t.Fatalf("pi arguments = %q, want %q", commandArguments, want)
+	}
+	if command.WaitDelay != piReviewerWaitDelay {
+		t.Fatalf("pi WaitDelay = %v, want %v so a held pipe cannot outlive a context kill", command.WaitDelay, piReviewerWaitDelay)
 	}
 }
 
