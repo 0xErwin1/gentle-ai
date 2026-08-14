@@ -179,6 +179,9 @@ func TestCompactEffectMarkerWriteHonorsCancellationAndPreservesPublicationCause(
 	original := syncReviewDirectory
 	syncReviewDirectory = func(dir string) error {
 		if dir == filepath.Dir(path) {
+			// Deliberate hostile corruption injected mid-publication: the raw
+			// write is the point here, and it must not re-enter this hook the
+			// way the private channel would.
 			if err := os.WriteFile(path, []byte("corrupt\n"), 0o600); err != nil {
 				t.Fatal(err)
 			}
@@ -228,7 +231,10 @@ func TestCompactEffectMarkerStrictValidation(t *testing.T) {
 	}
 	for _, tt := range cases {
 		t.Run(tt.name, func(t *testing.T) {
-			if err := os.WriteFile(path, tt.payload, 0o600); err != nil {
+			// Seeding must use the private channel: a raw os.WriteFile
+			// carries the inherited default DACL, which the Windows private
+			// validators correctly refuse (#3231).
+			if err := writePrivateRARAtomic(path, tt.payload); err != nil {
 				t.Fatal(err)
 			}
 			got, err := repository.read(marker.LineageID, marker.AuthorityRevision, marker.EventID)
@@ -335,7 +341,10 @@ func TestCompactRepositoryContextIntentAndReconcilerContract(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	published, err := readPrivateRARFile(path)
+	// The locator subsystem owns its own storage contract ("not authority"),
+	// so the published context reads through the locator reader; the strict
+	// private-RAR reader is the wrong bar for it on Windows (#3231).
+	published, err := readReviewRepositoryContext(path)
 	if err != nil || hashPayloadBytes(bytes.TrimSuffix(published, []byte{'\n'})) != intent.PayloadHash {
 		t.Fatalf("published context = %q, %v", published, err)
 	}
