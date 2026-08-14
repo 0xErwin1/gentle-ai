@@ -1300,18 +1300,27 @@ func (transition ReviewNextTransition) Validate() error {
 				argumentCount, schema := 6, reviewRefuterSchemaID
 				if input.CaptureOperation == reviewCaptureValidationCaptureOperation {
 					argumentCount, schema = 7, reviewValidatorSchemaID
-					if input.ValidationRequest == nil || arguments["request-hash"] != input.ValidationRequest.RequestHash {
-						return errors.New("provider validation capture transition lacks its frozen request binding") // refusal:by-design world-action: only STATUS can bind the frozen correction request
-					}
 				}
-				expected := make([]string, 0, len(input.Arguments)-1)
+				// Fail closed on the argument count BEFORE any arithmetic over
+				// it: a hostile envelope with a truncated (or empty) argument
+				// vector must produce this refusal, never a panic.
+				if len(input.Arguments) != argumentCount || len(arguments) != argumentCount {
+					return errors.New("provider role capture transition lacks an exact host-relay binding") // refusal:by-design world-action: only a provider code fix can make the rendered transition advance authority
+				}
+				if input.CaptureOperation == reviewCaptureValidationCaptureOperation &&
+					(input.ValidationRequest == nil || arguments["request-hash"] != input.ValidationRequest.RequestHash) {
+					return errors.New("provider validation capture transition lacks its frozen request binding") // refusal:by-design world-action: only STATUS can bind the frozen correction request
+				}
+				// The submission repeats every binding token INCLUDING --agent
+				// and drops only the read-only --materialize prelude selector.
+				expected := make([]string, 0, len(input.Arguments))
 				for _, argument := range input.Arguments {
-					if argument.Name != "agent" && argument.Name != "materialize" {
+					if argument.Name != "materialize" {
 						expected = append(expected, reviewTransitionArgumentToken(argument))
 					}
 				}
 				expected = append(expected, "--input="+reviewSubmissionValuePlaceholder)
-				if len(arguments) != argumentCount || input.Schema != schema ||
+				if input.Schema != schema ||
 					!reviewProviderHostRelayMaterializeRuntime(providerRuntime) || arguments["materialize"] != "true" ||
 					strings.TrimSpace(arguments["lineage"]) == "" || !validReviewCapabilitySHA256(arguments["expected-revision"]) ||
 					!validReviewCapabilitySHA256(arguments["target"]) || reviewtransaction.ValidateReviewRepositoryContextHandle(arguments["repository-context"]) != nil ||
@@ -1454,12 +1463,13 @@ func (submission ReviewTransitionSubmission) validateCaptureResult() error {
 
 // validateProviderRoleCapture is the pi host-relay non-lens role submission:
 // binding tokens only, with the raw provider result substituted into --input.
-// The refuter batch binds lineage/revision/target/repository-context; the
-// targeted validator additionally binds the frozen validation request hash.
+// The refuter batch binds lineage/revision/target/repository-context and the
+// identified host-relay runtime; the targeted validator additionally binds
+// the frozen validation request hash.
 func (submission ReviewTransitionSubmission) validateProviderRoleCapture() error {
-	expected, slot, schema := 5, "refuter_result", reviewRefuterSchemaID
+	expected, slot, schema := 6, "refuter_result", reviewRefuterSchemaID
 	if submission.OperationToken == "capture-validation" {
-		expected, slot, schema = 6, "validation_result", reviewValidatorSchemaID
+		expected, slot, schema = 7, "validation_result", reviewValidatorSchemaID
 	}
 	if submission.Value == nil || len(submission.Values) != 0 || len(submission.ArgumentTokens) != expected ||
 		submission.Value.SubstitutionLocation != expected-1 {
@@ -1481,6 +1491,10 @@ func (submission ReviewTransitionSubmission) validateProviderRoleCapture() error
 	if submission.OperationToken == "capture-validation" &&
 		(!strings.HasPrefix(tokens[4], "--request-hash=") || !validReviewCapabilitySHA256(strings.TrimPrefix(tokens[4], "--request-hash="))) {
 		return errors.New("submission descriptor bindings are invalid") // refusal:by-design world-action: only a provider code fix can restore authority bindings
+	}
+	if !strings.HasPrefix(tokens[expected-2], "--agent=") ||
+		!reviewProviderHostRelayMaterializeRuntime(model.AgentID(strings.TrimPrefix(tokens[expected-2], "--agent="))) {
+		return errors.New("submission descriptor bindings are invalid") // refusal:by-design world-action: only a provider code fix can bind the identified host-relay runtime
 	}
 	if tokens[expected-1] != "--input="+reviewSubmissionValuePlaceholder ||
 		submission.Value.Slot != slot || submission.Value.Domain != "artifact_path_or_stdin" ||

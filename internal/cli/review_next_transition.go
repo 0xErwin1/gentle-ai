@@ -454,11 +454,16 @@ func reviewProviderHostRelayRoleInput(binding ReviewTransitionBinding, role revi
 	default:
 		return ReviewTransitionInput{}, fmt.Errorf("unsupported host-relay provider role %q", role) // refusal:by-design world-action: the pi host relay may collect only compiled provider roles
 	}
-	tokens := make([]string, 0, len(arguments)+1)
+	// The submission repeats every binding token INCLUDING --agent -- the raw
+	// verdict is only admissible from the identified host-relay runtime -- and
+	// drops only the read-only --materialize prelude selector.
+	tokens := make([]string, 0, len(arguments)+2)
 	for _, argument := range arguments {
 		tokens = append(tokens, reviewTransitionArgumentToken(argument))
 	}
-	tokens = append(tokens, "--input="+reviewSubmissionValuePlaceholder)
+	tokens = append(tokens,
+		reviewTransitionArgumentToken(ReviewTransitionArgument{Name: "agent", Value: string(runtime)}),
+		"--input="+reviewSubmissionValuePlaceholder)
 	verb, _ := reviewNativeCaptureVerb(input.CaptureOperation)
 	input.Submission = &ReviewTransitionSubmission{
 		OperationToken: verb, ArgumentTokens: tokens,

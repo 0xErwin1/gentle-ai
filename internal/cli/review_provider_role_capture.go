@@ -58,7 +58,7 @@ func parseReviewProviderRoleCapture(command string, args []string, stdout io.Wri
 	if withRequestHash {
 		requestHash = flags.String("request-hash", "", "provider-issued frozen targeted validation request hash")
 	}
-	runtimeAgent := flags.String("agent", "", "host-relay runtime identity for --materialize; compiled runtimes materialize this role internally through `gentle-ai review finalize --agent`")
+	runtimeAgent := flags.String("agent", "", "host-relay runtime identity, required for both --materialize and --input; compiled runtimes materialize this role internally through `gentle-ai review finalize --agent`")
 	materialize := flags.Bool("materialize", false, "print the exact Go-materialized opaque provider role task for a host-relay --agent runtime without capturing anything; mutually exclusive with --input")
 	input := flags.String("input", "", "raw provider role result JSON file or - for stdin")
 	if err := parseReviewFlags(flags, args); err != nil {
@@ -78,15 +78,15 @@ func parseReviewProviderRoleCapture(command string, args []string, stdout io.Wri
 	if binding.materialize && binding.input != "" {
 		return nil, reviewPreflightError(fmt.Errorf("review %s --materialize only prints the Go-materialized provider task and cannot be combined with --input", command)) // refusal:by-design world-action: materialization is read-only and never authors or admits provider role output
 	}
-	if binding.materialize && binding.runtime == "" {
-		return nil, reviewPreflightError(fmt.Errorf("review %s --materialize requires --agent naming the host-relay runtime", command)) // refusal:by-design operator-knowledge: only a compiled host-relay runtime identity selects the materialize form
-	}
-	if !binding.materialize && binding.runtime != "" {
-		return nil, reviewPreflightError(fmt.Errorf("review %s --agent only selects the host-relay materialize form; compiled runtimes materialize this role internally through `gentle-ai review finalize --agent`", command))
-	}
 	if flags.NArg() != 0 || binding.lineage == "" || binding.target == "" || binding.revision == "" ||
 		(!binding.materialize && binding.input == "") {
-		return nil, reviewPreflightError(fmt.Errorf("review %s requires --lineage, --target, --expected-revision, and either --materialize (with --agent) or --input; `gentle-ai review status --contract %s --next-transition` prints the exact bindings", command, ReviewIntegrationContractV2))
+		return nil, reviewPreflightError(fmt.Errorf("review %s requires --lineage, --target, --expected-revision, --agent, and either --materialize or --input; `gentle-ai review status --contract %s --next-transition` prints the exact bindings", command, ReviewIntegrationContractV2))
+	}
+	if binding.runtime == "" {
+		// Both modes require the identified host-relay runtime: a raw provider
+		// verdict is only admissible from the runtime the negotiated
+		// transition bound, never from an unidentified caller.
+		return nil, reviewPreflightError(fmt.Errorf("review %s requires --agent naming the host-relay runtime", command)) // refusal:by-design operator-knowledge: only a compiled host-relay runtime identity selects the materialize and submission forms
 	}
 	if withRequestHash && binding.requestHash == "" {
 		return nil, reviewPreflightError(fmt.Errorf("review %s requires --request-hash binding the frozen targeted validation request", command)) // refusal:by-design operator-knowledge: the validator result applies only to one exact frozen correction request
@@ -94,19 +94,20 @@ func parseReviewProviderRoleCapture(command string, args []string, stdout io.Wri
 	if binding.repositoryContext != "" && reviewFlagWasProvided(flags, "cwd") {
 		return nil, reviewPreflightError(fmt.Errorf("review %s accepts either --repository-context or --cwd, not both", command)) // refusal:by-design operator-knowledge: only the caller knows whether the negotiated opaque context or a direct repository path names its authority
 	}
-	if binding.materialize {
-		if binding.repositoryContext == "" {
-			return nil, reviewPreflightError(fmt.Errorf("review %s --materialize requires the provider-issued --repository-context", command)) // refusal:by-design operator-knowledge: materialization must use the negotiated opaque context
-		}
-		if _, err := reviewRuntimeWithImmutableTransport(string(binding.runtime)); err != nil {
-			return nil, reviewPreflightError(err)
-		}
-		if reviewProviderCaptureRuntime(binding.runtime) {
-			return nil, reviewPreflightError(fmt.Errorf("review %s --materialize is unavailable for %q: a compiled runtime materializes internally through `gentle-ai review finalize --agent`", command, binding.runtime))
-		}
-		if !reviewProviderHostRelayMaterializeRuntime(binding.runtime) {
-			return nil, reviewPreflightError(fmt.Errorf("review %s provider runtime %q is host-mediated; use its live transport collection", command, binding.runtime)) // refusal:by-design world-action: only the Pi host relay collects a printed provider task
-		}
+	if binding.materialize && binding.repositoryContext == "" {
+		return nil, reviewPreflightError(fmt.Errorf("review %s --materialize requires the provider-issued --repository-context", command)) // refusal:by-design operator-knowledge: materialization must use the negotiated opaque context
+	}
+	// The runtime gate is symmetric across both modes: materialization and
+	// submission are two halves of the same host-relay transaction, so a
+	// runtime that may not receive the prompt may not return its verdict.
+	if _, err := reviewRuntimeWithImmutableTransport(string(binding.runtime)); err != nil {
+		return nil, reviewPreflightError(err)
+	}
+	if reviewProviderCaptureRuntime(binding.runtime) {
+		return nil, reviewPreflightError(fmt.Errorf("review %s is unavailable for %q: a compiled runtime materializes internally through `gentle-ai review finalize --agent`", command, binding.runtime))
+	}
+	if !reviewProviderHostRelayMaterializeRuntime(binding.runtime) {
+		return nil, reviewPreflightError(fmt.Errorf("review %s provider runtime %q is host-mediated; use its live transport collection", command, binding.runtime)) // refusal:by-design world-action: only the Pi host relay collects a printed provider task and returns its raw result
 	}
 	ctx := context.Background()
 	var err error

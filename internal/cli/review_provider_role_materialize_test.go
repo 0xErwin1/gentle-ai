@@ -132,8 +132,13 @@ func TestReviewCaptureRefuterSubmitsRawBytesAndHostMediatedFinalizeDiscoversSlot
 	if err := os.WriteFile(input, raw, 0o600); err != nil {
 		t.Fatal(err)
 	}
+	// A submission without the identified host-relay runtime is refused; the
+	// gate is symmetric with the materialize form.
+	if err := RunReview(append(append([]string{"capture-refuter"}, binding...), "--input", input), io.Discard); err == nil || !strings.Contains(err.Error(), "requires --agent") {
+		t.Fatalf("agent-free refuter submission refusal = %v", err)
+	}
 	var output bytes.Buffer
-	if err := RunReview(append(append([]string{"capture-refuter"}, binding...), "--input", input), &output); err != nil {
+	if err := RunReview(append(append([]string{"capture-refuter"}, binding...), "--agent", string(model.AgentPi), "--input", input), &output); err != nil {
 		t.Fatal(err)
 	}
 	var artifact reviewProviderRoleCaptureArtifact
@@ -198,9 +203,9 @@ func TestReviewCaptureRefuterRefusals(t *testing.T) {
 			want: "requires --agent",
 		},
 		{
-			name: "agent without materialize", env: reviewPiHostRelayContract,
+			name: "agent without materialize or input", env: reviewPiHostRelayContract,
 			argv: append(slices.Clone(fakeBinding), "--agent", string(model.AgentPi)),
-			want: "only selects the host-relay materialize form",
+			want: "either --materialize",
 		},
 		{
 			name: "without relay handshake", env: "",
@@ -211,6 +216,34 @@ func TestReviewCaptureRefuterRefusals(t *testing.T) {
 			name: "without materialize or input", env: reviewPiHostRelayContract,
 			argv: slices.Clone(fakeBinding),
 			want: "either --materialize",
+		},
+		// The submission form is gated exactly like the materialize form: a
+		// raw provider verdict is only admissible from the identified
+		// host-relay runtime, never from an unidentified or compiled caller.
+		{
+			name: "submission without agent", env: reviewPiHostRelayContract,
+			argv: append(slices.Clone(fakeBinding), "--input", "-"),
+			want: "requires --agent",
+		},
+		{
+			name: "submission from compiled claude-code runtime", env: reviewPiHostRelayContract,
+			argv: append(slices.Clone(fakeBinding), "--agent", string(model.AgentClaudeCode), "--input", "-"),
+			want: "materializes internally",
+		},
+		{
+			name: "submission from compiled codex runtime", env: reviewPiHostRelayContract,
+			argv: append(slices.Clone(fakeBinding), "--agent", string(model.AgentCodex), "--input", "-"),
+			want: "materializes internally",
+		},
+		{
+			name: "submission from opencode", env: reviewPiHostRelayContract,
+			argv: append(slices.Clone(fakeBinding), "--agent", string(model.AgentOpenCode), "--input", "-"),
+			want: "is host-mediated; use its live transport collection",
+		},
+		{
+			name: "submission without relay handshake", env: "",
+			argv: append(slices.Clone(fakeBinding), "--agent", string(model.AgentPi), "--input", "-"),
+			want: "not eligible for immutable receipt review",
 		},
 	}
 	for _, test := range tests {
@@ -223,6 +256,48 @@ func TestReviewCaptureRefuterRefusals(t *testing.T) {
 			validationErr := RunReview(append([]string{"capture-validation"}, append(slices.Clone(test.argv), "--request-hash", "sha256:"+strings.Repeat("2", 64))...), io.Discard)
 			if validationErr == nil || !strings.Contains(validationErr.Error(), test.want) {
 				t.Fatalf("capture-validation refusal = %v, want %q", validationErr, test.want)
+			}
+		})
+	}
+}
+
+// TestHostileProviderRoleCaptureTransitionsFailClosedWithoutPanic decodes
+// hostile role-capture transitions -- zero arguments, and a truncated
+// argument vector -- and requires a typed refusal from Validate(), never a
+// panic from unguarded slice arithmetic over the argument count.
+func TestHostileProviderRoleCaptureTransitionsFailClosedWithoutPanic(t *testing.T) {
+	t.Setenv(reviewPiHostRelayContractEnvironment, reviewPiHostRelayContract)
+	for _, test := range []struct {
+		name      string
+		operation string
+		arguments string
+	}{
+		{name: "refuter with zero arguments", operation: "review.capture-refuter", arguments: `[]`},
+		{name: "validation with zero arguments", operation: "review.capture-validation", arguments: `[]`},
+		{
+			name: "refuter with a truncated argument vector", operation: "review.capture-refuter",
+			arguments: `[{"name":"lineage","value":"hostile"}]`,
+		},
+		{
+			name: "validation with a truncated argument vector", operation: "review.capture-validation",
+			arguments: `[{"name":"lineage","value":"hostile"}]`,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			payload := `{"kind":"collect","reason_code":"provider_refuter_required","collect":{"inputs":[{` +
+				`"name":"provider_refuter","schema":"` + reviewRefuterSchemaID + `",` +
+				`"capture_operation":"` + test.operation + `","arguments":` + test.arguments + `}]}}`
+			var transition ReviewNextTransition
+			if err := json.Unmarshal([]byte(payload), &transition); err != nil {
+				t.Fatal(err)
+			}
+			defer func() {
+				if recovered := recover(); recovered != nil {
+					t.Fatalf("hostile role capture transition panicked: %v", recovered)
+				}
+			}()
+			if err := transition.Validate(); err == nil {
+				t.Fatal("hostile role capture transition validated")
 			}
 		})
 	}
@@ -259,9 +334,12 @@ func TestNegotiatedStatusRendersPiHostRelayRefuterCollectInput(t *testing.T) {
 	if tokens["agent"] != "--agent="+string(model.AgentPi) || tokens["materialize"] != "--materialize=true" {
 		t.Fatalf("pi host relay refuter arguments = %#v", input.Arguments)
 	}
-	wantTokens := make([]string, 0, len(input.Arguments)-1)
+	// The submission repeats every binding token INCLUDING --agent (the
+	// verdict is only admissible from the identified host-relay runtime) and
+	// drops only the read-only --materialize prelude selector.
+	wantTokens := make([]string, 0, len(input.Arguments))
 	for _, argument := range input.Arguments {
-		if argument.Name != "agent" && argument.Name != "materialize" {
+		if argument.Name != "materialize" {
 			wantTokens = append(wantTokens, argument.Token)
 		}
 	}
@@ -394,9 +472,12 @@ func TestReviewCaptureValidationMaterializesSubmitsAndFinalizeDiscovers(t *testi
 		tokens["agent"] != "--agent="+string(model.AgentPi) || tokens["materialize"] != "--materialize=true" {
 		t.Fatalf("pi host relay validation arguments = %#v", input.Arguments)
 	}
-	wantTokens := make([]string, 0, len(input.Arguments)-1)
+	// The submission repeats every binding token INCLUDING --agent (the
+	// verdict is only admissible from the identified host-relay runtime) and
+	// drops only the read-only --materialize prelude selector.
+	wantTokens := make([]string, 0, len(input.Arguments))
 	for _, argument := range input.Arguments {
-		if argument.Name != "agent" && argument.Name != "materialize" {
+		if argument.Name != "materialize" {
 			wantTokens = append(wantTokens, argument.Token)
 		}
 	}
