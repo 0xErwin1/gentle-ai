@@ -64,13 +64,17 @@ const (
 // never escalates its own route. Re-executing the compiled test binary keeps
 // that real without adding a language runtime dependency to the suite.
 const (
-	organicActorRoleEnvironment    = "GENTLE_AI_ORGANIC_ACTOR_ROLE"
-	organicActorRepoEnvironment    = "GENTLE_AI_ORGANIC_ACTOR_REPO"
-	organicActorPathEnvironment    = "GENTLE_AI_ORGANIC_ACTOR_PATH"
-	organicActorBodyEnvironment    = "GENTLE_AI_ORGANIC_ACTOR_BODY"
-	organicActorMessageEnvironment = "GENTLE_AI_ORGANIC_ACTOR_MESSAGE"
-	organicActorBinaryEnvironment  = "GENTLE_AI_ORGANIC_ACTOR_BINARY"
-	organicTestBinaryEnvironment   = "GENTLE_AI_ORGANIC_TEST_BINARY"
+	organicActorRoleEnvironment                     = "GENTLE_AI_ORGANIC_ACTOR_ROLE"
+	organicActorRepoEnvironment                     = "GENTLE_AI_ORGANIC_ACTOR_REPO"
+	organicActorPathEnvironment                     = "GENTLE_AI_ORGANIC_ACTOR_PATH"
+	organicActorBodyEnvironment                     = "GENTLE_AI_ORGANIC_ACTOR_BODY"
+	organicActorMessageEnvironment                  = "GENTLE_AI_ORGANIC_ACTOR_MESSAGE"
+	organicActorBinaryEnvironment                   = "GENTLE_AI_ORGANIC_ACTOR_BINARY"
+	organicTestBinaryEnvironment                    = "GENTLE_AI_ORGANIC_TEST_BINARY"
+	organicProviderCaptureFakeAgentEnvironment      = "GENTLE_AI_ORGANIC_PROVIDER_CAPTURE_FAKE_AGENT"
+	organicProviderCaptureFakePayloadEnvironment    = "GENTLE_AI_ORGANIC_PROVIDER_CAPTURE_FAKE_PAYLOAD"
+	organicProviderCaptureFakeFailureEnvironment    = "GENTLE_AI_ORGANIC_PROVIDER_CAPTURE_FAKE_FAILURE"
+	organicProviderCaptureFakeInvocationEnvironment = "GENTLE_AI_ORGANIC_PROVIDER_CAPTURE_FAKE_INVOCATION"
 
 	organicActorRoleDirect    = "direct"
 	organicActorRoleDelegated = "delegated"
@@ -101,6 +105,9 @@ const (
 var organicBinary string
 
 func TestMain(m *testing.M) {
+	if agent := strings.TrimSpace(os.Getenv(organicProviderCaptureFakeAgentEnvironment)); agent != "" {
+		os.Exit(runOrganicProviderCaptureFake(agent))
+	}
 	if role := strings.TrimSpace(os.Getenv(organicActorRoleEnvironment)); role != "" {
 		os.Exit(runOrganicActor(role))
 	}
@@ -801,12 +808,14 @@ func TestNativeProviderCaptureResultCLIUsesCompiledAdapters(t *testing.T) {
 			status := organicProviderStatus(t, harness, lineage, test.agent)
 			binding := organicProviderBinding(t, status)
 			bin := t.TempDir()
-			organicWriteProviderCaptureFake(t, filepath.Join(bin, test.binary), test.agent, binding, []string{"internal/provider/candidate.go"})
-			environment := append(harness.environment(), "PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+			fake := organicWriteProviderCaptureFake(t, bin, test.binary, test.agent, binding, []string{"internal/provider/candidate.go"})
+			environment := append(harness.environment(), fake.environment...)
 			arguments := []string{"review", "capture-result", "--agent", test.agent, "--repository-context", binding["repository-context"],
 				"--expected-revision", binding["expected-revision"], "--lineage", binding["lineage"], "--target", binding["target"],
 				"--lens", binding["lens"], "--order", binding["order"]}
-			if stdout, stderr, err := runOrganicCommand(t, organicBinary, harness.repo.worktree, environment, arguments...); err != nil {
+			stdout, stderr, err := runOrganicCommand(t, organicBinary, harness.repo.worktree, environment, arguments...)
+			fake.assertInvoked(t)
+			if err != nil {
 				t.Fatalf("provider capture: %v\nstdout:\n%s\nstderr:\n%s", err, stdout, stderr)
 			}
 			if result := harness.finalize(lineage, "--captured-results=true"); result.State != organicStateValidating {
@@ -825,11 +834,13 @@ func TestNativeProviderCaptureFailureReoffersTheSameBinding(t *testing.T) {
 			_ = organicProviderStart(t, harness, lineage, test.agent)
 			before := organicProviderBinding(t, organicProviderStatus(t, harness, lineage, test.agent))
 			bin := t.TempDir()
-			organicWriteProviderCaptureFake(t, filepath.Join(bin, test.binary), test.agent, nil, nil)
-			environment := append(harness.environment(), "PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+			fake := organicWriteProviderCaptureFake(t, bin, test.binary, test.agent, nil, nil)
+			environment := append(harness.environment(), fake.environment...)
 			arguments := []string{"review", "capture-result", "--agent", test.agent, "--repository-context", before["repository-context"],
 				"--expected-revision", before["expected-revision"], "--lineage", before["lineage"], "--target", before["target"], "--lens", before["lens"], "--order", before["order"]}
-			if _, _, err := runOrganicCommand(t, organicBinary, harness.repo.worktree, environment, arguments...); err == nil {
+			_, _, err := runOrganicCommand(t, organicBinary, harness.repo.worktree, environment, arguments...)
+			fake.assertInvoked(t)
+			if err == nil {
 				t.Fatal("provider transport failure unexpectedly captured a result")
 			}
 			after := organicProviderBinding(t, organicProviderStatus(t, harness, lineage, test.agent))
@@ -925,25 +936,191 @@ func organicProviderBinding(t *testing.T, status organicProviderStatusResult) ma
 	return binding
 }
 
-func organicWriteProviderCaptureFake(t *testing.T, path, agent string, binding map[string]string, paths []string) {
+func TestOrganicProviderCaptureFakeWindowsDispatch(t *testing.T) {
+	for _, test := range []struct {
+		name, goos, binary, wantExecutable, wantPathPrefix, wantPathExt string
+	}{
+		{name: "Unix Claude", goos: "linux", binary: "claude", wantExecutable: "claude", wantPathPrefix: "PATH=/fake-bin:"},
+		{name: "Windows Claude", goos: "windows", binary: "claude", wantExecutable: "claude.exe", wantPathPrefix: "PATH=/fake-bin;", wantPathExt: "PATHEXT=.EXE"},
+		{name: "Windows Codex", goos: "windows", binary: "codex", wantExecutable: "codex.exe", wantPathPrefix: "PATH=/fake-bin;", wantPathExt: "PATHEXT=.EXE"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if got := organicProviderCaptureFakeExecutableName(test.binary, test.goos); got != test.wantExecutable {
+				t.Fatalf("fake executable = %q, want %q", got, test.wantExecutable)
+			}
+			environment := organicProviderCaptureFakeDispatchEnvironment("/fake-bin", test.goos)
+			if !strings.HasPrefix(environment[0], test.wantPathPrefix) {
+				t.Fatalf("fake PATH = %q, want prefix %q", environment[0], test.wantPathPrefix)
+			}
+			if got := strings.TrimPrefix(environment[0], test.wantPathPrefix); got != os.Getenv("PATH") {
+				t.Fatalf("fake inherited PATH = %q, want %q", got, os.Getenv("PATH"))
+			}
+			if test.wantPathExt == "" {
+				if len(environment) != 1 {
+					t.Fatalf("Unix fake environment = %q, want only PATH", environment)
+				}
+				return
+			}
+			if len(environment) != 2 || environment[1] != test.wantPathExt {
+				t.Fatalf("Windows fake environment = %q, want PATHEXT %q", environment, test.wantPathExt)
+			}
+		})
+	}
+}
+
+type organicProviderCaptureFake struct {
+	agent          string
+	payload        string
+	failure        bool
+	invocationPath string
+	environment    []string
+}
+
+type organicProviderCaptureFakeInvocation struct {
+	Agent             string   `json:"agent"`
+	Failure           bool     `json:"failure"`
+	Payload           string   `json:"payload"`
+	Arguments         []string `json:"arguments"`
+	OutputLastMessage string   `json:"output_last_message"`
+}
+
+func organicWriteProviderCaptureFake(t *testing.T, directory, binary, agent string, binding map[string]string, paths []string) organicProviderCaptureFake {
 	t.Helper()
-	script := "#!/bin/sh\ncat >/dev/null\n"
-	if binding == nil {
-		script += "exit 1\n"
-	} else {
+	fake := organicProviderCaptureFake{
+		agent:          agent,
+		failure:        binding == nil,
+		invocationPath: filepath.Join(directory, "provider-capture-invocation.json"),
+		environment:    organicProviderCaptureFakeDispatchEnvironment(directory, runtime.GOOS),
+	}
+	if binding != nil {
 		payload, err := json.Marshal(map[string]any{"subject_hash": binding["subject-hash"], "inspection": map[string]any{"status": "completed", "paths": paths}, "findings": []any{}, "evidence": []string{"inspected the complete frozen candidate"}})
 		if err != nil {
 			t.Fatal(err)
 		}
-		if agent == "codex" {
-			script += "for argument in \"$@\"; do if [ \"$previous\" = --output-last-message ]; then output=$argument; break; fi; previous=$argument; done\nprintf '%s\\n' '" + string(payload) + "' > \"$output\"\n"
-		} else {
-			script += "printf '%s\\n' '" + string(payload) + "'\n"
-		}
+		fake.payload = string(payload) + "\n"
 	}
-	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
+	fake.environment = append(fake.environment,
+		organicProviderCaptureFakeAgentEnvironment+"="+fake.agent,
+		organicProviderCaptureFakePayloadEnvironment+"="+fake.payload,
+		organicProviderCaptureFakeFailureEnvironment+"="+strconv.FormatBool(fake.failure),
+		organicProviderCaptureFakeInvocationEnvironment+"="+fake.invocationPath,
+	)
+	path := filepath.Join(directory, organicProviderCaptureFakeExecutableName(binary, runtime.GOOS))
+	source, err := os.Open(os.Args[0])
+	if err != nil {
 		t.Fatal(err)
 	}
+	defer source.Close()
+	destination, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o755)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := io.Copy(destination, source); err != nil {
+		_ = destination.Close()
+		t.Fatal(err)
+	}
+	if err := destination.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(path, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return fake
+}
+
+func organicProviderCaptureFakeExecutableName(binary, goos string) string {
+	if goos == "windows" {
+		return binary + ".exe"
+	}
+	return binary
+}
+
+func organicProviderCaptureFakeDispatchEnvironment(directory, goos string) []string {
+	separator := string(os.PathListSeparator)
+	if goos == "windows" {
+		separator = ";"
+	}
+	environment := []string{"PATH=" + directory + separator + os.Getenv("PATH")}
+	if goos == "windows" {
+		environment = append(environment, "PATHEXT=.EXE")
+	}
+	return environment
+}
+
+func (fake organicProviderCaptureFake) assertInvoked(t *testing.T) {
+	t.Helper()
+	data, err := os.ReadFile(fake.invocationPath)
+	if err != nil {
+		t.Fatalf("provider capture fake was not invoked: %v", err)
+	}
+	var invocation organicProviderCaptureFakeInvocation
+	if err := json.Unmarshal(data, &invocation); err != nil {
+		t.Fatalf("decode provider capture fake invocation: %v\n%s", err, data)
+	}
+	if invocation.Agent != fake.agent || invocation.Failure != fake.failure {
+		t.Fatalf("provider capture fake invocation = %#v, want agent=%q failure=%t", invocation, fake.agent, fake.failure)
+	}
+	if !fake.failure && invocation.Payload != fake.payload {
+		t.Fatalf("provider capture fake payload = %q, want %q", invocation.Payload, fake.payload)
+	}
+	switch fake.agent {
+	case "claude-code":
+		if invocation.OutputLastMessage != "" {
+			t.Fatalf("Claude fake received --output-last-message=%q", invocation.OutputLastMessage)
+		}
+	case "codex":
+		if invocation.OutputLastMessage == "" {
+			t.Fatalf("Codex fake did not receive --output-last-message: %q", invocation.Arguments)
+		}
+	default:
+		t.Fatalf("unsupported provider capture fake agent %q", fake.agent)
+	}
+}
+
+func runOrganicProviderCaptureFake(agent string) int {
+	if _, err := io.Copy(io.Discard, os.Stdin); err != nil {
+		return 1
+	}
+	invocation := organicProviderCaptureFakeInvocation{
+		Agent:     agent,
+		Failure:   os.Getenv(organicProviderCaptureFakeFailureEnvironment) == "true",
+		Payload:   os.Getenv(organicProviderCaptureFakePayloadEnvironment),
+		Arguments: os.Args[1:],
+	}
+	for index, argument := range invocation.Arguments {
+		if argument == "--output-last-message" && index+1 < len(invocation.Arguments) {
+			invocation.OutputLastMessage = invocation.Arguments[index+1]
+			break
+		}
+	}
+	encoded, err := json.Marshal(invocation)
+	if err != nil {
+		return 1
+	}
+	if err := os.WriteFile(os.Getenv(organicProviderCaptureFakeInvocationEnvironment), encoded, 0o600); err != nil {
+		return 1
+	}
+	if invocation.Failure {
+		return 1
+	}
+	if invocation.Payload == "" {
+		return 1
+	}
+	switch agent {
+	case "claude-code":
+		_, err = fmt.Fprint(os.Stdout, invocation.Payload)
+	case "codex":
+		if invocation.OutputLastMessage == "" {
+			return 1
+		}
+		err = os.WriteFile(invocation.OutputLastMessage, []byte(invocation.Payload), 0o600)
+	default:
+		return 1
+	}
+	if err != nil {
+		return 1
+	}
+	return 0
 }
 
 // TestOrganicConfiguredAgentReceivesRoutingGuidance is the optional-SDD
