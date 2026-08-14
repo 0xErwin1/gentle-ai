@@ -1,6 +1,9 @@
 package config
 
-import "encoding/json"
+import (
+	"encoding/json"
+	"sort"
+)
 
 type ExportResult struct {
 	Document    Document     `json:"document"`
@@ -18,7 +21,13 @@ func Export(state DesiredState) ExportResult {
 		Lossless: true,
 	}
 
+	providers := make([]string, 0, len(state.Extensions))
 	for provider := range state.Extensions {
+		providers = append(providers, provider)
+	}
+	sort.Strings(providers)
+
+	for _, provider := range providers {
 		result.Diagnostics = append(result.Diagnostics, Diagnostic{
 			Code:     "config.export.loss.provider-extension",
 			Path:     "$.extensions." + provider,

@@ -42,3 +42,41 @@ func TestExportPreservesRepresentableState(t *testing.T) {
 		t.Fatalf("document = %#v, want representable state", result.Document)
 	}
 }
+
+func TestExportLegacyProviderExtensionsAreSorted(t *testing.T) {
+	state := DesiredState{
+		Version: CurrentVersion,
+		Extensions: map[string]json.RawMessage{
+			"zeta":  json.RawMessage(`{"enabled":true}`),
+			"alpha": json.RawMessage(`{"enabled":false}`),
+		},
+	}
+
+	first, err := EncodeExport(Export(state))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for range 32 {
+		current, err := EncodeExport(Export(state))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(first) != string(current) {
+			t.Fatalf("repeated export bytes differ\nfirst=%s\ncurrent=%s", first, current)
+		}
+	}
+
+	var result ExportResult
+	if err := json.Unmarshal(first, &result); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := diagnosticCodes(result.Diagnostics), []string{
+		"config.export.loss.provider-extension",
+		"config.export.loss.provider-extension",
+	}; !slices.Equal(got, want) {
+		t.Fatalf("diagnostic codes = %v, want %v", got, want)
+	}
+	if got, want := []string{result.Diagnostics[0].Path, result.Diagnostics[1].Path}, []string{"$.extensions.alpha", "$.extensions.zeta"}; !slices.Equal(got, want) {
+		t.Fatalf("diagnostic paths = %v, want %v", got, want)
+	}
+}

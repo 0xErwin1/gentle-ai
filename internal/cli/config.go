@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 
 	configdomain "github.com/gentleman-programming/gentle-ai/v2/internal/config"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
@@ -241,24 +242,69 @@ func exportConfig(stdout io.Writer, configPath, home string) error {
 		SDDMode:    legacy.SDDMode,
 		StrictTDD:  legacy.StrictTDD,
 	}))
-	result.Diagnostics = append(result.Diagnostics, configdomain.Diagnostic{
+	result.Diagnostics = append(result.Diagnostics, legacyExportDiagnostics(legacy)...)
+	result.Lossless = false
+	return writeConfigResult(stdout, result)
+}
+
+func legacyExportDiagnostics(legacy state.InstallState) []configdomain.Diagnostic {
+	diagnostics := make([]configdomain.Diagnostic, 0, len(legacy.CommunityTools)+len(legacy.ModelAssignments)+4)
+	communityTools := append([]string(nil), legacy.CommunityTools...)
+	sort.Strings(communityTools)
+	for index, tool := range communityTools {
+		diagnostics = append(diagnostics, configdomain.Diagnostic{
+			Code:     "config.export.loss.community-tool",
+			Path:     fmt.Sprintf("$.community_tools[%d]", index),
+			Severity: configdomain.Error,
+			Message:  fmt.Sprintf("legacy community tool %q cannot be represented; rerun gentle-ai install and select %q", tool, tool),
+		})
+	}
+
+	assignmentNames := make([]string, 0, len(legacy.ModelAssignments))
+	for name := range legacy.ModelAssignments {
+		assignmentNames = append(assignmentNames, name)
+	}
+	sort.Strings(assignmentNames)
+	for _, name := range assignmentNames {
+		assignment := legacy.ModelAssignments[name]
+		value := fmt.Sprintf("%s=%s/%s", name, assignment.ProviderID, assignment.ModelID)
+		if assignment.Effort != "" {
+			value += "@" + assignment.Effort
+		}
+		diagnostics = append(diagnostics, configdomain.Diagnostic{
+			Code:     "config.export.loss.model-assignment",
+			Path:     "$.model_assignments." + name,
+			Severity: configdomain.Error,
+			Message:  fmt.Sprintf("legacy model assignment %q cannot be represented; reconfigure it through gentle-ai's model picker", value),
+		})
+	}
+
+	if legacy.BackgroundIntent != "" {
+		diagnostics = append(diagnostics, configdomain.Diagnostic{
+			Code:     "config.export.loss.background-intent",
+			Path:     "$.opencode_background_subagents",
+			Severity: configdomain.Error,
+			Message:  fmt.Sprintf("legacy OpenCode background intent %q cannot be represented; rerun gentle-ai install with the same background preference", legacy.BackgroundIntent),
+		})
+	}
+
+	diagnostics = append(diagnostics, configdomain.Diagnostic{
 		Code: "config.export.loss.legacy-operational", Path: "$", Severity: configdomain.Error,
 		Message: "legacy install state omits runtime and provenance fields from desired configuration",
 	})
 	if !legacy.SelectionConfigured {
-		result.Diagnostics = append(result.Diagnostics, configdomain.Diagnostic{
+		diagnostics = append(diagnostics, configdomain.Diagnostic{
 			Code: "config.export.loss.ambiguous-intent", Path: "$", Severity: configdomain.Error,
 			Message: "legacy install state cannot distinguish inferred defaults from an explicit selection",
 		})
 	}
 	if legacy.RDDMode != "" {
-		result.Diagnostics = append(result.Diagnostics, configdomain.Diagnostic{
+		diagnostics = append(diagnostics, configdomain.Diagnostic{
 			Code: "config.export.loss.user-owned", Path: "$.rdd_mode", Severity: configdomain.Error,
 			Message: "user-owned review policy remains local and is excluded from desired configuration",
 		})
 	}
-	result.Lossless = false
-	return writeConfigResult(stdout, result)
+	return diagnostics
 }
 
 func legacyAgentIDs(values []string) []model.AgentID {
