@@ -2,6 +2,8 @@ package config
 
 import (
 	"encoding/json"
+	"reflect"
+	"slices"
 	"testing"
 
 	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
@@ -55,13 +57,41 @@ func TestDecode(t *testing.T) {
 			if state.Version != tt.wantVersion {
 				t.Fatalf("version = %q, want %q", state.Version, tt.wantVersion)
 			}
-			if got := Project(state); !equalSelection(got, tt.want) {
+			if got := Project(state); !reflect.DeepEqual(got, tt.want) {
 				t.Fatalf("selection = %#v, want %#v", got, tt.want)
 			}
-			if got := diagnosticCodes(diagnostics); !equalStrings(got, tt.wantCodes) {
+			if got := diagnosticCodes(diagnostics); !slices.Equal(got, tt.wantCodes) {
 				t.Fatalf("diagnostics = %v, want %v", got, tt.wantCodes)
 			}
 		})
+	}
+}
+
+func TestAdmitRejectsInvalidDocumentBeforeAction(t *testing.T) {
+	invoked := false
+	diagnostics := Admit([]byte(`{"version":"v9"}`), func(DesiredState) {
+		invoked = true
+	})
+
+	if invoked {
+		t.Fatal("action invoked for invalid document")
+	}
+	if got := diagnosticCodes(diagnostics); !slices.Equal(got, []string{"config.version.unsupported"}) {
+		t.Fatalf("diagnostics = %v", got)
+	}
+}
+
+func TestAdmitInvokesActionForValidDocument(t *testing.T) {
+	var admitted DesiredState
+	diagnostics := Admit([]byte(`{"version":"v1"}`), func(state DesiredState) {
+		admitted = state
+	})
+
+	if len(diagnostics) != 0 {
+		t.Fatalf("diagnostics = %v", diagnostics)
+	}
+	if admitted.Version != CurrentVersion {
+		t.Fatalf("admitted version = %q, want %q", admitted.Version, CurrentVersion)
 	}
 }
 
@@ -74,29 +104,17 @@ func TestNormalizeRejectsInvalidRolesAndCanonicalizesSelections(t *testing.T) {
 			{ID: "writer", RenderedName: "writer-2"},
 			{ID: "reviewer", References: []RoleRef{"missing"}},
 		},
+		Extensions: map[string]json.RawMessage{"opencode": json.RawMessage(`{"model":"x"}`)},
 	})
 
 	if state.Version != CurrentVersion {
 		t.Fatalf("version = %q, want %q", state.Version, CurrentVersion)
 	}
-	if got := Project(state).Agents; !equalAgents(got, []model.AgentID{model.AgentOpenCode}) {
+	if got := Project(state).Agents; !reflect.DeepEqual(got, []model.AgentID{model.AgentOpenCode}) {
 		t.Fatalf("agents = %v, want one opencode", got)
 	}
-	if got := diagnosticCodes(diagnostics); !equalStrings(got, []string{"config.role.duplicate", "config.role.reference.unresolved"}) {
+	if got := diagnosticCodes(diagnostics); !slices.Equal(got, []string{"config.role.duplicate", "config.role.reference.unresolved"}) {
 		t.Fatalf("diagnostics = %v", got)
-	}
-}
-
-func TestDocumentExtensionsRemainProviderScoped(t *testing.T) {
-	state, diagnostics := Normalize(Document{
-		Version: CurrentVersion,
-		Extensions: map[string]json.RawMessage{
-			"opencode": json.RawMessage(`{"model":"x"}`),
-		},
-	})
-
-	if len(diagnostics) != 0 {
-		t.Fatalf("diagnostics = %#v", diagnostics)
 	}
 	if string(state.Extensions["opencode"]) != `{"model":"x"}` {
 		t.Fatalf("extension = %s", state.Extensions["opencode"])
@@ -109,24 +127,4 @@ func diagnosticCodes(diagnostics []Diagnostic) []string {
 		codes = append(codes, diagnostic.Code)
 	}
 	return codes
-}
-
-func equalSelection(got, want model.Selection) bool {
-	return equalAgents(got.Agents, want.Agents) && got.Persona == want.Persona && got.Preset == want.Preset && equalComponents(got.Components, want.Components)
-}
-
-func equalAgents(got, want []model.AgentID) bool         { return equalSlice(got, want) }
-func equalComponents(got, want []model.ComponentID) bool { return equalSlice(got, want) }
-func equalStrings(got, want []string) bool               { return equalSlice(got, want) }
-
-func equalSlice[T comparable](got, want []T) bool {
-	if len(got) != len(want) {
-		return false
-	}
-	for index := range got {
-		if got[index] != want[index] {
-			return false
-		}
-	}
-	return true
 }

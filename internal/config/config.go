@@ -70,6 +70,15 @@ func Decode(input []byte) (DesiredState, []Diagnostic) {
 	return Normalize(document)
 }
 
+// Admit invokes action only when decoding and validation complete without diagnostics.
+func Admit(input []byte, action func(DesiredState)) []Diagnostic {
+	state, diagnostics := Decode(input)
+	if len(diagnostics) == 0 {
+		action(state)
+	}
+	return diagnostics
+}
+
 // Normalize migrates, defaults, validates, and canonicalizes desired state.
 func Normalize(document Document) (DesiredState, []Diagnostic) {
 	diagnostics := make([]Diagnostic, 0)
