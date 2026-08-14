@@ -259,6 +259,7 @@ func RunReviewCaptureResult(args []string, stdout io.Writer) error {
 	runtimeAgent := flags.String("agent", "", "compiled reviewer runtime that invokes the provider-owned request; mutually exclusive with --input and --preflight")
 	input := flags.String("input", "", "raw reviewer result JSON file or - for stdin; `gentle-ai review schema reviewer` emits the schema and a working example")
 	preflight := flags.Bool("preflight", false, "validate the capture binding and, when --input is supplied, the result admission without persisting anything")
+	materialize := flags.Bool("materialize", false, "print the exact Go-materialized opaque provider task for a host-relay --agent runtime without capturing anything; mutually exclusive with --input and --preflight")
 	if err := parseReviewFlags(flags, args); err != nil {
 		return err
 	}
@@ -267,6 +268,14 @@ func RunReviewCaptureResult(args []string, stdout io.Writer) error {
 	}
 	providerRuntime := model.AgentID(strings.TrimSpace(*runtimeAgent))
 	providerExecution := providerRuntime != ""
+	if *materialize {
+		if *preflight || strings.TrimSpace(*input) != "" {
+			return reviewPreflightError(errors.New("review capture-result --materialize only prints the Go-materialized provider task and cannot be combined with --input or --preflight")) // refusal:by-design world-action: materialization is read-only and never authors or admits reviewer output
+		}
+		if !providerExecution {
+			return reviewPreflightError(errors.New("review capture-result --materialize requires --agent naming the host-relay runtime")) // refusal:by-design operator-knowledge: only a compiled host-relay runtime identity selects the materialize form
+		}
+	}
 	if flags.NArg() != 0 || strings.TrimSpace(*lineage) == "" || strings.TrimSpace(*target) == "" ||
 		strings.TrimSpace(*lens) == "" || *order < 0 || (!*preflight && strings.TrimSpace(*input) == "" && !providerExecution) {
 		return reviewPreflightError(errors.New("review capture-result requires an exact repository context, --lineage, --target, --lens, --order, and either --input or --agent (or --preflight); `gentle-ai review status --contract gentle-ai.review-integration/v1 --next-transition` prints the exact bindings and `gentle-ai review schema reviewer` emits the result schema with a working example"))
@@ -288,7 +297,14 @@ func RunReviewCaptureResult(args []string, stdout io.Writer) error {
 		if _, err := reviewRuntimeWithImmutableTransport(string(providerRuntime)); err != nil {
 			return reviewPreflightError(err)
 		}
-		if !reviewProviderCaptureRuntime(providerRuntime) {
+		if *materialize {
+			if reviewProviderCaptureRuntime(providerRuntime) {
+				return reviewPreflightError(fmt.Errorf("review capture-result --materialize is unavailable for %q: a compiled runtime materializes internally; run the capture operation without --materialize", providerRuntime)) // refusal:by-design operator-knowledge: compiled subprocess adapters already receive the Go-materialized request in-process
+			}
+			if !reviewProviderHostRelayMaterializeRuntime(providerRuntime) {
+				return reviewPreflightError(fmt.Errorf("review capture-result provider runtime %q is host-mediated; use its live transport collection", providerRuntime)) // refusal:by-design world-action: only the Pi host relay collects a printed provider task
+			}
+		} else if !reviewProviderCaptureRuntime(providerRuntime) {
 			return reviewPreflightError(fmt.Errorf("review capture-result provider runtime %q is host-mediated; use its live transport collection", providerRuntime)) // refusal:by-design world-action: only compiled subprocess adapters use this capture path
 		}
 	}
@@ -328,9 +344,10 @@ func RunReviewCaptureResult(args []string, stdout io.Writer) error {
 		}
 	}
 	// --preflight verifies the capture binding without reading or persisting
-	// any result, so it stays reachable under a frozen switch. Everything else
+	// any result, and --materialize only prints the Go-materialized provider
+	// task, so both stay reachable under a frozen switch. Everything else
 	// here publishes a reviewer result into the store.
-	if !*preflight {
+	if !*preflight && !*materialize {
 		if err := authorizeReviewAuthorityMutation(ctx, root); err != nil {
 			return err
 		}
@@ -393,6 +410,20 @@ func RunReviewCaptureResult(args []string, stdout io.Writer) error {
 		}
 		if request.Binding.Lineage != state.LineageID || request.Binding.Target != state.InitialSnapshot.Identity || request.Binding.Revision != record.Revision || request.Binding.Lens != *lens || request.Binding.Order != *order || request.Subject != subject {
 			return reviewPreflightError(errors.New("provider reviewer invocation no longer matches the current reviewing authority")) // refusal:by-design world-action: only a fresh negotiated collection binding may invoke a provider runtime
+		}
+		if *materialize {
+			if *subjectHash != "" && *subjectHash != subject.SubjectHash {
+				return reviewPreflightError(errors.New("materialize subject hash does not match the provider-owned authority; refresh the binding with gentle-ai review status --cwd <repo> --contract <same-contract> --next-transition"))
+			}
+			// The host relay pipes these exact bytes verbatim into its fresh
+			// locked-down reviewer subprocess, so they leave here raw: no JSON
+			// envelope, no trailing newline, and nothing captured, consumed, or
+			// mutated. Submission returns through the existing --input path
+			// with this same binding.
+			if _, err := stdout.Write(request.Invocation.Prompt()); err != nil {
+				return fmt.Errorf("write materialized provider task: %w", err)
+			}
+			return nil
 		}
 		adapter, adapterErr := reviewProviderAdapter(reviewProviderRoleLens, providerRuntime)
 		if adapterErr != nil {

@@ -467,7 +467,7 @@ func reviewFinalizeNextTransition(state reviewtransaction.CompactState, revision
 
 func reviewMissingCaptureTransition(binding ReviewTransitionBinding, selectedLenses []string, artifacts []ReviewTransitionArtifact, context *reviewCaptureContext, runtime ...model.AgentID) ReviewNextTransition {
 	providerRuntime := model.AgentID("")
-	if len(runtime) > 0 && reviewProviderCaptureRuntime(runtime[0]) {
+	if len(runtime) > 0 && (reviewProviderCaptureRuntime(runtime[0]) || reviewProviderHostRelayMaterializeRuntime(runtime[0])) {
 		providerRuntime = runtime[0]
 	}
 	captured := make(map[int]bool, len(artifacts))
@@ -549,8 +549,20 @@ func reviewCaptureInput(binding ReviewTransitionBinding, lens string, order int,
 			input.BaseTree, input.CandidateTree = context.FrozenContext.BaseTree, context.FrozenContext.CandidateTree
 		}
 	}
-	if len(runtime) > 0 && reviewProviderCaptureRuntime(runtime[0]) {
-		input.Arguments = append(input.Arguments, ReviewTransitionArgument{Name: "agent", Value: string(runtime[0])})
+	if len(runtime) > 0 {
+		switch {
+		case reviewProviderCaptureRuntime(runtime[0]):
+			input.Arguments = append(input.Arguments, ReviewTransitionArgument{Name: "agent", Value: string(runtime[0])})
+		case reviewProviderHostRelayMaterializeRuntime(runtime[0]):
+			// The Pi host relay learns the whole flow from these two tokens:
+			// it first runs this exact materialize form to receive the
+			// Go-issued opaque prompt bytes, relays them through its fresh
+			// locked-down reviewer subprocess, and then submits the raw
+			// result through the existing --input path with the same binding.
+			input.Arguments = append(input.Arguments,
+				ReviewTransitionArgument{Name: "agent", Value: string(runtime[0])},
+				ReviewTransitionArgument{Name: "materialize", Value: "true"})
+		}
 	}
 	return input
 }
