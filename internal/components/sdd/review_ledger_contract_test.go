@@ -344,7 +344,7 @@ func TestKilocodeReviewSettingsMatchCurrentMainBaseline(t *testing.T) {
 	// shipped stop-reason table, so the invariant guard can cross-check the
 	// contract consumers receive instead of only the docs copy. Kilocode
 	// embeds that contract, so the hash moved. Deliberate, not drift.
-	const want = "f49ff29229573e437669444a6363fb75d1bd718550ef6d3af75208f8868dbd7d"
+	const want = "c953a5e86022f74feeb150eac4305cfe8e995e0a56b9f79355304c238dafab79"
 	if got != want {
 		t.Fatalf("Kilocode settings SHA-256 = %s, want current-main baseline %s", got, want)
 	}
