@@ -108,9 +108,26 @@ func TestResolveTargetSkipsManagedBinAndPreventsRecursion(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got != real {
+	if got != normalizedCandidatePath(t, real) {
 		t.Fatalf("ResolveTarget() = %q, want %q", got, real)
 	}
+}
+
+// normalizedCandidatePath resolves the fixture path exactly the way
+// ResolveTarget resolves candidates (EvalSymlinks + Abs): on Windows
+// t.TempDir() hands out 8.3 short names that production expands (#3209),
+// and on macOS /tmp itself is a symlink.
+func normalizedCandidatePath(t *testing.T, path string) string {
+	t.Helper()
+	resolved, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	absolute, err := filepath.Abs(resolved)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return absolute
 }
 
 func TestResolveTargetRejectsEmptyAndRelativeEntries(t *testing.T) {
@@ -147,7 +164,7 @@ func TestResolveTargetContinuesAfterBrokenCandidate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got != valid {
+	if got != normalizedCandidatePath(t, valid) {
 		t.Fatalf("ResolveTarget() = %q, want %q", got, valid)
 	}
 }
