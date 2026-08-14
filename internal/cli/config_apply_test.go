@@ -36,7 +36,7 @@ func TestConfigApplyAndReconcilePersistManagedState(t *testing.T) {
 		t.Fatalf("persisted desired = %#v, %v", desired, err)
 	}
 	manifest, err := state.ReadManifest(home, destination)
-	if err != nil || len(manifest.Resources) != 1 {
+	if err != nil || len(manifest.Resources) != 2 {
 		t.Fatalf("persisted manifest = %#v, %v", manifest, err)
 	}
 }

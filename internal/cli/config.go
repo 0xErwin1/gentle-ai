@@ -131,7 +131,10 @@ func configBaseline(destination string, previous ...configdomain.DesiredState) (
 	if err != nil {
 		return nil, nil, fmt.Errorf("read destination: %w", err)
 	}
-	liveDigest := digest(contents)
+	live, err := openCodeLiveResources(contents)
+	if err != nil {
+		return nil, nil, err
+	}
 	prior := configdomain.DesiredState{}
 	if len(previous) > 0 {
 		prior = previous[0]
@@ -140,8 +143,26 @@ func configBaseline(destination string, previous ...configdomain.DesiredState) (
 	if err != nil {
 		return nil, nil, err
 	}
-	resource := render.Resource{Path: ".config/opencode/opencode.json", Selector: "file"}
-	return map[string][]byte{resource.Path: contents}, map[render.ResourceKey]string{{Path: resource.Path, Selector: resource.Selector}: liveDigest}, nil
+	return map[string][]byte{renderOpenCodeSettingsPath: contents}, live, nil
+}
+
+const renderOpenCodeSettingsPath = ".config/opencode/opencode.json"
+
+func openCodeLiveResources(contents []byte) (map[render.ResourceKey]string, error) {
+	var settings map[string]any
+	if err := json.Unmarshal(contents, &settings); err != nil {
+		return nil, fmt.Errorf("read destination: parse OpenCode settings: %w", err)
+	}
+	agents, _ := settings["agent"].(map[string]any)
+	live := make(map[render.ResourceKey]string, len(agents))
+	for name, agent := range agents {
+		encoded, err := json.Marshal(agent)
+		if err != nil {
+			return nil, fmt.Errorf("read destination: encode OpenCode agent %q: %w", name, err)
+		}
+		live[render.ResourceKey{Path: renderOpenCodeSettingsPath, Selector: "/agent/" + name}] = digest(encoded)
+	}
+	return live, nil
 }
 
 func withoutPriorRoleNames(contents []byte, previous configdomain.DesiredState) ([]byte, error) {
