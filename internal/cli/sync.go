@@ -41,6 +41,7 @@ import (
 
 // SyncFlags holds parsed CLI flags for the sync command.
 type SyncFlags struct {
+	Config             string
 	Agents             []string
 	Skills             []string
 	SDDMode            string
@@ -92,6 +93,12 @@ type SyncResult struct {
 	BackgroundPolicyEnabled bool
 }
 
+// ValidateSyncConfigFlags rejects invalid declarative invocations before detection.
+func ValidateSyncConfigFlags(args []string) error {
+	_, err := ParseSyncFlags(args)
+	return err
+}
+
 // ParseSyncFlags parses the CLI arguments for the sync subcommand.
 func ParseSyncFlags(args []string) (SyncFlags, error) {
 	var opts SyncFlags
@@ -105,6 +112,7 @@ func ParseSyncFlags(args []string) (SyncFlags, error) {
 	var usage bytes.Buffer
 	fs := flag.NewFlagSet("sync", flag.ContinueOnError)
 	fs.SetOutput(&usage)
+	fs.StringVar(&opts.Config, "config", "", "desired configuration file")
 	registerListFlag(fs, "agent", &opts.Agents)
 	registerListFlag(fs, "agents", &opts.Agents)
 	registerListFlag(fs, "skill", &opts.Skills)
@@ -149,6 +157,9 @@ func ParseSyncFlags(args []string) (SyncFlags, error) {
 			opts.OpenCodeBackgroundSubagentsSet = true
 		}
 	})
+	if opts.Config != "" && syncHasSemanticFlags(fs) {
+		return SyncFlags{}, fmt.Errorf("config.flags.exclusive: --config cannot be combined with semantic selection flags; run gentle-ai sync --config <path> without selection flags")
+	}
 
 	if fs.NArg() > 0 {
 		return SyncFlags{}, fmt.Errorf("unexpected sync argument %q — pass agents with the --agent %s flag, not a positional argument", fs.Arg(0), fs.Arg(0))
@@ -170,6 +181,17 @@ func ParseSyncFlags(args []string) (SyncFlags, error) {
 	}
 
 	return opts, nil
+}
+
+func syncHasSemanticFlags(flags *flag.FlagSet) bool {
+	semantic := false
+	flags.Visit(func(f *flag.Flag) {
+		switch f.Name {
+		case "agent", "agents", "skill", "skills", "sdd-mode", "sdd-profile-strategy", "strict-tdd", "include-permissions", "include-theme", "profile", "profile-phase":
+			semantic = true
+		}
+	})
+	return semantic
 }
 
 func PrintSyncHelp(w io.Writer) {
@@ -1694,9 +1716,19 @@ func RunSync(args []string) (SyncResult, error) {
 		return SyncResult{}, fmt.Errorf("resolve user home directory: %w", err)
 	}
 
-	// Resolve agents: explicit flag takes precedence over auto-discovery.
+	var configuredSelection model.Selection
+	if flags.Config != "" {
+		configuredSelection, err = loadConfigSelection(flags.Config)
+		if err != nil {
+			return SyncResult{}, err
+		}
+	}
+
+	// Resolve agents: declarative configuration and explicit flags both take precedence over auto-discovery.
 	var agentIDs []model.AgentID
-	if len(flags.Agents) > 0 {
+	if flags.Config != "" {
+		agentIDs = append([]model.AgentID(nil), configuredSelection.Agents...)
+	} else if len(flags.Agents) > 0 {
 		parsed, err := asAgentIDs(flags.Agents)
 		if err != nil {
 			return SyncResult{}, err
@@ -1708,6 +1740,9 @@ func RunSync(args []string) (SyncResult, error) {
 	agentIDs = unique(agentIDs)
 
 	selection := BuildSyncSelection(flags, agentIDs)
+	if flags.Config != "" {
+		selection = configuredSelection
+	}
 
 	// Read state once for both model-assignment restoration and persona resolution.
 	// A missing state file is treated as a fresh home; other read/validation
@@ -1720,8 +1755,10 @@ func RunSync(args []string) (SyncResult, error) {
 	if err != nil {
 		return SyncResult{Agents: agentIDs, Selection: selection}, err
 	}
-	RestorePersistedSelection(&selection, persistedState, flags)
-	restorePersistedCommunityTools(homeDir, &selection, persistedState)
+	if flags.Config == "" {
+		RestorePersistedSelection(&selection, persistedState, flags)
+		restorePersistedCommunityTools(homeDir, &selection, persistedState)
+	}
 
 	// Load persisted model assignments from state when not provided via flags.
 	// Without this, every CLI sync falls back to defaults and would silently
@@ -1795,7 +1832,9 @@ func RunSync(args []string) (SyncResult, error) {
 	// branch (which returns early) and the normal path (which delegates to
 	// RunSyncWithSelection — that function's early-return guard prevents a second
 	// disk read on the CLI path).
-	applyResolvedPersona(&selection, persistedState.Persona)
+	if flags.Config == "" {
+		applyResolvedPersona(&selection, persistedState.Persona)
+	}
 
 	if flags.DryRun {
 		// Build the plan for inspection, skip execution.

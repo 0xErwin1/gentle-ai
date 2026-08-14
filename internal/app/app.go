@@ -128,10 +128,20 @@ func RunArgs(args []string, stdout io.Writer) error {
 				cli.PrintInstallHelp(stdout)
 				return nil
 			}
+			if cli.HasConfigFlag(args[1:]) {
+				if err := cli.ValidateInstallConfigFlags(args[1:]); err != nil {
+					return err
+				}
+			}
 		case "sync":
 			if hasHelpFlag(args[1:]) {
 				cli.PrintSyncHelp(stdout)
 				return nil
+			}
+			if cli.HasConfigFlag(args[1:]) {
+				if err := cli.ValidateSyncConfigFlags(args[1:]); err != nil {
+					return err
+				}
 			}
 		}
 	}

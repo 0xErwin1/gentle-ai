@@ -132,6 +132,13 @@ func RunInstall(args []string, detection system.DetectionResult) (InstallResult,
 	if err != nil {
 		return InstallResult{}, err
 	}
+	if flags.Config != "" {
+		selection, err := loadConfigSelection(flags.Config)
+		if err != nil {
+			return InstallResult{}, err
+		}
+		input.Selection = selection
+	}
 
 	resolved, err := planner.NewResolver(planner.MVPGraph()).Resolve(input.Selection)
 	if err != nil {

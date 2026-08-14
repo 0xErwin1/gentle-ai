@@ -8,6 +8,7 @@ import (
 )
 
 type InstallFlags struct {
+	Config     string
 	Agents     []string
 	Components []string
 	Skills     []string
@@ -20,6 +21,22 @@ type InstallFlags struct {
 
 	OpenCodeBackgroundSubagents    string
 	OpenCodeBackgroundSubagentsSet bool
+}
+
+// HasConfigFlag reports whether arguments select the declarative configuration path.
+func HasConfigFlag(args []string) bool {
+	for _, arg := range args {
+		if arg == "--config" || strings.HasPrefix(arg, "--config=") {
+			return true
+		}
+	}
+	return false
+}
+
+// ValidateInstallConfigFlags rejects invalid declarative invocations before detection.
+func ValidateInstallConfigFlags(args []string) error {
+	_, err := ParseInstallFlags(args)
+	return err
 }
 
 const installChannelHelp = "Gentle AI channel: stable (default), beta, or nightly (alias for beta) — env: GENTLE_AI_CHANNEL"
@@ -50,6 +67,7 @@ func ParseInstallFlags(args []string) (InstallFlags, error) {
 
 	fs := flag.NewFlagSet("install", flag.ContinueOnError)
 	fs.SetOutput(ioDiscard{})
+	fs.StringVar(&opts.Config, "config", "", "desired configuration file")
 	registerListFlag(fs, "agent", &opts.Agents)
 	registerListFlag(fs, "agents", &opts.Agents)
 	registerListFlag(fs, "component", &opts.Components)
@@ -72,10 +90,18 @@ func ParseInstallFlags(args []string) (InstallFlags, error) {
 		return InstallFlags{}, fmt.Errorf("unexpected install argument %q", fs.Arg(0))
 	}
 	fs.Visit(func(f *flag.Flag) {
-		if f.Name == "opencode-background-subagents" {
+		switch f.Name {
+		case "opencode-background-subagents":
 			opts.OpenCodeBackgroundSubagentsSet = true
+		case "agent", "agents", "component", "components", "skill", "skills", "persona", "preset", "sdd-mode":
+			if opts.Config != "" {
+				opts.Config = "!invalid!"
+			}
 		}
 	})
+	if opts.Config == "!invalid!" {
+		return InstallFlags{}, fmt.Errorf("config.flags.exclusive: --config cannot be combined with semantic selection flags; run gentle-ai install --config <path> without selection flags")
+	}
 
 	return opts, nil
 }
