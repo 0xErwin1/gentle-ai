@@ -1036,7 +1036,7 @@ func organicProviderCaptureFakeExecutableName(binary, goos string) string {
 }
 
 func organicProviderCaptureFakeDispatchEnvironment(directory, goos string) []string {
-	separator := string(os.PathListSeparator)
+	separator := ":"
 	if goos == "windows" {
 		separator = ";"
 	}
