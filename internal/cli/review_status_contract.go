@@ -1195,14 +1195,24 @@ func (transition ReviewNextTransition) Validate() error {
 					argumentCount = 7
 				}
 				providerRuntime := model.AgentID(arguments["agent"])
-				if providerRuntime != "" && reviewProviderCaptureRuntime(providerRuntime) {
+				providerCapture := providerRuntime != "" && reviewProviderCaptureRuntime(providerRuntime)
+				hostRelayMaterialize := providerRuntime != "" && reviewProviderHostRelayMaterializeRuntime(providerRuntime)
+				if providerCapture {
 					argumentCount++
+				}
+				if hostRelayMaterialize {
+					// A host-relay capture input carries both --agent and
+					// --materialize=true: the host materializes first, then
+					// submits through the existing --input path.
+					argumentCount += 2
 				}
 				if len(arguments) != argumentCount || !reviewStartSupportedLens(arguments["lens"]) || orderErr != nil || order < 0 ||
 					!validReviewCapabilitySHA256(arguments["expected-revision"]) || !validReviewCapabilitySHA256(arguments["target"]) ||
 					strings.TrimSpace(arguments["lineage"]) == "" || reviewtransaction.ValidateReviewRepositoryContextHandle(arguments["repository-context"]) != nil ||
 					input.ArtifactSubject == nil || input.ChangedPathManifest == nil ||
-					nativeGitTransport && arguments["subject-hash"] != input.ArtifactSubject.SubjectHash || providerRuntime != "" && !reviewProviderCaptureRuntime(providerRuntime) ||
+					nativeGitTransport && arguments["subject-hash"] != input.ArtifactSubject.SubjectHash ||
+					providerRuntime != "" && !providerCapture && !hostRelayMaterialize ||
+					hostRelayMaterialize && arguments["materialize"] != "true" ||
 					legacyTransport && input.CandidateDiff == nil || nativeGitTransport && (!validReviewGitTree(input.BaseTree) || !validReviewGitTree(input.CandidateTree)) ||
 					(!legacyTransport && !nativeGitTransport) {
 					return errors.New("review capture transition lacks an exact repository and authority binding")
