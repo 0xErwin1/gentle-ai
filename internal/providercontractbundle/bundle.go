@@ -4,6 +4,7 @@ package providercontractbundle
 
 import (
 	"archive/tar"
+	"bufio"
 	"bytes"
 	"compress/gzip"
 	"crypto/sha256"
@@ -18,7 +19,9 @@ import (
 	"regexp"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewerprovider"
 )
@@ -29,7 +32,11 @@ const (
 	maxArchiveBytes    int64 = 8 << 20
 	maxFileBytes       int64 = 4 << 20
 	maxBundleBytes     int64 = 16 << 20
+	maxManifestBytes   int64 = 64 << 10
+	bundleFileMode           = 0o644
 )
+
+var bundleTimestamp = time.Unix(0, 0).UTC()
 
 var (
 	// refusal:by-design input: an untrusted bundle never becomes an activation candidate.
@@ -107,6 +114,12 @@ func Generate(outputDir, contractSemver string) error {
 		}
 		if err := os.WriteFile(filename, files[name], 0o644); err != nil {
 			return fmt.Errorf("%w: write %s: %v", errInvalidBundle, name, err)
+		}
+		if err := os.Chmod(filename, bundleFileMode); err != nil {
+			return fmt.Errorf("%w: normalize mode for %s: %v", errInvalidBundle, name, err)
+		}
+		if err := os.Chtimes(filename, bundleTimestamp, bundleTimestamp); err != nil {
+			return fmt.Errorf("%w: normalize timestamp for %s: %v", errInvalidBundle, name, err)
 		}
 	}
 	return nil
@@ -205,14 +218,34 @@ func VerifyArchive(filename string) error {
 		return fmt.Errorf("%w: open archive: %v", errInvalidBundle, err)
 	}
 	defer file.Close()
-	gzipReader, err := gzip.NewReader(io.LimitReader(file, maxArchiveBytes+1))
+	compressed := bufio.NewReader(file)
+	gzipReader, err := gzip.NewReader(compressed)
 	if err != nil {
 		return fmt.Errorf("%w: open gzip stream: %v", errInvalidBundle, err)
 	}
-	defer gzipReader.Close()
+	gzipReader.Multistream(false)
+	expanded, err := io.ReadAll(io.LimitReader(gzipReader, maxBundleBytes+1))
+	if err != nil {
+		return fmt.Errorf("%w: read gzip stream: %v", errInvalidBundle, err)
+	}
+	if int64(len(expanded)) > maxBundleBytes {
+		return fmt.Errorf("%w: expanded tar exceeds size limit", errInvalidBundle)
+	}
+	if err := gzipReader.Close(); err != nil {
+		return fmt.Errorf("%w: close gzip stream: %v", errInvalidBundle, err)
+	}
+	if _, err := compressed.ReadByte(); !errors.Is(err, io.EOF) {
+		if err == nil {
+			return fmt.Errorf("%w: archive has trailing compressed data", errInvalidBundle)
+		}
+		return fmt.Errorf("%w: read archive trailer: %v", errInvalidBundle, err)
+	}
+	if err := validateRawTarHeaders(expanded); err != nil {
+		return fmt.Errorf("%w: %v", errInvalidBundle, err)
+	}
 
 	entries := make(map[string][]byte, 8)
-	tarReader := tar.NewReader(gzipReader)
+	tarReader := tar.NewReader(bytes.NewReader(expanded))
 	var totalBytes int64
 	for {
 		header, nextErr := tarReader.Next()
@@ -242,6 +275,62 @@ func VerifyArchive(filename string) error {
 		entries[header.Name] = payload
 	}
 	return validateEntries(entries)
+}
+
+func validateRawTarHeaders(payload []byte) error {
+	const blockSize = 512
+	var entries, zeroBlocks int
+	for offset := 0; ; {
+		if len(payload)-offset < blockSize {
+			return errors.New("tar stream ends before a complete header") // refusal:by-design input: a release archive must contain complete tar headers.
+		}
+		header := payload[offset : offset+blockSize]
+		offset += blockSize
+		if bytes.Equal(header, make([]byte, blockSize)) {
+			zeroBlocks++
+			if zeroBlocks >= 2 {
+				for _, value := range payload[offset:] {
+					if value != 0 {
+						return errors.New("tar stream has data after its terminator") // refusal:by-design input: only zero padding may follow a tar terminator.
+					}
+				}
+				return nil
+			}
+			continue
+		}
+		if zeroBlocks != 0 {
+			return errors.New("tar stream has an incomplete terminator") // refusal:by-design input: a release archive must end with two zero tar blocks.
+		}
+		if header[156] != tar.TypeReg && header[156] != tar.TypeRegA {
+			return fmt.Errorf("tar metadata type %q is forbidden", header[156])
+		}
+		size, err := rawTarSize(header[124:136])
+		if err != nil || size > maxFileBytes {
+			return fmt.Errorf("tar entry exceeds size limits: %v", err)
+		}
+		entries++
+		if entries > 8 {
+			return errors.New("tar has too many entries") // refusal:by-design input: a provider contract archive has exactly eight files.
+		}
+		padding := (blockSize - size%blockSize) % blockSize
+		if size > int64(len(payload)-offset) || padding > int64(len(payload)-offset)-size {
+			return errors.New("tar stream ends before a complete entry") // refusal:by-design input: each tar entry must be complete.
+		}
+		offset += int(size + padding)
+	}
+}
+
+func rawTarSize(field []byte) (int64, error) {
+	value := strings.Trim(string(field), " \x00")
+	if value == "" {
+		return 0, nil
+	}
+	for _, digit := range value {
+		if digit < '0' || digit > '7' {
+			return 0, fmt.Errorf("tar size is not octal")
+		}
+	}
+	return strconv.ParseInt(value, 8, 64)
 }
 
 // VerifyStaging validates a generated staging directory by first writing no
@@ -300,13 +389,11 @@ func validateEntries(entries map[string][]byte) error {
 	if !found {
 		return fmt.Errorf("%w: manifest.json is missing", errInvalidBundle)
 	}
-	var decoded manifest
-	decoder := json.NewDecoder(strings.NewReader(string(manifestPayload)))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&decoded); err != nil {
-		return fmt.Errorf("%w: decode manifest: %v", errInvalidBundle, err)
+	if int64(len(manifestPayload)) > maxManifestBytes {
+		return fmt.Errorf("%w: manifest.json exceeds size limit", errInvalidBundle)
 	}
-	if err := requireJSONEOF(decoder); err != nil {
+	var decoded manifest
+	if err := decodeStrictJSONObject(manifestPayload, &decoded); err != nil {
 		return fmt.Errorf("%w: decode manifest: %v", errInvalidBundle, err)
 	}
 	if decoded.Schema != bundleSchema || !contractSemverPattern.MatchString(decoded.ContractSemver) || decoded.TransportCapability != reviewerprovider.TransportCapability {
@@ -363,6 +450,88 @@ func validateEntries(entries map[string][]byte) error {
 		}
 	}
 	return nil
+}
+
+func decodeStrictJSONObject(payload []byte, target any) error {
+	decoder := json.NewDecoder(bytes.NewReader(payload))
+	if err := rejectDuplicateJSONKeys(decoder); err != nil {
+		return err
+	}
+	decoder = json.NewDecoder(bytes.NewReader(payload))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(target); err != nil {
+		return err
+	}
+	return requireJSONEOF(decoder)
+}
+
+func rejectDuplicateJSONKeys(decoder *json.Decoder) error {
+	token, err := decoder.Token()
+	if err != nil {
+		return err
+	}
+	if delimiter, ok := token.(json.Delim); !ok || delimiter != '{' {
+		return errors.New("JSON document must be an object") // refusal:by-design input: a manifest must be one JSON object.
+	}
+	if err := rejectDuplicateJSONObjectKeys(decoder); err != nil {
+		return err
+	}
+	var extra any
+	if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) {
+		if err != nil {
+			return err
+		}
+		return errors.New("multiple JSON values") // refusal:by-design input: a manifest must be one JSON object.
+	}
+	return nil
+}
+
+func rejectDuplicateJSONObjectKeys(decoder *json.Decoder) error {
+	keys := map[string]struct{}{}
+	for decoder.More() {
+		token, err := decoder.Token()
+		if err != nil {
+			return err
+		}
+		key, ok := token.(string)
+		if !ok {
+			return errors.New("JSON object key is not a string") // refusal:by-design input: JSON object keys must be strings.
+		}
+		if _, duplicate := keys[key]; duplicate {
+			return fmt.Errorf("duplicate JSON key %q", key)
+		}
+		keys[key] = struct{}{}
+		if err := rejectDuplicateJSONValueKeys(decoder); err != nil {
+			return err
+		}
+	}
+	_, err := decoder.Token()
+	return err
+}
+
+func rejectDuplicateJSONValueKeys(decoder *json.Decoder) error {
+	token, err := decoder.Token()
+	if err != nil {
+		return err
+	}
+	delimiter, ok := token.(json.Delim)
+	if !ok {
+		return nil
+	}
+	switch delimiter {
+	case '{':
+		return rejectDuplicateJSONObjectKeys(decoder)
+	case '[':
+		for decoder.More() {
+			if err := rejectDuplicateJSONValueKeys(decoder); err != nil {
+				return err
+			}
+		}
+		_, err := decoder.Token()
+		return err
+	default:
+		return fmt.Errorf("unexpected JSON delimiter %q", delimiter)
+	}
 }
 
 func validateFileReference(entries map[string][]byte, reference fileReference, expectedPath string, expectedPayload []byte) error {

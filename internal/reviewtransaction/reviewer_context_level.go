@@ -34,8 +34,10 @@ const (
 	// whatever the caller produced with the provider's own output before the
 	// reviewer ran, so relaying is not trusted at all.
 	ReviewerContextLevelRuntimeInterception ReviewerContextLevel = "runtime_interception"
-	// ReviewerContextLevelProviderContract records a successful Go-materialized,
-	// Go-admitted provider execution after its immutable slot is durable.
+	// ReviewerContextLevelProviderContract records Go-materialized and
+	// Go-admitted output delivered through the live provider transport after its
+	// immutable slot is durable. It records transport provenance, not UI
+	// provenance or a claim about how a user interface displayed the result.
 	ReviewerContextLevelProviderContract ReviewerContextLevel = "provider_contract"
 )
 

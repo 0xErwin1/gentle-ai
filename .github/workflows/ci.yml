@@ -345,6 +345,13 @@ jobs:
         # advises "latest" too (see internal/installcmd/resolver.go).
         run: npm install --global @anthropic-ai/claude-code@latest
 
+      - name: Install pinned Codex runtime
+        shell: pwsh
+        run: |
+          if ($env:RUNNER_OS -eq 'Linux') {
+            npm install --global @openai/codex@0.147.0
+          }
+
       - name: Verify real-agent detection E2E is registered
         # organic_runtime_real_agent_detection_test.go is gated behind the
         # real_agent_e2e build tag precisely so `go test ./...` at the repo
@@ -369,6 +376,9 @@ jobs:
         # `go test ./...` never does — see that file's build-tag comment.
         env:
           GENTLE_AI_REAL_AGENT_E2E: "1"
+          # The Linux-only Codex journey invokes the registered adapter through
+          # the product CLI under a process-scoped denying proxy and strace.
+          GENTLE_AI_CODEX_RUNTIME_E2E: ${{ matrix.os == 'ubuntu-latest' && '1' || '0' }}
           # The large-workspace journey spawns one Git subprocess per intended
           # untracked path, so its cost is dominated by process creation. Linux
           # absorbs it; Windows does not, and gating it here keeps the real

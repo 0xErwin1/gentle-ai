@@ -421,7 +421,7 @@ func RunReviewCaptureResult(args []string, stdout io.Writer) error {
 		})
 	}
 	path := filepath.Join(store.Dir, reviewtransaction.CompactReviewerResultsDir, fmt.Sprintf("%02d-%s.json", *order, *lens))
-	_, err = store.CaptureAdmittedReviewerResult(ctx, reviewtransaction.CompactAdmittedReviewerResultRequest{
+	captured, err := store.CaptureAdmittedReviewerResult(ctx, reviewtransaction.CompactAdmittedReviewerResultRequest{
 		ExpectedRevision: record.Revision, TargetIdentity: *target, FrozenContext: frozen,
 		ArtifactSubject: subject, Inspection: admitted.Result.Inspection, Result: admitted.NativeResult,
 		CandidateCausalFindingIDs: admitted.CandidateCausalFindingIDs, RawPayload: rawPayload,
@@ -441,25 +441,17 @@ func RunReviewCaptureResult(args []string, stdout io.Writer) error {
 	if providerExecution {
 		if err := reviewtransaction.PublishLensContextEmission(store.Dir, reviewtransaction.LensContextEmission{
 			Schema: reviewtransaction.LensContextEmissionSchema, LineageID: state.LineageID, TargetIdentity: state.InitialSnapshot.Identity,
-			AuthorityRevision: record.Revision, Lens: *lens, SelectedOrder: *order, SubjectHash: subject.SubjectHash,
+			AuthorityRevision: record.Revision, Lens: *lens, SelectedOrder: *order, SubjectHash: captured.Subject.SubjectHash,
 			Level: reviewtransaction.ReviewerContextLevelProviderContract,
 		}); err != nil {
 			return reviewPreflightError(fmt.Errorf("record provider reviewer execution: %w", err))
 		}
 	}
-	published, _, err := readPrivateReviewerFile(path, reviewResultArtifactLimit)
-	if err != nil {
-		if contextHandle != "" {
-			return reviewOpaqueContextCause("repository_context_capture_failed", "retry capture-result with the same exact binding or refresh status",
-				fmt.Errorf("read published reviewer result: %w", err))
-		}
-		return reviewPreflightError(fmt.Errorf("read published reviewer result: %w", err))
-	}
 	artifact := reviewResultArtifact{
 		Schema: reviewResultArtifactSchema, Capability: reviewResultArtifactCapability, Path: path,
-		SHA256: facadePayloadHash(published), LineageID: state.LineageID,
+		SHA256: captured.Slot.Digest, LineageID: state.LineageID,
 		TargetIdentity: state.InitialSnapshot.Identity, Lens: *lens, SelectedOrder: *order,
-		SubjectHash: subject.SubjectHash, AdmissionDecision: admitted.Admission.Decision,
+		SubjectHash: captured.Subject.SubjectHash, AdmissionDecision: captured.Admission.Decision,
 	}
 	if contextHandle != "" {
 		artifact.Reference = reviewResultReference(artifact)
