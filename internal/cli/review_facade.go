@@ -2697,12 +2697,6 @@ func runReviewFacadeFinalize(ctx context.Context, args []string, stdout io.Write
 		if err != nil {
 			return reviewPreflightError(err)
 		}
-		// Observed here, at the one moment the captured artifacts and the
-		// frozen authority are both in hand, and carried onto the receipt by
-		// the review completion below. Record only: nothing reads it back.
-		if state.State == reviewtransaction.StateReviewing {
-			state.ReviewerContextLevel = discoverReviewerContextLevel(ctx, root, store.Dir, state, record.Revision)
-		}
 	}
 	var validation *facadeValidationResult
 	if strings.TrimSpace(*validationPath) != "" {
@@ -2733,6 +2727,15 @@ func runReviewFacadeFinalize(ctx context.Context, args []string, stdout io.Write
 		if err != nil {
 			return reviewPreflightError(err)
 		}
+	}
+	// Observed only after every consumer that re-derives the revision from
+	// the state it is handed (the provider refuter materialization above)
+	// has run: CompactRevisionForState hashes ReviewerContextLevel, so
+	// setting it earlier made every compiled-runtime finalize diverge from
+	// the frozen record revision. The completion plan below still carries
+	// the observation onto the receipt.
+	if *capturedResults && state.State == reviewtransaction.StateReviewing {
+		state.ReviewerContextLevel = discoverReviewerContextLevel(ctx, root, store.Dir, state, record.Revision)
 	}
 	var evidence []byte
 	var capturedVerification *reviewtransaction.CapturedVerificationEvidence
