@@ -34,6 +34,7 @@ j27-merge-in-progress
 j28-rebase-in-progress
 j29-cherry-pick-in-progress
 j30-kill-switch-flipped-mid-review
+j3043-opencode-managed-background-activation
 j31-nonsense-mode-value
 j32-recovery-of-a-recovery
 j33-escalate-then-recover
@@ -69,14 +70,9 @@ j64-unmanaged-remediation-survives-audited-reset
 j65-selectorless-committed-correction-continuation
 j66-v5-capture-evidence-descriptors-execute
 j67-v5-capture-evidence-correction-descriptor-executes
-j68-review-advisory-prompt-shared-across-runtimes
-j69-review-advisory-prompt-refuses-unselected-lens-and-unadvertised-runtime
-j70-review-advisory-validate-admits-clean-result
-j71-review-advisory-validate-refuses-mismatched-subject
 j72-direct-review-start-refuses-empty-candidate
 j74-sdd-attempt-explicit-linked-worktree-handoff
 j75-intended-untracked-selection-executes-printed-start
-j76-claude-advisory-result-reaches-delivery
 j76-scope-changed-four-lens-successor
 j77-capture-result-input-preflight-is-read-only
 j78-lens-finding-id-prefix-discovery

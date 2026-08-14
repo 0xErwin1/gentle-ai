@@ -20,6 +20,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v2/internal/agentbuilder"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/backup"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/catalog"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/cli"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/components/communitytool"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/components/opencodeplugin"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/components/sdd"
@@ -331,12 +332,14 @@ type UninstallFunc func(agentIDs []model.AgentID, componentIDs []model.Component
 // explicit profile selection for OpenCode SDD profile cleanup.
 type UninstallWithProfilesFunc func(agentIDs []model.AgentID, componentIDs []model.ComponentID, profileNames []string, engramScope model.EngramUninstallScope) (componentuninstall.Result, error)
 
-// ExecuteFunc builds and runs the installation pipeline. It receives a ProgressFunc
-// callback to emit step-level progress events, and returns the ExecutionResult.
+// ExecuteFunc builds and runs the installation pipeline. It receives the
+// effective and publishable OpenCode background choices plus a ProgressFunc.
 type ExecuteFunc func(
 	selection model.Selection,
 	resolved planner.ResolvedPlan,
 	detection system.DetectionResult,
+	background model.OpenCodeBackgroundIntent,
+	backgroundPersist model.OpenCodeBackgroundIntent,
 	onProgress pipeline.ProgressFunc,
 ) pipeline.ExecutionResult
 
@@ -375,6 +378,7 @@ const (
 	ScreenDependencyTree
 	ScreenSkillPicker
 	ScreenReview
+	ScreenOpenCodeBackground
 	ScreenInstalling
 	ScreenModelPicker
 	ScreenComplete
@@ -443,6 +447,12 @@ type Model struct {
 	CodexModelPicker  screens.CodexModelPickerState
 	SkillPicker       []model.SkillID
 	Err               error
+
+	// BackgroundIntent is the effective OpenCode background choice for the
+	// current install. BackgroundPersist is published only after success.
+	BackgroundIntent         model.OpenCodeBackgroundIntent
+	BackgroundPersist        model.OpenCodeBackgroundIntent
+	backgroundPromptOriginal model.OpenCodeBackgroundIntent
 
 	// SelectedBackup holds the manifest chosen on ScreenBackups, used by the
 	// restore confirmation and result screens.
@@ -682,6 +692,7 @@ func NewModel(detection system.DetectionResult, version string, installState ...
 		Version:              version,
 		Selection:            selection,
 		Detection:            detection,
+		BackgroundIntent:     s.BackgroundIntent,
 		UninstallAgents:      agents,
 		UninstallComponents:  defaultUninstallComponents(),
 		UninstallEngramScope: model.EngramUninstallScopeGlobal,
@@ -1208,6 +1219,8 @@ func (m Model) View() string {
 		return screens.RenderSkillPicker(m.SkillPicker, m.Cursor, m.Height)
 	case ScreenReview:
 		return screens.RenderReview(m.Review, m.Cursor)
+	case ScreenOpenCodeBackground:
+		return screens.RenderOpenCodeBackground(m.Cursor)
 	case ScreenInstalling:
 		return screens.RenderInstalling(m.Progress.ViewModel(), screens.SpinnerChar(m.SpinnerFrame))
 	case ScreenComplete:
@@ -2426,6 +2439,24 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 		}
 	case ScreenReview:
 		if m.Cursor == 0 {
+			if m.shouldShowOpenCodeBackgroundScreen() {
+				resolution, err := cli.ResolveOpenCodeBackgroundInteractive(m.BackgroundIntent)
+				if err != nil {
+					m.Err = err
+					return m, nil
+				}
+				if resolution.NeedsPrompt {
+					m.backgroundPromptOriginal = m.BackgroundIntent
+					m.BackgroundPersist = ""
+					m.setScreen(ScreenOpenCodeBackground)
+					return m, nil
+				}
+				m.BackgroundIntent = resolution.Effective
+				if m.BackgroundIntent == model.OpenCodeBackgroundAuto {
+					m.BackgroundIntent = model.OpenCodeBackgroundOff
+				}
+				m.BackgroundPersist = resolution.Persist
+			}
 			return m.startInstalling()
 		}
 		// Back — in custom preset, walk back through the screens that were shown.
@@ -2451,6 +2482,21 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 		} else {
 			m.setScreen(ScreenDependencyTree)
 		}
+	case ScreenOpenCodeBackground:
+		options := screens.OpenCodeBackgroundOptions()
+		if m.Cursor < len(options) {
+			if m.Cursor == 0 {
+				m.BackgroundIntent = model.OpenCodeBackgroundOn
+			} else {
+				m.BackgroundIntent = model.OpenCodeBackgroundOff
+			}
+			m.BackgroundPersist = m.BackgroundIntent
+			return m.startInstalling()
+		}
+		m.BackgroundIntent = m.backgroundPromptOriginal
+		m.BackgroundPersist = ""
+		m.Err = nil
+		m.setScreen(ScreenReview)
 	case ScreenInstalling:
 		if m.Progress.Done() {
 			m.setScreen(ScreenComplete)
@@ -2623,6 +2669,8 @@ func (m Model) startInstalling() (tea.Model, tea.Cmd) {
 	selection := m.Selection
 	resolved := m.DependencyPlan
 	detection := m.Detection
+	background := m.BackgroundIntent
+	backgroundPersist := m.BackgroundPersist
 
 	return m, tea.Batch(tickCmd(), func() tea.Msg {
 		onProgress := func(event pipeline.ProgressEvent) {
@@ -2633,7 +2681,7 @@ func (m Model) startInstalling() (tea.Model, tea.Cmd) {
 			// we rely on the pipeline calling this synchronously from each step.
 		}
 
-		result := executeFn(selection, resolved, detection, onProgress)
+		result := executeFn(selection, resolved, detection, background, backgroundPersist, onProgress)
 		return PipelineDoneMsg{Result: result}
 	})
 }
@@ -3194,6 +3242,13 @@ func (m Model) goBack(cmd *tea.Cmd) Model {
 		m.setScreen(ScreenWelcome)
 		return m
 	}
+	if m.Screen == ScreenOpenCodeBackground {
+		m.BackgroundIntent = m.backgroundPromptOriginal
+		m.BackgroundPersist = ""
+		m.Err = nil
+		m.setScreen(ScreenReview)
+		return m
+	}
 	if m.Screen == ScreenRestoreResult || m.Screen == ScreenDeleteResult {
 		return m.finishBackupResult(m.Screen == ScreenDeleteResult)
 	}
@@ -3629,6 +3684,8 @@ func (m Model) optionCount() int {
 		return screens.SkillPickerOptionCount()
 	case ScreenReview:
 		return len(screens.ReviewOptions())
+	case ScreenOpenCodeBackground:
+		return len(screens.OpenCodeBackgroundOptions()) + 1
 	case ScreenInstalling:
 		return 0
 	case ScreenComplete:
@@ -4303,6 +4360,11 @@ func (m Model) hasDetectedOpenCode() bool {
 }
 
 func (m Model) shouldShowSDDModeScreen() bool {
+	return m.Selection.HasAgent(model.AgentOpenCode) &&
+		hasSelectedComponent(m.Selection.Components, model.ComponentSDD)
+}
+
+func (m Model) shouldShowOpenCodeBackgroundScreen() bool {
 	return m.Selection.HasAgent(model.AgentOpenCode) &&
 		hasSelectedComponent(m.Selection.Components, model.ComponentSDD)
 }
