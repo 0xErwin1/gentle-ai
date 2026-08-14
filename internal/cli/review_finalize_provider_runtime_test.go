@@ -70,6 +70,27 @@ func TestReviewFinalizeProviderRuntimeSurvivesContextLevelObservation(t *testing
 	}
 }
 
+// TestReviewFinalizeProviderRuntimeDeadlineFitsModelExecution pins the
+// deadline selection: a compiled-runtime finalize spawns a real refuter
+// model process, which can never fit the shared 25s facade budget — the
+// same reason review.start owns its larger constant.
+func TestReviewFinalizeProviderRuntimeDeadlineFitsModelExecution(t *testing.T) {
+	shared := reviewFacadeOperationTimeout
+	if got := reviewFacadeOperationDeadline("review.finalize", []string{"finalize", "--lineage", "x"}); got != shared {
+		t.Fatalf("plain finalize deadline = %v, want shared %v", got, shared)
+	}
+	got := reviewFacadeOperationDeadline("review.finalize", []string{"finalize", "--captured-results", "--agent", "claude-code"})
+	if got != reviewFacadeFinalizeProviderOperationTimeout {
+		t.Fatalf("compiled-runtime finalize deadline = %v, want %v", got, reviewFacadeFinalizeProviderOperationTimeout)
+	}
+	if got <= reviewFacadeStartOperationTimeout {
+		t.Fatalf("compiled-runtime finalize deadline %v must exceed even the start deadline %v: it contains a full model run", got, reviewFacadeStartOperationTimeout)
+	}
+	if got := reviewFacadeOperationDeadline("review.status", []string{"status", "--agent", "claude-code"}); got != shared {
+		t.Fatalf("status deadline = %v, want shared %v", got, shared)
+	}
+}
+
 func reviewNextTransitionCommandForTest(t *testing.T, payload []byte) string {
 	t.Helper()
 	var decoded struct {
