@@ -1668,6 +1668,9 @@ func TestCompactEffectIntentMismatchBlocksSuccessor(t *testing.T) {
 func TestCompactStartReturnsCommittedRecordWhenRepositoryContextReconciliationFails(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	// Windows resolves the context home through USERPROFILE, so the blocker
+	// below must land in the same directory on every OS (#3231).
+	t.Setenv("USERPROFILE", home)
 	repo := initSnapshotRepo(t)
 	state := newCompactTestState(t, repo, "start-post-commit-effect-failure")
 	if err := os.WriteFile(filepath.Join(home, ".gentle-ai"), []byte("blocked"), 0o600); err != nil {
