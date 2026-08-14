@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"slices"
 	"sort"
 	"strings"
@@ -20,6 +21,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/codex"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/backup"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
+	opencodeactivation "github.com/gentleman-programming/gentle-ai/v2/internal/opencode"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/planner"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/state"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/system"
@@ -681,11 +683,7 @@ func TestTuiInstallOnThenSyncPreservesAndRefreshesOpenCodeActivation(t *testing.
 	previousUserHomeDir := appUserHomeDir
 	appUserHomeDir = func() (string, error) { return home, nil }
 	t.Cleanup(func() { appUserHomeDir = previousUserHomeDir })
-	binDir := t.TempDir()
-	target := filepath.Join(binDir, "opencode")
-	if err := os.WriteFile(target, []byte("#!/bin/sh\nprintf 'opencode 1.15.11\\n'\n"), 0o755); err != nil {
-		t.Fatal(err)
-	}
+	binDir := writeFakeOpenCodeRuntime(t)
 	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
 
 	selection := model.Selection{Agents: []model.AgentID{model.AgentOpenCode}, Components: []model.ComponentID{model.ComponentPersona, model.ComponentSDD}, SDDMode: model.SDDModeSingle}
@@ -695,7 +693,8 @@ func TestTuiInstallOnThenSyncPreservesAndRefreshesOpenCodeActivation(t *testing.
 		t.Fatalf("TUI install error = %v", installResult.Err)
 	}
 
-	launcher := filepath.Join(home, ".gentle-ai", "bin", "opencode")
+	// Issue #3209: the managed launcher name is host-dependent.
+	launcher := opencodeactivation.ManagedLauncherPaths(home, runtime.GOOS)[0]
 	before, err := os.ReadFile(launcher)
 	if err != nil {
 		t.Fatalf("ReadFile(launcher): %v", err)
@@ -1638,11 +1637,7 @@ func TestTUIExecuteReturnsStatePersistenceFailure(t *testing.T) {
 	if err := os.Symlink(target, statePath); err != nil {
 		t.Skipf("state symlink unavailable: %v", err)
 	}
-	binDir := t.TempDir()
-	openCodeTarget := filepath.Join(binDir, "opencode")
-	if err := os.WriteFile(openCodeTarget, []byte("#!/bin/sh\nprintf 'opencode 1.15.11\\n'\n"), 0o755); err != nil {
-		t.Fatal(err)
-	}
+	binDir := writeFakeOpenCodeRuntime(t)
 	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
 
 	selection := model.Selection{Agents: []model.AgentID{model.AgentOpenCode}, CommunityTools: []model.CommunityToolID{}}
@@ -1678,11 +1673,7 @@ func TestTUIExecuteRollsBackOnMalformedState(t *testing.T) {
 	if err := os.WriteFile(state.Path(home), malformedState, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	binDir := t.TempDir()
-	openCodeTarget := filepath.Join(binDir, "opencode")
-	if err := os.WriteFile(openCodeTarget, []byte("#!/bin/sh\nprintf 'opencode 1.15.11\\n'\n"), 0o755); err != nil {
-		t.Fatal(err)
-	}
+	binDir := writeFakeOpenCodeRuntime(t)
 	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
 
 	selection := model.Selection{Agents: []model.AgentID{model.AgentOpenCode}, CommunityTools: []model.CommunityToolID{}}
@@ -2598,4 +2589,24 @@ func TestRunArgs_UpgradeUnsupportedOptionStopsBeforeAnyEffect(t *testing.T) {
 			}
 		})
 	}
+}
+
+// writeFakeOpenCodeRuntime places a fake opencode executable for the host OS
+// on a fresh dir and returns that dir. Windows needs a PATHEXT-visible .cmd
+// (there is no execute bit and sh scripts are not executable); issue #3209.
+func writeFakeOpenCodeRuntime(t *testing.T) string {
+	t.Helper()
+	binDir := t.TempDir()
+	if runtime.GOOS == "windows" {
+		path := filepath.Join(binDir, "opencode.cmd")
+		if err := os.WriteFile(path, []byte("@echo off\r\necho opencode 1.15.11\r\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		return binDir
+	}
+	path := filepath.Join(binDir, "opencode")
+	if err := os.WriteFile(path, []byte("#!/bin/sh\nprintf 'opencode 1.15.11\\n'\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return binDir
 }
