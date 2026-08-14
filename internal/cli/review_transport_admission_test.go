@@ -111,6 +111,7 @@ func TestUnsupportedReviewTransportCapabilityStopsBeforeAnyAuthority(t *testing.
 }
 
 func TestReviewTransportAdmissionRefusalNamesWorkingExits(t *testing.T) {
+	t.Setenv(reviewPiHostRelayContractEnvironment, reviewPiHostRelayContract)
 	repo := initReviewCLIRepo(t)
 	writeReviewStartCandidate(t, repo, "candidate.go", "package candidate\n", 0o644)
 

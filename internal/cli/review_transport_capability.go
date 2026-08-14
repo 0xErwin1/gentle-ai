@@ -3,6 +3,7 @@ package cli
 import (
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 
 	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/capabilitymanifest"
@@ -41,6 +42,15 @@ const (
 	reviewImmutableTransportPiHostRelay reviewImmutableTransport = "pi_host_relay"
 )
 
+// reviewPiHostRelayContract is the exact relay contract this binary admits.
+// The Pi launcher lives in gentle-pi and is versioned independently; it
+// declares this identity on every invocation it relays, and any other value
+// (or none) keeps Pi fail-closed at admission instead of freezing review
+// authority no installed host can ever collect.
+const reviewPiHostRelayContract = "gentle-pi.review-relay/v1"
+
+const reviewPiHostRelayContractEnvironment = "GENTLE_PI_REVIEW_RELAY_CONTRACT"
+
 type reviewImmutableRuntimePolicy struct {
 	Eligible  bool
 	Transport reviewImmutableTransport
@@ -60,6 +70,13 @@ func reviewImmutableRuntimeCapability(agent model.AgentID) reviewImmutableRuntim
 	case model.AgentOpenCode:
 		policy.Eligible = true
 	case model.AgentPi:
+		// The relay's declared contract is a required conjunct: it can only
+		// narrow the compiled boundary, never expand it. Without the exact
+		// handshake, `review start --agent pi` refuses before any repository,
+		// target, or authority work, and Pi never appears as a suggested exit.
+		if os.Getenv(reviewPiHostRelayContractEnvironment) != reviewPiHostRelayContract {
+			return policy
+		}
 		policy.Eligible = true
 	default:
 		return policy
