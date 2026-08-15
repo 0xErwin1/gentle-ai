@@ -1137,26 +1137,25 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 				transition.ReasonCode != "correction_repository_tooling_failed" {
 				result.ValidationRequest = nil
 			}
-			// The stdout JSON envelope is the machine surface and stays
-			// byte-for-byte unchanged; this is the additive Tier C human
-			// surface (spec "Three-Tier Narration Contract"), written to
-			// stderr only, never mixed into the parsed stream.
-			if transition.Kind == reviewNextTransitionStop {
-				continuation := ""
-				if transition.ReasonCode == "rdd_disabled" {
-					continuation = reviewRDDDisabledNarration(result.rddMode, root, args)
-				}
-				reviewNarrateStopReason(transition.ReasonCode, runtime, continuation)
-			}
+			// A negotiated invocation is the machine surface end to end: the
+			// stdout JSON envelope carries every routing fact (kind,
+			// reason_code, forecast), and a successful operation writes zero
+			// bytes to stderr. gentle-pi fails closed (UNEXPECTED_STDERR) on
+			// any stderr a successful native process writes, so the Tier C
+			// stop narration that used to print here was removed rather than
+			// allowlisted downstream. The registered Tier C statements remain
+			// in review_narration.go as the human-surface vocabulary source.
 		}
 		if intendedScope.NeedsSelection && (result.NextTransition == nil || result.NextTransition.Kind != reviewNextTransitionStop || result.NextTransition.ReasonCode != "rdd_disabled") {
 			transition := reviewIntendedUntrackedCollection(result, intendedScope)
 			result.NextTransition = &transition
 		}
 		if *contract == ReviewIntegrationContractV2 && result.NextTransition != nil {
+			// The forecast is structural only: it rides the v2 envelope's
+			// `forecast` field and is never narrated to stderr, because a
+			// successful negotiated operation must stay byte-silent there.
 			forecast := newReviewForecast(*result.NextTransition)
 			result.Forecast = &forecast
-			reviewNarrateForecast(forecast)
 		}
 		var validationErr error
 		if compactAuthority != nil {
@@ -1776,7 +1775,7 @@ func runReviewFacadeStart(ctx context.Context, args []string, stdout io.Writer) 
 	// point where the kill switch can stop a start and consent can name the real
 	// reason. Nothing has been persisted yet, so refusing here leaves no
 	// authority behind.
-	if err := authorizeReviewStart(ctx, root, assessment, consentMode); err != nil {
+	if err := authorizeReviewStart(ctx, root, assessment, consentMode, negotiated); err != nil {
 		if errors.Is(err, errReviewConsentQuestionRequired) {
 			// The caller declared it can relay a blocking question, so the
 			// typed question IS this start's response. Nothing has been
