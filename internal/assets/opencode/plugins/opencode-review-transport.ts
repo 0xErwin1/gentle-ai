@@ -26,6 +26,20 @@ interface Relay {
   close: () => void
 }
 
+interface RelayRegistration {
+  owner: symbol
+  relay: Relay
+  completing: boolean
+}
+
+const RELAY_REGISTRY_KEY = "__gentleAiOpenCodeReviewTransportRelays" as const
+
+function reviewRelayRegistry(): Map<string, RelayRegistration> {
+  const runtime = globalThis as typeof globalThis & { [RELAY_REGISTRY_KEY]?: Map<string, RelayRegistration> }
+  if (runtime[RELAY_REGISTRY_KEY] === undefined) runtime[RELAY_REGISTRY_KEY] = new Map<string, RelayRegistration>()
+  return runtime[RELAY_REGISTRY_KEY]
+}
+
 function taskKey(sessionID: string, callID: string): string {
   return `${sessionID}:${callID}`
 }
@@ -107,44 +121,56 @@ function startRelay(cwd: string, prompt: string): Relay {
 }
 
 const OpenCodeReviewTransportPlugin: Plugin = async ({ directory, worktree }) => {
-  const relays = new Map<string, Relay>()
+  const owner = Symbol("gentle-ai-opencode-review-transport")
+  const relays = reviewRelayRegistry()
   const cwd = () => worktree || directory
-  const clear = (key: string) => {
-    const relay = relays.get(key)
+  const clearOwned = (key: string) => {
+    const registration = relays.get(key)
+    if (!registration || registration.owner !== owner) return
     relays.delete(key)
-    relay?.close()
+    registration.relay.close()
+  }
+  const clearSession = (prefix: string) => {
+    for (const [key, registration] of relays) {
+      if (!key.startsWith(prefix)) continue
+      relays.delete(key)
+      registration.relay.close()
+    }
   }
   return {
-    dispose: async () => { for (const key of relays.keys()) clear(key) },
+    dispose: async () => {
+      for (const [key, registration] of relays) if (registration.owner === owner) clearOwned(key)
+    },
     event: async ({ event }) => {
       if (event.type !== "session.deleted") return
       const prefix = `${event.properties.info.id}:`
-      for (const key of relays.keys()) if (key.startsWith(prefix)) clear(key)
+      clearSession(prefix)
     },
     "tool.execute.before": async (input, output) => {
       if (input.tool !== "task" || typeof output.args?.subagent_type !== "string" || !REVIEW_AGENTS.has(output.args.subagent_type)) return
       if (typeof output.args.prompt !== "string") throw new Error("review task prompt is unavailable for Go relay materialization")
       const key = taskKey(input.sessionID, input.callID)
-      if (relays.has(key)) throw new Error("duplicate review Task relay before hook")
+      if (relays.has(key)) return
       const relay = startRelay(cwd(), output.args.prompt)
-      relays.set(key, relay)
+      relays.set(key, { owner, relay, completing: false })
       try {
         output.args.prompt = (await relay.prompt).prompt
       } catch (cause) {
-        clear(key)
+        clearOwned(key)
         throw cause
       }
     },
     "tool.execute.after": async (input, output) => {
       if (input.tool !== "task" || typeof input.args?.subagent_type !== "string" || !REVIEW_AGENTS.has(input.args.subagent_type)) return
       const key = taskKey(input.sessionID, input.callID)
-      const relay = relays.get(key)
-      if (!relay) throw new Error("review Task relay completion has no matching live before hook")
-      relays.delete(key)
+      const registration = relays.get(key)
+      if (!registration || registration.completing) return
+      registration.completing = true
       try {
-        output.output = await relay.complete(output.output)
+        output.output = await registration.relay.complete(output.output)
       } finally {
-        relay.close()
+        relays.delete(key)
+        registration.relay.close()
       }
     },
   }
