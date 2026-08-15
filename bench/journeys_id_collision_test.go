@@ -58,6 +58,7 @@ func journeySources() []journeySource {
 		{"journeys_provider_capture.go", providerCaptureRetryJourneys()},
 		{"journeys_captured_provider_validator.go", capturedProviderValidatorJourneys()},
 		{"journeys_sdd_shared_scaffolding.go", sddSharedScaffoldingJourneys()},
+		{"journeys_sdd_post_review_verify_report.go", sddPostReviewVerifyReportJourneys()},
 	}
 }
 

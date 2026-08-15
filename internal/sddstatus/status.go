@@ -601,11 +601,21 @@ func Resolve(options ResolveOptions) (Status, error) {
 		nextRecommended = "resolve-review"
 	}
 	var boundGate *ReviewGateState
+	legacyVerifyReportAttestationRequired := false
 	bridge := compactPreVerifyBridge{}
 	recoverable := authorityOnlyFailedReport(readText(firstPath(artifactPaths.VerifyReport)))
 	if governingRef != nil {
 		if !reviewDisabled {
 			result, reason, err := reviewtransaction.ValidateSDDReceiptRef(context.Background(), workspaceRoot, *governingRef)
+			if err == nil && result == reviewtransaction.GateScopeChanged {
+				switch classifyPostReviewVerifyReportAttestation(context.Background(), workspaceRoot, workspaceRoot, changeName, *governingRef, runtimeStatus, specCounts) {
+				case postReviewVerifyReportBound:
+					result = reviewtransaction.GateAllow
+					reason = "bound receipt differs only by the native-settlement-attested canonical passing verify report"
+				case postReviewVerifyReportRequired:
+					legacyVerifyReportAttestationRequired = true
+				}
+			}
 			if err == nil && result == reviewtransaction.GateAllow {
 				staleEvidence := artifacts["verifyReport"] == ArtifactDone && verifyResult.Stale && reviewState == nil
 				if applyState == ApplyAllDone && (artifacts["verifyReport"] != ArtifactDone || staleEvidence || runtimeRemediationComplete) {
@@ -617,6 +627,10 @@ func Resolve(options ResolveOptions) (Status, error) {
 					}
 				}
 				boundGate = &ReviewGateState{Result: result, Reason: "explicit bound compact authority exactly matches the current repository"}
+			} else if legacyVerifyReportAttestationRequired {
+				dependencies.Verify = DependencyReady
+				dependencies.Archive = DependencyBlocked
+				nextRecommended = string(PhaseVerify)
 			} else {
 				dependencies.Verify = DependencyBlocked
 				dependencies.Archive = DependencyBlocked
@@ -693,6 +707,9 @@ func Resolve(options ResolveOptions) (Status, error) {
 	status.BlockedReasons = blockedReasons.finalize(status.NextRecommended, status.BlockedReasons)
 	if runtimeRemediationComplete && status.Dependencies.Verify == DependencyReady && status.Dependencies.Archive == DependencyBlocked && status.NextRecommended == string(PhaseVerify) {
 		status.verifyRefreshReason = runtimeRemediationVerifyRefreshInstruction
+	}
+	if legacyVerifyReportAttestationRequired {
+		status.verifyRefreshReason = legacyVerifyReportAttestationInstruction(workspaceRoot, changeName)
 	}
 	if options.IncludeInstructions {
 		instructions := renderPhaseInstructions(status)
@@ -1997,6 +2014,13 @@ func resolveNextRecommended(dependencies Dependencies, applyState ApplyState, ve
 }
 
 const runtimeRemediationVerifyRefreshInstruction = "A passing native remediation settlement completed after the persisted verification report; run fresh verification and persist a report bound after that settlement before archive."
+
+func legacyVerifyReportAttestationInstruction(workspaceRoot, changeName string) string {
+	return fmt.Sprintf(
+		"verification attestation required: persist the exact canonical passing verify-report, then run `gentle-ai sdd-attempt acquire --cwd %s --change %q --request-id \"<unique-request-id>\" --work-unit \"%s\" --evidence-goal \"attest final verification report\" --max-attempts 1 --max-changed-lines 20`; after state proceed, settle that token with the report's evidence_revision. This distinct current-binary settlement records the required native report digest.",
+		pathquote.Quote(workspaceRoot), changeName, finalVerifyAttestationWorkUnit,
+	)
+}
 
 func renderPhaseInstructions(status Status) PhaseInstructions {
 	change := "<unresolved>"

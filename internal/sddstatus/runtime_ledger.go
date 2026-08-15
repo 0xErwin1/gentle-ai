@@ -11,6 +11,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -47,6 +48,8 @@ const (
 	runtimeOperationGrant                    = "authority/grant"
 	maximumRuntimeGrantRoots                 = 32
 	runtimeLockAcquireAttempts               = 3
+	finalVerifyWorkUnit                      = "verify"
+	finalVerifyAttestationWorkUnit           = "verify-attestation"
 
 	// runtimeLedgerStatusPointer suffixes every ledger refusal an ordinary
 	// caller can hit (budget exhausted, active attempt, no active attempt,
@@ -225,6 +228,7 @@ type RuntimeAttempt struct {
 	Handoff                    *RuntimeHandoff    `json:"handoff,omitempty"`
 	FinishCandidateIdentity    string             `json:"finish_candidate_identity,omitempty"`
 	FinishCandidateTree        string             `json:"finish_candidate_tree,omitempty"`
+	AttestedVerifyReportDigest string             `json:"attested_verify_report_digest,omitempty"`
 	Outcome                    AttemptOutcome     `json:"outcome"`
 	ChangedLines               int                `json:"changed_lines"`
 	EvidenceRevision           string             `json:"evidence_revision,omitempty"`
@@ -622,6 +626,7 @@ type runtimeFinishEvent struct {
 	Ordinal                    int                `json:"ordinal"`
 	FinishCandidateIdentity    string             `json:"finish_candidate_identity"`
 	FinishCandidateTree        string             `json:"finish_candidate_tree"`
+	AttestedVerifyReportDigest string             `json:"attested_verify_report_digest,omitempty"`
 	Outcome                    AttemptOutcome     `json:"outcome"`
 	ChangedLines               int                `json:"changed_lines"`
 	EvidenceRevision           string             `json:"evidence_revision"`
@@ -916,9 +921,14 @@ func (store RuntimeStore) Finish(ctx context.Context, request FinishAttemptReque
 				return runtimeRecord{}, errors.New("unmanaged remediation requires fresh corrected evidence")
 			}
 		}
+		attestedVerifyReport, err := store.captureFinalVerifyReport(ctx, *active, request, snapshot.CandidateTree)
+		if err != nil {
+			return runtimeRecord{}, err
+		}
 		event := &runtimeFinishEvent{
 			Ordinal: active.Ordinal, FinishCandidateIdentity: snapshot.Identity, FinishCandidateTree: snapshot.CandidateTree,
-			Outcome: request.Outcome, ChangedLines: changedLines, EvidenceRevision: request.EvidenceRevision,
+			AttestedVerifyReportDigest: attestedVerifyReport,
+			Outcome:                    request.Outcome, ChangedLines: changedLines, EvidenceRevision: request.EvidenceRevision,
 			Diagnosis: request.Diagnosis, HarnessDisposition: request.HarnessDisposition,
 			CleanupEvidence: request.CleanupEvidence, ProcessEvidence: request.ProcessEvidence,
 			RemediatesEvidenceRevision: request.RemediatesEvidenceRevision,
@@ -975,6 +985,82 @@ func (store RuntimeStore) Finish(ctx context.Context, request FinishAttemptReque
 		}
 		return runtimeRecord{Operation: runtimeOperationFinish, Finish: event}, nil
 	})
+}
+
+// captureFinalVerifyReport derives the final verification attestation from the
+// candidate tree being settled. It deliberately never accepts a caller digest:
+// the native finish record binds the exact report bytes it read itself.
+func (store RuntimeStore) captureFinalVerifyReport(ctx context.Context, active RuntimeAttempt, request FinishAttemptRequest, candidateTree string) (string, error) {
+	if request.Outcome != AttemptPassed || !isFinalVerifyWorkUnit(active.WorkUnit) {
+		return "", nil
+	}
+	openSpecRoot := filepath.Join(store.Workspace, "openspec")
+	if _, err := os.Stat(openSpecRoot); os.IsNotExist(err) {
+		// Runtime attempts are also used outside OpenSpec. Without an active
+		// OpenSpec root there is no canonical verify-report to attest.
+		return "", nil
+	} else if err != nil {
+		return "", fmt.Errorf("inspect OpenSpec root for final verification: %w", err)
+	}
+	changeRoot, err := resolveBindingChangeRoot(ctx, store.Repo, store.Workspace, store.Change)
+	if err != nil {
+		return "", fmt.Errorf("resolve canonical final verification report: %w", err)
+	}
+	reportPath := filepath.Join(changeRoot, "verify-report.md")
+	// The canonical report path is anchored at the planning workspace (--cwd),
+	// never at the Git repository root: a workspace that is a subdirectory of
+	// its repository still owns exactly one canonical active-change report.
+	workspacePath, err := filepath.Rel(store.Workspace, reportPath)
+	if err != nil {
+		return "", fmt.Errorf("resolve final verification report path: %w", err)
+	}
+	wantPath := path.Join("openspec", "changes", store.Change, "verify-report.md")
+	if filepath.ToSlash(workspacePath) != wantPath {
+		return "", fmt.Errorf("final verification report is not the canonical active-change path %q", wantPath) // refusal:by-design world-action: a report outside the canonical active change cannot be safely attested
+	}
+	// The settled candidate tree is built at the repository root, so the blob
+	// read addresses the same report through its repository-relative path.
+	logicalPath, err := filepath.Rel(store.Repo, reportPath)
+	if err != nil {
+		return "", fmt.Errorf("resolve final verification report path: %w", err)
+	}
+	logicalPath = filepath.ToSlash(logicalPath)
+	artifactPaths, err := resolveArtifactPaths(changeRoot)
+	if err != nil {
+		return "", fmt.Errorf("resolve final verification artifacts: %w", err)
+	}
+	specCounts, err := readSpecCounts(artifactPaths.Specs)
+	if err != nil {
+		return "", fmt.Errorf("read final verification specification counts: %w", err)
+	}
+	payload, err := reviewtransaction.ReadTreeBlob(ctx, store.Repo, candidateTree, logicalPath, MaxVerifyReportBytes)
+	if errors.Is(err, reviewtransaction.ErrTreeArtifactMissing) {
+		// A report outside the settled candidate is not final verification
+		// evidence. Preserve the generic runtime settlement, but it carries no
+		// archive-status exception and therefore remains fail-closed later.
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("read final verification report from candidate tree: %w", err)
+	}
+	admission := ValidateVerifyReportAdmission(string(payload), specCounts)
+	if !admission.Valid || admission.Verdict != "pass" || admission.EvidenceRevision != request.EvidenceRevision {
+		reason := admission.Reason
+		if reason == "" {
+			reason = "verdict or evidence revision does not match the final settlement"
+		}
+		return "", fmt.Errorf("final verification report is not a strict passing settlement attestation: %s", reason) // refusal:by-design operator-knowledge: the final verifier must persist a canonical passing report whose evidence revision matches this settlement
+	}
+	return verifyReportDigest(payload), nil
+}
+
+func verifyReportDigest(payload []byte) string {
+	sum := sha256.Sum256(payload)
+	return "sha256:" + hex.EncodeToString(sum[:])
+}
+
+func isFinalVerifyWorkUnit(workUnit string) bool {
+	return workUnit == finalVerifyWorkUnit || workUnit == finalVerifyAttestationWorkUnit
 }
 
 func (store RuntimeStore) Handoff(ctx context.Context, request HandoffAttemptRequest) (RuntimeStatus, error) {
@@ -2145,6 +2231,10 @@ func applyRuntimeFinishEvent(replay *runtimeReplay, event *runtimeFinishEvent, u
 	if event.ChangedLineBudgetExceeded != budgetExceeded {
 		return errors.New("finish record changed-line budget decision does not match replay state")
 	}
+	if event.AttestedVerifyReportDigest != "" &&
+		(event.Outcome != AttemptPassed || !isFinalVerifyWorkUnit(active.WorkUnit) || !runtimeRevisionPattern.MatchString(event.AttestedVerifyReportDigest)) {
+		return errors.New("finish record verify-report attestation is invalid") // refusal:by-design world-action: a malformed immutable attestation record requires restoring provider-owned authority
+	}
 	if unmanagedRemediation {
 		// Lockstep twin of the write-time guard in Finish: the binding derives
 		// from the immutable chain, so replayed corrections recorded across an
@@ -2173,6 +2263,7 @@ func applyRuntimeFinishEvent(replay *runtimeReplay, event *runtimeFinishEvent, u
 	attempt := &replay.Status.Attempts[len(replay.Status.Attempts)-1]
 	attempt.FinishCandidateIdentity = event.FinishCandidateIdentity
 	attempt.FinishCandidateTree = event.FinishCandidateTree
+	attempt.AttestedVerifyReportDigest = event.AttestedVerifyReportDigest
 	attempt.Outcome = event.Outcome
 	attempt.ChangedLines = event.ChangedLines
 	attempt.EvidenceRevision = event.EvidenceRevision
@@ -2315,7 +2406,8 @@ func validateRuntimeRecordShape(record runtimeRecord) error {
 			!runtimeRevisionPattern.MatchString(event.FinishCandidateIdentity) || !runtimeGitTreePattern.MatchString(event.FinishCandidateTree) ||
 			validateRuntimeText(event.Diagnosis, 500) != nil || !validHarnessDisposition(event.HarnessDisposition) ||
 			validateRuntimeText(event.CleanupEvidence, 500) != nil || validateRuntimeText(event.ProcessEvidence, 500) != nil ||
-			(event.RemediatesEvidenceRevision != "" && (!runtimeRevisionPattern.MatchString(event.RemediatesEvidenceRevision) || event.Outcome != AttemptPassed)) {
+			(event.RemediatesEvidenceRevision != "" && (!runtimeRevisionPattern.MatchString(event.RemediatesEvidenceRevision) || event.Outcome != AttemptPassed)) ||
+			(event.AttestedVerifyReportDigest != "" && (!runtimeRevisionPattern.MatchString(event.AttestedVerifyReportDigest) || event.Outcome != AttemptPassed)) {
 			return errors.New("invalid SDD runtime finish event")
 		}
 		request := FinishAttemptRequest{
@@ -2353,6 +2445,7 @@ func validateRuntimeRecordShape(record runtimeRecord) error {
 			finish.ChangedLines > maximumRuntimeChangedLines || !runtimeRevisionPattern.MatchString(finish.EvidenceRevision) ||
 			!runtimeRevisionPattern.MatchString(finish.RemediatesEvidenceRevision) ||
 			!runtimeRevisionPattern.MatchString(finish.FinishCandidateIdentity) || !runtimeGitTreePattern.MatchString(finish.FinishCandidateTree) ||
+			(finish.AttestedVerifyReportDigest != "" && !runtimeRevisionPattern.MatchString(finish.AttestedVerifyReportDigest)) ||
 			validateRuntimeText(finish.Diagnosis, 500) != nil || !validHarnessDisposition(finish.HarnessDisposition) ||
 			validateRuntimeText(finish.CleanupEvidence, 500) != nil || validateRuntimeText(finish.ProcessEvidence, 500) != nil {
 			return errors.New("invalid atomic SDD runtime remediation finish event")
