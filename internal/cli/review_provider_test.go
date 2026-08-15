@@ -437,7 +437,7 @@ func TestReviewProviderStatusFinalizesCapturedTargetedValidatorWithoutSecondProv
 	}
 }
 
-func TestReviewProviderStatusRecollectsUnreadableCapturedValidatorSlot(t *testing.T) {
+func TestReviewProviderStatusSurfacesUnreadableCapturedValidatorSlot(t *testing.T) {
 	repo, lineage, request := providerCorrectionReady(t)
 	store, err := reviewtransaction.CompactAuthoritativeStore(t.Context(), repo, lineage)
 	if err != nil {
@@ -467,9 +467,9 @@ func TestReviewProviderStatusRecollectsUnreadableCapturedValidatorSlot(t *testin
 	if err := status.Validate(); err != nil {
 		t.Fatalf("captured provider corrupted-slot STATUS validation: %v", err)
 	}
-	if status.NextTransition == nil || status.NextTransition.Kind != reviewNextTransitionCollect ||
-		status.NextTransition.ReasonCode != "targeted_validation_required" || status.NextTransition.Collect == nil ||
-		len(status.NextTransition.Collect.Inputs) != 1 || status.NextTransition.Collect.Inputs[0].ProviderTask != nil {
+	if status.NextTransition == nil || status.NextTransition.Kind != reviewNextTransitionStop ||
+		status.NextTransition.ReasonCode != "captured_artifacts_unverifiable" ||
+		status.NextTransition.Execute != nil || status.NextTransition.Collect != nil {
 		t.Fatalf("captured provider corrupted-slot transition = %#v", status.NextTransition)
 	}
 	after, err := store.Load()

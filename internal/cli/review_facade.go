@@ -1105,15 +1105,23 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 								}
 							}
 							if validationRequest != nil && capturedEvidence != nil && capturedEvidence.Outcome == reviewtransaction.VerificationOutcomePassed {
-								if _, readErr := readCapturedProviderTargetedValidatorResult(ctx, root, store.Dir, record.State, record.Revision); readErr == nil {
+								_, readErr := readCapturedProviderTargetedValidatorResult(ctx, root, store.Dir, record.State, record.Revision)
+								switch {
+								case readErr == nil:
 									capturedProviderTargetedValidator = true
-								} else if providerRoleHost {
+								case errors.Is(readErr, errReviewProviderTargetedValidatorResultNotCaptured):
 									// OpenCode and the pi host relay are the
 									// host-mediated providers. When no current slot
 									// exists, they receive the Go-issued task that can
 									// fill one; a readable occupied slot is
 									// provider-generic.
-									providerRole = reviewerprovider.RoleTargetedValidator
+									if providerRoleHost {
+										providerRole = reviewerprovider.RoleTargetedValidator
+									}
+								default:
+									// An unreadable or inadmissible captured slot is
+									// unverifiable evidence, never silent continuation.
+									artifactErr = readErr
 								}
 							}
 						}

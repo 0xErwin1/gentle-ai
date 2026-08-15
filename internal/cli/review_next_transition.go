@@ -199,7 +199,7 @@ func newReviewNextTransition(status ReviewTargetStatusResult, selectedLenses []s
 		bindingTarget = reviewAuthorityTargetIdentity(status)
 	}
 	binding := reviewTransitionBinding(status.Authority, bindingTarget, input.RepositoryContext)
-	if status.Authority.State == reviewtransaction.StateReviewing && artifactErr != nil {
+	if artifactErr != nil && (status.Authority.State == reviewtransaction.StateReviewing || input.ValidationRequest != nil) {
 		return reviewStopTransition("captured_artifacts_unverifiable")
 	}
 	if status.Authority.State == reviewtransaction.StateReviewing && input.LensContextBudgetExceeded {
