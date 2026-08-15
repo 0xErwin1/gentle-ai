@@ -79,6 +79,7 @@ type openCodeTransportSession struct {
 	record         reviewtransaction.CompactRecord
 	lensRequest    reviewProviderRequest
 	providerPrompt []byte
+	taskPrompt     string
 	nonce          string
 	passThrough    bool
 }
@@ -217,7 +218,7 @@ func openCodeTransportStart(ctx context.Context, envelope openCodeTransportEnvel
 	if err != nil {
 		return openCodeTransportSession{}, err
 	}
-	materialized, err := openCodeTransportMaterializedPrompt(taskPrompt, session.providerPrompt)
+	materialized, err := openCodeTransportMaterializedPrompt(session.taskPrompt, session.providerPrompt)
 	if err != nil {
 		return openCodeTransportSession{}, openCodeTransportFailure("opencode_review_transport_materialization_unavailable")
 	}
@@ -256,7 +257,11 @@ func openCodeTransportStartBound(ctx context.Context, taskPrompt string) (openCo
 	if err := authorizeReviewAuthorityMutation(ctx, root); err != nil {
 		return openCodeTransportSession{}, openCodeTransportAuthorityUnavailable(err)
 	}
-	session := openCodeTransportSession{binding: binding, root: root, store: store, record: record}
+	// For a role task decodeOpenCodeTransportBinding already proved taskPrompt
+	// is byte-identical to the Go-issued prompt. The lens branch below replaces
+	// it with the Go-rebuilt canonical binding line, so no caller-authored
+	// bytes can ride the materialization envelope into the reviewer Task.
+	session := openCodeTransportSession{binding: binding, root: root, store: store, record: record, taskPrompt: taskPrompt}
 	if binding.Role != "" {
 		invocation, err := reviewProviderRoleTaskRequest(ctx, root, store.Dir, record.State, record.Revision, binding.Role)
 		if err != nil {
@@ -268,6 +273,11 @@ func openCodeTransportStartBound(ctx context.Context, taskPrompt string) (openCo
 		if err != nil || request.Binding.Revision != record.Revision || request.Binding.Lineage != record.State.LineageID {
 			return openCodeTransportSession{}, openCodeTransportFailure("opencode_review_transport_materialization_unavailable")
 		}
+		encoded, err := json.Marshal(request.Binding)
+		if err != nil {
+			return openCodeTransportSession{}, openCodeTransportFailure("opencode_review_transport_materialization_unavailable")
+		}
+		session.taskPrompt = reviewLensContextBindingHeader + " " + string(encoded)
 		session.lensRequest, session.providerPrompt = request, request.Invocation.Prompt()
 	}
 	return session, nil
