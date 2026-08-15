@@ -669,6 +669,7 @@ func TestReviewLensContextStandsAloneAsTheReviewerInstruction(t *testing.T) {
 				"complete and only", "working tree", "subject_hash", "complete unique unordered set", "path:line or path:start-end",
 				"exactly as it appears in the changed-path manifest", "host:port", "validated against the frozen repository",
 				"entirely within lines this candidate changed", "one unchanged context line in the span",
+				"never reproduce that token", "describe it in words and cite the manifest file and line",
 			} {
 				if !strings.Contains(instruction, required) {
 					t.Fatalf("instruction omits %q:\n%s", required, instruction)
