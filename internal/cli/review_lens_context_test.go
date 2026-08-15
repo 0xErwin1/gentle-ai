@@ -659,7 +659,17 @@ func TestReviewLensContextStandsAloneAsTheReviewerInstruction(t *testing.T) {
 			}
 			// The reviewer must know the evidence in the block is the whole
 			// candidate, and that reading anything else is not permitted.
-			for _, required := range []string{"complete and only", "working tree", "subject_hash", "complete unique unordered set", "path:line or path:start-end"} {
+			// The citation discipline must warn that free-text evidence and
+			// proof_refs tokens shaped like path:line are validated against
+			// the frozen repository, since one unknown path rejects the
+			// entire result, and that a candidate-causal finding must anchor
+			// its span entirely within candidate-changed lines, since one
+			// unchanged context line in the span rejects the result too.
+			for _, required := range []string{
+				"complete and only", "working tree", "subject_hash", "complete unique unordered set", "path:line or path:start-end",
+				"exactly as it appears in the changed-path manifest", "host:port", "validated against the frozen repository",
+				"entirely within lines this candidate changed", "one unchanged context line in the span",
+			} {
 				if !strings.Contains(instruction, required) {
 					t.Fatalf("instruction omits %q:\n%s", required, instruction)
 				}
