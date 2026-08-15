@@ -243,8 +243,7 @@ func exerciseFrozenLineageResume(r *journeyRun) error {
 	if err != nil {
 		return err
 	}
-	if occupied.NextTransition.Kind != "execute" || occupied.NextTransition.ReasonCode != "captured_results_ready" ||
-		occupied.NextTransition.Execute.Operation != "review.finalize" {
+	if occupied.NextTransition.Kind != "stop" || occupied.NextTransition.ReasonCode != "native_stop_required" {
 		return fmt.Errorf("drifted occupied frozen status = %+v", occupied.NextTransition)
 	}
 	if err := r.sandbox.write(filepath.Join(r.sandbox.Repo, frozenLineageTracked), frozenLineageSource); err != nil {
