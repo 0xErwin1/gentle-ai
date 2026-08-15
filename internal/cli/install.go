@@ -88,6 +88,9 @@ func ParseInstallFlags(args []string) (InstallFlags, error) {
 		switch f.Name {
 		case "opencode-background-subagents":
 			opts.OpenCodeBackgroundSubagentsSet = true
+			if opts.Config != "" {
+				opts.Config = "!invalid!"
+			}
 		case "agent", "agents", "component", "components", "skill", "skills", "persona", "preset", "sdd-mode":
 			if opts.Config != "" {
 				opts.Config = "!invalid!"
