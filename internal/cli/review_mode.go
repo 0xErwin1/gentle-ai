@@ -630,8 +630,9 @@ func reviewConsoleTerminal(file *os.File) bool {
 // A consent declaration selects candidate-scoped negotiated semantics: relay
 // always returns the typed question, while granted and declined apply only to
 // the exact frozen candidate and never touch the legacy clone-wide latch. An
-// undeclared START keeps the one-time console behavior unchanged.
-func authorizeReviewStart(ctx context.Context, repo string, assessment reviewtransaction.RiskAssessment, consent reviewStartConsentMode) error {
+// undeclared plain START keeps the one-time console behavior unchanged; an
+// undeclared negotiated START authorizes silently (see below).
+func authorizeReviewStart(ctx context.Context, repo string, assessment reviewtransaction.RiskAssessment, consent reviewStartConsentMode, negotiated bool) error {
 	global, err := readGlobalRDDMode()
 	if err != nil {
 		return err
@@ -666,6 +667,19 @@ func authorizeReviewStart(ctx context.Context, repo string, assessment reviewtra
 	case reviewConsentModeGranted:
 		// The exact target binding was revalidated before this call. Authorize
 		// only that candidate; later candidates must receive their own question.
+		return nil
+	}
+	if negotiated {
+		// A negotiated invocation is machine-readable end to end: stdout
+		// carries the typed envelope and a successful operation writes zero
+		// bytes to stderr (gentle-pi fails closed on any stderr a successful
+		// START writes). Negotiated consent is carried by the typed consent
+		// envelope (--consent relay/granted/declined), so the legacy one-time
+		// console ceremony — the prompt and every skip notice — is a human
+		// surface this route never touches. The review proceeds in the same
+		// fail-safe direction as a headless start, and neither the one-time
+		// consent latch nor the once-per-clone notice marker is consumed, so
+		// a later plain start in this clone can still ask and still announce.
 		return nil
 	}
 	console := reviewConsole()
