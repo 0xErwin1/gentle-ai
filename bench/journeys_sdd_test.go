@@ -13,6 +13,8 @@ var portableSDDFailClosedAuthorityJourneyIDs = []string{
 	"j56-sdd-non-allow-post-apply-gate-fails-closed",
 	"j58-sdd-foreign-openspec-path-fails-closed",
 	"j107-sdd-approved-active-change-allows-shared-openspec-scaffolding",
+	"j108-sdd-post-review-verify-report-is-natively-bound",
+	"j109-sdd-legacy-post-review-report-requires-current-attestation",
 	"j80-rescope-authorized-evidence-only-retry",
 	"j81-rc1-consecutive-rescope-repair-executes-printed-command",
 }
