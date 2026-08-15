@@ -32,6 +32,18 @@ interface RelayRegistration {
   completing: boolean
 }
 
+// The relay registry is deliberately process-global so duplicate plugin
+// instances (for example one loaded from global config and one from project
+// config) share a single view of live review Task relays instead of spawning
+// duplicate Go processes for the same task.
+//
+// Owner invariant: every registration is owned by exactly one plugin instance
+// (the `owner` symbol of the instance whose before hook spawned its relay),
+// and only that owner may complete, delete, or close it. An instance that
+// observes an already-registered key at before time defers to the owner and
+// passes the task through untouched at after time. A completion for a key an
+// instance neither owns nor deferred is a protocol violation and refuses
+// loudly instead of silently dropping the completion.
 const RELAY_REGISTRY_KEY = "__gentleAiOpenCodeReviewTransportRelays" as const
 
 function reviewRelayRegistry(): Map<string, RelayRegistration> {
@@ -123,6 +135,12 @@ function startRelay(cwd: string, prompt: string): Relay {
 const OpenCodeReviewTransportPlugin: Plugin = async ({ directory, worktree }) => {
   const owner = Symbol("gentle-ai-opencode-review-transport")
   const relays = reviewRelayRegistry()
+  // Keys this instance observed at before time whose registration another
+  // instance owns. The owning instance's after hook delivers the completion,
+  // so this instance's after hook passes those tasks through untouched. This
+  // deferral is the only tolerated silent completion path; every other
+  // unmatched completion refuses loudly.
+  const deferred = new Set<string>()
   const cwd = () => worktree || directory
   const clearOwned = (key: string) => {
     const registration = relays.get(key)
@@ -131,14 +149,20 @@ const OpenCodeReviewTransportPlugin: Plugin = async ({ directory, worktree }) =>
     registration.relay.close()
   }
   const clearSession = (prefix: string) => {
+    // Owner-scoped on purpose: every live instance receives session.deleted
+    // and clears its own registrations, so the session empties collectively
+    // without one instance closing relays it does not own. A disposed
+    // instance's registrations are cleared by its dispose hook instead.
     for (const [key, registration] of relays) {
-      if (!key.startsWith(prefix)) continue
+      if (!key.startsWith(prefix) || registration.owner !== owner) continue
       relays.delete(key)
       registration.relay.close()
     }
+    for (const key of deferred) if (key.startsWith(prefix)) deferred.delete(key)
   }
   return {
     dispose: async () => {
+      deferred.clear()
       for (const [key, registration] of relays) if (registration.owner === owner) clearOwned(key)
     },
     event: async ({ event }) => {
@@ -150,7 +174,15 @@ const OpenCodeReviewTransportPlugin: Plugin = async ({ directory, worktree }) =>
       if (input.tool !== "task" || typeof output.args?.subagent_type !== "string" || !REVIEW_AGENTS.has(output.args.subagent_type)) return
       if (typeof output.args.prompt !== "string") throw new Error("review task prompt is unavailable for Go relay materialization")
       const key = taskKey(input.sessionID, input.callID)
-      if (relays.has(key)) return
+      const existing = relays.get(key)
+      if (existing) {
+        // Another instance already owns this task's relay: defer completion
+        // to that owner and pass this instance's hooks through untouched. A
+        // re-fired before hook for a registration this instance already owns
+        // keeps the live registration and defers nothing.
+        if (existing.owner !== owner) deferred.add(key)
+        return
+      }
       const relay = startRelay(cwd(), output.args.prompt)
       relays.set(key, { owner, relay, completing: false })
       try {
@@ -163,13 +195,19 @@ const OpenCodeReviewTransportPlugin: Plugin = async ({ directory, worktree }) =>
     "tool.execute.after": async (input, output) => {
       if (input.tool !== "task" || typeof input.args?.subagent_type !== "string" || !REVIEW_AGENTS.has(input.args.subagent_type)) return
       const key = taskKey(input.sessionID, input.callID)
+      // Owner-scoped dedup tolerance: this instance saw the before hook for
+      // this task but another instance owns the relay, so that owner's after
+      // hook delivers the completion and this one passes through untouched.
+      if (deferred.delete(key)) return
       const registration = relays.get(key)
-      if (!registration || registration.completing) return
+      if (!registration) throw new Error("review Task relay completion has no matching live before hook")
+      if (registration.owner !== owner) throw new Error("review Task relay completion is owned by another plugin instance")
+      if (registration.completing) throw new Error("review Task relay completion is already in flight for this task")
       registration.completing = true
       try {
         output.output = await registration.relay.complete(output.output)
       } finally {
-        relays.delete(key)
+        if (relays.get(key) === registration) relays.delete(key)
         registration.relay.close()
       }
     },
