@@ -669,20 +669,21 @@ func authorizeReviewStart(ctx context.Context, repo string, assessment reviewtra
 		// only that candidate; later candidates must receive their own question.
 		return nil
 	}
-	if negotiated {
-		// A negotiated invocation is machine-readable end to end: stdout
-		// carries the typed envelope and a successful operation writes zero
-		// bytes to stderr (gentle-pi fails closed on any stderr a successful
-		// START writes). Negotiated consent is carried by the typed consent
-		// envelope (--consent relay/granted/declined), so the legacy one-time
-		// console ceremony — the prompt and every skip notice — is a human
-		// surface this route never touches. The review proceeds in the same
-		// fail-safe direction as a headless start, and neither the one-time
-		// consent latch nor the once-per-clone notice marker is consumed, so
-		// a later plain start in this clone can still ask and still announce.
+	console := reviewConsole()
+	if negotiated && !console.Interactive {
+		// A non-interactive negotiated invocation is machine-readable end to
+		// end: stdout carries the typed envelope and a successful operation
+		// writes zero bytes to stderr (gentle-pi fails closed on any stderr a
+		// successful START writes), and machine listeners only ever spawn
+		// non-interactive processes. Negotiated consent is carried by the
+		// typed consent envelope (--consent relay/granted/declined), so this
+		// route returns before the latch read: neither the one-time consent
+		// latch nor the once-per-clone notice marker is consumed, and a later
+		// plain start in this clone can still ask and still announce. A human
+		// at a real terminal falls through to the unchanged one-time ceremony
+		// below and keeps the power to refuse.
 		return nil
 	}
-	console := reviewConsole()
 	asked, err := reviewtransaction.RDDConsentAsked(ctx, repo)
 	if err != nil {
 		// A damaged latch must neither block the review nor silently disable it:

@@ -219,12 +219,12 @@ func reviewNarrationContainsWord(lowered, word string) bool {
 	return pattern.MatchString(lowered)
 }
 
-// There is deliberately no stderr emission machinery here anymore. Every
-// production caller of the old reviewNarrateStopReason/reviewNarrateForecast
-// pair was a negotiated (--contract) invocation, and a successful negotiated
-// operation is machine-readable end to end: stdout carries every routing fact
-// (kind, reason_code, forecast) and stderr stays byte-silent, because
-// gentle-pi's adapter fails closed (UNEXPECTED_STDERR) on any stderr a
-// successful native process writes. The registered statements above remain
-// the single vocabulary source for the Tier A/C narration contract tests and
-// for any future genuinely-human surface.
+// There is deliberately no stderr emission machinery here anymore: a
+// successful negotiated operation is machine-readable end to end (gentle-pi
+// fails closed on any stderr a successful native process writes). The
+// registered statements above stay live two ways. The Tier C stop statements
+// are contract data cross-validated against the live stop-code emitter in
+// review_next_transition.go by review_narration_test.go (the bijection test).
+// The Tier A consent prompt remains production-emitted through the
+// interactive console ceremony in review_mode.go, proven reachable by
+// TestNegotiatedStartUndeclaredInteractiveKeepsConsentCeremony.
