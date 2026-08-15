@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -309,6 +310,49 @@ func TestExplicitLineageStatusOffersFreshStartForWholePriorSchemaAncestry(t *tes
 	}
 	if status.Applicability != TargetApplicabilityUnrelated || status.Action != TargetStatusActionStart {
 		t.Fatalf("whole prior-schema ancestry did not reclassify to fresh start: %#v", status)
+	}
+}
+
+// TestExplicitLineageStatusKeepsLiveAuthorityOverPriorSchemaPredecessor pins
+// the fresh-start exit to the NAMED lineage: a current-schema lineage whose
+// recovery predecessor is prior-schema still owns live authority, so
+// candidate loading must keep it instead of answering with the empty map
+// that routes STATUS to fresh start.
+func TestExplicitLineageStatusKeepsLiveAuthorityOverPriorSchemaPredecessor(t *testing.T) {
+	repo, predecessorStore, _, successorLineage := priorSchemaRecoveryChain(t, "live-over-prior")
+	outdateCompactSnapshotIdentity(t, predecessorStore)
+
+	candidates, err := loadCompactTargetStatusCandidates(context.Background(), repo, successorLineage)
+	if err != nil {
+		t.Fatalf("candidates for a live lineage over a prior-schema predecessor = %v", err)
+	}
+	if _, held := candidates[successorLineage]; !held {
+		t.Fatalf("live named lineage lost its authority to its prior-schema predecessor: %#v", candidates)
+	}
+}
+
+// TestPriorSchemaToleranceIsViolationScoped pins the suppression to the one
+// dangling-predecessor violation the prior-schema gap explains. A second
+// co-present violation on the same lineage is unconstructible through
+// compactAuthorityGraphViolations (it records at most one violation per
+// lineage and the dangling check short-circuits first), so the scoping is
+// proven at the unit level of the filtering predicate.
+func TestPriorSchemaToleranceIsViolationScoped(t *testing.T) {
+	record := CompactRecord{State: CompactState{LineageID: "successor",
+		Recovery: &CompactRecoveryProvenance{PredecessorLineageID: "gone"}}}
+	priorSchema := map[string]bool{"gone": true}
+	dangling := fmt.Errorf("dangling predecessor for %q", "successor")
+	if !compactPriorSchemaToleratedViolation("successor", dangling, record, priorSchema) {
+		t.Fatal("the dangling-predecessor violation a prior-schema gap explains must be tolerated")
+	}
+	for _, violation := range []error{fmt.Errorf("fork at %q", "gone"), errors.New("recovery cycle"),
+		fmt.Errorf("predecessor revision mismatch for %q", "successor")} {
+		if compactPriorSchemaToleratedViolation("successor", violation, record, priorSchema) {
+			t.Fatalf("unrelated violation %v must keep blocking", violation)
+		}
+	}
+	if compactPriorSchemaToleratedViolation("successor", dangling, record, map[string]bool{}) {
+		t.Fatal("a missing predecessor without prior-schema proof must keep blocking")
 	}
 }
 
