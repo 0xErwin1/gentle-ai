@@ -181,17 +181,21 @@ func (s RestoreService) restoreCompressed(manifest Manifest) error {
 			continue
 
 		case entry.Kind == PathKindSymlinkDirectory && entry.Existed:
-			// Pre-existing symlink to a directory: validate the target is
-			// safe (relative, contained under roots) and recreate the
-			// symlink if missing. Refuse absolute targets outright —
-			// accepting an absolute target from a (tampered) manifest
-			// would let an attacker point at any system path.
-			if err := validateSymlinkTarget(entry.LinkTarget, entry.OriginalPath, roots); err != nil {
-				return fmt.Errorf("manifest entry %q has unsafe LinkTarget %q: %w", entry.OriginalPath, entry.LinkTarget, err)
-			}
+			// Pre-existing symlink to a directory: if it already exists on
+			// disk, leave it untouched (no LinkTarget validation, no rewrite).
+			// Only when missing, validate the target is safe (relative,
+			// contained under roots), ensure the parent directory exists,
+			// and recreate the symlink — refusing unsafe targets outright so
+			// a tampered manifest cannot point at any system path.
 			if _, err := os.Lstat(entry.OriginalPath); err != nil {
 				if !os.IsNotExist(err) {
 					return fmt.Errorf("stat pre-existing symlink %q: %w", entry.OriginalPath, err)
+				}
+				if err := validateSymlinkTarget(entry.LinkTarget, entry.OriginalPath, roots); err != nil {
+					return fmt.Errorf("manifest entry %q has unsafe LinkTarget %q: %w", entry.OriginalPath, entry.LinkTarget, err)
+				}
+				if err := os.MkdirAll(filepath.Dir(entry.OriginalPath), 0o755); err != nil {
+					return fmt.Errorf("create parent directory for symlink %q: %w", entry.OriginalPath, err)
 				}
 				if err := os.Symlink(entry.LinkTarget, entry.OriginalPath); err != nil {
 					return fmt.Errorf("restore symlink %q -> %q: %w", entry.OriginalPath, entry.LinkTarget, err)
@@ -268,15 +272,19 @@ func (s RestoreService) restorePlain(manifest Manifest) error {
 			continue
 
 		case entry.Kind == PathKindSymlinkDirectory && entry.Existed:
-			// Pre-existing symlink to a directory: validate the target is
-			// safe (relative, contained under roots) and recreate the
-			// symlink if missing.
-			if err := validateSymlinkTarget(entry.LinkTarget, entry.OriginalPath, roots); err != nil {
-				return fmt.Errorf("manifest entry %q has unsafe LinkTarget %q: %w", entry.OriginalPath, entry.LinkTarget, err)
-			}
+			// Pre-existing symlink to a directory: if it already exists on
+			// disk, leave it untouched. Only when missing, validate the
+			// target is safe (relative, contained under roots), ensure the
+			// parent directory exists, and recreate the symlink.
 			if _, err := os.Lstat(entry.OriginalPath); err != nil {
 				if !os.IsNotExist(err) {
 					return fmt.Errorf("stat pre-existing symlink %q: %w", entry.OriginalPath, err)
+				}
+				if err := validateSymlinkTarget(entry.LinkTarget, entry.OriginalPath, roots); err != nil {
+					return fmt.Errorf("manifest entry %q has unsafe LinkTarget %q: %w", entry.OriginalPath, entry.LinkTarget, err)
+				}
+				if err := os.MkdirAll(filepath.Dir(entry.OriginalPath), 0o755); err != nil {
+					return fmt.Errorf("create parent directory for symlink %q: %w", entry.OriginalPath, err)
 				}
 				if err := os.Symlink(entry.LinkTarget, entry.OriginalPath); err != nil {
 					return fmt.Errorf("restore symlink %q -> %q: %w", entry.OriginalPath, entry.LinkTarget, err)
