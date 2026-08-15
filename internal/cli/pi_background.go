@@ -49,6 +49,9 @@ type PiBackgroundResolution struct {
 	Persist        model.PiBackgroundIntent
 	NeedsPrompt    bool
 	projectionPlan *piBackgroundProjectionPlan
+
+	// managed marks an explicit or prior-managed decision; implicit auto never projects.
+	managed bool
 }
 
 // ResolvePiBackground applies CLI > non-empty env > prior managed state >
@@ -86,6 +89,7 @@ func ResolvePiBackground(input PiBackgroundResolveInput) (PiBackgroundResolution
 	switch selected {
 	case model.PiBackgroundOn, model.PiBackgroundOff:
 		result.Effective = selected
+		result.managed = true
 		if explicit {
 			result.Persist = selected
 		}
@@ -94,6 +98,7 @@ func ResolvePiBackground(input PiBackgroundResolveInput) (PiBackgroundResolution
 		// safe to reuse, but auto never creates a managed choice by itself.
 		if prior == model.PiBackgroundOn || prior == model.PiBackgroundOff {
 			result.Effective = prior
+			result.managed = true
 		} else if explicit && input.Interactive {
 			result.Effective = model.PiBackgroundAuto
 		} else if input.Interactive {
@@ -167,12 +172,13 @@ type piBackgroundProjectionPlan struct {
 	changed     bool
 	priorExists bool
 	prior       []byte
+	skipReason  string
 }
 
 // preparePiBackgroundProjection returns nil when there is nothing to project:
 // no Pi component in the run, or an unresolved/auto effective policy.
 func preparePiBackgroundProjection(homeDir string, resolution *PiBackgroundResolution, hasPi bool) *piBackgroundProjectionPlan {
-	if resolution == nil || !hasPi || resolution.Effective == "" || resolution.Effective == model.PiBackgroundAuto {
+	if resolution == nil || !hasPi || !resolution.managed || resolution.Effective == "" || resolution.Effective == model.PiBackgroundAuto {
 		return nil
 	}
 	plan := &piBackgroundProjectionPlan{
@@ -202,8 +208,10 @@ func (p *piBackgroundProjectionPlan) Apply() error {
 			Schema string `json:"schema"`
 		}
 		if json.Unmarshal(existing, &decoded) != nil || decoded.Schema != piBackgroundPolicySchema {
-			// refusal:by-design operator-knowledge: only the operator knows whether the unmanaged file occupying the managed policy path can be replaced or must be moved
-			return fmt.Errorf("refusing to overwrite %q: existing file does not carry the managed schema %q; move it aside so the managed policy can own this path", p.path, piBackgroundPolicySchema)
+			// Non-fatal: a policy side-file must never roll back the apply stage.
+			p.applied = true
+			p.skipReason = fmt.Sprintf("existing file %q does not carry the managed schema %q; refusing to overwrite an unmanaged file", p.path, piBackgroundPolicySchema)
+			return nil
 		}
 		p.prior, p.priorExists = existing, true
 		if bytes.Equal(existing, desired) {

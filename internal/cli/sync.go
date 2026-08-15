@@ -1952,6 +1952,11 @@ func RenderSyncReport(result SyncResult) string {
 	backgroundReport := func() {
 		if containsAgent(result.Agents, model.AgentPi) && result.PiBackground.Intent != "" {
 			fmt.Fprintf(&b, "Pi background intent: %s (policy effective: %s)\n", result.PiBackground.Intent, result.PiBackground.Effective)
+			if !result.PiBackground.managed {
+				fmt.Fprintln(&b, "Pi background projection: unmanaged (no explicit policy)")
+			} else if plan := result.PiBackground.projectionPlan; plan != nil && plan.skipReason != "" {
+				fmt.Fprintln(&b, "Pi background projection skipped: "+plan.skipReason)
+			}
 		}
 		if !containsAgent(result.Agents, model.AgentOpenCode) || result.Background.Intent == "" {
 			return

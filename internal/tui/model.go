@@ -2681,10 +2681,8 @@ func (m Model) continueToPiBackgroundOrInstall() (tea.Model, tea.Cmd) {
 			m.setScreen(ScreenPiBackground)
 			return m, nil
 		}
+		// Unmanaged auto stays auto: only managed on/off decisions project.
 		m.PiBackgroundIntent = resolution.Effective
-		if m.PiBackgroundIntent == model.PiBackgroundAuto {
-			m.PiBackgroundIntent = model.PiBackgroundOff
-		}
 		m.PiBackgroundPersist = resolution.Persist
 	}
 	return m.startInstalling()
