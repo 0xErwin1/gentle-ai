@@ -492,7 +492,7 @@ func TestOpenCodeReviewTransportPluginContract(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{`gentle-ai.provider-transport/v1`, `"review", "opencode-transport"`, `const relays = new Map<string, Relay>()`, `output.args.prompt = (await relay.prompt).prompt`, `output.output = await relay.complete(output.output)`, `"tool.execute.before"`, `"tool.execute.after"`} {
+	for _, want := range []string{`gentle-ai.provider-transport/v1`, `"review", "opencode-transport"`, `RELAY_REGISTRY_KEY`, `reviewRelayRegistry()`, `output.args.prompt = (await relay.prompt).prompt`, `output.output = await registration.relay.complete(output.output)`, `"tool.execute.before"`, `"tool.execute.after"`} {
 		if !strings.Contains(source, want) {
 			t.Fatalf("transport plugin missing %q", want)
 		}

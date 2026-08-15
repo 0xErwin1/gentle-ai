@@ -19,9 +19,10 @@ import (
 )
 
 const (
-	openCodeReviewTransportSchema     = reviewerprovider.TransportCapability
-	openCodeTaskHostOutputLimit       = reviewResultArtifactLimit + 8<<10
-	openCodeTransportEnvelopeMaxBytes = reviewResultArtifactLimit*2 + 8<<10
+	openCodeReviewTransportSchema          = reviewerprovider.TransportCapability
+	openCodeTaskHostOutputLimit            = reviewResultArtifactLimit + 8<<10
+	openCodeTransportEnvelopeMaxBytes      = reviewResultArtifactLimit*2 + 8<<10
+	openCodeTransportMaterializationHeader = "GENTLE_AI_REVIEW_PROVIDER_MATERIALIZATION"
 )
 
 // openCodeTransportEnvelope is the strict bidirectional wire protocol shared
@@ -42,10 +43,30 @@ func (err *openCodeTaskOutputError) Error() string {
 	return err.Code + ": OpenCode Task output is incomplete or malformed"
 }
 
+type openCodeTransportBindingError struct{ detail string }
+
+func (err *openCodeTransportBindingError) Error() string {
+	return "opencode_review_transport_binding_invalid: " + err.detail
+}
+
+func openCodeTransportBindingInvalid(detail string) error {
+	return &openCodeTransportBindingError{detail: detail}
+}
+
 type openCodeTransportTaskBinding struct {
+	LineageID         string
+	Revision          string
+	TargetIdentity    string
 	RepositoryContext string
 	Lens              string
 	Role              reviewProviderRole
+}
+
+// openCodeTransportMaterialization carries the original, Go-issued Task
+// binding alongside the provider prompt that Go reconstructed from it. A
+// reintercepting hook can only pass through that exact reconstruction.
+type openCodeTransportMaterialization struct {
+	TaskPrompt string `json:"task_prompt"`
 }
 
 // openCodeTransportSession is deliberately process-local: a completion can
@@ -59,10 +80,11 @@ type openCodeTransportSession struct {
 	lensRequest    reviewProviderRequest
 	providerPrompt []byte
 	nonce          string
+	passThrough    bool
 }
 
 var openCodeTransportRandom = rand.Read
-var openCodeTransportCompletionTimeout = 120 * time.Second
+var openCodeTransportTrailingClosureTimeout = 5 * time.Second
 
 func RunReviewOpenCodeTransport(args []string, stdout io.Writer) error {
 	return runReviewOpenCodeTransport(args, os.Stdin, stdout)
@@ -96,23 +118,23 @@ func runReviewOpenCodeTransport(args []string, stdin io.Reader, stdout io.Writer
 	}); err != nil {
 		return err
 	}
-	completionContext, cancel := context.WithTimeout(context.Background(), openCodeTransportCompletionTimeout)
-	defer cancel()
-	completion, err := decodeOpenCodeTransportEnvelopeContext(completionContext, decoder)
+	// The OpenCode host owns the Task lifetime. Its completion, pipe closure, or
+	// child termination decides this wait; a Go deadline can preempt valid work.
+	completion, err := decodeOpenCodeTransportEnvelope(decoder)
 	if err != nil {
-		if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
-			return openCodeTransportFailure("opencode_review_transport_completion_timeout")
+		if errors.Is(err, io.EOF) {
+			return openCodeTransportFailure("opencode_review_transport_provider_result_missing")
 		}
-		return openCodeTransportFailure("opencode_review_transport_completion_missing")
+		return err
 	}
 	if err := validateOpenCodeTransportCompletion(completion, session.nonce); err != nil {
 		return err
 	}
-	trailingContext, cancelTrailing := context.WithTimeout(context.Background(), openCodeTransportCompletionTimeout)
+	trailingContext, cancelTrailing := context.WithTimeout(context.Background(), openCodeTransportTrailingClosureTimeout)
 	defer cancelTrailing()
 	if _, err := decodeOpenCodeTransportEnvelopeContext(trailingContext, decoder); !errors.Is(err, io.EOF) {
 		if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
-			return openCodeTransportFailure("opencode_review_transport_completion_timeout")
+			return openCodeTransportFailure("opencode_review_transport_trailing_closure_timeout")
 		}
 		return errors.New("opencode_review_transport_envelope_invalid: relay accepts exactly one start frame and one completion frame") // refusal:by-design world-action: the shim must close the live child stdin after its matching Task completion
 	}
@@ -173,7 +195,33 @@ func validateOpenCodeTransportCompletion(envelope openCodeTransportEnvelope, non
 }
 
 func openCodeTransportStart(ctx context.Context, envelope openCodeTransportEnvelope) (openCodeTransportSession, error) {
-	binding, err := decodeOpenCodeTransportBinding(envelope.Prompt)
+	taskPrompt, reintercepted, err := decodeOpenCodeTransportMaterialization(envelope.Prompt)
+	if err != nil {
+		return openCodeTransportSession{}, err
+	}
+	session, err := openCodeTransportStartBound(ctx, taskPrompt)
+	if err != nil {
+		return openCodeTransportSession{}, err
+	}
+	materialized, err := openCodeTransportMaterializedPrompt(taskPrompt, session.providerPrompt)
+	if err != nil {
+		return openCodeTransportSession{}, openCodeTransportFailure("opencode_review_transport_materialization_unavailable")
+	}
+	if reintercepted && envelope.Prompt != materialized {
+		return openCodeTransportSession{}, openCodeTransportBindingInvalid("Task prompt is not the exact Go-issued provider materialization")
+	}
+	session.providerPrompt = []byte(materialized)
+	session.passThrough = reintercepted
+	nonce, err := newOpenCodeTransportNonce()
+	if err != nil {
+		return openCodeTransportSession{}, openCodeTransportFailure("opencode_review_transport_materialization_unavailable")
+	}
+	session.nonce = nonce
+	return session, nil
+}
+
+func openCodeTransportStartBound(ctx context.Context, taskPrompt string) (openCodeTransportSession, error) {
+	binding, err := decodeOpenCodeTransportBinding(taskPrompt)
 	if err != nil {
 		return openCodeTransportSession{}, err
 	}
@@ -182,8 +230,17 @@ func openCodeTransportStart(ctx context.Context, envelope openCodeTransportEnvel
 		return openCodeTransportSession{}, openCodeTransportFailure("opencode_review_transport_materialization_unavailable")
 	}
 	store, record, err := discoverCompactFacadeReview(ctx, root, contextBinding.LineageID, false)
-	if err != nil || record.Revision != contextBinding.Revision {
+	if err != nil {
 		return openCodeTransportSession{}, openCodeTransportFailure("opencode_review_transport_materialization_unavailable")
+	}
+	if err := validateReviewProviderTaskAuthorityBinding(ReviewTransitionBinding{
+		LineageID: binding.LineageID, Revision: binding.Revision, TargetIdentity: binding.TargetIdentity,
+		RepositoryContext: binding.RepositoryContext,
+	}, contextBinding, record); err != nil {
+		return openCodeTransportSession{}, err
+	}
+	if err := authorizeReviewAuthorityMutation(ctx, root); err != nil {
+		return openCodeTransportSession{}, openCodeTransportAuthorityUnavailable(err)
 	}
 	session := openCodeTransportSession{binding: binding, root: root, store: store, record: record}
 	if binding.Role != "" {
@@ -199,15 +256,17 @@ func openCodeTransportStart(ctx context.Context, envelope openCodeTransportEnvel
 		}
 		session.lensRequest, session.providerPrompt = request, request.Invocation.Prompt()
 	}
-	nonce, err := newOpenCodeTransportNonce()
-	if err != nil {
-		return openCodeTransportSession{}, openCodeTransportFailure("opencode_review_transport_materialization_unavailable")
-	}
-	session.nonce = nonce
 	return session, nil
 }
 
 func openCodeTransportComplete(ctx context.Context, session openCodeTransportSession, envelope openCodeTransportEnvelope) (openCodeTransportEnvelope, error) {
+	if session.passThrough {
+		if envelope.Error != "" {
+			return openCodeTransportEnvelope{}, openCodeTransportFailure("opencode_task_transport_failed")
+		}
+		output := *envelope.Output
+		return openCodeTransportEnvelope{Schema: openCodeReviewTransportSchema, Operation: "result", Output: &output}, nil
+	}
 	if envelope.Error != "" {
 		return openCodeTransportEnvelope{}, openCodeTransportFailure("opencode_task_transport_failed")
 	}
@@ -216,7 +275,7 @@ func openCodeTransportComplete(ctx context.Context, session openCodeTransportSes
 		return openCodeTransportEnvelope{}, err
 	}
 	if err := authorizeReviewAuthorityMutation(ctx, session.root); err != nil {
-		return openCodeTransportEnvelope{}, openCodeTransportFailure("opencode_review_transport_authority_unavailable")
+		return openCodeTransportEnvelope{}, openCodeTransportAuthorityUnavailable(err)
 	}
 	store, record, err := discoverCompactFacadeReview(ctx, session.root, session.record.State.LineageID, false)
 	if err != nil || store.Dir != session.store.Dir || record.Revision != session.record.Revision {
@@ -275,29 +334,96 @@ func decodeOpenCodeTransportBinding(prompt string) (openCodeTransportTaskBinding
 		decoder.DisallowUnknownFields()
 		var binding reviewProviderTaskBinding
 		if err := decoder.Decode(&binding); err != nil {
-			return openCodeTransportTaskBinding{}, errors.New("opencode_review_transport_binding_invalid: Task prompt binding is not provider-issued JSON") // refusal:by-design world-action: the managed shim must relay the provider-issued task binding unchanged
+			return openCodeTransportTaskBinding{}, openCodeTransportBindingInvalid("Task prompt binding is not provider-issued JSON")
 		}
 		var extra any
 		if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) || binding.RepositoryContext == "" || binding.Role == "" {
-			return openCodeTransportTaskBinding{}, errors.New("opencode_review_transport_binding_invalid: Task prompt binding is incomplete") // refusal:by-design world-action: a managed provider role task requires its complete opaque Go binding
+			return openCodeTransportTaskBinding{}, openCodeTransportBindingInvalid("Task prompt binding is incomplete")
 		}
-		return openCodeTransportTaskBinding{RepositoryContext: binding.RepositoryContext, Role: reviewProviderRole(binding.Role)}, nil
+		issued, err := newReviewProviderTask(reviewProviderRole(binding.Role), ReviewTransitionBinding{
+			LineageID: binding.LineageID, Revision: binding.Revision, TargetIdentity: binding.TargetIdentity,
+			RepositoryContext: binding.RepositoryContext,
+		})
+		if err != nil || prompt != issued.Prompt {
+			return openCodeTransportTaskBinding{}, openCodeTransportBindingInvalid("Task prompt is not the exact provider-issued binding")
+		}
+		return openCodeTransportTaskBinding{
+			LineageID: binding.LineageID, Revision: binding.Revision, TargetIdentity: binding.TargetIdentity,
+			RepositoryContext: binding.RepositoryContext, Role: reviewProviderRole(binding.Role),
+		}, nil
 	}
 	encoded, found := strings.CutPrefix(line, reviewLensContextBindingHeader+" ")
 	if !found {
-		return openCodeTransportTaskBinding{}, errors.New("opencode_review_transport_binding_invalid: Task prompt has no provider-issued review binding") // refusal:by-design world-action: the managed shim must relay a collect Task prompt emitted by native review authority
+		return openCodeTransportTaskBinding{}, openCodeTransportBindingInvalid("Task prompt has no provider-issued review binding")
 	}
 	decoder := json.NewDecoder(strings.NewReader(encoded))
 	decoder.DisallowUnknownFields()
 	var binding reviewLensContextBinding
 	if err := decoder.Decode(&binding); err != nil {
-		return openCodeTransportTaskBinding{}, errors.New("opencode_review_transport_binding_invalid: Task prompt binding is not provider-issued JSON") // refusal:by-design world-action: a generated collect Task prompt is required; caller-authored binding data is refused
+		return openCodeTransportTaskBinding{}, openCodeTransportBindingInvalid("Task prompt binding is not provider-issued JSON")
 	}
 	var extra any
 	if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) || binding.RepositoryContext == "" || binding.Lens == "" {
-		return openCodeTransportTaskBinding{}, errors.New("opencode_review_transport_binding_invalid: Task prompt binding is incomplete") // refusal:by-design world-action: a generated collect Task prompt must retain its complete provider binding
+		return openCodeTransportTaskBinding{}, openCodeTransportBindingInvalid("Task prompt binding is incomplete")
 	}
-	return openCodeTransportTaskBinding{RepositoryContext: binding.RepositoryContext, Lens: binding.Lens}, nil
+	return openCodeTransportTaskBinding{
+		LineageID: binding.Lineage, Revision: binding.Revision, TargetIdentity: binding.Target,
+		RepositoryContext: binding.RepositoryContext, Lens: binding.Lens,
+	}, nil
+}
+
+// validateReviewProviderTaskAuthorityBinding is the sole live comparison seam
+// for a Go-issued provider task, its resolved opaque context, and the current
+// compact authority. The adapter only carries opaque bytes; this check remains
+// in Go before both materialization and capture.
+func validateReviewProviderTaskAuthorityBinding(binding ReviewTransitionBinding, contextBinding reviewtransaction.ReviewRepositoryContextBinding, record reviewtransaction.CompactRecord) error {
+	if binding.LineageID != contextBinding.LineageID {
+		return openCodeTransportBindingInvalid("Task lineage does not match the resolved repository context")
+	}
+	if binding.Revision != contextBinding.Revision {
+		return openCodeTransportBindingInvalid("Task revision does not match the resolved repository context")
+	}
+	if binding.TargetIdentity != contextBinding.TargetIdentity {
+		return openCodeTransportBindingInvalid("Task target does not match the resolved repository context")
+	}
+	// ResolveReviewRepositoryContextBinding already validates the context target
+	// against compact state. Requiring the same lineage and revision on the
+	// freshly discovered record prevents a stale locator from selecting another
+	// authority before any provider prompt can be materialized.
+	if record.State.LineageID != binding.LineageID || record.Revision != binding.Revision {
+		return openCodeTransportBindingInvalid("Task binding does not match live compact review authority")
+	}
+	return nil
+}
+
+func openCodeTransportMaterializedPrompt(taskPrompt string, providerPrompt []byte) (string, error) {
+	if taskPrompt == "" || len(providerPrompt) == 0 {
+		return "", errors.New("provider materialization is incomplete") // refusal:by-design world-action: only a complete Go reconstruction may reach a provider Task
+	}
+	payload, err := json.Marshal(openCodeTransportMaterialization{TaskPrompt: taskPrompt})
+	if err != nil {
+		return "", err
+	}
+	return openCodeTransportMaterializationHeader + " " + string(payload) + "\n" + string(providerPrompt), nil
+}
+
+func decodeOpenCodeTransportMaterialization(prompt string) (taskPrompt string, reintercepted bool, err error) {
+	line, providerPrompt, found := strings.Cut(prompt, "\n")
+	encoded, marked := strings.CutPrefix(line, openCodeTransportMaterializationHeader+" ")
+	if !marked {
+		return prompt, false, nil
+	}
+	decoder := json.NewDecoder(strings.NewReader(encoded))
+	decoder.DisallowUnknownFields()
+	var materialization openCodeTransportMaterialization
+	if err := decoder.Decode(&materialization); err != nil {
+		return "", false, openCodeTransportBindingInvalid("Task prompt materialization is not Go-issued JSON")
+	}
+	var extra any
+	if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) || materialization.TaskPrompt == "" || !found || providerPrompt == "" {
+		return "", false, openCodeTransportBindingInvalid("Task prompt materialization is incomplete")
+	}
+	return materialization.TaskPrompt, true, nil
 }
 
 func openCodeTransportCaptureRole(ctx context.Context, root string, store reviewtransaction.CompactStore, record reviewtransaction.CompactRecord, role reviewProviderRole, raw []byte) error {
@@ -369,4 +495,8 @@ func reviewResultArtifactPath(order int, lens string) string {
 
 func openCodeTransportFailure(code string) error {
 	return fmt.Errorf("%s: OpenCode Task transport did not produce a capturable reviewer result; run `gentle-ai review status --cwd <repo> --contract gentle-ai.review-integration/v2 --next-transition` before retrying", code)
+}
+
+func openCodeTransportAuthorityUnavailable(cause error) error {
+	return fmt.Errorf("opencode_review_transport_authority_unavailable: OpenCode Task transport did not produce a capturable reviewer result; run `gentle-ai review status --cwd <repo> --contract gentle-ai.review-integration/v2 --next-transition` before retrying: %w", cause)
 }
