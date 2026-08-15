@@ -264,7 +264,7 @@ func TestOpenCodeBackgroundChoiceFeedsInstall(t *testing.T) {
 			m.Cursor = tt.cursor
 			var got model.OpenCodeBackgroundIntent
 			var gotPersist model.OpenCodeBackgroundIntent
-			m.ExecuteFn = func(_ model.Selection, _ planner.ResolvedPlan, _ system.DetectionResult, background, persist model.OpenCodeBackgroundIntent, _ pipeline.ProgressFunc) pipeline.ExecutionResult {
+			m.ExecuteFn = func(_ model.Selection, _ planner.ResolvedPlan, _ system.DetectionResult, background, persist model.OpenCodeBackgroundIntent, _, _ model.PiBackgroundIntent, _ pipeline.ProgressFunc) pipeline.ExecutionResult {
 				got = background
 				gotPersist = persist
 				return pipeline.ExecutionResult{}
@@ -750,6 +750,7 @@ func TestPiCombinedWithOtherAgentKeepsGenericFlow(t *testing.T) {
 }
 
 func TestPiCombinedWithOtherAgentsTUIInstallKeepsAllAgentsInPlan(t *testing.T) {
+	t.Setenv(cli.PiBackgroundSubagentsEnv, "")
 	m := NewModel(system.DetectionResult{}, "dev")
 	m.Screen = ScreenAgents
 	m.InstallFlowActive = true
@@ -815,7 +816,7 @@ func TestPiCombinedWithOtherAgentsTUIInstallKeepsAllAgentsInPlan(t *testing.T) {
 
 	var gotSelection model.Selection
 	var gotPlan planner.ResolvedPlan
-	state.ExecuteFn = func(selection model.Selection, resolved planner.ResolvedPlan, _ system.DetectionResult, _ model.OpenCodeBackgroundIntent, _ model.OpenCodeBackgroundIntent, _ pipeline.ProgressFunc) pipeline.ExecutionResult {
+	state.ExecuteFn = func(selection model.Selection, resolved planner.ResolvedPlan, _ system.DetectionResult, _ model.OpenCodeBackgroundIntent, _ model.OpenCodeBackgroundIntent, _, _ model.PiBackgroundIntent, _ pipeline.ProgressFunc) pipeline.ExecutionResult {
 		gotSelection = selection
 		gotPlan = resolved
 		return pipeline.ExecutionResult{
@@ -824,10 +825,18 @@ func TestPiCombinedWithOtherAgentsTUIInstallKeepsAllAgentsInPlan(t *testing.T) {
 		}
 	}
 
+	// Pi is selected and its background preference is unresolved, so the review
+	// confirmation routes through the Pi background prompt first.
+	updated, _ = state.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	state = updated.(Model)
+	if state.Screen != ScreenPiBackground {
+		t.Fatalf("after review screen = %v, want %v", state.Screen, ScreenPiBackground)
+	}
+	state.Cursor = 1 // Keep foreground.
 	updated, cmd := state.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	state = updated.(Model)
 	if state.Screen != ScreenInstalling {
-		t.Fatalf("after review screen = %v, want %v", state.Screen, ScreenInstalling)
+		t.Fatalf("after pi background screen = %v, want %v", state.Screen, ScreenInstalling)
 	}
 	if cmd == nil {
 		t.Fatal("start installing command = nil")
@@ -865,6 +874,7 @@ func TestReviewToInstallingInitializesProgress(t *testing.T) {
 	m := NewModel(system.DetectionResult{}, "dev")
 	m.Screen = ScreenReview
 	m.BackgroundIntent = model.OpenCodeBackgroundOff
+	m.PiBackgroundIntent = model.PiBackgroundOff
 
 	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	state := updated.(Model)
