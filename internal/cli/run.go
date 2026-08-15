@@ -239,6 +239,9 @@ func RunInstall(args []string, detection system.DetectionResult) (InstallResult,
 	result.Verify = withPostInstallNotes(result.Verify, resolved)
 	result.Verify = withOpenCodeBackgroundPending(result.Verify, background, runtime.runtimeReady, resolved.Agents)
 	result.Verify = withOpenCodeBackgroundActivationNote(result.Verify, background, resolved.Agents)
+	if plan := piBackground.projectionPlan; plan != nil && plan.skipReason != "" {
+		result.Verify.FinalNote += "\n\nPi background projection skipped: " + plan.skipReason
+	}
 	result.BackgroundPolicyEnabled = runtime.runtimeReady && background.Effective == model.OpenCodeBackgroundOn
 	if backgroundActivation != nil {
 		result.Background.Activation = backgroundActivation.Report()
@@ -1841,6 +1844,7 @@ func executeTUIInstallWithBackground(homeDir string, selection model.Selection, 
 	piBackgroundResolution := PiBackgroundResolution{
 		Intent:    piBackground,
 		Effective: piBackground,
+		managed:   piBackground == model.PiBackgroundOn || piBackground == model.PiBackgroundOff,
 	}
 	runtime.piBackgroundProjection = preparePiBackgroundProjection(homeDir, &piBackgroundResolution, containsAgent(resolved.Agents, model.AgentPi))
 	orchestrator := pipeline.NewOrchestrator(pipeline.DefaultRollbackPolicy(), pipeline.WithFailurePolicy(pipeline.ContinueOnError), pipeline.WithProgressFunc(onProgress))

@@ -50,6 +50,7 @@ func TestResolvePiBackground(t *testing.T) {
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			got, err := ResolvePiBackground(tt.in)
+			got.managed = false // projection gating is proven by TestProjectionOnlyForManagedDecisions
 			if err != nil || !reflect.DeepEqual(got, tt.want) {
 				t.Fatalf("resolution = %#v, error = %v, want %#v", got, err, tt.want)
 			}
@@ -163,7 +164,7 @@ func TestPreparePiBackgroundProjectionHonorsEffectiveIntent(t *testing.T) {
 		{name: "off projects off", effect: model.PiBackgroundOff, hasPi: true, want: model.PiBackgroundOff},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			resolution := PiBackgroundResolution{Effective: tt.effect}
+			resolution := PiBackgroundResolution{Effective: tt.effect, managed: true}
 			plan := preparePiBackgroundProjection(home, &resolution, tt.hasPi)
 			if tt.want == "" {
 				if plan != nil || resolution.projectionPlan != nil {
@@ -201,7 +202,7 @@ func TestPiBackgroundProjectionStepWritesResolvedPolicy(t *testing.T) {
 	for _, policy := range []model.PiBackgroundIntent{model.PiBackgroundOn, model.PiBackgroundOff} {
 		t.Run(string(policy), func(t *testing.T) {
 			home := t.TempDir()
-			resolution := PiBackgroundResolution{Effective: policy}
+			resolution := PiBackgroundResolution{Effective: policy, managed: true}
 			plan := preparePiBackgroundProjection(home, &resolution, true)
 			step := piBackgroundProjectionStep{id: "pi:background-projection", plan: plan}
 			if step.ID() != "pi:background-projection" {
@@ -225,7 +226,7 @@ func TestPiBackgroundProjectionHonorsConfigHomeOverride(t *testing.T) {
 	home := t.TempDir()
 	configHome := filepath.Join(t.TempDir(), "custom-pi")
 	t.Setenv(PiConfigHomeEnv, configHome)
-	resolution := PiBackgroundResolution{Effective: model.PiBackgroundOn}
+	resolution := PiBackgroundResolution{Effective: model.PiBackgroundOn, managed: true}
 	plan := preparePiBackgroundProjection(home, &resolution, true)
 	want := filepath.Join(configHome, "gentle-ai", "background-subagents.json")
 	if plan == nil || plan.path != want {
@@ -242,7 +243,7 @@ func TestPiBackgroundProjectionHonorsConfigHomeOverride(t *testing.T) {
 func TestPiBackgroundProjectionRollback(t *testing.T) {
 	t.Run("created file is removed", func(t *testing.T) {
 		home := t.TempDir()
-		resolution := PiBackgroundResolution{Effective: model.PiBackgroundOn}
+		resolution := PiBackgroundResolution{Effective: model.PiBackgroundOn, managed: true}
 		plan := preparePiBackgroundProjection(home, &resolution, true)
 		step := piBackgroundProjectionStep{id: "pi:background-projection", plan: plan}
 		if err := step.Run(); err != nil {
@@ -265,7 +266,7 @@ func TestPiBackgroundProjectionRollback(t *testing.T) {
 		if err := os.WriteFile(path, prior, 0o644); err != nil {
 			t.Fatal(err)
 		}
-		resolution := PiBackgroundResolution{Effective: model.PiBackgroundOff}
+		resolution := PiBackgroundResolution{Effective: model.PiBackgroundOff, managed: true}
 		plan := preparePiBackgroundProjection(home, &resolution, true)
 		step := piBackgroundProjectionStep{id: "pi:background-projection", plan: plan}
 		if err := step.Run(); err != nil {
@@ -284,7 +285,7 @@ func TestPiBackgroundProjectionRollback(t *testing.T) {
 	})
 	t.Run("unchanged managed file is untouched", func(t *testing.T) {
 		home := t.TempDir()
-		resolution := PiBackgroundResolution{Effective: model.PiBackgroundOn}
+		resolution := PiBackgroundResolution{Effective: model.PiBackgroundOn, managed: true}
 		first := preparePiBackgroundProjection(home, &resolution, true)
 		if err := first.Apply(); err != nil {
 			t.Fatalf("Apply() error = %v", err)
@@ -328,11 +329,15 @@ func TestPiBackgroundProjectionRefusesForeignFile(t *testing.T) {
 			if err := os.WriteFile(path, []byte(tt.content), 0o644); err != nil {
 				t.Fatal(err)
 			}
-			resolution := PiBackgroundResolution{Effective: model.PiBackgroundOn}
+			resolution := PiBackgroundResolution{Effective: model.PiBackgroundOn, managed: true}
 			plan := preparePiBackgroundProjection(home, &resolution, true)
 			step := piBackgroundProjectionStep{id: "pi:background-projection", plan: plan}
-			if err := step.Run(); err == nil {
-				t.Fatal("Run() error = nil, want refusal for unmanaged file")
+			// Non-fatal skip: the surrounding apply stage must survive.
+			if err := step.Run(); err != nil {
+				t.Fatalf("Run() error = %v, want non-fatal skip", err)
+			}
+			if !strings.Contains(plan.skipReason, "refusing to overwrite") {
+				t.Fatalf("skip reason = %q, want recorded refusal", plan.skipReason)
 			}
 			after, err := os.ReadFile(path)
 			if err != nil || string(after) != tt.content {
@@ -347,6 +352,54 @@ func TestPiBackgroundProjectionRefusesForeignFile(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestProjectionOnlyForManagedDecisions(t *testing.T) {
+	writeManagedOn := func(t *testing.T, home string) string {
+		t.Helper()
+		managedOn := PiBackgroundResolution{Effective: model.PiBackgroundOn, managed: true}
+		if err := preparePiBackgroundProjection(home, &managedOn, true).Apply(); err != nil {
+			t.Fatal(err)
+		}
+		return managedOn.projectionPlan.path
+	}
+	t.Run("implicit auto leaves existing on policy byte-identical", func(t *testing.T) {
+		home := t.TempDir()
+		path := writeManagedOn(t, home)
+		before, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		implicit, err := ResolvePiBackground(PiBackgroundResolveInput{})
+		if err != nil || implicit.Effective != model.PiBackgroundOff {
+			t.Fatalf("implicit resolution = %#v, error = %v", implicit, err)
+		}
+		if plan := preparePiBackgroundProjection(home, &implicit, true); plan != nil {
+			t.Fatalf("implicit auto prepared plan %#v, want none", plan)
+		}
+		after, err := os.ReadFile(path)
+		if err != nil || !reflect.DeepEqual(after, before) {
+			t.Fatalf("existing on policy mutated: %s, error = %v", after, err)
+		}
+	})
+	t.Run("explicit off still rewrites the managed file", func(t *testing.T) {
+		home := t.TempDir()
+		writeManagedOn(t, home)
+		off, err := ResolvePiBackground(PiBackgroundResolveInput{CLISet: true, CLIValue: model.PiBackgroundOff})
+		if err != nil {
+			t.Fatal(err)
+		}
+		plan := preparePiBackgroundProjection(home, &off, true)
+		if plan == nil {
+			t.Fatal("explicit off prepared no plan")
+		}
+		if err := plan.Apply(); err != nil {
+			t.Fatalf("Apply() error = %v", err)
+		}
+		if _, policy := readPiBackgroundPolicy(t, plan.path); policy != "off" {
+			t.Fatalf("policy = %q, want off", policy)
+		}
+	})
 }
 
 func TestPiBackgroundInstallFlagAndHelp(t *testing.T) {
