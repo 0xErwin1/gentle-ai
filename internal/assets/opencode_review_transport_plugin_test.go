@@ -23,18 +23,11 @@ await first["tool.execute.before"]({ tool: "task", sessionID: "session", callID:
 await second["tool.execute.before"]({ tool: "task", sessionID: "session", callID: "call" }, before)
 const after = { output: "untrusted reviewer output", metadata: {} }
 await second["tool.execute.after"]({ tool: "task", sessionID: "session", callID: "call", args: { subagent_type: "review-risk" } }, after)
+if (after.output !== "untrusted reviewer output") throw new Error("non-owner after hook must pass through instead of completing the owner's relay; output = " + after.output)
 await first["tool.execute.after"]({ tool: "task", sessionID: "session", callID: "call", args: { subagent_type: "review-risk" } }, after)
 console.log(JSON.stringify({ prompt: before.args.prompt, output: after.output }))
 `
-	const relay = `#!/bin/sh
-IFS= read -r start
-printf '%s\n' "$start" >> "$GENTLE_AI_RELAY_LOG"
-printf '%s\n' '{"schema":"gentle-ai.provider-transport/v1","operation":"prompt","nonce":"nonce","prompt":"Go-materialized immutable prompt"}'
-IFS= read -r complete
-printf '%s\n' "$complete" >> "$GENTLE_AI_RELAY_LOG"
-printf '%s\n' '{"schema":"gentle-ai.provider-transport/v1","operation":"result","output":"captured"}'
-`
-	output, log := runOpenCodeTransportPluginHarness(t, map[string]string{"plugin.mts": string(source)}, harness, relay)
+	output, log := runOpenCodeTransportPluginHarness(t, map[string]string{"plugin.mts": string(source)}, harness, posixRelayFixture)
 	var result struct {
 		Prompt string `json:"prompt"`
 		Output string `json:"output"`
@@ -47,6 +40,125 @@ printf '%s\n' '{"schema":"gentle-ai.provider-transport/v1","operation":"result",
 	}
 	if log != "{\"schema\":\"gentle-ai.provider-transport/v1\",\"operation\":\"start\",\"prompt\":\"Go must receive this original host prompt\"}\n{\"schema\":\"gentle-ai.provider-transport/v1\",\"operation\":\"complete\",\"nonce\":\"nonce\",\"output\":\"untrusted reviewer output\"}\n" {
 		t.Fatalf("relay frames = %q", log)
+	}
+}
+
+// posixRelayFixture answers one start frame with a Go-materialized prompt and
+// one completion frame with a captured result, logging both inbound frames.
+const posixRelayFixture = `#!/bin/sh
+IFS= read -r start
+printf '%s\n' "$start" >> "$GENTLE_AI_RELAY_LOG"
+printf '%s\n' '{"schema":"gentle-ai.provider-transport/v1","operation":"prompt","nonce":"nonce","prompt":"Go-materialized immutable prompt"}'
+IFS= read -r complete
+printf '%s\n' "$complete" >> "$GENTLE_AI_RELAY_LOG"
+printf '%s\n' '{"schema":"gentle-ai.provider-transport/v1","operation":"result","output":"captured"}'
+`
+
+func TestOpenCodeReviewTransportPluginRefusesCompletionWithoutMatchingBeforeHook(t *testing.T) {
+	source, err := Read("opencode/plugins/opencode-review-transport.ts")
+	if err != nil {
+		t.Fatal(err)
+	}
+	const harness = `import plugin from "./plugin.mts"
+const hooks = await plugin({ directory: process.cwd(), worktree: process.cwd() })
+const after = { output: "untrusted reviewer output", metadata: {} }
+let refused = ""
+try {
+  await hooks["tool.execute.after"]({ tool: "task", sessionID: "session", callID: "orphan", args: { subagent_type: "review-risk" } }, after)
+} catch (cause) {
+  refused = cause instanceof Error ? cause.message : String(cause)
+}
+console.log(JSON.stringify({ refused, output: after.output }))
+`
+	output, _ := runOpenCodeTransportPluginHarness(t, map[string]string{"plugin.mts": string(source)}, harness, posixRelayFixture)
+	var result struct {
+		Refused string `json:"refused"`
+		Output  string `json:"output"`
+	}
+	if err := json.Unmarshal([]byte(output), &result); err != nil {
+		t.Fatalf("decode relay harness output %q: %v", output, err)
+	}
+	if !strings.Contains(result.Refused, "no matching live before hook") {
+		t.Fatalf("completion for an unknown key must refuse loudly, got refusal %q", result.Refused)
+	}
+	if result.Output != "untrusted reviewer output" {
+		t.Fatalf("refused completion must not mutate host output, got %q", result.Output)
+	}
+}
+
+func TestOpenCodeReviewTransportPluginRefusesCompletionForAnotherOwnersRegistration(t *testing.T) {
+	source, err := Read("opencode/plugins/opencode-review-transport.ts")
+	if err != nil {
+		t.Fatal(err)
+	}
+	const harness = `import plugin from "./plugin.mts"
+const first = await plugin({ directory: process.cwd(), worktree: process.cwd() })
+const second = await plugin({ directory: process.cwd(), worktree: process.cwd() })
+const before = { args: { subagent_type: "review-risk", prompt: "Go must receive this original host prompt" } }
+await first["tool.execute.before"]({ tool: "task", sessionID: "session", callID: "call" }, before)
+const after = { output: "untrusted reviewer output", metadata: {} }
+let refused = ""
+try {
+  await second["tool.execute.after"]({ tool: "task", sessionID: "session", callID: "call", args: { subagent_type: "review-risk" } }, after)
+} catch (cause) {
+  refused = cause instanceof Error ? cause.message : String(cause)
+}
+const untouched = after.output
+await first["tool.execute.after"]({ tool: "task", sessionID: "session", callID: "call", args: { subagent_type: "review-risk" } }, after)
+console.log(JSON.stringify({ refused, untouched, output: after.output }))
+`
+	output, log := runOpenCodeTransportPluginHarness(t, map[string]string{"plugin.mts": string(source)}, harness, posixRelayFixture)
+	var result struct {
+		Refused   string `json:"refused"`
+		Untouched string `json:"untouched"`
+		Output    string `json:"output"`
+	}
+	if err := json.Unmarshal([]byte(output), &result); err != nil {
+		t.Fatalf("decode relay harness output %q: %v", output, err)
+	}
+	if !strings.Contains(result.Refused, "another plugin instance") {
+		t.Fatalf("completion for another owner's registration must refuse, got refusal %q", result.Refused)
+	}
+	if result.Untouched != "untrusted reviewer output" {
+		t.Fatalf("refused cross-owner completion must not mutate host output, got %q", result.Untouched)
+	}
+	if result.Output != "captured" {
+		t.Fatalf("owner completion after a cross-owner refusal must still capture, got %q", result.Output)
+	}
+	if got := strings.Count(log, `"operation":"complete"`); got != 1 {
+		t.Fatalf("relay must receive exactly one completion frame, got %d; log=%q", got, log)
+	}
+}
+
+func TestOpenCodeReviewTransportPluginClearSessionLeavesOtherOwnersRegistrationsAlive(t *testing.T) {
+	source, err := Read("opencode/plugins/opencode-review-transport.ts")
+	if err != nil {
+		t.Fatal(err)
+	}
+	const harness = `import plugin from "./plugin.mts"
+const first = await plugin({ directory: process.cwd(), worktree: process.cwd() })
+const second = await plugin({ directory: process.cwd(), worktree: process.cwd() })
+const firstTask = { args: { subagent_type: "review-risk", prompt: "first owner prompt" } }
+const secondTask = { args: { subagent_type: "review-risk", prompt: "second owner prompt" } }
+await first["tool.execute.before"]({ tool: "task", sessionID: "session", callID: "first-call" }, firstTask)
+await second["tool.execute.before"]({ tool: "task", sessionID: "session", callID: "second-call" }, secondTask)
+await first.event({ event: { type: "session.deleted", properties: { info: { id: "session" } } } })
+const after = { output: "untrusted reviewer output", metadata: {} }
+await second["tool.execute.after"]({ tool: "task", sessionID: "session", callID: "second-call", args: { subagent_type: "review-risk" } }, after)
+console.log(JSON.stringify({ output: after.output }))
+`
+	output, log := runOpenCodeTransportPluginHarness(t, map[string]string{"plugin.mts": string(source)}, harness, posixRelayFixture)
+	var result struct {
+		Output string `json:"output"`
+	}
+	if err := json.Unmarshal([]byte(output), &result); err != nil {
+		t.Fatalf("decode relay harness output %q: %v", output, err)
+	}
+	if result.Output != "captured" {
+		t.Fatalf("another instance's session cleanup must not kill this owner's live relay, got output %q", result.Output)
+	}
+	if got := strings.Count(log, `"operation":"complete"`); got != 1 {
+		t.Fatalf("surviving registration must deliver exactly one completion frame, got %d; log=%q", got, log)
 	}
 }
 
@@ -239,6 +351,10 @@ func runOpenCodeTransportPluginHarness(t *testing.T, modules map[string]string, 
 	}
 	log, err := os.ReadFile(logPath)
 	if err != nil {
+		if os.IsNotExist(err) {
+			// A harness that never spawns a relay leaves no frame log behind.
+			return string(output), ""
+		}
 		t.Fatal(err)
 	}
 	return string(output), string(log)
