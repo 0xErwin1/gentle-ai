@@ -973,6 +973,7 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 			var correctionRequest *reviewtransaction.CorrectionPlanRequest
 			providerRole := reviewProviderRole("")
 			var preCommitDeliveryAssessment *reviewtransaction.CompactGateTargetApplicability
+			capturedProviderTargetedValidator := false
 			correctionForecasted := false
 			lensContextBudgetExceeded := false
 			var artifactErr error
@@ -1103,11 +1104,15 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 									}
 								}
 							}
-							if providerRoleHost && validationRequest != nil && capturedEvidence != nil && capturedEvidence.Outcome == reviewtransaction.VerificationOutcomePassed {
-								slot, slotErr := reviewtransaction.ReadCompactTargetedValidatorResultSlot(store.Dir, *validationRequest)
-								if slotErr != nil {
-									artifactErr = slotErr
-								} else if !slot.Occupied {
+							if validationRequest != nil && capturedEvidence != nil && capturedEvidence.Outcome == reviewtransaction.VerificationOutcomePassed {
+								if _, readErr := readCapturedProviderTargetedValidatorResult(ctx, root, store.Dir, record.State, record.Revision); readErr == nil {
+									capturedProviderTargetedValidator = true
+								} else if providerRoleHost {
+									// OpenCode and the pi host relay are the
+									// host-mediated providers. When no current slot
+									// exists, they receive the Go-issued task that can
+									// fill one; a readable occupied slot is
+									// provider-generic.
 									providerRole = reviewerprovider.RoleTargetedValidator
 								}
 							}
@@ -1130,11 +1135,15 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 					result.Eligibility = newReviewActionEligibility(result)
 				}
 			}
-			input := reviewNextTransitionInput{Gate: reviewtransaction.GateKind(*gate), Successor: *recoverySuccessor, Reason: *recoveryReason, Actor: *recoveryActor, Authorization: *recoveryAuthorization, RepairActor: *repairActor, RepairReason: *repairReason, RepairAuthorization: *repairAuthorization, StartLineage: startLineage, RuntimeAgent: runtime, ProviderRole: providerRole, Contract: *contract, RepositoryContext: repositoryContext, ValidationRequest: validationRequest, CorrectionRequest: correctionRequest, EvidenceErr: evidenceErr, CorrectionForecasted: correctionForecasted, CaptureContext: captureContext, Selector: selector, IntendedUntracked: intendedScope, RDDMode: result.rddMode, RDDModeResolved: result.rddModeResolved, LensContextBudgetExceeded: lensContextBudgetExceeded, PreCommitDeliveryAssessment: preCommitDeliveryAssessment}
+			input := reviewNextTransitionInput{Gate: reviewtransaction.GateKind(*gate), Successor: *recoverySuccessor, Reason: *recoveryReason, Actor: *recoveryActor, Authorization: *recoveryAuthorization, RepairActor: *repairActor, RepairReason: *repairReason, RepairAuthorization: *repairAuthorization, StartLineage: startLineage, RuntimeAgent: runtime, ProviderRole: providerRole, CapturedProviderTargetedValidator: capturedProviderTargetedValidator, Contract: *contract, RepositoryContext: repositoryContext, ValidationRequest: validationRequest, CorrectionRequest: correctionRequest, EvidenceErr: evidenceErr, CorrectionForecasted: correctionForecasted, CaptureContext: captureContext, Selector: selector, IntendedUntracked: intendedScope, RDDMode: result.rddMode, RDDModeResolved: result.rddModeResolved, LensContextBudgetExceeded: lensContextBudgetExceeded, PreCommitDeliveryAssessment: preCommitDeliveryAssessment}
 			transition := newReviewNextTransition(result, native.SelectedLenses, artifacts, capturedEvidence, artifactErr, input)
 			result.NextTransition = &transition
+			providerTargetedValidation := transition.ReasonCode == "targeted_validation_required" && transition.Collect != nil &&
+				len(transition.Collect.Inputs) == 1 && transition.Collect.Inputs[0].ProviderTask != nil
+			providerCapturedTargetedValidation := transition.ReasonCode == "captured_provider_targeted_validation_ready" && transition.Execute != nil &&
+				transition.Execute.Operation == "review.finalize"
 			if reviewTransitionValidationRequest(&transition) == nil && transition.ReasonCode != "correction_repository_verification_required" &&
-				transition.ReasonCode != "correction_repository_tooling_failed" {
+				transition.ReasonCode != "correction_repository_tooling_failed" && !providerTargetedValidation && !providerCapturedTargetedValidation {
 				result.ValidationRequest = nil
 			}
 			// A negotiated invocation is the machine surface end to end: the
@@ -2789,7 +2798,18 @@ func runReviewFacadeFinalize(ctx context.Context, args []string, stdout io.Write
 		}
 		effectiveFailed = derivedFailed
 	}
-	if state.State == reviewtransaction.StateCorrectionRequired && capturedVerification != nil &&
+	if submissionBindingProvided && !reviewFinalizeFlagProvided(args, "correction-lines") && strings.TrimSpace(*validationPath) == "" &&
+		*capturedEvidence && state.State == reviewtransaction.StateCorrectionRequired && capturedVerification != nil &&
+		capturedVerification.Record.Outcome == reviewtransaction.VerificationOutcomePassed && validation == nil {
+		// The Go-issued slot-consumption transition promises an occupied,
+		// readable validator slot; an unreadable slot must fail this exact
+		// submission instead of silently launching another provider.
+		capturedValidation, readErr := readCapturedProviderTargetedValidatorResult(ctx, root, store.Dir, state, record.Revision)
+		if readErr != nil {
+			return reviewPreflightError(fmt.Errorf("read captured provider targeted validator result: %w", readErr))
+		}
+		validation = &capturedValidation
+	} else if state.State == reviewtransaction.StateCorrectionRequired && capturedVerification != nil &&
 		capturedVerification.Record.Outcome == reviewtransaction.VerificationOutcomePassed && validation == nil {
 		// Discovery of an occupied validator slot is host-mediated-safe: the
 		// pi host relay's capture-validation submission occupies the same
@@ -3008,6 +3028,28 @@ func validateReviewFinalizeSubmission(ctx context.Context, repo string, state re
 		return errors.New("review finalize submission expected revision is stale; refresh with gentle-ai review status --next-transition")
 	}
 	hasValidation := strings.TrimSpace(validationPath) != ""
+	if !correctionLinesProvided && !hasValidation && capturedEvidence {
+		request, err := reviewtransaction.BuildTargetedValidationRequest(ctx, repo, state, revision)
+		if err != nil {
+			return err
+		}
+		if targetIdentity != request.CorrectionTargetIdentity || requestHash != request.RequestHash {
+			return errors.New("captured provider validator submission does not match the provider-owned targeted validation request; refresh with gentle-ai review status --next-transition")
+		}
+		expected := []string{
+			"--contract=" + ReviewIntegrationContractV2,
+			"--lineage=" + state.LineageID,
+			"--expected-revision=" + revision,
+			"--target=" + request.CorrectionTargetIdentity,
+			"--request-hash=" + request.RequestHash,
+			"--repository-context=" + repositoryContext,
+			"--captured-evidence=true",
+		}
+		if !reflect.DeepEqual(args, expected) {
+			return errors.New("captured provider validator submission differs from the provider-issued transition; refresh with gentle-ai review status --next-transition")
+		}
+		return nil
+	}
 	if correctionLinesProvided == hasValidation {
 		return errors.New("review finalize submission requires exactly one descriptor value; refresh with gentle-ai review status --next-transition")
 	}

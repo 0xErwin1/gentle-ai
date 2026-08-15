@@ -257,6 +257,9 @@ func newReviewNextTransition(status ReviewTargetStatusResult, selectedLenses []s
 			if input.ProviderRole == reviewerprovider.RoleTargetedValidator {
 				return reviewProviderRoleTransition("targeted_validation_required", validationBinding, input.ProviderRole, input.RuntimeAgent, input.ValidationRequest)
 			}
+			if input.CapturedProviderTargetedValidator {
+				return reviewCapturedProviderTargetedValidatorFinalizeTransition(input.Contract, validationBinding, *input.ValidationRequest)
+			}
 			if capturedEvidence == nil {
 				return reviewCollectTransition("correction_repository_verification_required", reviewCaptureEvidenceInput(input.Contract, validationBinding))
 			}
@@ -637,6 +640,7 @@ type reviewNextTransitionInput struct {
 	StartLineage                                   string
 	RuntimeAgent                                   model.AgentID
 	ProviderRole                                   reviewProviderRole
+	CapturedProviderTargetedValidator              bool
 	Contract                                       string
 	RepositoryContext                              string
 	ValidationRequest                              *reviewtransaction.TargetedValidationRequest
@@ -650,6 +654,26 @@ type reviewNextTransitionInput struct {
 	RDDModeResolved                                bool
 	LensContextBudgetExceeded                      bool
 	PreCommitDeliveryAssessment                    *reviewtransaction.CompactGateTargetApplicability
+}
+
+func reviewCapturedProviderTargetedValidatorFinalizeTransition(contract string, binding ReviewTransitionBinding, request reviewtransaction.TargetedValidationRequest) ReviewNextTransition {
+	if contract != ReviewIntegrationContractV2 || binding.RepositoryContext == "" {
+		return reviewStopTransition("captured_artifacts_unverifiable")
+	}
+	arguments := []ReviewTransitionArgument{
+		{Name: "contract", Value: contract},
+		{Name: "lineage", Value: binding.LineageID},
+		{Name: "expected-revision", Value: binding.Revision},
+		{Name: "target", Value: binding.TargetIdentity},
+		{Name: "request-hash", Value: request.RequestHash},
+		{Name: "repository-context", Value: binding.RepositoryContext},
+		{Name: "captured-evidence", Value: "true"},
+	}
+	return reviewExecuteTransition("captured_provider_targeted_validation_ready", "review.finalize", arguments, []ReviewTransitionArgument{
+		{Name: "state", Value: "correction_required"},
+		{Name: "verification_outcome", Value: string(reviewtransaction.VerificationOutcomePassed)},
+		{Name: "provider_targeted_validator", Value: "captured"},
+	}, binding, nil)
 }
 
 const reviewSubmissionValuePlaceholder = "{{value}}"
