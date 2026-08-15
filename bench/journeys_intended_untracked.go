@@ -19,6 +19,8 @@ var unbornIntendedUntrackedStatusCapability = &Capability{
 	Flags: []string{"--cwd", "--contract", "--agent", "--next-transition"},
 }
 
+const unbornIntendedDeliveryPath = "docs/unborn-candidate.md"
+
 func mixedIntendedUntrackedCandidate(sandbox *Sandbox) error {
 	if err := sandbox.write(filepath.Join(sandbox.Repo, "README.md"), "# demo\n\ntracked review candidate\n"); err != nil {
 		return err
@@ -126,6 +128,98 @@ func unbornUntrackedStatusCollectsSelection(r *journeyRun) error {
 	return nil
 }
 
+func unbornIntendedDeliveryCandidate(sandbox *Sandbox) error {
+	if err := os.MkdirAll(sandbox.Repo, 0o755); err != nil {
+		return err
+	}
+	if err := sandbox.git(sandbox.Repo, "init", "-b", "main", "-q"); err != nil {
+		return err
+	}
+	return sandbox.write(filepath.Join(sandbox.Repo, unbornIntendedDeliveryPath), "# Reviewed candidate\n")
+}
+
+func selectAndStartUnbornIntendedDelivery(r *journeyRun) error {
+	status, err := readStatusForContract(r, reviewContractV2, "--agent", "opencode")
+	if err != nil {
+		return err
+	}
+	if status.NextTransition.Kind != "collect" || status.NextTransition.ReasonCode != "intended_untracked_selection_required" {
+		return fmt.Errorf("unborn delivery STATUS did not collect intended untracked selection: %+v", status.NextTransition)
+	}
+	digest := status.argument("expected_untracked_inventory")
+	selected, err := readStatusForContract(r, reviewContractV2,
+		"--agent", "opencode", "--untracked-scope=select", "--expected-untracked-inventory="+digest,
+		"--intended-untracked="+unbornIntendedDeliveryPath)
+	if err != nil {
+		return err
+	}
+	if selected.NextTransition.Kind != "execute" || selected.NextTransition.Execute.Operation != "review.start" ||
+		!slices.Equal(selected.Projection.Paths, []string{unbornIntendedDeliveryPath}) {
+		return fmt.Errorf("selected unborn delivery STATUS = %+v", selected)
+	}
+	started, err := runPrintedTransition(r, selected)
+	if err != nil {
+		return err
+	}
+	if started.ExitCode != 0 {
+		return fmt.Errorf("printed unborn delivery START exited %d: %s", started.ExitCode, firstLine(started.Stderr))
+	}
+	if err := rememberLineage(r.sandbox, started); err != nil || r.sandbox.Lineage == "" {
+		return fmt.Errorf("printed unborn delivery START did not publish a lineage: %v", err)
+	}
+	r.sandbox.Scratch["unborn-intended-inventory"] = digest
+	return nil
+}
+
+func requireUnbornIntendedStagedDeliveryStop(r *journeyRun) error {
+	if _, err := gitOut(r.sandbox, r.sandbox.Repo, "rev-parse", "--verify", "HEAD"); err == nil {
+		return fmt.Errorf("unborn delivery fixture unexpectedly has a HEAD")
+	}
+	if cached, err := gitOut(r.sandbox, r.sandbox.Repo, "ls-files", "--cached"); err != nil || cached != "" {
+		return fmt.Errorf("unborn delivery real index = %q, %v", cached, err)
+	}
+	selectors := []string{
+		"--agent", "opencode", "--lineage", r.sandbox.Lineage, "--gate", "pre-commit",
+		"--untracked-scope=select", "--expected-untracked-inventory=" + r.sandbox.Scratch["unborn-intended-inventory"],
+		"--intended-untracked=" + unbornIntendedDeliveryPath,
+	}
+	status, err := readStatusForContract(r, reviewContractV2, selectors...)
+	if err != nil {
+		return err
+	}
+	replayed, replayErr := readStatusForContract(r, reviewContractV2, selectors...)
+	if replayErr != nil || status.Authority.State != "approved" || status.Authority.Revision == "" ||
+		status.Authority.Revision != replayed.Authority.Revision || status.NextTransition.Kind != "stop" ||
+		status.NextTransition.ReasonCode != "staged_delivery_candidate_required" || status.NextTransition.Execute.Operation != "" {
+		return fmt.Errorf("unborn intended staged delivery stop = %+v, replay = %+v, %v", status, replayed, replayErr)
+	}
+	if cached, err := gitOut(r.sandbox, r.sandbox.Repo, "ls-files", "--cached"); err != nil || cached != "" {
+		return fmt.Errorf("unborn delivery STATUS mutated the real index: %q, %v", cached, err)
+	}
+	return nil
+}
+
+func stageUnbornIntendedDeliveryCandidate(sandbox *Sandbox) error {
+	return sandbox.git(sandbox.Repo, "add", "--", unbornIntendedDeliveryPath)
+}
+
+func validateUnbornIntendedStagedDelivery(r *journeyRun) error {
+	status, err := readStatusForContract(r, reviewContractV2,
+		"--agent", "opencode", "--lineage", r.sandbox.Lineage, "--gate", "pre-commit", "--projection", "staged")
+	if err != nil {
+		return err
+	}
+	if status.NextTransition.Kind != "execute" || status.NextTransition.ReasonCode != "approved_receipt_ready" ||
+		status.NextTransition.Execute.Operation != "review.validate" || status.NextTransition.Execute.Command == "" {
+		return fmt.Errorf("exact unborn intended staged transition = %+v", status.NextTransition)
+	}
+	observation, err := runPrintedTransition(r, status)
+	if err != nil {
+		return err
+	}
+	return requireGateForLineage(observation, r.sandbox.Lineage, false)
+}
+
 func intendedUntrackedJourneys() []Journey {
 	return []Journey{
 		{
@@ -146,6 +240,20 @@ func intendedUntrackedJourneys() []Journey {
 				{Name: "fixture: unborn repository with one untracked executable candidate", Fixture: unbornUntrackedExecutableCandidate},
 				{Name: "mode enable", Requires: modeCapability, Args: productArgs("review", "mode", "enable", "--json")},
 				{Name: "v2 OpenCode STATUS collects the inventory-bound untracked selection", Requires: unbornIntendedUntrackedStatusCapability, Composite: unbornUntrackedStatusCollectsSelection},
+			},
+		},
+		{
+			ID:     "j106-approved-unborn-intended-candidate-requires-staging",
+			Title:  "Approved unborn intended candidate: empty staged STATUS stops until the exact candidate is staged",
+			Source: "issue #3307: read-only pre-commit applicability must classify an empty unborn staged projection as non-exact without rejecting STATUS",
+			Steps: []Step{
+				{Name: "fixture: unborn repository with one all-untracked candidate", Fixture: unbornIntendedDeliveryCandidate},
+				{Name: "enable review mode only in the disposable journey clone", Requires: modeCapability, Args: productArgs("review", "mode", "enable", "--scope", "clone", "--json")},
+				{Name: "select every untracked path and execute printed START", Requires: unbornIntendedUntrackedStatusCapability, Composite: selectAndStartUnbornIntendedDelivery},
+				{Name: "approve the unborn intended candidate", Requires: finalizeCapability, Args: productArgs("review", "finalize"), After: rememberLineage},
+				{Name: "empty real index stops without authority or index mutation", Requires: statusCapability, Composite: requireUnbornIntendedStagedDeliveryStop},
+				{Name: "fixture: stage the exact approved candidate", Fixture: stageUnbornIntendedDeliveryCandidate},
+				{Name: "exact staged STATUS returns and executes pre-commit validation", Requires: statusCapability, Composite: validateUnbornIntendedStagedDelivery},
 			},
 		},
 	}
