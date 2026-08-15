@@ -597,22 +597,23 @@ func TestOpenCodeReviewTransportPassesThroughReinterceptedProviderTask(t *testin
 				})
 			}
 			var final openCodeTransportEnvelope
+			var finalErr error
 			switch test.name {
 			case "secondary completion before primary completion":
 				forwarded, err := completion(secondary, hostOutput)
 				if err != nil || forwarded.Output == nil || *forwarded.Output != hostOutput {
 					t.Fatalf("secondary passthrough = %#v, %v", forwarded, err)
 				}
-				final, err = completion(primary, *forwarded.Output)
+				final, finalErr = completion(primary, *forwarded.Output)
 			case "primary completion before secondary completion":
 				captured, err := completion(primary, hostOutput)
 				if err != nil || captured.Output == nil || !strings.Contains(*captured.Output, `"captured":true`) {
 					t.Fatalf("primary capture = %#v, %v", captured, err)
 				}
-				final, err = completion(secondary, *captured.Output)
+				final, finalErr = completion(secondary, *captured.Output)
 			}
-			if err != nil || final.Output == nil || !strings.Contains(*final.Output, `"captured":true`) {
-				t.Fatalf("mixed relay final output = %#v, %v", final, err)
+			if finalErr != nil || final.Output == nil || !strings.Contains(*final.Output, `"captured":true`) {
+				t.Fatalf("mixed relay final output = %#v, %v", final, finalErr)
 			}
 			slot, err := reviewtransaction.ReadCompactTargetedValidatorResultSlot(store.Dir, request)
 			if err != nil || !slot.Occupied {
@@ -877,4 +878,71 @@ func mustArtifactSubject(t *testing.T, repo string, record reviewtransaction.Com
 		t.Fatal(err)
 	}
 	return subject
+}
+
+func TestOpenCodeReviewTransportCompletionWithoutOutputFailsClosed(t *testing.T) {
+	repo, lineage, _ := providerCorrectionReady(t)
+	task := openCodeTargetedValidatorTask(t, repo, lineage)
+	issued, err := openCodeTransportStart(t.Context(), openCodeTransportEnvelope{
+		Schema: openCodeReviewTransportSchema, Operation: "start", Prompt: task.Prompt,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	passThrough, err := openCodeTransportStart(t.Context(), openCodeTransportEnvelope{
+		Schema: openCodeReviewTransportSchema, Operation: "start", Prompt: string(issued.providerPrompt),
+	})
+	if err != nil || !passThrough.passThrough {
+		t.Fatalf("reintercepted session passThrough = %v, %v", passThrough.passThrough, err)
+	}
+	for _, test := range []struct {
+		name    string
+		session openCodeTransportSession
+	}{
+		{name: "pass-through completion without output", session: passThrough},
+		{name: "provider role completion without output", session: issued},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := openCodeTransportComplete(t.Context(), test.session, openCodeTransportEnvelope{
+				Schema: openCodeReviewTransportSchema, Operation: "complete", Nonce: test.session.nonce,
+			})
+			var outputErr *openCodeTaskOutputError
+			if !errors.As(err, &outputErr) || outputErr.Code != "opencode_task_output_empty" {
+				t.Fatalf("completion without output error = %v, want typed empty-output failure", err)
+			}
+		})
+	}
+	t.Run("pass-through completion beyond the host output limit", func(t *testing.T) {
+		output := strings.Repeat("x", openCodeTaskHostOutputLimit+1)
+		_, err := openCodeTransportComplete(t.Context(), passThrough, openCodeTransportEnvelope{
+			Schema: openCodeReviewTransportSchema, Operation: "complete", Nonce: passThrough.nonce, Output: &output,
+		})
+		var outputErr *openCodeTaskOutputError
+		if !errors.As(err, &outputErr) || outputErr.Code != "opencode_task_output_truncated" {
+			t.Fatalf("over-limit pass-through completion error = %v, want typed truncated failure", err)
+		}
+	})
+}
+
+func TestOpenCodeReviewTransportBoundsCompletionWaitForSilentlyDeadHost(t *testing.T) {
+	original := openCodeTransportCompletionSafetyBound
+	t.Cleanup(func() { openCodeTransportCompletionSafetyBound = original })
+	if openCodeTransportCompletionSafetyBound != reviewFacadeFinalizeProviderOperationTimeout {
+		t.Fatalf("completion safety bound = %s, want the %s provider operation deadline",
+			openCodeTransportCompletionSafetyBound, reviewFacadeFinalizeProviderOperationTimeout)
+	}
+	openCodeTransportCompletionSafetyBound = 30 * time.Millisecond
+	repo, _, store, record := newArtifactReview(t, false)
+	lens := record.State.SelectedLenses[0]
+	relay := startOpenCodeTransportRelay(t, openCodeLensTransportStart(t, repo, record, lens))
+	t.Cleanup(func() { _ = relay.input.Close() })
+	started := time.Now()
+	err := <-relay.done
+	if err == nil || !strings.Contains(err.Error(), "opencode_review_transport_completion_safety_bound_exceeded") {
+		t.Fatalf("silent host completion error = %v, want typed safety-bound failure", err)
+	}
+	if elapsed := time.Since(started); elapsed > 2*time.Second {
+		t.Fatalf("completion safety bound fired after %s, want a bounded wait", elapsed)
+	}
+	assertOpenCodeRelayLensUncaptured(t, repo, store, record, lens)
 }

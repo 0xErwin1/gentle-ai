@@ -86,6 +86,14 @@ type openCodeTransportSession struct {
 var openCodeTransportRandom = rand.Read
 var openCodeTransportTrailingClosureTimeout = 5 * time.Second
 
+// openCodeTransportCompletionSafetyBound is a safety bound for a host that
+// died silently without ever completing or closing the relay pipe; it is not
+// the operating lifetime. The OpenCode host still owns the Task lifetime and
+// decides the wait well inside this deadline. It deliberately mirrors
+// reviewFacadeFinalizeProviderOperationTimeout so relay waits share the
+// repository's generous provider operation deadline.
+var openCodeTransportCompletionSafetyBound = reviewFacadeFinalizeProviderOperationTimeout
+
 func RunReviewOpenCodeTransport(args []string, stdout io.Writer) error {
 	return runReviewOpenCodeTransport(args, os.Stdin, stdout)
 }
@@ -119,11 +127,17 @@ func runReviewOpenCodeTransport(args []string, stdin io.Reader, stdout io.Writer
 		return err
 	}
 	// The OpenCode host owns the Task lifetime. Its completion, pipe closure, or
-	// child termination decides this wait; a Go deadline can preempt valid work.
-	completion, err := decodeOpenCodeTransportEnvelope(decoder)
+	// child termination decides this wait; a tight Go deadline can preempt valid
+	// work. The outer safety bound only backstops a host that died silently.
+	completionContext, cancelCompletion := context.WithTimeout(context.Background(), openCodeTransportCompletionSafetyBound)
+	defer cancelCompletion()
+	completion, err := decodeOpenCodeTransportEnvelopeContext(completionContext, decoder)
 	if err != nil {
 		if errors.Is(err, io.EOF) {
 			return openCodeTransportFailure("opencode_review_transport_provider_result_missing")
+		}
+		if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+			return openCodeTransportFailure("opencode_review_transport_completion_safety_bound_exceeded")
 		}
 		return err
 	}
@@ -260,19 +274,16 @@ func openCodeTransportStartBound(ctx context.Context, taskPrompt string) (openCo
 }
 
 func openCodeTransportComplete(ctx context.Context, session openCodeTransportSession, envelope openCodeTransportEnvelope) (openCodeTransportEnvelope, error) {
-	if session.passThrough {
-		if envelope.Error != "" {
-			return openCodeTransportEnvelope{}, openCodeTransportFailure("opencode_task_transport_failed")
-		}
-		output := *envelope.Output
-		return openCodeTransportEnvelope{Schema: openCodeReviewTransportSchema, Operation: "result", Output: &output}, nil
-	}
 	if envelope.Error != "" {
 		return openCodeTransportEnvelope{}, openCodeTransportFailure("opencode_task_transport_failed")
 	}
-	hostOutput, err := decodeOpenCodeTaskHostOutput([]byte(*envelope.Output))
+	hostOutput, err := openCodeTransportCompletionHostOutput(envelope)
 	if err != nil {
 		return openCodeTransportEnvelope{}, err
+	}
+	if session.passThrough {
+		output := *envelope.Output
+		return openCodeTransportEnvelope{Schema: openCodeReviewTransportSchema, Operation: "result", Output: &output}, nil
 	}
 	if err := authorizeReviewAuthorityMutation(ctx, session.root); err != nil {
 		return openCodeTransportEnvelope{}, openCodeTransportAuthorityUnavailable(err)
@@ -445,6 +456,17 @@ func newOpenCodeTransportNonce() (string, error) {
 		return "", err
 	}
 	return hex.EncodeToString(nonce), nil
+}
+
+// openCodeTransportCompletionHostOutput fail-closes a completion frame into
+// bounded host-output bytes. A schema-valid completion may carry neither an
+// error nor an output; that frame is a typed relay failure here, never a nil
+// dereference, on both the pass-through and the capturing branch.
+func openCodeTransportCompletionHostOutput(envelope openCodeTransportEnvelope) ([]byte, error) {
+	if envelope.Output == nil {
+		return nil, &openCodeTaskOutputError{Code: "opencode_task_output_empty"}
+	}
+	return decodeOpenCodeTaskHostOutput([]byte(*envelope.Output))
 }
 
 func decodeOpenCodeTaskHostOutput(raw []byte) ([]byte, error) {
