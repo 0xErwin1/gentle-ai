@@ -553,6 +553,8 @@ func tuiExecuteWithBackground(
 	detection system.DetectionResult,
 	background model.OpenCodeBackgroundIntent,
 	backgroundPersist model.OpenCodeBackgroundIntent,
+	piBackground model.PiBackgroundIntent,
+	piBackgroundPersist model.PiBackgroundIntent,
 	onProgress pipeline.ProgressFunc,
 ) pipeline.ExecutionResult {
 	restoreCommandOutput := cli.SetCommandOutputStreaming(false)
@@ -566,7 +568,7 @@ func tuiExecuteWithBackground(
 	profile := cli.ResolveInstallProfile(detection)
 	resolved.PlatformDecision = planner.PlatformDecisionFromProfile(profile)
 
-	execResult, orchestrator := cli.ExecuteTUIInstallWithBackgroundAndOrchestrator(homeDir, selection, resolved, profile, background, onProgress)
+	execResult, orchestrator := cli.ExecuteTUIInstallWithBackgroundAndOrchestrator(homeDir, selection, resolved, profile, background, piBackground, onProgress)
 	if execResult.Err == nil {
 		// Persist the user's agent selection and model assignments so that future
 		// `sync` runs target only the installed agents and preserve model choices.
@@ -603,6 +605,9 @@ func tuiExecuteWithBackground(
 		installState.SetSelection(selection)
 		if backgroundPersist != "" {
 			installState.BackgroundIntent = backgroundPersist
+		}
+		if piBackgroundPersist != "" {
+			installState.PiBackgroundIntent = piBackgroundPersist
 		}
 		if writeErr := state.WriteReconciled(homeDir, installState); writeErr != nil {
 			execResult.Err = fmt.Errorf("persist install state: %w", writeErr)
