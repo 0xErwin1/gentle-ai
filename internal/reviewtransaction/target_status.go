@@ -568,7 +568,7 @@ func targetStatusForCandidate(result TargetStatusResult, candidate targetStatusC
 			return result
 		}
 		if candidate.frozenReviewing && !candidate.frozenReviewingPendingSlots {
-			result.Action, result.Replayability = TargetStatusActionStop, ReplayabilityManualActionRequired
+			result.Action, result.Replayability = TargetStatusActionFinalize, ReplayabilityNotReplayable
 			return result
 		}
 		if candidate.finalVerificationRetry != nil {

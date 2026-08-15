@@ -442,7 +442,18 @@ func (result ReviewTargetStatusResult) validateWithCompactAuthority(authority *r
 		correctionEvidenceFirst := transitionRequest == nil && result.ValidationRequest != nil &&
 			(result.NextTransition.ReasonCode == "correction_repository_verification_required" ||
 				result.NextTransition.ReasonCode == "correction_repository_tooling_failed")
-		if !correctionEvidenceFirst && ((transitionRequest == nil) != (result.ValidationRequest == nil) ||
+		providerTargetedValidation := transitionRequest == nil && result.ValidationRequest != nil &&
+			result.NextTransition.ReasonCode == "targeted_validation_required" && result.NextTransition.Collect != nil &&
+			len(result.NextTransition.Collect.Inputs) == 1 && result.NextTransition.Collect.Inputs[0].ProviderTask != nil
+		capturedProviderTargetedValidation := transitionRequest == nil && result.ValidationRequest != nil &&
+			result.NextTransition.ReasonCode == "captured_provider_targeted_validation_ready" && result.NextTransition.Execute != nil &&
+			result.NextTransition.Execute.Operation == "review.finalize"
+		if capturedProviderTargetedValidation {
+			if err := result.validateCapturedProviderTargetedValidatorTransition(); err != nil {
+				return err
+			}
+		}
+		if !correctionEvidenceFirst && !providerTargetedValidation && !capturedProviderTargetedValidation && ((transitionRequest == nil) != (result.ValidationRequest == nil) ||
 			transitionRequest != nil && !reflect.DeepEqual(*transitionRequest, *result.ValidationRequest)) {
 			return errors.New("negotiated status validation request copies differ")
 		}
@@ -629,6 +640,42 @@ func (result ReviewTargetStatusResult) validateWithCompactAuthority(authority *r
 	return nil
 }
 
+func (result ReviewTargetStatusResult) validateCapturedProviderTargetedValidatorTransition() error {
+	transition, request := result.NextTransition, result.ValidationRequest
+	if transition == nil || transition.Execute == nil || request == nil || result.Contract != ReviewIntegrationContractV2 ||
+		result.Authority == nil || result.Authority.State != reviewtransaction.StateCorrectionRequired ||
+		reviewtransaction.ValidateTargetedValidationRequest(*request) != nil || request.LineageID != result.Authority.LineageID ||
+		request.ExpectedRevision != result.Authority.Revision {
+		return errors.New("captured provider targeted-validator transition is not bound to current authority") // refusal:by-design world-action: a producer must not advertise an execute route outside current correction authority
+	}
+	binding := ReviewTransitionBinding{
+		LineageID: request.LineageID, Revision: request.ExpectedRevision, TargetIdentity: request.CorrectionTargetIdentity,
+		RepositoryContext: transition.Execute.Binding.RepositoryContext,
+	}
+	if reviewtransaction.ValidateReviewRepositoryContextHandle(binding.RepositoryContext) != nil {
+		return errors.New("captured provider targeted-validator transition has no repository context") // refusal:by-design world-action: a provider slot cannot safely resolve a repository without its Go-issued context handle
+	}
+	wantArguments := reviewTokenizedTransitionArguments([]ReviewTransitionArgument{
+		{Name: "contract", Value: ReviewIntegrationContractV2},
+		{Name: "lineage", Value: binding.LineageID},
+		{Name: "expected-revision", Value: binding.Revision},
+		{Name: "target", Value: binding.TargetIdentity},
+		{Name: "request-hash", Value: request.RequestHash},
+		{Name: "repository-context", Value: binding.RepositoryContext},
+		{Name: "captured-evidence", Value: "true"},
+	})
+	wantPreconditions := []ReviewTransitionArgument{
+		{Name: "state", Value: "correction_required"},
+		{Name: "verification_outcome", Value: string(reviewtransaction.VerificationOutcomePassed)},
+		{Name: "provider_targeted_validator", Value: "captured"},
+	}
+	if !reflect.DeepEqual(transition.Execute.Arguments, wantArguments) || !reflect.DeepEqual(transition.Execute.Preconditions, wantPreconditions) ||
+		transition.Execute.Binding != binding || len(transition.Execute.Artifacts) != 0 {
+		return errors.New("captured provider targeted-validator transition is not exact") // refusal:by-design world-action: only the exact Go-issued slot-consumption transition may finalize a correction
+	}
+	return nil
+}
+
 func (result ReviewTargetStatusResult) validateSubmissionDescriptors() error {
 	transition := result.NextTransition
 	if transition == nil || transition.Collect == nil {
@@ -701,16 +748,16 @@ func (result ReviewTargetStatusResult) validateSubmissionDescriptors() error {
 			return errors.New("submission descriptor transition must contain exactly one input") // refusal:by-design world-action: only a provider code fix can produce the required single input
 		}
 		input := transition.Collect.Inputs[0]
-		if input.CaptureOperation == "external.run_provider_role" {
+		if input.ProviderTask != nil {
 			// The OpenCode host-mediated form: a Go-issued provider validator
-			// task whose exact binding validateReviewProviderTaskInput above
-			// already verified. It carries no submission descriptor. Before
-			// this branch existed, STATUS refused the very transition it had
-			// just rendered for OpenCode and answered operation_failed.
-			if input.ProviderTask == nil || input.Submission != nil {
-				return errors.New("targeted validation submission descriptor has no provider request") // refusal:by-design world-action: only a provider code fix can bind the validation request
-			}
-			return nil
+			// task bound to the current correction authority. It carries no
+			// submission descriptor.
+			return result.validateTargetedValidatorProviderTaskInput(input)
+		}
+		if input.CaptureOperation == "external.run_provider_role" {
+			// A provider role collection input without its Go-issued task is
+			// never a valid targeted validation form.
+			return errors.New("targeted validation submission descriptor has no provider request") // refusal:by-design world-action: only a provider code fix can bind the validation request
 		}
 		if input.CaptureOperation == reviewCaptureValidationCaptureOperation {
 			// The pi host-relay form: a self-contained executable vector with
@@ -828,6 +875,26 @@ func validateReviewProviderTaskInput(input ReviewTransitionInput, arguments map[
 	return nil
 }
 
+func (result ReviewTargetStatusResult) validateTargetedValidatorProviderTaskInput(input ReviewTransitionInput) error {
+	if result.Schema != ReviewIntegrationStatusSchemaV5 || result.Authority == nil || result.ValidationRequest == nil ||
+		input.Name != "provider_"+string(reviewerprovider.RoleTargetedValidator) || input.ProviderTask == nil ||
+		input.ProviderTask.Role != string(reviewerprovider.RoleTargetedValidator) || input.Submission != nil {
+		return errors.New("targeted validator provider task is not bound to the correction authority") // refusal:by-design world-action: only Go may issue a targeted validator task for the current correction authority
+	}
+	arguments, err := reviewTransitionArgumentMap(input.Arguments)
+	if err != nil {
+		return err
+	}
+	if err := validateReviewProviderTaskInput(input, arguments); err != nil {
+		return err
+	}
+	if arguments["lineage"] != result.Authority.LineageID || arguments["expected-revision"] != result.Authority.Revision ||
+		arguments["target"] != result.ValidationRequest.CorrectionTargetIdentity {
+		return errors.New("targeted validator provider task is not bound to the correction authority") // refusal:by-design world-action: only Go may issue a targeted validator task for the current correction authority
+	}
+	return nil
+}
+
 func (result ReviewTargetStatusResult) validateNextTransitionTargets() error {
 	if result.NextTransition == nil {
 		return nil
@@ -890,7 +957,8 @@ func (result ReviewTargetStatusResult) validateNextTransitionTargets() error {
 	if result.Authority != nil && result.Authority.State == reviewtransaction.StateValidating {
 		expectedExecutionTarget = reviewAuthorityTargetIdentity(result)
 	} else if result.Authority != nil && result.Authority.State == reviewtransaction.StateCorrectionRequired &&
-		result.ValidationRequest != nil && result.NextTransition.ReasonCode == "correction_repository_tooling_failed" {
+		result.ValidationRequest != nil && (result.NextTransition.ReasonCode == "correction_repository_tooling_failed" ||
+		result.NextTransition.ReasonCode == "captured_provider_targeted_validation_ready") {
 		expectedExecutionTarget = result.ValidationRequest.CorrectionTargetIdentity
 	}
 	if result.NextTransition.Execute != nil && result.NextTransition.Execute.Binding.TargetIdentity != expectedExecutionTarget {

@@ -1427,7 +1427,7 @@ func TestExplicitReviewingStatusRejectsSemanticAndIneligibleFrozenCandidates(t *
 			t.Fatalf("pending frozen finalize status = %#v, %v", status, err)
 		}
 	})
-	t.Run("fully occupied drifted candidate stops", func(t *testing.T) {
+	t.Run("fully occupied drifted candidate finalizes", func(t *testing.T) {
 		fixture := newCompactReviewerCaptureFixture(t, "frozen-complete")
 		if _, err := fixture.store.CaptureAdmittedReviewerResult(context.Background(), fixture.request); err != nil {
 			t.Fatal(err)
@@ -1439,7 +1439,7 @@ func TestExplicitReviewingStatusRejectsSemanticAndIneligibleFrozenCandidates(t *
 			Target: Target{Kind: TargetCurrentChanges, IntendedUntracked: []string{}}, LineageID: fixture.state.LineageID,
 		})
 		if err != nil || status.Applicability != TargetApplicabilityCurrent || status.LineageID != fixture.state.LineageID ||
-			status.Action != TargetStatusActionStop || status.Replayability != ReplayabilityManualActionRequired {
+			status.Action != TargetStatusActionFinalize || status.Replayability != ReplayabilityNotReplayable {
 			t.Fatalf("fully occupied frozen status = %#v, %v", status, err)
 		}
 	})
