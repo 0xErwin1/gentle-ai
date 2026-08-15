@@ -333,13 +333,16 @@ type UninstallFunc func(agentIDs []model.AgentID, componentIDs []model.Component
 type UninstallWithProfilesFunc func(agentIDs []model.AgentID, componentIDs []model.ComponentID, profileNames []string, engramScope model.EngramUninstallScope) (componentuninstall.Result, error)
 
 // ExecuteFunc builds and runs the installation pipeline. It receives the
-// effective and publishable OpenCode background choices plus a ProgressFunc.
+// effective and publishable OpenCode and Pi background choices plus a
+// ProgressFunc.
 type ExecuteFunc func(
 	selection model.Selection,
 	resolved planner.ResolvedPlan,
 	detection system.DetectionResult,
 	background model.OpenCodeBackgroundIntent,
 	backgroundPersist model.OpenCodeBackgroundIntent,
+	piBackground model.PiBackgroundIntent,
+	piBackgroundPersist model.PiBackgroundIntent,
 	onProgress pipeline.ProgressFunc,
 ) pipeline.ExecutionResult
 
@@ -379,6 +382,7 @@ const (
 	ScreenSkillPicker
 	ScreenReview
 	ScreenOpenCodeBackground
+	ScreenPiBackground
 	ScreenInstalling
 	ScreenModelPicker
 	ScreenComplete
@@ -453,6 +457,12 @@ type Model struct {
 	BackgroundIntent         model.OpenCodeBackgroundIntent
 	BackgroundPersist        model.OpenCodeBackgroundIntent
 	backgroundPromptOriginal model.OpenCodeBackgroundIntent
+
+	// PiBackgroundIntent is the effective Pi background choice for the current
+	// install. PiBackgroundPersist is published only after success.
+	PiBackgroundIntent         model.PiBackgroundIntent
+	PiBackgroundPersist        model.PiBackgroundIntent
+	piBackgroundPromptOriginal model.PiBackgroundIntent
 
 	// SelectedBackup holds the manifest chosen on ScreenBackups, used by the
 	// restore confirmation and result screens.
@@ -693,6 +703,7 @@ func NewModel(detection system.DetectionResult, version string, installState ...
 		Selection:            selection,
 		Detection:            detection,
 		BackgroundIntent:     s.BackgroundIntent,
+		PiBackgroundIntent:   s.PiBackgroundIntent,
 		UninstallAgents:      agents,
 		UninstallComponents:  defaultUninstallComponents(),
 		UninstallEngramScope: model.EngramUninstallScopeGlobal,
@@ -1221,6 +1232,8 @@ func (m Model) View() string {
 		return screens.RenderReview(m.Review, m.Cursor)
 	case ScreenOpenCodeBackground:
 		return screens.RenderOpenCodeBackground(m.Cursor)
+	case ScreenPiBackground:
+		return screens.RenderPiBackground(m.Cursor)
 	case ScreenInstalling:
 		return screens.RenderInstalling(m.Progress.ViewModel(), screens.SpinnerChar(m.SpinnerFrame))
 	case ScreenComplete:
@@ -2457,7 +2470,7 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 				}
 				m.BackgroundPersist = resolution.Persist
 			}
-			return m.startInstalling()
+			return m.continueToPiBackgroundOrInstall()
 		}
 		// Back — in custom preset, walk back through the screens that were shown.
 		if m.Selection.Preset == model.PresetCustom {
@@ -2491,10 +2504,25 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 				m.BackgroundIntent = model.OpenCodeBackgroundOff
 			}
 			m.BackgroundPersist = m.BackgroundIntent
-			return m.startInstalling()
+			return m.continueToPiBackgroundOrInstall()
 		}
 		m.BackgroundIntent = m.backgroundPromptOriginal
 		m.BackgroundPersist = ""
+		m.Err = nil
+		m.setScreen(ScreenReview)
+	case ScreenPiBackground:
+		options := screens.PiBackgroundOptions()
+		if m.Cursor < len(options) {
+			if m.Cursor == 0 {
+				m.PiBackgroundIntent = model.PiBackgroundOn
+			} else {
+				m.PiBackgroundIntent = model.PiBackgroundOff
+			}
+			m.PiBackgroundPersist = m.PiBackgroundIntent
+			return m.startInstalling()
+		}
+		m.PiBackgroundIntent = m.piBackgroundPromptOriginal
+		m.PiBackgroundPersist = ""
 		m.Err = nil
 		m.setScreen(ScreenReview)
 	case ScreenInstalling:
@@ -2636,6 +2664,30 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// continueToPiBackgroundOrInstall resolves the Pi background preference right
+// before the install transaction starts, prompting only when it is otherwise
+// unresolved. It mirrors the OpenCode gate and chains after it so both
+// prompts can appear in one review confirmation.
+func (m Model) continueToPiBackgroundOrInstall() (tea.Model, tea.Cmd) {
+	if m.shouldShowPiBackgroundScreen() {
+		resolution, err := cli.ResolvePiBackgroundInteractive(m.PiBackgroundIntent)
+		if err != nil {
+			m.Err = err
+			return m, nil
+		}
+		if resolution.NeedsPrompt {
+			m.piBackgroundPromptOriginal = m.PiBackgroundIntent
+			m.PiBackgroundPersist = ""
+			m.setScreen(ScreenPiBackground)
+			return m, nil
+		}
+		// Unmanaged auto stays auto: only managed on/off decisions project.
+		m.PiBackgroundIntent = resolution.Effective
+		m.PiBackgroundPersist = resolution.Persist
+	}
+	return m.startInstalling()
+}
+
 // startInstalling initializes the progress state from the resolved plan and
 // starts the pipeline execution in a goroutine if ExecuteFn is provided.
 func (m Model) startInstalling() (tea.Model, tea.Cmd) {
@@ -2671,6 +2723,8 @@ func (m Model) startInstalling() (tea.Model, tea.Cmd) {
 	detection := m.Detection
 	background := m.BackgroundIntent
 	backgroundPersist := m.BackgroundPersist
+	piBackground := m.PiBackgroundIntent
+	piBackgroundPersist := m.PiBackgroundPersist
 
 	return m, tea.Batch(tickCmd(), func() tea.Msg {
 		onProgress := func(event pipeline.ProgressEvent) {
@@ -2681,7 +2735,7 @@ func (m Model) startInstalling() (tea.Model, tea.Cmd) {
 			// we rely on the pipeline calling this synchronously from each step.
 		}
 
-		result := executeFn(selection, resolved, detection, background, backgroundPersist, onProgress)
+		result := executeFn(selection, resolved, detection, background, backgroundPersist, piBackground, piBackgroundPersist, onProgress)
 		return PipelineDoneMsg{Result: result}
 	})
 }
@@ -3249,6 +3303,13 @@ func (m Model) goBack(cmd *tea.Cmd) Model {
 		m.setScreen(ScreenReview)
 		return m
 	}
+	if m.Screen == ScreenPiBackground {
+		m.PiBackgroundIntent = m.piBackgroundPromptOriginal
+		m.PiBackgroundPersist = ""
+		m.Err = nil
+		m.setScreen(ScreenReview)
+		return m
+	}
 	if m.Screen == ScreenRestoreResult || m.Screen == ScreenDeleteResult {
 		return m.finishBackupResult(m.Screen == ScreenDeleteResult)
 	}
@@ -3686,6 +3747,8 @@ func (m Model) optionCount() int {
 		return len(screens.ReviewOptions())
 	case ScreenOpenCodeBackground:
 		return len(screens.OpenCodeBackgroundOptions()) + 1
+	case ScreenPiBackground:
+		return len(screens.PiBackgroundOptions()) + 1
 	case ScreenInstalling:
 		return 0
 	case ScreenComplete:
@@ -4367,6 +4430,13 @@ func (m Model) shouldShowSDDModeScreen() bool {
 func (m Model) shouldShowOpenCodeBackgroundScreen() bool {
 	return m.Selection.HasAgent(model.AgentOpenCode) &&
 		hasSelectedComponent(m.Selection.Components, model.ComponentSDD)
+}
+
+// shouldShowPiBackgroundScreen gates only on the Pi agent: Pi's SDD stack is
+// provided by gentle-pi itself, so the pi-only flow (which skips the SDD
+// component) must still resolve the background preference.
+func (m Model) shouldShowPiBackgroundScreen() bool {
+	return m.Selection.HasAgent(model.AgentPi)
 }
 
 // shouldShowStrictTDDScreen reports whether the Strict TDD Mode screen should
