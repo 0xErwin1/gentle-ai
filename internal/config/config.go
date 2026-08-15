@@ -148,6 +148,34 @@ func FromSelection(selection model.Selection) DesiredState {
 	}}
 }
 
+// NormalizeSelection routes existing workflow selections through the desired-state contract.
+func NormalizeSelection(selection model.Selection) (model.Selection, []Diagnostic) {
+	preserveUnsetPersona := selection.Persona == ""
+
+	state, diagnostics := Normalize(Document{
+		Version:   CurrentVersion,
+		Selection: FromSelection(selection).Selection,
+	})
+	if len(diagnostics) != 0 {
+		return model.Selection{}, diagnostics
+	}
+
+	projected := Project(state)
+	selection.Agents = projected.Agents
+	selection.Components = projected.Components
+	selection.Skills = projected.Skills
+	selection.Preset = projected.Preset
+	selection.SDDMode = projected.SDDMode
+	selection.SDDProfileStrategy = projected.SDDProfileStrategy
+	selection.StrictTDD = projected.StrictTDD
+	selection.Profiles = projected.Profiles
+	if !preserveUnsetPersona {
+		selection.Persona = projected.Persona
+	}
+
+	return selection, nil
+}
+
 func normalizeSelection(selection Selection, diagnostics *[]Diagnostic) Selection {
 	if selection.Persona == "" {
 		selection.Persona = model.PersonaGentleman

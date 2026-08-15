@@ -1517,6 +1517,12 @@ func validatePersistedSyncState(persisted state.InstallState, readErr error) err
 // and a fully-built Selection (agents + components + options).
 // This is the function the TUI calls directly to avoid CLI flag parsing.
 func RunSyncWithSelection(homeDir string, selection model.Selection) (SyncResult, error) {
+	normalized, err := normalizeConfigSelection(selection)
+	if err != nil {
+		return SyncResult{}, err
+	}
+	selection = normalized
+
 	persistedState, persistedStateErr := state.Read(homeDir)
 	if persistedStateErr != nil && !os.IsNotExist(persistedStateErr) {
 		return SyncResult{Agents: selection.Agents, Selection: selection}, fmt.Errorf("read persisted installation state: %w", persistedStateErr)
