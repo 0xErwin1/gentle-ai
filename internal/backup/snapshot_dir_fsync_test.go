@@ -187,3 +187,110 @@ func TestLegacyManifestWithUnknownKindDoesNotDelete(t *testing.T) {
 		t.Fatalf("content = %q, want %q", got, body)
 	}
 }
+
+// TestRestoreLeavesExistingSymlinkUntouched covers the follow-up:
+// when a symlink already exists on disk at OriginalPath, restore
+// must skip LinkTarget validation entirely (validate-only-before-
+// recreate). Otherwise a manifest whose LinkTarget would fail
+// validation aborts an otherwise no-op restore of a pre-existing
+// link.
+func TestRestoreLeavesExistingSymlinkUntouched(t *testing.T) {
+	home := t.TempDir()
+	overrideHomeForBackup(t, home)
+
+	// Symlink already exists with an absolute target that
+	// validateSymlinkTarget would reject. With the pre-fix order
+	// (validate first), restore refused; with the fix (Lstat first),
+	// restore sees the link is there and skips the recreation branch
+	// (and therefore the validation it gates).
+	link := filepath.Join(home, "pre-existing-link")
+	if err := os.Symlink("/absolute-target", link); err != nil {
+		t.Skipf("Symlink not available: %v", err)
+	}
+
+	// Capture the platform-normalized target so the post-restore check
+	// is robust to OS-specific separator conversion (Windows turns the
+	// leading "/" into "\" inside the link target).
+	beforeTarget, err := os.Readlink(link)
+	if err != nil {
+		t.Fatalf("Readlink before restore: %v", err)
+	}
+
+	err = (RestoreService{}).Restore(Manifest{
+		Compressed: false,
+		Entries: []ManifestEntry{{
+			OriginalPath: link,
+			Existed:      true,
+			Kind:         PathKindSymlinkDirectory,
+			LinkTarget:   "/absolute-target",
+			Mode:         uint32(os.ModeSymlink | 0o777),
+		}},
+	})
+	if err != nil {
+		t.Fatalf("Restore() error = %v, want nil when pre-existing symlink needs no recreation", err)
+	}
+
+	// The on-disk symlink must still resolve to the same target — restore
+	// did not touch it.
+	gotTarget, err := os.Readlink(link)
+	if err != nil {
+		t.Fatalf("Readlink: %v", err)
+	}
+	if gotTarget != beforeTarget {
+		t.Fatalf("Readlink target = %q, want %q", gotTarget, beforeTarget)
+	}
+}
+
+// TestRestoreCreatesMissingParentDirForSymlink covers the follow-up:
+// when a symlink needs recreation and its parent directory does not
+// exist, restore must create the parent before calling os.Symlink —
+// otherwise a fresh restore whose parent was cleaned up aborts with
+// ENOENT from os.Symlink.
+func TestRestoreCreatesMissingParentDirForSymlink(t *testing.T) {
+	home := t.TempDir()
+	overrideHomeForBackup(t, home)
+
+	// Pre-existing target at home/target-dir; the symlink's own parent
+	// home/missing-parent does NOT exist. Manifest LinkTarget points
+	// back up one level to the target, which keeps it inside the
+	// allowed roots after resolution.
+	if err := os.MkdirAll(filepath.Join(home, "target-dir"), 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	link := filepath.Join(home, "missing-parent", "link")
+
+	// Probe symlink availability on this platform before driving the
+	// actual scenario — restore's recreation branch calls os.Symlink.
+	probe := filepath.Join(home, ".probe-symlink")
+	if err := os.Symlink("x", probe); err != nil {
+		t.Skipf("Symlink not available: %v", err)
+	}
+	os.Remove(probe)
+
+	err := (RestoreService{}).Restore(Manifest{
+		Compressed: false,
+		Entries: []ManifestEntry{{
+			OriginalPath: link,
+			Existed:      true,
+			Kind:         PathKindSymlinkDirectory,
+			LinkTarget:   filepath.Join("..", "target-dir"),
+			Mode:         uint32(os.ModeSymlink | 0o777),
+		}},
+	})
+	if err != nil {
+		t.Fatalf("Restore() error = %v, want nil when missing parent dir can be created", err)
+	}
+
+	info, err := os.Lstat(link)
+	if err != nil {
+		t.Fatalf("Lstat: %v", err)
+	}
+	if info.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("expected symlink at %q, got mode %v", link, info.Mode())
+	}
+	if got, err := os.Readlink(link); err != nil {
+		t.Fatalf("Readlink: %v", err)
+	} else if got != filepath.Join("..", "target-dir") {
+		t.Fatalf("Readlink target = %q, want %q", got, filepath.Join("..", "target-dir"))
+	}
+}
