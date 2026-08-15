@@ -15,6 +15,7 @@ j103-sdd-interrupted-settlement-omits-evidence
 j104-repository-context-survives-fresh-process
 j105-compiled-provider-capture-retries-same-binding
 j106-captured-provider-validator-slot-finalizes-generically
+j107-sdd-approved-active-change-allows-shared-openspec-scaffolding
 j11-unborn-head
 j12-rejected-capture-then-recapture
 j13-next-transition-runs-verbatim

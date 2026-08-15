@@ -136,3 +136,79 @@ func TestBoundReviewArchiveGateIgnoresStaleGateContextViaReDerivation(t *testing
 		t.Fatalf("status still routed through the retired stored-GateContext-comparison rejection: %#v", status)
 	}
 }
+
+func TestCompactAuthorityPathsBoundAllowsExactFreshOpenSpecInfrastructure(t *testing.T) {
+	const change = "add-webhook-signature-verifier"
+	paths := []string{
+		".gitignore",
+		"internal/webhook/signature.go",
+		"openspec/config.yaml",
+		"openspec/changes/archive/.gitkeep",
+		"openspec/specs/.gitkeep",
+		"openspec/changes/" + change + "/proposal.md",
+		"openspec/changes/" + change + "/design.md",
+		"openspec/changes/" + change + "/tasks.md",
+		"openspec/changes/" + change + "/specs/auth/spec.md",
+	}
+	state := reviewtransaction.CompactState{
+		GenesisPaths:    append([]string(nil), paths...),
+		InitialSnapshot: reviewtransaction.Snapshot{Paths: append([]string(nil), paths...)},
+	}
+	if bound, reason := compactAuthorityPathsBound(state, change); !bound || reason != "" {
+		t.Fatalf("fresh shared OpenSpec infrastructure bound=%t reason=%q, want true, empty", bound, reason)
+	}
+
+	for _, test := range []struct {
+		name string
+		path string
+	}{
+		{name: "other active change", path: "openspec/changes/other-change/tasks.md"},
+		{name: "archived change payload", path: "openspec/changes/archive/previous-change/proposal.md"},
+		{name: "canonical capability spec", path: "openspec/specs/webhooks/spec.md"},
+		{name: "unexpected config", path: "openspec/config.yml"},
+		{name: "traversal", path: "openspec/changes/" + change + "/../other-change/tasks.md"},
+		{name: "ambiguous separator", path: "openspec\\changes\\other-change\\tasks.md"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			forged := state
+			forged.GenesisPaths = append(append([]string(nil), paths...), test.path)
+			forged.InitialSnapshot.Paths = append([]string(nil), forged.GenesisPaths...)
+			if bound, reason := compactAuthorityPathsBound(forged, change); bound || reason == "" {
+				t.Fatalf("foreign path %q bound=%t reason=%q, want false with refusal", test.path, bound, reason)
+			}
+		})
+	}
+}
+
+func TestResolveAllowsApprovedFreshOpenSpecInfrastructureForActiveChange(t *testing.T) {
+	const change = "add-webhook-signature-verifier"
+	root := t.TempDir()
+	changeRoot := seedReadyChange(t, root, change, "- [x] 1.1 Done\n")
+	writeApprovedCompactAuthorityForChangeWithCandidate(t, root, changeRoot, "approved-webhook", "- [x] 1.1 Done\n", func() {
+		write(t, filepath.Join(root, ".gitignore"), ".env\n")
+		write(t, filepath.Join(root, "internal", "webhook", "signature.go"), "package webhook\n")
+		write(t, filepath.Join(root, "openspec", "config.yaml"), "schema: specification\n")
+		write(t, filepath.Join(root, "openspec", "changes", "archive", ".gitkeep"), "")
+		write(t, filepath.Join(root, "openspec", "specs", ".gitkeep"), "")
+		write(t, filepath.Join(changeRoot, "proposal.md"), "# Proposal\nFresh infrastructure included\n")
+		write(t, filepath.Join(changeRoot, "design.md"), "# Design\nFresh infrastructure included\n")
+		write(t, filepath.Join(changeRoot, "specs", "auth", "spec.md"), "### Requirement: Auth\n#### Scenario: Fresh infrastructure\n")
+		write(t, filepath.Join(changeRoot, "verify-report.md"), boundedVerifyEnvelope(shaID("a"), "pass"))
+	})
+
+	status, err := Resolve(ResolveOptions{CWD: root, ChangeName: change})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.ReviewGate == nil || status.ReviewGate.Result != reviewtransaction.GateAllow ||
+		status.Dependencies.Archive == DependencyBlocked || status.NextRecommended == "resolve-review" {
+		t.Fatalf("fresh OpenSpec infrastructure status = %#v", status)
+	}
+	projected, err := ProjectStatusV1(status)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if projected.ReviewGate == nil || projected.ReviewGate.Result != reviewtransaction.GateAllow {
+		t.Fatalf("fresh OpenSpec infrastructure projected review gate = %#v", projected.ReviewGate)
+	}
+}
