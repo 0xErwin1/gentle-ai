@@ -12,6 +12,7 @@ var portableSDDFailClosedAuthorityJourneyIDs = []string{
 	"j55-sdd-mismatched-authority-receipt-fails-closed",
 	"j56-sdd-non-allow-post-apply-gate-fails-closed",
 	"j58-sdd-foreign-openspec-path-fails-closed",
+	"j107-sdd-approved-active-change-allows-shared-openspec-scaffolding",
 	"j80-rescope-authorized-evidence-only-retry",
 	"j81-rc1-consecutive-rescope-repair-executes-printed-command",
 }
