@@ -25,6 +25,13 @@ const after = { output: "untrusted reviewer output", metadata: {} }
 await second["tool.execute.after"]({ tool: "task", sessionID: "session", callID: "call", args: { subagent_type: "review-risk" } }, after)
 if (after.output !== "untrusted reviewer output") throw new Error("non-owner after hook must pass through instead of completing the owner's relay; output = " + after.output)
 await first["tool.execute.after"]({ tool: "task", sessionID: "session", callID: "call", args: { subagent_type: "review-risk" } }, after)
+const beforeReversed = { args: { subagent_type: "review-risk", prompt: "Go must receive this original host prompt" } }
+await first["tool.execute.before"]({ tool: "task", sessionID: "session", callID: "reversed" }, beforeReversed)
+await second["tool.execute.before"]({ tool: "task", sessionID: "session", callID: "reversed" }, beforeReversed)
+const reversed = { output: "untrusted reviewer output", metadata: {} }
+await first["tool.execute.after"]({ tool: "task", sessionID: "session", callID: "reversed", args: { subagent_type: "review-risk" } }, reversed)
+await second["tool.execute.after"]({ tool: "task", sessionID: "session", callID: "reversed", args: { subagent_type: "review-risk" } }, reversed)
+if (reversed.output !== "captured") throw new Error("non-owner after an owner-delivered completion must pass through; output = " + reversed.output)
 console.log(JSON.stringify({ prompt: before.args.prompt, output: after.output }))
 `
 	output, log := runOpenCodeTransportPluginHarness(t, map[string]string{"plugin.mts": string(source)}, harness, posixRelayFixture)
@@ -38,8 +45,46 @@ console.log(JSON.stringify({ prompt: before.args.prompt, output: after.output })
 	if result.Prompt != "Go-materialized immutable prompt" || result.Output != "captured" {
 		t.Fatalf("relay result = %#v", result)
 	}
-	if log != "{\"schema\":\"gentle-ai.provider-transport/v1\",\"operation\":\"start\",\"prompt\":\"Go must receive this original host prompt\"}\n{\"schema\":\"gentle-ai.provider-transport/v1\",\"operation\":\"complete\",\"nonce\":\"nonce\",\"output\":\"untrusted reviewer output\"}\n" {
+	frames := "{\"schema\":\"gentle-ai.provider-transport/v1\",\"operation\":\"start\",\"prompt\":\"Go must receive this original host prompt\"}\n{\"schema\":\"gentle-ai.provider-transport/v1\",\"operation\":\"complete\",\"nonce\":\"nonce\",\"output\":\"untrusted reviewer output\"}\n"
+	if log != frames+frames {
 		t.Fatalf("relay frames = %q", log)
+	}
+}
+
+func TestOpenCodeReviewTransportPluginRefusesDeferredCompletionWhoseOwnerIsGone(t *testing.T) {
+	source, err := Read("opencode/plugins/opencode-review-transport.ts")
+	if err != nil {
+		t.Fatal(err)
+	}
+	const harness = `import plugin from "./plugin.mts"
+const first = await plugin({ directory: process.cwd(), worktree: process.cwd() })
+const second = await plugin({ directory: process.cwd(), worktree: process.cwd() })
+const before = { args: { subagent_type: "review-risk", prompt: "Go must receive this original host prompt" } }
+await first["tool.execute.before"]({ tool: "task", sessionID: "session", callID: "call" }, before)
+await second["tool.execute.before"]({ tool: "task", sessionID: "session", callID: "call" }, before)
+await first.dispose()
+const after = { output: "untrusted reviewer output", metadata: {} }
+let refused = ""
+try {
+  await second["tool.execute.after"]({ tool: "task", sessionID: "session", callID: "call", args: { subagent_type: "review-risk" } }, after)
+} catch (cause) {
+  refused = cause instanceof Error ? cause.message : String(cause)
+}
+console.log(JSON.stringify({ refused, output: after.output }))
+`
+	output, _ := runOpenCodeTransportPluginHarness(t, map[string]string{"plugin.mts": string(source)}, harness, posixRelayFixture)
+	var result struct {
+		Refused string `json:"refused"`
+		Output  string `json:"output"`
+	}
+	if err := json.Unmarshal([]byte(output), &result); err != nil {
+		t.Fatalf("decode relay harness output %q: %v", output, err)
+	}
+	if !strings.Contains(result.Refused, "no matching live before hook") {
+		t.Fatalf("deferred completion without a live owner must refuse loudly, got refusal %q", result.Refused)
+	}
+	if result.Output != "untrusted reviewer output" {
+		t.Fatalf("refused completion must not mutate host output, got %q", result.Output)
 	}
 }
 

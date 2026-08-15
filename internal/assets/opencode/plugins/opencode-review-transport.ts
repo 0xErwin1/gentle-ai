@@ -140,7 +140,7 @@ const OpenCodeReviewTransportPlugin: Plugin = async ({ directory, worktree }) =>
   // so this instance's after hook passes those tasks through untouched. This
   // deferral is the only tolerated silent completion path; every other
   // unmatched completion refuses loudly.
-  const deferred = new Set<string>()
+  const deferred = new Map<string, RelayRegistration>()
   const cwd = () => worktree || directory
   const clearOwned = (key: string) => {
     const registration = relays.get(key)
@@ -158,7 +158,7 @@ const OpenCodeReviewTransportPlugin: Plugin = async ({ directory, worktree }) =>
       relays.delete(key)
       registration.relay.close()
     }
-    for (const key of deferred) if (key.startsWith(prefix)) deferred.delete(key)
+    for (const key of deferred.keys()) if (key.startsWith(prefix)) deferred.delete(key)
   }
   return {
     dispose: async () => {
@@ -180,7 +180,7 @@ const OpenCodeReviewTransportPlugin: Plugin = async ({ directory, worktree }) =>
         // to that owner and pass this instance's hooks through untouched. A
         // re-fired before hook for a registration this instance already owns
         // keeps the live registration and defers nothing.
-        if (existing.owner !== owner) deferred.add(key)
+        if (existing.owner !== owner) deferred.set(key, existing)
         return
       }
       const relay = startRelay(cwd(), output.args.prompt)
@@ -198,7 +198,15 @@ const OpenCodeReviewTransportPlugin: Plugin = async ({ directory, worktree }) =>
       // Owner-scoped dedup tolerance: this instance saw the before hook for
       // this task but another instance owns the relay, so that owner's after
       // hook delivers the completion and this one passes through untouched.
-      if (deferred.delete(key)) return
+      // The pass-through holds only while that exact owning registration is
+      // still live or has delivered its own completion; a deferred key whose
+      // owner vanished without completing falls through to the loud orphan
+      // refusal below instead of returning raw reviewer output as success.
+      const deferredTo = deferred.get(key)
+      if (deferredTo !== undefined) {
+        deferred.delete(key)
+        if (relays.get(key) === deferredTo || deferredTo.completing) return
+      }
       const registration = relays.get(key)
       if (!registration) throw new Error("review Task relay completion has no matching live before hook")
       if (registration.owner !== owner) throw new Error("review Task relay completion is owned by another plugin instance")
