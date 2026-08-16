@@ -16,6 +16,9 @@ import { promisify } from "util"
 
 const execFileAsync = promisify(execFile)
 
+// Mirrors the CLI guard's markers (.git, .atl, and ProjectSkillDirs in internal/skillregistry/registry.go); a Go parity test pins this list.
+const PROJECT_MARKERS = [".git", ".atl", "skills", ".opencode/skills", ".claude/skills", ".gemini/skills", ".cursor/skills", ".github/skills", ".codex/skills", ".qwen/skills", ".kiro/skills", ".openclaw/skills", ".pi/skills", ".agent/skills", ".agents/skills", ".atl/skills", ".hermes/skills"]
+
 async function pathExists(path: string): Promise<boolean> {
   try {
     await access(path)
@@ -36,7 +39,8 @@ async function isProjectRoot(cwd: string): Promise<boolean> {
   if (!cwd) return false
   if (cwd === parse(cwd).root) return false
   if (cwd === homedir()) return false
-  return (await pathExists(join(cwd, ".git"))) || (await pathExists(join(cwd, ".atl")))
+  for (const marker of PROJECT_MARKERS) if (await pathExists(join(cwd, ...marker.split("/")))) return true
+  return false
 }
 
 export const SkillRegistryPlugin: Plugin = async (input) => {
