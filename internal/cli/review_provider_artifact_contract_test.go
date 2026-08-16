@@ -79,8 +79,14 @@ func TestReviewProviderArtifactV21ContractsArePinned(t *testing.T) {
 		// Deliberate, not drift.
 		"fixtures/consent-v3.fixture.json":      "feb1dc7705f7da6490698ef48021bb7730de154ae23ec73d033d8d96fa996a21",
 		"schemas/capabilities-v2.1.schema.json": "9ede8ebbe3e169cf6ca4f4a6882c9c4e588a6d1073d8e22a155649cd41d38cd0",
-		"schemas/consent-v3.schema.json":        "80915f5f4f43a494826253d1e7251fc463989f41d2cf163a6a52a8b4328c023c",
-		"schemas/status.schema.json":            "c4dcc736cfc6300560a3c4262d2d982368529d5c49d58d499552a3b0beef9212",
+		// Cross-lane battery conformance fix: the schema pinned the choice
+		// invocations to `--agent claude-code`, but the live emitter omits the
+		// agent token when the caller declared no runtime (the pinned fixture
+		// itself carries no --agent), and #2676 binds the declared runtime
+		// (claude-code, opencode, codex) when there is one. The schema now
+		// follows the emitter. Deliberate, not drift.
+		"schemas/consent-v3.schema.json": "2315f1ecda9e798344f0886434316a2cba69e9cc4c1a72eb436bd5fe44c25bb6",
+		"schemas/status.schema.json":     "c4dcc736cfc6300560a3c4262d2d982368529d5c49d58d499552a3b0beef9212",
 	}
 	for name, expected := range want {
 		payload, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(name)))
@@ -98,7 +104,40 @@ func TestReviewProviderArtifactV25StatusContractsArePinned(t *testing.T) {
 	root := filepath.Join("..", "..", "contracts", "review-integration", "v2")
 	want := map[string]string{
 		"fixtures/status-v5.fixture.json": "1a6d002c9691c87e50687f8d5f3e59013e9229d93004028f746bfcda7947d5fc",
-		"schemas/status-v5.schema.json":   "fac52b56d7ec927e3b7e0f41d5af2ea4c2a221e4912b0b4d4f70485d3bf2b60b",
+		// Cross-lane battery conformance fix: live negotiated STATUS publishes
+		// the top-level repository_context reference (review_status_contract.go's
+		// ReviewTargetStatusResult, populated since the recovered-units merges),
+		// which the schema did not admit; and targeted_validation_required also
+		// arrives as the provider-task (external.run_provider_role) and pi
+		// host-relay (review.capture-validation) shapes, which the schema
+		// rejected as missing the generic submission; and the negotiated-route
+		// disposition preview (ReviewRepairDispositionProviderInputs) is real
+		// optional emitter output the strict schema must admit. Deliberate,
+		// not drift.
+		"schemas/status-v5.schema.json": "5d5170d0c4be0977b640524c6ca9b119e42803a9e8409c43f0053c0c6fbd421e",
+	}
+	for name, expected := range want {
+		payload, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(name)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		digest := sha256.Sum256(payload)
+		if actual := hex.EncodeToString(digest[:]); actual != expected {
+			t.Fatalf("%s digest = %s, want %s", name, actual, expected)
+		}
+	}
+}
+
+// TestReviewProviderArtifactConformanceSchemasArePinned pins the schemas the
+// cross-lane battery conformance work first published: the delivery gate
+// result (gentle-ai.review-gate-result/v1) and the OpenCode provider-role
+// capture acknowledgement (gentle-ai.opencode-review-provider-role/v1). Both
+// envelopes already shipped on the wire; only their published schemas are new.
+func TestReviewProviderArtifactConformanceSchemasArePinned(t *testing.T) {
+	root := filepath.Join("..", "..", "contracts", "review-integration", "v2")
+	want := map[string]string{
+		"schemas/gate-result.schema.json":            "38aa37bdea8bdc8ea664d888f7c7217beac7e34c43a95a3ed7d9354bf76709ed",
+		"schemas/opencode-provider-role.schema.json": "c6b9f216f89c044f8e844b55e7200114850cfbc16642bca0677f30a399d8aa9b",
 	}
 	for name, expected := range want {
 		payload, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(name)))
@@ -220,6 +259,8 @@ func TestReviewProviderArtifactSchemasAreStrictAndBound(t *testing.T) {
 		{name: "failure.schema.json", id: ReviewIntegrationFailureSchemaIDV2},
 		{name: "operation.schema.json", id: ReviewIntegrationOperationSchemaIDV2},
 		{name: "repair.schema.json", id: ReviewIntegrationRepairSchemaIDV2},
+		{name: "gate-result.schema.json", id: "https://gentle-ai.dev/contracts/review-integration/v2/schemas/gate-result.schema.json"},
+		{name: "opencode-provider-role.schema.json", id: "https://gentle-ai.dev/contracts/review-integration/v2/schemas/opencode-provider-role.schema.json"},
 	}
 	v2Documents := make(map[string]map[string]any, len(v2Schemas))
 	for _, tt := range v2Schemas {
