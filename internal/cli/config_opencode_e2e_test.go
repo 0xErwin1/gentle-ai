@@ -29,7 +29,7 @@ func TestConfigOpenCodeEndToEnd(t *testing.T) {
 		t.Fatalf("rendered user content = %s, %v", rendered, err)
 	}
 	for _, operation := range []string{"plan", "diff"} {
-		assertConfigOutput(t, []string{operation, "--config", configPath, "--destination", renderDestination, "--stage", t.TempDir()}, "render.ownership.conflict")
+		assertConfigOutput(t, []string{operation, "--config", configPath, "--destination", renderDestination, "--stage", t.TempDir()}, `"kind": "create"`)
 	}
 	assertConfigOutput(t, []string{"export", "--config", configPath}, `"version": "v1"`)
 
@@ -39,7 +39,7 @@ func TestConfigOpenCodeEndToEnd(t *testing.T) {
 		t.Fatalf("persisted desired = %#v, %v", desired, err)
 	}
 	manifest, err := state.ReadManifest(home, destination)
-	if err != nil || len(manifest.Resources) != 1 {
+	if err != nil || len(manifest.Resources) != 2 {
 		t.Fatalf("persisted manifest = %#v, %v", manifest, err)
 	}
 
