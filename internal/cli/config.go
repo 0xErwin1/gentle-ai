@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"sort"
 
+	"github.com/gentleman-programming/gentle-ai/v2/internal/components/permissions"
 	configdomain "github.com/gentleman-programming/gentle-ai/v2/internal/config"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/render"
@@ -19,6 +20,31 @@ import (
 )
 
 var writeConfigState = state.WriteDesiredAndManifest
+
+// decodeDesiredState decodes a document and adds the diagnostics that depend on
+// what an adapter can express. A declared rule the target client has no way to
+// read is not configuration: refusing it names the adapter to drop, where
+// accepting it would write a key that looks configured and does nothing.
+func decodeDesiredState(document []byte) (configdomain.DesiredState, []configdomain.Diagnostic) {
+	desired, diagnostics := configdomain.Decode(document)
+	if len(diagnostics) > 0 || desired.Selection.Permissions == nil {
+		return desired, diagnostics
+	}
+
+	for _, agent := range desired.Selection.Agents {
+		if permissions.SupportsDeclaredRules(agent) {
+			continue
+		}
+		diagnostics = append(diagnostics, configdomain.Diagnostic{
+			Code:     "config.permissions.unsupported-adapter",
+			Path:     "$.selection.permissions",
+			Severity: configdomain.Error,
+			Message:  fmt.Sprintf("adapter %q does not express permissions as allow, deny and ask rules; remove the permissions from the document or drop that adapter", agent),
+		})
+	}
+
+	return desired, diagnostics
+}
 
 // RunConfig performs declarative configuration operations.
 func RunConfig(args []string, stdout io.Writer) error {
@@ -48,7 +74,7 @@ func RunConfig(args []string, stdout io.Writer) error {
 	if err != nil {
 		return fmt.Errorf("read config: %w", err)
 	}
-	desired, diagnostics := configdomain.Decode(document)
+	desired, diagnostics := decodeDesiredState(document)
 	result := map[string]any{"operation": operation, "diagnostics": diagnostics}
 	if len(diagnostics) > 0 || operation == "validate" {
 		return writeConfigResult(stdout, result)
@@ -59,11 +85,16 @@ func RunConfig(args []string, stdout io.Writer) error {
 	if *destination == "" || *stage == "" {
 		return fmt.Errorf("config %s requires --destination and --stage; run gentle-ai config %s --config <path> --destination <path> --stage <path>", operation, operation)
 	}
+	if (operation == "apply" || operation == "reconcile") && *home == "" {
+		return fmt.Errorf("config %s requires --home for persisted desired state; run gentle-ai config %s --config <path> --home <path> --destination <path> --stage <path>", operation, operation)
+	}
+
+	// A preview that reads what was already applied differently from the
+	// reconciliation itself is worse than no preview: every managed file the
+	// installation already holds reports as a user-owned conflict, which is the
+	// one distinction plan and diff exist to make.
 	previous := configdomain.DesiredState{}
-	if operation == "apply" || operation == "reconcile" {
-		if *home == "" {
-			return fmt.Errorf("config %s requires --home for persisted desired state; run gentle-ai config %s --config <path> --home <path> --destination <path> --stage <path>", operation, operation)
-		}
+	if *home != "" {
 		previous, err = readConfigDesired(*home)
 		if err != nil {
 			return err
@@ -73,7 +104,7 @@ func RunConfig(args []string, stdout io.Writer) error {
 	if err != nil {
 		return err
 	}
-	provider, unavailable := selectRenderProvider(desired, *home)
+	provider, unavailable := selectRenderProvider(desired, *home, *destination)
 	if len(unavailable) > 0 {
 		result["diagnostics"] = unavailable
 		return writeConfigResult(stdout, result)
@@ -87,7 +118,7 @@ func RunConfig(args []string, stdout io.Writer) error {
 	if err != nil {
 		return err
 	}
-	stager := configurationStager{adapters: desired.Selection.Agents, readRoot: *home}
+	stager := configurationStager{adapters: desired.Selection.Agents, readRoot: *home, destination: *destination}
 	provisioned := stager.ProvisionedResources(desired)
 	manifest.Resources = append(manifest.Resources, provisioned...)
 	result["manifest"] = manifest
@@ -102,14 +133,18 @@ func RunConfig(args []string, stdout io.Writer) error {
 		live[key] = value
 	}
 	addLiveFileResources(live, *destination, manifest)
-	plan := render.Plan(render.Manifest{}, manifest, live)
-	if operation == "apply" || operation == "reconcile" {
-		previous, err := readConfigManifest(*home, *destination)
+
+	previousManifest := render.Manifest{}
+	if *home != "" {
+		previousManifest, err = readConfigManifest(*home, *destination)
 		if err != nil {
 			return err
 		}
-		addLiveFileResources(live, *destination, previous)
-		plan = render.Plan(previous, manifest, live)
+		addLiveFileResources(live, *destination, previousManifest)
+	}
+
+	plan := render.Plan(previousManifest, manifest, live)
+	if operation == "apply" || operation == "reconcile" {
 		if err := render.Apply(render.ApplyRequest{
 			Plan: plan, Snapshot: snapshot, Destination: *destination,
 			Persist: func() error { return writeConfigState(*home, *destination, desired, manifest) },
@@ -133,7 +168,7 @@ func RunConfig(args []string, stdout io.Writer) error {
 // declares. Substituting a different adapter's renderer would hand the operator
 // configuration for a client they never named, so an adapter without rendering
 // support is reported instead of quietly replaced.
-func selectRenderProvider(desired configdomain.DesiredState, readRoot string) (render.Provider, []configdomain.Diagnostic) {
+func selectRenderProvider(desired configdomain.DesiredState, readRoot, destination string) (render.Provider, []configdomain.Diagnostic) {
 	unavailable := make([]configdomain.Diagnostic, 0)
 	selected := make([]render.Provider, 0, len(desired.Selection.Agents))
 
@@ -162,7 +197,7 @@ func selectRenderProvider(desired configdomain.DesiredState, readRoot string) (r
 		return nil, unavailable
 	}
 
-	selected = append(selected, configurationStager{adapters: desired.Selection.Agents, readRoot: readRoot})
+	selected = append(selected, configurationStager{adapters: desired.Selection.Agents, readRoot: readRoot, destination: destination})
 
 	owner := map[string]render.Provider{}
 	for _, provider := range selected {
@@ -369,7 +404,7 @@ func loadConfigSelection(path string) (model.Selection, error) {
 	if err != nil {
 		return model.Selection{}, fmt.Errorf("read config: %w", err)
 	}
-	state, diagnostics := configdomain.Decode(document)
+	state, diagnostics := decodeDesiredState(document)
 	if len(diagnostics) != 0 {
 		return model.Selection{}, fmt.Errorf("config validation failed: %s; run gentle-ai config validate --config %q", diagnostics[0].Code, path)
 	}
