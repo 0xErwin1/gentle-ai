@@ -632,6 +632,14 @@ func TestSkillRegistryPluginContract(t *testing.T) {
 		"input.worktree",
 		"timeout: 30_000",
 		"console.error",
+		// Non-project guard: a fresh OpenCode directory can resolve to "/" or
+		// another non-project location; the plugin must skip silently instead
+		// of spawning a refresh that pollutes or fails at startup (#skill-registry-root-guard).
+		"isProjectRoot",
+		"homedir()",
+		".git",
+		".atl",
+		"console.info",
 	} {
 		if !strings.Contains(src, want) {
 			t.Fatalf("skill-registry.ts missing %q", want)
@@ -639,6 +647,9 @@ func TestSkillRegistryPluginContract(t *testing.T) {
 	}
 	if strings.Contains(src, "exec(") {
 		t.Fatal("skill-registry.ts must use execFile, not shell exec")
+	}
+	if guardIdx, spawnIdx := strings.Index(src, "isProjectRoot"), strings.Index(src, "execFileAsync("); guardIdx == -1 || spawnIdx == -1 || guardIdx >= spawnIdx {
+		t.Fatalf("skill-registry.ts must guard before spawning; isProjectRoot@%d execFileAsync(@%d", guardIdx, spawnIdx)
 	}
 	worktreeIdx := strings.Index(src, "input.worktree")
 	directoryIdx := strings.Index(src, "input.directory")
