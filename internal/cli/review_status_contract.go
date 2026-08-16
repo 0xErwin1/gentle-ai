@@ -743,7 +743,10 @@ func (result ReviewTargetStatusResult) validateSubmissionDescriptors() error {
 		if want == nil || !reflect.DeepEqual(*input.Submission, *want) {
 			return errors.New("correction submission descriptor is not provider-bound") // refusal:by-design world-action: only a provider code fix can bind descriptor tokens to its request
 		}
-	case "targeted_validation_required":
+	// The inconclusive-recapture reason collects exactly the same input
+	// through the same capture operation and submission descriptor; only its
+	// reason code differs, so it is bound by the identical rules (#3378).
+	case "targeted_validation_required", reviewInconclusiveTargetedValidationReason:
 		if len(transition.Collect.Inputs) != 1 {
 			return errors.New("submission descriptor transition must contain exactly one input") // refusal:by-design world-action: only a provider code fix can produce the required single input
 		}

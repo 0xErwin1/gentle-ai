@@ -513,6 +513,14 @@ type facadeValidationResult struct {
 	FollowUps                     []reviewtransaction.FollowUp `json:"follow_ups"`
 }
 
+// errReviewTargetedValidationInconclusive marks the one admission failure
+// that is neither corruption nor an inadmissible slot: a captured targeted
+// validation that produced no verdict because the validator could not reach
+// the frozen trees. Callers separate it from every other read failure with
+// errors.Is, because its continuation is the opposite of theirs -- nothing was
+// consumed and the same validation can simply be run again (issue #3378).
+var errReviewTargetedValidationInconclusive = errors.New("targeted validation is inconclusive") // refusal:by-design world-action: restore the validator's read-only access to the frozen trees and run the same targeted validation again
+
 // conclusive rejects validation checks whose evidence reports the immutable
 // candidate could not be inspected. Such a check is not a verdict: admitted as
 // failed it consumes the single correction attempt on a non-observation
@@ -528,8 +536,10 @@ func (result facadeValidationResult) conclusive() error {
 		{name: "correction_regression", evidence: result.CorrectionRegression.Evidence},
 	} {
 		if reviewtransaction.InconclusiveValidationEvidence(check.evidence) {
-			// refusal:by-design world-action: validator access to the frozen trees must be restored before the same evidence can be captured again
-			return fmt.Errorf("targeted validation is inconclusive: %s evidence reports the immutable candidate could not be inspected, so no verdict was produced and the correction attempt was not consumed; restore validator access to the frozen trees and capture the same validation again", check.name)
+			// The exit is named on the sentinel this wraps: restore the
+			// validator's access to the frozen trees and run the same
+			// targeted validation again.
+			return fmt.Errorf("%w: %s evidence reports the immutable candidate could not be inspected, so no verdict was produced and the correction attempt was not consumed; restore validator access to the frozen trees and run the same targeted validation again", errReviewTargetedValidationInconclusive, check.name)
 		}
 	}
 	return nil
@@ -1055,6 +1065,7 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 			providerRole := reviewProviderRole("")
 			var preCommitDeliveryAssessment *reviewtransaction.CompactGateTargetApplicability
 			capturedProviderTargetedValidator := false
+			capturedProviderTargetedValidatorInconclusive := false
 			correctionForecasted := false
 			lensContextBudgetExceeded := false
 			var artifactErr error
@@ -1202,6 +1213,17 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 									if providerRoleHost {
 										providerRole = reviewerprovider.RoleTargetedValidator
 									}
+								case errors.Is(readErr, errReviewTargetedValidationInconclusive):
+									// A captured result whose evidence reports the
+									// frozen trees could not be inspected is not a
+									// verdict and not corruption: the bytes are exactly
+									// what the provider produced, no state transitioned,
+									// and the correction attempt was never consumed.
+									// Its continuation is the opposite of an
+									// unverifiable slot's -- restore validator access
+									// and run the same validation again -- so it must
+									// not be routed as unverifiable evidence (#3378).
+									capturedProviderTargetedValidatorInconclusive = true
 								default:
 									// An unreadable or inadmissible captured slot is
 									// unverifiable evidence, never silent continuation.
@@ -1227,7 +1249,7 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 					result.Eligibility = newReviewActionEligibility(result)
 				}
 			}
-			input := reviewNextTransitionInput{Gate: reviewtransaction.GateKind(*gate), Successor: *recoverySuccessor, Reason: *recoveryReason, Actor: *recoveryActor, Authorization: *recoveryAuthorization, RepairActor: *repairActor, RepairReason: *repairReason, RepairAuthorization: *repairAuthorization, StartLineage: startLineage, RuntimeAgent: runtime, ProviderRole: providerRole, CapturedProviderTargetedValidator: capturedProviderTargetedValidator, Contract: *contract, RepositoryContext: repositoryContext, ValidationRequest: validationRequest, CorrectionRequest: correctionRequest, EvidenceErr: evidenceErr, CorrectionForecasted: correctionForecasted, CaptureContext: captureContext, Selector: selector, IntendedUntracked: intendedScope, RDDMode: result.rddMode, RDDModeResolved: result.rddModeResolved, LensContextBudgetExceeded: lensContextBudgetExceeded, PreCommitDeliveryAssessment: preCommitDeliveryAssessment}
+			input := reviewNextTransitionInput{Gate: reviewtransaction.GateKind(*gate), Successor: *recoverySuccessor, Reason: *recoveryReason, Actor: *recoveryActor, Authorization: *recoveryAuthorization, RepairActor: *repairActor, RepairReason: *repairReason, RepairAuthorization: *repairAuthorization, StartLineage: startLineage, RuntimeAgent: runtime, ProviderRole: providerRole, CapturedProviderTargetedValidator: capturedProviderTargetedValidator, CapturedProviderTargetedValidatorInconclusive: capturedProviderTargetedValidatorInconclusive, Contract: *contract, RepositoryContext: repositoryContext, ValidationRequest: validationRequest, CorrectionRequest: correctionRequest, EvidenceErr: evidenceErr, CorrectionForecasted: correctionForecasted, CaptureContext: captureContext, Selector: selector, IntendedUntracked: intendedScope, RDDMode: result.rddMode, RDDModeResolved: result.rddModeResolved, LensContextBudgetExceeded: lensContextBudgetExceeded, PreCommitDeliveryAssessment: preCommitDeliveryAssessment}
 			transition := newReviewNextTransition(result, native.SelectedLenses, artifacts, capturedEvidence, artifactErr, input)
 			result.NextTransition = &transition
 			providerTargetedValidation := transition.ReasonCode == "targeted_validation_required" && transition.Collect != nil &&
