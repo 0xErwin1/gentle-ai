@@ -3,6 +3,7 @@ package render
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -46,7 +47,7 @@ type ReconcilePlan struct {
 	Operations []Operation `json:"operations"`
 }
 
-// ManifestFor builds a canonical file-level ownership manifest for a staged snapshot.
+// ManifestFor builds a canonical resource-level ownership manifest for a staged snapshot.
 func ManifestFor(snapshot Snapshot) (Manifest, error) {
 	resources := make([]Resource, 0, len(snapshot.Artifacts))
 	for _, artifact := range snapshot.Artifacts {
@@ -54,11 +55,48 @@ func ManifestFor(snapshot Snapshot) (Manifest, error) {
 		if err != nil {
 			return Manifest{}, fmt.Errorf("read staged artifact %q: %w", artifact.Path, err)
 		}
-		sum := sha256.Sum256(contents)
-		resources = append(resources, Resource{Path: artifact.Path, Selector: "file", Digest: hex.EncodeToString(sum[:])})
+		if artifact.Path == openCodeSettingsPath {
+			openCodeResources, err := openCodeManifestResources(artifact.Path, contents, snapshot.ManagedSelectors[artifact.Path])
+			if err != nil {
+				return Manifest{}, err
+			}
+			resources = append(resources, openCodeResources...)
+			continue
+		}
+		resources = append(resources, Resource{Path: artifact.Path, Selector: "file", Digest: resourceDigest(contents)})
 	}
 	sortResources(resources)
 	return Manifest{Resources: resources}, nil
+}
+
+func openCodeManifestResources(path string, contents []byte, selectors []string) ([]Resource, error) {
+	var settings map[string]any
+	if err := json.Unmarshal(contents, &settings); err != nil {
+		return nil, fmt.Errorf("parse staged OpenCode settings: %w", err)
+	}
+	agents, _ := settings["agent"].(map[string]any)
+	resources := make([]Resource, 0, len(selectors))
+	for _, selector := range selectors {
+		name, ok := openCodeAgentName(selector)
+		if !ok {
+			return nil, fmt.Errorf("invalid staged OpenCode selector %q", selector)
+		}
+		agent, ok := agents[name]
+		if !ok {
+			return nil, fmt.Errorf("staged OpenCode agent %q is missing", name)
+		}
+		encoded, err := json.Marshal(agent)
+		if err != nil {
+			return nil, fmt.Errorf("encode staged OpenCode agent %q: %w", name, err)
+		}
+		resources = append(resources, Resource{Path: path, Selector: selector, Digest: resourceDigest(encoded)})
+	}
+	return resources, nil
+}
+
+func resourceDigest(contents []byte) string {
+	sum := sha256.Sum256(contents)
+	return hex.EncodeToString(sum[:])
 }
 
 // Plan compares desired managed resources with a prior manifest and live digests without mutating either.
