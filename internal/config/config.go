@@ -64,6 +64,9 @@ type Selection struct {
 
 	ClaudePhaseAssignments map[string]ClaudePhaseAssignment `json:"claudePhaseAssignments,omitempty"`
 	CodexOrchestrator      *CodexOrchestratorAssignment     `json:"codexOrchestrator,omitempty"`
+
+	CommunityTools  []model.CommunityToolID           `json:"communityTools,omitempty"`
+	OpenCodePlugins []model.OpenCodeCommunityPluginID `json:"openCodePlugins,omitempty"`
 }
 
 type Document struct {
@@ -161,6 +164,7 @@ func Project(state DesiredState) model.Selection {
 		CodexPhaseModelAssignments:  copyMap(state.Selection.CodexPhaseModelAssignments),
 		ClaudePhaseAssignments:      claudePhasesToModel(state.Selection.ClaudePhaseAssignments),
 		CodexOrchestratorAssignment: codexOrchestratorToModel(state.Selection.CodexOrchestrator),
+		CommunityTools:              append([]model.CommunityToolID(nil), state.Selection.CommunityTools...),
 	}
 }
 
@@ -180,6 +184,7 @@ func FromSelection(selection model.Selection) DesiredState {
 		CodexPhaseModelAssignments:  copyMap(selection.CodexPhaseModelAssignments),
 		ClaudePhaseAssignments:      claudePhasesFromModel(selection.ClaudePhaseAssignments),
 		CodexOrchestrator:           codexOrchestratorFromModel(selection.CodexOrchestratorAssignment),
+		CommunityTools:              selection.CommunityTools,
 	}}
 }
 
@@ -211,6 +216,7 @@ func NormalizeSelection(selection model.Selection) (model.Selection, []Diagnosti
 	selection.CodexPhaseModelAssignments = projected.CodexPhaseModelAssignments
 	selection.ClaudePhaseAssignments = projected.ClaudePhaseAssignments
 	selection.CodexOrchestratorAssignment = projected.CodexOrchestratorAssignment
+	selection.CommunityTools = projected.CommunityTools
 	if !preserveUnsetPersona {
 		selection.Persona = projected.Persona
 	}
@@ -245,6 +251,25 @@ func normalizeSelection(selection Selection, diagnostics *[]Diagnostic) Selectio
 	selection.Agents = unique(selection.Agents)
 	selection.Components = unique(selection.Components)
 	selection.Skills = unique(selection.Skills)
+	selection.CommunityTools = unique(selection.CommunityTools)
+	selection.OpenCodePlugins = unique(selection.OpenCodePlugins)
+
+	for _, tool := range selection.CommunityTools {
+		if tool != model.CommunityToolCodeGraph {
+			*diagnostics = append(*diagnostics, diagnostic("config.community-tool.unsupported", "$.selection.communityTools", fmt.Sprintf("unsupported community tool %q", tool)))
+		}
+	}
+
+	// Every shipped OpenCode plugin is retired upstream: OpenCode ships the
+	// functionality natively and an installed extension would shadow built-in
+	// behavior, so any explicit request is refused instead of honored.
+	if len(selection.OpenCodePlugins) > 0 {
+		names := make([]string, 0, len(selection.OpenCodePlugins))
+		for _, plugin := range selection.OpenCodePlugins {
+			names = append(names, string(plugin))
+		}
+		*diagnostics = append(*diagnostics, diagnostic("config.opencode-plugin.retired", "$.selection.openCodePlugins", fmt.Sprintf("retired OpenCode plugins %q; OpenCode ships this functionality natively and Gentle AI no longer installs plugin packages, so remove openCodePlugins from the document", names)))
+	}
 
 	for _, agent := range selection.Agents {
 		if !catalog.IsSupportedAgent(agent) {
