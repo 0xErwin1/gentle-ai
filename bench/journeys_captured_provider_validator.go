@@ -50,7 +50,7 @@ func captureProviderValidatorSlot(r *journeyRun) error {
 		return fmt.Errorf("provider slot capture status = %+v", status)
 	}
 	input := status.NextTransition.Collect.Inputs[0]
-	if input.Name != "provider_targeted-validator" || input.CaptureOperation != "external.run_provider_role" ||
+	if input.Name != "provider_targeted_validator" || input.CaptureOperation != "external.run_provider_role" ||
 		input.ProviderTask == nil || input.ProviderTask.Role != "targeted-validator" || input.ProviderTask.Prompt == "" {
 		return fmt.Errorf("provider slot task = %+v", input)
 	}
