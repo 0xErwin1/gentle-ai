@@ -57,7 +57,8 @@ func repairPrivateRARDirectoryNoFollow(path string, _ fs.FileMode) error {
 	owner, _, ownerErr := descriptor.Owner()
 	dacl, _, daclErr := descriptor.DACL()
 	if ownerErr != nil || daclErr != nil || owner == nil || dacl == nil {
-		return errUnsafeRARAuthorityPath
+		return rarWindowsRepairRefusal(path,
+			"the owner-only descriptor to apply is missing its owner or its DACL")
 	}
 	handle, err := openWindowsRARObject(ntPath(path), rarDirectoryRepairAccess, true)
 	if err != nil {
@@ -66,44 +67,142 @@ func repairPrivateRARDirectoryNoFollow(path string, _ fs.FileMode) error {
 	file := os.NewFile(uintptr(handle), path)
 	defer file.Close()
 	if openWindowsRARFileUnsafe(file) {
-		return unsafeRARPathError(path, true)
+		return rarWindowsRepairRefusal(path, "the repair handle resolved to a reparse point")
 	}
 	// What the object IS decides, never who created it. FILE_DIRECTORY_FILE and
 	// OBJ_DONT_REPARSE already refused a non-directory and a junction, and this
-	// same handle answers the owner before the write: only the token user, or
-	// the token owner an elevated shell stamps on its own creations, repairs.
+	// same handle answers the owner before the write: only a principal this
+	// process controls -- one this token could itself have stamped as an owner
+	// -- repairs. See rarWindowsRepairOwnerControlled for why that is the
+	// question, and why the narrower token-user comparison this replaced
+	// refused directories the process had just created.
 	existing, err := windows.GetSecurityInfo(handle, windows.SE_FILE_OBJECT,
 		windows.OWNER_SECURITY_INFORMATION)
 	if err != nil {
 		return err
 	}
-	if !rarSecurityDescriptorOwnedByCurrentUser(existing) {
-		owner, _, ownerErr := existing.Owner()
-		tokenOwner, tokenErr := currentRARWindowsTokenOwnerSID()
-		if ownerErr != nil || owner == nil || tokenErr != nil || !owner.Equals(tokenOwner) {
-			return unsafeRARPathError(path, true)
-		}
+	controlled, err := rarWindowsDescriptorOwnerControlled(existing)
+	if err != nil {
+		return err
+	}
+	if !controlled {
+		return rarWindowsRepairRefusal(path,
+			"the directory is owned by a principal this process does not control")
 	}
 	// Only an empty directory is repaired, read from this same handle. An
 	// interrupted creation leaves nothing behind, so recovery works; a
 	// populated authority directory whose ACL somebody widened stays refused,
 	// because silently re-tightening it would hide the exposure.
-	if names, readErr := file.Readdirnames(-1); readErr != nil || len(names) > 0 {
-		return unsafeRARPathError(path, true)
+	names, readErr := file.Readdirnames(-1)
+	if readErr != nil {
+		return rarWindowsRepairRefusal(path,
+			fmt.Sprintf("the repair handle cannot list the directory (%v)", readErr))
+	}
+	if len(names) > 0 {
+		return rarWindowsRepairRefusal(path,
+			"the directory already holds state, so its widened ACL is not silently re-tightened")
 	}
 	err = windows.SetSecurityInfo(handle, windows.SE_FILE_OBJECT,
 		windows.OWNER_SECURITY_INFORMATION|windows.DACL_SECURITY_INFORMATION|
 			windows.PROTECTED_DACL_SECURITY_INFORMATION, owner, nil, dacl, nil)
 	runtime.KeepAlive(descriptor)
 	if err != nil {
-		return err
+		return fmt.Errorf("apply the owner-only RAR directory descriptor: %w", err)
 	}
 	repaired, err := windows.GetSecurityInfo(handle, windows.SE_FILE_OBJECT,
 		windows.OWNER_SECURITY_INFORMATION|windows.DACL_SECURITY_INFORMATION)
-	if err != nil || !privateRARSecurityDescriptorSafe(repaired, true) {
-		return unsafeRARPathError(path, true)
+	if err != nil {
+		return fmt.Errorf("read back the repaired RAR directory descriptor: %w", err)
+	}
+	if !privateRARSecurityDescriptorSafe(repaired, true) {
+		return rarWindowsRepairRefusal(path,
+			"the descriptor the repair wrote is still not owner-only")
 	}
 	return nil
+}
+
+// rarWindowsRepairRefusal names which invariant refused.
+//
+// #3376 shipped a repair whose distinct refusals all produced one identical
+// message, and a caller that then discarded the repair's error entirely, so
+// the only thing a failure could say was that the path was unsafe. That made
+// the Windows-only CI failure it produced impossible to attribute to a branch
+// from its output alone, on a platform this repository cannot execute locally.
+// The operator-facing cause and the typed *UnsafeRARPathError are both
+// preserved; only the attribution is added.
+func rarWindowsRepairRefusal(path, reason string) error {
+	return fmt.Errorf("%s: %w", reason, unsafeRARPathError(path, true))
+}
+
+// rarWindowsDescriptorOwnerControlled answers the repair's ownership question
+// for a descriptor read from the object itself. It is the only place the token
+// is consulted; the rule applied to what it finds is
+// rarWindowsRepairOwnerControlled, which is pure and executed by tests on
+// every platform.
+func rarWindowsDescriptorOwnerControlled(
+	descriptor *windows.SECURITY_DESCRIPTOR,
+) (bool, error) {
+	if descriptor == nil || !descriptor.IsValid() {
+		return false, nil
+	}
+	owner, _, err := descriptor.Owner()
+	if err != nil {
+		return false, fmt.Errorf("read the RAR directory owner: %w", err)
+	}
+	if owner == nil || !owner.IsValid() {
+		return false, nil
+	}
+	token, err := currentRARWindowsTokenPrincipals()
+	if err != nil {
+		return false, err
+	}
+	return rarWindowsRepairOwnerControlled(owner.String(), token), nil
+}
+
+// currentRARWindowsTokenPrincipals gathers every SID the current process could
+// itself stamp as an owner.
+func currentRARWindowsTokenPrincipals() (rarWindowsTokenPrincipals, error) {
+	user, err := currentRARWindowsUserSID()
+	if err != nil {
+		return rarWindowsTokenPrincipals{}, err
+	}
+	defaultOwner, err := currentRARWindowsTokenOwnerSID()
+	if err != nil {
+		return rarWindowsTokenPrincipals{}, err
+	}
+	eligible, err := currentRARWindowsOwnerEligibleSIDs()
+	if err != nil {
+		return rarWindowsTokenPrincipals{}, err
+	}
+	return rarWindowsTokenPrincipals{
+		User:          user.String(),
+		DefaultOwner:  defaultOwner.String(),
+		OwnerEligible: eligible,
+	}, nil
+}
+
+// currentRARWindowsOwnerEligibleSIDs returns the token's SE_GROUP_OWNER
+// groups: the exact set Windows will accept from this token as an owner SID.
+// Plain membership is deliberately not enough -- a UAC-filtered administrator
+// carries BUILTIN\Administrators as SE_GROUP_USE_FOR_DENY_ONLY and genuinely
+// cannot take ownership, so it must not clear this bar.
+func currentRARWindowsOwnerEligibleSIDs() ([]string, error) {
+	groups, err := windows.GetCurrentProcessToken().GetTokenGroups()
+	if err != nil {
+		return nil, fmt.Errorf("resolve current Windows token groups: %w", err)
+	}
+	var eligible []string
+	for _, group := range groups.AllGroups() {
+		if group.Attributes&windows.SE_GROUP_OWNER == 0 ||
+			group.Sid == nil || !group.Sid.IsValid() {
+			continue
+		}
+		if sid := group.Sid.String(); sid != "" {
+			eligible = append(eligible, sid)
+		}
+	}
+	runtime.KeepAlive(groups)
+	return eligible, nil
 }
 
 func createPrivateRARDirectory(path string) (bool, error) {
@@ -141,6 +240,18 @@ func createPrivateRARDirectory(path string) (bool, error) {
 		// instead: an empty directory this process's own principals own.
 		if repairErr := rarPrivateDirectoryRepair(path, 0o700); repairErr == nil {
 			validateErr = validatePrivateRARDirectory(path)
+		} else {
+			// #3376 discarded this. The refusal below then carried the same
+			// generic unsafe-path message whichever invariant had actually
+			// refused, which is exactly why the Windows-only failure it
+			// shipped could not be attributed to a branch from CI output on a
+			// platform this repository cannot execute locally. The typed
+			// *UnsafeRARPathError of validateErr stays first in the chain, so
+			// errors.As and errors.Is are unchanged.
+			validateErr = fmt.Errorf(
+				"%w (the automatic repair could not run: %v)",
+				validateErr, repairErr,
+			)
 		}
 	}
 	if validateErr != nil {
