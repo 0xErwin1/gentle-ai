@@ -1,0 +1,274 @@
+package sddstatus
+
+import (
+	"context"
+	"os"
+	"path/filepath"
+	"testing"
+
+	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
+)
+
+// TestVerifyReportPathUnderAnchorsDecidesSpellingsFromAnyPlatform is the
+// cross-platform half of this guard.
+//
+// The defect it pins only ever reproduced on Windows, but nothing about it is
+// Windows-specific once the filesystem is out of the way: it was a lexical
+// comparison between an anchor in one spelling and a change root in another.
+// verifyReportPathUnderAnchors is pure and takes slash-form absolute paths, so
+// genuine Windows spellings -- 8.3 short names, drive letters, mixed case --
+// are stated and refuted here from a Linux runner.
+func TestVerifyReportPathUnderAnchorsDecidesSpellingsFromAnyPlatform(t *testing.T) {
+	const change = "post-review-verify-report"
+	const canonical = "openspec/changes/post-review-verify-report/verify-report.md"
+	const windowsLong = "C:/Users/runneradmin/AppData/Local/Temp/TestBound/001"
+	const windowsShort = "C:/Users/RUNNER~1/AppData/Local/Temp/TestBound/001"
+
+	for _, testCase := range []struct {
+		name       string
+		repo       string
+		workspace  string
+		changeRoot string
+		want       string
+		wantErr    bool
+	}{
+		{
+			name:       "posix anchors in one spelling",
+			repo:       "/srv/repo",
+			workspace:  "/srv/repo",
+			changeRoot: "/srv/repo/openspec/changes/" + change,
+			want:       canonical,
+		},
+		{
+			name:       "windows long-form anchors in one spelling",
+			repo:       windowsLong,
+			workspace:  windowsLong,
+			changeRoot: windowsLong + "/openspec/changes/" + change,
+			want:       canonical,
+		},
+		{
+			// The exact CI failure. GetTempPath hands out the short spelling
+			// and filepath.EvalSymlinks expands it, so the workspace anchor and
+			// the change root named one directory in two spellings.
+			name:       "windows 8.3 short workspace against an expanded change root",
+			repo:       windowsLong,
+			workspace:  windowsShort,
+			changeRoot: windowsLong + "/openspec/changes/" + change,
+			wantErr:    true,
+		},
+		{
+			name:       "windows 8.3 short repository against an expanded change root",
+			repo:       windowsShort,
+			workspace:  windowsLong,
+			changeRoot: windowsLong + "/openspec/changes/" + change,
+			wantErr:    true,
+		},
+		{
+			// Refusing this is the POSIX half of the contract, not an
+			// oversight: /srv/Repo and /srv/repo are two directories on ext4.
+			// It is unreachable in production because every anchor is resolved
+			// by the same canonicalization, which returns the on-disk case.
+			name:       "differently cased anchor is not the same directory",
+			repo:       "/srv/repo",
+			workspace:  "/srv/Repo",
+			changeRoot: "/srv/repo/openspec/changes/" + change,
+			wantErr:    true,
+		},
+		{
+			name:       "trailing separators are not a difference",
+			repo:       windowsLong + "/",
+			workspace:  windowsLong + "/",
+			changeRoot: windowsLong + "/openspec/changes/" + change + "/",
+			want:       canonical,
+		},
+		{
+			name:       "redundant separators and dot segments are not a difference",
+			repo:       "/srv//repo/.",
+			workspace:  "/srv/./repo",
+			changeRoot: "/srv/repo/openspec/changes/" + change,
+			want:       canonical,
+		},
+		{
+			// Separator normalization is the caller's filepath.ToSlash, and
+			// this states why: a backslash is an ordinary filename character on
+			// POSIX, so this comparison must never treat it as a separator.
+			name:       "native windows separators are the caller's job to normalize",
+			repo:       `C:\Users\runneradmin\repo`,
+			workspace:  `C:\Users\runneradmin\repo`,
+			changeRoot: "C:/Users/runneradmin/repo/openspec/changes/" + change,
+			wantErr:    true,
+		},
+		{
+			name:       "workspace below the repository keeps the repository-relative path",
+			repo:       "/srv/repo",
+			workspace:  "/srv/repo/service",
+			changeRoot: "/srv/repo/service/openspec/changes/" + change,
+			want:       "service/" + canonical,
+		},
+		{
+			name:       "a sibling whose name merely shares the anchor prefix is not contained",
+			repo:       "/srv/repo",
+			workspace:  "/srv/repo",
+			changeRoot: "/srv/repo-2/openspec/changes/" + change,
+			wantErr:    true,
+		},
+		{
+			name:       "a change root above the workspace is refused, never described with ..",
+			repo:       "/srv/repo",
+			workspace:  "/srv/repo/service",
+			changeRoot: "/srv/repo/openspec/changes/" + change,
+			wantErr:    true,
+		},
+		{
+			name:       "a report outside the canonical active-change path is refused",
+			repo:       "/srv/repo",
+			workspace:  "/srv/repo",
+			changeRoot: "/srv/repo/openspec/archive/" + change,
+			wantErr:    true,
+		},
+		{
+			name:       "a change root named for another change is refused",
+			repo:       "/srv/repo",
+			workspace:  "/srv/repo",
+			changeRoot: "/srv/repo/openspec/changes/other-change",
+			wantErr:    true,
+		},
+		{
+			name:       "a workspace outside its repository is refused",
+			repo:       "/srv/other",
+			workspace:  "/srv/repo",
+			changeRoot: "/srv/repo/openspec/changes/" + change,
+			wantErr:    true,
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			got, err := verifyReportPathUnderAnchors(testCase.repo, testCase.workspace, testCase.changeRoot, change)
+			if testCase.wantErr {
+				if err == nil {
+					t.Fatalf("verifyReportPathUnderAnchors(%q, %q, %q) = %q, nil; want a refusal",
+						testCase.repo, testCase.workspace, testCase.changeRoot, got)
+				}
+				if got != "" {
+					t.Fatalf("refused anchoring returned %q; want no path alongside the refusal", got)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("verifyReportPathUnderAnchors(%q, %q, %q) error = %v",
+					testCase.repo, testCase.workspace, testCase.changeRoot, err)
+			}
+			if got != testCase.want {
+				t.Fatalf("repository-relative report path = %q, want %q", got, testCase.want)
+			}
+		})
+	}
+}
+
+// TestCanonicalVerifyReportPathsAcceptsTwoSpellingsOfOneWorkspace proves the
+// filesystem half: the anchors reach the pure comparison in one spelling
+// because canonicalVerifyReportPaths resolves every one of them the same way.
+// A symlinked ancestor is the POSIX shape of the divergence; on Windows the
+// same resolution expands an 8.3 short name to its long, real-case form.
+func TestCanonicalVerifyReportPathsAcceptsTwoSpellingsOfOneWorkspace(t *testing.T) {
+	const change = "aliased-anchor"
+	realRepo, aliasedRepo := aliasedRepository(t, change)
+	changeRoot, err := resolveBindingChangeRoot(context.Background(), realRepo, realRepo, change)
+	if err != nil {
+		t.Fatal(err)
+	}
+	canonical := "openspec/changes/" + change + "/verify-report.md"
+	for _, spelling := range []struct {
+		name      string
+		repo      string
+		workspace string
+	}{
+		{name: "canonical", repo: realRepo, workspace: realRepo},
+		{name: "aliased workspace", repo: realRepo, workspace: aliasedRepo},
+		{name: "aliased repository", repo: aliasedRepo, workspace: realRepo},
+		{name: "both aliased", repo: aliasedRepo, workspace: aliasedRepo},
+	} {
+		t.Run(spelling.name, func(t *testing.T) {
+			got, err := canonicalVerifyReportPaths(spelling.repo, spelling.workspace, changeRoot, change)
+			if err != nil {
+				t.Fatalf("canonicalVerifyReportPaths(%q, %q) error = %v", spelling.repo, spelling.workspace, err)
+			}
+			if got != canonical {
+				t.Fatalf("repository-relative report path = %q, want %q", got, canonical)
+			}
+		})
+	}
+}
+
+// TestBoundArchiveGateAttestsPostReviewReportThroughAnAliasedWorkspace is the
+// executed regression for the three Windows suite failures. It drives the
+// whole archive-gate path the CI job drives, and only the spelling of --cwd
+// differs between the passing and failing runs: before the fix the aliased run
+// projected ReviewGate nil, Archive blocked, NextRecommended resolve-review and
+// "current repository target no longer matches the reviewed scope", which is
+// byte for byte what the Windows runner reported under C:\Users\RUNNER~1.
+func TestBoundArchiveGateAttestsPostReviewReportThroughAnAliasedWorkspace(t *testing.T) {
+	const change = "aliased-post-review-verify-report"
+	base, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := filepath.Join(base, "real")
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(root, filepath.Join(base, "alias")); err != nil {
+		t.Fatal(err)
+	}
+	alias := filepath.Join(base, "alias")
+
+	changeRoot := seedReadyChange(t, root, change, "- [x] 1.1 Done\n")
+	verifyPath := filepath.Join(changeRoot, "verify-report.md")
+	write(t, verifyPath, boundedVerifyEnvelope(shaID("a"), "pass"))
+	writeApprovedCompactAuthorityForChangeWithCandidate(t, root, changeRoot, "approved-aliased-post-review", "- [x] 1.1 Approved\n", nil)
+	if _, err := BindApprovedReview(context.Background(), root, change, "approved-aliased-post-review", ""); err != nil {
+		t.Fatal(err)
+	}
+	write(t, verifyPath, boundedVerifyEnvelope(shaID("b"), "pass"))
+	runSDDStatusGit(t, root, "add", "openspec")
+
+	store := mustRuntimeStore(t, root, change)
+	runtime, err := store.Status()
+	if err != nil {
+		t.Fatal(err)
+	}
+	started, err := store.Begin(context.Background(), BeginAttemptRequest{
+		ExpectedRevision: runtime.Revision, RequestID: "begin-aliased-final-verify", WorkUnit: "verify",
+		EvidenceGoal: "run final independent verification", MaxAttempts: 1, MaxChangedLines: 20,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Finish(context.Background(), FinishAttemptRequest{
+		ExpectedRevision: started.Revision, RequestID: "settle-aliased-final-verify", Outcome: AttemptPassed,
+		EvidenceRevision: shaID("b"), Diagnosis: "final verification passed", HarnessDisposition: HarnessReused,
+		CleanupEvidence: "no cleanup required", ProcessEvidence: "focused verification passed",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, spelling := range []struct {
+		name string
+		cwd  string
+	}{
+		{name: "canonical workspace", cwd: root},
+		{name: "aliased workspace", cwd: alias},
+	} {
+		t.Run(spelling.name, func(t *testing.T) {
+			settled, err := Resolve(ResolveOptions{CWD: spelling.cwd, ChangeName: change})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if settled.ReviewGate == nil || settled.ReviewGate.Result != reviewtransaction.GateAllow ||
+				settled.ReviewGate.Reason != "bound receipt differs only by the native-settlement-attested canonical passing verify report" ||
+				settled.Dependencies.Archive != DependencyReady || settled.NextRecommended != "archive" {
+				t.Fatalf("attested status through %s = gate %#v, archive %q, next %q, blocked %v; want report-delta allow and archive-ready",
+					spelling.cwd, settled.ReviewGate, settled.Dependencies.Archive, settled.NextRecommended, settled.BlockedReasons)
+			}
+		})
+	}
+}
