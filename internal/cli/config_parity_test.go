@@ -62,6 +62,7 @@ var selectionParity = map[string]parityDisposition{
 	"RDDMode":            represented("RDDMode"),
 	"MCPServers":         represented("MCPServers"),
 	"Permissions":        represented("Permissions"),
+	"SkillAssignments":   represented("SkillAssignments"),
 
 	"ModelAssignments":            represented("ModelAssignments"),
 	"ClaudeModelAssignments":      represented("ClaudeModelAssignments"),
