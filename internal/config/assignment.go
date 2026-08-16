@@ -401,3 +401,44 @@ func permissionsFromModel(permissions *model.Permissions) *Permissions {
 		Ask:   append([]string(nil), permissions.Ask...),
 	}
 }
+
+func skillAssignmentsToModel(assignments map[string][]model.SkillID) map[model.AgentID][]model.SkillID {
+	if assignments == nil {
+		return nil
+	}
+
+	converted := make(map[model.AgentID][]model.SkillID, len(assignments))
+	for agent, skills := range assignments {
+		converted[model.AgentID(agent)] = append([]model.SkillID(nil), skills...)
+	}
+
+	return converted
+}
+
+func skillAssignmentsFromModel(assignments map[model.AgentID][]model.SkillID) map[string][]model.SkillID {
+	if assignments == nil {
+		return nil
+	}
+
+	converted := make(map[string][]model.SkillID, len(assignments))
+	for agent, skills := range assignments {
+		converted[string(agent)] = append([]model.SkillID(nil), skills...)
+	}
+
+	return converted
+}
+
+// validateSkillAssignments rejects an assignment for an adapter the document
+// never declared, because it would silently apply to nothing.
+func validateSkillAssignments(selection Selection, diagnostics *[]Diagnostic) {
+	declared := make(map[model.AgentID]struct{}, len(selection.Agents))
+	for _, agent := range selection.Agents {
+		declared[agent] = struct{}{}
+	}
+
+	for _, agent := range sortedKeys(selection.SkillAssignments) {
+		if _, ok := declared[model.AgentID(agent)]; !ok {
+			*diagnostics = append(*diagnostics, diagnostic("config.skill-assignment.undeclared-adapter", "$.selection.skillAssignments."+agent, fmt.Sprintf("adapter %q takes skill assignments but is not declared; add it to agents or remove the assignment", agent)))
+		}
+	}
+}
