@@ -56,6 +56,32 @@ function taskKey(sessionID: string, callID: string): string {
   return `${sessionID}:${callID}`
 }
 
+// A refused relay must fail the Task loudly and never launch an unbound
+// child. Throwing from the before hook is the primary refusal; these two
+// projections keep the refusal authoritative even in a host runtime that
+// swallows hook errors and launches the Task anyway: the child receives only
+// this refusal prompt (never the semi-bound original), and the after hook
+// replaces the child's raw output with the typed transport refusal so an
+// unbound child's prose can never masquerade as a captured reviewer result.
+const RELAY_REFUSED_CODE = "opencode_review_transport_relay_refused"
+
+function relayRefusedReason(cause: unknown): string {
+  return cause instanceof Error ? cause.message : String(cause)
+}
+
+function relayRefusedPrompt(reason: string): string {
+  return (
+    `${RELAY_REFUSED_CODE}: the Go review relay refused this Task before launch: ${reason}\n` +
+    `You have no review binding and no frozen candidate evidence. Do not inspect anything, ` +
+    `do not fabricate findings, and do not return a review result. ` +
+    `Reply with exactly: ${RELAY_REFUSED_CODE}`
+  )
+}
+
+function relayRefusedOutput(reason: string): string {
+  return `${RELAY_REFUSED_CODE}: ${reason}`
+}
+
 function decodeTransportFrame(line: string): TransportFrame {
   const frame = JSON.parse(line) as unknown
   if (!frame || typeof frame !== "object" || Array.isArray(frame)) throw new Error("invalid Go transport response")
@@ -141,6 +167,10 @@ const OpenCodeReviewTransportPlugin: Plugin = async ({ directory, worktree }) =>
   // deferral is the only tolerated silent completion path; every other
   // unmatched completion refuses loudly.
   const deferred = new Map<string, RelayRegistration>()
+  // Keys whose relay start this instance refused. Their Tasks must never
+  // deliver child output as a completion, even if the host runtime swallowed
+  // the before hook's thrown refusal and launched the Task anyway.
+  const refused = new Map<string, string>()
   const cwd = () => worktree || directory
   const clearOwned = (key: string) => {
     const registration = relays.get(key)
@@ -159,10 +189,12 @@ const OpenCodeReviewTransportPlugin: Plugin = async ({ directory, worktree }) =>
       registration.relay.close()
     }
     for (const key of deferred.keys()) if (key.startsWith(prefix)) deferred.delete(key)
+    for (const key of refused.keys()) if (key.startsWith(prefix)) refused.delete(key)
   }
   return {
     dispose: async () => {
       deferred.clear()
+      refused.clear()
       for (const [key, registration] of relays) if (registration.owner === owner) clearOwned(key)
     },
     event: async ({ event }) => {
@@ -189,12 +221,21 @@ const OpenCodeReviewTransportPlugin: Plugin = async ({ directory, worktree }) =>
         output.args.prompt = (await relay.prompt).prompt
       } catch (cause) {
         clearOwned(key)
+        const reason = relayRefusedReason(cause)
+        refused.set(key, reason)
+        output.args.prompt = relayRefusedPrompt(reason)
         throw cause
       }
     },
     "tool.execute.after": async (input, output) => {
       if (input.tool !== "task" || typeof input.args?.subagent_type !== "string" || !REVIEW_AGENTS.has(input.args.subagent_type)) return
       const key = taskKey(input.sessionID, input.callID)
+      const refusal = refused.get(key)
+      if (refusal !== undefined) {
+        refused.delete(key)
+        output.output = relayRefusedOutput(refusal)
+        throw new Error(relayRefusedOutput(refusal))
+      }
       // Owner-scoped dedup tolerance: this instance saw the before hook for
       // this task but another instance owns the relay, so that owner's after
       // hook delivers the completion and this one passes through untouched.
