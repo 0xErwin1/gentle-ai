@@ -94,7 +94,7 @@ func AssessCompactGateTarget(ctx context.Context, repo string, state CompactStat
 	if compatibility != nil {
 		proofExpected := state.CurrentSnapshot
 		proofExpected.Projection = snapshot.Projection
-		if classifyCompactTargetRelation(proofExpected, snapshot, state.GenesisPaths,
+		if classifyCompactTargetRelation(proofExpected, snapshot, state.CorrectionScopePaths(),
 			compactTargetRelationEvidence{CompatibleAdvance: compatibility}).Kind == compactTargetCompatibleAdvance {
 			assessment.Applicability = CompactGateTargetExact
 			return assessment, nil
@@ -111,7 +111,7 @@ func AssessCompactGateTarget(ctx context.Context, repo string, state CompactStat
 	squashedFixDelivery := compactSquashedFixDelivery(request.Gate, state, snapshot, resolvedPrePR, state.CurrentSnapshot.CandidateTree)
 	strictBinding := request.Gate == GatePostApply || request.Gate == GatePreCommit ||
 		request.Gate == GatePrePush && state.InitialSnapshot.Kind != TargetCurrentChanges
-	pathsMatch := pathsAreSubset(snapshot.Paths, state.GenesisPaths) == nil
+	pathsMatch := pathsAreSubset(snapshot.Paths, state.CorrectionScopePaths()) == nil
 	baseMatches := snapshot.BaseTree == state.CurrentSnapshot.BaseTree || request.Target.Kind == TargetFixDiff || squashedFixDelivery
 	if strictBinding {
 		pathsMatch = snapshot.PathsDigest == state.CurrentSnapshot.PathsDigest || squashedFixDelivery
@@ -149,7 +149,7 @@ func AssessCompactGateTarget(ctx context.Context, repo string, state CompactStat
 	// relation algebra compares content/scope inside the selected gate
 	// projection rather than treating the gate's own staged view as unrelated.
 	relationExpected.Projection = snapshot.Projection
-	relation := classifyCompactTargetRelation(relationExpected, snapshot, state.GenesisPaths, compactTargetRelationEvidence{})
+	relation := classifyCompactTargetRelation(relationExpected, snapshot, state.CorrectionScopePaths(), compactTargetRelationEvidence{})
 	if relation.Kind != compactTargetUnsafe {
 		assessment.Applicability = CompactGateTargetScopeChanged
 		return assessment, nil
@@ -161,7 +161,7 @@ func AssessCompactGateTarget(ctx context.Context, repo string, state CompactStat
 func compactSquashedFixDelivery(gate GateKind, state CompactState, snapshot Snapshot, refs *resolvedPrePRRefs, finalCandidateTree string) bool {
 	return gate == GatePrePush && state.CurrentSnapshot.Kind == TargetFixDiff && refs != nil && refs.DeliveredCommitCount == 1 &&
 		snapshot.CandidateTree == finalCandidateTree && snapshot.BaseTree == state.InitialSnapshot.BaseTree &&
-		equalStrings(snapshot.Paths, state.GenesisPaths) && snapshot.PathsDigest == digestPaths(state.GenesisPaths)
+		equalStrings(snapshot.Paths, state.CorrectionScopePaths()) && snapshot.PathsDigest == digestPaths(state.CorrectionScopePaths())
 }
 
 func EvaluateCompactGate(ctx context.Context, repo string, receipt CompactReceipt, input NativeGateRequestInput) NativeGateEvaluation {
