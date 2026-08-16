@@ -56,6 +56,7 @@ var selectionParity = map[string]parityDisposition{
 	"SDDProfileStrategy": represented("SDDProfileStrategy"),
 	"StrictTDD":          represented("StrictTDD"),
 	"Profiles":           represented("Profiles"),
+	"BackgroundIntent":   represented("BackgroundIntent"),
 
 	"ModelAssignments":            gap("ModelAssignments"),
 	"ClaudeModelAssignments":      gap("ClaudeModelAssignments"),
@@ -92,7 +93,7 @@ var installStateParity = map[string]parityDisposition{
 	"CodexCarrilModelAssignments": gap("CodexCarrilModelAssignments"),
 	"CodexPhaseModelAssignments":  gap("CodexPhaseModelAssignments"),
 	"RDDMode":                     gap("RDDMode"),
-	"BackgroundIntent":            gap("BackgroundIntent"),
+	"BackgroundIntent":            represented("BackgroundIntent"),
 	"PiBackgroundIntent":          gap("PiBackgroundIntent"),
 
 	"InstalledBinaryVersion":   exempt(observedState),
@@ -116,7 +117,7 @@ var installFlagsParity = map[string]parityDisposition{
 
 	"Scope":                       gap("Scope"),
 	"Channel":                     gap("Channel"),
-	"OpenCodeBackgroundSubagents": gap("BackgroundIntent"),
+	"OpenCodeBackgroundSubagents": represented("BackgroundIntent"),
 	"PiBackgroundSubagents":       gap("PiBackgroundIntent"),
 
 	"Config":                         exempt("selects the declarative document itself"),
