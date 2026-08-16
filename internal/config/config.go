@@ -46,6 +46,11 @@ type Selection struct {
 	SDDProfileStrategy string              `json:"sddProfileStrategy,omitempty"`
 	StrictTDD          bool                `json:"strictTDD,omitempty"`
 	Profiles           []Profile           `json:"profiles,omitempty"`
+
+	// BackgroundIntent stays unresolved when omitted. Defaulting it here would
+	// turn silence into an explicit choice, and only an explicit choice is
+	// persisted as managed state.
+	BackgroundIntent model.OpenCodeBackgroundIntent `json:"backgroundIntent,omitempty"`
 }
 
 type Document struct {
@@ -126,13 +131,14 @@ func Normalize(document Document) (DesiredState, []Diagnostic) {
 // Project provides the existing planner and installer semantic selection.
 func Project(state DesiredState) model.Selection {
 	return model.Selection{
-		Agents:     append([]model.AgentID(nil), state.Selection.Agents...),
-		Components: append([]model.ComponentID(nil), state.Selection.Components...),
-		Skills:     append([]model.SkillID(nil), state.Selection.Skills...),
-		Persona:    state.Selection.Persona,
-		Preset:     state.Selection.Preset,
-		SDDMode:    state.Selection.SDDMode,
-		StrictTDD:  state.Selection.StrictTDD,
+		Agents:           append([]model.AgentID(nil), state.Selection.Agents...),
+		Components:       append([]model.ComponentID(nil), state.Selection.Components...),
+		Skills:           append([]model.SkillID(nil), state.Selection.Skills...),
+		Persona:          state.Selection.Persona,
+		Preset:           state.Selection.Preset,
+		SDDMode:          state.Selection.SDDMode,
+		StrictTDD:        state.Selection.StrictTDD,
+		BackgroundIntent: state.Selection.BackgroundIntent,
 	}
 }
 
@@ -141,7 +147,8 @@ func FromSelection(selection model.Selection) DesiredState {
 	return DesiredState{Version: CurrentVersion, Selection: Selection{
 		Agents: selection.Agents, Components: selection.Components, Skills: selection.Skills,
 		Persona: selection.Persona, Preset: selection.Preset, SDDMode: selection.SDDMode,
-		StrictTDD: selection.StrictTDD,
+		StrictTDD:        selection.StrictTDD,
+		BackgroundIntent: selection.BackgroundIntent,
 	}}
 }
 
@@ -164,6 +171,7 @@ func NormalizeSelection(selection model.Selection) (model.Selection, []Diagnosti
 	selection.Preset = projected.Preset
 	selection.SDDMode = projected.SDDMode
 	selection.StrictTDD = projected.StrictTDD
+	selection.BackgroundIntent = projected.BackgroundIntent
 	if !preserveUnsetPersona {
 		selection.Persona = projected.Persona
 	}
@@ -186,6 +194,10 @@ func normalizeSelection(selection Selection, diagnostics *[]Diagnostic) Selectio
 	}
 	if len(selection.Components) == 0 {
 		selection.Components = model.ComponentsForPreset(selection.Preset, selection.Persona)
+	}
+
+	if selection.BackgroundIntent != "" && !selection.BackgroundIntent.Valid() {
+		*diagnostics = append(*diagnostics, diagnostic("config.background-intent.unsupported", "$.selection.backgroundIntent", fmt.Sprintf("unsupported background intent %q; use auto, on, or off", selection.BackgroundIntent)))
 	}
 
 	selection.Agents = unique(selection.Agents)
