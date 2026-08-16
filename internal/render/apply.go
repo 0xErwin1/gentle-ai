@@ -2,6 +2,7 @@ package render
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -84,7 +85,9 @@ type fileStep struct {
 	existed        bool
 }
 
-func (step *fileStep) ID() string { return string(step.operation.Kind) + ":" + step.operation.Path }
+func (step *fileStep) ID() string {
+	return string(step.operation.Kind) + ":" + step.operation.Path + ":" + step.operation.Selector
+}
 
 func (step *fileStep) Run() error {
 	data, err := os.ReadFile(step.target)
@@ -93,11 +96,15 @@ func (step *fileStep) Run() error {
 	} else if !os.IsNotExist(err) {
 		return err
 	}
-	if step.operation.Kind == Remove {
-		return os.Remove(step.target)
-	}
-	data, err = os.ReadFile(step.source)
-	if err != nil {
+	if step.operation.Selector == "file" {
+		if step.operation.Kind == Remove {
+			return os.Remove(step.target)
+		}
+		data, err = os.ReadFile(step.source)
+		if err != nil {
+			return err
+		}
+	} else if data, err = applyOpenCodeResource(step.operation, step.source, data); err != nil {
 		return err
 	}
 	if err := os.MkdirAll(filepath.Dir(step.target), 0o755); err != nil {
@@ -112,6 +119,51 @@ func (step *fileStep) Run() error {
 		return fmt.Errorf("verify %q: content mismatch", step.operation.Path)
 	}
 	return nil
+}
+
+func applyOpenCodeResource(operation Operation, source string, target []byte) ([]byte, error) {
+	name, ok := openCodeAgentName(operation.Selector)
+	if !ok {
+		return nil, fmt.Errorf("unsupported resource selector %q", operation.Selector)
+	}
+	settings := map[string]any{}
+	if len(target) != 0 {
+		if err := json.Unmarshal(target, &settings); err != nil {
+			return nil, fmt.Errorf("parse target OpenCode settings: %w", err)
+		}
+	}
+	agents, _ := settings["agent"].(map[string]any)
+	if agents == nil {
+		agents = map[string]any{}
+		settings["agent"] = agents
+	}
+	if operation.Kind == Remove {
+		delete(agents, name)
+		return json.Marshal(settings)
+	}
+	contents, err := os.ReadFile(source)
+	if err != nil {
+		return nil, err
+	}
+	var staged map[string]any
+	if err := json.Unmarshal(contents, &staged); err != nil {
+		return nil, fmt.Errorf("parse staged OpenCode settings: %w", err)
+	}
+	stagedAgents, _ := staged["agent"].(map[string]any)
+	agent, exists := stagedAgents[name]
+	if !exists {
+		return nil, fmt.Errorf("staged OpenCode agent %q is missing", name)
+	}
+	agents[name] = agent
+	return json.Marshal(settings)
+}
+
+func openCodeAgentName(selector string) (string, bool) {
+	const prefix = "/agent/"
+	if len(selector) <= len(prefix) || selector[:len(prefix)] != prefix {
+		return "", false
+	}
+	return selector[len(prefix):], true
 }
 
 func (step *fileStep) Rollback() error {
