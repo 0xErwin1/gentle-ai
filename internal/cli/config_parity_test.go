@@ -123,10 +123,10 @@ var installFlagsParity = map[string]parityDisposition{
 }
 
 func TestImperativeSurfacesAreClassifiedForParity(t *testing.T) {
-	declarative := declarativeFields()
+	declarative := declarativeFields(t)
 
 	for _, domain := range parityDomains() {
-		fields := structFields(domain.value)
+		fields := structFields(t, domain.name, domain.value)
 
 		for _, field := range fields {
 			disposition, classified := domain.parity[field]
@@ -196,16 +196,22 @@ func parityDomains() []parityDomain {
 	}
 }
 
-func declarativeFields() map[string]struct{} {
+func declarativeFields(t *testing.T) map[string]struct{} {
 	fields := map[string]struct{}{}
-	for _, field := range structFields(configdomain.Selection{}) {
+	for _, field := range structFields(t, "config.Selection", configdomain.Selection{}) {
 		fields[field] = struct{}{}
 	}
 	return fields
 }
 
-func structFields(value any) []string {
+func structFields(t *testing.T, name string, value any) []string {
+	t.Helper()
+
 	structType := reflect.TypeOf(value)
+	if structType.Kind() != reflect.Struct {
+		t.Fatalf("%s is a %s, not a struct; the parity guard can only classify struct fields", name, structType.Kind())
+	}
+
 	fields := make([]string, 0, structType.NumField())
 	for index := 0; index < structType.NumField(); index++ {
 		fields = append(fields, structType.Field(index).Name)
