@@ -103,6 +103,20 @@ func parseBackgroundIntent(source, raw string, present bool) (model.OpenCodeBack
 	return parsed, nil
 }
 
+// backgroundIntentSource selects the explicit invocation-scoped background
+// choice. A declarative document and the flag are mutually exclusive, so a
+// declared intent stands in for the flag rather than competing with it, and an
+// omitted declaration leaves the choice unresolved for the lower-ranked sources.
+func backgroundIntentSource(flagSet bool, flagValue string, selection model.Selection) (bool, string) {
+	if flagSet {
+		return true, flagValue
+	}
+	if selection.BackgroundIntent != "" {
+		return true, string(selection.BackgroundIntent)
+	}
+	return false, ""
+}
+
 func resolveOpenCodeBackgroundCLI(set bool, raw string, persisted state.InstallState) (OpenCodeBackgroundResolution, error) {
 	envValue, envSet := os.LookupEnv(OpenCodeBackgroundSubagentsEnv)
 	return ResolveOpenCodeBackground(OpenCodeBackgroundResolveInput{

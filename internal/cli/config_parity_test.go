@@ -56,6 +56,7 @@ var selectionParity = map[string]parityDisposition{
 	"SDDProfileStrategy": represented("SDDProfileStrategy"),
 	"StrictTDD":          represented("StrictTDD"),
 	"Profiles":           represented("Profiles"),
+	"BackgroundIntent":   represented("BackgroundIntent"),
 
 	"ModelAssignments":            gap("ModelAssignments"),
 	"ClaudeModelAssignments":      gap("ClaudeModelAssignments"),
@@ -74,13 +75,14 @@ var selectionParity = map[string]parityDisposition{
 
 // installStateParity classifies persisted state, which mixes durable intent with observed outcomes.
 var installStateParity = map[string]parityDisposition{
-	"InstalledAgents": represented("Agents"),
-	"Components":      represented("Components"),
-	"Skills":          represented("Skills"),
-	"Preset":          represented("Preset"),
-	"SDDMode":         represented("SDDMode"),
-	"StrictTDD":       represented("StrictTDD"),
-	"Persona":         represented("Persona"),
+	"InstalledAgents":  represented("Agents"),
+	"Components":       represented("Components"),
+	"Skills":           represented("Skills"),
+	"Preset":           represented("Preset"),
+	"SDDMode":          represented("SDDMode"),
+	"StrictTDD":        represented("StrictTDD"),
+	"Persona":          represented("Persona"),
+	"BackgroundIntent": represented("BackgroundIntent"),
 
 	"CommunityTools":              gap("CommunityTools"),
 	"ModelAssignments":            gap("ModelAssignments"),
@@ -92,7 +94,6 @@ var installStateParity = map[string]parityDisposition{
 	"CodexCarrilModelAssignments": gap("CodexCarrilModelAssignments"),
 	"CodexPhaseModelAssignments":  gap("CodexPhaseModelAssignments"),
 	"RDDMode":                     gap("RDDMode"),
-	"BackgroundIntent":            gap("BackgroundIntent"),
 
 	"InstalledBinaryVersion":   exempt(observedState),
 	"ManagedAssetDigest":       exempt(observedState),
@@ -115,7 +116,7 @@ var installFlagsParity = map[string]parityDisposition{
 
 	"Scope":                       gap("Scope"),
 	"Channel":                     gap("Channel"),
-	"OpenCodeBackgroundSubagents": gap("BackgroundIntent"),
+	"OpenCodeBackgroundSubagents": represented("BackgroundIntent"),
 
 	"Config":                         exempt("selects the declarative document itself"),
 	"DryRun":                         exempt(operationalFlag),

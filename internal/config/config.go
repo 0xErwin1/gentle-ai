@@ -46,6 +46,11 @@ type Selection struct {
 	SDDProfileStrategy model.SDDProfileStrategyID `json:"sddProfileStrategy,omitempty"`
 	StrictTDD          bool                       `json:"strictTDD,omitempty"`
 	Profiles           []model.Profile            `json:"profiles,omitempty"`
+
+	// BackgroundIntent stays unresolved when omitted. Defaulting it here would
+	// turn silence into an explicit choice, and only an explicit choice is
+	// persisted as managed state.
+	BackgroundIntent model.OpenCodeBackgroundIntent `json:"backgroundIntent,omitempty"`
 }
 
 type Document struct {
@@ -135,6 +140,7 @@ func Project(state DesiredState) model.Selection {
 		SDDProfileStrategy: state.Selection.SDDProfileStrategy,
 		StrictTDD:          state.Selection.StrictTDD,
 		Profiles:           append([]model.Profile(nil), state.Selection.Profiles...),
+		BackgroundIntent:   state.Selection.BackgroundIntent,
 	}
 }
 
@@ -144,7 +150,7 @@ func FromSelection(selection model.Selection) DesiredState {
 		Agents: selection.Agents, Components: selection.Components, Skills: selection.Skills,
 		Persona: selection.Persona, Preset: selection.Preset, SDDMode: selection.SDDMode,
 		SDDProfileStrategy: selection.SDDProfileStrategy, StrictTDD: selection.StrictTDD,
-		Profiles: selection.Profiles,
+		Profiles: selection.Profiles, BackgroundIntent: selection.BackgroundIntent,
 	}}
 }
 
@@ -169,6 +175,7 @@ func NormalizeSelection(selection model.Selection) (model.Selection, []Diagnosti
 	selection.SDDProfileStrategy = projected.SDDProfileStrategy
 	selection.StrictTDD = projected.StrictTDD
 	selection.Profiles = projected.Profiles
+	selection.BackgroundIntent = projected.BackgroundIntent
 	if !preserveUnsetPersona {
 		selection.Persona = projected.Persona
 	}
@@ -185,6 +192,10 @@ func normalizeSelection(selection Selection, diagnostics *[]Diagnostic) Selectio
 	}
 	if len(selection.Components) == 0 {
 		selection.Components = model.ComponentsForPreset(selection.Preset, selection.Persona)
+	}
+
+	if selection.BackgroundIntent != "" && !selection.BackgroundIntent.Valid() {
+		*diagnostics = append(*diagnostics, diagnostic("config.background-intent.unsupported", "$.selection.backgroundIntent", fmt.Sprintf("unsupported background intent %q; use auto, on, or off", selection.BackgroundIntent)))
 	}
 
 	selection.Agents = unique(selection.Agents)

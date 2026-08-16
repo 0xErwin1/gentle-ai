@@ -160,7 +160,8 @@ func RunInstall(args []string, detection system.DetectionResult) (InstallResult,
 	} else if stateErr != nil {
 		return InstallResult{}, fmt.Errorf("persist install state preflight: %w", stateErr)
 	}
-	background, err := resolveOpenCodeBackgroundCLI(flags.OpenCodeBackgroundSubagentsSet, flags.OpenCodeBackgroundSubagents, persistedState)
+	backgroundSet, backgroundValue := backgroundIntentSource(flags.OpenCodeBackgroundSubagentsSet, flags.OpenCodeBackgroundSubagents, input.Selection)
+	background, err := resolveOpenCodeBackgroundCLI(backgroundSet, backgroundValue, persistedState)
 	if err != nil {
 		return InstallResult{}, err
 	}

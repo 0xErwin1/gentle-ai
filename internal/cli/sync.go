@@ -1753,7 +1753,8 @@ func RunSync(args []string) (SyncResult, error) {
 	if err := validatePersistedSyncState(persistedState, persistedStateErr); err != nil {
 		return SyncResult{Agents: agentIDs, Selection: selection}, err
 	}
-	background, err := resolveOpenCodeBackgroundCLI(flags.OpenCodeBackgroundSubagentsSet, flags.OpenCodeBackgroundSubagents, persistedState)
+	backgroundSet, backgroundValue := backgroundIntentSource(flags.OpenCodeBackgroundSubagentsSet, flags.OpenCodeBackgroundSubagents, selection)
+	background, err := resolveOpenCodeBackgroundCLI(backgroundSet, backgroundValue, persistedState)
 	if err != nil {
 		return SyncResult{Agents: agentIDs, Selection: selection}, err
 	}
