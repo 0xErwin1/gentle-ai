@@ -295,6 +295,7 @@ func RunInstall(args []string, detection system.DetectionResult) (InstallResult,
 		Persona:                     string(input.Selection.Persona),
 	}
 	newState.SetSelection(input.Selection)
+	newState.RDDMode = string(input.Selection.RDDMode)
 	if background.Persist != "" {
 		newState.BackgroundIntent = background.Persist
 	}
