@@ -2,6 +2,7 @@ package cli
 
 import (
 	"fmt"
+	"sort"
 
 	"github.com/gentleman-programming/gentle-ai/v2/internal/agents"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/components/engram"
@@ -64,7 +65,11 @@ func (stager configurationStager) Stage(state configdomain.DesiredState, stageRo
 		}
 	}
 
-	return nil
+	if err := stageDeclaredMCPServers(stageRoot, selection, adapters); err != nil {
+		return err
+	}
+
+	return stageDeclaredPermissions(stageRoot, selection, adapters)
 }
 
 func (stager configurationStager) stageComponent(component model.ComponentID, stageRoot string, selection model.Selection, adapters []agents.Adapter) error {
@@ -203,4 +208,65 @@ func liveProvisioning(resources []render.Resource, profile system.PlatformProfil
 	}
 
 	return live
+}
+
+// stageDeclaredMCPServers materialises the servers a document declares through
+// each adapter's own MCP strategy. It runs outside the component loop because a
+// declared server is configuration in its own right, not something the Context7
+// component happens to bring along.
+func stageDeclaredMCPServers(stageRoot string, selection model.Selection, adapters []agents.Adapter) error {
+	if len(selection.MCPServers) == 0 {
+		return nil
+	}
+
+	servers := make([]mcp.Server, 0, len(selection.MCPServers))
+	for _, name := range sortedServerNames(selection.MCPServers) {
+		declared := selection.MCPServers[name]
+		servers = append(servers, mcp.Server{
+			Name: name, Command: declared.Command, Args: declared.Args,
+			Env: declared.Env, URL: declared.URL, Enabled: declared.Enabled,
+		})
+	}
+
+	for _, adapter := range adapters {
+		target := componentInjectionDirScoped(stageRoot, "", ScopeGlobal, adapter)
+		if _, err := mcp.InjectDeclared(target, adapter, servers); err != nil {
+			return fmt.Errorf("stage MCP servers for %q: %w", adapter.Agent(), err)
+		}
+	}
+
+	return nil
+}
+
+// stageDeclaredPermissions layers the rules a document declares over whatever
+// the permissions component already wrote, so a declaration adds to the shipped
+// guardrails instead of replacing them.
+func stageDeclaredPermissions(stageRoot string, selection model.Selection, adapters []agents.Adapter) error {
+	if selection.Permissions == nil {
+		return nil
+	}
+
+	declared := permissions.Declared{
+		Allow: selection.Permissions.Allow,
+		Deny:  selection.Permissions.Deny,
+		Ask:   selection.Permissions.Ask,
+	}
+
+	for _, adapter := range adapters {
+		if _, err := permissions.InjectDeclared(stageRoot, adapter, declared); err != nil {
+			return fmt.Errorf("stage permissions for %q: %w", adapter.Agent(), err)
+		}
+	}
+
+	return nil
+}
+
+func sortedServerNames(servers map[string]model.MCPServer) []string {
+	names := make([]string, 0, len(servers))
+	for name := range servers {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	return names
 }
