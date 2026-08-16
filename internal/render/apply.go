@@ -65,6 +65,13 @@ func applySteps(request ApplyRequest) ([]pipeline.Step, error) {
 		if operation.Kind == Skip {
 			continue
 		}
+		// Provisioning is an action, and this pipeline reconciles files with a
+		// rollback that reverts bytes. Performing a download here would claim a
+		// guarantee it cannot honour, so pending provisioning is reported to the
+		// caller instead of being performed or quietly dropped.
+		if operation.Selector == ProvisionSelector {
+			continue
+		}
 		if operation.Kind != Create && operation.Kind != Update && operation.Kind != Remove {
 			return nil, fmt.Errorf("apply refused: unsupported operation %q", operation.Kind)
 		}
