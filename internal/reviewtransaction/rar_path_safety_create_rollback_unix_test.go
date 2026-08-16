@@ -88,6 +88,35 @@ func TestCreatePrivateRARDirectoryKeepsTheUnsafePathItNames(t *testing.T) {
 	}
 }
 
+func TestCreatePrivateRARDirectoryNeverRepairsThroughASubstitutedSymlink(t *testing.T) {
+	root := resolvedTempDir(t)
+	path := filepath.Join(root, "v1")
+	victim := filepath.Join(root, "victim")
+	if err := os.Mkdir(victim, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// The race the no-follow walk exists to defeat, and the likeliest reason a
+	// just-created 0700 directory fails on POSIX: it is swapped for a symlink
+	// before validation reads it. A repair that resolved the path would chmod
+	// the attacker's target instead.
+	previous := rarPrivateDirectoryMkdir
+	rarPrivateDirectoryMkdir = func(name string, mode fs.FileMode) error {
+		if err := errors.Join(os.Mkdir(name, mode), os.Remove(name)); err != nil {
+			return err
+		}
+		return os.Symlink(victim, name)
+	}
+	t.Cleanup(func() { rarPrivateDirectoryMkdir = previous })
+
+	created, err := createPrivateRARDirectory(path)
+	if created || err == nil {
+		t.Fatalf("createPrivateRARDirectory over a substituted symlink = (%t, %v), want (false, refusal)", created, err)
+	}
+	if info, statErr := os.Lstat(victim); statErr != nil || info.Mode().Perm() != 0o755 {
+		t.Fatalf("substituted target = %v (%v), want mode 0755; the repair followed the symlink", info, statErr)
+	}
+}
+
 func TestCreatePrivateRARDirectoryNeverRepairsADirectoryItDidNotCreate(t *testing.T) {
 	root := resolvedTempDir(t)
 	path := filepath.Join(root, "v1")

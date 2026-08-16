@@ -22,11 +22,37 @@ func rarPathUnsafe(_ string, info fs.FileInfo) bool {
 // variables so tests can reproduce filesystems that silently ignore the mode
 // they are handed -- WSL DrvFS, exFAT, and SMB mounts without POSIX extensions
 // -- which no mode argument reachable from a test on ext4 or tmpfs can
-// produce. Production always uses the os package.
+// produce. Production always uses the no-follow repair below.
 var (
 	rarPrivateDirectoryMkdir = os.Mkdir
-	rarPrivateDirectoryChmod = os.Chmod
+	rarPrivateDirectoryChmod = repairPrivateRARDirectoryNoFollow
 )
+
+// repairPrivateRARDirectoryNoFollow reapplies the owner-only mode through a
+// descriptor, never the path: os.Chmod resolves symlinks and Linux rejects
+// AT_SYMLINK_NOFOLLOW on fchmodat(2). The validator's own no-follow walk opens
+// the directory, and fchmod(2), the mode check and the uid check all run
+// against that one descriptor -- substituting a symlink for the just-created
+// directory is the attack this walk exists to defeat, and on POSIX it is
+// essentially the only other reason this repair ever runs.
+func repairPrivateRARDirectoryNoFollow(path string, mode fs.FileMode) error {
+	file, err := openRARPathNoFollow(path, true)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+	if err := file.Chmod(mode); err != nil {
+		return err
+	}
+	repaired, err := file.Stat()
+	if err != nil {
+		return err
+	}
+	if !repaired.IsDir() || !privateOpenRARPathSafe(file, repaired) {
+		return unsafeRARPathError(path, true)
+	}
+	return nil
+}
 
 func createPrivateRARDirectory(path string) (bool, error) {
 	err := rarPrivateDirectoryMkdir(path, 0o700)
@@ -47,7 +73,7 @@ func createPrivateRARDirectory(path string) (bool, error) {
 		// that was already there is somebody else's, and rewriting its
 		// permissions is exactly the world-action errUnsafeRARAuthorityPath
 		// refuses to take on the operator's behalf.
-		if chmodErr := rarPrivateDirectoryChmod(path, 0o700); chmodErr == nil {
+		if repairErr := rarPrivateDirectoryChmod(path, 0o700); repairErr == nil {
 			validateErr = validatePrivateRARDirectory(path)
 		}
 	}
