@@ -168,6 +168,7 @@ func fullyPopulatedDocument() Document {
 			CodexOrchestrator:           &CodexOrchestratorAssignment{Model: "gpt-5.6-sol", Effort: "medium"},
 			MCPServers:                  map[string]MCPServer{"atlas": {Command: "atlas", Args: []string{"mcp"}, Env: map[string]string{"TOKEN": "x"}}},
 			Permissions:                 &Permissions{Allow: []string{"Read(*)"}, Deny: []string{"Bash(curl *)"}, Ask: []string{"Edit(*.tf)"}},
+			SkillAssignments:            map[string][]model.SkillID{"opencode": {model.SkillSDDApply}},
 			Profiles: []Profile{{
 				Name:             "cheap",
 				Orchestrator:     &ModelAssignment{Provider: "anthropic", Model: "claude-haiku", Effort: "low"},
