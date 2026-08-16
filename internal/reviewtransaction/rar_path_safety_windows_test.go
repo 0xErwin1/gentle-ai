@@ -152,6 +152,74 @@ func TestRARPrivateOwnerRemainsTokenUserOnly(t *testing.T) {
 	}
 }
 
+// TestRARWindowsTokenPrincipalsDescribeThisProcess covers the half of the
+// ownership decision that cannot be executed off Windows: reading the real
+// token. The rule applied to what it reads is covered cross-platform by
+// TestRARWindowsRepairOwnerControlled.
+func TestRARWindowsTokenPrincipalsDescribeThisProcess(t *testing.T) {
+	token, err := currentRARWindowsTokenPrincipals()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if token.User == "" || token.DefaultOwner == "" {
+		t.Fatalf("token principals are incomplete: %+v", token)
+	}
+	for _, owned := range []string{token.User, token.DefaultOwner} {
+		if !rarWindowsRepairOwnerControlled(owned, token) {
+			t.Fatalf("this process does not control its own principal %s", owned)
+		}
+	}
+
+	// A directory this process creates without an explicit owner comes out
+	// owned by the token's default owner, so the repair must accept exactly
+	// that SID. This is the invariant #3376's predicate could not express.
+	dir := filepath.Join(t.TempDir(), "created-by-this-process")
+	if err := os.Mkdir(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	descriptor, err := windows.GetNamedSecurityInfo(
+		dir,
+		windows.SE_FILE_OBJECT,
+		windows.OWNER_SECURITY_INFORMATION,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	controlled, err := rarWindowsDescriptorOwnerControlled(descriptor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !controlled {
+		owner, _, ownerErr := descriptor.Owner()
+		t.Fatalf("a directory this process just created is owned by %v (err %v), "+
+			"which %+v does not control", owner, ownerErr, token)
+	}
+
+	// The squattable well-known groups stay outside the accepted set whatever
+	// this token turns out to be.
+	for _, forgeable := range []windows.WELL_KNOWN_SID_TYPE{
+		windows.WinWorldSid,
+		windows.WinAuthenticatedUserSid,
+	} {
+		sid, err := windows.CreateWellKnownSid(forgeable)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if rarWindowsRepairOwnerControlled(sid.String(), token) {
+			t.Fatalf("forgeable owner %s is treated as controlled", sid)
+		}
+	}
+
+	// A foreign account SID derived from this machine's own domain is the
+	// closest thing to a real attacker-owned directory a test can build.
+	if rarWindowsRepairOwnerControlled(
+		"S-1-5-21-1004336348-1177238915-682003330-31337",
+		token,
+	) {
+		t.Fatal("a foreign account SID is treated as controlled")
+	}
+}
+
 func rarWindowsDescriptorForOwner(
 	t *testing.T,
 	owner *windows.SID,
