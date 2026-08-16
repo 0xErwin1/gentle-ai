@@ -60,19 +60,22 @@ status contract; direct and delegated runs do not create or consume an SDD run.
 
 ## Review mode
 
-Receipt-driven development is user-owned and independent of the implementation
-route:
+Receipt-driven development is user-owned, opt-in, and independent of the
+implementation route. With no source expressing an opinion it is **off**,
+reported as decided by `default`:
 
 | Command | Effect |
 |---|---|
 | `gentle-ai review mode status --cwd <repo>` | Report the global source, clone-local source, deciding source, and effective mode without mutation. |
+| `gentle-ai review mode enable --scope global --cwd <repo>` | Opt in. Enables receipt-driven development globally for future candidates. This is the only command that turns it on. |
 | `gentle-ai review mode disable --cwd <repo>` | Disable receipt-driven development globally. |
 | `gentle-ai review mode disable --scope clone --cwd <repo>` | Disable it only for this clone; no other clone inherits the override. |
-| `gentle-ai review mode enable --cwd <repo>` | Enable it globally for future candidates. |
-| `gentle-ai review mode enable --scope clone --cwd <repo>` | Clear this clone's off-only override. |
+| `gentle-ai review mode enable --scope clone --cwd <repo>` | Clear this clone's off-only override. Does not turn review on by itself. |
 
 Any disabled source wins. A clone may opt out but cannot require review for the
-user. Interactive starts ask before reviewer work; non-interactive tier-1/tier-2 starts proceed without prompting and report how to disable review mode. Interactive consent is asked
+user, so the global scope is the only way in. Interactive starts ask before
+reviewer work; non-interactive tier-1/tier-2 starts proceed without prompting and
+report how to disable review mode. Interactive consent is asked
 once per clone. Accepting records that choice; **not now** applies only to that
 candidate and does not change review mode.
 

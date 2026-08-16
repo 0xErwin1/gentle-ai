@@ -20,6 +20,7 @@ import (
 )
 
 func TestValidatingEvidenceCollectionUnblocksFinalizeAndPreCommit(t *testing.T) {
+	reviewEnabledHome(t)
 	repo, started, _, record, _ := capturedArtifact(t)
 	finalize := []string{"--contract", ReviewIntegrationContractV1, "--next-transition", "--cwd", repo, "--lineage", started.LineageID, "--captured-results"}
 	var first bytes.Buffer
@@ -98,6 +99,7 @@ func TestFinalizeNextTransitionBindsCorrectedCurrentSnapshot(t *testing.T) {
 }
 
 func TestNegotiatedNextTransitionDiscoversCapturedArtifactsAndAdvances(t *testing.T) {
+	reviewEnabledHome(t)
 	repo, started, _, record, _ := capturedArtifact(t)
 	args := []string{"status", "--contract", ReviewIntegrationContractV1, "--next-transition", "--cwd", repo, "--lineage", started.LineageID}
 	var first, replay bytes.Buffer
@@ -135,6 +137,7 @@ func TestNegotiatedNextTransitionDiscoversCapturedArtifactsAndAdvances(t *testin
 }
 
 func TestCorrectionNextTransitionAgreesBetweenFinalizeAndRestartStatus(t *testing.T) {
+	reviewEnabledHome(t)
 	for _, tt := range []struct {
 		name, reason          string
 		forecast              bool
@@ -220,7 +223,9 @@ func TestCorrectionNextTransitionAgreesBetweenFinalizeAndRestartStatus(t *testin
 }
 
 func TestConsumedHistoricalCorrectionRoutesToRecoveryOrStop(t *testing.T) {
-	t.Parallel()
+	// Not parallel: opting in writes the user's global mode through t.Setenv,
+	// which Go forbids in a test that also calls t.Parallel.
+	reviewEnabledHome(t)
 
 	forecast := 1
 	for _, proposed := range []*int{nil, &forecast} {
@@ -971,6 +976,7 @@ func TestReviewStatusValidateRejectsMalformedForecast(t *testing.T) {
 }
 
 func TestNegotiatedStatusForecastStaysStructuralAndV1StaysFrozen(t *testing.T) {
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("forecast\n"), 0o644); err != nil {
 		t.Fatal(err)

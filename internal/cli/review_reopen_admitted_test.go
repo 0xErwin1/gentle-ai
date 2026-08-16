@@ -49,6 +49,7 @@ func contaminatedReviewerPayloadForTest(t *testing.T, repo string, record review
 //  2. an authorization that does not name an admitted slot can never sweep it,
 //     even when the request names it.
 func TestReviewReopenResultsAdmittedSlotQuarantineRequiresNamedAuthorization(t *testing.T) {
+	reviewEnabledHome(t)
 	repo, started, store, initial := newArtifactReview(t, true)
 	for order, lens := range initial.State.SelectedLenses {
 		input := filepath.Join(t.TempDir(), fmt.Sprintf("result-%d.json", order))
@@ -144,7 +145,9 @@ func TestReviewReopenResultsAdmittedSlotQuarantineRequiresNamedAuthorization(t *
 // route, recapture, and finalize to an approved terminal state over the exact
 // same candidate identity, with the overridden bytes preserved.
 func TestReviewReopenResultsRecoversContaminatedAdmittedReviewFromCorrectionRequired(t *testing.T) {
-	t.Parallel()
+	// Not parallel: opting in writes the user's global mode through t.Setenv,
+	// which Go forbids in a test that also calls t.Parallel.
+	reviewEnabledHome(t)
 
 	repo, started, store, initial := newArtifactReview(t, true)
 	if len(initial.State.SelectedLenses) != 4 {

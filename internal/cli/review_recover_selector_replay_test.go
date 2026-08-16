@@ -74,6 +74,7 @@ func escalatedSelectionReplayFixture(t *testing.T, lineage string) (string, revi
 // selector_arguments: [] and `review recover` re-derived the target from
 // predecessor inheritance alone, refusing its own authorization.
 func TestRecoveryTransitionReplaysAuthorizedUntrackedSelection(t *testing.T) {
+	reviewEnabledHome(t)
 	repo, predecessor := escalatedSelectionReplayFixture(t, "recover-1972")
 
 	// The bounded correction the escalation asked for.
@@ -204,6 +205,7 @@ func TestRecoveryArgumentsReplayUntrackedSelection(t *testing.T) {
 // successor target must derive from the declared selection, not from
 // predecessor inheritance.
 func TestReviewRecoverAcceptsDeclaredUntrackedSelection(t *testing.T) {
+	reviewEnabledHome(t)
 	repo, predecessor := escalatedSelectionReplayFixture(t, "recover-1972-flags")
 	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("base\none\ntwo\nthree\ncorrected\n"), 0o644); err != nil {
 		t.Fatal(err)
@@ -253,6 +255,7 @@ func TestReviewRecoverAcceptsDeclaredUntrackedSelection(t *testing.T) {
 // declaration is a real recovery-time decision, so it must override the
 // predecessor's frozen declaration exactly the way a fresh START would.
 func TestReviewRecoverExcludeSelectionOverridesInheritance(t *testing.T) {
+	reviewEnabledHome(t)
 	repo, predecessor := escalatedSelectionReplayFixture(t, "recover-1972-exclude")
 	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("base\none\ntwo\nthree\ncorrected\n"), 0o644); err != nil {
 		t.Fatal(err)
@@ -301,6 +304,7 @@ func TestReviewRecoverExcludeSelectionOverridesInheritance(t *testing.T) {
 // whose declared selection does not match the authorized identity refuses
 // exactly as before.
 func TestReviewRecoverDivergentSelectionStillRefused(t *testing.T) {
+	reviewEnabledHome(t)
 	repo, predecessor := escalatedSelectionReplayFixture(t, "recover-1972-divergent")
 	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("base\none\ntwo\nthree\ncorrected\n"), 0o644); err != nil {
 		t.Fatal(err)

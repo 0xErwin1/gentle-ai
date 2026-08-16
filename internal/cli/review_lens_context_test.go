@@ -35,6 +35,7 @@ func lensContextBlock(t *testing.T, handle, lens string) string {
 // collect transition already carries, and receives the complete reviewer
 // prompt prefix with nothing left to assemble.
 func TestReviewLensContextEmitsFinishedReviewerBlockFromTwoTokens(t *testing.T) {
+	reviewEnabledHome(t)
 	_, args, record, _ := newCandidateInspectionReview(t, "candidate\n", true)
 	handle := args[slices.Index(args, "--repository-context")+1]
 	lens := args[slices.Index(args, "--lens")+1]
@@ -139,6 +140,7 @@ func TestReviewLensContextEmitsFinishedReviewerBlockFromTwoTokens(t *testing.T) 
 // with no bytes on stdout: a partial reviewer block is the fabricate-a-clean-
 // review shape this surface exists to prevent.
 func TestReviewLensContextRefusesUnboundInput(t *testing.T) {
+	reviewEnabledHome(t)
 	_, args, _, _ := newCandidateInspectionReview(t, "candidate\n", true)
 	handle := args[slices.Index(args, "--repository-context")+1]
 	lens := args[slices.Index(args, "--lens")+1]
@@ -189,7 +191,7 @@ func writeOverByteBudgetLensContextCandidate(t *testing.T, repo string) {
 // there is no partial outcome; and because START refuses before creating
 // authority, there is no dead lineage to abandon afterwards either (#3367).
 func TestNegotiatedStartRefusesOverBudgetCandidateWithoutPersistingAuthority(t *testing.T) {
-	home := reviewModeHome(t)
+	home := reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	writeOverByteBudgetLensContextCandidate(t, repo)
 	authorityRoot := reviewCLIAuthorityRoot(t, repo)
@@ -238,6 +240,7 @@ func TestNegotiatedStartRefusesOverBudgetCandidateWithoutPersistingAuthority(t *
 // not launch. A reviewer handed a path header with no diff would report it
 // clean.
 func TestReviewLensContextRefusesEmptyPatchForContentChangingPath(t *testing.T) {
+	reviewEnabledHome(t)
 	_, args, _, _ := newCandidateInspectionReview(t, "candidate\n", true)
 	handle := args[slices.Index(args, "--repository-context")+1]
 	lens := args[slices.Index(args, "--lens")+1]
@@ -261,6 +264,7 @@ func TestReviewLensContextRefusesEmptyPatchForContentChangingPath(t *testing.T) 
 // deadline reaches every phase, so a repository that stops answering partway
 // through never yields a partial block.
 func TestReviewLensContextCarriesAggregateDeadline(t *testing.T) {
+	reviewEnabledHome(t)
 	_, args, _, _ := newCandidateInspectionReview(t, "candidate\n", true)
 	handle := args[slices.Index(args, "--repository-context")+1]
 	lens := args[slices.Index(args, "--lens")+1]
@@ -296,7 +300,7 @@ func TestReviewLensContextCarriesAggregateDeadline(t *testing.T) {
 // reachable, and it is why the classification is kept rather than deleted
 // along with the count. Every no-mutation assertion below is unchanged.
 func TestNegotiatedStatusStopsDeterministicLensContextBudgetWithoutMutation(t *testing.T) {
-	home := reviewModeHome(t)
+	home := reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	writeOverByteBudgetLensContextCandidate(t, repo)
 	record := startCompactAuthorityWithoutFacadeChecks(t, repo, "lens-context-status-budget")
@@ -425,6 +429,7 @@ func TestReviewLensContextCleanupClassifiesCleanupFailureIndependentlyOfOperatio
 }
 
 func TestReviewLensContextCallersFailClosedOnInspectorCleanupFailure(t *testing.T) {
+	reviewEnabledHome(t)
 	cleanupErr := errors.New("close inspector")
 	for _, caller := range []struct {
 		name string
@@ -481,6 +486,7 @@ func TestReviewLensContextCallersFailClosedOnInspectorCleanupFailure(t *testing.
 // TestReviewLensContextLeavesRepositoryUntouched proves the surface is a pure
 // read of the frozen trees.
 func TestReviewLensContextLeavesRepositoryUntouched(t *testing.T) {
+	reviewEnabledHome(t)
 	repo, args, _, _ := newCandidateInspectionReview(t, "candidate\n", true)
 	handle := args[slices.Index(args, "--repository-context")+1]
 	lens := args[slices.Index(args, "--lens")+1]
@@ -505,6 +511,7 @@ func TestReviewLensContextLeavesRepositoryUntouched(t *testing.T) {
 // declared by whoever finalizes. Absence stays absence when nothing produced a
 // context.
 func TestReviewLensContextRecordsProviderEmissionForTheReceipt(t *testing.T) {
+	reviewEnabledHome(t)
 	repo, args, record, _ := newCandidateInspectionReview(t, "candidate\n", true)
 	handle := args[slices.Index(args, "--repository-context")+1]
 	state := record.State
@@ -550,6 +557,7 @@ func TestReviewLensContextRecordsProviderEmissionForTheReceipt(t *testing.T) {
 // TestReviewLensContextRefusesConflictingDeliveryForOneSlot proves the audit
 // record cannot be rewritten: one frozen lens slot records one mechanism.
 func TestReviewLensContextRefusesConflictingDeliveryForOneSlot(t *testing.T) {
+	reviewEnabledHome(t)
 	_, args, _, _ := newCandidateInspectionReview(t, "candidate\n", true)
 	handle := args[slices.Index(args, "--repository-context")+1]
 	lens := args[slices.Index(args, "--lens")+1]
@@ -583,6 +591,7 @@ func TestReviewLensContextRefusesConflictingDeliveryForOneSlot(t *testing.T) {
 // its terminal receipt, and a review that never used the surface carries no
 // level at all rather than a guessed one.
 func TestReviewReceiptRecordsLensContextLevel(t *testing.T) {
+	reviewEnabledHome(t)
 	for _, test := range []struct {
 		name           string
 		produceContext bool
@@ -641,6 +650,7 @@ func TestReviewReceiptRecordsLensContextLevel(t *testing.T) {
 // what it may look at, and exactly what to return. There is no runtime layer
 // behind this output to fill a gap in it.
 func TestReviewLensContextStandsAloneAsTheReviewerInstruction(t *testing.T) {
+	reviewEnabledHome(t)
 	_, args, record, _ := newCandidateInspectionReview(t, "candidate\n", true)
 	handle := args[slices.Index(args, "--repository-context")+1]
 	for _, lens := range record.State.SelectedLenses {
@@ -724,7 +734,7 @@ func writeLensContextPathFixture(t *testing.T, repo string, paths int) {
 // costs a few kilobytes of evidence, so START must not persist durable
 // authority whose STATUS is a permanent stop (issue #3367 property 1).
 func TestNegotiatedStartLeavesNoAuthorityStatusCanOnlyRefuse(t *testing.T) {
-	reviewModeHome(t)
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	writeLensContextPathFixture(t, repo, 60)
 	started := runNegotiatedReviewStart(t, repo, "large-candidate-reviewable")
@@ -747,7 +757,7 @@ func TestNegotiatedStartLeavesNoAuthorityStatusCanOnlyRefuse(t *testing.T) {
 // admitting a much larger 32-path candidate is a count masquerading as a
 // budget (issue #3367 property 3).
 func TestReviewLensContextAdmitsManyPathsFarUnderByteBudget(t *testing.T) {
-	reviewModeHome(t)
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	writeLensContextPathFixture(t, repo, 33)
 	started := runNegotiatedReviewStart(t, repo, "lens-context-small-paths")
@@ -827,7 +837,7 @@ func deriveLensContextHandle(t *testing.T, repo string, record reviewtransaction
 // false a comfortably-small candidate returns, so no caller could tell "fits"
 // apart from "never measured" (issue #3367 property 2).
 func TestReviewLensContextBudgetProbeReportsFailureInsteadOfUnderBudget(t *testing.T) {
-	reviewModeHome(t)
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	writeLensContextPathFixture(t, repo, 4)
 	started := runNegotiatedReviewStart(t, repo, "budget-probe-failure")

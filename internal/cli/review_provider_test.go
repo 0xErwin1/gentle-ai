@@ -39,6 +39,7 @@ func TestReviewProviderRoleRegistryIsClosedAndSchemaValid(t *testing.T) {
 }
 
 func TestReviewProviderMaterializationMatchesNativeLensContext(t *testing.T) {
+	reviewEnabledHome(t)
 	_, args, _, _ := newCandidateInspectionReview(t, "candidate\n", true)
 	handle := args[slices.Index(args, "--repository-context")+1]
 	lens := args[slices.Index(args, "--lens")+1]
@@ -78,6 +79,7 @@ func TestReviewProviderLensAdmissionUsesNativeValidator(t *testing.T) {
 }
 
 func TestReviewProviderTargetedValidatorCapturesExactRequestUnderLock(t *testing.T) {
+	reviewEnabledHome(t)
 	repo, lineage, request := providerCorrectionReady(t)
 	store, err := reviewtransaction.CompactAuthoritativeStore(t.Context(), repo, lineage)
 	if err != nil {
@@ -110,6 +112,7 @@ func TestReviewProviderTargetedValidatorCapturesExactRequestUnderLock(t *testing
 }
 
 func TestReviewProviderTargetedValidatorTransportFailureDoesNotCapture(t *testing.T) {
+	reviewEnabledHome(t)
 	repo, lineage, request := providerCorrectionReady(t)
 	store, err := reviewtransaction.CompactAuthoritativeStore(t.Context(), repo, lineage)
 	if err != nil {
@@ -135,6 +138,7 @@ func TestReviewProviderTargetedValidatorTransportFailureDoesNotCapture(t *testin
 }
 
 func TestReviewProviderCaptureResultInvokesOnlyTheGoMaterializedLensRequest(t *testing.T) {
+	reviewEnabledHome(t)
 	repo, args, record, _ := newCandidateInspectionReview(t, "candidate\n", true)
 	handle := args[slices.Index(args, "--repository-context")+1]
 	previous := reviewProviderAdapterFor
@@ -173,6 +177,7 @@ func TestReviewProviderCaptureResultInvokesOnlyTheGoMaterializedLensRequest(t *t
 }
 
 func TestReviewProviderRefuterCapturesTransactionWideBatch(t *testing.T) {
+	reviewEnabledHome(t)
 	repo, started, store, record := newArtifactReview(t, false)
 	result := admittedReviewerResultForTest(t, repo, record, record.State.SelectedLenses[0], 0)
 	result.Findings = []facadeFinding{{
@@ -212,6 +217,7 @@ func TestReviewProviderRefuterCapturesTransactionWideBatch(t *testing.T) {
 }
 
 func TestReviewProviderOpenCodeStatusIssuesBoundRefuterTask(t *testing.T) {
+	reviewEnabledHome(t)
 	repo, started, _, record := newArtifactReview(t, false)
 	result := admittedReviewerResultForTest(t, repo, record, record.State.SelectedLenses[0], 0)
 	result.Findings = []facadeFinding{{
@@ -249,6 +255,7 @@ func TestReviewProviderOpenCodeStatusIssuesBoundRefuterTask(t *testing.T) {
 }
 
 func TestReviewProviderOpenCodeStatusIssuesBoundTargetedValidatorTask(t *testing.T) {
+	reviewEnabledHome(t)
 	repo, lineage, request := providerCorrectionReady(t)
 	var output bytes.Buffer
 	if err := RunReview([]string{
@@ -353,6 +360,7 @@ func TestReviewProviderOpenCodeStatusIssuesBoundTargetedValidatorTask(t *testing
 }
 
 func TestReviewProviderStatusFinalizesCapturedTargetedValidatorWithoutSecondProvider(t *testing.T) {
+	reviewEnabledHome(t)
 	repo, lineage, request := providerCorrectionReady(t)
 	store, err := reviewtransaction.CompactAuthoritativeStore(t.Context(), repo, lineage)
 	if err != nil {
@@ -447,6 +455,7 @@ func TestReviewProviderStatusFinalizesCapturedTargetedValidatorWithoutSecondProv
 }
 
 func TestReviewProviderStatusSurfacesUnreadableCapturedValidatorSlot(t *testing.T) {
+	reviewEnabledHome(t)
 	repo, lineage, request := providerCorrectionReady(t)
 	store, err := reviewtransaction.CompactAuthoritativeStore(t.Context(), repo, lineage)
 	if err != nil {
@@ -488,6 +497,7 @@ func TestReviewProviderStatusSurfacesUnreadableCapturedValidatorSlot(t *testing.
 }
 
 func TestReviewProviderStatusRequiresPassedEvidenceBeforeSlotConsumption(t *testing.T) {
+	reviewEnabledHome(t)
 	repo, lineage, request := providerCorrectionReady(t)
 	store, err := reviewtransaction.CompactAuthoritativeStore(t.Context(), repo, lineage)
 	if err != nil {

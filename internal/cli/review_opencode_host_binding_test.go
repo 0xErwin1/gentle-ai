@@ -45,6 +45,7 @@ func hostLensReviewFixture(t *testing.T) (repo string, store reviewtransaction.C
 // line. That first-contact frame must be admitted by field value, start the
 // session, and hand the child only Go-rebuilt canonical bytes.
 func TestOpenCodeReviewTransportAdmitsContractShapedHostLensFrame(t *testing.T) {
+	reviewEnabledHome(t)
 	repo, store, record, lens, contextHandle, subject := hostLensReviewFixture(t)
 	const injected = "You are the reliability reviewer. Inspect the frozen candidate trees and return one JSON object."
 	binding := hostLensBindingJSON(record.State.LineageID, record.State.InitialSnapshot.Identity, lens, `"0"`,
@@ -93,6 +94,7 @@ func TestOpenCodeReviewTransportAdmitsContractShapedHostLensFrame(t *testing.T) 
 // covers the other legitimate host serialization: numeric order and a key
 // order different from both the contract listing and Go's marshal order.
 func TestOpenCodeReviewTransportAdmitsHostLensFrameWithNumericOrderAndShuffledKeys(t *testing.T) {
+	reviewEnabledHome(t)
 	repo, _, record, lens, contextHandle, subject := hostLensReviewFixture(t)
 	binding := fmt.Sprintf(
 		`{"subject_hash": %q, "repository_context": %q, "revision": %q, "order": 0, "lens": %q, "target": %q, "lineage": %q}`,
@@ -116,6 +118,7 @@ func TestOpenCodeReviewTransportAdmitsHostLensFrameWithNumericOrderAndShuffledKe
 // against the Go-resolved authority, unknown keys refuse, and missing
 // required fields refuse. No tampered frame may release a provider prompt.
 func TestOpenCodeReviewTransportRefusesHostLensFrameValueTampering(t *testing.T) {
+	reviewEnabledHome(t)
 	repo, store, record, lens, contextHandle, subject := hostLensReviewFixture(t)
 	valid := func() map[string]any {
 		return map[string]any{
@@ -180,6 +183,7 @@ func TestOpenCodeReviewTransportRefusesHostLensFrameValueTampering(t *testing.T)
 // value against the resolved authority, and the child receives only the
 // Go-rebuilt materialization -- never the host-authored trailing bytes.
 func TestOpenCodeReviewTransportAdmitsHostExpandedProviderRoleTask(t *testing.T) {
+	reviewEnabledHome(t)
 	repo, lineage, _ := providerCorrectionReady(t)
 	task := openCodeTargetedValidatorTask(t, repo, lineage)
 	const injected = "Input:\nmaterialized validator payload"
@@ -205,6 +209,7 @@ func TestOpenCodeReviewTransportAdmitsHostExpandedProviderRoleTask(t *testing.T)
 // lane fail-closed under semantic admission: unknown keys and same-line
 // trailing JSON still refuse before any provider launch.
 func TestOpenCodeReviewTransportRefusesHostRoleFrameTampering(t *testing.T) {
+	reviewEnabledHome(t)
 	repo, lineage, _ := providerCorrectionReady(t)
 	task := openCodeTargetedValidatorTask(t, repo, lineage)
 	line, _, _ := strings.Cut(task.Prompt, "\n")

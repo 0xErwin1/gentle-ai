@@ -111,6 +111,7 @@ exit $LASTEXITCODE
 }
 
 func TestPowerShell51ReviewerPayloadBindsProviderArtifactSubject(t *testing.T) {
+	reviewEnabledHome(t)
 	repo, started, _, record := newArtifactReview(t, false)
 	lens := record.State.SelectedLenses[0]
 	input := filepath.Join(t.TempDir(), "reviewer.json")

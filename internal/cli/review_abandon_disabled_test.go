@@ -140,7 +140,7 @@ func TestReviewAbandonWhileDisabledStillRequiresTheExactBinding(t *testing.T) {
 // cleanup classification does not admit arbitrary destruction: a stale revision
 // and terminal authority both remain refused with the switch off.
 func TestReviewAbandonWhileDisabledKeepsEligibilityAndRevisionChecks(t *testing.T) {
-	reviewModeHome(t)
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	revision, snapshotIdentity := pristineReviewingCLIFixture(t, repo)
 	statePath := filepath.Join(reviewCLIAuthorityRoot(t, repo), "v2", "abandon-stale-reviewing", "review-state.json")

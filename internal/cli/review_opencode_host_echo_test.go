@@ -34,6 +34,7 @@ func openCodeHostEchoedMaterialization(t *testing.T, materialized string) string
 // first-contact frame -- rebuilt from live authority, byte-identical to the
 // Go materialization, with none of the echoed bytes -- and it must capture.
 func TestOpenCodeReviewTransportMaterializesHostEchoedLensFrame(t *testing.T) {
+	reviewEnabledHome(t)
 	repo, _, store, record := newArtifactReview(t, false)
 	lens := record.State.SelectedLenses[0]
 	primary := startOpenCodeTransportRelay(t, openCodeLensTransportStart(t, repo, record, lens))
@@ -75,6 +76,7 @@ func TestOpenCodeReviewTransportMaterializesHostEchoedLensFrame(t *testing.T) {
 // TestOpenCodeReviewTransportMaterializesHostEchoedRoleFrame proves the same
 // classification on the provider-role lane.
 func TestOpenCodeReviewTransportMaterializesHostEchoedRoleFrame(t *testing.T) {
+	reviewEnabledHome(t)
 	repo, lineage, request := providerCorrectionReady(t)
 	task := openCodeTargetedValidatorTask(t, repo, lineage)
 	store, _, err := discoverCompactFacadeReview(t.Context(), repo, lineage, false)
@@ -118,6 +120,7 @@ func TestOpenCodeReviewTransportMaterializesHostEchoedRoleFrame(t *testing.T) {
 // nothing else, so a genuine re-intercepting hook still forwards its host
 // output while an echoed copy takes the capturing first-contact path.
 func TestOpenCodeReviewTransportPassesThroughOnlyByteExactMaterialization(t *testing.T) {
+	reviewEnabledHome(t)
 	repo, _, _, record := newArtifactReview(t, false)
 	lens := record.State.SelectedLenses[0]
 	primary := startOpenCodeTransportRelay(t, openCodeLensTransportStart(t, repo, record, lens))

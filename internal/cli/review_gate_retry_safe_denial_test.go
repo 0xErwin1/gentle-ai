@@ -56,6 +56,7 @@ func decodeDeniedGateResult(t *testing.T, gateErr error, payload []byte) ReviewV
 // that into authority_corrupted although nothing in the store is damaged --
 // `git fetch origin` alone flips the identical gate to allow.
 func TestPrePRGateNamesFetchStalenessAsRetrySafeDenial(t *testing.T) {
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	branch := strings.TrimSpace(runReviewCLIGit(t, repo, "symbolic-ref", "--short", "HEAD"))
 	remote := filepath.Join(t.TempDir(), "remote.git")
@@ -139,6 +140,7 @@ func TestPrePRGateNamesFetchStalenessAsRetrySafeDenial(t *testing.T) {
 // authority corruption requiring explicit maintainer action, although the
 // identical gate allows once the concurrent writer finishes.
 func TestGateDiscoveryNamesLiveLockContentionAsInventoryBusy(t *testing.T) {
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	_, store := approveDiscoveryMarkdown(t, repo, "review-lock-live", "docs/live.md", "reviewed\n")
 	lockPath := reviewCLISharedStoreLockPath(t, repo)
@@ -277,6 +279,7 @@ func writeReviewCLIStoreLockResidue(t *testing.T, lockPath string, pid int, host
 // recorded pid is verifiably dead on this host, the denial must say so and
 // name the removal continuation.
 func TestGateDiscoveryNamesDeadOwnerStaleLockResidue(t *testing.T) {
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	approveDiscoveryMarkdown(t, repo, "review-lock-dead", "docs/dead.md", "reviewed\n")
 	lockPath := reviewCLISharedStoreLockPath(t, repo)
@@ -385,6 +388,7 @@ func TestGateDiscoveryNamesDeadOwnerStaleLockResidue(t *testing.T) {
 // (pinned end-to-end above); (3) residue with a held flock or a holder
 // verifiably dead on this host (pinned above). Nothing else is ever busy.
 func TestInventoryBusyProducersRequireProvablySelfClearingContention(t *testing.T) {
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	approveDiscoveryMarkdown(t, repo, "review-busy-producers", "docs/busy.md", "reviewed\n")
 	ctx := context.Background()
@@ -402,6 +406,7 @@ func TestInventoryBusyProducersRequireProvablySelfClearingContention(t *testing.
 // EVERY unknown assessment shares one recognized retry-safe cause class.
 // Mixed or unrecognized causes keep today's fail-closed corruption verdict.
 func TestGateDiscoveryMixedOrUnrecognizedUnknownCausesStayCorrupted(t *testing.T) {
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	approveDiscoveryMarkdown(t, repo, "review-mixed-first", "docs/mixed-first.md", "first\n")
 	runReviewCLIGit(t, repo, "add", "-A")

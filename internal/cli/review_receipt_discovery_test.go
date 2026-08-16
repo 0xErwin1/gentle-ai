@@ -31,6 +31,7 @@ func assertScopeChangeRecovery(t *testing.T, failure ReviewIntegrationFailure, l
 }
 
 func TestUnqualifiedGateDiscoverySelectsOneExactReceiptAcrossUnrelatedHistory(t *testing.T) {
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	first, _ := approveDiscoveryMarkdown(t, repo, "review-discovery-first", "docs/first.md", "first\n")
 	runReviewCLIGit(t, repo, "add", "-A")
@@ -70,6 +71,7 @@ func TestUnqualifiedGateDiscoverySelectsOneExactReceiptAcrossUnrelatedHistory(t 
 // "exact recommit" branch AssessCompactGateTarget itself special-cases) still
 // needs the expensive path.
 func TestPreCommitGateDiscoverySkipsAssessmentForGenesisDisjointTerminalLeaves(t *testing.T) {
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	const n = 12
 	for index := 0; index < n; index++ {
@@ -123,6 +125,7 @@ func TestPreCommitGateDiscoverySkipsAssessmentForGenesisDisjointTerminalLeaves(t
 // lineages -- so it must still be discovered and selected exactly as
 // AssessCompactGateTarget's un-skipped path would.
 func TestPreCommitGateDiscoveryStillSelectsExactReceiptAmongDisjointNoiseLineages(t *testing.T) {
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	const n = 8
 	for index := 0; index < n; index++ {
@@ -156,6 +159,7 @@ func TestPreCommitGateDiscoveryStillSelectsExactReceiptAmongDisjointNoiseLineage
 }
 
 func TestReceiptlessTerminalLegacyChainIsInventoryReadableButNeverGateAuthority(t *testing.T) {
+	reviewEnabledHome(t)
 	fixture := newLegacyCLIFixture(t, "legacy-pre-receipt")
 	if err := os.Remove(fixture.receiptPath); err != nil {
 		t.Fatal(err)
@@ -200,6 +204,7 @@ func TestReceiptlessTerminalLegacyChainIsInventoryReadableButNeverGateAuthority(
 }
 
 func TestUnqualifiedGateDiscoveryReturnsTypedMissingAndScopeChanged(t *testing.T) {
+	reviewEnabledHome(t)
 	t.Run("missing", func(t *testing.T) {
 		repo := initReviewCLIRepo(t)
 		var output bytes.Buffer
@@ -285,6 +290,7 @@ func TestUnqualifiedGateDiscoveryReturnsTypedMissingAndScopeChanged(t *testing.T
 }
 
 func TestUnqualifiedPrePushDiscoveryReportsTargetResolutionWithoutMutation(t *testing.T) {
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	_, store := approveDiscoveryMarkdown(t, repo, "review-discovery-missing-upstream", "docs/reviewed.md", "reviewed\n")
 	runReviewCLIGit(t, repo, "add", "-A")
@@ -350,6 +356,7 @@ func TestUnqualifiedPrePushDiscoveryReportsTargetResolutionWithoutMutation(t *te
 // load-bearing: naming the corrupt lineage produces the corruption
 // classification, and nothing else silently takes its place.
 func TestUnqualifiedPrePushDiscoveryKeepsCorruptAuthorityPrecedence(t *testing.T) {
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	approveDiscoveryMarkdown(t, repo, "review-discovery-target-and-corruption", "docs/reviewed.md", "reviewed\n")
 	runReviewCLIGit(t, repo, "add", "-A")
@@ -403,6 +410,7 @@ func TestUnqualifiedPrePushDiscoveryKeepsCorruptAuthorityPrecedence(t *testing.T
 }
 
 func TestUnqualifiedGateDiscoveryRoutesCommittedNextSliceWorkspace(t *testing.T) {
+	reviewEnabledHome(t)
 	// #1401: after one approved slice is committed exactly as reviewed, new
 	// dirty tracked work on top must classify as unrelated or scope-changed,
 	// never as authority_corrupted against the healthy predecessor.
@@ -460,6 +468,7 @@ func TestUnqualifiedGateDiscoveryRoutesCommittedNextSliceWorkspace(t *testing.T)
 }
 
 func TestUnqualifiedGateDiscoveryRejectsMultipleExactReceiptsButExplicitLineageIsDirect(t *testing.T) {
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	started, store := approveDiscoveryMarkdown(t, repo, "review-discovery-exact-a", "docs/exact.md", "exact\n")
 	record, err := store.Load()
@@ -528,6 +537,7 @@ func TestUnqualifiedGateDiscoveryRejectsMultipleExactReceiptsButExplicitLineageI
 }
 
 func TestUnqualifiedGateDiscoveryRequiresSelectionForMultipleScopeChangedReceipts(t *testing.T) {
+	reviewEnabledHome(t)
 	for _, tt := range []struct {
 		name       string
 		projection reviewtransaction.Projection
@@ -648,6 +658,7 @@ func TestUnqualifiedGateDiscoveryRequiresSelectionForMultipleScopeChangedReceipt
 // receipt, and defers to ordinary repository policy, so the contest has no
 // delivery consequence until the operator turns reviews back on.
 func TestUnqualifiedGateDiscoveryOnMixedCompactAndLegacyAuthorityHonorsTheKillSwitch(t *testing.T) {
+	reviewEnabledHome(t)
 	fixture := newLegacyCLIFixture(t, "review-discovery-mixed-legacy")
 	// Reviews the identical, still-dirty candidate a second time under an
 	// independent compact v2 lineage: nothing changed on disk between the two
@@ -697,6 +708,7 @@ func TestUnqualifiedGateDiscoveryOnMixedCompactAndLegacyAuthorityHonorsTheKillSw
 }
 
 func TestUnscopedGateDiscoveryToleratesCorruptedUnrelatedLegacyInventory(t *testing.T) {
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	started, _ := approveDiscoveryMarkdown(t, repo, "review-discovery-valid", "docs/valid.md", "valid\n")
 	commonDir := filepath.Clean(string(bytes.TrimSpace([]byte(runReviewCLIGit(t, repo, "rev-parse", "--path-format=absolute", "--git-common-dir")))))
@@ -755,6 +767,7 @@ func TestUnscopedGateDiscoveryToleratesCorruptedUnrelatedLegacyInventory(t *test
 }
 
 func TestReleaseGateToleratesCorruptionConfinedToLegacyEntriesIncludingLockResidue(t *testing.T) {
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	started, _ := approveDiscoveryMarkdown(t, repo, "review-release-tolerance", "docs/valid.md", "valid\n")
 	runReviewCLIGit(t, repo, "add", "-A")
@@ -890,6 +903,7 @@ func TestReleaseGateToleratesCorruptionConfinedToLegacyEntriesIncludingLockResid
 }
 
 func TestUnscopedGateDiscoveryExcludesTamperedLegacyReceiptFromCandidates(t *testing.T) {
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	started, _ := approveDiscoveryMarkdown(t, repo, "review-discovery-valid", "docs/valid.md", "valid\n")
 	legacyStore, authoritative := approveLegacyDiscoveryChain(t, repo, "review-legacy-tampered")
@@ -1013,6 +1027,7 @@ func approveLegacyDiscoveryChain(t *testing.T, repo, lineage string) (reviewtran
 // with no way to tell which entry caused it. The corrupt leaf still fails
 // closed -- when something names it.
 func TestUnscopedGateDiscoveryFailsClosedOnCorruptedCompactLeaf(t *testing.T) {
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	approveDiscoveryMarkdown(t, repo, "review-discovery-valid", "docs/valid.md", "valid\n")
 	commonDir := filepath.Clean(string(bytes.TrimSpace([]byte(runReviewCLIGit(t, repo, "rev-parse", "--path-format=absolute", "--git-common-dir")))))
@@ -1057,6 +1072,7 @@ func TestUnscopedGateDiscoveryFailsClosedOnCorruptedCompactLeaf(t *testing.T) {
 }
 
 func TestExplicitMalformedLineageFailsClosedWithoutMutation(t *testing.T) {
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	started, store := approveDiscoveryMarkdown(t, repo, "review-selected-malformed", "docs/selected.md", "selected\n")
 	malformed := []byte("{\n")
@@ -1090,6 +1106,7 @@ func TestExplicitMalformedLineageFailsClosedWithoutMutation(t *testing.T) {
 // receipt_ambiguous with review.start as the runnable next action -- a
 // named divergence, not a silent one.
 func TestUnqualifiedPrePRDiscoveryDeniesSequentialCompactReceiptsWithoutComposition(t *testing.T) {
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	branch := strings.TrimSpace(runReviewCLIGit(t, repo, "symbolic-ref", "--short", "HEAD"))
 	remote := filepath.Join(t.TempDir(), "remote.git")
@@ -1141,6 +1158,7 @@ func TestUnqualifiedPrePRDiscoveryDeniesSequentialCompactReceiptsWithoutComposit
 // EvaluateCompactGate denies it directly -- gate_invalidated, not
 // receipt_ambiguous, since discovery itself was unambiguous.
 func TestUnqualifiedPrePRDiscoveryDeniesSequentialReceiptsForSamePathWithoutComposition(t *testing.T) {
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	branch := strings.TrimSpace(runReviewCLIGit(t, repo, "symbolic-ref", "--short", "HEAD"))
 	remote := filepath.Join(t.TempDir(), "remote.git")
@@ -1173,6 +1191,7 @@ func TestUnqualifiedPrePRDiscoveryDeniesSequentialReceiptsForSamePathWithoutComp
 }
 
 func TestUnqualifiedPrePRDiscoveryReconcilesCurrentChangesReceiptAcrossDivergedBase(t *testing.T) {
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	branch := strings.TrimSpace(runReviewCLIGit(t, repo, "symbolic-ref", "--short", "HEAD"))
 	initialCommit := strings.TrimSpace(runReviewCLIGit(t, repo, "rev-parse", "HEAD"))
@@ -1207,6 +1226,7 @@ func TestUnqualifiedPrePRDiscoveryReconcilesCurrentChangesReceiptAcrossDivergedB
 }
 
 func TestUnqualifiedPrePRDiscoveryKeepsExactSingleReceiptContext(t *testing.T) {
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	branch := strings.TrimSpace(runReviewCLIGit(t, repo, "symbolic-ref", "--short", "HEAD"))
 	remote := filepath.Join(t.TempDir(), "remote.git")
@@ -1243,6 +1263,7 @@ func approveDiscoveryMarkdown(t *testing.T, repo, lineage, logicalPath, content 
 // workspace while the index is empty, partial, or different, so STATUS must
 // inspect the pre-commit candidate before it offers validation.
 func TestNegotiatedStatusRequiresExactStagedDeliveryCandidate(t *testing.T) {
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	const lineage = "review-staged-delivery-candidate"
 	for path, content := range map[string]string{"docs/alpha.md": "baseline alpha\n", "docs/bravo.md": "baseline bravo\n"} {

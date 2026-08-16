@@ -203,30 +203,29 @@ type RDDDisabledError struct {
 	Source    RDDModeSource
 }
 
-// Error names the exact command that turns reviews back on, scoped to the
-// source that actually decided. Refusing here is correct -- the operator asked
-// for reviews to be off -- but a refusal that exits non-zero and names no
-// runnable continuation is the one shape this project does not ship. The scope
-// is derived rather than generic so the operator does not have to work out
-// which of the two independent sources they need to change.
+// Error names the exact command that turns reviews on, scoped to the source
+// that actually decided. Refusing here is correct -- either the operator asked
+// for reviews to be off, or nobody ever opted in -- but a refusal that exits
+// non-zero and names no runnable continuation is the one shape this project
+// does not ship. The scope is derived rather than generic so the operator does
+// not have to work out which source they need to change. The wording says "on"
+// rather than "back on" because receipt-driven development is opt-in: the most
+// common refusal is a fresh install where reviews were never on to begin with.
 func (err *RDDDisabledError) Error() string {
 	message := fmt.Sprintf("%v: %s is rejected because the %s mode source keeps it off",
 		ErrRDDDisabled, rddOperationSubject(err.Operation), err.Source)
 	// A mutation refuses against authority that already exists, so the operator
 	// needs one fact a start never has to carry: their in-flight review survived
-	// the refusal. It is stated before the continuation because it is true even
-	// when no source can be named and no command may be offered.
+	// the refusal. It is stated before the continuation because it answers a
+	// different question than "how do I proceed".
 	if err.Operation == RDDOperationMutate {
 		message += "; the review is frozen, not discarded"
 	}
 	scope := reviewModeScopeForSource(err.Source)
-	if scope == "" {
-		return message
-	}
 	if err.Operation == RDDOperationMutate {
-		return fmt.Sprintf("%s; turn reviews back on with gentle-ai review mode enable --scope=%s to continue it from where it stopped", message, scope)
+		return fmt.Sprintf("%s; turn reviews on with gentle-ai review mode enable --scope=%s to continue it from where it stopped", message, scope)
 	}
-	return fmt.Sprintf("%s; turn it back on with gentle-ai review mode enable --scope=%s", message, scope)
+	return fmt.Sprintf("%s; turn reviews on with gentle-ai review mode enable --scope=%s", message, scope)
 }
 
 // rddOperationSubject names the refused operation the way an operator would say
@@ -240,17 +239,20 @@ func rddOperationSubject(operation RDDOperation) string {
 }
 
 // reviewModeScopeForSource maps the deciding source onto the --scope value of
-// `gentle-ai review mode enable`. The default source expresses no opinion, so
-// it can never be what keeps reviews off and gets no continuation rather than
-// a guessed one.
+// `gentle-ai review mode enable`. Receipt-driven development is opt-in, so the
+// default source is not an absence of a decision the operator can act on: it is
+// the ordinary state of an install nobody configured, and it resolves the same
+// way a global opinion does. It answers "global" for that reason, and because
+// global is the only scope that can turn reviews on at all -- a clone may
+// disable for itself but may never require review for the user, so pointing a
+// never-configured operator at --scope=clone would name a command that cannot
+// do what the refusal just asked them to do.
 func reviewModeScopeForSource(source RDDModeSource) string {
 	switch source {
-	case RDDModeSourceGlobal:
-		return "global"
 	case RDDModeSourceCloneLocal:
 		return "clone"
 	default:
-		return ""
+		return "global"
 	}
 }
 
@@ -715,7 +717,11 @@ func rddModeStatus(
 	case globalMode == RDDModeOn:
 		status.Effective, status.Source = RDDModeOn, RDDModeSourceGlobal
 	default:
-		status.Effective, status.Source = RDDModeOn, RDDModeSourceDefault
+		// Receipt-driven development is opt-in. Nobody expressed an opinion
+		// here, and an install nobody configured must not start reviewing on
+		// its own: the only way to "on" is an explicit global enable, which the
+		// case above reads back untouched across an upgrade.
+		status.Effective, status.Source = RDDModeOff, RDDModeSourceDefault
 	}
 	return status
 }
