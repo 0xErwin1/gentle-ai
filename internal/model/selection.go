@@ -22,6 +22,8 @@ type Selection struct {
 	CodexPhaseModelAssignments       map[string]string                // key = phase name; value = model id (Custom per-phase picker only)
 	CommunityTools                   []CommunityToolID                // optional cross-agent community tools/plugins
 	BackgroundIntent                 OpenCodeBackgroundIntent         // OpenCode background subagent choice; empty = unresolved
+	Scope                            InstallScope                     // install scope; empty = unresolved
+	Channel                          InstallChannel                   // release track; empty = unresolved
 }
 
 func (s Selection) HasCommunityTool(tool CommunityToolID) bool {
