@@ -5,12 +5,15 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
 
+	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewerprovider"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
 )
 
@@ -129,11 +132,10 @@ func TestReviewStatusRoutesInconclusiveCapturedValidationToRetryableCapture(t *t
 // TestReviewInconclusiveCapturedValidationReachesApprovedReceipt is the
 // acceptance case for the maintainer's preserved lineage: open correction,
 // unconsumed attempt, and an occupied validator slot holding an inconclusive
-// result. The slot is immutable and no-replace by construction
-// (publishCompactRoleResultSlot leaves an occupied slot untouched), so the
-// retry must be reachable WITHOUT overwriting it. Supplying a conclusive
-// validation through the transition's own submission descriptor must drive
-// the lineage all the way to an approved receipt.
+// result. This is the caller-authored route (no host-mediated runtime bound):
+// its submission descriptor hands the fresh validation straight to finalize,
+// so it never touches the occupied slot at all. Executing exactly what STATUS
+// emits must drive the lineage all the way to an approved receipt.
 func TestReviewInconclusiveCapturedValidationReachesApprovedReceipt(t *testing.T) {
 	repo, lineage, request := providerCorrectionReady(t)
 	inconclusive := providerInconclusiveValidationPayload(t, request)
@@ -171,6 +173,127 @@ func TestReviewInconclusiveCapturedValidationReachesApprovedReceipt(t *testing.T
 	preserved, err := os.ReadFile(slotPath)
 	if err != nil || !bytes.Equal(preserved, inconclusive) {
 		t.Fatalf("inconclusive validator payload was not preserved: %v", err)
+	}
+}
+
+// TestReviewInconclusiveCapturedValidationCompletesTheHostRelayRoute is the
+// live-route proof for the runtime that actually drives these lineages. A
+// host-mediated runtime may never author a verdict itself, so handing it the
+// generic external.run_targeted_validation form leaves it with a transition it
+// has no executor for; it must receive the same Go-issued provider role task
+// an unoccupied slot receives. This test executes exactly the transition
+// STATUS emits -- the provider role capture funnel `review capture-validation`
+// uses -- and then the finalize STATUS emits next, all the way to the receipt.
+func TestReviewInconclusiveCapturedValidationCompletesTheHostRelayRoute(t *testing.T) {
+	repo, lineage, request := providerCorrectionReady(t)
+	inconclusive := providerInconclusiveValidationPayload(t, request)
+	store := seedCapturedValidatorSlot(t, repo, lineage, request, inconclusive)
+
+	readHostStatus := func() ReviewTargetStatusResult {
+		t.Helper()
+		var output bytes.Buffer
+		if err := RunReview([]string{
+			"status", "--cwd", repo, "--lineage", lineage, "--contract", ReviewIntegrationContractV2,
+			"--agent", string(model.AgentOpenCode), "--next-transition",
+		}, &output); err != nil {
+			var direct bytes.Buffer
+			directErr := runReviewStatus(t.Context(), []string{
+				"--cwd", repo, "--lineage", lineage, "--contract", ReviewIntegrationContractV2,
+				"--agent", string(model.AgentOpenCode), "--next-transition",
+			}, &direct)
+			t.Fatalf("host-relay inconclusive STATUS: %v\ndirect=%v\n%s", err, directErr, output.String())
+		}
+		var status ReviewTargetStatusResult
+		decodeStrictReviewJSON(t, output.Bytes(), &status)
+		if err := status.Validate(); err != nil {
+			t.Fatalf("host-relay inconclusive STATUS validation: %v", err)
+		}
+		return status
+	}
+
+	before := readHostStatus()
+	if before.NextTransition == nil || before.NextTransition.Kind != reviewNextTransitionCollect ||
+		before.NextTransition.ReasonCode != "targeted_validation_inconclusive_recapture_required" ||
+		before.NextTransition.Collect == nil || len(before.NextTransition.Collect.Inputs) != 1 {
+		t.Fatalf("host-relay inconclusive transition = %#v", before.NextTransition)
+	}
+	input := before.NextTransition.Collect.Inputs[0]
+	if input.CaptureOperation != "external.run_provider_role" || input.ProviderTask == nil ||
+		input.ProviderTask.Role != string(reviewerprovider.RoleTargetedValidator) || input.Submission != nil {
+		t.Fatalf("host-relay inconclusive input = %#v: a host-mediated runtime must receive a Go-issued validator task, never a form that asks it to author the verdict", input)
+	}
+	transitionPayload, err := json.Marshal(before.NextTransition)
+	if err != nil {
+		t.Fatal(err)
+	}
+	validateAgainstPublishedNextTransitionSchemaV5(t, transitionPayload)
+
+	// Exactly the funnel `review capture-validation` drives.
+	record, err := store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := reviewProviderCaptureTargetedValidatorRaw(t.Context(), repo, store, record.State, record.Revision,
+		providerTargetedValidationPayload(t, request)); err != nil {
+		t.Fatalf("recapture the validation the host relay just ran: %v", err)
+	}
+
+	after := readHostStatus()
+	if after.NextTransition == nil || after.NextTransition.Kind != reviewNextTransitionExecute ||
+		after.NextTransition.Execute == nil || after.NextTransition.Execute.Operation != "review.finalize" {
+		t.Fatalf("post-recapture transition = %#v", after.NextTransition)
+	}
+	tokens := make([]string, len(after.NextTransition.Execute.Arguments))
+	for index, argument := range after.NextTransition.Execute.Arguments {
+		tokens[index] = argument.Token
+	}
+	if err := RunReviewFacadeFinalize(tokens, &bytes.Buffer{}); err != nil {
+		t.Fatalf("execute the finalize STATUS emitted after the recapture: %v", err)
+	}
+	terminal, err := store.Load()
+	if err != nil || terminal.State.State != reviewtransaction.StateApproved || len(terminal.State.CorrectionAttempts) != 1 {
+		t.Fatalf("host-relay recapture terminal authority = %#v, %v", terminal, err)
+	}
+
+	// The superseded non-verdict is archived, never destroyed.
+	archived := filepath.Join(store.Dir, reviewtransaction.CompactQuarantinedReviewerResultsDir,
+		strings.TrimPrefix(request.ExpectedRevision, "sha256:")[:16],
+		"targeted-validator-"+strings.TrimPrefix(request.CorrectionTargetIdentity, "sha256:")[:16]+".json")
+	preserved, err := os.ReadFile(archived)
+	if err != nil || !bytes.Equal(preserved, inconclusive) {
+		t.Fatalf("superseded inconclusive payload was not preserved at %s: %v", archived, err)
+	}
+}
+
+// TestReviewCapturedVerdictStaysUnreplaceable is the guard on the supersede
+// path. Only a captured non-verdict may be moved aside; a real verdict --
+// here a genuine failed one, the exact shape a widened detector must never
+// misread as inconclusive -- keeps the immutable slot it already owns.
+func TestReviewCapturedVerdictStaysUnreplaceable(t *testing.T) {
+	repo, lineage, request := providerCorrectionReady(t)
+	failed, err := canonicalProviderRoleResult(facadeValidationResult{
+		TargetedValidationRequestHash: request.RequestHash,
+		CorrectionTargetIdentity:      request.CorrectionTargetIdentity,
+		OriginalCriteria: facadeValidationCheck{Passed: false, Evidence: []string{
+			"Inspected the correction candidate tree: the loop still stops one entry short, so the finding is not fixed"}},
+		CorrectionRegression: facadeValidationCheck{Passed: true, Evidence: []string{"inspected the frozen candidate tree; no regression"}},
+		FollowUps:            []reviewtransaction.FollowUp{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := seedCapturedValidatorSlot(t, repo, lineage, request, failed)
+	record, err := store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := reviewProviderCaptureTargetedValidatorRaw(t.Context(), repo, store, record.State, record.Revision,
+		providerTargetedValidationPayload(t, request)); !errors.Is(err, reviewtransaction.ErrCapturedReviewerResultSlotConflict) {
+		t.Fatalf("recapture over a real verdict = %v, want a slot conflict", err)
+	}
+	slot, err := reviewtransaction.ReadCompactTargetedValidatorResultSlot(store.Dir, request)
+	if err != nil || !slot.Occupied || !bytes.Equal(slot.Payload, failed) {
+		t.Fatalf("the real verdict no longer occupies its slot: %v", err)
 	}
 }
 
