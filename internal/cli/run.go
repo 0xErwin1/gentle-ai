@@ -359,6 +359,7 @@ func RunPreparedInstall(prepared PreparedInstall, detection system.DetectionResu
 		Persona:                     string(input.Selection.Persona),
 	}
 	newState.SetSelection(input.Selection)
+	newState.RDDMode = string(input.Selection.RDDMode)
 	if background.Persist != "" {
 		newState.BackgroundIntent = background.Persist
 	}
