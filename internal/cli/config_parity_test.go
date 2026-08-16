@@ -57,6 +57,8 @@ var selectionParity = map[string]parityDisposition{
 	"StrictTDD":          represented("StrictTDD"),
 	"Profiles":           represented("Profiles"),
 	"BackgroundIntent":   represented("BackgroundIntent"),
+	"Scope":              represented("Scope"),
+	"Channel":            represented("Channel"),
 
 	"ModelAssignments":            represented("ModelAssignments"),
 	"ClaudeModelAssignments":      represented("ClaudeModelAssignments"),
@@ -115,8 +117,8 @@ var installFlagsParity = map[string]parityDisposition{
 	"Preset":     represented("Preset"),
 	"SDDMode":    represented("SDDMode"),
 
-	"Scope":                       gap("Scope"),
-	"Channel":                     gap("Channel"),
+	"Scope":                       represented("Scope"),
+	"Channel":                     represented("Channel"),
 	"OpenCodeBackgroundSubagents": represented("BackgroundIntent"),
 	"PiBackgroundSubagents":       gap("PiBackgroundIntent"),
 
