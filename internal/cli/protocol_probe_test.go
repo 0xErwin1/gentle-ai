@@ -58,6 +58,9 @@ func TestMain(m *testing.M) {
 	if err := os.Setenv("USERPROFILE", testHome); err != nil {
 		panic(err)
 	}
+	if err := os.Unsetenv("XDG_CONFIG_HOME"); err != nil {
+		panic(err)
+	}
 
 	verifyEngramVersion = func() (string, error) {
 		return "", errors.New("engram version not available in tests")
