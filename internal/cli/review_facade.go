@@ -1231,6 +1231,11 @@ func RunReviewRecover(args []string, stdout io.Writer) error {
 	committedOnly := flags.Bool("committed-only", false, "acknowledge that --base-ref excludes dirty tracked changes")
 	workspaceOverlay := flags.Bool("workspace-overlay", false, "recover an approved base-diff into the exact staged index over --base-ref")
 	releaseScope := flags.Bool("release-scope", false, "recover an approved current-changes review into the immutable HEAD first-parent release scope")
+	var untrackedScope, expectedUntrackedInventory reviewSingleValueFlag
+	var intendedUntracked reviewRepeatedPathFlag
+	flags.Var(&untrackedScope, "untracked-scope", "explicit untracked scope for a current-changes successor: exclude or select (default: inherit the predecessor's frozen declaration)")
+	flags.Var(&intendedUntracked, "intended-untracked", "repo-relative untracked path to include; repeat for each path")
+	flags.Var(&expectedUntrackedInventory, "expected-untracked-inventory", "sha256 inventory digest from review status")
 	if err := parseReviewFlags(flags, args); err != nil {
 		return err
 	}
@@ -1301,10 +1306,27 @@ func RunReviewRecover(args []string, stdout io.Writer) error {
 	// the authority being recovered, and dropping them silently rebinds the
 	// successor to a partial candidate. Only the current-changes successor
 	// carries the declaration forward; base-diff, overlay, and release
-	// scopes never hold intended-untracked paths.
+	// scopes never hold intended-untracked paths. Issue #1972: an explicit
+	// recovery-time declaration (the same flags START and STATUS accept)
+	// overrides inheritance, so the successor target derives from the exact
+	// selection STATUS authorized rather than from the predecessor alone.
+	declaredSelection := reviewIntendedUntrackedDeclared(untrackedScope, intendedUntracked, expectedUntrackedInventory)
+	currentChangesSuccessor := !*releaseScope && !*committedOnly && !stagedScopeOverlay && !overlay
+	if declaredSelection && !currentChangesSuccessor {
+		return errors.New("intended-untracked selection requires a current-changes recovery; rerun `gentle-ai review recover` without --untracked-scope, --intended-untracked, and --expected-untracked-inventory")
+	}
+	if declaredSelection && projection == reviewtransaction.ProjectionStaged {
+		return errors.New("staged projection does not accept intended-untracked selection; remove those flags and rerun `gentle-ai review recover --projection staged`")
+	}
 	intended := []string{}
-	if !*releaseScope && !*committedOnly && !stagedScopeOverlay && !overlay &&
-		predecessorRecord.State.InitialSnapshot.Kind == reviewtransaction.TargetCurrentChanges {
+	switch {
+	case declaredSelection:
+		scope, scopeErr := reviewIntendedUntrackedScopeForTarget(context.Background(), reviewtransaction.SnapshotBuilder{Repo: root}, untrackedScope, intendedUntracked, expectedUntrackedInventory)
+		if scopeErr != nil {
+			return scopeErr
+		}
+		intended = append(intended, scope.Intended...)
+	case currentChangesSuccessor && predecessorRecord.State.InitialSnapshot.Kind == reviewtransaction.TargetCurrentChanges:
 		intended = append(intended, predecessorRecord.State.InitialSnapshot.IntendedUntracked...)
 	}
 	target := reviewtransaction.Target{Kind: reviewtransaction.TargetCurrentChanges, Projection: projection, IntendedUntracked: intended}
@@ -2263,6 +2285,9 @@ func validateReviewTransitionSelectorFlagCounts(args []string, operation string)
 			"policy":                        reviewIntegrationValueFlag,
 			"focus":                         reviewIntegrationValueFlag,
 			"base-ref":                      reviewIntegrationValueFlag,
+			"untracked-scope":               reviewIntegrationValueFlag,
+			"intended-untracked":            reviewIntegrationValueFlag,
+			"expected-untracked-inventory":  reviewIntegrationValueFlag,
 			"committed-only":                reviewIntegrationBoolFlag,
 			"workspace-overlay":             reviewIntegrationBoolFlag,
 			"release-scope":                 reviewIntegrationBoolFlag,
