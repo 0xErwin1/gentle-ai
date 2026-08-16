@@ -15,7 +15,7 @@
     "contract": {"const": "gentle-ai.review-integration/v2"},
     "operation": {"const": "review.start"},
     "action": {"const": "consent_required"},
-    "agent": {"enum": ["claude-code", "opencode", "codex"]},
+    "agent": {"enum": ["claude-code", "opencode", "codex", "pi"]},
     "blocking": {"const": true},
     "target_identity": {"$ref": "#/$defs/sha256"},
     "projection": {"enum": ["workspace", "staged"]},
