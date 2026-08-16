@@ -38,6 +38,7 @@ type harnessCase struct {
 	Body         string   `json:"body,omitempty"`
 	Prompt       string   `json:"prompt,omitempty"`
 	TaskOutput   string   `json:"task_output"`
+	SkipAfter    bool     `json:"skip_after,omitempty"`
 }
 
 // runOpenCodeLane drives the real plugin bytes through host-assembled binding
@@ -104,6 +105,10 @@ func (b *battery) runOpenCodeLane() {
 		b.fail(openCodeLane, "hook harness setup", err.Error())
 		return
 	}
+
+	// Owns a private lineage, so it neither consumes nor depends on this
+	// lineage's reviewer slot.
+	b.runOpenCodeHostEchoScenario(node)
 
 	reviewer := map[string]any{
 		"subject_hash": args["subject-hash"],
