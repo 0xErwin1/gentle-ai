@@ -197,9 +197,17 @@ func reviewProviderCanonicalRefuterClaims(snapshot string, claims []reviewtransa
 	return canonical, nil
 }
 
+// reviewProviderTargetedValidatorRequest carries the opaque repository context
+// because this role, alone among the provider roles, is expected to inspect
+// the immutable corrected candidate itself. The handle stays opaque and
+// path-free: it is a locator, not authorization, and resolving it revalidates
+// the repository and the current compact authority before any tree is read.
+// Without it the inspection recipe in the role's prompt would name a command
+// no validator could assemble, which is the second half of #3380.
 type reviewProviderTargetedValidatorRequest struct {
 	ValidationRequest reviewtransaction.TargetedValidationRequest `json:"validation_request"`
 	FixDeltaHash      string                                      `json:"fix_delta_hash"`
+	RepositoryContext string                                      `json:"repository_context"`
 	Evidence          []reviewProviderEvidence                    `json:"evidence"`
 	Invocation        reviewerprovider.Invocation                 `json:"-"`
 }
@@ -230,11 +238,23 @@ func reviewProviderNewTargetedValidatorRequest(ctx context.Context, repo string,
 	if !providerSHA256(fixDeltaHash) {
 		return reviewProviderTargetedValidatorRequest{}, errors.New("provider targeted validator request has an invalid fix delta hash") // refusal:by-design world-action: the provider-created validator request must carry immutable fix identity
 	}
+	// The same binding STATUS publishes for this transition, so the handle the
+	// validator is handed is byte-identical to the one the orchestrator holds
+	// and the derivation stays deterministic for the transport's re-interception
+	// byte comparison.
+	repositoryContext, err := reviewtransaction.PublishReviewRepositoryContext(ctx, repo, reviewtransaction.ReviewRepositoryContextBinding{
+		LineageID: request.LineageID, TargetIdentity: request.CorrectionTargetIdentity, Revision: request.ExpectedRevision,
+	})
+	if err != nil {
+		return reviewProviderTargetedValidatorRequest{}, err
+	}
 	evidence, err := reviewProviderMaterializeEvidence(ctx, repo, correction)
 	if err != nil {
 		return reviewProviderTargetedValidatorRequest{}, err
 	}
-	providerRequest := reviewProviderTargetedValidatorRequest{ValidationRequest: request, FixDeltaHash: fixDeltaHash, Evidence: evidence}
+	providerRequest := reviewProviderTargetedValidatorRequest{
+		ValidationRequest: request, FixDeltaHash: fixDeltaHash, RepositoryContext: repositoryContext, Evidence: evidence,
+	}
 	prompt, err := reviewProviderRolePrompt(contract, providerRequest)
 	if err != nil {
 		return reviewProviderTargetedValidatorRequest{}, err
@@ -425,6 +445,9 @@ func reviewProviderAdmitTargetedValidatorRaw(request reviewProviderTargetedValid
 	}
 	if !providerSHA256(request.FixDeltaHash) {
 		return facadeValidationResult{}, reviewtransaction.ScopedValidationResult{}, errors.New("provider targeted validator request has an invalid fix delta hash") // refusal:by-design world-action: validator admission requires Go-owned immutable fix identity
+	}
+	if err := reviewtransaction.ValidateReviewRepositoryContextHandle(request.RepositoryContext); err != nil {
+		return facadeValidationResult{}, reviewtransaction.ScopedValidationResult{}, errors.New("provider targeted validator request has no opaque repository context") // refusal:by-design world-action: a validator asked to inspect the frozen candidate must be issued the locator that reaches it
 	}
 	payload, err := reviewProviderExtractRoleRaw(reviewProviderRoleTargetedValidator, raw)
 	if err != nil {
