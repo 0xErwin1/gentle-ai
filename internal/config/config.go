@@ -64,6 +64,9 @@ type Selection struct {
 
 	ClaudePhaseAssignments map[string]ClaudePhaseAssignment `json:"claudePhaseAssignments,omitempty"`
 	CodexOrchestrator      *CodexOrchestratorAssignment     `json:"codexOrchestrator,omitempty"`
+
+	CommunityTools  []model.CommunityToolID           `json:"communityTools,omitempty"`
+	OpenCodePlugins []model.OpenCodeCommunityPluginID `json:"openCodePlugins,omitempty"`
 }
 
 type Document struct {
@@ -163,6 +166,8 @@ func Project(state DesiredState) model.Selection {
 		CodexPhaseModelAssignments:  copyMap(state.Selection.CodexPhaseModelAssignments),
 		ClaudePhaseAssignments:      claudePhasesToModel(state.Selection.ClaudePhaseAssignments),
 		CodexOrchestratorAssignment: codexOrchestratorToModel(state.Selection.CodexOrchestrator),
+		CommunityTools:              append([]model.CommunityToolID(nil), state.Selection.CommunityTools...),
+		OpenCodePlugins:             append([]model.OpenCodeCommunityPluginID(nil), state.Selection.OpenCodePlugins...),
 	}
 }
 
@@ -182,6 +187,8 @@ func FromSelection(selection model.Selection) DesiredState {
 		CodexPhaseModelAssignments:  copyMap(selection.CodexPhaseModelAssignments),
 		ClaudePhaseAssignments:      claudePhasesFromModel(selection.ClaudePhaseAssignments),
 		CodexOrchestrator:           codexOrchestratorFromModel(selection.CodexOrchestratorAssignment),
+		CommunityTools:              selection.CommunityTools,
+		OpenCodePlugins:             selection.OpenCodePlugins,
 	}}
 }
 
@@ -215,6 +222,8 @@ func NormalizeSelection(selection model.Selection) (model.Selection, []Diagnosti
 	selection.CodexPhaseModelAssignments = projected.CodexPhaseModelAssignments
 	selection.ClaudePhaseAssignments = projected.ClaudePhaseAssignments
 	selection.CodexOrchestratorAssignment = projected.CodexOrchestratorAssignment
+	selection.CommunityTools = projected.CommunityTools
+	selection.OpenCodePlugins = projected.OpenCodePlugins
 	if !preserveUnsetPersona {
 		selection.Persona = projected.Persona
 	}
@@ -243,6 +252,22 @@ func normalizeSelection(selection Selection, diagnostics *[]Diagnostic) Selectio
 	selection.Agents = unique(selection.Agents)
 	selection.Components = unique(selection.Components)
 	selection.Skills = unique(selection.Skills)
+	selection.CommunityTools = unique(selection.CommunityTools)
+	selection.OpenCodePlugins = unique(selection.OpenCodePlugins)
+
+	for _, tool := range selection.CommunityTools {
+		if tool != model.CommunityToolCodeGraph {
+			*diagnostics = append(*diagnostics, diagnostic("config.community-tool.unsupported", "$.selection.communityTools", fmt.Sprintf("unsupported community tool %q", tool)))
+		}
+	}
+
+	for _, plugin := range selection.OpenCodePlugins {
+		switch plugin {
+		case model.OpenCodePluginSubAgentStatusline, model.OpenCodePluginSDDEngramManage, model.OpenCodePluginGentleLogo:
+		default:
+			*diagnostics = append(*diagnostics, diagnostic("config.opencode-plugin.unsupported", "$.selection.openCodePlugins", fmt.Sprintf("unsupported OpenCode plugin %q", plugin)))
+		}
+	}
 
 	for _, agent := range selection.Agents {
 		if !catalog.IsSupportedAgent(agent) {

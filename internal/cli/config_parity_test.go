@@ -66,8 +66,8 @@ var selectionParity = map[string]parityDisposition{
 	"CodexOrchestratorAssignment": represented("CodexOrchestrator"),
 	"CodexCarrilModelAssignments": represented("CodexCarrilModelAssignments"),
 	"CodexPhaseModelAssignments":  represented("CodexPhaseModelAssignments"),
-	"OpenCodePlugins":             gap("OpenCodePlugins"),
-	"CommunityTools":              gap("CommunityTools"),
+	"OpenCodePlugins":             represented("OpenCodePlugins"),
+	"CommunityTools":              represented("CommunityTools"),
 
 	"CodexMultiAgent":                  exempt("deprecated; Codex always writes features.multi_agent and the field survives only for state back-compatibility"),
 	"ClearCodexOrchestratorAssignment": exempt("imperative clear action; declarative state expresses the same intent by omitting the assignment"),
@@ -85,7 +85,7 @@ var installStateParity = map[string]parityDisposition{
 	"BackgroundIntent":   represented("BackgroundIntent"),
 	"PiBackgroundIntent": gap("PiBackgroundIntent"),
 
-	"CommunityTools":              gap("CommunityTools"),
+	"CommunityTools":              represented("CommunityTools"),
 	"ModelAssignments":            represented("ModelAssignments"),
 	"ClaudeModelAssignments":      represented("ClaudeModelAssignments"),
 	"ClaudePhaseAssignments":      represented("ClaudePhaseAssignments"),
@@ -238,4 +238,28 @@ func staleEntries(parity map[string]parityDisposition, fields []string) []string
 	sort.Strings(stale)
 
 	return stale
+}
+
+// A gap entry names the contract field that should eventually carry the intent,
+// which is a prediction. When an implementation lands under a different name the
+// gap entry keeps matching nothing and stays green forever, so the closure goes
+// unreported. Checking the contract from the other side catches that: a field
+// nobody claims is either an unrecorded closure or a field with no imperative
+// counterpart at all.
+func TestEveryContractFieldIsClaimed(t *testing.T) {
+	claimed := map[string]struct{}{}
+
+	for _, domain := range parityDomains() {
+		for _, disposition := range domain.parity {
+			if disposition.exemptBecause == "" && !disposition.gap {
+				claimed[disposition.declarativeField] = struct{}{}
+			}
+		}
+	}
+
+	for _, field := range structFields(t, "config.Selection", configdomain.Selection{}) {
+		if _, ok := claimed[field]; !ok {
+			t.Errorf("config.Selection.%s is claimed by no parity entry; record which imperative surface it represents, or add it as an exemption", field)
+		}
+	}
 }
