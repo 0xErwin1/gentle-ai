@@ -20,6 +20,35 @@ type InstallInput struct {
 	DryRun    bool
 }
 
+// ResolveInstallInput produces the complete install input for one invocation.
+// A document replaces the selection the flags resolved, and its declared scope
+// and channel stand in for the flags it is not allowed to be combined with.
+// Resolving them anywhere but here would leave a declared install target
+// validated, persisted and exported while the install still ran against the
+// flag defaults.
+func ResolveInstallInput(flags InstallFlags, detection system.DetectionResult) (InstallInput, error) {
+	input, err := NormalizeInstallFlags(flags, detection)
+	if err != nil {
+		return InstallInput{}, err
+	}
+
+	if flags.Config != "" {
+		selection, err := loadConfigSelection(flags.Config)
+		if err != nil {
+			return InstallInput{}, err
+		}
+		input.Selection = selection
+		input = applyDeclaredInstallTarget(input, selection)
+	}
+
+	input.Selection, err = normalizeConfigSelection(input.Selection)
+	if err != nil {
+		return InstallInput{}, err
+	}
+
+	return input, nil
+}
+
 func NormalizeInstallFlags(flags InstallFlags, detection system.DetectionResult) (InstallInput, error) {
 	selection := model.Selection{}
 
