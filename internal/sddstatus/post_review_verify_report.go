@@ -20,7 +20,8 @@ const (
 
 // classifyPostReviewVerifyReportAttestation proves the exact final verify
 // settlement, report bytes, current candidate tree, and one-path receipt delta.
-// A missing digest is recoverable only after every structural check succeeds;
+// A missing digest has nothing to attest: it classifies as recoverable once
+// the receipt and path anchoring checks succeed, before any snapshot build;
 // the legacy caller-owned work-unit label does not govern the recovery offer.
 func classifyPostReviewVerifyReportAttestation(
 	ctx context.Context,
@@ -76,15 +77,21 @@ func classifyPostReviewVerifyReportAttestation(
 	}
 	logicalReportPath = filepath.ToSlash(logicalReportPath)
 
+	// Legacy records had no native digest and work-unit labels are caller-owned.
+	// Their label cannot grant archive authority, but with nothing to attest
+	// there is nothing to byte-gate either: the settlement classifies here as
+	// the safe recovery offer, before the snapshot build below could hash
+	// drifted worktree bytes into the Git object database.
+	if settlement.AttestedVerifyReportDigest == "" {
+		return postReviewVerifyReportRequired
+	}
 	// Status classification never writes to the Git object database: this cheap
 	// byte gate rejects a worktree report that cannot match the attested digest
 	// before any snapshot build hashes drifted bytes; filters only fail closed.
-	if settlement.AttestedVerifyReportDigest != "" {
-		worktreeReport, err := os.ReadFile(reportPath)
-		if err != nil || len(worktreeReport) > MaxVerifyReportBytes ||
-			verifyReportDigest(worktreeReport) != settlement.AttestedVerifyReportDigest {
-			return postReviewVerifyReportUnproven
-		}
+	worktreeReport, err := os.ReadFile(reportPath)
+	if err != nil || len(worktreeReport) > MaxVerifyReportBytes ||
+		verifyReportDigest(worktreeReport) != settlement.AttestedVerifyReportDigest {
+		return postReviewVerifyReportUnproven
 	}
 
 	current, err := (reviewtransaction.SnapshotBuilder{Repo: repo}).Build(ctx, reviewtransaction.Target{
@@ -109,12 +116,6 @@ func classifyPostReviewVerifyReportAttestation(
 	// without RestoreTreeBlob's object-writing write-tree round-trip.
 	if _, err := reviewtransaction.ReadTreeBlob(ctx, repo, receipt.FinalCandidateTree, logicalReportPath, MaxVerifyReportBytes); err != nil {
 		return postReviewVerifyReportUnproven
-	}
-	// Legacy records had no native digest and work-unit labels are caller-owned.
-	// Their label cannot grant archive authority, but it cannot suppress the safe
-	// recovery offer once every structural report check above has succeeded.
-	if settlement.AttestedVerifyReportDigest == "" {
-		return postReviewVerifyReportRequired
 	}
 	// Only the explicit current-binary final verification labels can carry the
 	// native digest that grants the archive-status exception.
