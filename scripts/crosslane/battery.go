@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -10,6 +11,11 @@ import (
 	"strings"
 	"time"
 )
+
+// commandTimeout bounds every non-host command: the --with-model lane drives
+// a real reviewer underneath, so a hung provider must fail the lane with a
+// diagnostic instead of hanging the battery forever.
+const commandTimeout = 20 * time.Minute
 
 const (
 	statusPass = "PASS"
@@ -70,7 +76,10 @@ func (b *battery) record(source string, body []byte) map[string]any {
 
 // run executes the binary under test and returns stdout, stderr, and exit code.
 func (b *battery) run(dir string, args ...string) (string, string, int) {
-	command := exec.Command(b.binary, args...)
+	ctx, cancel := context.WithTimeout(context.Background(), commandTimeout)
+	defer cancel()
+	command := exec.CommandContext(ctx, b.binary, args...)
+	command.WaitDelay = 30 * time.Second
 	command.Dir = dir
 	var stdout, stderr bytes.Buffer
 	command.Stdout = &stdout
@@ -81,6 +90,9 @@ func (b *battery) run(dir string, args ...string) (string, string, int) {
 		code = 1
 		if exit, ok := err.(*exec.ExitError); ok {
 			code = exit.ExitCode()
+		}
+		if ctx.Err() != nil {
+			return stdout.String(), fmt.Sprintf("timed out after %s: %s", commandTimeout, stderr.String()), code
 		}
 	}
 	return stdout.String(), stderr.String(), code
