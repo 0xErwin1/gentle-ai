@@ -19,6 +19,12 @@ type Snapshot struct {
 	Stage            string
 	Artifacts        []Artifact
 	ManagedSelectors map[string][]string
+
+	// decompose and merge belong to the adapter that rendered the snapshot, so
+	// neither manifest construction nor reconciliation has to recognise any
+	// adapter's file format.
+	decompose ResourceDecomposer
+	merge     ResourceMerger
 }
 
 type Request struct {
@@ -30,6 +36,28 @@ type Request struct {
 
 type Provider interface {
 	Render(config.DesiredState, map[string][]byte) ([]ArtifactContent, error)
+}
+
+// SelectorProvider is implemented by an adapter whose artifacts are composed
+// files, where several independently owned resources share one path. The
+// adapter names its own selectors because only it knows the shape of what it
+// wrote; the renderer stays neutral about every adapter's schema.
+type SelectorProvider interface {
+	Selectors(config.DesiredState) map[string][]string
+}
+
+// ResourceMerger is implemented by an adapter that owns resources inside a
+// composed file. Merging a selector-level resource into a live file requires
+// knowing that file's shape, which only the adapter that wrote it knows.
+type ResourceMerger interface {
+	Merge(operation Operation, stagedPath string, target []byte) ([]byte, error)
+}
+
+// ResourceDecomposer is implemented by an adapter that splits a composed
+// artifact into the resources it owns. An artifact whose adapter does not
+// decompose it is owned whole.
+type ResourceDecomposer interface {
+	Resources(path string, contents []byte, selectors []string) ([]Resource, error)
 }
 
 type ArtifactContent struct {
@@ -79,17 +107,19 @@ func (r Renderer) Render(request Request) (Snapshot, error) {
 	}
 	sort.Slice(artifacts, func(i, j int) bool { return artifacts[i].Path < artifacts[j].Path })
 
-	selectors := make([]string, 0, len(request.State.Roles))
-	for _, role := range request.State.Roles {
-		name := role.RenderedName
-		if name == "" {
-			name = string(role.ID)
+	managed := map[string][]string{}
+	if selector, ok := r.provider.(SelectorProvider); ok {
+		for path, selectors := range selector.Selectors(request.State) {
+			sorted := append([]string(nil), selectors...)
+			sort.Strings(sorted)
+			managed[path] = sorted
 		}
-		selectors = append(selectors, "/agent/"+name)
 	}
-	sort.Strings(selectors)
 
-	return Snapshot{Stage: request.StageRoot, Artifacts: artifacts, ManagedSelectors: map[string][]string{openCodeSettingsPath: selectors}}, nil
+	decomposer, _ := r.provider.(ResourceDecomposer)
+	merger, _ := r.provider.(ResourceMerger)
+
+	return Snapshot{Stage: request.StageRoot, Artifacts: artifacts, ManagedSelectors: managed, decompose: decomposer, merge: merger}, nil
 }
 
 func isolatedRoots(destination, stage string) error {
