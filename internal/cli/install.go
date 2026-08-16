@@ -99,6 +99,7 @@ func ParseInstallFlags(args []string) (InstallFlags, error) {
 		switch f.Name {
 		case "opencode-background-subagents":
 			opts.OpenCodeBackgroundSubagentsSet = true
+			semanticFlagUsed = true
 		case "pi-background-subagents":
 			opts.PiBackgroundSubagentsSet = true
 		case "agent", "agents", "component", "components", "skill", "skills", "persona", "preset", "sdd-mode":
