@@ -63,6 +63,10 @@ type Selection struct {
 	// persisted as managed state.
 	BackgroundIntent model.OpenCodeBackgroundIntent `json:"backgroundIntent,omitempty"`
 
+	// PiBackgroundIntent is the same choice for Pi and follows the same rule:
+	// silence stays unresolved, because only an explicit choice is persisted.
+	PiBackgroundIntent model.PiBackgroundIntent `json:"piBackgroundIntent,omitempty"`
+
 	// Assignment maps are keyed by phase name. The document is the complete
 	// desired state, so an omitted map declares no assignments rather than
 	// leaving a previous choice untouched.
@@ -193,6 +197,7 @@ func Project(state DesiredState) model.Selection {
 		StrictTDD:          state.Selection.StrictTDD,
 		Profiles:           profilesToModel(state.Selection.Profiles),
 		BackgroundIntent:   state.Selection.BackgroundIntent,
+		PiBackgroundIntent: state.Selection.PiBackgroundIntent,
 
 		ModelAssignments:            assignmentsToModel(state.Selection.ModelAssignments),
 		ClaudeModelAssignments:      copyMap(state.Selection.ClaudeModelAssignments),
@@ -219,7 +224,7 @@ func FromSelection(selection model.Selection) DesiredState {
 		Agents: selection.Agents, Components: selection.Components, Skills: selection.Skills,
 		Persona: selection.Persona, Preset: selection.Preset, SDDMode: selection.SDDMode,
 		SDDProfileStrategy: selection.SDDProfileStrategy, StrictTDD: selection.StrictTDD,
-		Profiles: profilesFromModel(selection.Profiles), BackgroundIntent: selection.BackgroundIntent,
+		Profiles: profilesFromModel(selection.Profiles), BackgroundIntent: selection.BackgroundIntent, PiBackgroundIntent: selection.PiBackgroundIntent,
 
 		ModelAssignments:            assignmentsFromModel(selection.ModelAssignments),
 		ClaudeModelAssignments:      copyMap(selection.ClaudeModelAssignments),
@@ -262,6 +267,7 @@ func NormalizeSelection(selection model.Selection) (model.Selection, []Diagnosti
 	selection.StrictTDD = projected.StrictTDD
 	selection.Profiles = projected.Profiles
 	selection.BackgroundIntent = projected.BackgroundIntent
+	selection.PiBackgroundIntent = projected.PiBackgroundIntent
 	selection.ModelAssignments = projected.ModelAssignments
 	selection.ClaudeModelAssignments = projected.ClaudeModelAssignments
 	selection.KiroModelAssignments = projected.KiroModelAssignments
@@ -296,6 +302,9 @@ func normalizeSelection(selection Selection, diagnostics *[]Diagnostic) Selectio
 		selection.Components = model.ComponentsForPreset(selection.Preset, selection.Persona)
 	}
 
+	if selection.PiBackgroundIntent != "" && !selection.PiBackgroundIntent.Valid() {
+		*diagnostics = append(*diagnostics, diagnostic("config.pi-background-intent.unsupported", "$.selection.piBackgroundIntent", fmt.Sprintf("unsupported Pi background intent %q; use auto, on, or off", selection.PiBackgroundIntent)))
+	}
 	if selection.BackgroundIntent != "" && !selection.BackgroundIntent.Valid() {
 		*diagnostics = append(*diagnostics, diagnostic("config.background-intent.unsupported", "$.selection.backgroundIntent", fmt.Sprintf("unsupported background intent %q; use auto, on, or off", selection.BackgroundIntent)))
 	}
