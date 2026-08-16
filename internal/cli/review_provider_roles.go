@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
@@ -498,7 +499,10 @@ func reviewProviderCaptureTargetedValidatorRaw(ctx context.Context, repo string,
 	}
 	result, native, err := reviewProviderAdmitTargetedValidatorRaw(request, raw)
 	if err != nil {
-		return facadeValidationResult{}, reviewtransaction.ScopedValidationResult{}, err
+		// Every host-mediated capture entry point funnels through here, so this
+		// is where a recapture that is itself a non-verdict spends its attempt.
+		return facadeValidationResult{}, reviewtransaction.ScopedValidationResult{},
+			reviewRecordInconclusiveTargetedValidation(store.Dir, request.ValidationRequest, raw, err)
 	}
 	// The new bytes are an admitted verdict. If the slot is still held by a
 	// non-verdict captured before this build could refuse one, archive it and
@@ -569,6 +573,66 @@ func reviewTargetedValidatorSlotPath(storeDir string, request reviewtransaction.
 		strings.TrimPrefix(request.ExpectedRevision, "sha256:"), "result.json")
 }
 
+// maxInconclusiveTargetedValidations bounds the non-verdicts one correction may
+// accumulate: one "I could not inspect it" deserves a re-run, a validator still
+// blind after that reports an environmental failure no recapture resolves.
+const maxInconclusiveTargetedValidations = 3
+
+// reviewQuarantinedTargetedValidatorPath names one preserved validator result
+// under the store's existing quarantine root. The empty suffix is the single
+// superseded legacy occupant, whose fixed name keeps the supersede publish
+// content-idempotent; "-attempt-<n>" is one rejected recapture.
+func reviewQuarantinedTargetedValidatorPath(storeDir string, request reviewtransaction.TargetedValidationRequest, suffix string) string {
+	return filepath.Join(storeDir, reviewtransaction.CompactQuarantinedReviewerResultsDir,
+		strings.TrimPrefix(request.ExpectedRevision, "sha256:")[:16],
+		"targeted-validator-"+strings.TrimPrefix(request.CorrectionTargetIdentity, "sha256:")[:16]+suffix+".json")
+}
+
+func reviewInconclusiveTargetedValidationAttempt(attempt int) string {
+	return "-attempt-" + strconv.Itoa(attempt)
+}
+
+// reviewInconclusiveTargetedValidationAttempts is the persisted retry ledger. It
+// counts rejected recaptures, the only event a repeatedly blind validator can
+// produce: this build refuses to publish a non-verdict, so the occupied slot
+// never changes, and the supersede archive is written only once an admitted
+// verdict has already ended this route.
+func reviewInconclusiveTargetedValidationAttempts(storeDir string, request reviewtransaction.TargetedValidationRequest) int {
+	attempts := 0
+	for attempts < maxInconclusiveTargetedValidations {
+		if _, err := os.Lstat(reviewQuarantinedTargetedValidatorPath(storeDir, request, reviewInconclusiveTargetedValidationAttempt(attempts+1))); err != nil {
+			break
+		}
+		attempts++
+	}
+	return attempts
+}
+
+// reviewRecordInconclusiveTargetedValidation appends one rejected non-verdict to
+// that ledger and returns the refusal unchanged, so every capture route records
+// the attempt by wrapping its own admission error. Each record takes a fresh
+// ordinal and content is never deduplicated: identical bytes are the expected
+// shape of a deterministically blind validator, so reading them as a crash
+// replay would swallow real attempts. The record is one atomic publish with
+// nothing else to reconcile, so a crash before it leaves an attempt uncounted,
+// which errs toward more retries rather than fewer.
+func reviewRecordInconclusiveTargetedValidation(storeDir string, request reviewtransaction.TargetedValidationRequest, rejected []byte, err error) error {
+	if !errors.Is(err, errReviewTargetedValidationInconclusive) {
+		return err
+	}
+	path := reviewQuarantinedTargetedValidatorPath(storeDir, request,
+		reviewInconclusiveTargetedValidationAttempt(reviewInconclusiveTargetedValidationAttempts(storeDir, request)+1))
+	for _, dir := range []string{filepath.Join(storeDir, reviewtransaction.CompactQuarantinedReviewerResultsDir), filepath.Dir(path)} {
+		if dirErr := ensureReviewerArtifactDir(dir); dirErr != nil {
+			return errors.Join(err, dirErr)
+		}
+	}
+	if publishErr := publishImmutableReviewerFile(path, rejected); publishErr != nil {
+		return errors.Join(err, publishErr)
+	}
+	return err
+}
+
 // reviewArchiveInconclusiveTargetedValidatorSlot vacates a correction-bound
 // validator slot occupied by a captured non-verdict, preserving its exact
 // bytes and digest under the store's existing quarantine root first. It is a
@@ -603,12 +667,10 @@ func reviewArchiveInconclusiveTargetedValidatorSlot(storeDir string, request rev
 	if err := ensureReviewerArtifactDir(archiveRoot); err != nil {
 		return err
 	}
-	archiveDir := filepath.Join(archiveRoot, strings.TrimPrefix(request.ValidationRequest.ExpectedRevision, "sha256:")[:16])
-	if err := ensureReviewerArtifactDir(archiveDir); err != nil {
+	archivePath := reviewQuarantinedTargetedValidatorPath(storeDir, request.ValidationRequest, "")
+	if err := ensureReviewerArtifactDir(filepath.Dir(archivePath)); err != nil {
 		return err
 	}
-	archivePath := filepath.Join(archiveDir, "targeted-validator-"+
-		strings.TrimPrefix(request.ValidationRequest.CorrectionTargetIdentity, "sha256:")[:16]+".json")
 	if err := publishImmutableReviewerFile(archivePath, payload); err != nil {
 		return fmt.Errorf("archive superseded targeted validator result: %w", err)
 	}
@@ -645,6 +707,15 @@ func readCapturedProviderTargetedValidatorResult(ctx context.Context, repo, stor
 	}
 	result, _, err := reviewProviderAdmitTargetedValidatorRaw(request, slot.Payload)
 	if err != nil {
+		// A non-verdict stays retryable only while the ledger has room. Once it
+		// does not, this slot is what captured_artifacts_unverifiable already
+		// names -- a captured artifact no routing can turn into a result -- so
+		// the exhausted error drops the retryable sentinel and the caller's
+		// default branch reaches that terminal instead of recapturing forever.
+		if errors.Is(err, errReviewTargetedValidationInconclusive) &&
+			reviewInconclusiveTargetedValidationAttempts(storeDir, request.ValidationRequest)+1 >= maxInconclusiveTargetedValidations {
+			return facadeValidationResult{}, fmt.Errorf("captured provider targeted validator produced no verdict on %d consecutive attempts: %s", maxInconclusiveTargetedValidations, err) // refusal:by-design human-authority: the captured_artifacts_unverifiable stop this routes to names the continuation, and a permanently blind validator needs maintainer inspection
+		}
 		return facadeValidationResult{}, fmt.Errorf("captured provider targeted validator result is no longer admitted: %w", err)
 	}
 	payload, err := canonicalProviderRoleResult(result)

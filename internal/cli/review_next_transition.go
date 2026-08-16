@@ -272,6 +272,10 @@ func newReviewNextTransition(status ReviewTargetStatusResult, selectedLenses []s
 				// routes around the slot through the ordinary submission
 				// descriptor, which hands the fresh validation straight to
 				// finalize; the inconclusive bytes stay preserved on disk.
+				// Neither inconclusive branch is unbounded: each branch records a
+				// rejected recapture, and the caller stops raising the retryable
+				// sentinel once that ledger reaches
+				// maxInconclusiveTargetedValidations, so an exhausted lineage stops.
 				return reviewTargetedValidationCollection(reviewInconclusiveTargetedValidationReason, input.Contract, validationBinding, *input.ValidationRequest)
 			}
 			if input.CapturedProviderTargetedValidator {
