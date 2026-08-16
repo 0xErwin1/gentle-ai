@@ -316,14 +316,24 @@ func TestBoundReviewArchiveGateAllowsAttestedPostReviewVerifyReportDelta(t *test
 		})
 	}
 
-	// R4: a status poll (drifted or bound) never writes a Git object.
+	// R4: a status poll (drifted, bound, or digest-less legacy) never writes a
+	// Git object. The legacy case drifts the worktree report so any snapshot
+	// build reached past the byte gate would hash the novel bytes into the ODB.
+	legacy := runtime
+	legacy.Attempts = append([]RuntimeAttempt(nil), runtime.Attempts...)
+	legacy.Attempts[len(legacy.Attempts)-1].AttestedVerifyReportDigest = ""
 	for _, tc := range []struct {
 		report string
+		status *RuntimeStatus
 		want   postReviewVerifyReportAttestation
-	}{{finalReport + "\n# drifted in the worktree only\n", postReviewVerifyReportUnproven}, {finalReport, postReviewVerifyReportBound}} {
+	}{
+		{finalReport + "\n# drifted in the worktree only\n", &runtime, postReviewVerifyReportUnproven},
+		{finalReport, &runtime, postReviewVerifyReportBound},
+		{finalReport + "\n# drifted in the worktree only\n", &legacy, postReviewVerifyReportRequired},
+	} {
 		write(t, verifyPath, tc.report)
 		before := countLooseGitObjects(t, root)
-		if got := classifyPostReviewVerifyReportAttestation(context.Background(), root, root, change, *ref, &runtime, SpecCounts{Requirements: 1, Scenarios: 1}); got != tc.want {
+		if got := classifyPostReviewVerifyReportAttestation(context.Background(), root, root, change, *ref, tc.status, SpecCounts{Requirements: 1, Scenarios: 1}); got != tc.want {
 			t.Fatalf("status classification = %v, want %v", got, tc.want)
 		}
 		if after := countLooseGitObjects(t, root); after != before {

@@ -921,10 +921,7 @@ func (store RuntimeStore) Finish(ctx context.Context, request FinishAttemptReque
 				return runtimeRecord{}, errors.New("unmanaged remediation requires fresh corrected evidence")
 			}
 		}
-		attestedVerifyReport, err := store.captureFinalVerifyReport(ctx, *active, request, snapshot.CandidateTree)
-		if err != nil {
-			return runtimeRecord{}, err
-		}
+		attestedVerifyReport := store.captureFinalVerifyReport(ctx, *active, request, snapshot.CandidateTree)
 		event := &runtimeFinishEvent{
 			Ordinal: active.Ordinal, FinishCandidateIdentity: snapshot.Identity, FinishCandidateTree: snapshot.CandidateTree,
 			AttestedVerifyReportDigest: attestedVerifyReport,
@@ -992,22 +989,23 @@ func (store RuntimeStore) Finish(ctx context.Context, request FinishAttemptReque
 // the native finish record binds the exact report bytes it read itself.
 // Attestation derivation never aborts a passing settlement: an underivable
 // attestation degrades like the missing-blob branch below (empty attestation,
-// archive stays fail-closed). Only writing the ledger itself remains fatal.
-func (store RuntimeStore) captureFinalVerifyReport(ctx context.Context, active RuntimeAttempt, request FinishAttemptRequest, candidateTree string) (string, error) {
+// archive stays fail-closed), so the derivation cannot fail and returns only
+// the attested digest. Only writing the ledger itself remains fatal.
+func (store RuntimeStore) captureFinalVerifyReport(ctx context.Context, active RuntimeAttempt, request FinishAttemptRequest, candidateTree string) string {
 	if request.Outcome != AttemptPassed || !isFinalVerifyWorkUnit(active.WorkUnit) {
-		return "", nil
+		return ""
 	}
 	openSpecRoot := filepath.Join(store.Workspace, "openspec")
 	if _, err := os.Stat(openSpecRoot); os.IsNotExist(err) {
 		// Runtime attempts are also used outside OpenSpec. Without an active
 		// OpenSpec root there is no canonical verify-report to attest.
-		return "", nil
+		return ""
 	} else if err != nil {
-		return "", nil
+		return ""
 	}
 	changeRoot, err := resolveBindingChangeRoot(ctx, store.Repo, store.Workspace, store.Change)
 	if err != nil {
-		return "", nil
+		return ""
 	}
 	reportPath := filepath.Join(changeRoot, "verify-report.md")
 	// The canonical report path is anchored at the planning workspace (--cwd),
@@ -1015,42 +1013,42 @@ func (store RuntimeStore) captureFinalVerifyReport(ctx context.Context, active R
 	// its repository still owns exactly one canonical active-change report.
 	workspacePath, err := filepath.Rel(store.Workspace, reportPath)
 	if err != nil {
-		return "", nil
+		return ""
 	}
 	wantPath := path.Join("openspec", "changes", store.Change, "verify-report.md")
 	if filepath.ToSlash(workspacePath) != wantPath {
-		return "", nil
+		return ""
 	}
 	// The settled candidate tree is built at the repository root, so the blob
 	// read addresses the same report through its repository-relative path.
 	logicalPath, err := filepath.Rel(store.Repo, reportPath)
 	if err != nil {
-		return "", nil
+		return ""
 	}
 	logicalPath = filepath.ToSlash(logicalPath)
 	artifactPaths, err := resolveArtifactPaths(changeRoot)
 	if err != nil {
-		return "", nil
+		return ""
 	}
 	specCounts, err := readSpecCounts(artifactPaths.Specs)
 	if err != nil {
-		return "", nil
+		return ""
 	}
 	payload, err := reviewtransaction.ReadTreeBlob(ctx, store.Repo, candidateTree, logicalPath, MaxVerifyReportBytes)
 	if errors.Is(err, reviewtransaction.ErrTreeArtifactMissing) {
 		// A report outside the settled candidate is not final verification
 		// evidence. Preserve the generic runtime settlement, but it carries no
 		// archive-status exception and therefore remains fail-closed later.
-		return "", nil
+		return ""
 	}
 	if err != nil {
-		return "", nil
+		return ""
 	}
 	admission := ValidateVerifyReportAdmission(string(payload), specCounts)
 	if !admission.Valid || admission.Verdict != "pass" || admission.EvidenceRevision != request.EvidenceRevision {
-		return "", nil
+		return ""
 	}
-	return verifyReportDigest(payload), nil
+	return verifyReportDigest(payload)
 }
 
 func verifyReportDigest(payload []byte) string {
