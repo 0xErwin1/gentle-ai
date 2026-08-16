@@ -83,6 +83,15 @@ type Selection struct {
 	Scope   model.InstallScope   `json:"scope,omitempty"`
 	Channel model.InstallChannel `json:"channel,omitempty"`
 
+	// Permissions add to the guardrails gentle-ai ships rather than replacing
+	// them, so declaring an allowance never quietly removes a shipped deny.
+	Permissions *Permissions `json:"permissions,omitempty"`
+
+	// MCPServers are keyed by server name. A local server runs a command; a
+	// remote one is reached at a URL. Declaring both is rejected rather than
+	// silently preferring one.
+	MCPServers map[string]MCPServer `json:"mcpServers,omitempty"`
+
 	// RDDMode governs the global review kill switch only. The clone-local
 	// override stays out of the contract on purpose: it exists so that no
 	// repository can ship or force a review policy onto a clone.
@@ -188,6 +197,8 @@ func Project(state DesiredState) model.Selection {
 		Scope:                       state.Selection.Scope,
 		Channel:                     state.Selection.Channel,
 		RDDMode:                     state.Selection.RDDMode,
+		MCPServers:                  mcpServersToModel(state.Selection.MCPServers),
+		Permissions:                 permissionsToModel(state.Selection.Permissions),
 	}
 }
 
@@ -211,6 +222,8 @@ func FromSelection(selection model.Selection) DesiredState {
 		Scope:                       selection.Scope,
 		Channel:                     selection.Channel,
 		RDDMode:                     selection.RDDMode,
+		MCPServers:                  mcpServersFromModel(selection.MCPServers),
+		Permissions:                 permissionsFromModel(selection.Permissions),
 	}}
 }
 
@@ -246,6 +259,8 @@ func NormalizeSelection(selection model.Selection) (model.Selection, []Diagnosti
 	selection.Scope = projected.Scope
 	selection.Channel = projected.Channel
 	selection.RDDMode = projected.RDDMode
+	selection.MCPServers = projected.MCPServers
+	selection.Permissions = projected.Permissions
 	if !preserveUnsetPersona {
 		selection.Persona = projected.Persona
 	}
@@ -284,6 +299,7 @@ func normalizeSelection(selection Selection, diagnostics *[]Diagnostic) Selectio
 		*diagnostics = append(*diagnostics, diagnostic("config.channel.unsupported", "$.selection.channel", fmt.Sprintf("unsupported channel %q; use stable or beta", selection.Channel)))
 	}
 
+	validateMCPServers(selection, diagnostics)
 	validateAssignments(selection, diagnostics)
 	validateStructuredAssignments(selection, diagnostics)
 
