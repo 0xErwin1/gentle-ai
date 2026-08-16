@@ -25,6 +25,8 @@ type Selection struct {
 	BackgroundIntent                 OpenCodeBackgroundIntent         // OpenCode background subagent choice; empty = unresolved
 	Scope                            InstallScope                     // install scope; empty = unresolved
 	Channel                          InstallChannel                   // release track; empty = unresolved
+	MCPServers                       map[string]MCPServer             // declared MCP servers, keyed by name
+	Permissions                      *Permissions                     // declared permission rules layered over the shipped defaults
 	RDDMode                          RDDMode                          // global review kill switch; empty = unresolved
 }
 
