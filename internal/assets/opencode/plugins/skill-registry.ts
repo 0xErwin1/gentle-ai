@@ -9,13 +9,46 @@
 
 import type { Plugin } from "@opencode-ai/plugin"
 import { execFile } from "child_process"
+import { access } from "fs/promises"
+import { homedir } from "os"
+import { join, parse } from "path"
 import { promisify } from "util"
 
 const execFileAsync = promisify(execFile)
 
+async function pathExists(path: string): Promise<boolean> {
+  try {
+    await access(path)
+    return true
+  } catch {
+    return false
+  }
+}
+
+/**
+ * OpenCode started in a brand-new non-project directory can resolve the
+ * working directory to "/", the user's home directory, or a markerless
+ * scratch folder. Refreshing there would initialize a stray .atl registry
+ * (or fail loudly on a read-only root) at every startup. The CLI refuses
+ * those locations too; this guard skips the spawn entirely.
+ */
+async function isProjectRoot(cwd: string): Promise<boolean> {
+  if (!cwd) return false
+  if (cwd === parse(cwd).root) return false
+  if (cwd === homedir()) return false
+  return (await pathExists(join(cwd, ".git"))) || (await pathExists(join(cwd, ".atl")))
+}
+
 export const SkillRegistryPlugin: Plugin = async (input) => {
   async function refreshSkillRegistry() {
     const cwd = input.worktree || input.directory || process.cwd()
+
+    if (!(await isProjectRoot(cwd))) {
+      // Startup hooks must not scream: a non-project directory is a normal
+      // situation, not an error.
+      console.info("[skill-registry] skipping refresh: not a project root:", cwd)
+      return
+    }
 
     try {
       await execFileAsync(
