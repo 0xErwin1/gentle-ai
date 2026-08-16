@@ -66,9 +66,10 @@ gentle-ai install --config gentle-ai.json
       "description": "Coordinates the change",
       "prompt": "You coordinate work and delegate.",
       "tools": ["Read", "Grep"],
+      "mode": "primary",
       "model": { "provider": "anthropic", "model": "claude-opus-5" }
     },
-    { "id": "apply", "renderedName": "gentle-apply" }
+    { "id": "apply", "renderedName": "gentle-apply", "mode": "subagent", "hidden": true }
   ],
   "extensions": {
     "opencode": { "share": "disabled" }
@@ -83,6 +84,8 @@ Unknown fields are rejected rather than ignored, so a typo fails validation inst
 A role's `id` is its logical identity and never appears in generated output. `renderedName` is the name a client sees. `references` always name logical ids.
 
 Renaming is therefore a one-line edit: change `renderedName`, reconcile, and every generated reference follows. The old resource is removed and the new one created in the same plan.
+
+`mode` says whether the operator addresses the role directly (`primary`) or another role delegates to it (`subagent`); `hidden` keeps it out of the client's agent list. Each adapter renders the role in its own form: a file with frontmatter where agents are files, an entry with `mode`, `tools` and a delegation permission where they live in one settings file. An adapter whose format has no equivalent for a field renders the rest.
 
 ```console
 gentle-ai config diff --config gentle-ai.json --home ~ --destination ~ --stage /tmp/stage
@@ -170,6 +173,7 @@ Adapters consume the same normalized model and only implement output. Two capabi
 | `config.version.unsupported` | The schema version is not one this binary understands. |
 | `config.agent.unsupported` | A declared adapter does not exist. |
 | `config.role.reference.unresolved` | A `references` entry names a role the document does not declare. |
+| `config.role.mode.unsupported` | A role declares a mode other than `primary` or `subagent`. |
 | `config.role.unsupported-adapter` | A declared adapter expresses no agent roles. |
 | `config.skill-assignment.undeclared-adapter` | A skill assignment names an adapter the document does not declare. |
 | `config.extension.undeclared-provider` | An extension names an adapter the document does not declare. |
