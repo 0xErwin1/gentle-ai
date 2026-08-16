@@ -36,8 +36,11 @@ var (
 	rarPrivateDirectoryRepair = repairPrivateRARDirectoryNoFollow
 )
 
+// FILE_LIST_DIRECTORY is requested because the repair below is allowed only on
+// an empty directory, and a handle that cannot list one cannot establish that.
 const rarDirectoryRepairAccess = windows.SYNCHRONIZE | windows.READ_CONTROL |
-	windows.FILE_READ_ATTRIBUTES | windows.WRITE_DAC | windows.WRITE_OWNER
+	windows.FILE_READ_ATTRIBUTES | windows.FILE_LIST_DIRECTORY |
+	windows.WRITE_DAC | windows.WRITE_OWNER
 
 // repairPrivateRARDirectoryNoFollow reapplies the owner-only protected DACL
 // through a handle, never a name: SetNamedSecurityInfo resolves the name it is
@@ -63,6 +66,29 @@ func repairPrivateRARDirectoryNoFollow(path string, _ fs.FileMode) error {
 	file := os.NewFile(uintptr(handle), path)
 	defer file.Close()
 	if openWindowsRARFileUnsafe(file) {
+		return unsafeRARPathError(path, true)
+	}
+	// What the object IS decides, never who created it. FILE_DIRECTORY_FILE and
+	// OBJ_DONT_REPARSE already refused a non-directory and a junction, and this
+	// same handle answers the owner before the write: only the token user, or
+	// the token owner an elevated shell stamps on its own creations, repairs.
+	existing, err := windows.GetSecurityInfo(handle, windows.SE_FILE_OBJECT,
+		windows.OWNER_SECURITY_INFORMATION)
+	if err != nil {
+		return err
+	}
+	if !rarSecurityDescriptorOwnedByCurrentUser(existing) {
+		owner, _, ownerErr := existing.Owner()
+		tokenOwner, tokenErr := currentRARWindowsTokenOwnerSID()
+		if ownerErr != nil || owner == nil || tokenErr != nil || !owner.Equals(tokenOwner) {
+			return unsafeRARPathError(path, true)
+		}
+	}
+	// Only an empty directory is repaired, read from this same handle. An
+	// interrupted creation leaves nothing behind, so recovery works; a
+	// populated authority directory whose ACL somebody widened stays refused,
+	// because silently re-tightening it would hide the exposure.
+	if names, readErr := file.Readdirnames(-1); readErr != nil || len(names) > 0 {
 		return unsafeRARPathError(path, true)
 	}
 	err = windows.SetSecurityInfo(handle, windows.SE_FILE_OBJECT,
@@ -100,8 +126,8 @@ func createPrivateRARDirectory(path string) (bool, error) {
 		return false, err
 	}
 	validateErr := validatePrivateRARDirectory(path)
-	if validateErr != nil && created {
-		// Same shape as the POSIX path: a directory this call just created can
+	if validateErr != nil {
+		// Same shape as the POSIX path: a directory at this path can
 		// still fail its own owner-only validation when the filesystem or the
 		// process token did not honour the descriptor handed to
 		// CreateDirectory. Apply the owner-only, protected DACL explicitly and
@@ -109,9 +135,10 @@ func createPrivateRARDirectory(path string) (bool, error) {
 		// prints, so anything it cannot fix here the operator still cannot fix
 		// there, and the refusal below stays truthful.
 		//
-		// Only a directory created by this very call is repaired. Rewriting the
-		// ACL of a directory that was already there is the world-action
-		// errUnsafeRARAuthorityPath refuses to take on the operator's behalf.
+		// Do NOT gate this on `created`: CreateDirectory answers every later
+		// attempt with ERROR_ALREADY_EXISTS, so that gate makes recovery from
+		// an interrupted run once-only. The handle-verified object decides
+		// instead: an empty directory this process's own principals own.
 		if repairErr := rarPrivateDirectoryRepair(path, 0o700); repairErr == nil {
 			validateErr = validatePrivateRARDirectory(path)
 		}
