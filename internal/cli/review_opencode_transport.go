@@ -11,6 +11,8 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -59,7 +61,68 @@ type openCodeTransportTaskBinding struct {
 	TargetIdentity    string
 	RepositoryContext string
 	Lens              string
+	Order             openCodeHostBindingOrder
+	SubjectHash       string
 	Role              reviewProviderRole
+	// canonicalTaskPrompt is the Go-rebuilt binding line for a provider role
+	// task. It replaces the host-authored prompt before materialization so no
+	// caller-authored byte can ride the relay into the reviewer child.
+	canonicalTaskPrompt string
+}
+
+// openCodeHostBindingOrder admits the contract's host-owned order field. The
+// collect input delivers `order` as a decimal string argument and the
+// orchestration contract tells the host to assemble the binding JSON from
+// exactly that input, so the JSON number 0 and the string "0" identify the
+// same frozen slot. Presence is tracked so a provider-omitted order skips the
+// value check instead of masquerading as slot 0.
+type openCodeHostBindingOrder struct {
+	value    int
+	provided bool
+}
+
+func (order *openCodeHostBindingOrder) UnmarshalJSON(data []byte) error {
+	trimmed := bytes.TrimSpace(data)
+	if string(trimmed) == "null" {
+		// A JSON null is an omitted field, not slot 0: the value check must
+		// not bind an absent order to the first lens slot by accident.
+		return nil
+	}
+	if len(trimmed) > 0 && trimmed[0] == '"' {
+		var text string
+		if err := json.Unmarshal(trimmed, &text); err != nil {
+			return err
+		}
+		value, err := strconv.Atoi(strings.TrimSpace(text))
+		if err != nil {
+			return errors.New("order is not a decimal integer") // refusal:by-design world-action: the collect input delivers order as a decimal slot index
+		}
+		order.value, order.provided = value, true
+		return nil
+	}
+	var value int
+	if err := json.Unmarshal(trimmed, &value); err != nil {
+		return err
+	}
+	order.value, order.provided = value, true
+	return nil
+}
+
+// openCodeHostLensBinding is the semantic admission shape for a first-contact
+// host-assembled lens frame. The orchestration contract makes key order and
+// whitespace host-owned, so admission accepts the contract's exact field set
+// in any serialization the strict decoder recognizes and verifies every field
+// value against the Go-resolved authority instead of comparing bytes. Unknown
+// keys still refuse, missing required fields still refuse, and the reviewer
+// child only ever receives Go-rebuilt canonical bytes.
+type openCodeHostLensBinding struct {
+	Lineage           string                   `json:"lineage"`
+	Target            string                   `json:"target"`
+	Lens              string                   `json:"lens"`
+	Order             openCodeHostBindingOrder `json:"order"`
+	Revision          string                   `json:"revision"`
+	RepositoryContext string                   `json:"repository_context"`
+	SubjectHash       string                   `json:"subject_hash"`
 }
 
 // openCodeTransportMaterialization carries the original, Go-issued Task
@@ -257,21 +320,33 @@ func openCodeTransportStartBound(ctx context.Context, taskPrompt string) (openCo
 	if err := authorizeReviewAuthorityMutation(ctx, root); err != nil {
 		return openCodeTransportSession{}, openCodeTransportAuthorityUnavailable(err)
 	}
-	// For a role task decodeOpenCodeTransportBinding already proved taskPrompt
-	// is byte-identical to the Go-issued prompt. The lens branch below replaces
-	// it with the Go-rebuilt canonical binding line, so no caller-authored
-	// bytes can ride the materialization envelope into the reviewer Task.
+	// Both branches replace the host-authored task prompt with Go-rebuilt
+	// canonical bytes -- the role branch with the Go-issued binding line, the
+	// lens branch with the Go-marshaled authority binding -- so no
+	// caller-authored byte can ride the materialization envelope into the
+	// reviewer Task. Host frames are admitted by field value only; every
+	// value below is checked against the Go-resolved authority, fail-closed.
 	session := openCodeTransportSession{binding: binding, root: root, store: store, record: record, taskPrompt: taskPrompt}
 	if binding.Role != "" {
+		session.taskPrompt = binding.canonicalTaskPrompt
 		invocation, err := reviewProviderRoleTaskRequest(ctx, root, store.Dir, record.State, record.Revision, binding.Role)
 		if err != nil {
 			return openCodeTransportSession{}, openCodeTransportFailure("opencode_review_transport_materialization_unavailable")
 		}
 		session.providerPrompt = invocation.Prompt()
 	} else {
+		if !slices.Contains(record.State.SelectedLenses, binding.Lens) {
+			return openCodeTransportSession{}, openCodeTransportBindingInvalid("Task lens is not a provider-selected lens for this review")
+		}
 		request, err := reviewProviderMaterialize(ctx, reviewLensContextDependencies(), binding.RepositoryContext, binding.Lens)
 		if err != nil || request.Binding.Revision != record.Revision || request.Binding.Lineage != record.State.LineageID {
 			return openCodeTransportSession{}, openCodeTransportFailure("opencode_review_transport_materialization_unavailable")
+		}
+		if binding.Order.provided && binding.Order.value != request.Binding.Order {
+			return openCodeTransportSession{}, openCodeTransportBindingInvalid("Task order does not match the provider-selected lens slot")
+		}
+		if binding.SubjectHash != "" && binding.SubjectHash != request.Binding.SubjectHash {
+			return openCodeTransportSession{}, openCodeTransportBindingInvalid("Task subject hash does not match the provider-issued artifact subject")
 		}
 		encoded, err := json.Marshal(request.Binding)
 		if err != nil {
@@ -348,6 +423,14 @@ func openCodeTransportComplete(ctx context.Context, session openCodeTransportSes
 	return openCodeTransportEnvelope{Schema: openCodeReviewTransportSchema, Operation: "result", Output: &output}, nil
 }
 
+// decodeOpenCodeTransportBinding admits the first line of a host Task prompt
+// semantically: the exact contract field set in host-owned key order and
+// whitespace, unknown keys refused, missing required fields refused. Field
+// values are verified against the Go-resolved authority by the caller; bytes
+// are never compared for a first-contact host-assembled frame, because the
+// orchestration contract makes the binding serialization host-owned. Trailing
+// prompt lines are host-authored task prose and never reach the reviewer
+// child, which only ever receives the Go-rebuilt materialization.
 func decodeOpenCodeTransportBinding(prompt string) (openCodeTransportTaskBinding, error) {
 	line, _, _ := strings.Cut(prompt, "\n")
 	if encoded, found := strings.CutPrefix(line, reviewProviderTaskBindingHeader+" "); found {
@@ -365,12 +448,13 @@ func decodeOpenCodeTransportBinding(prompt string) (openCodeTransportTaskBinding
 			LineageID: binding.LineageID, Revision: binding.Revision, TargetIdentity: binding.TargetIdentity,
 			RepositoryContext: binding.RepositoryContext,
 		})
-		if err != nil || prompt != issued.Prompt {
-			return openCodeTransportTaskBinding{}, openCodeTransportBindingInvalid("Task prompt is not the exact provider-issued binding")
+		if err != nil {
+			return openCodeTransportTaskBinding{}, openCodeTransportBindingInvalid("Task prompt binding is not a Go-issuable provider role binding")
 		}
 		return openCodeTransportTaskBinding{
 			LineageID: binding.LineageID, Revision: binding.Revision, TargetIdentity: binding.TargetIdentity,
 			RepositoryContext: binding.RepositoryContext, Role: reviewProviderRole(binding.Role),
+			canonicalTaskPrompt: issued.Prompt,
 		}, nil
 	}
 	encoded, found := strings.CutPrefix(line, reviewLensContextBindingHeader+" ")
@@ -379,17 +463,18 @@ func decodeOpenCodeTransportBinding(prompt string) (openCodeTransportTaskBinding
 	}
 	decoder := json.NewDecoder(strings.NewReader(encoded))
 	decoder.DisallowUnknownFields()
-	var binding reviewLensContextBinding
+	var binding openCodeHostLensBinding
 	if err := decoder.Decode(&binding); err != nil {
 		return openCodeTransportTaskBinding{}, openCodeTransportBindingInvalid("Task prompt binding is not provider-issued JSON")
 	}
 	var extra any
-	if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) || binding.RepositoryContext == "" || binding.Lens == "" {
+	if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) || binding.Lineage == "" || binding.Target == "" ||
+		binding.Revision == "" || binding.RepositoryContext == "" || binding.Lens == "" {
 		return openCodeTransportTaskBinding{}, openCodeTransportBindingInvalid("Task prompt binding is incomplete")
 	}
 	return openCodeTransportTaskBinding{
 		LineageID: binding.Lineage, Revision: binding.Revision, TargetIdentity: binding.Target,
-		RepositoryContext: binding.RepositoryContext, Lens: binding.Lens,
+		RepositoryContext: binding.RepositoryContext, Lens: binding.Lens, Order: binding.Order, SubjectHash: binding.SubjectHash,
 	}, nil
 }
 
