@@ -34,6 +34,16 @@ type Role struct {
 	ID           RoleID    `json:"id"`
 	RenderedName string    `json:"renderedName,omitempty"`
 	References   []RoleRef `json:"references,omitempty"`
+
+	// An adapter that composes agents inside one settings file needs nothing
+	// beyond a name and its references. An adapter that keeps them as files
+	// needs content, and rendering one without these would mean inventing a
+	// description, a model and a prompt the document never declared. Model is a
+	// pointer so an undeclared one stays absent from the encoded document.
+	Description string           `json:"description,omitempty"`
+	Prompt      string           `json:"prompt,omitempty"`
+	Tools       []string         `json:"tools,omitempty"`
+	Model       *ModelAssignment `json:"model,omitempty"`
 }
 
 type Selection struct {
@@ -329,6 +339,11 @@ func normalizeRoles(roles []Role, diagnostics *[]Diagnostic) []Role {
 			continue
 		}
 		known[role.ID] = struct{}{}
+	}
+	for _, role := range roles {
+		if role.Model != nil && (role.Model.Provider == "" || role.Model.Model == "") {
+			*diagnostics = append(*diagnostics, diagnostic("config.role.model.incomplete", "$.roles."+string(role.ID)+".model", "a role model requires both provider and model"))
+		}
 	}
 	for _, role := range roles {
 		for _, reference := range role.References {
