@@ -241,6 +241,8 @@ func exportConfig(stdout io.Writer, configPath, home string) error {
 		Preset:     legacy.Preset,
 		SDDMode:    legacy.SDDMode,
 		StrictTDD:  legacy.StrictTDD,
+
+		BackgroundIntent: legacy.BackgroundIntent,
 	}))
 	result.Diagnostics = append(result.Diagnostics, legacyExportDiagnostics(legacy)...)
 	result.Lossless = false
@@ -276,15 +278,6 @@ func legacyExportDiagnostics(legacy state.InstallState) []configdomain.Diagnosti
 			Path:     "$.model_assignments." + name,
 			Severity: configdomain.Error,
 			Message:  fmt.Sprintf("legacy model assignment %q cannot be represented; reconfigure it through gentle-ai's model picker", value),
-		})
-	}
-
-	if legacy.BackgroundIntent != "" {
-		diagnostics = append(diagnostics, configdomain.Diagnostic{
-			Code:     "config.export.loss.background-intent",
-			Path:     "$.opencode_background_subagents",
-			Severity: configdomain.Error,
-			Message:  fmt.Sprintf("legacy OpenCode background intent %q cannot be represented; rerun gentle-ai install with the same background preference", legacy.BackgroundIntent),
 		})
 	}
 
