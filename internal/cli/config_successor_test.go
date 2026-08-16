@@ -72,9 +72,13 @@ func TestConfigRenameUsesExactParsedTarget(t *testing.T) {
 	if _, ok := agents["writer-v1"]; ok {
 		t.Fatalf("old writer remains: %#v", agents)
 	}
+	// OpenCode expresses delegation as a permission, so the rename has to reach
+	// the name the reviewer is allowed to hand work to.
 	reviewer := agents["reviewer"].(map[string]any)
-	if got, want := reviewer["references"], []any{"writer-v2"}; !equalJSON(got, want) {
-		t.Fatalf("reviewer references = %#v, want %#v", got, want)
+	permission, _ := reviewer["permission"].(map[string]any)
+	task, _ := permission["task"].(map[string]any)
+	if got, want := task, map[string]any{"*": "deny", "writer-v2": "allow"}; !equalJSON(got, want) {
+		t.Fatalf("reviewer delegation = %#v, want %#v", got, want)
 	}
 }
 
