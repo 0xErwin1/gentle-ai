@@ -51,6 +51,16 @@ type Selection struct {
 	// turn silence into an explicit choice, and only an explicit choice is
 	// persisted as managed state.
 	BackgroundIntent model.OpenCodeBackgroundIntent `json:"backgroundIntent,omitempty"`
+
+	// Assignment maps are keyed by phase name. The document is the complete
+	// desired state, so an omitted map declares no assignments rather than
+	// leaving a previous choice untouched.
+	ModelAssignments            map[string]ModelAssignment        `json:"modelAssignments,omitempty"`
+	ClaudeModelAssignments      map[string]model.ClaudeModelAlias `json:"claudeModelAssignments,omitempty"`
+	KiroModelAssignments        map[string]model.KiroModelAlias   `json:"kiroModelAssignments,omitempty"`
+	CodexModelAssignments       map[string]model.CodexEffort      `json:"codexModelAssignments,omitempty"`
+	CodexCarrilModelAssignments map[string]string                 `json:"codexCarrilModelAssignments,omitempty"`
+	CodexPhaseModelAssignments  map[string]string                 `json:"codexPhaseModelAssignments,omitempty"`
 }
 
 type Document struct {
@@ -139,6 +149,13 @@ func Project(state DesiredState) model.Selection {
 		SDDMode:          state.Selection.SDDMode,
 		StrictTDD:        state.Selection.StrictTDD,
 		BackgroundIntent: state.Selection.BackgroundIntent,
+
+		ModelAssignments:            assignmentsToModel(state.Selection.ModelAssignments),
+		ClaudeModelAssignments:      copyMap(state.Selection.ClaudeModelAssignments),
+		KiroModelAssignments:        copyMap(state.Selection.KiroModelAssignments),
+		CodexModelAssignments:       copyMap(state.Selection.CodexModelAssignments),
+		CodexCarrilModelAssignments: copyMap(state.Selection.CodexCarrilModelAssignments),
+		CodexPhaseModelAssignments:  copyMap(state.Selection.CodexPhaseModelAssignments),
 	}
 }
 
@@ -149,6 +166,13 @@ func FromSelection(selection model.Selection) DesiredState {
 		Persona: selection.Persona, Preset: selection.Preset, SDDMode: selection.SDDMode,
 		StrictTDD:        selection.StrictTDD,
 		BackgroundIntent: selection.BackgroundIntent,
+
+		ModelAssignments:            assignmentsFromModel(selection.ModelAssignments),
+		ClaudeModelAssignments:      copyMap(selection.ClaudeModelAssignments),
+		KiroModelAssignments:        copyMap(selection.KiroModelAssignments),
+		CodexModelAssignments:       copyMap(selection.CodexModelAssignments),
+		CodexCarrilModelAssignments: copyMap(selection.CodexCarrilModelAssignments),
+		CodexPhaseModelAssignments:  copyMap(selection.CodexPhaseModelAssignments),
 	}}
 }
 
@@ -172,6 +196,12 @@ func NormalizeSelection(selection model.Selection) (model.Selection, []Diagnosti
 	selection.SDDMode = projected.SDDMode
 	selection.StrictTDD = projected.StrictTDD
 	selection.BackgroundIntent = projected.BackgroundIntent
+	selection.ModelAssignments = projected.ModelAssignments
+	selection.ClaudeModelAssignments = projected.ClaudeModelAssignments
+	selection.KiroModelAssignments = projected.KiroModelAssignments
+	selection.CodexModelAssignments = projected.CodexModelAssignments
+	selection.CodexCarrilModelAssignments = projected.CodexCarrilModelAssignments
+	selection.CodexPhaseModelAssignments = projected.CodexPhaseModelAssignments
 	if !preserveUnsetPersona {
 		selection.Persona = projected.Persona
 	}
@@ -199,6 +229,8 @@ func normalizeSelection(selection Selection, diagnostics *[]Diagnostic) Selectio
 	if selection.BackgroundIntent != "" && !selection.BackgroundIntent.Valid() {
 		*diagnostics = append(*diagnostics, diagnostic("config.background-intent.unsupported", "$.selection.backgroundIntent", fmt.Sprintf("unsupported background intent %q; use auto, on, or off", selection.BackgroundIntent)))
 	}
+
+	validateAssignments(selection, diagnostics)
 
 	selection.Agents = unique(selection.Agents)
 	selection.Components = unique(selection.Components)
