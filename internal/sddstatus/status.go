@@ -406,6 +406,41 @@ func listActiveOpenSpecChanges(workspaceRoot string) ([]string, error) {
 	return changes, nil
 }
 
+// selectableOpenSpecChanges filters exploration-only directories out of the
+// auto-selection candidates (#3278 claim C). A stale sdd-explore directory
+// holding only exploration.md is not an active change: counting it made
+// selection ambiguous beside the one genuinely active change, and the SDD
+// task-failure continuation (which carries no selector) could never resolve
+// that ambiguity. Exploration-only directories stay addressable when
+// explicitly named — listActiveOpenSpecChanges still returns them — and
+// directories with no SDD artifacts at all keep their historical behavior as
+// candidates.
+func selectableOpenSpecChanges(changesDir string, changes []string) []string {
+	selectable := make([]string, 0, len(changes))
+	for _, change := range changes {
+		if explorationOnlyChangeDir(filepath.Join(changesDir, change)) {
+			continue
+		}
+		selectable = append(selectable, change)
+	}
+	return selectable
+}
+
+// explorationOnlyChangeDir reports whether the change directory's only SDD
+// artifact is an exploration artifact: exploration.md is present and none of
+// proposal.md, design.md, tasks.md, or specs/ exist.
+func explorationOnlyChangeDir(changeRoot string) bool {
+	if _, err := os.Stat(filepath.Join(changeRoot, "exploration.md")); err != nil {
+		return false
+	}
+	for _, marker := range []string{"proposal.md", "design.md", "tasks.md", "specs"} {
+		if _, err := os.Stat(filepath.Join(changeRoot, marker)); err == nil {
+			return false
+		}
+	}
+	return true
+}
+
 func Resolve(options ResolveOptions) (Status, error) {
 	workspaceRoot, err := resolveWorkspaceRoot(options)
 	if err != nil {
@@ -427,16 +462,30 @@ func Resolve(options ResolveOptions) (Status, error) {
 
 	changeName := strings.TrimSpace(options.ChangeName)
 	if changeName == "" {
-		switch len(activeChanges) {
+		candidates := selectableOpenSpecChanges(changesDir, activeChanges)
+		switch len(candidates) {
 		case 0:
+			if len(activeChanges) > 0 {
+				// Every directory is exploration-only. This is an OpenSpec
+				// workspace mid-exploration, not an empty one, so do not fall
+				// through to Engram: report it honestly and keep the
+				// directories addressable by explicit name.
+				return blockedStatus(ArtifactStoreOpenSpec, workspaceRoot, nil, nil, "sdd-new", []string{
+					"No active OpenSpec changes found under openspec/changes.",
+					fmt.Sprintf(
+						"Exploration-only directories are not active changes: %s. Run `gentle-ai sdd-status <change-name> --cwd %s` to inspect one explicitly.",
+						strings.Join(activeChanges, ", "), workspaceRoot,
+					),
+				}, options.IncludeInstructions), nil
+			}
 			if status, ok, err := resolveEngramStatus(workspaceRoot, changeName, options.IncludeInstructions, reviewDisabled); ok || err != nil {
 				return status, err
 			}
 			return blockedStatus(ArtifactStoreOpenSpec, workspaceRoot, nil, nil, "sdd-new", []string{"No active OpenSpec changes found under openspec/changes."}, options.IncludeInstructions), nil
 		case 1:
-			changeName = activeChanges[0]
+			changeName = candidates[0]
 		default:
-			return blockedStatus(ArtifactStoreOpenSpec, workspaceRoot, nil, nil, "select-change", ambiguousChangeSelectionReasons("Change", workspaceRoot, activeChanges), options.IncludeInstructions), nil
+			return blockedStatus(ArtifactStoreOpenSpec, workspaceRoot, nil, nil, "select-change", ambiguousChangeSelectionReasons("Change", workspaceRoot, candidates), options.IncludeInstructions), nil
 		}
 	}
 
