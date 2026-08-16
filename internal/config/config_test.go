@@ -48,6 +48,11 @@ func TestDecode(t *testing.T) {
 			document:  `{`,
 			wantCodes: []string{"config.document.malformed"},
 		},
+		{
+			name:      "rejects unknown fields",
+			document:  `{"version":"v1","selection":{"agents":["opencode"],"unknown":true}}`,
+			wantCodes: []string{"config.document.unknown-field"},
+		},
 	}
 
 	for _, tt := range tests {
