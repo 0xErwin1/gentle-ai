@@ -264,6 +264,10 @@ const (
 	// recorded holder, and the retry continuation, never maintainer
 	// escalation for a condition that clears itself.
 	ReviewAuthorityInventoryBusy ReviewReceiptDiscoveryKind = "inventory_busy"
+	// ReviewAuthorityLockUnverifiable names shared store-lock residue whose
+	// recorded holder is neither flock-held nor verifiably dead on this
+	// host; no event terminates a retry, so it is NOT retry-safe.
+	ReviewAuthorityLockUnverifiable ReviewReceiptDiscoveryKind = "lock_holder_unverifiable"
 )
 
 type ReviewReceiptDiscoveryError struct {
@@ -351,6 +355,8 @@ func (err *ReviewReceiptDiscoveryError) Error() string {
 		message = "advertised publication base commit is not available locally"
 	case ReviewAuthorityInventoryBusy:
 		message = "review authority store is busy"
+	case ReviewAuthorityLockUnverifiable:
+		message = "review authority store lock records a holder this host cannot verify"
 	}
 	if err.Detail != "" {
 		return message + ": " + err.Detail
@@ -3737,11 +3743,9 @@ func discoverCompactFacadeGateReview(ctx context.Context, repo, lineage string, 
 		receipt, parseErr := reviewtransaction.ParseCompactReceipt(payload)
 		derived, deriveErr := record.State.Receipt()
 		if parseErr != nil || deriveErr != nil || !reviewtransaction.CompactReceiptEqual(receipt, derived) {
-			if parseErr != nil {
-				if busy := reviewInventoryBusyFromStoreRead(ctx, repo, parseErr); busy != nil {
-					return reviewtransaction.CompactStore{}, reviewtransaction.CompactRecord{}, busy
-				}
-			}
+			// A receipt that EXISTS but fails to parse or match is integrity
+			// damage: a held shared lock never downgrades it to busy; only
+			// the clean absence/read-race windows above may.
 			return reviewtransaction.CompactStore{}, reviewtransaction.CompactRecord{}, &ReviewReceiptDiscoveryError{Kind: ReviewAuthorityCorrupted}
 		}
 		terminalCount++
@@ -4110,7 +4114,28 @@ func reviewInventoryBusyFromLockResidue(ctx context.Context, repo string, report
 	if err != nil || !evidence.Exists || (!evidence.Held && !evidence.HolderRecorded) {
 		return nil
 	}
+	if !evidence.Held && !evidence.HolderVerifiedDeadOnThisHost {
+		return reviewLockHolderUnverifiableError(evidence)
+	}
 	return reviewInventoryBusyError(ctx, repo, &evidence)
+}
+
+// reviewLockHolderUnverifiableError renders the not-retry-safe disposition
+// for lock residue whose recorded holder this host can neither prove live
+// (kernel advisory ownership is the only liveness truth, and the flock is
+// not held) nor prove dead: "retry once it finishes" would never terminate.
+func reviewLockHolderUnverifiableError(evidence reviewtransaction.CompactSharedStoreLockEvidence) *ReviewReceiptDiscoveryError {
+	why := fmt.Sprintf("pid %d cannot be attributed to a live review operation from this host", evidence.HolderPID)
+	if host, err := os.Hostname(); err == nil && host != evidence.HolderHost {
+		why = fmt.Sprintf("it was recorded on host %s, not this host (%s)", evidence.HolderHost, host)
+	}
+	return &ReviewReceiptDiscoveryError{
+		Kind: ReviewAuthorityLockUnverifiable,
+		Detail: fmt.Sprintf(
+			"the store lock %s under the repository Git common directory records holder pid %d on host %s, which is neither flock-held nor verifiably dead: %s; verify that holder on the recorded host, or remove the LOCK file only if that machine is known idle",
+			evidence.DisplayPath, evidence.HolderPID, evidence.HolderHost, why,
+		),
+	}
 }
 
 // reviewInventoryBusyError renders the inventory_busy denial. The reason
@@ -4142,11 +4167,6 @@ func reviewInventoryBusyError(ctx context.Context, repo string, evidence *review
 			detail = fmt.Sprintf(
 				"the store lock %s under the repository Git common directory records holder pid %d, which is no longer running on this host; remove the stale LOCK file, then retry the same gate",
 				evidence.DisplayPath, evidence.HolderPID,
-			)
-		case evidence.HolderRecorded:
-			detail = fmt.Sprintf(
-				"the store lock %s under the repository Git common directory records holder pid %d on host %s; retry once that operation finishes",
-				evidence.DisplayPath, evidence.HolderPID, evidence.HolderHost,
 			)
 		}
 	}
