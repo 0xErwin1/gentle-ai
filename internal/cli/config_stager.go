@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/components/filemerge"
@@ -33,9 +34,15 @@ import (
 // readRoot stays the live home because a few injectors derive content from what
 // is already installed there. Pointing those reads at an empty stage would make
 // a render quietly disagree with the install it is supposed to preview.
+//
+// destination is where the staged bytes are headed. An injector that records an
+// absolute path to a file it just wrote resolves it against the root it was
+// given, so staging alone would bake the staging directory into the content and
+// ship a live configuration pointing inside a directory that no longer exists.
 type configurationStager struct {
-	adapters []model.AgentID
-	readRoot string
+	adapters    []model.AgentID
+	readRoot    string
+	destination string
 }
 
 // stageableComponents are the components whose entire contribution is files.
@@ -77,7 +84,47 @@ func (stager configurationStager) Stage(state configdomain.DesiredState, stageRo
 		return err
 	}
 
-	return stageDeclaredExtensions(stageRoot, state, adapters)
+	if err := stageDeclaredExtensions(stageRoot, state, adapters); err != nil {
+		return err
+	}
+
+	return stager.rebaseStagedPaths(stageRoot)
+}
+
+// rebaseStagedPaths retargets the staging root recorded inside staged content
+// at the destination it stands in for. Without it the same document renders
+// different bytes for every staging directory, which is the determinism the
+// contract promises, and the applied file points at the staging directory.
+func (stager configurationStager) rebaseStagedPaths(stageRoot string) error {
+	if stager.destination == "" || stager.destination == stageRoot {
+		return nil
+	}
+
+	staged, destination := []byte(stageRoot), []byte(stager.destination)
+
+	return filepath.WalkDir(stageRoot, func(path string, entry os.DirEntry, err error) error {
+		if err != nil || !entry.Type().IsRegular() {
+			return err
+		}
+
+		contents, err := os.ReadFile(path)
+		if err != nil {
+			return fmt.Errorf("read staged file %q: %w", path, err)
+		}
+		if !bytes.Contains(contents, staged) {
+			return nil
+		}
+
+		info, err := entry.Info()
+		if err != nil {
+			return fmt.Errorf("inspect staged file %q: %w", path, err)
+		}
+		if _, err := filemerge.WriteFileAtomic(path, bytes.ReplaceAll(contents, staged, destination), info.Mode().Perm()); err != nil {
+			return fmt.Errorf("rebase staged file %q: %w", path, err)
+		}
+
+		return nil
+	})
 }
 
 func (stager configurationStager) stageComponent(component model.ComponentID, stageRoot string, selection model.Selection, adapters []agents.Adapter) error {
