@@ -25,6 +25,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v4/internal/components/communitytool"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/components/filemerge"
 	componentuninstall "github.com/gentleman-programming/gentle-ai/v4/internal/components/uninstall"
+	configdomain "github.com/gentleman-programming/gentle-ai/v4/internal/config"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/opencode"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/pipeline"
@@ -4156,6 +4157,14 @@ func (m Model) shouldShowCommunityToolsScreen() bool {
 }
 
 func (m *Model) buildDependencyPlan() {
+	normalized, diagnostics := configdomain.NormalizeSelection(m.Selection)
+	if len(diagnostics) != 0 {
+		m.Err = fmt.Errorf("config validation failed: %s", diagnostics[0].Code)
+		m.DependencyPlan = planner.ResolvedPlan{}
+		return
+	}
+	m.Selection = normalized
+
 	resolved, err := planner.NewResolver(planner.MVPGraph()).Resolve(m.Selection)
 	if err != nil {
 		m.Err = err

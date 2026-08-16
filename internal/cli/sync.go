@@ -1988,6 +1988,14 @@ func RunSyncWithSelectionScope(homeDir string, selection model.Selection, scope 
 	if _, err := parseInstallScope(string(scope)); err != nil {
 		return SyncResult{}, err
 	}
+	// Normalize the selection against the declarative contract desired state
+	// before persona validation or any write.
+	normalized, err := normalizeConfigSelection(selection)
+	if err != nil {
+		return SyncResult{}, err
+	}
+	selection = normalized
+
 	// An explicit persona is validated before the alias migration or any write;
 	// only an empty value means "resolve from persisted state" (#1677).
 	if selection.Persona != "" {
