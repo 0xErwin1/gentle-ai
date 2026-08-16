@@ -2,6 +2,8 @@ package reviewtransaction
 
 import (
 	"bytes"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -102,5 +104,48 @@ func TestVerificationEvidenceRecordWithNullLedgerHistoryStaysReadable(t *testing
 	}
 	if parsed.LedgerIDs != nil {
 		t.Fatalf("historical record decoded ledger IDs = %#v, want nil", parsed.LedgerIDs)
+	}
+}
+
+// TestVerificationEvidenceDigestDomainIsPinnedToEachRecordsOwnEncoding pins
+// the documented digest-domain shift: the same logical ledger-free record
+// digests differently under the historical `null` encoding and the published
+// `[]` encoding, and the digest-keyed evidence store accepts each form
+// validated against its own persisted canonical bytes, never the other's.
+func TestVerificationEvidenceDigestDomainIsPinnedToEachRecordsOwnEncoding(t *testing.T) {
+	t.Parallel()
+	snapshot, revision := newLedgerFreeEvidenceSnapshot(t), "sha256:"+strings.Repeat("a", 64)
+	lineage, payload := "clean-path-lineage", []byte("go test ./...: pass\n")
+	newStore, legacyStore := t.TempDir(), t.TempDir()
+	captured, err := PublishCapturedVerificationEvidence(CaptureVerificationEvidenceRequest{
+		StoreDir: newStore, LineageID: lineage, AuthorityRevision: revision,
+		Target: snapshot, Payload: payload, Outcome: VerificationOutcomePassed,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacy := captured.Record
+	legacy.LedgerIDs = nil
+	legacy.RecordDigest = verificationEvidenceRecordDigest(legacy)
+	if legacy.RecordDigest == captured.Record.RecordDigest {
+		t.Fatal("digest domain shift: null and empty-array encodings must digest differently")
+	}
+	legacyBytes, err := CanonicalVerificationEvidenceRecord(legacy)
+	if err != nil || !bytes.Contains(legacyBytes, []byte(`"ledger_ids":null`)) {
+		t.Fatalf("null-form record does not validate against its own digest: %v\n%s", err, legacyBytes)
+	}
+	dir, err := compactFinalEvidenceCandidateDir(legacyStore, revision, snapshot.Identity)
+	if err != nil || os.MkdirAll(dir, 0o700) != nil {
+		t.Fatal(err)
+	}
+	if os.WriteFile(filepath.Join(dir, CompactFinalEvidenceFile), payload, 0o600) != nil ||
+		os.WriteFile(filepath.Join(dir, CompactFinalEvidenceRecordFile), legacyBytes, 0o600) != nil {
+		t.Fatal("write legacy evidence artifacts")
+	}
+	for storeDir, digest := range map[string]string{newStore: captured.Record.RecordDigest, legacyStore: legacy.RecordDigest} {
+		loaded, err := ReadCapturedVerificationEvidence(storeDir, lineage, revision, snapshot)
+		if err != nil || loaded.Record.RecordDigest != digest {
+			t.Fatalf("evidence store read = %#v, %v; want record digest %s", loaded.Record, err, digest)
+		}
 	}
 }
