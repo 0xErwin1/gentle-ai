@@ -2,8 +2,10 @@
 package config
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 
 	"github.com/gentleman-programming/gentle-ai/v4/internal/catalog"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
@@ -63,11 +65,26 @@ type DesiredState struct {
 // Decode converts a JSON document into canonical desired state without side effects.
 func Decode(input []byte) (DesiredState, []Diagnostic) {
 	var document Document
-	if err := json.Unmarshal(input, &document); err != nil {
+	decoder := json.NewDecoder(bytes.NewReader(input))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&document); err != nil {
+		return DesiredState{}, []Diagnostic{decodeDiagnostic(err)}
+	}
+	if err := decoder.Decode(&struct{}{}); err != io.EOF {
 		return DesiredState{}, []Diagnostic{diagnostic("config.document.malformed", "$", "configuration must be valid JSON")}
 	}
 
 	return Normalize(document)
+}
+
+func decodeDiagnostic(err error) Diagnostic {
+	if _, ok := err.(*json.UnmarshalTypeError); ok {
+		return diagnostic("config.document.malformed", "$", "configuration must be valid JSON")
+	}
+	if bytes.Contains([]byte(err.Error()), []byte("unknown field")) {
+		return diagnostic("config.document.unknown-field", "$", "configuration contains an unknown field")
+	}
+	return diagnostic("config.document.malformed", "$", "configuration must be valid JSON")
 }
 
 // Admit invokes action only when decoding and validation complete without diagnostics.
@@ -126,6 +143,32 @@ func FromSelection(selection model.Selection) DesiredState {
 		Persona: selection.Persona, Preset: selection.Preset, SDDMode: selection.SDDMode,
 		StrictTDD: selection.StrictTDD,
 	}}
+}
+
+// NormalizeSelection routes existing workflow selections through the desired-state contract.
+func NormalizeSelection(selection model.Selection) (model.Selection, []Diagnostic) {
+	preserveUnsetPersona := selection.Persona == ""
+
+	state, diagnostics := Normalize(Document{
+		Version:   CurrentVersion,
+		Selection: FromSelection(selection).Selection,
+	})
+	if len(diagnostics) != 0 {
+		return model.Selection{}, diagnostics
+	}
+
+	projected := Project(state)
+	selection.Agents = projected.Agents
+	selection.Components = projected.Components
+	selection.Skills = projected.Skills
+	selection.Preset = projected.Preset
+	selection.SDDMode = projected.SDDMode
+	selection.StrictTDD = projected.StrictTDD
+	if !preserveUnsetPersona {
+		selection.Persona = projected.Persona
+	}
+
+	return selection, nil
 }
 
 func normalizeSelection(selection Selection, diagnostics *[]Diagnostic) Selection {
