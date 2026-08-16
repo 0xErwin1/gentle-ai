@@ -29,11 +29,25 @@
     "forecast": {"$ref": "#/$defs/forecast"},
     "next_transition": {"$ref": "#/$defs/next_transition"},
     "validation_request": {"$ref": "../../v1/schemas/targeted-validation-request.schema.json"},
-    "final_verification_retry": {"$ref": "../../v1/schemas/status-v2.schema.json#/properties/final_verification_retry"}
+    "final_verification_retry": {"$ref": "../../v1/schemas/status-v2.schema.json#/properties/final_verification_retry"},
+    "repository_context": {"$ref": "#/$defs/repository_context"}
   },
   "dependentRequired": {"forecast": ["next_transition"]},
   "$defs": {
     "sha256": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "repository_context": {
+      "type": "object", "additionalProperties": false,
+      "required": ["capability", "handle", "revision", "target_identity"],
+      "properties": {
+        "capability": {"const": "review.opaque_repository_context"},
+        "handle": {"type": "string", "pattern": "^rctx1_[0-9a-f]{64}$"},
+        "revision": {"$ref": "#/$defs/sha256"},
+        "target_identity": {"$ref": "#/$defs/sha256"},
+        "event_id": {"$ref": "#/$defs/sha256"},
+        "outcome": {"enum": ["applied", "pending", "blocked_conflict", "durability_limited"]}
+      },
+      "dependentRequired": {"event_id": ["outcome"], "outcome": ["event_id"]}
+    },
     "forecast": {
       "type": "object", "additionalProperties": false, "required": ["horizon", "steps"],
       "properties": {
@@ -57,7 +71,11 @@
         {"if": {"properties": {"kind": {"const": "stop"}}, "required": ["kind"]}, "then": {"not": {"anyOf": [{"required": ["execute"]}, {"required": ["collect"]}]}}},
         {"if": {"properties": {"reason_code": {"enum": ["correction_plan_required", "corrected_candidate_unavailable"]}}, "required": ["reason_code"]}, "then": {"required": ["correction_request"]}, "else": {"not": {"required": ["correction_request"]}}},
         {"if": {"properties": {"reason_code": {"const": "correction_plan_required"}}, "required": ["reason_code"]}, "then": {"properties": {"kind": {"const": "collect"}, "collect": {"properties": {"inputs": {"minItems": 1, "maxItems": 1, "items": {"properties": {"capture_operation": {"const": "external.plan_correction"}}, "required": ["capture_operation", "submission"]}}}}}}},
-        {"if": {"properties": {"reason_code": {"const": "targeted_validation_required"}}, "required": ["reason_code"]}, "then": {"properties": {"kind": {"const": "collect"}, "collect": {"properties": {"inputs": {"minItems": 1, "maxItems": 1, "items": {"properties": {"capture_operation": {"const": "external.run_targeted_validation"}}, "required": ["capture_operation", "submission"]}}}}}}},
+        {"if": {"properties": {"reason_code": {"const": "targeted_validation_required"}}, "required": ["reason_code"]}, "then": {"properties": {"kind": {"const": "collect"}, "collect": {"properties": {"inputs": {"minItems": 1, "maxItems": 1, "items": {"anyOf": [
+          {"properties": {"capture_operation": {"const": "external.run_targeted_validation"}}, "required": ["capture_operation", "submission"]},
+          {"properties": {"capture_operation": {"const": "external.run_provider_role"}}, "required": ["capture_operation", "provider_task"]},
+          {"properties": {"capture_operation": {"const": "review.capture-validation"}}, "required": ["capture_operation", "validation_request"]}
+        ]}}}}}}},
         {"if": {"properties": {"reason_code": {"enum": ["verification_evidence_required", "correction_repository_verification_required"]}}, "required": ["reason_code"]}, "then": {"properties": {"kind": {"const": "collect"}, "collect": {"properties": {"inputs": {"minItems": 1, "maxItems": 1, "items": {"properties": {"capture_operation": {"const": "review.capture-evidence"}}, "required": ["capture_operation", "submission"]}}}}}}}
       ]
     },
@@ -82,7 +100,9 @@
         "provider_task": {"$ref": "#/$defs/provider_task"}
       },
       "allOf": [
-        {"if": {"properties": {"capture_operation": {"const": "external.run_targeted_validation"}}, "required": ["capture_operation"]}, "then": {"required": ["validation_request", "submission"], "properties": {"schema": {"const": "gentle-ai.review-targeted-validation-request/v1"}}}, "else": {"not": {"required": ["validation_request"]}}},
+        {"if": {"properties": {"capture_operation": {"const": "external.run_targeted_validation"}}, "required": ["capture_operation"]}, "then": {"required": ["validation_request", "submission"], "properties": {"schema": {"const": "gentle-ai.review-targeted-validation-request/v1"}}}},
+        {"if": {"properties": {"capture_operation": {"const": "review.capture-validation"}}, "required": ["capture_operation"]}, "then": {"required": ["validation_request"]}},
+        {"if": {"properties": {"capture_operation": {"not": {"enum": ["external.run_targeted_validation", "review.capture-validation"]}}}, "required": ["capture_operation"]}, "then": {"not": {"required": ["validation_request"]}}},
         {"if": {"properties": {"capture_operation": {"const": "external.plan_correction"}}, "required": ["capture_operation"]}, "then": {"required": ["submission"], "properties": {"schema": {"const": "gentle-ai.review-correction-plan/v1"}}}},
         {"if": {"properties": {"capture_operation": {"const": "review.capture-evidence"}}, "required": ["capture_operation"]}, "then": {"required": ["submission"], "properties": {"schema": {"const": "https://gentle-ai.dev/schema/review/verification-evidence/v1"}, "submission": {"$ref": "#/$defs/capture_evidence_submission_descriptor"}}}},
         {"if": {"properties": {"capture_operation": {"not": {"enum": ["external.plan_correction", "external.run_targeted_validation", "review.capture-evidence"]}}}, "required": ["capture_operation"]}, "then": {"not": {"required": ["submission"]}}},
