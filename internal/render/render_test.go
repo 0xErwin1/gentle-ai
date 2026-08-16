@@ -2,6 +2,7 @@ package render
 
 import (
 	"bytes"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -125,5 +126,84 @@ func TestRenamingARoleUpdatesTheFilesThatReferenceIt(t *testing.T) {
 	}
 	if !strings.Contains(string(document), "references: gentle-implementer") {
 		t.Errorf("rendered orchestrator = %s, want the reference resolved to the rendered name", document)
+	}
+}
+
+// An adapter that keeps agents inside one settings file still has to carry the
+// role, not just its name. Rendering only the name leaves the operator with an
+// entry the client reads as an agent with no description, no prompt, no tools
+// and no model, which is indistinguishable from a role that was never declared.
+func TestOpenCodeRendersTheWholeDeclaredRole(t *testing.T) {
+	hidden := true
+	state := config.DesiredState{Roles: []config.Role{
+		{
+			ID: "orchestrator", RenderedName: "my-orchestrator", References: []config.RoleRef{"worker"},
+			Description: "coordinates", Prompt: "you coordinate", Tools: []string{"Read", "Edit"},
+			Mode:  config.RolePrimary,
+			Model: &config.ModelAssignment{Provider: "anthropic", Model: "claude-opus-5", Effort: "high"},
+		},
+		{ID: "worker", RenderedName: "my-worker", Mode: config.RoleSubagent, Hidden: &hidden},
+	}}
+
+	artifacts, err := OpenCodeProvider{}.Render(state, nil)
+	if err != nil {
+		t.Fatalf("Render() error = %v", err)
+	}
+
+	var settings struct {
+		Agent map[string]map[string]any `json:"agent"`
+	}
+	if err := json.Unmarshal(artifacts[0].Contents, &settings); err != nil {
+		t.Fatalf("decode rendered settings: %v", err)
+	}
+
+	orchestrator := settings.Agent["my-orchestrator"]
+	for field, want := range map[string]any{
+		"description": "coordinates",
+		"prompt":      "you coordinate",
+		"mode":        "primary",
+		"model":       "anthropic/claude-opus-5",
+		"variant":     "high",
+	} {
+		if orchestrator[field] != want {
+			t.Errorf("orchestrator %s = %v, want %v", field, orchestrator[field], want)
+		}
+	}
+
+	tools, _ := orchestrator["tools"].(map[string]any)
+	if tools["read"] != true || tools["edit"] != true || tools["*"] != false {
+		t.Errorf("orchestrator tools = %v, want the declared tools enabled and the rest denied", tools)
+	}
+
+	permission, _ := orchestrator["permission"].(map[string]any)
+	task, _ := permission["task"].(map[string]any)
+	if task["my-worker"] != "allow" || task["*"] != "deny" {
+		t.Errorf("orchestrator delegation = %v, want only the referenced role allowed", task)
+	}
+
+	if settings.Agent["my-worker"]["hidden"] != true {
+		t.Errorf("worker hidden = %v, want true", settings.Agent["my-worker"]["hidden"])
+	}
+}
+
+// A field the document left out must stay out: filling it would hand the client
+// a description, a prompt or a toolset the operator never wrote.
+func TestOpenCodeOmitsWhatTheRoleDidNotDeclare(t *testing.T) {
+	state := config.DesiredState{Roles: []config.Role{{ID: "worker", RenderedName: "my-worker"}}}
+
+	artifacts, err := OpenCodeProvider{}.Render(state, nil)
+	if err != nil {
+		t.Fatalf("Render() error = %v", err)
+	}
+
+	var settings struct {
+		Agent map[string]map[string]any `json:"agent"`
+	}
+	if err := json.Unmarshal(artifacts[0].Contents, &settings); err != nil {
+		t.Fatalf("decode rendered settings: %v", err)
+	}
+
+	if len(settings.Agent["my-worker"]) != 0 {
+		t.Errorf("rendered agent = %v, want nothing the document did not declare", settings.Agent["my-worker"])
 	}
 }
