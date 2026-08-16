@@ -37,9 +37,12 @@ type battery struct {
 	repoRoot  string
 	workRoot  string
 	withModel bool
+	withHost  bool
 
-	envelopes []capturedEnvelope
-	checks    []check
+	envelopes  []capturedEnvelope
+	checks     []check
+	hostCosts  []string
+	piRelayDir string
 }
 
 func (b *battery) pass(lane, name, note string) {

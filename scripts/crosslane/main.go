@@ -32,6 +32,7 @@ import (
 func main() {
 	binary := flag.String("binary", "", "path to the gentle-ai binary under test (required)")
 	withModel := flag.Bool("with-model", false, "include the real reviewer model run (uses the dev subscription)")
+	withHost := flag.Bool("with-host", false, "spawn REAL host applications (codex exec, pi print mode, an opencode session) end to end (uses the dev subscription)")
 	keepWork := flag.Bool("keep-work", false, "keep the scratch working directory for inspection")
 	flag.Parse()
 
@@ -63,6 +64,7 @@ func main() {
 		repoRoot:  repoRoot,
 		workRoot:  workRoot,
 		withModel: *withModel,
+		withHost:  *withHost,
 	}
 	if !*keepWork {
 		defer os.RemoveAll(workRoot)
@@ -73,6 +75,7 @@ func main() {
 	b.captureCapabilities()
 	b.runOpenCodeLane()
 	b.runClaudeLane()
+	b.runHostLanes()
 	b.runSchemaLane()
 
 	failed := b.printTable()
@@ -101,5 +104,12 @@ func (b *battery) printTable() int {
 	}
 	fmt.Println()
 	fmt.Printf("total: %d checks, %d failed\n", len(b.checks), failed)
+	if len(b.hostCosts) > 0 {
+		fmt.Println()
+		fmt.Println("token cost (real model runs on the dev subscription):")
+		for _, cost := range b.hostCosts {
+			fmt.Printf("  %s\n", cost)
+		}
+	}
 	return failed
 }
