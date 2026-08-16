@@ -40,7 +40,8 @@ func TestConfigExportLegacyReportsValueSpecificLossesDeterministically(t *testin
 	var result struct {
 		Document struct {
 			Selection struct {
-				Agents []string `json:"agents"`
+				Agents           []string `json:"agents"`
+				BackgroundIntent string   `json:"backgroundIntent"`
 			} `json:"selection"`
 		} `json:"document"`
 		Diagnostics []struct {
@@ -55,6 +56,9 @@ func TestConfigExportLegacyReportsValueSpecificLossesDeterministically(t *testin
 	if got, want := result.Document.Selection.Agents, []string{"opencode"}; !equalStrings(got, want) {
 		t.Fatalf("exported agents = %v, want %v", got, want)
 	}
+	if got, want := result.Document.Selection.BackgroundIntent, "on"; got != want {
+		t.Fatalf("exported backgroundIntent = %q, want %q", got, want)
+	}
 
 	got := make([]string, len(result.Diagnostics))
 	for index, diagnostic := range result.Diagnostics {
@@ -63,7 +67,6 @@ func TestConfigExportLegacyReportsValueSpecificLossesDeterministically(t *testin
 	want := []string{
 		"config.export.loss.community-tool|$.community_tools[0]|legacy community tool \"codegraph\" cannot be represented; rerun gentle-ai install and select \"codegraph\"",
 		"config.export.loss.model-assignment|$.model_assignments.sdd-apply|legacy model assignment \"sdd-apply=anthropic/claude-sonnet@high\" cannot be represented; reconfigure it through gentle-ai's model picker",
-		"config.export.loss.background-intent|$.opencode_background_subagents|legacy OpenCode background intent \"on\" cannot be represented; rerun gentle-ai install with the same background preference",
 		"config.export.loss.legacy-operational|$|legacy install state omits runtime and provenance fields from desired configuration",
 	}
 	if !equalStrings(got, want) {
