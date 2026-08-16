@@ -1631,13 +1631,21 @@ func absOrCWD(path string) (string, error) {
 // that listed options and named no command. The list stays first because it is
 // what a human scanning the refusal wants; the commands follow because that is
 // what makes the refusal runnable.
+//
+// The selector is positional: ParseCommandArgs has no --change flag, so the
+// emitted spelling must be `gentle-ai sdd-status <change> --cwd <root>`. The
+// first shipped spelling used `--change` and every emitted command was
+// rejected by the very parser it targets (#3278, #2790), burning the
+// operator's single sanctioned observation on a syntax error. The guard test
+// in selection_continuation_test.go feeds every emitted continuation back
+// through ParseCommandArgs so the spelling cannot drift from the parser again.
 func ambiguousChangeSelectionReasons(subject, workspaceRoot string, changes []string) []string {
 	reasons := make([]string, 0, len(changes)+1)
 	reasons = append(reasons, fmt.Sprintf("%s selection is ambiguous: %s.", subject, strings.Join(changes, ", ")))
 	for _, change := range changes {
 		reasons = append(reasons, fmt.Sprintf(
-			"Run `gentle-ai sdd-status --cwd %s --change %s` to continue with %s.",
-			workspaceRoot, change, change,
+			"Run `gentle-ai sdd-status %s --cwd %s` to continue with %s.",
+			change, workspaceRoot, change,
 		))
 	}
 	return reasons
