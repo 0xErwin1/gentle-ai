@@ -492,7 +492,13 @@ func TestOpenCodeReviewTransportPluginContract(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{`gentle-ai.provider-transport/v1`, `"review", "opencode-transport"`, `RELAY_REGISTRY_KEY`, `reviewRelayRegistry()`, `output.args.prompt = (await relay.prompt).prompt`, `output.output = await registration.relay.complete(output.output)`, `"tool.execute.before"`, `"tool.execute.after"`} {
+	for _, want := range []string{`gentle-ai.provider-transport/v1`, `"review", "opencode-transport"`, `RELAY_REGISTRY_KEY`, `reviewRelayRegistry()`, `output.args.prompt = (await relay.prompt).prompt`, `output.output = await registration.relay.complete(output.output)`, `"tool.execute.before"`, `"tool.execute.after"`,
+		// A refused relay start must fail the Task loudly and never launch an
+		// unbound child: the before hook poisons the Task prompt and the after
+		// hook replaces child output with the typed refusal, so a host runtime
+		// that swallows hook errors still cannot deliver an unbound child's
+		// prose as a reviewer completion.
+		`opencode_review_transport_relay_refused`, `refused.set(key, reason)`, `output.args.prompt = relayRefusedPrompt(reason)`, `output.output = relayRefusedOutput(refusal)`} {
 		if !strings.Contains(source, want) {
 			t.Fatalf("transport plugin missing %q", want)
 		}
