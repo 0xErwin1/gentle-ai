@@ -185,6 +185,10 @@ func PrepareInstall(args []string, detection system.DetectionResult) (PreparedIn
 		}
 		input.Selection = selection
 	}
+	input.Selection, err = normalizeConfigSelection(input.Selection)
+	if err != nil {
+		return PreparedInstall{}, err
+	}
 
 	resolved, err := planner.NewResolver(planner.MVPGraph()).Resolve(input.Selection)
 	if err != nil {
