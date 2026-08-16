@@ -1214,6 +1214,14 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 										providerRole = reviewerprovider.RoleTargetedValidator
 									}
 								case errors.Is(readErr, errReviewTargetedValidationInconclusive):
+									// A host-mediated runtime must never be handed the
+									// generic "author the validation yourself" form: only
+									// Go may run its validator. It gets the same Go-issued
+									// role task an unoccupied slot gets, and the capture
+									// vacates the non-verdict occupant before publishing.
+									if providerRoleHost {
+										providerRole = reviewerprovider.RoleTargetedValidator
+									}
 									// A captured result whose evidence reports the
 									// frozen trees could not be inspected is not a
 									// verdict and not corruption: the bytes are exactly
@@ -1252,8 +1260,8 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 			input := reviewNextTransitionInput{Gate: reviewtransaction.GateKind(*gate), Successor: *recoverySuccessor, Reason: *recoveryReason, Actor: *recoveryActor, Authorization: *recoveryAuthorization, RepairActor: *repairActor, RepairReason: *repairReason, RepairAuthorization: *repairAuthorization, StartLineage: startLineage, RuntimeAgent: runtime, ProviderRole: providerRole, CapturedProviderTargetedValidator: capturedProviderTargetedValidator, CapturedProviderTargetedValidatorInconclusive: capturedProviderTargetedValidatorInconclusive, Contract: *contract, RepositoryContext: repositoryContext, ValidationRequest: validationRequest, CorrectionRequest: correctionRequest, EvidenceErr: evidenceErr, CorrectionForecasted: correctionForecasted, CaptureContext: captureContext, Selector: selector, IntendedUntracked: intendedScope, RDDMode: result.rddMode, RDDModeResolved: result.rddModeResolved, LensContextBudgetExceeded: lensContextBudgetExceeded, PreCommitDeliveryAssessment: preCommitDeliveryAssessment}
 			transition := newReviewNextTransition(result, native.SelectedLenses, artifacts, capturedEvidence, artifactErr, input)
 			result.NextTransition = &transition
-			providerTargetedValidation := transition.ReasonCode == "targeted_validation_required" && transition.Collect != nil &&
-				len(transition.Collect.Inputs) == 1 && transition.Collect.Inputs[0].ProviderTask != nil
+			providerTargetedValidation := (transition.ReasonCode == "targeted_validation_required" || transition.ReasonCode == reviewInconclusiveTargetedValidationReason) &&
+				transition.Collect != nil && len(transition.Collect.Inputs) == 1 && transition.Collect.Inputs[0].ProviderTask != nil
 			providerCapturedTargetedValidation := transition.ReasonCode == "captured_provider_targeted_validation_ready" && transition.Execute != nil &&
 				transition.Execute.Operation == "review.finalize"
 			if reviewTransitionValidationRequest(&transition) == nil && transition.ReasonCode != "correction_repository_verification_required" &&

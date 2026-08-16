@@ -255,7 +255,14 @@ func newReviewNextTransition(status ReviewTargetStatusResult, selectedLenses []s
 				return reviewCollectTransition("correction_repository_verification_required", reviewCaptureEvidenceInput(input.Contract, validationBinding))
 			}
 			if input.ProviderRole == reviewerprovider.RoleTargetedValidator {
-				return reviewProviderRoleTransition("targeted_validation_required", validationBinding, input.ProviderRole, input.RuntimeAgent, input.ValidationRequest)
+				// Same Go-issued role task either way; only the reason differs,
+				// so a consumer can tell a first validation apart from one being
+				// run again because the captured attempt produced no verdict.
+				reason := "targeted_validation_required"
+				if input.CapturedProviderTargetedValidatorInconclusive {
+					reason = reviewInconclusiveTargetedValidationReason
+				}
+				return reviewProviderRoleTransition(reason, validationBinding, input.ProviderRole, input.RuntimeAgent, input.ValidationRequest)
 			}
 			if input.CapturedProviderTargetedValidatorInconclusive {
 				// The occupied slot holds a non-verdict, and an occupied slot

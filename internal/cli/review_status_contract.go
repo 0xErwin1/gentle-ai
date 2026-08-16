@@ -443,7 +443,8 @@ func (result ReviewTargetStatusResult) validateWithCompactAuthority(authority *r
 			(result.NextTransition.ReasonCode == "correction_repository_verification_required" ||
 				result.NextTransition.ReasonCode == "correction_repository_tooling_failed")
 		providerTargetedValidation := transitionRequest == nil && result.ValidationRequest != nil &&
-			result.NextTransition.ReasonCode == "targeted_validation_required" && result.NextTransition.Collect != nil &&
+			(result.NextTransition.ReasonCode == "targeted_validation_required" ||
+				result.NextTransition.ReasonCode == reviewInconclusiveTargetedValidationReason) && result.NextTransition.Collect != nil &&
 			len(result.NextTransition.Collect.Inputs) == 1 && result.NextTransition.Collect.Inputs[0].ProviderTask != nil
 		capturedProviderTargetedValidation := transitionRequest == nil && result.ValidationRequest != nil &&
 			result.NextTransition.ReasonCode == "captured_provider_targeted_validation_ready" && result.NextTransition.Execute != nil &&

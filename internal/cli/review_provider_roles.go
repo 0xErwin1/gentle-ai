@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"reflect"
 	"sort"
 	"strings"
@@ -498,6 +500,15 @@ func reviewProviderCaptureTargetedValidatorRaw(ctx context.Context, repo string,
 	if err != nil {
 		return facadeValidationResult{}, reviewtransaction.ScopedValidationResult{}, err
 	}
+	// The new bytes are an admitted verdict. If the slot is still held by a
+	// non-verdict captured before this build could refuse one, archive it and
+	// vacate the slot so the immutable publication below sees an empty slot
+	// rather than a conflict it must refuse (#3378). A real verdict is never
+	// archived: the occupant has to be inadmissible for inconclusiveness and
+	// nothing else, and its exact bytes and digest are preserved first.
+	if err := reviewArchiveInconclusiveTargetedValidatorSlot(store.Dir, request); err != nil {
+		return facadeValidationResult{}, reviewtransaction.ScopedValidationResult{}, err
+	}
 	payload, err := canonicalProviderRoleResult(result)
 	if err != nil {
 		return facadeValidationResult{}, reviewtransaction.ScopedValidationResult{}, err
@@ -548,6 +559,72 @@ func reviewProviderCaptureTargetedValidator(ctx context.Context, repo string, st
 		return facadeValidationResult{}, reviewtransaction.ScopedValidationResult{}, fmt.Errorf("invoke provider targeted validator: %w", err)
 	}
 	return reviewProviderCaptureTargetedValidatorRaw(ctx, repo, store, state, revision, raw)
+}
+
+// reviewTargetedValidatorSlotPath is the one place the correction-bound
+// validator slot layout is spelled out on this side of the store boundary.
+func reviewTargetedValidatorSlotPath(storeDir string, request reviewtransaction.TargetedValidationRequest) string {
+	return filepath.Join(storeDir, "targeted-validator-results",
+		strings.TrimPrefix(request.CorrectionTargetIdentity, "sha256:"),
+		strings.TrimPrefix(request.ExpectedRevision, "sha256:"), "result.json")
+}
+
+// reviewArchiveInconclusiveTargetedValidatorSlot vacates a correction-bound
+// validator slot occupied by a captured non-verdict, preserving its exact
+// bytes and digest under the store's existing quarantine root first. It is a
+// no-op for an empty slot and for any occupant that is admissible or that
+// fails admission for any reason other than inconclusiveness, so an immutable
+// verdict -- passed or failed -- can never be replaced through this path.
+// Archive-then-remove converges on retry: a crash after the archive leaves the
+// preserved copy, and the next attempt finds it already published.
+func reviewArchiveInconclusiveTargetedValidatorSlot(storeDir string, request reviewProviderTargetedValidatorRequest) error {
+	slot, err := reviewtransaction.ReadCompactTargetedValidatorResultSlot(storeDir, request.ValidationRequest)
+	if err != nil || !slot.Occupied {
+		// A slot this build cannot even read back is corruption, not a
+		// non-verdict: leave it exactly as it is for maintainer inspection.
+		return nil
+	}
+	occupant, _, admitErr := reviewProviderAdmitTargetedValidatorRaw(request, slot.Payload)
+	if !errors.Is(admitErr, errReviewTargetedValidationInconclusive) {
+		_ = occupant
+		return nil
+	}
+	path := reviewTargetedValidatorSlotPath(storeDir, request.ValidationRequest)
+	digestPath := path + ".sha256"
+	payload, payloadInfo, payloadErr := readPrivateReviewerFile(path, reviewResultArtifactLimit)
+	if payloadErr != nil {
+		return fmt.Errorf("read superseded targeted validator result: %w", payloadErr)
+	}
+	_, digestInfo, digestErr := readPrivateReviewerFile(digestPath, 256)
+	if digestErr != nil {
+		return fmt.Errorf("read superseded targeted validator result digest: %w", digestErr)
+	}
+	archiveRoot := filepath.Join(storeDir, reviewtransaction.CompactQuarantinedReviewerResultsDir)
+	if err := ensureReviewerArtifactDir(archiveRoot); err != nil {
+		return err
+	}
+	archiveDir := filepath.Join(archiveRoot, strings.TrimPrefix(request.ValidationRequest.ExpectedRevision, "sha256:")[:16])
+	if err := ensureReviewerArtifactDir(archiveDir); err != nil {
+		return err
+	}
+	archivePath := filepath.Join(archiveDir, "targeted-validator-"+
+		strings.TrimPrefix(request.ValidationRequest.CorrectionTargetIdentity, "sha256:")[:16]+".json")
+	if err := publishImmutableReviewerFile(archivePath, payload); err != nil {
+		return fmt.Errorf("archive superseded targeted validator result: %w", err)
+	}
+	if err := publishImmutableReviewerFile(archivePath+".sha256", []byte(slot.Digest+"\n")); err != nil {
+		return fmt.Errorf("archive superseded targeted validator result digest: %w", err)
+	}
+	for _, owned := range []struct {
+		path string
+		info os.FileInfo
+	}{{path: path, info: payloadInfo}, {path: digestPath, info: digestInfo}} {
+		removeOwnedArtifact(owned.path, owned.info)
+		if _, err := os.Lstat(owned.path); !os.IsNotExist(err) {
+			return errors.New("superseded targeted validator result changed before removal") // refusal:by-design human-authority: a validator slot that changes mid-supersede requires maintainer inspection
+		}
+	}
+	return syncReviewerArtifactDirectoryCompatible(filepath.Dir(path))
 }
 
 func readCapturedProviderTargetedValidatorResult(ctx context.Context, repo, storeDir string, state reviewtransaction.CompactState, revision string) (facadeValidationResult, error) {
