@@ -341,6 +341,26 @@ func TestBoundReviewArchiveGateAllowsAttestedPostReviewVerifyReportDelta(t *test
 		}
 	}
 
+	// A digest-less settlement whose receipt-to-current delta also touches a
+	// non-report path has nothing a verify-attestation work unit could repair:
+	// it must keep the pre-existing scope-changed routing, never Required, and
+	// proving that delta must still write no Git objects.
+	tasksPath := filepath.Join(changeRoot, "tasks.md")
+	originalTasks, err := os.ReadFile(tasksPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	write(t, verifyPath, finalReport+"\n# drifted in the worktree only\n")
+	write(t, tasksPath, string(originalTasks)+"- [ ] drifted unrelated edit\n")
+	before := countLooseGitObjects(t, root)
+	if got := classifyPostReviewVerifyReportAttestation(context.Background(), root, root, change, *ref, &legacy, SpecCounts{Requirements: 1, Scenarios: 1}); got != postReviewVerifyReportUnproven {
+		t.Fatalf("legacy non-report delta classification = %v, want unproven", got)
+	}
+	if after := countLooseGitObjects(t, root); after != before {
+		t.Fatalf("legacy non-report delta classification wrote %d Git object(s)", after-before)
+	}
+	write(t, tasksPath, string(originalTasks))
+
 	write(t, verifyPath, finalReport+"\n# Mutated after settlement\n")
 	runSDDStatusGit(t, root, "add", "openspec")
 	assertPostReviewVerifyReportScopeChanged(t, root, change, *ref)

@@ -3,9 +3,11 @@ package sddstatus
 import (
 	"context"
 	"os"
+	"os/exec"
 	"path"
 	"path/filepath"
 	"reflect"
+	"strings"
 
 	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
 )
@@ -83,6 +85,20 @@ func classifyPostReviewVerifyReportAttestation(
 	// the safe recovery offer, before the snapshot build below could hash
 	// drifted worktree bytes into the Git object database.
 	if settlement.AttestedVerifyReportDigest == "" {
+		// The recovery offer is honest only when the receipt-to-current delta
+		// is the canonical verify report alone; any other touched path keeps
+		// the pre-existing scope-changed routing. git diff against the receipt
+		// tree is read-only, so this proof still writes no Git objects.
+		delta, err := exec.CommandContext(ctx, "git", "-C", repo, "diff",
+			"--name-only", "-z", "--no-renames", receipt.FinalCandidateTree, "--").Output()
+		if err != nil {
+			return postReviewVerifyReportUnproven
+		}
+		for _, changed := range strings.Split(string(delta), "\x00") {
+			if changed != "" && changed != logicalReportPath {
+				return postReviewVerifyReportUnproven
+			}
+		}
 		return postReviewVerifyReportRequired
 	}
 	// Status classification never writes to the Git object database: this cheap
