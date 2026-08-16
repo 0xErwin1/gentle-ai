@@ -84,8 +84,11 @@ func TestReviewProviderArtifactV21ContractsArePinned(t *testing.T) {
 		// agent token when the caller declared no runtime (the pinned fixture
 		// itself carries no --agent), and #2676 binds the declared runtime
 		// (claude-code, opencode, codex) when there is one. The schema now
-		// follows the emitter. Deliberate, not drift.
-		"schemas/consent-v3.schema.json": "2315f1ecda9e798344f0886434316a2cba69e9cc4c1a72eb436bd5fe44c25bb6",
+		// follows the emitter. The agent enum also admits "pi": the Pi host
+		// relay drives consent with its own declared runtime identity, which
+		// the emitter legitimately publishes once the relay handshake is
+		// declared. Deliberate, not drift.
+		"schemas/consent-v3.schema.json": "f56b1809c1bff21713795ef37a095c6ecfdbbb3cf928bcf604b8d5f33be3dea5",
 		"schemas/status.schema.json":     "c4dcc736cfc6300560a3c4262d2d982368529d5c49d58d499552a3b0beef9212",
 	}
 	for name, expected := range want {
@@ -112,9 +115,12 @@ func TestReviewProviderArtifactV25StatusContractsArePinned(t *testing.T) {
 		// host-relay (review.capture-validation) shapes, which the schema
 		// rejected as missing the generic submission; and the negotiated-route
 		// disposition preview (ReviewRepairDispositionProviderInputs) is real
-		// optional emitter output the strict schema must admit. Deliberate,
-		// not drift.
-		"schemas/status-v5.schema.json": "5d5170d0c4be0977b640524c6ca9b119e42803a9e8409c43f0053c0c6fbd421e",
+		// optional emitter output the strict schema must admit; and the pi
+		// host-relay materialize path renders the reviewer_result collect
+		// input with a capture-result submission descriptor, which the
+		// submission oneOf and the no-submission allOf rule both rejected.
+		// Deliberate, not drift.
+		"schemas/status-v5.schema.json": "4dd17e863725edb20e9cbb85d9614dfdc07ef6c9257aa789f4c9e8835400483e",
 	}
 	for name, expected := range want {
 		payload, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(name)))
