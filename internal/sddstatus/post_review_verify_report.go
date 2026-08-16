@@ -63,13 +63,28 @@ func classifyPostReviewVerifyReportAttestation(
 	if err != nil {
 		return postReviewVerifyReportUnproven
 	}
-	logicalReportPath, err := filepath.Rel(repo, filepath.Join(changeRoot, "verify-report.md"))
+	reportPath := filepath.Join(changeRoot, "verify-report.md")
+	// Mirror captureFinalVerifyReport: the canonical path is anchored at the
+	// planning workspace, tree reads at the repository root (which may differ).
+	workspaceReportPath, err := filepath.Rel(workspace, reportPath)
+	if err != nil || filepath.ToSlash(workspaceReportPath) != path.Join("openspec", "changes", change, "verify-report.md") {
+		return postReviewVerifyReportUnproven
+	}
+	logicalReportPath, err := filepath.Rel(repo, reportPath)
 	if err != nil {
 		return postReviewVerifyReportUnproven
 	}
 	logicalReportPath = filepath.ToSlash(logicalReportPath)
-	if logicalReportPath != path.Join("openspec", "changes", change, "verify-report.md") {
-		return postReviewVerifyReportUnproven
+
+	// Status classification never writes to the Git object database: this cheap
+	// byte gate rejects a worktree report that cannot match the attested digest
+	// before any snapshot build hashes drifted bytes; filters only fail closed.
+	if settlement.AttestedVerifyReportDigest != "" {
+		worktreeReport, err := os.ReadFile(reportPath)
+		if err != nil || len(worktreeReport) > MaxVerifyReportBytes ||
+			verifyReportDigest(worktreeReport) != settlement.AttestedVerifyReportDigest {
+			return postReviewVerifyReportUnproven
+		}
 	}
 
 	current, err := (reviewtransaction.SnapshotBuilder{Repo: repo}).Build(ctx, reviewtransaction.Target{
@@ -88,8 +103,11 @@ func classifyPostReviewVerifyReportAttestation(
 	if !admission.Valid || admission.Verdict != "pass" || admission.EvidenceRevision != settlement.EvidenceRevision {
 		return postReviewVerifyReportUnproven
 	}
-	rebuilt, err := reviewtransaction.RestoreTreeBlob(ctx, repo, current.CandidateTree, receipt.FinalCandidateTree, logicalReportPath)
-	if err != nil || rebuilt != receipt.FinalCandidateTree {
+	// Read-only single-blob-delta proof: current.Paths proved only the report
+	// path differs and both ReadTreeBlob calls prove a canonical 100644 blob on
+	// each side, so swapping that one blob reproduces the receipt tree exactly
+	// without RestoreTreeBlob's object-writing write-tree round-trip.
+	if _, err := reviewtransaction.ReadTreeBlob(ctx, repo, receipt.FinalCandidateTree, logicalReportPath, MaxVerifyReportBytes); err != nil {
 		return postReviewVerifyReportUnproven
 	}
 	// Legacy records had no native digest and work-unit labels are caller-owned.

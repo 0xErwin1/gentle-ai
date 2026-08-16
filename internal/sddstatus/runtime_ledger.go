@@ -990,6 +990,9 @@ func (store RuntimeStore) Finish(ctx context.Context, request FinishAttemptReque
 // captureFinalVerifyReport derives the final verification attestation from the
 // candidate tree being settled. It deliberately never accepts a caller digest:
 // the native finish record binds the exact report bytes it read itself.
+// Attestation derivation never aborts a passing settlement: an underivable
+// attestation degrades like the missing-blob branch below (empty attestation,
+// archive stays fail-closed). Only writing the ledger itself remains fatal.
 func (store RuntimeStore) captureFinalVerifyReport(ctx context.Context, active RuntimeAttempt, request FinishAttemptRequest, candidateTree string) (string, error) {
 	if request.Outcome != AttemptPassed || !isFinalVerifyWorkUnit(active.WorkUnit) {
 		return "", nil
@@ -1000,11 +1003,11 @@ func (store RuntimeStore) captureFinalVerifyReport(ctx context.Context, active R
 		// OpenSpec root there is no canonical verify-report to attest.
 		return "", nil
 	} else if err != nil {
-		return "", fmt.Errorf("inspect OpenSpec root for final verification: %w", err)
+		return "", nil
 	}
 	changeRoot, err := resolveBindingChangeRoot(ctx, store.Repo, store.Workspace, store.Change)
 	if err != nil {
-		return "", fmt.Errorf("resolve canonical final verification report: %w", err)
+		return "", nil
 	}
 	reportPath := filepath.Join(changeRoot, "verify-report.md")
 	// The canonical report path is anchored at the planning workspace (--cwd),
@@ -1012,26 +1015,26 @@ func (store RuntimeStore) captureFinalVerifyReport(ctx context.Context, active R
 	// its repository still owns exactly one canonical active-change report.
 	workspacePath, err := filepath.Rel(store.Workspace, reportPath)
 	if err != nil {
-		return "", fmt.Errorf("resolve final verification report path: %w", err)
+		return "", nil
 	}
 	wantPath := path.Join("openspec", "changes", store.Change, "verify-report.md")
 	if filepath.ToSlash(workspacePath) != wantPath {
-		return "", fmt.Errorf("final verification report is not the canonical active-change path %q", wantPath) // refusal:by-design world-action: a report outside the canonical active change cannot be safely attested
+		return "", nil
 	}
 	// The settled candidate tree is built at the repository root, so the blob
 	// read addresses the same report through its repository-relative path.
 	logicalPath, err := filepath.Rel(store.Repo, reportPath)
 	if err != nil {
-		return "", fmt.Errorf("resolve final verification report path: %w", err)
+		return "", nil
 	}
 	logicalPath = filepath.ToSlash(logicalPath)
 	artifactPaths, err := resolveArtifactPaths(changeRoot)
 	if err != nil {
-		return "", fmt.Errorf("resolve final verification artifacts: %w", err)
+		return "", nil
 	}
 	specCounts, err := readSpecCounts(artifactPaths.Specs)
 	if err != nil {
-		return "", fmt.Errorf("read final verification specification counts: %w", err)
+		return "", nil
 	}
 	payload, err := reviewtransaction.ReadTreeBlob(ctx, store.Repo, candidateTree, logicalPath, MaxVerifyReportBytes)
 	if errors.Is(err, reviewtransaction.ErrTreeArtifactMissing) {
@@ -1041,15 +1044,11 @@ func (store RuntimeStore) captureFinalVerifyReport(ctx context.Context, active R
 		return "", nil
 	}
 	if err != nil {
-		return "", fmt.Errorf("read final verification report from candidate tree: %w", err)
+		return "", nil
 	}
 	admission := ValidateVerifyReportAdmission(string(payload), specCounts)
 	if !admission.Valid || admission.Verdict != "pass" || admission.EvidenceRevision != request.EvidenceRevision {
-		reason := admission.Reason
-		if reason == "" {
-			reason = "verdict or evidence revision does not match the final settlement"
-		}
-		return "", fmt.Errorf("final verification report is not a strict passing settlement attestation: %s", reason) // refusal:by-design operator-knowledge: the final verifier must persist a canonical passing report whose evidence revision matches this settlement
+		return "", nil
 	}
 	return verifyReportDigest(payload), nil
 }
