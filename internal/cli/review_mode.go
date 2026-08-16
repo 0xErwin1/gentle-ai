@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/pathquote"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/state"
@@ -960,4 +961,22 @@ func reviewConsentSignalSubject(signal reviewtransaction.RiskSignal) string {
 	default:
 		return "a sensitive area"
 	}
+}
+
+// applyDeclaredRDDMode records a declared global review mode, stamping the
+// cutoff only when the value actually changes. The cutoff is authority, not an
+// audit field: re-enabling must affect future candidates only, so refreshing it
+// on an unchanged value would move that boundary forward on every run. An
+// omitted declaration leaves persisted state alone, because silence is not a
+// policy decision. The clone-local override is deliberately out of reach here.
+func applyDeclaredRDDMode(persisted state.InstallState, declared model.RDDMode, now time.Time) (state.InstallState, bool) {
+	if declared == "" || string(declared) == persisted.RDDMode {
+		return persisted, false
+	}
+
+	recorded := now.UTC()
+	persisted.RDDMode = string(declared)
+	persisted.RDDModeRecordedAt = &recorded
+
+	return persisted, true
 }
