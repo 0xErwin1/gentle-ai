@@ -1,7 +1,11 @@
 package cli
 
 import (
+	"encoding/json"
 	"fmt"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/components/filemerge"
+	"os"
+	"path/filepath"
 	"sort"
 
 	"github.com/gentleman-programming/gentle-ai/v2/internal/agents"
@@ -69,7 +73,11 @@ func (stager configurationStager) Stage(state configdomain.DesiredState, stageRo
 		return err
 	}
 
-	return stageDeclaredPermissions(stageRoot, selection, adapters)
+	if err := stageDeclaredPermissions(stageRoot, selection, adapters); err != nil {
+		return err
+	}
+
+	return stageDeclaredExtensions(stageRoot, state, adapters)
 }
 
 func (stager configurationStager) stageComponent(component model.ComponentID, stageRoot string, selection model.Selection, adapters []agents.Adapter) error {
@@ -101,7 +109,7 @@ func (stager configurationStager) stageComponentForAdapter(
 ) error {
 	switch component {
 	case model.ComponentSkills:
-		skillIDs := selectedSkillIDs(selection)
+		skillIDs := skillsForAdapter(selection, adapter.Agent())
 		if len(skillIDs) == 0 {
 			return nil
 		}
@@ -269,4 +277,63 @@ func sortedServerNames(servers map[string]model.MCPServer) []string {
 	sort.Strings(names)
 
 	return names
+}
+
+// skillsForAdapter resolves what one adapter receives. A per-adapter assignment
+// replaces the flat list for that adapter only, so the simple form keeps
+// meaning "every adapter" and a document only names an adapter when it differs.
+func skillsForAdapter(selection model.Selection, agent model.AgentID) []model.SkillID {
+	if assigned, ok := selection.SkillAssignments[agent]; ok {
+		return assigned
+	}
+
+	return selectedSkillIDs(selection)
+}
+
+// stageDeclaredExtensions merges each provider's extension block into that
+// adapter's settings. An extension is the escape hatch for configuration the
+// neutral contract does not model, so it lands verbatim rather than being
+// reinterpreted, and only for the adapter it names.
+func stageDeclaredExtensions(stageRoot string, state configdomain.DesiredState, adapters []agents.Adapter) error {
+	if len(state.Extensions) == 0 {
+		return nil
+	}
+
+	for _, adapter := range adapters {
+		block, declared := state.Extensions[string(adapter.Agent())]
+		if !declared {
+			continue
+		}
+
+		settingsPath := adapter.SettingsPath(stageRoot)
+		if settingsPath == "" {
+			continue
+		}
+		if err := mergeExtensionBlock(settingsPath, block); err != nil {
+			return fmt.Errorf("stage extension for %q: %w", adapter.Agent(), err)
+		}
+	}
+
+	return nil
+}
+
+func mergeExtensionBlock(settingsPath string, block json.RawMessage) error {
+	existing, err := os.ReadFile(settingsPath)
+	if err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("read settings %q: %w", settingsPath, err)
+	}
+
+	merged, err := filemerge.MergeJSONObjects(existing, block)
+	if err != nil {
+		return fmt.Errorf("merge extension into %q: %w", settingsPath, err)
+	}
+
+	if err := os.MkdirAll(filepath.Dir(settingsPath), 0o755); err != nil {
+		return fmt.Errorf("create settings directory: %w", err)
+	}
+	if _, err := filemerge.WriteFileAtomic(settingsPath, merged, 0o644); err != nil {
+		return fmt.Errorf("write settings %q: %w", settingsPath, err)
+	}
+
+	return nil
 }
