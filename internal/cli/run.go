@@ -138,6 +138,7 @@ func RunInstall(args []string, detection system.DetectionResult) (InstallResult,
 			return InstallResult{}, err
 		}
 		input.Selection = selection
+		input = applyDeclaredInstallTarget(input, selection)
 	}
 	input.Selection, err = normalizeConfigSelection(input.Selection)
 	if err != nil {

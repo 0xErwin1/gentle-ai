@@ -4,18 +4,20 @@ import (
 	"fmt"
 	"os"
 	"strings"
+
+	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
 )
 
 // InstallScope controls where agent-scoped config files (system prompts, skills/, agents/, etc.) are written.
 // ScopeGlobal writes to the user's global config root for each selected agent.
 // ScopeWorkspace writes to the current workspace config root for each selected agent.
-type InstallScope string
+type InstallScope = model.InstallScope
 
 const (
 	// ScopeGlobal writes to the global agent config dir (default, backward-compatible).
-	ScopeGlobal InstallScope = "global"
+	ScopeGlobal = model.InstallScopeGlobal
 	// ScopeWorkspace writes to the current workspace config root for each selected agent.
-	ScopeWorkspace InstallScope = "workspace"
+	ScopeWorkspace = model.InstallScopeWorkspace
 
 	// scopeEnvVar is the environment variable that controls install scope.
 	scopeEnvVar = "GENTLE_AI_INSTALL_SCOPE"
@@ -52,4 +54,18 @@ func ResolveAgentConfigDir(scope InstallScope, homeDir, workspaceDir string) str
 		return workspaceDir
 	}
 	return homeDir
+}
+
+// applyDeclaredInstallTarget lets a declared scope or channel stand in for the
+// flag, which cannot be passed alongside a document. An omitted declaration
+// leaves whatever the flag and environment already resolved.
+func applyDeclaredInstallTarget(input InstallInput, selection model.Selection) InstallInput {
+	if selection.Scope != "" {
+		input.Scope = selection.Scope
+	}
+	if selection.Channel != "" {
+		input.Channel = selection.Channel
+	}
+
+	return input
 }
