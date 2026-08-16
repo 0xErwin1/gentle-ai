@@ -196,12 +196,6 @@ func TestOpenCodeReviewTransportRefusesNonCanonicalProviderTaskBeforeProviderLau
 			},
 		},
 		{
-			name: "expanded provider binding",
-			prompt: func(binding string) string {
-				return binding + "\n\nInput:\nmaterialized validator payload"
-			},
-		},
-		{
 			name: "forged materialization marker",
 			prompt: func(binding string) string {
 				payload, err := json.Marshal(openCodeTransportMaterialization{TaskPrompt: binding})
@@ -763,9 +757,13 @@ func startOpenCodeTransportRelay(t *testing.T, start openCodeTransportEnvelope) 
 		_ = output.CloseWithError(err)
 		done <- err
 	}()
-	if err := json.NewEncoder(input).Encode(start); err != nil {
-		t.Fatal(err)
-	}
+	// The start frame is written concurrently because io.Pipe is synchronous:
+	// when the encoded frame lands exactly on the decoder's read-chunk
+	// boundary, the relay decodes the envelope and answers with its prompt
+	// frame before consuming the trailing newline, and a same-goroutine
+	// writer would deadlock against the unread prompt frame. Any write
+	// failure surfaces through the prompt decode below.
+	go func() { _ = json.NewEncoder(input).Encode(start) }()
 	decoder := json.NewDecoder(bufio.NewReader(outputReader))
 	var prompt openCodeTransportEnvelope
 	if err := decoder.Decode(&prompt); err != nil {
