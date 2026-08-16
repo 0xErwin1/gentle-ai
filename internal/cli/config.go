@@ -71,7 +71,7 @@ func RunConfig(args []string, stdout io.Writer) error {
 	if err != nil {
 		return err
 	}
-	provider, unavailable := selectRenderProvider(desired)
+	provider, unavailable := selectRenderProvider(desired, *home)
 	if len(unavailable) > 0 {
 		result["diagnostics"] = unavailable
 		return writeConfigResult(stdout, result)
@@ -89,12 +89,14 @@ func RunConfig(args []string, stdout io.Writer) error {
 	if operation == "render" {
 		return writeConfigResult(stdout, result)
 	}
+	addLiveFileResources(live, *destination, manifest)
 	plan := render.Plan(render.Manifest{}, manifest, live)
 	if operation == "apply" || operation == "reconcile" {
 		previous, err := readConfigManifest(*home, *destination)
 		if err != nil {
 			return err
 		}
+		addLiveFileResources(live, *destination, previous)
 		plan = render.Plan(previous, manifest, live)
 		if err := render.Apply(render.ApplyRequest{
 			Plan: plan, Snapshot: snapshot, Destination: *destination,
@@ -111,7 +113,7 @@ func RunConfig(args []string, stdout io.Writer) error {
 // declares. Substituting a different adapter's renderer would hand the operator
 // configuration for a client they never named, so an adapter without rendering
 // support is reported instead of quietly replaced.
-func selectRenderProvider(desired configdomain.DesiredState) (render.Provider, []configdomain.Diagnostic) {
+func selectRenderProvider(desired configdomain.DesiredState, readRoot string) (render.Provider, []configdomain.Diagnostic) {
 	unavailable := make([]configdomain.Diagnostic, 0)
 	selected := make([]render.Provider, 0, len(desired.Selection.Agents))
 
@@ -132,6 +134,8 @@ func selectRenderProvider(desired configdomain.DesiredState) (render.Provider, [
 	if len(unavailable) > 0 {
 		return nil, unavailable
 	}
+
+	selected = append(selected, configurationStager{adapters: desired.Selection.Agents, readRoot: readRoot})
 
 	owner := map[string]render.Provider{}
 	for _, provider := range selected {
@@ -170,6 +174,20 @@ func (composed composedProvider) Render(state configdomain.DesiredState, baselin
 	}
 
 	return artifacts, nil
+}
+
+func (composed composedProvider) Stage(state configdomain.DesiredState, stageRoot string) error {
+	for _, provider := range composed.members {
+		staging, ok := provider.(render.StagingProvider)
+		if !ok {
+			continue
+		}
+		if err := staging.Stage(state, stageRoot); err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
 
 func (composed composedProvider) Selectors(state configdomain.DesiredState) map[string][]string {
@@ -249,6 +267,27 @@ func configBaseline(destination string, previous ...configdomain.DesiredState) (
 		return nil, nil, err
 	}
 	return map[string][]byte{renderOpenCodeSettingsPath: contents}, live, nil
+}
+
+// addLiveFileResources records what the destination actually holds for every
+// whole-file resource a manifest mentions. Without it the planner sees no live
+// state for a staged tree and reads every managed file as stale, because the
+// baseline reader only ever inspected the one composed settings file.
+func addLiveFileResources(live map[render.ResourceKey]string, destination string, manifest render.Manifest) {
+	for _, resource := range manifest.Resources {
+		if resource.Selector != "file" {
+			continue
+		}
+		key := render.ResourceKey{Path: resource.Path, Selector: resource.Selector}
+		if _, known := live[key]; known {
+			continue
+		}
+		contents, err := os.ReadFile(filepath.Join(destination, filepath.FromSlash(resource.Path)))
+		if err != nil {
+			continue
+		}
+		live[key] = digest(contents)
+	}
 }
 
 const renderOpenCodeSettingsPath = ".config/opencode/opencode.json"
