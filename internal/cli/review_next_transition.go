@@ -397,6 +397,17 @@ func newReviewNextTransition(status ReviewTargetStatusResult, selectedLenses []s
 	}
 }
 
+// reviewProviderRoleInputName renders the published collection-input name for
+// one provider role. Input names are contract identifiers, not role tokens:
+// the published transition_input schema (status-v5.schema.json) and gentle-pi's
+// runtime decoder both pin them to ^[a-z0-9_]+$, so the hyphen the
+// targeted-validator role token carries must project to an underscore here
+// (cross-lane battery finding; the completed-input echo already published
+// "provider_targeted_validator").
+func reviewProviderRoleInputName(role reviewProviderRole) string {
+	return "provider_" + strings.ReplaceAll(string(role), "-", "_")
+}
+
 func reviewProviderRoleTransition(reason string, binding ReviewTransitionBinding, role reviewProviderRole, runtime model.AgentID, validation *reviewtransaction.TargetedValidationRequest) ReviewNextTransition {
 	if reviewProviderHostRelayMaterializeRuntime(runtime) {
 		input, err := reviewProviderHostRelayRoleInput(binding, role, runtime, validation)
@@ -410,7 +421,7 @@ func reviewProviderRoleTransition(reason string, binding ReviewTransitionBinding
 		return reviewStopTransition("captured_artifacts_unverifiable")
 	}
 	return reviewCollectTransition(reason, ReviewTransitionInput{
-		Name: "provider_" + string(role), Schema: reviewProviderRoleTaskSchema(role), CaptureOperation: "external.run_provider_role",
+		Name: reviewProviderRoleInputName(role), Schema: reviewProviderRoleTaskSchema(role), CaptureOperation: "external.run_provider_role",
 		Arguments: append(reviewBindingArguments(binding),
 			ReviewTransitionArgument{Name: "repository-context", Value: binding.RepositoryContext},
 			ReviewTransitionArgument{Name: "agent", Value: string(model.AgentOpenCode)},
@@ -442,7 +453,7 @@ func reviewProviderHostRelayRoleInput(binding ReviewTransitionBinding, role revi
 	}
 	arguments := append(reviewBindingArguments(binding),
 		ReviewTransitionArgument{Name: "repository-context", Value: binding.RepositoryContext})
-	input := ReviewTransitionInput{Name: "provider_" + string(role)}
+	input := ReviewTransitionInput{Name: reviewProviderRoleInputName(role)}
 	switch role {
 	case reviewerprovider.RoleRefuter:
 		input.Schema, input.CaptureOperation = reviewRefuterSchemaID, reviewCaptureRefuterCaptureOperation
