@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"sort"
+	"strings"
 
 	"github.com/gentleman-programming/gentle-ai/v2/internal/components/filemerge"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/config"
@@ -68,16 +68,11 @@ func (OpenCodeProvider) Render(state config.DesiredState, baseline map[string][]
 
 	agents := make(map[string]any, len(state.Roles))
 	for _, role := range state.Roles {
-		references := make([]string, 0, len(role.References))
-		for _, reference := range role.References {
-			name, ok := roles[config.RoleID(reference)]
-			if !ok {
-				return nil, fmt.Errorf("resolve OpenCode role %q", reference)
-			}
-			references = append(references, name)
+		entry, err := openCodeAgentEntry(role, roles)
+		if err != nil {
+			return nil, err
 		}
-		sort.Strings(references)
-		agents[roles[role.ID]] = map[string]any{"references": references}
+		agents[roles[role.ID]] = entry
 	}
 
 	overlay, err := json.Marshal(map[string]any{"agent": agents})
@@ -90,6 +85,74 @@ func (OpenCodeProvider) Render(state config.DesiredState, baseline map[string][]
 	}
 	return []ArtifactContent{{Path: openCodeSettingsPath, Contents: merged}}, nil
 }
+
+// openCodeAgentEntry projects one declared role onto the agent shape OpenCode
+// reads, which is the shape gentle-ai's own generated agents already use. A
+// field the document left out is left out of the entry, so a role never gains
+// a description, a prompt or a toolset the operator never wrote.
+//
+// Delegation is a permission in OpenCode, not a list: a role that references
+// others is allowed to hand work to exactly those and denied the rest, which is
+// what naming them means.
+func openCodeAgentEntry(role config.Role, roles map[config.RoleID]string) (map[string]any, error) {
+	entry := map[string]any{}
+
+	if role.Description != "" {
+		entry["description"] = role.Description
+	}
+	if role.Prompt != "" {
+		entry["prompt"] = role.Prompt
+	}
+	if role.Mode != "" {
+		entry["mode"] = string(role.Mode)
+	}
+	if role.Hidden != nil {
+		entry["hidden"] = *role.Hidden
+	}
+	if role.Model != nil {
+		entry["model"] = role.Model.Provider + "/" + role.Model.Model
+		if role.Model.Effort != "" {
+			entry["variant"] = role.Model.Effort
+		}
+	}
+	if len(role.Tools) > 0 {
+		entry["tools"] = map[string]any{replaceSentinel: openCodeTools(role.Tools)}
+	}
+
+	if len(role.References) == 0 {
+		return entry, nil
+	}
+
+	delegation := map[string]any{"*": "deny"}
+	for _, reference := range role.References {
+		name, resolved := roles[config.RoleID(reference)]
+		if !resolved {
+			return nil, fmt.Errorf("resolve OpenCode role %q", reference)
+		}
+		delegation[name] = "allow"
+	}
+	entry["permission"] = map[string]any{"task": map[string]any{replaceSentinel: delegation}}
+
+	return entry, nil
+}
+
+// openCodeTools turns the declared allow-list into the enable map OpenCode
+// reads. The wildcard denies everything the document did not name, so an
+// allow-list stays an allow-list rather than becoming an addition to whatever
+// the client defaults to.
+func openCodeTools(tools []string) map[string]any {
+	enabled := map[string]any{"*": false}
+	for _, tool := range tools {
+		enabled[strings.ToLower(tool)] = true
+	}
+
+	return enabled
+}
+
+// replaceSentinel is the filemerge directive that makes a nested object replace
+// its counterpart instead of merging into it. A declared toolset or delegation
+// list that merged would keep entries the document removed.
+const replaceSentinel = "__replace__"
 
 // Merge applies one owned agent into the live settings file, leaving every
 // unrelated key in it untouched.
