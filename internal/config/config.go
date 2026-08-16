@@ -67,6 +67,11 @@ type Selection struct {
 
 	CommunityTools  []model.CommunityToolID           `json:"communityTools,omitempty"`
 	OpenCodePlugins []model.OpenCodeCommunityPluginID `json:"openCodePlugins,omitempty"`
+
+	// Scope and Channel stay unresolved when omitted so the flag and the
+	// environment keep their turn; only a declared value overrides them.
+	Scope   model.InstallScope   `json:"scope,omitempty"`
+	Channel model.InstallChannel `json:"channel,omitempty"`
 }
 
 type Document struct {
@@ -168,6 +173,8 @@ func Project(state DesiredState) model.Selection {
 		CodexOrchestratorAssignment: codexOrchestratorToModel(state.Selection.CodexOrchestrator),
 		CommunityTools:              append([]model.CommunityToolID(nil), state.Selection.CommunityTools...),
 		OpenCodePlugins:             append([]model.OpenCodeCommunityPluginID(nil), state.Selection.OpenCodePlugins...),
+		Scope:                       state.Selection.Scope,
+		Channel:                     state.Selection.Channel,
 	}
 }
 
@@ -189,6 +196,8 @@ func FromSelection(selection model.Selection) DesiredState {
 		CodexOrchestrator:           codexOrchestratorFromModel(selection.CodexOrchestratorAssignment),
 		CommunityTools:              selection.CommunityTools,
 		OpenCodePlugins:             selection.OpenCodePlugins,
+		Scope:                       selection.Scope,
+		Channel:                     selection.Channel,
 	}}
 }
 
@@ -224,6 +233,8 @@ func NormalizeSelection(selection model.Selection) (model.Selection, []Diagnosti
 	selection.CodexOrchestratorAssignment = projected.CodexOrchestratorAssignment
 	selection.CommunityTools = projected.CommunityTools
 	selection.OpenCodePlugins = projected.OpenCodePlugins
+	selection.Scope = projected.Scope
+	selection.Channel = projected.Channel
 	if !preserveUnsetPersona {
 		selection.Persona = projected.Persona
 	}
@@ -244,6 +255,13 @@ func normalizeSelection(selection Selection, diagnostics *[]Diagnostic) Selectio
 
 	if selection.BackgroundIntent != "" && !selection.BackgroundIntent.Valid() {
 		*diagnostics = append(*diagnostics, diagnostic("config.background-intent.unsupported", "$.selection.backgroundIntent", fmt.Sprintf("unsupported background intent %q; use auto, on, or off", selection.BackgroundIntent)))
+	}
+
+	if selection.Scope != "" && !selection.Scope.Valid() {
+		*diagnostics = append(*diagnostics, diagnostic("config.scope.unsupported", "$.selection.scope", fmt.Sprintf("unsupported scope %q; use global or workspace", selection.Scope)))
+	}
+	if selection.Channel != "" && !selection.Channel.Valid() {
+		*diagnostics = append(*diagnostics, diagnostic("config.channel.unsupported", "$.selection.channel", fmt.Sprintf("unsupported channel %q; use stable or beta", selection.Channel)))
 	}
 
 	validateAssignments(selection, diagnostics)
