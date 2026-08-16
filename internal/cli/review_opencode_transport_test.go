@@ -19,6 +19,7 @@ import (
 )
 
 func TestOpenCodeReviewTransportRelaysOneLiveTaskAndCapturesHostOutput(t *testing.T) {
+	reviewEnabledHome(t)
 	repo, _, store, record := newArtifactReview(t, false)
 	lens := record.State.SelectedLenses[0]
 	relay := startOpenCodeTransportRelay(t, openCodeLensTransportStart(t, repo, record, lens))
@@ -53,6 +54,7 @@ func TestOpenCodeReviewTransportRelaysOneLiveTaskAndCapturesHostOutput(t *testin
 }
 
 func TestOpenCodeReviewTransportLensMaterializationCarriesOnlyGoIssuedBytes(t *testing.T) {
+	reviewEnabledHome(t)
 	repo, _, _, record := newArtifactReview(t, false)
 	lens := record.State.SelectedLenses[0]
 	start := openCodeLensTransportStart(t, repo, record, lens)
@@ -77,6 +79,7 @@ func TestOpenCodeReviewTransportLensMaterializationCarriesOnlyGoIssuedBytes(t *t
 }
 
 func TestOpenCodeReviewTransportPublishesProvenanceOnlyAfterDurableCapture(t *testing.T) {
+	reviewEnabledHome(t)
 	for _, test := range []struct {
 		name           string
 		beforeComplete func(*testing.T, string, reviewtransaction.CompactStore, reviewtransaction.CompactRecord, string)
@@ -185,6 +188,7 @@ func TestOpenCodeReviewTransportRefusesStandaloneCompletionWithoutAuthorityMutat
 }
 
 func TestOpenCodeReviewTransportRefusesNonCanonicalProviderTaskBeforeProviderLaunch(t *testing.T) {
+	reviewEnabledHome(t)
 	for _, test := range []struct {
 		name   string
 		prompt func(string) string
@@ -244,6 +248,7 @@ func TestOpenCodeReviewTransportRefusesNonCanonicalProviderTaskBeforeProviderLau
 }
 
 func TestOpenCodeReviewTransportRefusesCanonicalTaskAuthorityMismatchesBeforeProviderLaunch(t *testing.T) {
+	reviewEnabledHome(t)
 	targetedValidatorFixture := func(t *testing.T) (string, string, ReviewProviderTask) {
 		t.Helper()
 		repo, lineage, _ := providerCorrectionReady(t)
@@ -390,6 +395,7 @@ func openCodeTargetedValidatorAgainstReviewContextTask(t *testing.T) (string, st
 }
 
 func TestOpenCodeReviewTransportUsesHostControlledProviderLifetimeAndBoundedTrailingClosure(t *testing.T) {
+	reviewEnabledHome(t)
 	originalTrailingClosureTimeout := openCodeTransportTrailingClosureTimeout
 	t.Cleanup(func() { openCodeTransportTrailingClosureTimeout = originalTrailingClosureTimeout })
 	if openCodeTransportTrailingClosureTimeout != 5*time.Second {
@@ -439,6 +445,7 @@ func TestOpenCodeReviewTransportUsesHostControlledProviderLifetimeAndBoundedTrai
 }
 
 func TestOpenCodeReviewTransportSessionFailuresDoNotMutateAuthority(t *testing.T) {
+	reviewEnabledHome(t)
 	originalTrailingClosureTimeout := openCodeTransportTrailingClosureTimeout
 	t.Cleanup(func() { openCodeTransportTrailingClosureTimeout = originalTrailingClosureTimeout })
 	openCodeTransportTrailingClosureTimeout = 20 * time.Millisecond
@@ -502,6 +509,7 @@ func TestOpenCodeReviewTransportTimedOutReadDoesNotLeaveAGoroutine(t *testing.T)
 }
 
 func TestOpenCodeReviewTransportCapturesProviderRefuter(t *testing.T) {
+	reviewEnabledHome(t)
 	repo, started, store, record := newArtifactReview(t, false)
 	reviewer := admittedReviewerResultForTest(t, repo, record, record.State.SelectedLenses[0], 0)
 	reviewer.Findings = []facadeFinding{{
@@ -554,6 +562,7 @@ func TestOpenCodeReviewTransportCapturesProviderRefuter(t *testing.T) {
 }
 
 func TestOpenCodeReviewTransportCapturesProviderTargetedValidator(t *testing.T) {
+	reviewEnabledHome(t)
 	repo, lineage, request := providerCorrectionReady(t)
 	task := openCodeTargetedValidatorTask(t, repo, lineage)
 	store, record, err := discoverCompactFacadeReview(t.Context(), repo, lineage, false)
@@ -583,6 +592,7 @@ func TestOpenCodeReviewTransportCapturesProviderTargetedValidator(t *testing.T) 
 }
 
 func TestOpenCodeReviewTransportPassesThroughReinterceptedProviderTask(t *testing.T) {
+	reviewEnabledHome(t)
 	for _, test := range []struct{ name string }{
 		{name: "secondary completion before primary completion"},
 		{name: "primary completion before secondary completion"},
@@ -681,7 +691,7 @@ func TestOpenCodeReviewTransportRefusesUnavailableAuthorityAtStartOrCompletion(t
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			home := reviewModeHome(t)
+			home := reviewEnabledHome(t)
 			repo, lineage, request := providerCorrectionReady(t)
 			task := openCodeTargetedValidatorTask(t, repo, lineage)
 			store, before, err := discoverCompactFacadeReview(t.Context(), repo, lineage, false)
@@ -914,6 +924,7 @@ func mustArtifactSubject(t *testing.T, repo string, record reviewtransaction.Com
 }
 
 func TestOpenCodeReviewTransportCompletionWithoutOutputFailsClosed(t *testing.T) {
+	reviewEnabledHome(t)
 	repo, lineage, _ := providerCorrectionReady(t)
 	task := openCodeTargetedValidatorTask(t, repo, lineage)
 	issued, err := openCodeTransportStart(t.Context(), openCodeTransportEnvelope{
@@ -958,6 +969,7 @@ func TestOpenCodeReviewTransportCompletionWithoutOutputFailsClosed(t *testing.T)
 }
 
 func TestOpenCodeReviewTransportBoundsCompletionWaitForSilentlyDeadHost(t *testing.T) {
+	reviewEnabledHome(t)
 	original := openCodeTransportCompletionSafetyBound
 	t.Cleanup(func() { openCodeTransportCompletionSafetyBound = original })
 	if openCodeTransportCompletionSafetyBound != reviewFacadeFinalizeProviderOperationTimeout {

@@ -48,7 +48,7 @@ func manifestEntryLineCost(t *testing.T, payload []byte, entries int) float64 {
 // measured: on the reporter's candidate its manifest was 89% of the payload,
 // and it is emitted in full for every candidate regardless of size.
 func TestNegotiatedStartBoundsChangedPathManifestLineCost(t *testing.T) {
-	reviewModeHome(t)
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	const paths = 40
 	for index := range paths {
@@ -81,7 +81,7 @@ func TestNegotiatedStartBoundsChangedPathManifestLineCost(t *testing.T) {
 // provider-materialized reviewer route refuses, so it must stay emittable and
 // merely stop spending ten lines on every entry.
 func TestCapturePreflightBoundsChangedPathManifestLineCost(t *testing.T) {
-	reviewModeHome(t)
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	const paths = 40
 	for index := range paths {
@@ -115,7 +115,7 @@ func TestCapturePreflightBoundsChangedPathManifestLineCost(t *testing.T) {
 // per uncaptured lens. The repetition itself is fixed by the published schema
 // and is not what this pins; the per-entry line cost of each copy is.
 func TestNegotiatedStatusBoundsChangedPathManifestLineCost(t *testing.T) {
-	reviewModeHome(t)
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	// Forty paths, matching the START and preflight fixtures above. This used
 	// to be pinned to the retired 32-entry evidence cap, which was the largest

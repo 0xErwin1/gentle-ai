@@ -15,6 +15,7 @@ import (
 )
 
 func TestExplicitFrozenReviewingStatusResumesPendingCandidateAfterDrift(t *testing.T) {
+	reviewEnabledHome(t)
 	for _, targetKind := range []reviewtransaction.TargetKind{
 		reviewtransaction.TargetCurrentChanges,
 		reviewtransaction.TargetBaseDiff,
@@ -68,6 +69,7 @@ func TestExplicitFrozenReviewingStatusResumesPendingCandidateAfterDrift(t *testi
 }
 
 func TestExplicitFrozenReviewingStatusUsesFrozenUntrackedScope(t *testing.T) {
+	reviewEnabledHome(t)
 	repo, _, record := frozenReviewingStatusFixture(t, reviewtransaction.TargetCurrentChanges, []string{"frozen-untracked.txt"})
 	writeReviewStartCandidate(t, repo, "service-token.ts", "export const token = 'live drift'\n", 0o644)
 	writeUndeclaredWorkspaceFile(t, repo, "live-untracked.txt", "live drift\n", 0o644)
@@ -143,7 +145,7 @@ func TestExplicitFrozenReviewingStatusRejectsPartialSlotsAndStaleStartLineages(t
 	})
 
 	t.Run("stale legacy selector is not reused", func(t *testing.T) {
-		reviewModeHome(t)
+		reviewEnabledHome(t)
 		repo := initReviewCLIRepo(t)
 		writeReviewStartCandidate(t, repo, "service-token.ts", "export const token = 'legacy'\n", 0o644)
 		addPristineLegacyAuthority(t, repo, "stale-legacy-lineage")
@@ -163,7 +165,7 @@ func frozenReviewingStatusFixture(t *testing.T, kind reviewtransaction.TargetKin
 		}
 		return frozenStagedReviewingStatusFixture(t)
 	}
-	reviewModeHome(t)
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	base := strings.TrimSpace(runReviewCLIGit(t, repo, "rev-parse", "HEAD"))
 	writeReviewStartCandidate(t, repo, "service-token.ts", "export const token = 'frozen'\n", 0o644)
@@ -216,7 +218,7 @@ func frozenReviewingStatusFixture(t *testing.T, kind reviewtransaction.TargetKin
 
 func frozenStagedReviewingStatusFixture(t *testing.T) (string, reviewtransaction.CompactStore, reviewtransaction.CompactRecord) {
 	t.Helper()
-	reviewModeHome(t)
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	base := strings.TrimSpace(runReviewCLIGit(t, repo, "rev-parse", "HEAD"))
 	writeReviewStartCandidate(t, repo, "docs/candidate.md", "# Candidate\n", 0o644)

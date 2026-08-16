@@ -70,16 +70,30 @@ func run() int {
 	}
 
 	b := &battery{
-		binary:    resolved,
-		repoRoot:  repoRoot,
-		workRoot:  workRoot,
-		withModel: *withModel,
-		withHost:  *withHost,
+		binary:      resolved,
+		repoRoot:    repoRoot,
+		workRoot:    workRoot,
+		withModel:   *withModel,
+		withHost:    *withHost,
+		sandboxHome: filepath.Join(workRoot, "home"),
 	}
 	if !*keepWork {
 		defer os.RemoveAll(workRoot)
 	} else {
 		defer fmt.Printf("\nwork directory kept: %s\n", workRoot)
+	}
+	if err := os.MkdirAll(b.sandboxHome, 0o755); err != nil {
+		fmt.Fprintf(os.Stderr, "crosslane: %v\n", err)
+		return 2
+	}
+	// Receipt-driven development is opt-in, so the battery opts in for its own
+	// sandbox. The lifecycle lanes exist to exercise reviews; leaving the switch
+	// at its shipped default would make every one of them a refusal rather than
+	// a test. This runs through the real `review mode enable` so the battery
+	// depends on the same resolution path a user does.
+	if _, stderr, code := b.run(b.sandboxHome, "review", "mode", "enable", "--scope", "global", "--cwd", repoRoot); code != 0 {
+		fmt.Fprintf(os.Stderr, "crosslane: enable sandbox review mode: %s\n", firstLine(stderr))
+		return 2
 	}
 
 	b.captureCapabilities()

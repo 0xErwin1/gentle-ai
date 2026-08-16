@@ -32,6 +32,7 @@ func piHostRelayCaptureBinding(t *testing.T, repo string, args []string, record 
 }
 
 func TestReviewCaptureResultMaterializePrintsPiProviderTaskWithoutCapturing(t *testing.T) {
+	reviewEnabledHome(t)
 	t.Setenv(reviewPiHostRelayContractEnvironment, reviewPiHostRelayContract)
 	repo, args, record, _ := newCandidateInspectionReview(t, "candidate\n", true)
 	binding := piHostRelayCaptureBinding(t, repo, args, record)
@@ -76,6 +77,7 @@ func TestReviewCaptureResultMaterializePrintsPiProviderTaskWithoutCapturing(t *t
 }
 
 func TestReviewCaptureResultMaterializedPiTaskSubmitsThroughExistingInputPath(t *testing.T) {
+	reviewEnabledHome(t)
 	t.Setenv(reviewPiHostRelayContractEnvironment, reviewPiHostRelayContract)
 	repo, args, record, _ := newCandidateInspectionReview(t, "candidate\n", true)
 	binding := piHostRelayCaptureBinding(t, repo, args, record)
@@ -166,6 +168,7 @@ func TestReviewCaptureResultMaterializeRefusals(t *testing.T) {
 }
 
 func TestNegotiatedStatusRendersPiHostRelayMaterializeCaptureInput(t *testing.T) {
+	reviewEnabledHome(t)
 	t.Setenv(reviewPiHostRelayContractEnvironment, reviewPiHostRelayContract)
 	repo, _, record, _ := newCandidateInspectionReview(t, "candidate\n", true)
 	var output bytes.Buffer

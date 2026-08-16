@@ -104,6 +104,7 @@ func relocateCompactRecordWithIdentities(t *testing.T, repo, fromLineage, toLine
 }
 
 func TestStatusOffersFreshStartForPriorSchemaLineageAndStartSucceeds(t *testing.T) {
+	reviewEnabledHome(t)
 	repo, started, _, _ := newArtifactReview(t, false)
 	store := relocateCompactRecordWithIdentities(t, repo, started.LineageID, "prior-schema-history", retiredSnapshotIdentityForCLITest)
 
