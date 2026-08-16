@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/gentleman-programming/gentle-ai/v2/internal/catalog"
+	configdomain "github.com/gentleman-programming/gentle-ai/v2/internal/config"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/system"
 )
@@ -80,6 +81,15 @@ func NormalizeInstallFlags(flags InstallFlags, detection system.DetectionResult)
 	}
 
 	return InstallInput{Selection: selection, Scope: scope, Channel: channel, DryRun: flags.DryRun}, nil
+}
+
+func normalizeConfigSelection(selection model.Selection) (model.Selection, error) {
+	normalized, diagnostics := configdomain.NormalizeSelection(selection)
+	if len(diagnostics) != 0 {
+		return model.Selection{}, fmt.Errorf("config validation failed: %s; correct the selection and rerun gentle-ai install or gentle-ai sync", diagnostics[0].Code)
+	}
+
+	return normalized, nil
 }
 
 // personaAliasRemapNotice is printed whenever the legacy
