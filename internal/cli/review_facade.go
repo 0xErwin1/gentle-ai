@@ -1110,7 +1110,10 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 						if record.State.State == reviewtransaction.StateReviewing {
 							artifacts, artifactErr = discoverCapturedReviewerArtifacts(ctx, root, store.Dir, record.State, record.Revision)
 							if artifactErr == nil && len(artifacts) != len(record.State.SelectedLenses) {
-								lensContextBudgetExceeded, artifactErr = reviewLensContextStatusBudgetExhausted(ctx, root, record.State, record.Revision)
+								// Only the probe's deterministic verdict stops STATUS: an unproven
+								// probe says nothing about artifacts that just verified, so it must
+								// never become a terminal captured-artifact failure (issue #3367).
+								lensContextBudgetExceeded = reviewLensContextStatusBudgetExhausted(ctx, root, record.State, record.Revision)
 							}
 							if artifactErr == nil && !lensContextBudgetExceeded {
 								if hasRepositoryContextIntent(record.EffectIntents) {
