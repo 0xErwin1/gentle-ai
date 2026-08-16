@@ -46,11 +46,41 @@ func createPrivateRARDirectory(path string) (bool, error) {
 	if err != nil && !errors.Is(err, windows.ERROR_ALREADY_EXISTS) {
 		return false, err
 	}
-	if err := validatePrivateRARDirectory(path); err != nil {
-		if created {
-			_ = os.Remove(path)
+	validateErr := validatePrivateRARDirectory(path)
+	if validateErr != nil && created {
+		// Same shape as the POSIX path: a directory this call just created can
+		// still fail its own owner-only validation when the filesystem or the
+		// process token did not honour the descriptor handed to
+		// CreateDirectory. Apply the owner-only, protected DACL explicitly and
+		// revalidate before giving up. This is precisely the repair the CLI
+		// prints, so anything it cannot fix here the operator still cannot fix
+		// there, and the refusal below stays truthful.
+		//
+		// Only a directory created by this very call is repaired. Rewriting the
+		// ACL of a directory that was already there is the world-action
+		// errUnsafeRARAuthorityPath refuses to take on the operator's behalf.
+		if owner, _, ownerErr := descriptor.Owner(); ownerErr == nil && owner != nil {
+			if dacl, _, daclErr := descriptor.DACL(); daclErr == nil && dacl != nil {
+				_ = windows.SetNamedSecurityInfo(
+					path,
+					windows.SE_FILE_OBJECT,
+					windows.OWNER_SECURITY_INFORMATION|
+						windows.DACL_SECURITY_INFORMATION|
+						windows.PROTECTED_DACL_SECURITY_INFORMATION,
+					owner, nil, dacl, nil,
+				)
+				validateErr = validatePrivateRARDirectory(path)
+			}
 		}
-		return false, err
+		runtime.KeepAlive(descriptor)
+	}
+	if validateErr != nil {
+		// The just-created directory deliberately stays on disk. Removing it
+		// made the refusal name a path that no longer existed, so the repair
+		// this product prints could not run at all and the operator had no way
+		// out. Nothing is trusted by leaving it: every reader revalidates, and
+		// the next attempt takes the already-exists branch and refuses again.
+		return false, validateErr
 	}
 	return created, nil
 }

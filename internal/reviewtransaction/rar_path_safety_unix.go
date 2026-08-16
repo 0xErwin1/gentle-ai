@@ -17,17 +17,48 @@ func rarPathUnsafe(_ string, info fs.FileInfo) bool {
 	return info == nil || info.Mode()&os.ModeSymlink != 0
 }
 
+// rarPrivateDirectoryMkdir and rarPrivateDirectoryChmod are the only two
+// filesystem primitives that establish an owner-only RAR directory. They are
+// variables so tests can reproduce filesystems that silently ignore the mode
+// they are handed -- WSL DrvFS, exFAT, and SMB mounts without POSIX extensions
+// -- which no mode argument reachable from a test on ext4 or tmpfs can
+// produce. Production always uses the os package.
+var (
+	rarPrivateDirectoryMkdir = os.Mkdir
+	rarPrivateDirectoryChmod = os.Chmod
+)
+
 func createPrivateRARDirectory(path string) (bool, error) {
-	err := os.Mkdir(path, 0o700)
+	err := rarPrivateDirectoryMkdir(path, 0o700)
 	created := err == nil
 	if err != nil && !errors.Is(err, fs.ErrExist) {
 		return false, err
 	}
-	if err := validatePrivateRARDirectory(path); err != nil {
-		if created {
-			_ = os.Remove(path)
+	validateErr := validatePrivateRARDirectory(path)
+	if validateErr != nil && created {
+		// A directory this call just created can still fail its own owner-only
+		// validation, because some filesystems ignore the mode passed to
+		// mkdir(2). Ask for the mode explicitly and revalidate before giving
+		// up: that is the whole failure on WSL DrvFS, and it is the difference
+		// between the kill switch working and the documented self-service
+		// delivery exit being unreachable.
+		//
+		// Only a directory created by this very call is repaired. A directory
+		// that was already there is somebody else's, and rewriting its
+		// permissions is exactly the world-action errUnsafeRARAuthorityPath
+		// refuses to take on the operator's behalf.
+		if chmodErr := rarPrivateDirectoryChmod(path, 0o700); chmodErr == nil {
+			validateErr = validatePrivateRARDirectory(path)
 		}
-		return false, err
+	}
+	if validateErr != nil {
+		// The just-created directory deliberately stays on disk. Removing it
+		// made the refusal name a path that no longer existed, so the repair
+		// this product prints (`chmod 700 <path>`) failed with "cannot access
+		// ...: No such file or directory" and the operator had no runnable way
+		// out. Nothing is trusted by leaving it: every reader revalidates, and
+		// the next attempt takes the already-exists branch and refuses again.
+		return false, validateErr
 	}
 	return created, nil
 }
