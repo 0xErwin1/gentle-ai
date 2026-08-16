@@ -28,7 +28,7 @@ func TestPublicDocumentKeysAreContractNames(t *testing.T) {
 			BackgroundIntent:   model.OpenCodeBackgroundOn,
 			Profiles: []Profile{{
 				Name:             "cheap",
-				Orchestrator:     ModelAssignment{Provider: "anthropic", Model: "claude-haiku", Effort: "low"},
+				Orchestrator:     &ModelAssignment{Provider: "anthropic", Model: "claude-haiku", Effort: "low"},
 				PhaseAssignments: map[string]ModelAssignment{"sdd-apply": {Provider: "anthropic", Model: "claude-sonnet"}},
 			}},
 		},
@@ -73,7 +73,7 @@ func TestProfileSurvivesModelRoundTrip(t *testing.T) {
 	if profile.Name != "cheap" {
 		t.Errorf("Name = %q, want %q", profile.Name, "cheap")
 	}
-	if profile.Orchestrator != (ModelAssignment{Provider: "anthropic", Model: "claude-haiku", Effort: "low"}) {
+	if profile.Orchestrator == nil || *profile.Orchestrator != (ModelAssignment{Provider: "anthropic", Model: "claude-haiku", Effort: "low"}) {
 		t.Errorf("Orchestrator = %+v", profile.Orchestrator)
 	}
 	if got, want := profile.PhaseAssignments["sdd-apply"], (ModelAssignment{Provider: "anthropic", Model: "claude-sonnet", Effort: "high"}); got != want {

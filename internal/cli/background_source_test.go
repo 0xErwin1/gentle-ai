@@ -86,3 +86,38 @@ func TestDeclaredBackgroundIntentOutranksPriorState(t *testing.T) {
 		t.Errorf("Effective = %q, want %q", resolution.Effective, model.OpenCodeBackgroundOff)
 	}
 }
+
+// The resolver ranks an explicit invocation choice above the environment, and a
+// declared intent enters that same tier. Without this the precedence between a
+// document and GENTLE_AI_OPENCODE_BACKGROUND_SUBAGENTS is unproved.
+func TestDeclaredBackgroundIntentOutranksEnvironment(t *testing.T) {
+	t.Setenv(OpenCodeBackgroundSubagentsEnv, "on")
+
+	set, value := backgroundIntentSource(false, "", model.Selection{BackgroundIntent: model.OpenCodeBackgroundOff})
+
+	resolution, err := resolveOpenCodeBackgroundCLI(set, value, state.InstallState{})
+	if err != nil {
+		t.Fatalf("resolve declared background intent: %v", err)
+	}
+
+	if resolution.Effective != model.OpenCodeBackgroundOff {
+		t.Errorf("Effective = %q, want %q", resolution.Effective, model.OpenCodeBackgroundOff)
+	}
+}
+
+// With nothing declared and no flag, the environment is the next source and must
+// still win over prior managed state.
+func TestEnvironmentAppliesWhenNothingIsDeclared(t *testing.T) {
+	t.Setenv(OpenCodeBackgroundSubagentsEnv, "on")
+
+	set, value := backgroundIntentSource(false, "", model.Selection{})
+
+	resolution, err := resolveOpenCodeBackgroundCLI(set, value, state.InstallState{BackgroundIntent: model.OpenCodeBackgroundOff})
+	if err != nil {
+		t.Fatalf("resolve background intent: %v", err)
+	}
+
+	if resolution.Effective != model.OpenCodeBackgroundOn {
+		t.Errorf("Effective = %q, want %q", resolution.Effective, model.OpenCodeBackgroundOn)
+	}
+}

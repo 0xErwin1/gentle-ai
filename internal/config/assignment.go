@@ -15,10 +15,13 @@ type ModelAssignment struct {
 	Effort   string `json:"effort,omitempty"`
 }
 
-// Profile is the contract form of a named SDD profile.
+// Profile is the contract form of a named SDD profile. Orchestrator is a
+// pointer because encoding/json defines no empty state for a struct value: a
+// non-pointer field would publish an object of zero values and assert an
+// assignment the user never declared.
 type Profile struct {
 	Name             string                     `json:"name"`
-	Orchestrator     ModelAssignment            `json:"orchestrator,omitempty"`
+	Orchestrator     *ModelAssignment           `json:"orchestrator,omitempty"`
 	PhaseAssignments map[string]ModelAssignment `json:"phaseAssignments,omitempty"`
 }
 
@@ -53,9 +56,14 @@ func profilesToModel(profiles []Profile) []model.Profile {
 			phases = nil
 		}
 
+		orchestrator := model.ModelAssignment{}
+		if profile.Orchestrator != nil {
+			orchestrator = assignmentToModel(*profile.Orchestrator)
+		}
+
 		converted = append(converted, model.Profile{
 			Name:              profile.Name,
-			OrchestratorModel: assignmentToModel(profile.Orchestrator),
+			OrchestratorModel: orchestrator,
 			PhaseAssignments:  phases,
 		})
 	}
@@ -78,9 +86,15 @@ func profilesFromModel(profiles []model.Profile) []Profile {
 			phases = nil
 		}
 
+		var orchestrator *ModelAssignment
+		if profile.OrchestratorModel != (model.ModelAssignment{}) {
+			assignment := assignmentFromModel(profile.OrchestratorModel)
+			orchestrator = &assignment
+		}
+
 		converted = append(converted, Profile{
 			Name:             profile.Name,
-			Orchestrator:     assignmentFromModel(profile.OrchestratorModel),
+			Orchestrator:     orchestrator,
 			PhaseAssignments: phases,
 		})
 	}
