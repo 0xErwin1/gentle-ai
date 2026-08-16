@@ -161,6 +161,37 @@ func TestCaptureEvidenceSuccessEnvelopeIsByteIdenticalThroughRunReview(t *testin
 	}
 }
 
+// TestCaptureEvidenceConflictRefusalEmitsTypedFailureEnvelope reaches the
+// last uncovered capture-evidence refusal: a replay whose bytes differ from
+// the immutably captured record. Nothing is written, so the honest machine
+// classification is a not_started refusal whose continuation is a fresh STATUS.
+func TestCaptureEvidenceConflictRefusalEmitsTypedFailureEnvelope(t *testing.T) {
+	repo, lineage, validating := validatingEvidenceReview(t)
+	args := []string{
+		"capture-evidence", "--cwd", repo, "--lineage", lineage,
+		"--target", validating.State.CurrentSnapshot.Identity,
+		"--expected-revision", validating.Revision,
+		"--outcome", string(reviewtransaction.VerificationOutcomePassed),
+	}
+	if err := RunReview(append(args, "--input", writeCaptureEvidenceInput(t)), &bytes.Buffer{}); err != nil {
+		t.Fatalf("first capture-evidence must commit: %v", err)
+	}
+	conflicting := filepath.Join(t.TempDir(), "conflicting.txt")
+	if err := os.WriteFile(conflicting, []byte("verification: a different transcript\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var output bytes.Buffer
+	err := RunReview(append(args, "--input", conflicting), &output)
+	failure := decodeCaptureRefusalEnvelope(t, err, output.Bytes())
+	if failure.Operation != "review.capture-evidence" || failure.Phase != "preflight" ||
+		failure.Code != "captured_final_evidence_conflict" || failure.MutationOutcome != ReviewMutationNotStarted ||
+		failure.NextAction != "review.status" || failure.LineageID != lineage {
+		t.Fatalf("conflict refusal envelope = %#v", failure)
+	}
+	schema := compileWholePublishedReviewSchema(t, "v2", "failure.schema.json")
+	validatePublishedReviewSchema(t, schema, output.Bytes())
+}
+
 // TestCaptureResultRefusalsEmitTypedFailureEnvelopes covers the reviewer-lens
 // collection: the request-shape refusal takes the shared preflight code, and
 // the binding refusal earns the typed capture_binding_mismatch whose
