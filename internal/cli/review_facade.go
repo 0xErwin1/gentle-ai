@@ -248,6 +248,26 @@ const (
 	// unmanaged-while-disabled classification with a missing, scope-changed,
 	// or unrelated receipt.
 	ReviewReceiptTargetUnresolvable ReviewReceiptDiscoveryKind = "target_unresolvable"
+	// ReviewGateRemoteFetchRequired (issue #3342) names the one assessment
+	// failure class the local repository resolves by itself: every unknown
+	// assessment failed because the advertised publication tip is not in the
+	// local object store. The authority store is healthy; `git fetch
+	// <remote>` followed by the identical gate resolves it. The gate stays
+	// denied (fail-closed), but the denial is retry-safe, never maintainer
+	// escalation.
+	ReviewGateRemoteFetchRequired ReviewReceiptDiscoveryKind = "remote_fetch_required"
+	// ReviewAuthorityInventoryBusy (issue #3342) names transient shared-store
+	// coordination instead of damage: the shared compact store lock is held
+	// by a live concurrent review operation, a store read lost a bounded lock
+	// wait, or the lock file carries readable interrupted-holder residue. The
+	// gate stays denied (fail-closed), but the denial names the lock, its
+	// recorded holder, and the retry continuation, never maintainer
+	// escalation for a condition that clears itself.
+	ReviewAuthorityInventoryBusy ReviewReceiptDiscoveryKind = "inventory_busy"
+	// ReviewAuthorityLockUnverifiable names shared store-lock residue whose
+	// recorded holder is neither flock-held nor verifiably dead on this
+	// host; no event terminates a retry, so it is NOT retry-safe.
+	ReviewAuthorityLockUnverifiable ReviewReceiptDiscoveryKind = "lock_holder_unverifiable"
 )
 
 type ReviewReceiptDiscoveryError struct {
@@ -331,6 +351,12 @@ func (err *ReviewReceiptDiscoveryError) Error() string {
 		message = "complete review authority inventory is unavailable or corrupted"
 	case ReviewReceiptTargetUnresolvable:
 		message = "review gate target could not be resolved"
+	case ReviewGateRemoteFetchRequired:
+		message = "advertised publication base commit is not available locally"
+	case ReviewAuthorityInventoryBusy:
+		message = "review authority store is busy"
+	case ReviewAuthorityLockUnverifiable:
+		message = "review authority store lock records a holder this host cannot verify"
 	}
 	if err.Detail != "" {
 		return message + ": " + err.Detail
@@ -3614,6 +3640,11 @@ func discoverCompactFacadeGateReview(ctx context.Context, repo, lineage string, 
 	}
 	report, err := reviewtransaction.InventoryAuthority(ctx, repo)
 	if (err != nil || !report.Complete || !report.Authoritative) && !reviewAuthorityCorruptionConfinedToLegacyEntries(report, err) {
+		// issue #3342: an inventory whose only completeness breakers are
+		// readable shared-lock residue is coordination evidence, not damage.
+		if busy := reviewInventoryBusyFromLockResidue(ctx, repo, report, err); busy != nil {
+			return reviewtransaction.CompactStore{}, reviewtransaction.CompactRecord{}, busy
+		}
 		return reviewtransaction.CompactStore{}, reviewtransaction.CompactRecord{}, &ReviewReceiptDiscoveryError{
 			Kind: ReviewAuthorityCorrupted, Category: reviewAuthorityCauseCategory(report, err),
 			Detail: reviewAuthorityCorruptionDetail(ctx, repo),
@@ -3621,6 +3652,9 @@ func discoverCompactFacadeGateReview(ctx context.Context, repo, lineage string, 
 	}
 	stores, err := reviewtransaction.CompactAuthorityLeaves(ctx, repo)
 	if err != nil {
+		if busy := reviewInventoryBusyFromStoreRead(ctx, repo, err); busy != nil {
+			return reviewtransaction.CompactStore{}, reviewtransaction.CompactRecord{}, busy
+		}
 		return reviewtransaction.CompactStore{}, reviewtransaction.CompactRecord{}, &ReviewReceiptDiscoveryError{
 			Kind: ReviewAuthorityCorrupted, Category: "record_or_graph_invalid",
 			Detail: reviewAuthorityCorruptionDetail(ctx, repo),
@@ -3635,7 +3669,15 @@ func discoverCompactFacadeGateReview(ctx context.Context, repo, lineage string, 
 	exact := []candidate{}
 	scopeChanged := []candidate{}
 	scopeWithoutContext := []string{}
-	assessmentUnknown := []string{}
+	// assessmentUnknown keeps each lineage's underlying assessment failure
+	// (issue #3342): when every unknown assessment shares one recognized
+	// retry-safe cause class, the fail-closed exit below names that class and
+	// its runnable continuation instead of collapsing into corruption.
+	type unknownAssessment struct {
+		lineage string
+		cause   error
+	}
+	assessmentUnknown := []unknownAssessment{}
 	// deliveryShape collects receipts whose assessment failed only on the
 	// deterministic pre-push one-commit delivery rule: a typed statement about
 	// candidate shape versus the reviewed receipt, made over an inventory the
@@ -3679,6 +3721,9 @@ func discoverCompactFacadeGateReview(ctx context.Context, repo, lineage string, 
 	for _, store := range stores {
 		record, loadErr := store.Load()
 		if loadErr != nil {
+			if busy := reviewInventoryBusyFromStoreRead(ctx, repo, loadErr); busy != nil {
+				return reviewtransaction.CompactStore{}, reviewtransaction.CompactRecord{}, busy
+			}
 			return reviewtransaction.CompactStore{}, reviewtransaction.CompactRecord{}, &ReviewReceiptDiscoveryError{Kind: ReviewAuthorityCorrupted}
 		}
 		if !facadeTerminalState(record.State.State) {
@@ -3686,11 +3731,21 @@ func discoverCompactFacadeGateReview(ctx context.Context, repo, lineage string, 
 		}
 		payload, readErr := os.ReadFile(store.ReceiptPath())
 		if readErr != nil {
+			// issue #3342 occurrence 1: a terminal record whose receipt is
+			// not yet published is the concurrent writer's own window while
+			// the shared store lock is held; without a live holder it stays
+			// the fail-closed corruption verdict.
+			if busy := reviewInventoryBusyFromStoreRead(ctx, repo, readErr); busy != nil {
+				return reviewtransaction.CompactStore{}, reviewtransaction.CompactRecord{}, busy
+			}
 			return reviewtransaction.CompactStore{}, reviewtransaction.CompactRecord{}, &ReviewReceiptDiscoveryError{Kind: ReviewAuthorityCorrupted}
 		}
 		receipt, parseErr := reviewtransaction.ParseCompactReceipt(payload)
 		derived, deriveErr := record.State.Receipt()
 		if parseErr != nil || deriveErr != nil || !reviewtransaction.CompactReceiptEqual(receipt, derived) {
+			// A receipt that EXISTS but fails to parse or match is integrity
+			// damage: a held shared lock never downgrades it to busy; only
+			// the clean absence/read-race windows above may.
 			return reviewtransaction.CompactStore{}, reviewtransaction.CompactRecord{}, &ReviewReceiptDiscoveryError{Kind: ReviewAuthorityCorrupted}
 		}
 		terminalCount++
@@ -3777,7 +3832,7 @@ func discoverCompactFacadeGateReview(ctx context.Context, repo, lineage string, 
 				})
 				continue
 			}
-			assessmentUnknown = append(assessmentUnknown, record.State.LineageID)
+			assessmentUnknown = append(assessmentUnknown, unknownAssessment{lineage: record.State.LineageID, cause: assessErr})
 			continue
 		}
 		switch assessment.Applicability {
@@ -3826,7 +3881,9 @@ func discoverCompactFacadeGateReview(ctx context.Context, repo, lineage string, 
 		for index := range deliveryShape {
 			lineages = append(lineages, deliveryShape[index].lineage)
 		}
-		lineages = append(lineages, assessmentUnknown...)
+		for _, unknown := range assessmentUnknown {
+			lineages = append(lineages, unknown.lineage)
+		}
 		for _, failure := range targetResolution {
 			lineages = append(lineages, failure.lineage)
 		}
@@ -3856,6 +3913,19 @@ func discoverCompactFacadeGateReview(ctx context.Context, repo, lineage string, 
 		}
 	}
 	if len(scopeWithoutContext) > 0 || len(assessmentUnknown) > 0 {
+		// issue #3342: when EVERY unknown assessment shares one recognized
+		// retry-safe cause class, the denial names that class and its
+		// runnable continuation. Mixed or unrecognized causes keep the exact
+		// fail-closed corruption verdict below.
+		if len(scopeWithoutContext) == 0 {
+			causes := make([]error, len(assessmentUnknown))
+			for index := range assessmentUnknown {
+				causes[index] = assessmentUnknown[index].cause
+			}
+			if retrySafe := reviewRetrySafeUnknownAssessments(ctx, repo, causes); retrySafe != nil {
+				return reviewtransaction.CompactStore{}, reviewtransaction.CompactRecord{}, retrySafe
+			}
+		}
 		return reviewtransaction.CompactStore{}, reviewtransaction.CompactRecord{}, &ReviewReceiptDiscoveryError{Kind: ReviewAuthorityCorrupted}
 	}
 	if len(targetResolution) == terminalCount {
@@ -3940,6 +4010,167 @@ func reviewAuthorityCauseCategory(report reviewtransaction.AuthorityStatusReport
 		}
 	}
 	return "inventory_incomplete"
+}
+
+// reviewLockContentionCause reports whether cause is one of the typed
+// shared-store coordination refusals a store read produces under a held lock
+// (issue #3342): the non-blocking acquisition sentinel or an exhausted
+// bounded lock wait. Both prove nothing about the store's content.
+func reviewLockContentionCause(cause error) bool {
+	var lockTimeout *reviewtransaction.AuthorityLockTimeoutError
+	return errors.Is(cause, reviewtransaction.ErrStoreLockContended) || errors.As(cause, &lockTimeout)
+}
+
+// reviewRetrySafeUnknownAssessments classifies the fail-closed unknown-
+// assessment exit of discoverCompactFacadeGateReview (issue #3342). It
+// answers non-nil only when EVERY unknown assessment failed with the SAME
+// recognized retry-safe cause class:
+//
+//   - fetch staleness: every assessment failed because the advertised
+//     publication tip is absent from the local object store
+//     (GateRemoteFetchRequiredError). The continuation is `git fetch
+//     <remote>`, then the identical gate.
+//   - lock contention: every assessment lost shared-store coordination. The
+//     continuation is retrying once the concurrent operation finishes.
+//
+// Mixed or unrecognized causes answer nil, keeping the caller's exact
+// authority_corrupted verdict.
+func reviewRetrySafeUnknownAssessments(ctx context.Context, repo string, causes []error) *ReviewReceiptDiscoveryError {
+	fetchStale, contended, remote := 0, 0, ""
+	for _, cause := range causes {
+		var fetchErr *reviewtransaction.GateRemoteFetchRequiredError
+		if errors.As(cause, &fetchErr) {
+			fetchStale++
+			if remote == "" {
+				remote = strings.TrimSpace(fetchErr.Remote)
+			}
+			continue
+		}
+		if reviewLockContentionCause(cause) {
+			contended++
+			continue
+		}
+		return nil
+	}
+	if fetchStale > 0 && fetchStale == len(causes) {
+		if remote == "" {
+			remote = "origin"
+		}
+		return &ReviewReceiptDiscoveryError{
+			Kind:   ReviewGateRemoteFetchRequired,
+			Detail: fmt.Sprintf("run `git fetch %s`, then re-run the same gate", remote),
+		}
+	}
+	if contended > 0 && contended == len(causes) {
+		return reviewInventoryBusyError(ctx, repo, nil)
+	}
+	return nil
+}
+
+// reviewInventoryBusyFromStoreRead classifies one store-read failure inside
+// receipt discovery (issue #3342). A typed lock-contention cause is
+// retry-safe on its own; any other read anomaly is retry-safe only while the
+// shared compact store lock is verifiably held by a live concurrent writer,
+// whose mid-write window the anomaly then belongs to. Everything else answers
+// nil and keeps the caller's fail-closed corruption verdict.
+func reviewInventoryBusyFromStoreRead(ctx context.Context, repo string, cause error) *ReviewReceiptDiscoveryError {
+	if reviewLockContentionCause(cause) {
+		return reviewInventoryBusyError(ctx, repo, nil)
+	}
+	evidence, err := reviewtransaction.InspectCompactSharedStoreLock(ctx, repo)
+	if err != nil || !evidence.Held {
+		return nil
+	}
+	return reviewInventoryBusyError(ctx, repo, &evidence)
+}
+
+// reviewInventoryBusyFromLockResidue classifies the one incomplete-inventory
+// shape that is coordination evidence rather than damage (issue #3342
+// occurrence 2): no inventory error, no diagnostics, and every ambiguous lock
+// either already confined to an invalid legacy entry or the shared compact
+// store lock itself carrying readable interrupted-holder residue. Unreadable
+// residue answers nil and keeps the exact authority_corrupted verdict.
+func reviewInventoryBusyFromLockResidue(ctx context.Context, repo string, report reviewtransaction.AuthorityStatusReport, inventoryErr error) *ReviewReceiptDiscoveryError {
+	if inventoryErr != nil || len(report.Diagnostics) > 0 {
+		return nil
+	}
+	sharedResidue := false
+	for _, lock := range report.Locks {
+		if lock.Status != reviewtransaction.AuthorityLockAmbiguous {
+			continue
+		}
+		if reviewAmbiguousLockConfinedToInvalidLegacyEntry(report, lock) {
+			continue
+		}
+		if lock.Version != reviewtransaction.AuthorityVersionCompact || strings.TrimSpace(lock.LineageID) != "" {
+			return nil
+		}
+		sharedResidue = true
+	}
+	if !sharedResidue {
+		return nil
+	}
+	evidence, err := reviewtransaction.InspectCompactSharedStoreLock(ctx, repo)
+	if err != nil || !evidence.Exists || (!evidence.Held && !evidence.HolderRecorded) {
+		return nil
+	}
+	if !evidence.Held && !evidence.HolderVerifiedDeadOnThisHost {
+		return reviewLockHolderUnverifiableError(evidence)
+	}
+	return reviewInventoryBusyError(ctx, repo, &evidence)
+}
+
+// reviewLockHolderUnverifiableError renders the not-retry-safe disposition
+// for lock residue whose recorded holder this host can neither prove live
+// (kernel advisory ownership is the only liveness truth, and the flock is
+// not held) nor prove dead: "retry once it finishes" would never terminate.
+func reviewLockHolderUnverifiableError(evidence reviewtransaction.CompactSharedStoreLockEvidence) *ReviewReceiptDiscoveryError {
+	why := fmt.Sprintf("pid %d cannot be attributed to a live review operation from this host", evidence.HolderPID)
+	if host, err := os.Hostname(); err == nil && host != evidence.HolderHost {
+		why = fmt.Sprintf("it was recorded on host %s, not this host (%s)", evidence.HolderHost, host)
+	}
+	return &ReviewReceiptDiscoveryError{
+		Kind: ReviewAuthorityLockUnverifiable,
+		Detail: fmt.Sprintf(
+			"the store lock %s under the repository Git common directory records holder pid %d on host %s, which is neither flock-held nor verifiably dead: %s; verify that holder on the recorded host, or remove the LOCK file only if that machine is known idle",
+			evidence.DisplayPath, evidence.HolderPID, evidence.HolderHost, why,
+		),
+	}
+}
+
+// reviewInventoryBusyError renders the inventory_busy denial. The reason
+// names the lock (relative to the repository Git common directory, so no
+// absolute path leaks into gate envelopes), the recorded holder when
+// readable, and the runnable continuation. Stale-lock removal guidance
+// appears ONLY when the recorded pid is verifiably dead on this host; the
+// lock schema records pid and host precisely to make that decidable.
+func reviewInventoryBusyError(ctx context.Context, repo string, evidence *reviewtransaction.CompactSharedStoreLockEvidence) *ReviewReceiptDiscoveryError {
+	if evidence == nil {
+		if inspected, err := reviewtransaction.InspectCompactSharedStoreLock(ctx, repo); err == nil {
+			evidence = &inspected
+		}
+	}
+	detail := "a concurrent review operation is using the review authority store; retry once it finishes"
+	if evidence != nil && evidence.Exists {
+		switch {
+		case evidence.Held && evidence.HolderRecorded:
+			detail = fmt.Sprintf(
+				"a concurrent review operation holds the store lock %s under the repository Git common directory (recorded holder pid %d on host %s); retry once it finishes",
+				evidence.DisplayPath, evidence.HolderPID, evidence.HolderHost,
+			)
+		case evidence.Held:
+			detail = fmt.Sprintf(
+				"a concurrent review operation holds the store lock %s under the repository Git common directory; retry once it finishes",
+				evidence.DisplayPath,
+			)
+		case evidence.HolderRecorded && evidence.HolderVerifiedDeadOnThisHost:
+			detail = fmt.Sprintf(
+				"the store lock %s under the repository Git common directory records holder pid %d, which is no longer running on this host; remove the stale LOCK file, then retry the same gate",
+				evidence.DisplayPath, evidence.HolderPID,
+			)
+		}
+	}
+	return &ReviewReceiptDiscoveryError{Kind: ReviewAuthorityInventoryBusy, Detail: detail}
 }
 
 func legacyExactFacadeGateLineages(ctx context.Context, repo string, input reviewtransaction.NativeGateRequestInput) int {
@@ -4553,9 +4784,13 @@ func emitFacadeGateEvaluationNegotiated(stdout io.Writer, evaluation reviewtrans
 	if err := reviewGateContentionError(evaluation); err != nil {
 		return err
 	}
+	action := reviewGateAction(evaluation.Result)
+	if override := reviewRetrySafeDenialAction(evaluation.Context.Denial); override != "" {
+		action = override
+	}
 	result := ReviewValidateResult{
 		Schema: ReviewValidateSchema, Result: evaluation.Result, Allowed: evaluation.Result == reviewtransaction.GateAllow,
-		Action: reviewGateAction(evaluation.Result), Reason: evaluation.Reason, Context: evaluation.Context,
+		Action: action, Reason: evaluation.Reason, Context: evaluation.Context,
 		Relation: evaluation.Relation, Next: evaluation.Next,
 	}
 	if err := encodeReviewIntegrationOperation(stdout, negotiated, ReviewIntegrationOperationValidate, result, result, contract); err != nil {
