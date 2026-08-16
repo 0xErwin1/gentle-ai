@@ -38,6 +38,14 @@ type Provider interface {
 	Render(config.DesiredState, map[string][]byte) ([]ArtifactContent, error)
 }
 
+// StagingProvider is implemented by an adapter that materialises a tree of
+// files rather than a single composed document. It writes under the staging
+// root and the renderer enumerates what appeared, so the engine never has to
+// predict any adapter's directory layout.
+type StagingProvider interface {
+	Stage(state config.DesiredState, stageRoot string) error
+}
+
 // SelectorProvider is implemented by an adapter whose artifacts are composed
 // files, where several independently owned resources share one path. The
 // adapter names its own selectors because only it knows the shape of what it
@@ -94,7 +102,13 @@ func (r Renderer) Render(request Request) (Snapshot, error) {
 		}
 	}
 
-	artifacts := make([]Artifact, 0, len(request.Baseline)+len(contents))
+	staging, stages := r.provider.(StagingProvider)
+	if stages {
+		if err := staging.Stage(request.State, request.StageRoot); err != nil {
+			return Snapshot{}, fmt.Errorf("stage adapter tree: %w", err)
+		}
+	}
+
 	paths := make(map[string]struct{}, len(request.Baseline)+len(contents))
 	for path := range request.Baseline {
 		paths[path] = struct{}{}
@@ -102,6 +116,20 @@ func (r Renderer) Render(request Request) (Snapshot, error) {
 	for _, artifact := range contents {
 		paths[artifact.Path] = struct{}{}
 	}
+	// Enumeration is confined to adapters that stage a tree. Walking the root
+	// unconditionally would claim anything already sitting in a reused staging
+	// directory as managed, which reconciliation would then apply.
+	if stages {
+		staged, err := enumerateStage(request.StageRoot)
+		if err != nil {
+			return Snapshot{}, err
+		}
+		for _, path := range staged {
+			paths[path] = struct{}{}
+		}
+	}
+
+	artifacts := make([]Artifact, 0, len(paths))
 	for path := range paths {
 		artifacts = append(artifacts, Artifact{Path: path})
 	}
@@ -185,4 +213,35 @@ func copyBaseline(baseline map[string][]byte) map[string][]byte {
 		copy[path] = append([]byte(nil), contents...)
 	}
 	return copy
+}
+
+// enumerateStage lists every file the stage holds, in slash form relative to the
+// staging root. Enumerating what is there rather than trusting what a provider
+// said it wrote keeps the manifest honest about the tree that will be applied.
+func enumerateStage(stageRoot string) ([]string, error) {
+	paths := make([]string, 0)
+	err := filepath.Walk(stageRoot, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if info.IsDir() {
+			return nil
+		}
+		relative, err := filepath.Rel(stageRoot, path)
+		if err != nil {
+			return err
+		}
+		paths = append(paths, filepath.ToSlash(relative))
+
+		return nil
+	})
+	if os.IsNotExist(err) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("enumerate stage: %w", err)
+	}
+	sort.Strings(paths)
+
+	return paths, nil
 }
