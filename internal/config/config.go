@@ -61,6 +61,9 @@ type Selection struct {
 	CodexModelAssignments       map[string]model.CodexEffort      `json:"codexModelAssignments,omitempty"`
 	CodexCarrilModelAssignments map[string]string                 `json:"codexCarrilModelAssignments,omitempty"`
 	CodexPhaseModelAssignments  map[string]string                 `json:"codexPhaseModelAssignments,omitempty"`
+
+	ClaudePhaseAssignments map[string]ClaudePhaseAssignment `json:"claudePhaseAssignments,omitempty"`
+	CodexOrchestrator      *CodexOrchestratorAssignment     `json:"codexOrchestrator,omitempty"`
 }
 
 type Document struct {
@@ -156,6 +159,8 @@ func Project(state DesiredState) model.Selection {
 		CodexModelAssignments:       copyMap(state.Selection.CodexModelAssignments),
 		CodexCarrilModelAssignments: copyMap(state.Selection.CodexCarrilModelAssignments),
 		CodexPhaseModelAssignments:  copyMap(state.Selection.CodexPhaseModelAssignments),
+		ClaudePhaseAssignments:      claudePhasesToModel(state.Selection.ClaudePhaseAssignments),
+		CodexOrchestratorAssignment: codexOrchestratorToModel(state.Selection.CodexOrchestrator),
 	}
 }
 
@@ -173,6 +178,8 @@ func FromSelection(selection model.Selection) DesiredState {
 		CodexModelAssignments:       copyMap(selection.CodexModelAssignments),
 		CodexCarrilModelAssignments: copyMap(selection.CodexCarrilModelAssignments),
 		CodexPhaseModelAssignments:  copyMap(selection.CodexPhaseModelAssignments),
+		ClaudePhaseAssignments:      claudePhasesFromModel(selection.ClaudePhaseAssignments),
+		CodexOrchestrator:           codexOrchestratorFromModel(selection.CodexOrchestratorAssignment),
 	}}
 }
 
@@ -202,6 +209,8 @@ func NormalizeSelection(selection model.Selection) (model.Selection, []Diagnosti
 	selection.CodexModelAssignments = projected.CodexModelAssignments
 	selection.CodexCarrilModelAssignments = projected.CodexCarrilModelAssignments
 	selection.CodexPhaseModelAssignments = projected.CodexPhaseModelAssignments
+	selection.ClaudePhaseAssignments = projected.ClaudePhaseAssignments
+	selection.CodexOrchestratorAssignment = projected.CodexOrchestratorAssignment
 	if !preserveUnsetPersona {
 		selection.Persona = projected.Persona
 	}
@@ -231,6 +240,7 @@ func normalizeSelection(selection Selection, diagnostics *[]Diagnostic) Selectio
 	}
 
 	validateAssignments(selection, diagnostics)
+	validateStructuredAssignments(selection, diagnostics)
 
 	selection.Agents = unique(selection.Agents)
 	selection.Components = unique(selection.Components)
