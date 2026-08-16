@@ -273,13 +273,22 @@ func TestReviewProviderOpenCodeStatusIssuesBoundTargetedValidatorTask(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	if input.Name != "provider_"+string(reviewerprovider.RoleTargetedValidator) || input.CaptureOperation != "external.run_provider_role" ||
+	if input.Name != "provider_targeted_validator" || input.CaptureOperation != "external.run_provider_role" ||
 		input.Submission != nil || input.ValidationRequest != nil || input.ProviderTask == nil ||
 		input.ProviderTask.Agent != "review-validator" || input.ProviderTask.Role != string(reviewerprovider.RoleTargetedValidator) ||
 		arguments["lineage"] != status.Authority.LineageID || arguments["expected-revision"] != status.Authority.Revision ||
 		arguments["target"] != request.CorrectionTargetIdentity || arguments["target"] != status.ValidationRequest.CorrectionTargetIdentity {
 		t.Fatalf("OpenCode targeted-validator task = %#v", input)
 	}
+	// The provider-task validator slot is one of the shapes the published
+	// status-v5 schema admits for targeted_validation_required (cross-lane
+	// battery finding: the schema used to force the generic
+	// external.run_targeted_validation submission shape onto this input).
+	transitionPayload, err := json.Marshal(status.NextTransition)
+	if err != nil {
+		t.Fatal(err)
+	}
+	validateAgainstPublishedNextTransitionSchemaV5(t, transitionPayload)
 
 	cloneInput := func() (ReviewTargetStatusResult, *ReviewTransitionInput) {
 		malformed := status
