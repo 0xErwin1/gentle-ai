@@ -71,7 +71,13 @@ func RunConfig(args []string, stdout io.Writer) error {
 	if err != nil {
 		return err
 	}
-	snapshot, err := render.New(render.OpenCodeProvider{}).Render(render.Request{State: desired, Destination: *destination, StageRoot: *stage, Baseline: baseline})
+	provider, unavailable := selectRenderProvider(desired)
+	if len(unavailable) > 0 {
+		result["diagnostics"] = unavailable
+		return writeConfigResult(stdout, result)
+	}
+
+	snapshot, err := render.New(provider).Render(render.Request{State: desired, Destination: *destination, StageRoot: *stage, Baseline: baseline})
 	if err != nil {
 		return err
 	}
@@ -99,6 +105,104 @@ func RunConfig(args []string, stdout io.Writer) error {
 	}
 	result["plan"] = plan
 	return writeConfigResult(stdout, result)
+}
+
+// selectRenderProvider resolves the renderer from the adapters the document
+// declares. Substituting a different adapter's renderer would hand the operator
+// configuration for a client they never named, so an adapter without rendering
+// support is reported instead of quietly replaced.
+func selectRenderProvider(desired configdomain.DesiredState) (render.Provider, []configdomain.Diagnostic) {
+	unavailable := make([]configdomain.Diagnostic, 0)
+	selected := make([]render.Provider, 0, len(desired.Selection.Agents))
+
+	for _, agent := range desired.Selection.Agents {
+		provider, ok := render.ProviderFor(agent)
+		if !ok {
+			unavailable = append(unavailable, configdomain.Diagnostic{
+				Code:     "config.provider.unavailable",
+				Path:     "$.selection.agents",
+				Severity: configdomain.Error,
+				Message:  fmt.Sprintf("no rendering support for adapter %q yet; remove it from the document or render an adapter that has a provider", agent),
+			})
+			continue
+		}
+		selected = append(selected, provider)
+	}
+
+	if len(unavailable) > 0 {
+		return nil, unavailable
+	}
+
+	owner := map[string]render.Provider{}
+	for _, provider := range selected {
+		declaring, ok := provider.(render.SelectorProvider)
+		if !ok {
+			continue
+		}
+		for path := range declaring.Selectors(desired) {
+			owner[path] = provider
+		}
+	}
+
+	return composedProvider{members: selected, owner: owner}, nil
+}
+
+// composedProvider concatenates the artifacts of every selected adapter and
+// forwards each adapter's optional capabilities for the paths that adapter
+// owns. Dropping them here would silently downgrade a composed artifact to
+// whole-file ownership, which reconciliation then refuses as stale.
+//
+// A document declaring no adapter renders nothing, which is the honest reading
+// of a desired state that names no target.
+type composedProvider struct {
+	members []render.Provider
+	owner   map[string]render.Provider
+}
+
+func (composed composedProvider) Render(state configdomain.DesiredState, baseline map[string][]byte) ([]render.ArtifactContent, error) {
+	artifacts := make([]render.ArtifactContent, 0)
+	for _, provider := range composed.members {
+		rendered, err := provider.Render(state, baseline)
+		if err != nil {
+			return nil, err
+		}
+		artifacts = append(artifacts, rendered...)
+	}
+
+	return artifacts, nil
+}
+
+func (composed composedProvider) Selectors(state configdomain.DesiredState) map[string][]string {
+	selectors := map[string][]string{}
+	for _, provider := range composed.members {
+		declaring, ok := provider.(render.SelectorProvider)
+		if !ok {
+			continue
+		}
+		for path, owned := range declaring.Selectors(state) {
+			selectors[path] = append(selectors[path], owned...)
+		}
+	}
+
+	return selectors
+}
+
+func (composed composedProvider) Resources(path string, contents []byte, selectors []string) ([]render.Resource, error) {
+	decomposer, ok := composed.owner[path].(render.ResourceDecomposer)
+	if !ok {
+		return nil, fmt.Errorf("no adapter can decompose %q; remove the adapter that writes it from the document, then run gentle-ai config render again", path)
+	}
+
+	return decomposer.Resources(path, contents, selectors)
+}
+
+func (composed composedProvider) Merge(operation render.Operation, stagedPath string, target []byte) ([]byte, error) {
+	merger, ok := composed.owner[operation.Path].(render.ResourceMerger)
+	if !ok {
+		return nil, fmt.Errorf("no adapter can merge %q; remove the adapter that writes it from the document, then run gentle-ai config render again", operation.Path)
+	}
+
+	return merger.Merge(operation, stagedPath, target)
 }
 
 func readConfigManifest(home, destination string) (render.Manifest, error) {
