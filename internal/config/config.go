@@ -31,20 +31,37 @@ type Diagnostic struct {
 type RoleID string
 type RoleRef RoleID
 
+// RoleMode is how a client addresses a role: primary is one the operator talks
+// to, subagent is one another role delegates to.
+type RoleMode string
+
+const (
+	RolePrimary  RoleMode = "primary"
+	RoleSubagent RoleMode = "subagent"
+)
+
 type Role struct {
 	ID           RoleID    `json:"id"`
 	RenderedName string    `json:"renderedName,omitempty"`
 	References   []RoleRef `json:"references,omitempty"`
 
-	// An adapter that composes agents inside one settings file needs nothing
-	// beyond a name and its references. An adapter that keeps them as files
-	// needs content, and rendering one without these would mean inventing a
-	// description, a model and a prompt the document never declared. Model is a
-	// pointer so an undeclared one stays absent from the encoded document.
+	// Every adapter that expresses roles needs this content, whether it keeps
+	// them as files or as entries in one settings file. Rendering a role
+	// without them would mean inventing a description, a model and a prompt the
+	// document never declared. Model is a pointer so an undeclared one stays
+	// absent from the encoded document.
 	Description string           `json:"description,omitempty"`
 	Prompt      string           `json:"prompt,omitempty"`
 	Tools       []string         `json:"tools,omitempty"`
 	Model       *ModelAssignment `json:"model,omitempty"`
+
+	// Mode and Hidden describe how a client presents the role: whether it is
+	// something the operator addresses directly or something another role
+	// delegates to, and whether it appears in the client's agent list. Adapters
+	// that generate these today decide them from the role's purpose, so a
+	// document that cannot say them can only be rendered by guessing.
+	Mode   RoleMode `json:"mode,omitempty"`
+	Hidden *bool    `json:"hidden,omitempty"`
 }
 
 type Selection struct {
@@ -402,6 +419,9 @@ func normalizeRoles(roles []Role, diagnostics *[]Diagnostic) []Role {
 	for _, role := range roles {
 		if role.Model != nil && (role.Model.Provider == "" || role.Model.Model == "") {
 			*diagnostics = append(*diagnostics, diagnostic("config.role.model.incomplete", "$.roles."+string(role.ID)+".model", "a role model requires both provider and model"))
+		}
+		if role.Mode != "" && role.Mode != RolePrimary && role.Mode != RoleSubagent {
+			*diagnostics = append(*diagnostics, diagnostic("config.role.mode.unsupported", "$.roles."+string(role.ID)+".mode", fmt.Sprintf("unsupported role mode %q; use %s or %s", role.Mode, RolePrimary, RoleSubagent)))
 		}
 	}
 	for _, role := range roles {
