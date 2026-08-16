@@ -989,6 +989,22 @@ func newReviewIntegrationFailure(operation string, args []string, runErr error) 
 		case ReviewAuthorityCorrupted:
 			failure.AuthorityApplicability = "corrupted"
 			failure.CauseCategory = discovery.Category
+		case ReviewGateRemoteFetchRequired:
+			// issue #3342: the local clone is behind the advertised remote
+			// tip; nothing about the authority store was evaluated, and the
+			// cause names the runnable `git fetch <remote>` continuation.
+			failure.Message = "The advertised publication base commit is not available locally; fetch the publication remote, then retry the same gate."
+			failure.AuthorityApplicability = "not_evaluated"
+			failure.RetrySafe = true
+			failure.NextAction = "retry"
+		case ReviewAuthorityInventoryBusy:
+			// issue #3342: transient shared-store coordination, never damage;
+			// the cause names the lock, its recorded holder, and the
+			// continuation.
+			failure.Message = "The review authority store is busy with a concurrent review operation; retry the same gate."
+			failure.AuthorityApplicability = "not_evaluated"
+			failure.RetrySafe = true
+			failure.NextAction = "retry"
 		}
 		return failure
 	}
