@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"github.com/gentleman-programming/gentle-ai/v2/internal/agents"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/components/engram"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/components/mcp"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/components/opencodeplugin"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/components/permissions"
@@ -14,6 +15,7 @@ import (
 	configdomain "github.com/gentleman-programming/gentle-ai/v2/internal/config"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/render"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/system"
 )
 
 // configurationStager materialises the configuration a document declares by
@@ -151,4 +153,54 @@ func (stager configurationStager) sddOptions(selection model.Selection, adapter 
 		Profiles:                    selection.Profiles,
 		CodeGraphGuidanceMarkdown:   codeGraphGuidanceMarkdownForSDD(stager.readRoot, selection.CommunityTools),
 	}
+}
+
+// provisionedComponents are performed rather than written: a download or a
+// clone. They carry no staged bytes, so the manifest records them as present
+// and the plan reconciles them by presence.
+var provisionedComponents = map[model.ComponentID]bool{
+	model.ComponentEngram: true,
+	model.ComponentGGA:    true,
+}
+
+// Resources declares what the document provisions, so a plan reports it instead
+// of a document silently asking for something no operation ever mentions.
+func (stager configurationStager) ProvisionedResources(state configdomain.DesiredState) []render.Resource {
+	selection := configdomain.Project(state)
+	resources := make([]render.Resource, 0, len(selection.Components))
+
+	for _, component := range selection.Components {
+		if !provisionedComponents[component] {
+			continue
+		}
+		resources = append(resources, render.Resource{
+			Path:      string(component),
+			Selector:  render.ProvisionSelector,
+			Digest:    render.ProvisionPresent,
+			Component: component,
+		})
+	}
+
+	return resources
+}
+
+// liveProvisioning reports which declared components are already installed,
+// reusing the detectors the installer consults rather than probing again.
+func liveProvisioning(resources []render.Resource, profile system.PlatformProfile) map[render.ResourceKey]string {
+	live := make(map[render.ResourceKey]string, len(resources))
+
+	for _, resource := range resources {
+		present := false
+		switch resource.Component {
+		case model.ComponentEngram:
+			present = engram.VerifyInstalled() == nil
+		case model.ComponentGGA:
+			present = ggaAvailable(profile)
+		}
+		if present {
+			live[render.ResourceKey{Path: resource.Path, Selector: resource.Selector}] = render.ProvisionPresent
+		}
+	}
+
+	return live
 }
