@@ -16,10 +16,12 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v2/internal/state"
 )
 
-// RunConfig performs read-only declarative configuration operations.
+var writeConfigState = state.WriteDesiredAndManifest
+
+// RunConfig performs declarative configuration operations.
 func RunConfig(args []string, stdout io.Writer) error {
 	if len(args) == 0 {
-		return fmt.Errorf("usage: gentle-ai config <validate|render|plan|diff|export>")
+		return fmt.Errorf("usage: gentle-ai config <validate|render|plan|diff|apply|reconcile|export>")
 	}
 	operation := args[0]
 	flags := flag.NewFlagSet("config "+operation, flag.ContinueOnError)
@@ -44,22 +46,32 @@ func RunConfig(args []string, stdout io.Writer) error {
 	if err != nil {
 		return fmt.Errorf("read config: %w", err)
 	}
-	state, diagnostics := configdomain.Decode(document)
+	desired, diagnostics := configdomain.Decode(document)
 	result := map[string]any{"operation": operation, "diagnostics": diagnostics}
 	if len(diagnostics) > 0 || operation == "validate" {
 		return writeConfigResult(stdout, result)
 	}
-	if operation != "render" && operation != "plan" && operation != "diff" {
-		return fmt.Errorf("unknown config operation %q; run gentle-ai config <validate|render|plan|diff> --config <path>", operation)
+	if operation != "render" && operation != "plan" && operation != "diff" && operation != "apply" && operation != "reconcile" {
+		return fmt.Errorf("unknown config operation %q; run gentle-ai config <validate|render|plan|diff|apply|reconcile> --config <path>", operation)
 	}
 	if *destination == "" || *stage == "" {
 		return fmt.Errorf("config %s requires --destination and --stage; run gentle-ai config %s --config <path> --destination <path> --stage <path>", operation, operation)
 	}
-	baseline, live, err := configBaseline(*destination)
+	previous := configdomain.DesiredState{}
+	if operation == "apply" || operation == "reconcile" {
+		if *home == "" {
+			return fmt.Errorf("config %s requires --home for persisted desired state; run gentle-ai config %s --config <path> --home <path> --destination <path> --stage <path>", operation, operation)
+		}
+		previous, err = readConfigDesired(*home)
+		if err != nil {
+			return err
+		}
+	}
+	baseline, live, err := configBaseline(*destination, previous)
 	if err != nil {
 		return err
 	}
-	snapshot, err := render.New(render.OpenCodeProvider{}).Render(render.Request{State: state, Destination: *destination, StageRoot: *stage, Baseline: baseline})
+	snapshot, err := render.New(render.OpenCodeProvider{}).Render(render.Request{State: desired, Destination: *destination, StageRoot: *stage, Baseline: baseline})
 	if err != nil {
 		return err
 	}
@@ -68,13 +80,50 @@ func RunConfig(args []string, stdout io.Writer) error {
 		return err
 	}
 	result["manifest"] = manifest
-	if operation != "render" {
-		result["plan"] = render.Plan(render.Manifest{}, manifest, live)
+	if operation == "render" {
+		return writeConfigResult(stdout, result)
 	}
+	plan := render.Plan(render.Manifest{}, manifest, live)
+	if operation == "apply" || operation == "reconcile" {
+		previous, err := readConfigManifest(*home, *destination)
+		if err != nil {
+			return err
+		}
+		plan = render.Plan(previous, manifest, live)
+		if err := render.Apply(render.ApplyRequest{
+			Plan: plan, Snapshot: snapshot, Destination: *destination,
+			Persist: func() error { return writeConfigState(*home, *destination, desired, manifest) },
+		}); err != nil {
+			return err
+		}
+	}
+	result["plan"] = plan
 	return writeConfigResult(stdout, result)
 }
 
-func configBaseline(destination string) (map[string][]byte, map[render.ResourceKey]string, error) {
+func readConfigManifest(home, destination string) (render.Manifest, error) {
+	manifest, err := state.ReadManifest(home, destination)
+	if os.IsNotExist(err) {
+		return render.Manifest{}, nil
+	}
+	if err != nil {
+		return render.Manifest{}, fmt.Errorf("read managed manifest: %w", err)
+	}
+	return manifest, nil
+}
+
+func readConfigDesired(home string) (configdomain.DesiredState, error) {
+	desired, err := state.ReadDesired(home)
+	if os.IsNotExist(err) {
+		return configdomain.DesiredState{}, nil
+	}
+	if err != nil {
+		return configdomain.DesiredState{}, fmt.Errorf("read desired state: %w", err)
+	}
+	return desired, nil
+}
+
+func configBaseline(destination string, previous ...configdomain.DesiredState) (map[string][]byte, map[render.ResourceKey]string, error) {
 	path := filepath.Join(destination, ".config", "opencode", "opencode.json")
 	contents, err := os.ReadFile(path)
 	if os.IsNotExist(err) {
@@ -83,8 +132,40 @@ func configBaseline(destination string) (map[string][]byte, map[render.ResourceK
 	if err != nil {
 		return nil, nil, fmt.Errorf("read destination: %w", err)
 	}
+	liveDigest := digest(contents)
+	prior := configdomain.DesiredState{}
+	if len(previous) > 0 {
+		prior = previous[0]
+	}
+	contents, err = withoutPriorRoleNames(contents, prior)
+	if err != nil {
+		return nil, nil, err
+	}
 	resource := render.Resource{Path: ".config/opencode/opencode.json", Selector: "file"}
-	return map[string][]byte{resource.Path: contents}, map[render.ResourceKey]string{{Path: resource.Path, Selector: resource.Selector}: digest(contents)}, nil
+	return map[string][]byte{resource.Path: contents}, map[render.ResourceKey]string{{Path: resource.Path, Selector: resource.Selector}: liveDigest}, nil
+}
+
+func withoutPriorRoleNames(contents []byte, previous configdomain.DesiredState) ([]byte, error) {
+	if len(previous.Roles) == 0 {
+		return contents, nil
+	}
+	var settings map[string]any
+	if err := json.Unmarshal(contents, &settings); err != nil {
+		return nil, fmt.Errorf("read destination: parse OpenCode settings: %w", err)
+	}
+	agents, _ := settings["agent"].(map[string]any)
+	for _, role := range previous.Roles {
+		name := role.RenderedName
+		if name == "" {
+			name = string(role.ID)
+		}
+		delete(agents, name)
+	}
+	encoded, err := json.Marshal(settings)
+	if err != nil {
+		return nil, fmt.Errorf("read destination: encode OpenCode settings: %w", err)
+	}
+	return encoded, nil
 }
 
 func digest(contents []byte) string {
