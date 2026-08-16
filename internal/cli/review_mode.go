@@ -428,6 +428,17 @@ func emitReviewMode(stdout io.Writer, result ReviewModeResult, emitJSON bool) er
 		reviewModeLabel(result.Status.Global),
 		reviewModeLabel(result.Status.CloneLocal),
 	)
+	if err != nil || result.Status.Reach != reviewtransaction.RDDModeReachThisBuild {
+		return err
+	}
+	// The switch is machine state. A write that reached only this build has to
+	// say so on the surface the operator actually reads, or it reports a
+	// working kill switch to someone half of whose gentle-ai installations are
+	// still enforcing review.
+	_, err = fmt.Fprint(
+		stdout,
+		"  note:        applied for this gentle-ai only; a gentle-ai installed before the switch moved reads a location this command could not open, and keeps enforcing the value it holds there\n",
+	)
 	return err
 }
 
