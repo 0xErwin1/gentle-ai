@@ -3,6 +3,8 @@ package config
 import (
 	"encoding/json"
 	"fmt"
+	"reflect"
+	"strings"
 	"testing"
 	"unicode"
 
@@ -13,27 +15,11 @@ import (
 // one this package names deliberately. An untagged Go type reaching the encoder
 // publishes its identifiers instead, which turns any later rename into a silent
 // breaking change for every configuration file in existence.
+// The fixture below must stay fully populated: this guard can only inspect keys
+// that something actually encoded, so a field left out of it is a field nobody
+// checks. TestEveryContractFieldIsPopulated keeps that honest.
 func TestPublicDocumentKeysAreContractNames(t *testing.T) {
-	document := Document{
-		Version: CurrentVersion,
-		Selection: Selection{
-			Agents:             []model.AgentID{model.AgentOpenCode},
-			Components:         []model.ComponentID{model.ComponentEngram},
-			Skills:             []model.SkillID{model.SkillSDDApply},
-			Persona:            model.PersonaGentleman,
-			Preset:             model.PresetFullGentleman,
-			SDDMode:            model.SDDModeSingle,
-			SDDProfileStrategy: model.SDDProfileStrategyGeneratedMulti,
-			StrictTDD:          true,
-			BackgroundIntent:   model.OpenCodeBackgroundOn,
-			Profiles: []Profile{{
-				Name:             "cheap",
-				Orchestrator:     &ModelAssignment{Provider: "anthropic", Model: "claude-haiku", Effort: "low"},
-				PhaseAssignments: map[string]ModelAssignment{"sdd-apply": {Provider: "anthropic", Model: "claude-sonnet"}},
-			}},
-		},
-		Roles: []Role{{ID: "reviewer", RenderedName: "code-reviewer", References: []RoleRef{"reviewer"}}},
-	}
+	document := fullyPopulatedDocument()
 
 	encoded, err := json.Marshal(document)
 	if err != nil {
@@ -121,5 +107,91 @@ func objectKeys(value any, path string) []documentKey {
 
 	default:
 		return nil
+	}
+}
+
+// fullyPopulatedDocument is the single fixture both shape guards inspect. It has
+// to exercise every contract field, which the guard below enforces.
+func fullyPopulatedDocument() Document {
+	return Document{
+		Version: CurrentVersion,
+		Selection: Selection{
+			Agents:             []model.AgentID{model.AgentOpenCode},
+			Components:         []model.ComponentID{model.ComponentEngram},
+			Skills:             []model.SkillID{model.SkillSDDApply},
+			Persona:            model.PersonaGentleman,
+			Preset:             model.PresetFullGentleman,
+			SDDMode:            model.SDDModeSingle,
+			SDDProfileStrategy: model.SDDProfileStrategyGeneratedMulti,
+			StrictTDD:          true,
+			BackgroundIntent:   model.OpenCodeBackgroundOn,
+			Scope:              model.InstallScopeWorkspace,
+			Channel:            model.InstallChannelBeta,
+			RDDMode:            model.RDDModeOn,
+			CommunityTools:     []model.CommunityToolID{model.CommunityToolCodeGraph},
+			OpenCodePlugins:    []model.OpenCodeCommunityPluginID{model.OpenCodePluginGentleLogo},
+			ModelAssignments:   map[string]ModelAssignment{"sdd-apply": {Provider: "anthropic", Model: "claude-sonnet"}},
+
+			ClaudeModelAssignments:      map[string]model.ClaudeModelAlias{"sdd-apply": model.ClaudeModelOpus},
+			KiroModelAssignments:        map[string]model.KiroModelAlias{"sdd-apply": model.KiroModelDeepSeek},
+			CodexModelAssignments:       map[string]model.CodexEffort{"sdd-apply": model.CodexEffortHigh},
+			CodexCarrilModelAssignments: map[string]string{"sdd-mid": "gpt-5.6-luna"},
+			CodexPhaseModelAssignments:  map[string]string{"sdd-apply": "gpt-5.6-sol"},
+			ClaudePhaseAssignments:      map[string]ClaudePhaseAssignment{"sdd-apply": {Model: "opus", Effort: "high"}},
+			CodexOrchestrator:           &CodexOrchestratorAssignment{Model: "gpt-5.6-sol", Effort: "medium"},
+			Profiles: []Profile{{
+				Name:             "cheap",
+				Orchestrator:     &ModelAssignment{Provider: "anthropic", Model: "claude-haiku", Effort: "low"},
+				PhaseAssignments: map[string]ModelAssignment{"sdd-apply": {Provider: "anthropic", Model: "claude-sonnet"}},
+			}},
+		},
+		Roles: []Role{{
+			ID: "reviewer", RenderedName: "code-reviewer", References: []RoleRef{"reviewer"},
+			Description: "reviews", Prompt: "you review", Tools: []string{"Read"},
+			Model: &ModelAssignment{Provider: "anthropic", Model: "claude-sonnet"},
+		}},
+	}
+}
+
+// A guard that inspects an encoded document only covers what the fixture
+// populated. Reflection over the encoded result catches the field somebody adds
+// and forgets to exercise, which is otherwise silent.
+func TestEveryContractFieldIsPopulated(t *testing.T) {
+	encoded, err := json.Marshal(fullyPopulatedDocument())
+	if err != nil {
+		t.Fatalf("encode document: %v", err)
+	}
+
+	var decoded map[string]any
+	if err := json.Unmarshal(encoded, &decoded); err != nil {
+		t.Fatalf("decode document: %v", err)
+	}
+
+	selection, _ := decoded["selection"].(map[string]any)
+	for index := 0; index < reflect.TypeOf(Selection{}).NumField(); index++ {
+		field := reflect.TypeOf(Selection{}).Field(index)
+		name := strings.Split(field.Tag.Get("json"), ",")[0]
+		if name == "" || name == "-" {
+			continue
+		}
+		if _, present := selection[name]; !present {
+			t.Errorf("selection.%s is absent from the fixture, so no shape guard covers it; populate it", name)
+		}
+	}
+
+	roles, _ := decoded["roles"].([]any)
+	if len(roles) == 0 {
+		t.Fatal("fixture declares no role")
+	}
+	role, _ := roles[0].(map[string]any)
+	for index := 0; index < reflect.TypeOf(Role{}).NumField(); index++ {
+		field := reflect.TypeOf(Role{}).Field(index)
+		name := strings.Split(field.Tag.Get("json"), ",")[0]
+		if name == "" || name == "-" {
+			continue
+		}
+		if _, present := role[name]; !present {
+			t.Errorf("roles[].%s is absent from the fixture, so no shape guard covers it; populate it", name)
+		}
 	}
 }
