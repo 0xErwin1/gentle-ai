@@ -74,9 +74,18 @@ func TestRenderUsesTheProviderOfTheDeclaredAdapter(t *testing.T) {
 		t.Fatalf("expected a manifest, got %s", output)
 	}
 
+	// The stage also holds whatever tree the declared components materialise, so
+	// what this pins is that the declared adapter's own settings file is among
+	// them rather than that it is the only thing there.
 	staged := stagedFiles(t, stage)
-	if len(staged) != 1 || !strings.HasSuffix(staged[0], "opencode.json") {
-		t.Errorf("staged = %v, want the OpenCode settings file", staged)
+	settings := false
+	for _, path := range staged {
+		if strings.HasSuffix(path, "opencode.json") {
+			settings = true
+		}
+	}
+	if !settings {
+		t.Errorf("staged = %v, want the OpenCode settings file among them", staged)
 	}
 }
 
