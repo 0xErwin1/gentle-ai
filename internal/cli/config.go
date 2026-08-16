@@ -71,7 +71,13 @@ func RunConfig(args []string, stdout io.Writer) error {
 	if err != nil {
 		return err
 	}
-	snapshot, err := render.New(render.OpenCodeProvider{}).Render(render.Request{State: desired, Destination: *destination, StageRoot: *stage, Baseline: baseline})
+	provider, unavailable := selectRenderProvider(desired)
+	if len(unavailable) > 0 {
+		result["diagnostics"] = unavailable
+		return writeConfigResult(stdout, result)
+	}
+
+	snapshot, err := render.New(provider).Render(render.Request{State: desired, Destination: *destination, StageRoot: *stage, Baseline: baseline})
 	if err != nil {
 		return err
 	}
@@ -99,6 +105,53 @@ func RunConfig(args []string, stdout io.Writer) error {
 	}
 	result["plan"] = plan
 	return writeConfigResult(stdout, result)
+}
+
+// selectRenderProvider resolves the renderer from the adapters the document
+// declares. Substituting a different adapter's renderer would hand the operator
+// configuration for a client they never named, so an adapter without rendering
+// support is reported instead of quietly replaced.
+func selectRenderProvider(desired configdomain.DesiredState) (render.Provider, []configdomain.Diagnostic) {
+	unavailable := make([]configdomain.Diagnostic, 0)
+	selected := make([]render.Provider, 0, len(desired.Selection.Agents))
+
+	for _, agent := range desired.Selection.Agents {
+		provider, ok := render.ProviderFor(agent)
+		if !ok {
+			unavailable = append(unavailable, configdomain.Diagnostic{
+				Code:     "config.provider.unavailable",
+				Path:     "$.selection.agents",
+				Severity: configdomain.Error,
+				Message:  fmt.Sprintf("no rendering support for adapter %q yet; remove it from the document or render an adapter that has a provider", agent),
+			})
+			continue
+		}
+		selected = append(selected, provider)
+	}
+
+	if len(unavailable) > 0 {
+		return nil, unavailable
+	}
+
+	return composedProvider(selected), nil
+}
+
+// composedProvider concatenates the artifacts of every selected adapter. A
+// document declaring no adapter renders nothing, which is the honest reading of
+// a desired state that names no target.
+type composedProvider []render.Provider
+
+func (composed composedProvider) Render(state configdomain.DesiredState, baseline map[string][]byte) ([]render.ArtifactContent, error) {
+	artifacts := make([]render.ArtifactContent, 0)
+	for _, provider := range composed {
+		rendered, err := provider.Render(state, baseline)
+		if err != nil {
+			return nil, err
+		}
+		artifacts = append(artifacts, rendered...)
+	}
+
+	return artifacts, nil
 }
 
 func readConfigManifest(home, destination string) (render.Manifest, error) {
