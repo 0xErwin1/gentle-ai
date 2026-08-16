@@ -133,6 +133,8 @@ func RunArgs(args []string, stdout io.Writer) error {
 			return cli.RunSDDPreflightHook(args[1:], stdout)
 		case "codegraph":
 			return cli.RunCodeGraph(args[1:], stdout)
+		case "config":
+			return cli.RunConfig(args[1:], stdout)
 		case "telemetry":
 			return cli.RunTelemetry(args[1:], stdout)
 		case "review":
