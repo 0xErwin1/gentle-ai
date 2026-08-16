@@ -20,6 +20,9 @@ COMMANDS
                Missing mappings or unsafe shell config leave config unchanged with guidance.
   codegraph init --cwd <project-root>
                Initialize a project's CodeGraph index; codegraph [init] --help shows local help
+  config <validate|render|plan|diff|apply|reconcile|export> --config <path>
+               Read, preview and reconcile the declarative desired state;
+               'install --config' and 'sync --config' consume the same document
   skill-registry refresh [--force] [--quiet] [--no-gitignore] [--cwd <project>]
                Rescan disk skills and update the shared index only when bytes change
   skill-registry list [--json] [--cwd <project>]
