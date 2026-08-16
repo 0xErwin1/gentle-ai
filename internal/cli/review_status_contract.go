@@ -1030,7 +1030,7 @@ func (result ReviewTargetStatusResult) validateSelectorNextTransition() error {
 	if execution == nil || (execution.Operation != "review.validate" && execution.Operation != "review.recover") {
 		return nil
 	}
-	arguments, err := reviewTransitionArgumentMap(execution.Arguments)
+	arguments, err := reviewTransitionArgumentMap(execution.Arguments, execution.Operation)
 	if err != nil {
 		return err
 	}
@@ -1039,8 +1039,15 @@ func (result ReviewTargetStatusResult) validateSelectorNextTransition() error {
 	if selectorsPresent {
 		selectors = *execution.SelectorArguments
 	}
+	// intended-untracked legitimately repeats on a selection-replaying
+	// RECOVER (#1972), so echo membership is checked pairwise against the
+	// executable arguments rather than through the deduplicating map.
+	argumentPairs := make(map[ReviewTransitionArgument]bool, len(execution.Arguments))
+	for _, argument := range execution.Arguments {
+		argumentPairs[ReviewTransitionArgument{Name: argument.Name, Value: argument.Value}] = true
+	}
 	for _, selector := range selectors {
-		if arguments[selector.Name] != selector.Value {
+		if !argumentPairs[ReviewTransitionArgument{Name: selector.Name, Value: selector.Value}] {
 			return errors.New("negotiated transition changed its normalized selector")
 		}
 	}
@@ -1048,7 +1055,11 @@ func (result ReviewTargetStatusResult) validateSelectorNextTransition() error {
 	_, hasCommitted := arguments["committed-only"]
 	projection, hasProjection := arguments["projection"]
 	workspaceOverlay, hasWorkspaceOverlay := arguments["workspace-overlay"]
-	if !selectorsPresent && (hasBase || hasCommitted || hasProjection || hasWorkspaceOverlay) {
+	_, hasUntrackedScope := arguments["untracked-scope"]
+	_, hasUntrackedInventory := arguments["expected-untracked-inventory"]
+	_, hasIntendedUntracked := arguments["intended-untracked"]
+	if !selectorsPresent && (hasBase || hasCommitted || hasProjection || hasWorkspaceOverlay ||
+		hasUntrackedScope || hasUntrackedInventory || hasIntendedUntracked) {
 		return errors.New("negotiated transition omitted its normalized selector")
 	}
 	if hasWorkspaceOverlay && workspaceOverlay != "true" {
@@ -1067,11 +1078,11 @@ func (result ReviewTargetStatusResult) validateSelectorNextTransition() error {
 			return errors.New("current-changes RECOVER transition invented target selectors")
 		}
 	case reviewtransaction.TargetBaseDiff:
-		if !hasBase || !hasCommitted || hasWorkspaceOverlay {
+		if !hasBase || !hasCommitted || hasWorkspaceOverlay || hasUntrackedScope || hasUntrackedInventory || hasIntendedUntracked {
 			return errors.New("base-diff RECOVER transition lacks exact target selectors")
 		}
 	case reviewtransaction.TargetBaseWorkspaceOverlay:
-		if !hasBase || hasCommitted {
+		if !hasBase || hasCommitted || hasUntrackedScope || hasUntrackedInventory || hasIntendedUntracked {
 			return errors.New("workspace-overlay RECOVER transition has incompatible target selectors")
 		}
 		if result.Projection.Projection == reviewtransaction.ProjectionStaged &&
@@ -1560,7 +1571,7 @@ func (submission ReviewTransitionSubmission) validateFinalize() error {
 }
 
 func reviewTransitionArgumentMap(arguments []ReviewTransitionArgument, operation ...string) (map[string]string, error) {
-	allowIntendedUntracked := len(operation) == 1 && operation[0] == "review.start"
+	allowIntendedUntracked := len(operation) == 1 && (operation[0] == "review.start" || operation[0] == "review.recover")
 	values := make(map[string]string, len(arguments))
 	for _, argument := range arguments {
 		if previous, duplicate := values[argument.Name]; duplicate && (!allowIntendedUntracked || argument.Name != "intended-untracked" || previous == argument.Value) {
@@ -1609,16 +1620,38 @@ func validateReviewTransitionExecution(execution ReviewTransitionExecution, argu
 			return errors.New("review validate transition selectors are invalid")
 		}
 	case "review.recover":
+		// intended-untracked repeats once per selected path (#1972), so the
+		// selector echo is rebuilt from the ordered executable arguments and
+		// the argument-count check uses distinct selector names because the
+		// argument map deduplicates the repeats.
+		recoverSelectorNames := map[string]bool{
+			"base-ref": true, "committed-only": true, "projection": true, "workspace-overlay": true,
+			"untracked-scope": true, "expected-untracked-inventory": true, "intended-untracked": true,
+		}
 		wantSelectors := []ReviewTransitionArgument{}
-		for _, name := range []string{"base-ref", "committed-only", "projection", "workspace-overlay"} {
-			if value, present := arguments[name]; present {
-				wantSelectors = append(wantSelectors, ReviewTransitionArgument{Name: name, Value: value})
+		distinctSelectors := map[string]bool{}
+		intendedPaths := []string{}
+		for _, argument := range execution.Arguments {
+			if !recoverSelectorNames[argument.Name] {
+				continue
+			}
+			wantSelectors = append(wantSelectors, ReviewTransitionArgument{Name: argument.Name, Value: argument.Value})
+			distinctSelectors[argument.Name] = true
+			if argument.Name == "intended-untracked" {
+				intendedPaths = append(intendedPaths, argument.Value)
 			}
 		}
 		if execution.SelectorArguments != nil && !reflect.DeepEqual(*execution.SelectorArguments, wantSelectors) {
 			return errors.New("review recover transition selectors are invalid")
 		}
-		if !exact([]string{"predecessor-lineage", "expected-predecessor-revision", "successor-lineage", "disposition", "reason", "actor", "maintainer-authorization"}, wantSelectors) ||
+		required := []string{"predecessor-lineage", "expected-predecessor-revision", "successor-lineage", "disposition", "reason", "actor", "maintainer-authorization"}
+		requiredPresent := true
+		for _, name := range required {
+			if _, present := arguments[name]; !present {
+				requiredPresent = false
+			}
+		}
+		if !requiredPresent || len(arguments) != len(required)+len(distinctSelectors) ||
 			arguments["predecessor-lineage"] != execution.Binding.LineageID ||
 			arguments["expected-predecessor-revision"] != execution.Binding.Revision ||
 			!validReviewIntegrationLineage(arguments["successor-lineage"]) ||
@@ -1640,6 +1673,9 @@ func validateReviewTransitionExecution(execution ReviewTransitionExecution, argu
 		committed, hasCommitted := arguments["committed-only"]
 		projection, hasProjection := arguments["projection"]
 		workspaceOverlay, hasWorkspaceOverlay := arguments["workspace-overlay"]
+		untrackedScope, hasUntrackedScope := arguments["untracked-scope"]
+		inventory, hasInventory := arguments["expected-untracked-inventory"]
+		hasIntended := distinctSelectors["intended-untracked"]
 		if arguments["maintainer-authorization"] != wantAuthorization ||
 			hasBase && !validReviewTransitionSelector(base) ||
 			hasCommitted && (!hasBase || committed != "true") ||
@@ -1649,6 +1685,23 @@ func validateReviewTransitionExecution(execution ReviewTransitionExecution, argu
 				projection != string(reviewtransaction.ProjectionStaged) || workspaceOverlay != "true") {
 			return errors.New("review recover transition selectors are invalid")
 		}
+		// The untracked selection replay (#1972) is only meaningful for a
+		// workspace current-changes successor: scope and inventory travel
+		// together, select carries at least one path, exclude carries none,
+		// and every path is a plain repository-relative spelling.
+		if hasUntrackedScope != hasInventory ||
+			hasIntended && untrackedScope != "select" ||
+			hasUntrackedScope && untrackedScope == "select" && !hasIntended ||
+			hasUntrackedScope && untrackedScope != "select" && untrackedScope != "exclude" ||
+			hasUntrackedScope && (hasBase || hasCommitted || hasWorkspaceOverlay || hasProjection) ||
+			hasInventory && strings.TrimSpace(inventory) == "" {
+			return errors.New("review recover transition selectors are invalid")
+		}
+		for _, path := range intendedPaths {
+			if !validReviewIntendedUntrackedPath(path) {
+				return errors.New("review recover transition selectors are invalid")
+			}
+		}
 	}
 	return nil
 }
@@ -1657,6 +1710,16 @@ func validReviewTransitionSelector(value string) bool {
 	fields := strings.Fields(value)
 	return len(fields) == 1 && fields[0] == value && !path.IsAbs(value) &&
 		!strings.HasPrefix(value, "-") && !strings.ContainsRune(value, 0)
+}
+
+// validReviewIntendedUntrackedPath admits the repository-relative spellings an
+// intended-untracked declaration may carry. Unlike a target selector, a path
+// may contain interior spaces, so only the shapes that would break argv
+// replay or escape the repository are rejected.
+func validReviewIntendedUntrackedPath(value string) bool {
+	return value != "" && value == strings.TrimSpace(value) && !path.IsAbs(value) &&
+		!strings.HasPrefix(value, "-") && !strings.ContainsRune(value, 0) &&
+		!strings.ContainsAny(value, "\n\r")
 }
 
 func (eligibility ReviewActionEligibility) Validate(status ReviewTargetStatusResult) error {
