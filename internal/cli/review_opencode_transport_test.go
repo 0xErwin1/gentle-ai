@@ -196,9 +196,13 @@ func TestOpenCodeReviewTransportRefusesNonCanonicalProviderTaskBeforeProviderLau
 			},
 		},
 		{
-			name: "forged materialization marker",
-			prompt: func(binding string) string {
-				payload, err := json.Marshal(openCodeTransportMaterialization{TaskPrompt: binding})
+			// A materialization marker is not authority by itself: the inner
+			// task prompt still has to carry a provider-issued binding, because
+			// that binding is the only thing Go rebuilds the reviewer Task from.
+			// A marker wrapped around caller prose has nothing to rebuild.
+			name: "materialization marker without a provider binding",
+			prompt: func(string) string {
+				payload, err := json.Marshal(openCodeTransportMaterialization{TaskPrompt: "caller-authored task prompt"})
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -596,10 +600,17 @@ func TestOpenCodeReviewTransportPassesThroughReinterceptedProviderTask(t *testin
 			if !strings.HasPrefix(primary.prompt.Prompt, openCodeTransportMaterializationHeader+" ") {
 				t.Fatalf("primary provider prompt = %q, want Go materialization envelope", primary.prompt.Prompt)
 			}
-			if _, err := openCodeTransportStart(t.Context(), openCodeTransportEnvelope{
+			// An expanded materialization is a host-authored copy, not this
+			// relay's own bytes: it never inherits pass-through, and the
+			// expansion never survives into the provider Task.
+			expanded, err := openCodeTransportStart(t.Context(), openCodeTransportEnvelope{
 				Schema: openCodeReviewTransportSchema, Operation: "start", Prompt: primary.prompt.Prompt + "\ncaller-authored expansion",
-			}); err == nil || !strings.Contains(err.Error(), "opencode_review_transport_binding_invalid") {
-				t.Fatalf("expanded materialization error = %v", err)
+			})
+			if err != nil || expanded.passThrough {
+				t.Fatalf("expanded materialization passThrough = %v, %v", expanded.passThrough, err)
+			}
+			if string(expanded.providerPrompt) != primary.prompt.Prompt {
+				t.Fatalf("expanded materialization provider prompt is not the Go materialization")
 			}
 			secondary := startOpenCodeTransportRelay(t, openCodeTransportEnvelope{
 				Schema: openCodeReviewTransportSchema, Operation: "start", Prompt: primary.prompt.Prompt,
