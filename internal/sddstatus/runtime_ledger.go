@@ -912,8 +912,13 @@ func (store RuntimeStore) Finish(ctx context.Context, request FinishAttemptReque
 		}
 		if unmanagedRemediation {
 			evidenceOnly := runtimeEvidenceOnlyRetryAuthorized(status.LastReset, status.LastRescope, chainFailedAttempt, snapshot.CandidateTree)
-			if !evidenceOnly && (snapshot.Identity == active.BeginCandidateIdentity || snapshot.CandidateTree == active.BeginCandidateTree) {
-				// refusal:by-design operator-knowledge: a remediation claim must name a candidate changed by the active correction attempt, or an audited reset or rescope authorizing this exact unchanged candidate.
+			// #3073: "changed" is judged against the failed evidence's candidate
+			// snapshot, not the attempt's begin snapshot. A correction applied
+			// between the audited reset and the acquire lives inside the begin
+			// snapshot already, so the begin-relative comparison refused a
+			// candidate that genuinely no longer matches the state that failed.
+			if !evidenceOnly && runtimeRemediationCandidateUnchanged(chainFailedAttempt, *active, snapshot.Identity, snapshot.CandidateTree) {
+				// refusal:by-design operator-knowledge: a remediation claim must name a candidate changed relative to the state that failed verification, or an audited reset or rescope authorizing this exact unchanged candidate.
 				return runtimeRecord{}, errors.New("unmanaged remediation requires a changed correction candidate")
 			}
 			if request.EvidenceRevision == request.RemediatesEvidenceRevision {
@@ -2242,8 +2247,16 @@ func applyRuntimeFinishEvent(replay *runtimeReplay, event *runtimeFinishEvent, u
 		// failing objective against these exact bytes authorizes one evidence-only
 		// retry, so a replayed correction may leave the candidate unchanged.
 		evidenceOnly := runtimeEvidenceOnlyRetryAuthorized(replay.Status.LastReset, replay.Status.LastRescope, chainFailedAttempt, event.FinishCandidateTree)
-		unchangedCandidate := event.FinishCandidateIdentity == active.BeginCandidateIdentity ||
-			event.FinishCandidateTree == active.BeginCandidateTree
+		// #3073 lockstep-with-history: the write guard judges "unchanged"
+		// against the failed evidence's candidate snapshot, while records
+		// committed before that fix were judged against the attempt's begin
+		// snapshot. A committed record is valid if it satisfied the guard of
+		// the generation that wrote it, so replay refuses only a record
+		// unchanged under BOTH baselines; judging by the new baseline alone
+		// would make a legitimately committed pre-fix chain unreplayable.
+		unchangedCandidate := runtimeRemediationCandidateUnchanged(chainFailedAttempt, *active, event.FinishCandidateIdentity, event.FinishCandidateTree) &&
+			(event.FinishCandidateIdentity == active.BeginCandidateIdentity ||
+				event.FinishCandidateTree == active.BeginCandidateTree)
 		// A binding is deliberately NOT checked here. The write path stopped
 		// treating a leftover binding as a blocker (the kill switch must have
 		// no implications while it is off), and this replay mirror has to agree
@@ -3163,6 +3176,25 @@ func runtimeEvidenceOnlyRetryAuthorized(reset *RuntimeReset, rescope *RuntimeRes
 	return rescope != nil && rescope.Actor != "" && rescope.Reason != "" &&
 		rescope.PreviousObjectiveID == failed.ObjectiveID && rescope.PreviousGeneration == failed.ObjectiveGeneration &&
 		rescope.RescopeCandidateTree == candidateTree
+}
+
+// runtimeRemediationCandidateUnchanged judges whether a settling unmanaged
+// remediation still presents the state that FAILED (#3073). The laundering
+// baseline is the remediated failed evidence's candidate snapshot — the exact
+// bytes the failure was recorded over — not the correction attempt's begin
+// snapshot: a correction applied between the audited reset and the acquire is
+// already inside the begin snapshot, so judging against begin refused a
+// genuinely changed candidate, while a revert to the failed bytes after
+// acquire counted as "changed" against begin despite re-presenting exactly
+// what failed. Failed attempts recorded before the finish candidate snapshot
+// existed carry no baseline of their own, so those legacy records fall back
+// to the pre-#3073 begin-relative comparison.
+func runtimeRemediationCandidateUnchanged(failed, active RuntimeAttempt, identity, tree string) bool {
+	baselineIdentity, baselineTree := failed.FinishCandidateIdentity, failed.FinishCandidateTree
+	if baselineIdentity == "" && baselineTree == "" {
+		baselineIdentity, baselineTree = active.BeginCandidateIdentity, active.BeginCandidateTree
+	}
+	return identity == baselineIdentity || tree == baselineTree
 }
 
 func runtimeObjectiveID(change, workUnit, evidenceGoal, candidateIdentity string, generation int) string {
