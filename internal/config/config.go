@@ -72,6 +72,11 @@ type Selection struct {
 	// environment keep their turn; only a declared value overrides them.
 	Scope   model.InstallScope   `json:"scope,omitempty"`
 	Channel model.InstallChannel `json:"channel,omitempty"`
+
+	// RDDMode governs the global review kill switch only. The clone-local
+	// override stays out of the contract on purpose: it exists so that no
+	// repository can ship or force a review policy onto a clone.
+	RDDMode model.RDDMode `json:"rddMode,omitempty"`
 }
 
 type Document struct {
@@ -172,6 +177,7 @@ func Project(state DesiredState) model.Selection {
 		CommunityTools:              append([]model.CommunityToolID(nil), state.Selection.CommunityTools...),
 		Scope:                       state.Selection.Scope,
 		Channel:                     state.Selection.Channel,
+		RDDMode:                     state.Selection.RDDMode,
 	}
 }
 
@@ -194,6 +200,7 @@ func FromSelection(selection model.Selection) DesiredState {
 		CommunityTools:              selection.CommunityTools,
 		Scope:                       selection.Scope,
 		Channel:                     selection.Channel,
+		RDDMode:                     selection.RDDMode,
 	}}
 }
 
@@ -228,6 +235,7 @@ func NormalizeSelection(selection model.Selection) (model.Selection, []Diagnosti
 	selection.CommunityTools = projected.CommunityTools
 	selection.Scope = projected.Scope
 	selection.Channel = projected.Channel
+	selection.RDDMode = projected.RDDMode
 	if !preserveUnsetPersona {
 		selection.Persona = projected.Persona
 	}
@@ -258,6 +266,9 @@ func normalizeSelection(selection Selection, diagnostics *[]Diagnostic) Selectio
 
 	if selection.Scope != "" && !selection.Scope.Valid() {
 		*diagnostics = append(*diagnostics, diagnostic("config.scope.unsupported", "$.selection.scope", fmt.Sprintf("unsupported scope %q; use global or workspace", selection.Scope)))
+	}
+	if selection.RDDMode != "" && !selection.RDDMode.Valid() {
+		*diagnostics = append(*diagnostics, diagnostic("config.rdd-mode.unsupported", "$.selection.rddMode", fmt.Sprintf("unsupported review mode %q; use on or off", selection.RDDMode)))
 	}
 	if selection.Channel != "" && !selection.Channel.Valid() {
 		*diagnostics = append(*diagnostics, diagnostic("config.channel.unsupported", "$.selection.channel", fmt.Sprintf("unsupported channel %q; use stable or beta", selection.Channel)))
