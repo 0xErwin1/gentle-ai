@@ -38,9 +38,20 @@ func TestConfigOpenCodeEndToEnd(t *testing.T) {
 	if err != nil || desired.Version != configdomain.CurrentVersion || desired.Roles[0].RenderedName != "writer-v1" {
 		t.Fatalf("persisted desired = %#v, %v", desired, err)
 	}
+	// The manifest covers the staged component tree as well, so what this pins
+	// is that both declared roles are owned inside the settings file.
 	manifest, err := state.ReadManifest(home, destination)
-	if err != nil || len(manifest.Resources) != 2 {
-		t.Fatalf("persisted manifest = %#v, %v", manifest, err)
+	if err != nil {
+		t.Fatalf("read persisted manifest: %v", err)
+	}
+	owned := 0
+	for _, resource := range manifest.Resources {
+		if resource.Path == ".config/opencode/opencode.json" {
+			owned++
+		}
+	}
+	if owned != 2 {
+		t.Fatalf("owned settings resources = %d, want the two declared roles", owned)
 	}
 
 	writeConfigDocument(t, configPath, `{"version":"v1","selection":{"agents":["opencode"]},"roles":[{"id":"writer","renderedName":"writer-v2"},{"id":"reviewer","references":["writer"]}]}`)
