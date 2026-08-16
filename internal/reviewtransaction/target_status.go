@@ -351,7 +351,7 @@ func assessTargetStatusSnapshot(ctx context.Context, repo string, request Target
 				continue
 			}
 		} else if proof := compactLocalBaseAdvanceCompatibility(ctx, repo, state, request.Target, live); proof != nil &&
-			classifyCompactTargetRelation(state.CurrentSnapshot, live, state.GenesisPaths,
+			classifyCompactTargetRelation(state.CurrentSnapshot, live, state.CorrectionScopePaths(),
 				compactTargetRelationEvidence{CompatibleAdvance: proof}).Kind == compactTargetCompatibleAdvance {
 			candidates = append(candidates, candidate)
 			continue
