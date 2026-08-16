@@ -769,15 +769,19 @@ func runReviewCollectCaptureCommand(operation string, args []string, stdout io.W
 	// write failure cannot suppress the artifact, exactly as the negotiated
 	// route does.
 	clause := reviewUnexpectedFaultDefectReportClause(ctx, operation, args[1:], failure)
-	if err := emitReviewIntegrationFailure(stdout, failure); err != nil {
-		return err
-	}
+	emitErr := emitReviewIntegrationFailure(stdout, failure)
 	typedFailure := newReviewIntegrationFailureError(failure, runErr)
 	typedFailure.defectReportClause = clause
 	// The plain route always printed the native refusal text on stderr, and
 	// operators (and the sweep of refusal-message tests) depend on it; only
 	// the machine-readable code is new on this line.
 	typedFailure.operatorMessage = runErr.Error()
+	if emitErr != nil {
+		// A dead stdout (closed pipe, halted host relay) must never cost the
+		// caller the native refusal: keep the refusal primary so errors.Is/As
+		// dispatch survives, with the emit failure attached to the chain.
+		return errors.Join(typedFailure, emitErr)
+	}
 	return typedFailure
 }
 

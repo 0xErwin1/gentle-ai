@@ -307,3 +307,27 @@ func TestCollectCaptureOperationsStayOffTheNegotiatedSurface(t *testing.T) {
 		}
 	}
 }
+
+// reviewEmitFailureWriter simulates a dead stdout (closed pipe, halted host
+// relay) so envelope emission fails underneath a real native refusal.
+type reviewEmitFailureWriter struct{ err error }
+
+func (w reviewEmitFailureWriter) Write([]byte) (int, error) { return 0, w.err }
+
+// TestCaptureRefusalEmitFailurePreservesNativeRefusal pins that a failed
+// envelope emission never discards the refusal: the returned chain carries
+// both errors, refusal primary, so errors.Is/As dispatch keeps working.
+func TestCaptureRefusalEmitFailurePreservesNativeRefusal(t *testing.T) {
+	emitErr := errors.New("stdout gone: broken pipe")
+	err := RunReview([]string{"capture-evidence", "--cwd", initReviewCLIRepo(t)}, reviewEmitFailureWriter{err: emitErr})
+	var typed *ReviewIntegrationFailureError
+	if !errors.As(err, &typed) || typed.Failure.Code != "invalid_request" {
+		t.Fatalf("native refusal lost when envelope emission failed: %v", err)
+	}
+	if !errors.Is(err, emitErr) {
+		t.Fatalf("emit failure missing from the error chain: %v", err)
+	}
+	if !strings.HasPrefix(err.Error(), typed.Error()) {
+		t.Fatalf("refusal is not the primary error: %q", err.Error())
+	}
+}
