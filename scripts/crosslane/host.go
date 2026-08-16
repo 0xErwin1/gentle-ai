@@ -48,6 +48,9 @@ func (b *battery) runEnv(dir string, env []string, args ...string) (string, stri
 	ctx, cancel := context.WithTimeout(context.Background(), hostCommandTimeout)
 	defer cancel()
 	command := exec.CommandContext(ctx, b.binary, args...)
+	// Force Wait to close the stdout/stderr pipes after kill so grandchild
+	// processes holding them open cannot block past the context cancel.
+	command.WaitDelay = 30 * time.Second
 	command.Dir = dir
 	if len(env) > 0 {
 		command.Env = mergeEnvironment(env)
@@ -164,7 +167,8 @@ func (b *battery) hostMediumCandidate(lane, name string) (string, bool) {
 		return "", false
 	}
 	base := "export function add(a, b) {\n  return a + b;\n}\n"
-	if err := writeFile(repo, "src/add.js", base); err == nil {
+	err = writeFile(repo, "src/add.js", base)
+	if err == nil {
 		err = commitAll(repo, "feat: add")
 	}
 	if err != nil {
@@ -190,8 +194,9 @@ func (b *battery) hostCaptureLens(lane, repo string, env []string, input map[str
 	b.noteHostCost(lane, "1 compiled reviewer subprocess run (capture-result --agent)")
 	capture, stderr, code := b.runJSONEnv("result-artifact", repo, env,
 		append([]string{"review", "capture-result"}, argumentTokens(input)...)...)
-	if code != 0 || getString(capture, "schema") != "gentle-ai.review-result-artifact/v2" {
-		b.fail(lane, "reviewer capture admitted", fmt.Sprintf("exit=%d schema=%q %s", code, getString(capture, "schema"), firstLine(stderr)))
+	if code != 0 || getString(capture, "schema") != "gentle-ai.review-result-artifact/v2" || getString(capture, "admission_decision") != "completed" {
+		b.fail(lane, "reviewer capture admitted", fmt.Sprintf("exit=%d schema=%q admission=%q %s",
+			code, getString(capture, "schema"), getString(capture, "admission_decision"), firstLine(stderr)))
 		return false
 	}
 	b.pass(lane, "reviewer capture admitted", "real reviewer process produced a native result artifact")

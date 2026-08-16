@@ -107,7 +107,7 @@ func (b *battery) probePiPrintModeExtensions() {
 			"pi loads extensions in print mode (extension-registered CLI flags in --help; --no-extensions is the opt-out); the full extension-driven review flow is an unbounded agentic session, so this lane drives the bounded host relay instead")
 		return
 	}
-	b.pass(hostPiLane, "print-mode extension probe",
+	b.skip(hostPiLane, "print-mode extension probe",
 		"pi --help shows no extension-registered flags; extension loading in print mode unproven, lane drives the host relay")
 }
 

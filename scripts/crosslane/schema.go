@@ -126,11 +126,9 @@ func (b *battery) compilePublishedSchemas() (map[string]*jsonschema.Schema, []st
 		if err != nil {
 			return nil, nil, fmt.Errorf("compile %s: %w", p.id, err)
 		}
-		// Later contract versions win when two files share an identity
-		// (they do not today; keep the first compiled otherwise).
-		if _, exists := compiled[p.identity]; !exists {
-			compiled[p.identity] = schema
-		}
+		// Later contract versions win when two files share an identity:
+		// the walk visits v1 before v2, so the last assignment is newest.
+		compiled[p.identity] = schema
 		identities = append(identities, p.identity)
 	}
 	return compiled, identities, nil

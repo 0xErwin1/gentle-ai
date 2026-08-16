@@ -30,6 +30,12 @@ import (
 )
 
 func main() {
+	os.Exit(run())
+}
+
+// run holds the battery body so deferred cleanup (work-root removal or the
+// --keep-work banner) always executes before the process exits nonzero.
+func run() int {
 	binary := flag.String("binary", "", "path to the gentle-ai binary under test (required)")
 	withModel := flag.Bool("with-model", false, "include the real reviewer model run (uses the dev subscription)")
 	withHost := flag.Bool("with-host", false, "spawn REAL host applications (codex exec, pi print mode, an opencode session) end to end (uses the dev subscription)")
@@ -38,7 +44,7 @@ func main() {
 
 	if *binary == "" {
 		fmt.Fprintln(os.Stderr, "crosslane: --binary <path> is required")
-		os.Exit(2)
+		return 2
 	}
 	resolved, err := filepath.Abs(*binary)
 	if err == nil {
@@ -46,17 +52,17 @@ func main() {
 	}
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "crosslane: binary %q is not usable: %v\n", *binary, err)
-		os.Exit(2)
+		return 2
 	}
 	repoRoot, err := os.Getwd()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "crosslane: %v\n", err)
-		os.Exit(2)
+		return 2
 	}
 	workRoot, err := os.MkdirTemp("", "gentle-ai-crosslane-")
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "crosslane: %v\n", err)
-		os.Exit(2)
+		return 2
 	}
 
 	b := &battery{
@@ -80,8 +86,9 @@ func main() {
 
 	failed := b.printTable()
 	if failed > 0 {
-		os.Exit(1)
+		return 1
 	}
+	return 0
 }
 
 func (b *battery) printTable() int {

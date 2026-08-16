@@ -23,7 +23,8 @@ func (b *battery) runClaudeLowLifecycle() {
 		b.fail(claudeLane, "low lifecycle scratch repository", err.Error())
 		return
 	}
-	if err := writeFile(repo, "docs/ordinary-guide.md", "# Ordinary guide\n\nline one\n"); err == nil {
+	err = writeFile(repo, "docs/ordinary-guide.md", "# Ordinary guide\n\nline one\n")
+	if err == nil {
 		err = commitAll(repo, "docs: guide")
 	}
 	if err != nil {
@@ -91,7 +92,8 @@ func (b *battery) runClaudeMediumConsent() {
 		return
 	}
 	base := "export function mul(a, b) {\n  return a * b;\n}\n"
-	if err := writeFile(repo, "src/mul.js", base); err == nil {
+	err = writeFile(repo, "src/mul.js", base)
+	if err == nil {
 		err = commitAll(repo, "feat: mul")
 	}
 	if err != nil {

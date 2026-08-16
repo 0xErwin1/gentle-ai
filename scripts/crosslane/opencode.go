@@ -51,7 +51,8 @@ func (b *battery) runOpenCodeLane() {
 		return
 	}
 	base := "export function greet(name) {\n  return \"hi \" + name;\n}\n"
-	if err := writeFile(repo, "src/greet.js", base); err == nil {
+	err = writeFile(repo, "src/greet.js", base)
+	if err == nil {
 		err = commitAll(repo, "feat: greet")
 	}
 	if err != nil {
