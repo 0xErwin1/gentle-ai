@@ -131,6 +131,44 @@ func TestNegotiatedStatusEnvelopeMatchesPublishedStatusSchemaV5(t *testing.T) {
 	validatePublishedReviewSchema(t, schema, output.Bytes())
 }
 
+// TestStatusDispositionProjectionMatchesPublishedStatusSchemaV5 ties the
+// emitter bytes of the negotiated-route disposition preview
+// (ReviewRepairDispositionProviderInputs, populated by STATUS when a closed
+// closure disposition plan derives) to the published status-v5 schema. Like
+// the top-level repository_context the battery caught, this optional
+// projection is real emitter output the strict schema must admit.
+func TestStatusDispositionProjectionMatchesPublishedStatusSchemaV5(t *testing.T) {
+	t.Parallel()
+	fixture, err := os.ReadFile(filepath.Join("..", "..", "contracts", "review-integration", "v2", "fixtures", "status-v5.fixture.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var document map[string]any
+	if err := json.Unmarshal(fixture, &document); err != nil {
+		t.Fatal(err)
+	}
+	disposition, err := json.Marshal(ReviewRepairDispositionProviderInputs{
+		PlanDigest:                 "sha256:" + strings.Repeat("a", 64),
+		AuthorityInventoryRevision: "sha256:" + strings.Repeat("b", 64),
+		SeedLineageID:              "review-disposition-seed",
+		SeedExpectedRevision:       "sha256:" + strings.Repeat("c", 64),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var dispositionDocument map[string]any
+	if err := json.Unmarshal(disposition, &dispositionDocument); err != nil {
+		t.Fatal(err)
+	}
+	document["disposition"] = dispositionDocument
+	payload, err := json.Marshal(document)
+	if err != nil {
+		t.Fatal(err)
+	}
+	schema := compileWholePublishedReviewSchema(t, "v2", "status-v5.schema.json")
+	validatePublishedReviewSchema(t, schema, payload)
+}
+
 // TestConsentFixtureMatchesPublishedConsentSchemaV3 compiles the published
 // consent-v3 schema against the pinned consent-v3 fixture — the exact live
 // bytes TestConsentQuestionMatchesVersionedFixture captures from the emitter.

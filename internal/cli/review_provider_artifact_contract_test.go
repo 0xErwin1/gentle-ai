@@ -110,8 +110,11 @@ func TestReviewProviderArtifactV25StatusContractsArePinned(t *testing.T) {
 		// which the schema did not admit; and targeted_validation_required also
 		// arrives as the provider-task (external.run_provider_role) and pi
 		// host-relay (review.capture-validation) shapes, which the schema
-		// rejected as missing the generic submission. Deliberate, not drift.
-		"schemas/status-v5.schema.json": "e0d7687c40c242d2d2c64690d3e9fb5c0ad88bcd18df2d7dd50702102149020c",
+		// rejected as missing the generic submission; and the negotiated-route
+		// disposition preview (ReviewRepairDispositionProviderInputs) is real
+		// optional emitter output the strict schema must admit. Deliberate,
+		// not drift.
+		"schemas/status-v5.schema.json": "5d5170d0c4be0977b640524c6ca9b119e42803a9e8409c43f0053c0c6fbd421e",
 	}
 	for name, expected := range want {
 		payload, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(name)))

@@ -30,7 +30,17 @@
     "next_transition": {"$ref": "#/$defs/next_transition"},
     "validation_request": {"$ref": "../../v1/schemas/targeted-validation-request.schema.json"},
     "final_verification_retry": {"$ref": "../../v1/schemas/status-v2.schema.json#/properties/final_verification_retry"},
-    "repository_context": {"$ref": "#/$defs/repository_context"}
+    "repository_context": {"$ref": "#/$defs/repository_context"},
+    "disposition": {
+      "type": "object", "additionalProperties": false,
+      "required": ["plan_digest", "authority_inventory_revision"],
+      "properties": {
+        "plan_digest": {"$ref": "#/$defs/sha256"},
+        "authority_inventory_revision": {"$ref": "#/$defs/sha256"},
+        "seed_lineage_id": {"type": "string", "minLength": 1, "maxLength": 128},
+        "seed_expected_revision": {"$ref": "#/$defs/sha256"}
+      }
+    }
   },
   "dependentRequired": {"forecast": ["next_transition"]},
   "$defs": {
