@@ -273,7 +273,7 @@ func validateOpenCodeTransportCompletion(envelope openCodeTransportEnvelope, non
 }
 
 func openCodeTransportStart(ctx context.Context, envelope openCodeTransportEnvelope) (openCodeTransportSession, error) {
-	taskPrompt, reintercepted, err := decodeOpenCodeTransportMaterialization(envelope.Prompt)
+	taskPrompt, marked, err := decodeOpenCodeTransportMaterialization(envelope.Prompt)
 	if err != nil {
 		return openCodeTransportSession{}, err
 	}
@@ -285,11 +285,20 @@ func openCodeTransportStart(ctx context.Context, envelope openCodeTransportEnvel
 	if err != nil {
 		return openCodeTransportSession{}, openCodeTransportFailure("opencode_review_transport_materialization_unavailable")
 	}
-	if reintercepted && envelope.Prompt != materialized {
-		return openCodeTransportSession{}, openCodeTransportBindingInvalid("Task prompt is not the exact Go-issued provider materialization")
-	}
 	session.providerPrompt = []byte(materialized)
-	session.passThrough = reintercepted
+	// Byte equality against the Go rebuild identifies a re-interception, and it
+	// stays exact. It classifies the frame; it does not admit one. Carrying the
+	// marker is not proof of Go authorship: an OpenCode host persists the
+	// plugin-mutated Task argument -- the whole materialization -- into its own
+	// transcript, so its driver model re-types a paraphrased copy on the next
+	// collection attempt. Only the exact bytes are a re-interception whose
+	// completion belongs to the relay that issued them; a copy is an ordinary
+	// host-authored first-contact frame that this relay must materialize and
+	// capture itself. Refusing it instead wedged the reviewer slot with no
+	// caller-side exit. Admitting it grants nothing, because the reviewer child
+	// receives only the bytes rebuilt above from live authority and every
+	// echoed byte was already discarded with the incoming prompt.
+	session.passThrough = marked && envelope.Prompt == materialized
 	nonce, err := newOpenCodeTransportNonce()
 	if err != nil {
 		return openCodeTransportSession{}, openCodeTransportFailure("opencode_review_transport_materialization_unavailable")
