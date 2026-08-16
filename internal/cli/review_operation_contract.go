@@ -1527,7 +1527,12 @@ type ReviewIntegrationFinalizeResult struct {
 	// Escalation carries the same correction-budget accounting sentence as
 	// ReviewFacadeFinalizeResult.Escalation, so the negotiated and legacy
 	// finalize surfaces explain a terminal escalation identically.
-	Escalation        string                                       `json:"escalation,omitempty"`
+	Escalation string `json:"escalation,omitempty"`
+	// AdvisoryFindings mirrors ReviewFacadeFinalizeResult.AdvisoryFindings so
+	// a negotiated consumer learns the same explicit non-blocking disposition
+	// the legacy surface reports. Additive and optional: it appears only on an
+	// approved lineage that froze at least one non-blocking finding.
+	AdvisoryFindings  *reviewtransaction.AdvisoryFindingSet        `json:"advisory_findings,omitempty"`
 	StoreRevision     string                                       `json:"store_revision"`
 	Eligibility       *ReviewActionEligibility                     `json:"eligibility,omitempty"`
 	NextTransition    *ReviewNextTransition                        `json:"next_transition,omitempty"`

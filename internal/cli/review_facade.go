@@ -229,9 +229,14 @@ type ReviewFacadeFinalizeResult struct {
 	// reviewtransaction.EscalationAccountingReasonTemplate. It is present only
 	// when the authority actually escalated with a derivable cause, so every
 	// other finalize shape keeps its exact existing output.
-	Escalation    string `json:"escalation,omitempty"`
-	StoreRevision string `json:"store_revision"`
-	ReceiptPath   string `json:"receipt_path,omitempty"`
+	Escalation string `json:"escalation,omitempty"`
+	// AdvisoryFindings names the disposition of every non-blocking frozen
+	// finding on a terminally approved lineage, plus the sentence saying the
+	// approval stands. It is present only when an approved lineage actually
+	// froze such a finding, so a clean approval's bytes are unchanged.
+	AdvisoryFindings *reviewtransaction.AdvisoryFindingSet `json:"advisory_findings,omitempty"`
+	StoreRevision    string                                `json:"store_revision"`
+	ReceiptPath      string                                `json:"receipt_path,omitempty"`
 }
 
 type ReviewReceiptDiscoveryKind string
@@ -4825,10 +4830,18 @@ func encodeCompactFacadeFinalize(stdout io.Writer, negotiated bool, contract str
 		result.Escalation = fmt.Sprintf(reviewtransaction.EscalationAccountingReasonTemplate,
 			accounting.Cause, accounting.Spent, accounting.Remaining, accounting.Total)
 	}
+	// The disposition of a non-blocking finding is already decided by the time
+	// this lineage is approved -- it lives in state.Outcomes and its absence
+	// from state.FixFindingIDs. Saying it out loud changes no routing and
+	// blocks nothing new; it removes the inference a consumer previously had
+	// to make from a bare severity string, which is what let an approved
+	// WARNING be "fixed" and re-reviewed in the field.
+	result.AdvisoryFindings = reviewtransaction.AdvisoryFindingSetFor(state)
 	public := ReviewIntegrationFinalizeResult{
 		Operation: result.Operation, LineageID: result.LineageID, State: result.State,
-		Action: result.Action, Escalation: result.Escalation, StoreRevision: result.StoreRevision,
-		Eligibility: eligibility, NextTransition: transition, ValidationRequest: validationRequest,
+		Action: result.Action, Escalation: result.Escalation, AdvisoryFindings: result.AdvisoryFindings,
+		StoreRevision: result.StoreRevision,
+		Eligibility:   eligibility, NextTransition: transition, ValidationRequest: validationRequest,
 	}
 	return encodeReviewIntegrationOperation(stdout, negotiated, ReviewIntegrationOperationFinalize, result, public, contract)
 }

@@ -14,6 +14,9 @@
 #   claude    - one low-risk full lifecycle to gate allow, plus one medium
 #               candidate consent/v3 round-trip; --with-model additionally
 #               runs the real compiled claude-code reviewer runtime.
+#   advisory  - the middle path: a medium candidate reviewed into one WARNING
+#               and one SUGGESTION must reach an approved receipt that
+#               declares both non-blocking and offers no correction route.
 #   schema    - validates every envelope captured above against the published
 #               schemas in contracts/review-integration/.
 #
