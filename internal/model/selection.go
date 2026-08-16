@@ -22,6 +22,7 @@ type Selection struct {
 	Profiles                         []Profile                        // named SDD profiles to generate/update during sync
 	OpenCodePlugins                  []OpenCodeCommunityPluginID      // optional community OpenCode TUI plugins
 	CommunityTools                   []CommunityToolID                // optional cross-agent community tools/plugins
+	PiBackgroundIntent               PiBackgroundIntent               // Pi background subagent choice; empty = unresolved
 	BackgroundIntent                 OpenCodeBackgroundIntent         // OpenCode background subagent choice; empty = unresolved
 	Scope                            InstallScope                     // install scope; empty = unresolved
 	Channel                          InstallChannel                   // release track; empty = unresolved
