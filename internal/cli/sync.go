@@ -191,7 +191,7 @@ func syncHasSemanticFlags(flags *flag.FlagSet) bool {
 	semantic := false
 	flags.Visit(func(f *flag.Flag) {
 		switch f.Name {
-		case "agent", "agents", "skill", "skills", "sdd-mode", "sdd-profile-strategy", "strict-tdd", "include-permissions", "include-theme", "profile", "profile-phase":
+		case "agent", "agents", "skill", "skills", "sdd-mode", "sdd-profile-strategy", "strict-tdd", "include-permissions", "include-theme", "profile", "profile-phase", "opencode-background-subagents":
 			semantic = true
 		}
 	})
@@ -1783,7 +1783,8 @@ func RunSync(args []string) (SyncResult, error) {
 	if err := validatePersistedSyncState(persistedState, persistedStateErr); err != nil {
 		return SyncResult{Agents: agentIDs, Selection: selection}, err
 	}
-	background, err := resolveOpenCodeBackgroundCLI(flags.OpenCodeBackgroundSubagentsSet, flags.OpenCodeBackgroundSubagents, persistedState)
+	backgroundSet, backgroundValue := backgroundIntentSource(flags.OpenCodeBackgroundSubagentsSet, flags.OpenCodeBackgroundSubagents, selection)
+	background, err := resolveOpenCodeBackgroundCLI(backgroundSet, backgroundValue, persistedState)
 	if err != nil {
 		return SyncResult{Agents: agentIDs, Selection: selection}, err
 	}
