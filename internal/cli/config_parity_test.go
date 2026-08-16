@@ -57,6 +57,7 @@ var selectionParity = map[string]parityDisposition{
 	"StrictTDD":          represented("StrictTDD"),
 	"Profiles":           represented("Profiles"),
 	"BackgroundIntent":   represented("BackgroundIntent"),
+	"PiBackgroundIntent": represented("PiBackgroundIntent"),
 	"Scope":              represented("Scope"),
 	"Channel":            represented("Channel"),
 	"RDDMode":            represented("RDDMode"),
@@ -89,7 +90,7 @@ var installStateParity = map[string]parityDisposition{
 	"StrictTDD":          represented("StrictTDD"),
 	"Persona":            represented("Persona"),
 	"BackgroundIntent":   represented("BackgroundIntent"),
-	"PiBackgroundIntent": gap("PiBackgroundIntent"),
+	"PiBackgroundIntent": represented("PiBackgroundIntent"),
 
 	"CommunityTools":              represented("CommunityTools"),
 	"ModelAssignments":            represented("ModelAssignments"),
@@ -124,7 +125,7 @@ var installFlagsParity = map[string]parityDisposition{
 	"Scope":                       represented("Scope"),
 	"Channel":                     represented("Channel"),
 	"OpenCodeBackgroundSubagents": represented("BackgroundIntent"),
-	"PiBackgroundSubagents":       gap("PiBackgroundIntent"),
+	"PiBackgroundSubagents":       represented("PiBackgroundIntent"),
 
 	"Config":                         exempt("selects the declarative document itself"),
 	"DryRun":                         exempt(operationalFlag),
