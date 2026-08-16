@@ -196,6 +196,21 @@ func TestCreatePrivateRARDirectoryRepairsADescriptorThatDidNotStick(t *testing.T
 	}
 }
 
+func TestCreatePrivateRARDirectoryRepairsWhatAnInterruptedRunLeftBehind(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "v1")
+	// What a run killed between CreateDirectory and its repair leaves behind: a
+	// directory carrying inherited ACLs. CreateDirectory answers every later
+	// attempt with ERROR_ALREADY_EXISTS, so a `created` gate never repairs it.
+	if err := os.Mkdir(path, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	created, err := createPrivateRARDirectory(path)
+	if err != nil || created {
+		t.Fatalf("invocation after an interrupted run = (%t, %v), want (false, nil)", created, err)
+	}
+}
+
 func TestCreatePrivateRARDirectoryKeepsTheUnsafePathItNamesOnWindows(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "v1")
 	ignoreRequestedRARDescriptor(t)

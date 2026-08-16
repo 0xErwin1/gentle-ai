@@ -115,25 +115,55 @@ func TestCreatePrivateRARDirectoryNeverRepairsThroughASubstitutedSymlink(t *test
 	if info, statErr := os.Lstat(victim); statErr != nil || info.Mode().Perm() != 0o755 {
 		t.Fatalf("substituted target = %v (%v), want mode 0755; the repair followed the symlink", info, statErr)
 	}
+	// Refusing has to be stable: the wrong entry is the operator's to remove,
+	// never this product's, so every later invocation refuses it untouched.
+	if created, err := createPrivateRARDirectory(path); created || err == nil {
+		t.Fatalf("second attempt over a substituted symlink = (%t, %v), want (false, refusal)", created, err)
+	}
+	if info, statErr := os.Lstat(victim); statErr != nil || info.Mode().Perm() != 0o755 {
+		t.Fatalf("substituted target = %v (%v), want mode 0755 after the second refusal", info, statErr)
+	}
 }
 
-func TestCreatePrivateRARDirectoryNeverRepairsADirectoryItDidNotCreate(t *testing.T) {
+func TestCreatePrivateRARDirectoryRepairsWhatAnInterruptedRunLeftBehind(t *testing.T) {
 	root := resolvedTempDir(t)
 	path := filepath.Join(root, "v1")
+	// What a run killed between mkdir(2) and its repair leaves behind -- a CI
+	// timeout, an OOM kill, Ctrl-C, a transient EPERM. mkdir answers every
+	// later attempt with EEXIST, so a `created` gate never repairs it.
 	if err := os.Mkdir(path, 0o755); err != nil {
 		t.Fatal(err)
 	}
 
 	created, err := createPrivateRARDirectory(path)
-	if created || err == nil {
-		t.Fatalf("createPrivateRARDirectory on a pre-existing unsafe directory = (%t, %v), want (false, refusal)", created, err)
+	if err != nil || created {
+		t.Fatalf("invocation after an interrupted run = (%t, %v), want (false, nil)", created, err)
 	}
 	info, statErr := os.Lstat(path)
-	if statErr != nil {
-		t.Fatalf("stat pre-existing directory: %v", statErr)
+	if statErr != nil || info.Mode().Perm() != 0o700 {
+		t.Fatalf("directory left by the interrupted run = %v (%v), want it repaired to 0700", info, statErr)
 	}
-	if info.Mode().Perm() != 0o755 {
-		t.Fatalf("pre-existing directory mode = %04o, want it left at 0755; this product does not rewrite permissions it refuses to trust", info.Mode().Perm())
+}
+
+func TestCreatePrivateRARDirectoryNeverRepairsADirectoryHoldingState(t *testing.T) {
+	root := resolvedTempDir(t)
+	path := filepath.Join(root, "v1")
+	if err := os.Mkdir(path, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// Content is the line between an interrupted creation and an authority
+	// directory somebody weakened. Re-tightening the second one silently would
+	// hide from the operator that anyone could write what is already inside it.
+	if err := os.WriteFile(filepath.Join(path, "state.json"), []byte("{}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	created, err := createPrivateRARDirectory(path)
+	if created || err == nil {
+		t.Fatalf("createPrivateRARDirectory over a populated unsafe directory = (%t, %v), want (false, refusal)", created, err)
+	}
+	if info, statErr := os.Lstat(path); statErr != nil || info.Mode().Perm() != 0o755 {
+		t.Fatalf("populated directory = %v (%v), want it left at 0755", info, statErr)
 	}
 }
 

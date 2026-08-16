@@ -41,6 +41,25 @@ func repairPrivateRARDirectoryNoFollow(path string, mode fs.FileMode) error {
 		return err
 	}
 	defer file.Close()
+	// What the entry IS decides, never who created it. O_NOFOLLOW|O_DIRECTORY
+	// already failed the open for a symlink, and an entry owned by anyone else
+	// is refused before the write: euid 0 could otherwise chmod it.
+	before, err := file.Stat()
+	if err != nil {
+		return err
+	}
+	if stat, ok := before.Sys().(*syscall.Stat_t); !ok || !before.IsDir() ||
+		stat.Uid != uint32(os.Geteuid()) {
+		return unsafeRARPathError(path, true)
+	}
+	// Only an empty directory is repaired, and emptiness is read from this same
+	// descriptor. An interrupted creation leaves nothing behind, so recovery
+	// works; a populated authority directory whose mode somebody weakened stays
+	// refused, because silently re-tightening it would hide from the operator
+	// that anything inside it was writable by anyone.
+	if names, readErr := file.Readdirnames(-1); readErr != nil || len(names) > 0 {
+		return unsafeRARPathError(path, true)
+	}
 	if err := file.Chmod(mode); err != nil {
 		return err
 	}
@@ -61,18 +80,21 @@ func createPrivateRARDirectory(path string) (bool, error) {
 		return false, err
 	}
 	validateErr := validatePrivateRARDirectory(path)
-	if validateErr != nil && created {
-		// A directory this call just created can still fail its own owner-only
+	if validateErr != nil {
+		// A directory at this path can still fail its own owner-only
 		// validation, because some filesystems ignore the mode passed to
 		// mkdir(2). Ask for the mode explicitly and revalidate before giving
 		// up: that is the whole failure on WSL DrvFS, and it is the difference
 		// between the kill switch working and the documented self-service
 		// delivery exit being unreachable.
 		//
-		// Only a directory created by this very call is repaired. A directory
-		// that was already there is somebody else's, and rewriting its
-		// permissions is exactly the world-action errUnsafeRARAuthorityPath
-		// refuses to take on the operator's behalf.
+		// Do NOT gate this on `created`: a run killed between mkdir(2) and its
+		// repair leaves an unsafe directory that every later mkdir answers with
+		// EEXIST, so that gate makes recovery once-only. The no-follow
+		// descriptor decides instead: tightening an EMPTY directory this euid
+		// already owns is not the world-action errUnsafeRARAuthorityPath
+		// declines. A symlink, somebody else's entry, and a directory already
+		// holding state all still refuse.
 		if repairErr := rarPrivateDirectoryChmod(path, 0o700); repairErr == nil {
 			validateErr = validatePrivateRARDirectory(path)
 		}
