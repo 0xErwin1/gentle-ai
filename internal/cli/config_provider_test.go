@@ -9,11 +9,13 @@ import (
 	"testing"
 )
 
-// Rendering a document that targets an adapter with no provider used to emit
-// OpenCode output and report no diagnostics, which is a silently wrong answer:
-// the operator receives configuration for a client they did not declare.
+// Rendering a document that targets an adapter which cannot express what it
+// declares used to emit OpenCode output and report no diagnostics, which is a
+// silently wrong answer: the operator receives configuration for a client they
+// did not declare. A refusal has to leave nothing behind, so what it pins
+// beyond the diagnostic is an empty stage and no manifest.
 func TestRenderRefusesAnAdapterWithoutAProvider(t *testing.T) {
-	document := `{"version":"v1","selection":{"agents":["claude-code"]},"roles":[{"id":"reviewer"}]}`
+	document := `{"version":"v1","selection":{"agents":["codex"]},"roles":[{"id":"reviewer"}]}`
 	configPath := filepath.Join(t.TempDir(), "config.json")
 	if err := os.WriteFile(configPath, []byte(document), 0o644); err != nil {
 		t.Fatal(err)
@@ -40,10 +42,10 @@ func TestRenderRefusesAnAdapterWithoutAProvider(t *testing.T) {
 	if len(result.Diagnostics) != 1 {
 		t.Fatalf("diagnostics = %+v, want exactly one", result.Diagnostics)
 	}
-	if got, want := result.Diagnostics[0].Code, "config.provider.unavailable"; got != want {
+	if got, want := result.Diagnostics[0].Code, "config.role.unsupported-adapter"; got != want {
 		t.Errorf("code = %q, want %q", got, want)
 	}
-	if !strings.Contains(result.Diagnostics[0].Message, "claude-code") {
+	if !strings.Contains(result.Diagnostics[0].Message, "codex") {
 		t.Errorf("message %q does not name the adapter", result.Diagnostics[0].Message)
 	}
 	if result.Manifest != nil {
