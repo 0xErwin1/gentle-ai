@@ -21,6 +21,7 @@ type Selection struct {
 	CodexCarrilModelAssignments      map[string]string                // key = carril profile (sdd-strong|sdd-mid|sdd-cheap); value = model id
 	CodexPhaseModelAssignments       map[string]string                // key = phase name; value = model id (Custom per-phase picker only)
 	CommunityTools                   []CommunityToolID                // optional cross-agent community tools/plugins
+	PiBackgroundIntent               PiBackgroundIntent               // Pi background subagent choice; empty = unresolved
 	BackgroundIntent                 OpenCodeBackgroundIntent         // OpenCode background subagent choice; empty = unresolved
 	Scope                            InstallScope                     // install scope; empty = unresolved
 	Channel                          InstallChannel                   // release track; empty = unresolved

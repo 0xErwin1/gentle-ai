@@ -228,7 +228,8 @@ func RunPreparedInstall(prepared PreparedInstall, detection system.DetectionResu
 	if err != nil {
 		return InstallResult{}, fmt.Errorf("prepare OpenCode background activation: %w", err)
 	}
-	piBackground, err := resolvePiBackgroundCLI(flags.PiBackgroundSubagentsSet, flags.PiBackgroundSubagents, persistedState)
+	piSet, piValue := piBackgroundIntentSource(flags.PiBackgroundSubagentsSet, flags.PiBackgroundSubagents, input.Selection)
+	piBackground, err := resolvePiBackgroundCLI(piSet, piValue, persistedState)
 	if err != nil {
 		return InstallResult{}, err
 	}
