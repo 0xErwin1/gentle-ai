@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
+	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/claude"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/config"
 )
 
@@ -101,4 +103,27 @@ func readArtifact(t *testing.T, snapshot Snapshot, path string) []byte {
 
 	t.Fatalf("artifact %q was not rendered", path)
 	return nil
+}
+
+// A rename is one edit in the document only if every generated file follows it.
+// Emitting the logical id leaves the orchestrator naming an agent no adapter
+// renders, which is the textual replacement the contract exists to avoid.
+func TestRenamingARoleUpdatesTheFilesThatReferenceIt(t *testing.T) {
+	stage := t.TempDir()
+	state := config.DesiredState{Roles: []config.Role{
+		{ID: "orchestrator", RenderedName: "gentle-orchestrator", References: []config.RoleRef{"apply"}},
+		{ID: "apply", RenderedName: "gentle-implementer"},
+	}}
+
+	if err := NewRoleProvider(claude.NewAdapter()).Stage(state, stage); err != nil {
+		t.Fatalf("Stage() error = %v", err)
+	}
+
+	document, err := os.ReadFile(filepath.Join(stage, ".claude", "agents", "gentle-orchestrator.md"))
+	if err != nil {
+		t.Fatalf("read rendered orchestrator: %v", err)
+	}
+	if !strings.Contains(string(document), "references: gentle-implementer") {
+		t.Errorf("rendered orchestrator = %s, want the reference resolved to the rendered name", document)
+	}
 }
