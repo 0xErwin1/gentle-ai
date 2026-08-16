@@ -43,7 +43,7 @@ func InjectDeclared(homeDir string, adapter agents.Adapter, declared Declared) (
 		return InjectionResult{}, fmt.Errorf("encode declared permissions: %w", err)
 	}
 
-	writeResult, err := mergeJSONFile(settingsPath, overlay)
+	writeResult, err := mergeJSONFile(settingsPath, overlay, false)
 	if err != nil {
 		return InjectionResult{}, err
 	}
