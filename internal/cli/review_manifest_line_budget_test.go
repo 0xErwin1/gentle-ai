@@ -117,7 +117,10 @@ func TestCapturePreflightBoundsChangedPathManifestLineCost(t *testing.T) {
 func TestNegotiatedStatusBoundsChangedPathManifestLineCost(t *testing.T) {
 	reviewModeHome(t)
 	repo := initReviewCLIRepo(t)
-	const paths = reviewProviderMaxEvidenceEntries
+	// Forty paths, matching the START and preflight fixtures above. This used
+	// to be pinned to the retired 32-entry evidence cap, which was the largest
+	// candidate STATUS would answer at all before issue #3367.
+	const paths = 40
 	for index := range paths {
 		writeReviewStartCandidate(t, repo,
 			"internal/generated/package"+strconv.Itoa(index)+"/descriptive_source_name.go",

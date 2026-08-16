@@ -1110,6 +1110,9 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 						if record.State.State == reviewtransaction.StateReviewing {
 							artifacts, artifactErr = discoverCapturedReviewerArtifacts(ctx, root, store.Dir, record.State, record.Revision)
 							if artifactErr == nil && len(artifacts) != len(record.State.SelectedLenses) {
+								// Only the probe's deterministic verdict stops STATUS: an unproven
+								// probe says nothing about artifacts that just verified, so it must
+								// never become a terminal captured-artifact failure (issue #3367).
 								lensContextBudgetExceeded = reviewLensContextStatusBudgetExhausted(ctx, root, record.State, record.Revision)
 							}
 							if artifactErr == nil && !lensContextBudgetExceeded {
@@ -2093,6 +2096,7 @@ func runReviewFacadeStart(ctx context.Context, args []string, stdout io.Writer) 
 	var requestedFrozenContext *reviewtransaction.FrozenCandidateContext
 	var requestedRepositoryContext *ReviewRepositoryContextReference
 	var requestedContextErr error
+	var requestedLensBudgetErr error
 	// Selecting lenses is a promise that reviewer work can be handed out, and
 	// the frozen candidate context is the whole of what a reviewer is handed.
 	// Rendering it here -- for every START that selects lenses, negotiated or
@@ -2109,6 +2113,14 @@ func runReviewFacadeStart(ctx context.Context, args []string, stdout io.Writer) 
 		contextResult, contextErr := renderReviewStartFrozenCandidateContext(ctx, contextBuilder, state.InitialSnapshot)
 		if contextErr == nil && *contract == ReviewIntegrationContractV1 {
 			contextResult, contextErr = contextBuilder.WithLegacyCandidateDiff(ctx, state.InitialSnapshot, contextResult)
+		}
+		// Rendering the frozen context proves the candidate's trees and manifest
+		// exist; it does not prove the reviewer evidence built from them fits.
+		// That second proof belongs here too, for the same reason, and keeps its
+		// own typed refusal rather than being reshaped into a render failure it
+		// is not (issue #3367).
+		if contextErr == nil {
+			requestedLensBudgetErr = reviewLensContextStartBudgetRefusal(ctx, root, state)
 		}
 		if contextErr != nil {
 			requestedContextErr = &reviewStartContextError{LineageID: state.LineageID, Cause: contextErr}
@@ -2149,6 +2161,9 @@ func runReviewFacadeStart(ctx context.Context, args []string, stdout io.Writer) 
 	beforeCreate := func() error {
 		if requestedContextErr != nil {
 			return requestedContextErr
+		}
+		if requestedLensBudgetErr != nil {
+			return requestedLensBudgetErr
 		}
 		if intendedScope.Declared {
 			if _, err := (reviewtransaction.SnapshotBuilder{Repo: root}).ValidateIntendedUntrackedSelection(ctx, intendedScope.Digest, intendedScope.Intended); err != nil {
