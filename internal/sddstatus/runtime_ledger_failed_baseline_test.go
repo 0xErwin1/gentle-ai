@@ -156,6 +156,44 @@ func TestRuntimeRemediationRevertToFailedBytesStaysRefused(t *testing.T) {
 	}
 }
 
+// The replay mirror decides the exact write-guard predicate, and every shape
+// the write guard admits replays cleanly (write-to-replay closure). A
+// two-baseline AND accepted unchanged-vs-failed records the write path refuses.
+func TestRuntimeRemediationReplayDecidesWriteGuardPredicate(t *testing.T) {
+	failedTree, beginTree, failedEvidence := "failedtree", "begintree", runtimeTestHash('a')
+	cases := []struct {
+		name, finishTree string
+		reset            *RuntimeReset
+		wantRefused      bool
+	}{
+		{"unchanged vs failed baseline refuses like the write guard", failedTree, nil, true},
+		{"post-acquire change replays", "correctedtree", nil, false},
+		{"pre-acquire change with finish equal to begin replays", beginTree, nil, false},
+		{"evidence-only waiver shape replays unchanged bytes", failedTree, &RuntimeReset{Actor: "maintainer", Reason: "authorized evidence-only retry", PreviousObjectiveID: "objective", PreviousGeneration: 1, ResetCandidateTree: failedTree}, false},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			replay := &runtimeReplay{Status: RuntimeStatus{
+				Objective: &RuntimeObjective{ID: "objective", Generation: 1, MaxAttempts: 3, MaxChangedLines: 10},
+				Attempts: []RuntimeAttempt{
+					{ObjectiveID: "objective", ObjectiveGeneration: 1, Outcome: AttemptFailed, EvidenceRevision: failedEvidence,
+						FinishCandidateIdentity: runtimeTestHash('f'), FinishCandidateTree: failedTree},
+					{Outcome: AttemptRunning},
+				},
+				ActiveAttempt: &RuntimeAttempt{Ordinal: 2, BeginCandidateIdentity: runtimeTestHash('0'), BeginCandidateTree: beginTree},
+				LastReset:     testCase.reset,
+			}}
+			err := applyRuntimeFinishEvent(replay, &runtimeFinishEvent{
+				Ordinal: 2, FinishCandidateIdentity: runtimeTestHash('1'), FinishCandidateTree: testCase.finishTree,
+				Outcome: AttemptPassed, EvidenceRevision: runtimeTestHash('b'), RemediatesEvidenceRevision: failedEvidence,
+			}, true)
+			if (err != nil) != testCase.wantRefused {
+				t.Fatalf("replay refusal = %v, want refused %v", err, testCase.wantRefused)
+			}
+		})
+	}
+}
+
 // Failed attempts recorded before the finish candidate snapshot existed carry
 // no baseline of their own, so the judgment falls back to the correction
 // attempt's begin snapshot — the pre-#3073 comparison — instead of judging

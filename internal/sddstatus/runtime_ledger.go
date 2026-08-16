@@ -917,6 +917,9 @@ func (store RuntimeStore) Finish(ctx context.Context, request FinishAttemptReque
 			// between the audited reset and the acquire lives inside the begin
 			// snapshot already, so the begin-relative comparison refused a
 			// candidate that genuinely no longer matches the state that failed.
+			// Records committed under this predicate require a reader deciding
+			// the same predicate (applyRuntimeFinishEvent): replay compatibility
+			// is forward-only, the store's standard schema-evolution discipline.
 			if !evidenceOnly && runtimeRemediationCandidateUnchanged(chainFailedAttempt, *active, snapshot.Identity, snapshot.CandidateTree) {
 				// refusal:by-design operator-knowledge: a remediation claim must name a candidate changed relative to the state that failed verification, or an audited reset or rescope authorizing this exact unchanged candidate.
 				return runtimeRecord{}, errors.New("unmanaged remediation requires a changed correction candidate")
@@ -2247,16 +2250,10 @@ func applyRuntimeFinishEvent(replay *runtimeReplay, event *runtimeFinishEvent, u
 		// failing objective against these exact bytes authorizes one evidence-only
 		// retry, so a replayed correction may leave the candidate unchanged.
 		evidenceOnly := runtimeEvidenceOnlyRetryAuthorized(replay.Status.LastReset, replay.Status.LastRescope, chainFailedAttempt, event.FinishCandidateTree)
-		// #3073 lockstep-with-history: the write guard judges "unchanged"
-		// against the failed evidence's candidate snapshot, while records
-		// committed before that fix were judged against the attempt's begin
-		// snapshot. A committed record is valid if it satisfied the guard of
-		// the generation that wrote it, so replay refuses only a record
-		// unchanged under BOTH baselines; judging by the new baseline alone
-		// would make a legitimately committed pre-fix chain unreplayable.
-		unchangedCandidate := runtimeRemediationCandidateUnchanged(chainFailedAttempt, *active, event.FinishCandidateIdentity, event.FinishCandidateTree) &&
-			(event.FinishCandidateIdentity == active.BeginCandidateIdentity ||
-				event.FinishCandidateTree == active.BeginCandidateTree)
+		// #3073 lockstep twin: replay decides the exact write-guard predicate;
+		// the helper falls back to the begin comparison only for a legacy
+		// failed record that carries no finish snapshot.
+		unchangedCandidate := runtimeRemediationCandidateUnchanged(chainFailedAttempt, *active, event.FinishCandidateIdentity, event.FinishCandidateTree)
 		// A binding is deliberately NOT checked here. The write path stopped
 		// treating a leftover binding as a blocker (the kill switch must have
 		// no implications while it is off), and this replay mirror has to agree
