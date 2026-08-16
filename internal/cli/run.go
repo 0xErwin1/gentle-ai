@@ -130,18 +130,7 @@ func RunInstall(args []string, detection system.DetectionResult) (InstallResult,
 		return InstallResult{}, err
 	}
 
-	input, err := NormalizeInstallFlags(flags, detection)
-	if err != nil {
-		return InstallResult{}, err
-	}
-	if flags.Config != "" {
-		selection, err := loadConfigSelection(flags.Config)
-		if err != nil {
-			return InstallResult{}, err
-		}
-		input.Selection = selection
-	}
-	input.Selection, err = normalizeConfigSelection(input.Selection)
+	input, err := ResolveInstallInput(flags, detection)
 	if err != nil {
 		return InstallResult{}, err
 	}
@@ -344,6 +333,12 @@ func persistInstallState(homeDir string, newState state.InstallState, agentIDs [
 func mergeFullInstallState(existing, fresh state.InstallState) state.InstallState {
 	merged := existing
 	merged.InstalledAgents = fresh.InstalledAgents
+
+	// The version stamp describes the assets this run wrote, so carrying the
+	// existing one forward would leave a first install unstamped, and doctor
+	// skips its staleness check entirely on an empty stamp.
+	merged.InstalledBinaryVersion = fresh.InstalledBinaryVersion
+
 	merged.SelectionConfigured, merged.Components, merged.Skills = fresh.SelectionConfigured, fresh.Components, fresh.Skills
 	merged.Preset, merged.SDDMode, merged.StrictTDD = fresh.Preset, fresh.SDDMode, fresh.StrictTDD
 	merged.CommunityTools, merged.CommunityToolsConfigured = fresh.CommunityTools, fresh.CommunityToolsConfigured

@@ -1,10 +1,39 @@
 package cli
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/state"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/system"
 )
+
+// A declared install target that only the helper honours is worse than one the
+// contract never carried: it validates, persists and exports while the install
+// runs against the flag defaults. Declaring a workspace scope and receiving a
+// machine-wide install is the concrete cost, so this exercises the input the
+// installer actually consumes rather than the helper in isolation.
+func TestDeclaredInstallTargetReachesTheInstallInput(t *testing.T) {
+	document := filepath.Join(t.TempDir(), "gentle-ai.json")
+	contents := `{"version":"v1","selection":{"agents":["opencode"],"scope":"workspace","channel":"beta"}}`
+	if err := os.WriteFile(document, []byte(contents), 0o644); err != nil {
+		t.Fatalf("write document: %v", err)
+	}
+
+	input, err := ResolveInstallInput(InstallFlags{Config: document}, system.DetectionResult{})
+	if err != nil {
+		t.Fatalf("ResolveInstallInput() error = %v", err)
+	}
+
+	if input.Scope != ScopeWorkspace {
+		t.Errorf("Scope = %q, want %q: a declared workspace install would be written machine-wide", input.Scope, ScopeWorkspace)
+	}
+	if input.Channel != ChannelBeta {
+		t.Errorf("Channel = %q, want %q: a declared channel would not select its release", input.Channel, ChannelBeta)
+	}
+}
 
 func TestApplyDeclaredInstallTarget(t *testing.T) {
 	tests := []struct {
@@ -48,5 +77,19 @@ func TestApplyDeclaredInstallTarget(t *testing.T) {
 				t.Errorf("Channel = %q, want %q", got.Channel, test.wantChannel)
 			}
 		})
+	}
+}
+
+// A full install stamps the version of the binary that wrote the assets. Losing
+// it leaves doctor's staleness check permanently skipped, so an upgrade never
+// reports that the installed assets are older than the running binary.
+func TestFullInstallStateKeepsTheVersionOfTheRunThatWroteIt(t *testing.T) {
+	merged := mergeFullInstallState(
+		state.InstallState{},
+		state.InstallState{InstalledAgents: []string{"opencode"}, InstalledBinaryVersion: AppVersion},
+	)
+
+	if merged.InstalledBinaryVersion != AppVersion {
+		t.Errorf("InstalledBinaryVersion = %q, want %q", merged.InstalledBinaryVersion, AppVersion)
 	}
 }
