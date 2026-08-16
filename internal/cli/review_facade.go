@@ -676,6 +676,9 @@ func RunReview(args []string, stdout io.Writer) error {
 		return newReviewIntegrationFailureError(*preflightFailure, nil)
 	}
 	if !negotiated {
+		if capture, collectCapture := reviewCollectCaptureOperationByCommand(args[0]); collectCapture {
+			return runReviewCollectCaptureCommand(capture.Operation, args, stdout)
+		}
 		if err := runReviewCommandContext(context.Background(), args, stdout); err != nil {
 			// The plain form has no envelope contract, but an unanticipated
 			// internal fault on a mutating operation is the same product defect
@@ -727,6 +730,54 @@ func RunReview(args []string, stdout io.Writer) error {
 	}
 	typedFailure := newReviewIntegrationFailureError(failure, runErr)
 	typedFailure.defectReportClause = clause
+	return typedFailure
+}
+
+// runReviewCollectCaptureCommand dispatches one collect-satisfying capture
+// verb (capture-result, capture-evidence, capture-refuter, capture-validation)
+// and, on refusal, emits the typed failure/v2 envelope on stdout.
+//
+// DECISION (finalize-ambiguity diagnosis): emission is unconditional, not
+// gated on a contract flag, because these verbs cannot know they have a
+// machine caller -- orchestrators invoke them WITHOUT --contract, exactly as
+// the negotiated collect transitions render their submission argv. Their
+// success paths already print one JSON document on stdout unconditionally, so
+// refusals printing one JSON document is symmetric; without it a machine
+// caller that parses stdout (the gentle-pi runtime's shared invoke path) can
+// only classify the refusal as empty-output with mutation outcome unknown --
+// a false ambiguity for a refusal that provably never started. The
+// operator-facing error still returns unchanged, so stderr keeps its
+// human-readable line and the exit code stays non-zero.
+//
+// Output is buffered like the negotiated route so stdout carries exactly one
+// document: a flag-parse refusal writes usage prose before failing, and those
+// bytes must never precede the envelope a machine caller will decode.
+func runReviewCollectCaptureCommand(operation string, args []string, stdout io.Writer) error {
+	ctx := context.Background()
+	var output bytes.Buffer
+	runErr := runReviewCommand(args, &output)
+	if runErr == nil {
+		_, err := io.Copy(stdout, &output)
+		return err
+	}
+	failure := newReviewIntegrationFailure(operation, args[1:], runErr)
+	// The capture verbs exist only in the v2.1 negotiated lifecycle and the
+	// published v1 failure schema does not admit their operation names, so
+	// the envelope publishes under the v2 identity unconditionally.
+	failure.Schema, failure.Contract = ReviewIntegrationFailureSchemaV2, ReviewIntegrationContractV2
+	// Generate the defect report before emitting the envelope so a stdout
+	// write failure cannot suppress the artifact, exactly as the negotiated
+	// route does.
+	clause := reviewUnexpectedFaultDefectReportClause(ctx, operation, args[1:], failure)
+	if err := emitReviewIntegrationFailure(stdout, failure); err != nil {
+		return err
+	}
+	typedFailure := newReviewIntegrationFailureError(failure, runErr)
+	typedFailure.defectReportClause = clause
+	// The plain route always printed the native refusal text on stderr, and
+	// operators (and the sweep of refusal-message tests) depend on it; only
+	// the machine-readable code is new on this line.
+	typedFailure.operatorMessage = runErr.Error()
 	return typedFailure
 }
 
