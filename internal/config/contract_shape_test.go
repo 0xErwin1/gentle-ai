@@ -133,6 +133,7 @@ func fullyPopulatedDocument() Document {
 			SDDProfileStrategy: "generated-multi",
 			StrictTDD:          true,
 			BackgroundIntent:   model.OpenCodeBackgroundOn,
+			PiBackgroundIntent: model.PiBackgroundOn,
 			Scope:              model.InstallScopeWorkspace,
 			Channel:            model.InstallChannelBeta,
 			RDDMode:            model.RDDModeOn,
