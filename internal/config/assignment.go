@@ -199,3 +199,105 @@ func sortedKeys[V any](source map[string]V) []string {
 
 	return keys
 }
+
+// ClaudePhaseAssignment is the contract form of a Claude model choice for one
+// phase. An omitted effort means the model's own default.
+type ClaudePhaseAssignment struct {
+	Model  string `json:"model"`
+	Effort string `json:"effort,omitempty"`
+}
+
+// CodexOrchestratorAssignment is the contract form of the top-level Codex
+// session choice. It is a pointer on Selection because encoding/json defines no
+// empty state for a struct value.
+type CodexOrchestratorAssignment struct {
+	Model  string `json:"model"`
+	Effort string `json:"effort,omitempty"`
+}
+
+func claudePhasesToModel(assignments map[string]ClaudePhaseAssignment) map[string]model.ClaudePhaseAssignment {
+	if assignments == nil {
+		return nil
+	}
+
+	converted := make(map[string]model.ClaudePhaseAssignment, len(assignments))
+	for phase, assignment := range assignments {
+		converted[phase] = model.ClaudePhaseAssignment{
+			Model:  model.ClaudeModelAlias(assignment.Model),
+			Effort: model.ClaudeEffort(assignment.Effort),
+		}
+	}
+
+	return converted
+}
+
+func claudePhasesFromModel(assignments map[string]model.ClaudePhaseAssignment) map[string]ClaudePhaseAssignment {
+	if assignments == nil {
+		return nil
+	}
+
+	converted := make(map[string]ClaudePhaseAssignment, len(assignments))
+	for phase, assignment := range assignments {
+		converted[phase] = ClaudePhaseAssignment{
+			Model:  string(assignment.Model),
+			Effort: string(assignment.Effort),
+		}
+	}
+
+	return converted
+}
+
+func codexOrchestratorToModel(assignment *CodexOrchestratorAssignment) *model.CodexOrchestratorAssignment {
+	if assignment == nil {
+		return nil
+	}
+
+	return &model.CodexOrchestratorAssignment{
+		Model:  assignment.Model,
+		Effort: model.CodexEffort(assignment.Effort),
+	}
+}
+
+func codexOrchestratorFromModel(assignment *model.CodexOrchestratorAssignment) *CodexOrchestratorAssignment {
+	if assignment == nil {
+		return nil
+	}
+
+	return &CodexOrchestratorAssignment{
+		Model:  assignment.Model,
+		Effort: string(assignment.Effort),
+	}
+}
+
+// validateStructuredAssignments separates an unsupported model from an effort
+// the model does not support, because the two need different corrections.
+func validateStructuredAssignments(selection Selection, diagnostics *[]Diagnostic) {
+	for _, phase := range sortedKeys(selection.ClaudePhaseAssignments) {
+		assignment := selection.ClaudePhaseAssignments[phase]
+		alias := model.ClaudeModelAlias(assignment.Model)
+		path := "$.selection.claudePhaseAssignments." + phase
+
+		if !alias.Valid() {
+			*diagnostics = append(*diagnostics, diagnostic("config.claude-phase.unsupported", path, fmt.Sprintf("unsupported Claude model %q", assignment.Model)))
+			continue
+		}
+
+		if !model.ClaudeEffortAllowedForModel(alias, model.ClaudeEffort(assignment.Effort)) {
+			*diagnostics = append(*diagnostics, diagnostic("config.claude-phase.effort-unsupported", path, fmt.Sprintf("Claude model %q does not support effort %q", assignment.Model, assignment.Effort)))
+		}
+	}
+
+	orchestrator := selection.CodexOrchestrator
+	if orchestrator == nil {
+		return
+	}
+
+	if orchestrator.Model == "" {
+		*diagnostics = append(*diagnostics, diagnostic("config.codex-orchestrator.incomplete", "$.selection.codexOrchestrator", "a Codex orchestrator assignment requires a model id"))
+		return
+	}
+
+	if effort := model.CodexEffort(orchestrator.Effort); orchestrator.Effort != "" && !effort.Valid() {
+		*diagnostics = append(*diagnostics, diagnostic("config.codex-orchestrator.effort-unsupported", "$.selection.codexOrchestrator", fmt.Sprintf("unsupported Codex effort %q; use low, medium, high, or xhigh", orchestrator.Effort)))
+	}
+}
