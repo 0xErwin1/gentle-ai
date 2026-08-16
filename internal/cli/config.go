@@ -139,16 +139,23 @@ func selectRenderProvider(desired configdomain.DesiredState, readRoot string) (r
 
 	for _, agent := range desired.Selection.Agents {
 		provider, ok := render.ProviderFor(agent)
-		if !ok {
-			unavailable = append(unavailable, configdomain.Diagnostic{
-				Code:     "config.provider.unavailable",
-				Path:     "$.selection.agents",
-				Severity: configdomain.Error,
-				Message:  fmt.Sprintf("no rendering support for adapter %q yet; remove it from the document or render an adapter that has a provider", agent),
-			})
+		if ok {
+			selected = append(selected, provider)
 			continue
 		}
-		selected = append(selected, provider)
+
+		// An adapter with no notion of roles still takes everything else the
+		// document declares, so only a declared role is refused. Refusing the
+		// whole render would make one unsupported concept cost the operator the
+		// configuration this adapter can actually hold.
+		if len(desired.Roles) > 0 {
+			unavailable = append(unavailable, configdomain.Diagnostic{
+				Code:     "config.role.unsupported-adapter",
+				Path:     "$.roles",
+				Severity: configdomain.Error,
+				Message:  fmt.Sprintf("adapter %q expresses no agent roles; remove the roles from the document or drop that adapter, then run gentle-ai config render again", agent),
+			})
+		}
 	}
 
 	if len(unavailable) > 0 {
