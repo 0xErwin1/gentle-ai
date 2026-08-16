@@ -257,6 +257,16 @@ func newReviewNextTransition(status ReviewTargetStatusResult, selectedLenses []s
 			if input.ProviderRole == reviewerprovider.RoleTargetedValidator {
 				return reviewProviderRoleTransition("targeted_validation_required", validationBinding, input.ProviderRole, input.RuntimeAgent, input.ValidationRequest)
 			}
+			if input.CapturedProviderTargetedValidatorInconclusive {
+				// The occupied slot holds a non-verdict, and an occupied slot
+				// is no-replace by construction (publishCompactRoleResultSlot
+				// leaves conflicting bytes untouched, so the immutability of a
+				// real verdict is never weakened). The recapture therefore
+				// routes around the slot through the ordinary submission
+				// descriptor, which hands the fresh validation straight to
+				// finalize; the inconclusive bytes stay preserved on disk.
+				return reviewTargetedValidationCollection(reviewInconclusiveTargetedValidationReason, input.Contract, validationBinding, *input.ValidationRequest)
+			}
 			if input.CapturedProviderTargetedValidator {
 				return reviewCapturedProviderTargetedValidatorFinalizeTransition(input.Contract, validationBinding, *input.ValidationRequest)
 			}
@@ -274,12 +284,7 @@ func newReviewNextTransition(status ReviewTargetStatusResult, selectedLenses []s
 			default:
 				return reviewStopTransition("captured_verification_evidence_invalid")
 			}
-			return reviewCollectTransition("targeted_validation_required", ReviewTransitionInput{
-				Name: "targeted_validation", Schema: reviewtransaction.TargetedValidationRequestSchema,
-				CaptureOperation: "external.run_targeted_validation", Arguments: reviewTargetedValidationArguments(input.Contract, validationBinding, *input.ValidationRequest),
-				ValidationRequest: input.ValidationRequest,
-				Submission:        reviewTargetedValidationSubmission(input.Contract, validationBinding, *input.ValidationRequest),
-			})
+			return reviewTargetedValidationCollection("targeted_validation_required", input.Contract, validationBinding, *input.ValidationRequest)
 		}
 		if input.CorrectionForecasted {
 			if input.CorrectionRequest == nil {
@@ -652,6 +657,7 @@ type reviewNextTransitionInput struct {
 	RuntimeAgent                                   model.AgentID
 	ProviderRole                                   reviewProviderRole
 	CapturedProviderTargetedValidator              bool
+	CapturedProviderTargetedValidatorInconclusive  bool
 	Contract                                       string
 	RepositoryContext                              string
 	ValidationRequest                              *reviewtransaction.TargetedValidationRequest
@@ -1079,6 +1085,28 @@ func reviewBindingArguments(binding ReviewTransitionBinding) []ReviewTransitionA
 	return []ReviewTransitionArgument{{Name: "lineage", Value: binding.LineageID}, {Name: "expected-revision", Value: binding.Revision}, {Name: "target", Value: binding.TargetIdentity}}
 }
 
+// reviewInconclusiveTargetedValidationReason names the one retryable
+// captured-validation outcome (issue #3378). It is deliberately distinct from
+// targeted_validation_required so a consumer can tell "no validation exists
+// yet" apart from "the captured one produced no verdict, nothing was
+// consumed, and the validator's access to the frozen trees must be restored
+// before running it again". Both collect the same input through the same
+// capture operation and submission descriptor.
+const reviewInconclusiveTargetedValidationReason = "targeted_validation_inconclusive_recapture_required"
+
+// reviewTargetedValidationCollection renders the generic targeted-validation
+// collection. Its capture operation is external, and its submission hands the
+// result straight to finalize, so it never touches the immutable
+// correction-bound validator slot.
+func reviewTargetedValidationCollection(reason, contract string, binding ReviewTransitionBinding, request reviewtransaction.TargetedValidationRequest) ReviewNextTransition {
+	return reviewCollectTransition(reason, ReviewTransitionInput{
+		Name: "targeted_validation", Schema: reviewtransaction.TargetedValidationRequestSchema,
+		CaptureOperation: "external.run_targeted_validation", Arguments: reviewTargetedValidationArguments(contract, binding, request),
+		ValidationRequest: &request,
+		Submission:        reviewTargetedValidationSubmission(contract, binding, request),
+	})
+}
+
 func reviewTargetedValidationArguments(contract string, binding ReviewTransitionBinding, request reviewtransaction.TargetedValidationRequest) []ReviewTransitionArgument {
 	arguments := reviewBindingArguments(binding)
 	if contract == ReviewIntegrationContractV2 {
@@ -1225,6 +1253,8 @@ func reviewReasonDescription(reason string) string {
 		return "Reviewer lens artifacts required for current revision"
 	case "targeted_validation_required":
 		return "Targeted validation run required for correction plan"
+	case reviewInconclusiveTargetedValidationReason:
+		return "Captured targeted validation produced no verdict and consumed no correction attempt; restore validator access to the frozen candidate and run it again"
 	case "correction_plan_required":
 		return "Correction plan required to resolve review findings"
 	case "verification_evidence_required":

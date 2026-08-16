@@ -255,6 +255,55 @@ func (b *battery) runOpenCodeLane() {
 		b.checkValidatorInspectionRecipe(repo, probe.ChildPrompt)
 	}
 
+	// An inconclusive validator result is a non-verdict: it must never occupy
+	// the immutable slot, because admitting it as failed would spend the one
+	// correction attempt on an observation that was never made (issue #3378).
+	// This is the deterministic half of that fix; the routing half needs a
+	// slot published by a pre-fix build, which no public command can create
+	// once the detector refuses these bytes.
+	inconclusive := map[string]any{
+		"targeted_validation_request_hash": validationRequest["request_hash"],
+		"correction_target_identity":       validationRequest["correction_target_identity"],
+		"original_criteria": map[string]any{
+			"passed":   false,
+			"evidence": []string{"Immutable correction candidate tree could not be inspected with read-only Git access, so no verdict was produced"},
+		},
+		"correction_regression": map[string]any{
+			"passed":   false,
+			"evidence": []string{"Immutable correction candidate tree could not be inspected with read-only Git access, so no verdict was produced"},
+		},
+		"follow_ups": []any{},
+	}
+	inconclusiveJSON, err := json.Marshal(inconclusive)
+	if err != nil {
+		b.fail(openCodeLane, "validator frame: inconclusive refused", err.Error())
+		return
+	}
+	switch refused, err := b.runHookCase(node, harnessCase{
+		Name:       "validator-inconclusive",
+		Subagent:   "review-validator",
+		Prompt:     providerPrompt,
+		TaskOutput: string(inconclusiveJSON),
+	}); {
+	case err != nil:
+		b.fail(openCodeLane, "validator frame: inconclusive refused", err.Error())
+		return
+	case refused.AfterOK:
+		b.fail(openCodeLane, "validator frame: inconclusive refused",
+			"an uninspected-candidate validator result was admitted; it would spend the single correction attempt on a non-observation")
+		return
+	default:
+		statusDoc, stderr, _ = b.status(repo, "opencode")
+		retry := collectInput(statusDoc)
+		if retry == nil || retry["capture_operation"] != "external.run_provider_role" {
+			b.fail(openCodeLane, "validator frame: inconclusive refused",
+				fmt.Sprintf("refused inconclusive result did not leave the validator slot retryable; %s %s",
+					getString(statusDoc, "next_transition", "reason_code"), firstLine(stderr)))
+			return
+		}
+		b.pass(openCodeLane, "validator frame: inconclusive refused", "uninspected-candidate verdict refused and the validation stayed retryable")
+	}
+
 	// Host-serialized role frame: same semantic binding, re-serialized by the
 	// host (sorted keys). The Go transport currently requires the byte-exact
 	// provider-issued prompt.
