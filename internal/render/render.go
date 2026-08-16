@@ -16,8 +16,9 @@ type Artifact struct {
 }
 
 type Snapshot struct {
-	Stage     string
-	Artifacts []Artifact
+	Stage            string
+	Artifacts        []Artifact
+	ManagedSelectors map[string][]string
 }
 
 type Request struct {
@@ -78,7 +79,17 @@ func (r Renderer) Render(request Request) (Snapshot, error) {
 	}
 	sort.Slice(artifacts, func(i, j int) bool { return artifacts[i].Path < artifacts[j].Path })
 
-	return Snapshot{Stage: request.StageRoot, Artifacts: artifacts}, nil
+	selectors := make([]string, 0, len(request.State.Roles))
+	for _, role := range request.State.Roles {
+		name := role.RenderedName
+		if name == "" {
+			name = string(role.ID)
+		}
+		selectors = append(selectors, "/agent/"+name)
+	}
+	sort.Strings(selectors)
+
+	return Snapshot{Stage: request.StageRoot, Artifacts: artifacts, ManagedSelectors: map[string][]string{openCodeSettingsPath: selectors}}, nil
 }
 
 func isolatedRoots(destination, stage string) error {
