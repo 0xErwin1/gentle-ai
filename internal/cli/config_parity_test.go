@@ -59,6 +59,7 @@ var selectionParity = map[string]parityDisposition{
 	"BackgroundIntent":   represented("BackgroundIntent"),
 	"Scope":              represented("Scope"),
 	"Channel":            represented("Channel"),
+	"RDDMode":            represented("RDDMode"),
 
 	"ModelAssignments":            represented("ModelAssignments"),
 	"ClaudeModelAssignments":      represented("ClaudeModelAssignments"),
@@ -95,7 +96,7 @@ var installStateParity = map[string]parityDisposition{
 	"CodexOrchestratorAssignment": represented("CodexOrchestrator"),
 	"CodexCarrilModelAssignments": represented("CodexCarrilModelAssignments"),
 	"CodexPhaseModelAssignments":  represented("CodexPhaseModelAssignments"),
-	"RDDMode":                     gap("RDDMode"),
+	"RDDMode":                     represented("RDDMode"),
 
 	"InstalledBinaryVersion":   exempt(observedState),
 	"ManagedAssetDigest":       exempt(observedState),

@@ -284,6 +284,7 @@ func RunInstall(args []string, detection system.DetectionResult) (InstallResult,
 	if background.Persist != "" {
 		newState.BackgroundIntent = background.Persist
 	}
+	newState.RDDMode = string(input.Selection.RDDMode)
 	writer, err := managedAssetDigest()
 	if err != nil {
 		return result, fmt.Errorf("derive managed asset writer identity: %w", err)
@@ -336,6 +337,8 @@ func mergeFullInstallState(existing, fresh state.InstallState) state.InstallStat
 	if fresh.BackgroundIntent != "" {
 		merged.BackgroundIntent = fresh.BackgroundIntent
 	}
+	merged, _ = applyDeclaredRDDMode(merged, model.RDDMode(fresh.RDDMode), time.Now())
+
 	return merged
 }
 
