@@ -3,6 +3,7 @@ package sddstatus
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -406,6 +407,44 @@ func listActiveOpenSpecChanges(workspaceRoot string) ([]string, error) {
 	return changes, nil
 }
 
+// selectableOpenSpecChanges filters exploration-only directories out of the
+// auto-selection candidates (#3278 claim C). A stale sdd-explore directory
+// holding only exploration.md is not an active change: counting it made
+// selection ambiguous beside the one genuinely active change, and the SDD
+// task-failure continuation (which carries no selector) could never resolve
+// that ambiguity. Exploration-only directories stay addressable when
+// explicitly named — listActiveOpenSpecChanges still returns them — and
+// directories with no SDD artifacts at all keep their historical behavior as
+// candidates.
+func selectableOpenSpecChanges(changesDir string, changes []string) []string {
+	selectable := make([]string, 0, len(changes))
+	for _, change := range changes {
+		if explorationOnlyChangeDir(filepath.Join(changesDir, change)) {
+			continue
+		}
+		selectable = append(selectable, change)
+	}
+	return selectable
+}
+
+// explorationOnlyChangeDir reports whether the change directory's only SDD
+// artifact is an exploration artifact: exploration.md is present and none of
+// proposal.md, design.md, tasks.md, or specs/ exist. Only os.ErrNotExist
+// proves a marker absent; any other stat error makes the classification
+// unprovable, so the directory stays an active-change candidate (failing
+// toward visibility, never toward silent exclusion from selection).
+func explorationOnlyChangeDir(changeRoot string) bool {
+	if _, err := os.Stat(filepath.Join(changeRoot, "exploration.md")); err != nil {
+		return false
+	}
+	for _, marker := range []string{"proposal.md", "design.md", "tasks.md", "specs"} {
+		if _, err := os.Stat(filepath.Join(changeRoot, marker)); !errors.Is(err, os.ErrNotExist) {
+			return false
+		}
+	}
+	return true
+}
+
 func Resolve(options ResolveOptions) (Status, error) {
 	workspaceRoot, err := resolveWorkspaceRoot(options)
 	if err != nil {
@@ -427,16 +466,30 @@ func Resolve(options ResolveOptions) (Status, error) {
 
 	changeName := strings.TrimSpace(options.ChangeName)
 	if changeName == "" {
-		switch len(activeChanges) {
+		candidates := selectableOpenSpecChanges(changesDir, activeChanges)
+		switch len(candidates) {
 		case 0:
+			if len(activeChanges) > 0 {
+				// Every directory is exploration-only. This is an OpenSpec
+				// workspace mid-exploration, not an empty one, so do not fall
+				// through to Engram: report it honestly and keep the
+				// directories addressable by explicit name.
+				return blockedStatus(ArtifactStoreOpenSpec, workspaceRoot, nil, nil, "sdd-new", []string{
+					"No active OpenSpec changes found under openspec/changes.",
+					fmt.Sprintf(
+						"Exploration-only directories are not active changes: %s. Run `gentle-ai sdd-status <change-name> --cwd %s` to inspect one explicitly.",
+						strings.Join(activeChanges, ", "), workspaceRoot,
+					),
+				}, options.IncludeInstructions), nil
+			}
 			if status, ok, err := resolveEngramStatus(workspaceRoot, changeName, options.IncludeInstructions, reviewDisabled); ok || err != nil {
 				return status, err
 			}
 			return blockedStatus(ArtifactStoreOpenSpec, workspaceRoot, nil, nil, "sdd-new", []string{"No active OpenSpec changes found under openspec/changes."}, options.IncludeInstructions), nil
 		case 1:
-			changeName = activeChanges[0]
+			changeName = candidates[0]
 		default:
-			return blockedStatus(ArtifactStoreOpenSpec, workspaceRoot, nil, nil, "select-change", ambiguousChangeSelectionReasons("Change", workspaceRoot, activeChanges), options.IncludeInstructions), nil
+			return blockedStatus(ArtifactStoreOpenSpec, workspaceRoot, nil, nil, "select-change", ambiguousChangeSelectionReasons("Change", workspaceRoot, candidates), options.IncludeInstructions), nil
 		}
 	}
 
@@ -1582,13 +1635,21 @@ func absOrCWD(path string) (string, error) {
 // that listed options and named no command. The list stays first because it is
 // what a human scanning the refusal wants; the commands follow because that is
 // what makes the refusal runnable.
+//
+// The selector is positional: ParseCommandArgs has no --change flag, so the
+// emitted spelling must be `gentle-ai sdd-status <change> --cwd <root>`. The
+// first shipped spelling used `--change` and every emitted command was
+// rejected by the very parser it targets (#3278, #2790), burning the
+// operator's single sanctioned observation on a syntax error. The guard test
+// in selection_continuation_test.go feeds every emitted continuation back
+// through ParseCommandArgs so the spelling cannot drift from the parser again.
 func ambiguousChangeSelectionReasons(subject, workspaceRoot string, changes []string) []string {
 	reasons := make([]string, 0, len(changes)+1)
 	reasons = append(reasons, fmt.Sprintf("%s selection is ambiguous: %s.", subject, strings.Join(changes, ", ")))
 	for _, change := range changes {
 		reasons = append(reasons, fmt.Sprintf(
-			"Run `gentle-ai sdd-status --cwd %s --change %s` to continue with %s.",
-			workspaceRoot, change, change,
+			"Run `gentle-ai sdd-status %s --cwd %s` to continue with %s.",
+			change, workspaceRoot, change,
 		))
 	}
 	return reasons
