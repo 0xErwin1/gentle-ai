@@ -200,6 +200,21 @@ func TestGateDiscoveryNamesLiveLockContentionAsInventoryBusy(t *testing.T) {
 		t.Fatalf("negotiated live-contention failure = %#v, want inventory_busy/retry_safe/retry", failure)
 	}
 
+	// A receipt that EXISTS but fails to parse is integrity damage, never
+	// inventory_busy, even while the shared lock is verifiably held.
+	if err := os.WriteFile(receipt, []byte("{tampered"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	output.Reset()
+	gateErr = RunReviewFacadeValidate([]string{"--cwd", repo, "--gate", string(reviewtransaction.GatePostApply)}, &output)
+	tampered := decodeDeniedGateResult(t, gateErr, output.Bytes())
+	if tampered.Context.Denial == nil || tampered.Context.Denial.Code != "authority_corrupted" || tampered.Action == "retry" {
+		t.Fatalf("held-lock tampered-receipt result = %#v, want authority_corrupted without a retry promise", tampered)
+	}
+	if err := os.Remove(receipt); err != nil {
+		t.Fatal(err)
+	}
+
 	// The same anomaly WITHOUT a live holder is genuine damage and keeps
 	// today's fail-closed corruption verdict, byte for byte.
 	if err := held.Release(); err != nil {
@@ -303,32 +318,47 @@ func TestGateDiscoveryNamesDeadOwnerStaleLockResidue(t *testing.T) {
 		}
 	})
 
-	t.Run("live recorded holder never gets the removal continuation", func(t *testing.T) {
+	t.Run("recorded holder without the flock is unverifiable even when its pid runs here", func(t *testing.T) {
 		writeReviewCLIStoreLockResidue(t, lockPath, os.Getpid(), host)
 		t.Cleanup(func() { _ = os.Remove(lockPath) })
 		output, gateErr := validate()
 		result := decodeDeniedGateResult(t, gateErr, output.Bytes())
-		if result.Context.Denial == nil || result.Context.Denial.Code != "inventory_busy" {
-			t.Fatalf("live-owner denial = %#v, want inventory_busy", result.Context.Denial)
+		if result.Context.Denial == nil || result.Context.Denial.Code != "lock_holder_unverifiable" || result.Action == "retry" {
+			t.Fatalf("live-pid result = %#v, want lock_holder_unverifiable without a retry promise", result)
 		}
 		if !strings.Contains(result.Reason, strconv.Itoa(os.Getpid())) {
-			t.Fatalf("live-owner reason does not name the recorded holder pid: %q", result.Reason)
+			t.Fatalf("live-pid reason does not name the recorded holder pid: %q", result.Reason)
 		}
-		if strings.Contains(result.Reason, "remove the stale") {
-			t.Fatalf("live-owner reason suggests removing a lock whose recorded holder is running: %q", result.Reason)
+		if strings.Contains(result.Reason, "remove the stale") || strings.Contains(result.Reason, "retry once") {
+			t.Fatalf("live-pid reason promises removal or a terminating retry: %q", result.Reason)
 		}
 	})
 
-	t.Run("foreign-host recorded holder never gets the removal continuation", func(t *testing.T) {
-		writeReviewCLIStoreLockResidue(t, lockPath, reviewCLIDeadPID(t), host+"-elsewhere")
+	t.Run("foreign-host recorded holder is unverifiable, never a retry promise", func(t *testing.T) {
+		pid := reviewCLIDeadPID(t)
+		writeReviewCLIStoreLockResidue(t, lockPath, pid, host+"-elsewhere")
 		t.Cleanup(func() { _ = os.Remove(lockPath) })
 		output, gateErr := validate()
 		result := decodeDeniedGateResult(t, gateErr, output.Bytes())
-		if result.Context.Denial == nil || result.Context.Denial.Code != "inventory_busy" {
-			t.Fatalf("foreign-host denial = %#v, want inventory_busy", result.Context.Denial)
+		if result.Context.Denial == nil || result.Context.Denial.Code != "lock_holder_unverifiable" || result.Action == "retry" {
+			t.Fatalf("foreign-host result = %#v, want lock_holder_unverifiable without a retry promise", result)
 		}
-		if strings.Contains(result.Reason, "remove the stale") {
-			t.Fatalf("liveness is not verifiable across hosts, yet the reason suggests removal: %q", result.Reason)
+		for _, token := range []string{reviewSharedStoreLockToken, strconv.Itoa(pid), host + "-elsewhere", "known idle"} {
+			if !strings.Contains(result.Reason, token) {
+				t.Fatalf("foreign-host reason misses %q: %q", token, result.Reason)
+			}
+		}
+		if strings.Contains(result.Reason, "remove the stale") || strings.Contains(result.Reason, "retry once") {
+			t.Fatalf("foreign-host reason promises removal or a terminating retry: %q", result.Reason)
+		}
+
+		var negotiated bytes.Buffer
+		if err := RunReview([]string{"validate", "--contract", ReviewIntegrationContractV1, "--cwd", repo, "--gate", string(reviewtransaction.GatePostApply)}, &negotiated); err == nil {
+			t.Fatalf("negotiated foreign-host gate unexpectedly allowed:\n%s", negotiated.String())
+		}
+		failure := decodeReviewIntegrationFailure(t, negotiated.Bytes())
+		if failure.Code != "lock_holder_unverifiable" || failure.RetrySafe || failure.NextAction == "retry" {
+			t.Fatalf("negotiated foreign-host failure = %#v, want lock_holder_unverifiable and not retry-safe", failure)
 		}
 	})
 
@@ -346,6 +376,25 @@ func TestGateDiscoveryNamesDeadOwnerStaleLockResidue(t *testing.T) {
 			t.Fatalf("unreadable-lock control reason changed: %q", result.Reason)
 		}
 	})
+}
+
+// TestInventoryBusyProducersRequireProvablySelfClearingContention pins the
+// producer set behind reviewInventoryBusyError after the narrowing: (1) a
+// typed in-flight lock-contention cause, here and in the all-contended
+// aggregate (pinned below); (2) a read anomaly under a verifiably held flock
+// (pinned end-to-end above); (3) residue with a held flock or a holder
+// verifiably dead on this host (pinned above). Nothing else is ever busy.
+func TestInventoryBusyProducersRequireProvablySelfClearingContention(t *testing.T) {
+	repo := initReviewCLIRepo(t)
+	approveDiscoveryMarkdown(t, repo, "review-busy-producers", "docs/busy.md", "reviewed\n")
+	ctx := context.Background()
+	contention := fmt.Errorf("read authority: %w", reviewtransaction.ErrStoreLockContended)
+	if busy := reviewInventoryBusyFromStoreRead(ctx, repo, contention); busy == nil || busy.Kind != ReviewAuthorityInventoryBusy {
+		t.Fatalf("typed in-flight contention = %#v, want inventory_busy", busy)
+	}
+	if busy := reviewInventoryBusyFromStoreRead(ctx, repo, errors.New("parse compact receipt: unexpected end of JSON input")); busy != nil {
+		t.Fatalf("anomaly without a held flock = %#v, want nil (fail-closed corruption)", busy)
+	}
 }
 
 // TestGateDiscoveryMixedOrUnrecognizedUnknownCausesStayCorrupted pins the

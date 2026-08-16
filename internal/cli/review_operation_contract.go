@@ -1005,6 +1005,12 @@ func newReviewIntegrationFailure(operation string, args []string, runErr error) 
 			failure.AuthorityApplicability = "not_evaluated"
 			failure.RetrySafe = true
 			failure.NextAction = "retry"
+		case ReviewAuthorityLockUnverifiable:
+			// Neither provably live nor provably dead: no event terminates a
+			// retry, so the continuation is manual and stays not retry-safe.
+			failure.Message = "The review authority store lock records a holder this host cannot verify; verify it on the recorded host, or remove the lock only if that machine is known idle."
+			failure.AuthorityApplicability = "not_evaluated"
+			failure.NextAction = "explicit-maintainer-action"
 		}
 		return failure
 	}
