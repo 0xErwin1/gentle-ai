@@ -197,11 +197,17 @@ func TestConsentFixtureMatchesPublishedConsentSchemaV3(t *testing.T) {
 // TestConsentEnvelopeWithDeclaredRuntimeMatchesPublishedConsentSchemaV3 drives
 // the live relay-declared START with each runtime the consent validator
 // accepts and validates the emitted envelope, so the published agent domain
-// covers every identity the emitter can actually publish (#2676).
+// covers every identity the emitter can actually publish (#2676). Pi joins
+// the domain through its host-relay handshake: the emitter legitimately
+// publishes agent "pi" once the relay contract is declared, so the published
+// schema must admit it (cross-lane battery conformance finding).
 func TestConsentEnvelopeWithDeclaredRuntimeMatchesPublishedConsentSchemaV3(t *testing.T) {
 	schema := compileWholePublishedReviewSchema(t, "v2", "consent-v3.schema.json")
-	for _, agent := range []model.AgentID{model.AgentClaudeCode, model.AgentOpenCode, model.AgentCodex} {
+	for _, agent := range []model.AgentID{model.AgentClaudeCode, model.AgentOpenCode, model.AgentCodex, model.AgentPi} {
 		t.Run(string(agent), func(t *testing.T) {
+			if agent == model.AgentPi {
+				t.Setenv(reviewPiHostRelayContractEnvironment, reviewPiHostRelayContract)
+			}
 			reviewModeHome(t)
 			repo := initReviewCLIRepo(t)
 			stubReviewConsole(t, false, "")
@@ -219,6 +225,39 @@ func TestConsentEnvelopeWithDeclaredRuntimeMatchesPublishedConsentSchemaV3(t *te
 			validatePublishedReviewSchema(t, schema, output.Bytes())
 		})
 	}
+}
+
+// TestPiHostRelayStatusEnvelopeMatchesPublishedStatusSchemaV5 pins the whole
+// live negotiated STATUS envelope the Pi host relay receives: the materialize
+// branch (review_next_transition.go's reviewCaptureInput) renders the
+// reviewer_result collect input with a capture-result submission descriptor,
+// real emitter output the published status-v5 schema must admit (cross-lane
+// battery conformance finding).
+func TestPiHostRelayStatusEnvelopeMatchesPublishedStatusSchemaV5(t *testing.T) {
+	t.Setenv(reviewPiHostRelayContractEnvironment, reviewPiHostRelayContract)
+	repo, _, record, _ := newCandidateInspectionReview(t, "candidate\n", true)
+
+	var output bytes.Buffer
+	if err := RunReview([]string{
+		"status", "--cwd", repo, "--lineage", record.State.LineageID, "--contract", ReviewIntegrationContractV2,
+		"--agent", string(model.AgentPi), "--next-transition",
+	}, &output); err != nil {
+		t.Fatal(err)
+	}
+	var status ReviewTargetStatusResult
+	decodeStrictReviewJSON(t, output.Bytes(), &status)
+	if status.NextTransition == nil || status.NextTransition.Kind != reviewNextTransitionCollect ||
+		status.NextTransition.Collect == nil || len(status.NextTransition.Collect.Inputs) != 1 {
+		t.Fatalf("pi host relay transition = %#v", status.NextTransition)
+	}
+	// The divergence needs the capture-result submission present, so this
+	// test proves the live emitter really publishes it before validating.
+	submission := status.NextTransition.Collect.Inputs[0].Submission
+	if submission == nil || submission.OperationToken != "capture-result" {
+		t.Fatalf("pi host relay submission = %#v", submission)
+	}
+	schema := compileWholePublishedReviewSchema(t, "v2", "status-v5.schema.json")
+	validatePublishedReviewSchema(t, schema, output.Bytes())
 }
 
 // TestReviewGateResultEnvelopeMatchesPublishedSchema walks one low-risk
