@@ -45,7 +45,7 @@ type Selection struct {
 	SDDMode            model.SDDModeID            `json:"sddMode,omitempty"`
 	SDDProfileStrategy model.SDDProfileStrategyID `json:"sddProfileStrategy,omitempty"`
 	StrictTDD          bool                       `json:"strictTDD,omitempty"`
-	Profiles           []model.Profile            `json:"profiles,omitempty"`
+	Profiles           []Profile                  `json:"profiles,omitempty"`
 
 	// BackgroundIntent stays unresolved when omitted. Defaulting it here would
 	// turn silence into an explicit choice, and only an explicit choice is
@@ -139,7 +139,7 @@ func Project(state DesiredState) model.Selection {
 		SDDMode:            state.Selection.SDDMode,
 		SDDProfileStrategy: state.Selection.SDDProfileStrategy,
 		StrictTDD:          state.Selection.StrictTDD,
-		Profiles:           append([]model.Profile(nil), state.Selection.Profiles...),
+		Profiles:           profilesToModel(state.Selection.Profiles),
 		BackgroundIntent:   state.Selection.BackgroundIntent,
 	}
 }
@@ -150,7 +150,7 @@ func FromSelection(selection model.Selection) DesiredState {
 		Agents: selection.Agents, Components: selection.Components, Skills: selection.Skills,
 		Persona: selection.Persona, Preset: selection.Preset, SDDMode: selection.SDDMode,
 		SDDProfileStrategy: selection.SDDProfileStrategy, StrictTDD: selection.StrictTDD,
-		Profiles: selection.Profiles, BackgroundIntent: selection.BackgroundIntent,
+		Profiles: profilesFromModel(selection.Profiles), BackgroundIntent: selection.BackgroundIntent,
 	}}
 }
 
