@@ -121,6 +121,8 @@ func objectKeys(value any, path string) []documentKey {
 // fullyPopulatedDocument is the single fixture both shape guards inspect. It has
 // to exercise every contract field, which the guard below enforces.
 func fullyPopulatedDocument() Document {
+	hidden := true
+
 	return Document{
 		Version: CurrentVersion,
 		Selection: Selection{
@@ -160,7 +162,9 @@ func fullyPopulatedDocument() Document {
 		Roles: []Role{{
 			ID: "reviewer", RenderedName: "code-reviewer", References: []RoleRef{"reviewer"},
 			Description: "reviews", Prompt: "you review", Tools: []string{"Read"},
-			Model: &ModelAssignment{Provider: "anthropic", Model: "claude-sonnet"},
+			Model:  &ModelAssignment{Provider: "anthropic", Model: "claude-sonnet"},
+			Mode:   RoleSubagent,
+			Hidden: &hidden,
 		}},
 	}
 }
