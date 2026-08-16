@@ -247,27 +247,35 @@ func runReviewLensContext(args []string, help io.Writer, deps reviewLensContextD
 	return block, nil
 }
 
+// reviewLensContextProbeOutcome is what a representability probe learned. The
+// first two are verdicts about the candidate; the third is a fact about the
+// probe, and the type exists so they never collapse into each other.
+type reviewLensContextProbeOutcome int
+
+const (
+	reviewLensContextRepresentable reviewLensContextProbeOutcome = iota // every lens assembled in full, inside the budget
+	reviewLensContextOverBudget                                         // one lens exceeded it: deterministic and permanent
+	reviewLensContextUnproven                                           // never decided: the candidate may fit perfectly well
+)
+
 // reviewLensContextBudgetProbe assembles the complete immutable evidence for
-// every lens a review selected and reports whether any of them exceeds the
-// byte budget. It derives the opaque handle without publishing it, records no
-// emission, and writes nothing. Every other assembly failure is left to the
-// launch path so fresh STATUS preserves the existing negotiated collection
-// continuity.
+// every lens a review selected and classifies the candidate. It derives the
+// opaque handle without publishing it, records no emission, and writes nothing.
 //
-// The third outcome is the one that matters. A probe that never reached the
-// budget returns its cause rather than "under budget": before issue #3367 a
-// preparation failure here read exactly like a candidate that fits, which let
-// a caller be handed a reviewer slot nothing had verified was fillable. That
-// is the same shape the budget itself exists to prevent, one layer up.
+// The third outcome is the one that matters. Every stop that is not the budget
+// refusal -- an unreachable tree, an expired deadline, any other typed refusal
+// -- ends the probe and returns its cause, because before issue #3367 those
+// failures read exactly like a candidate that fits, which let a caller be
+// handed a reviewer slot nothing had verified was fillable.
 func reviewLensContextBudgetProbe(
 	ctx context.Context, deps reviewLensContextDeps, repo string,
 	state reviewtransaction.CompactState, revision string,
-) (bool, error) {
+) (reviewLensContextProbeOutcome, error) {
 	assemblyContext, cancel := context.WithTimeout(ctx, deps.timeout)
 	defer cancel()
 	inspector, err := deps.prepare(reviewtransaction.SnapshotBuilder{Repo: repo}, assemblyContext, state.InitialSnapshot)
 	if err != nil {
-		return false, err
+		return reviewLensContextUnproven, err
 	}
 	defer deps.close(inspector)
 	frozen := inspector.FrozenCandidateContext()
@@ -275,12 +283,12 @@ func reviewLensContextBudgetProbe(
 		LineageID: state.LineageID, TargetIdentity: state.InitialSnapshot.Identity, Revision: revision,
 	})
 	if err != nil {
-		return false, err
+		return reviewLensContextUnproven, err
 	}
 	for order, lens := range state.SelectedLenses {
 		subject, subjectErr := reviewtransaction.NewArtifactSubject(state, revision, frozen, lens, order, "")
 		if subjectErr != nil {
-			return false, subjectErr
+			return reviewLensContextUnproven, subjectErr
 		}
 		_, assemblyErr := reviewLensContextBlock(assemblyContext, deps, inspector, reviewLensContextBinding{
 			Lineage: state.LineageID, Target: state.InitialSnapshot.Identity, Lens: lens, Order: order,
@@ -288,26 +296,37 @@ func reviewLensContextBudgetProbe(
 		}, subject, frozen)
 		var refusal *reviewLensContextError
 		if errors.As(assemblyErr, &refusal) && refusal.Code == "lens_context_budget_exceeded" {
-			return true, nil
+			return reviewLensContextOverBudget, nil
+		}
+		if assemblyErr != nil {
+			return reviewLensContextUnproven, assemblyErr
 		}
 	}
-	return false, nil
+	return reviewLensContextRepresentable, nil
 }
 
 // reviewLensContextStatusBudgetExhausted proves the deterministic budget
-// refusal for the frozen slots STATUS would otherwise reoffer.
+// refusal for the frozen slots STATUS would otherwise reoffer, and only that.
+//
+// An unproven probe answers false rather than degrading STATUS: this runs only
+// after the captured artifacts verified, so reporting its cause as that
+// discovery's failure would turn a transient hiccup into a terminal
+// captured-artifact verdict about something that never happened. The launch
+// this keeps offering re-runs the same assembly against the same frozen trees
+// and refuses with its own typed, refreshable cause.
 //
 // Since START refuses an unrepresentable candidate before persisting anything,
 // the only lineages this can still classify as exhausted are ones an older
 // build created, so it stays as the upgrade path's defence rather than the
 // primary guard.
-func reviewLensContextStatusBudgetExhausted(ctx context.Context, repo string, state reviewtransaction.CompactState, revision string) (bool, error) {
-	return reviewLensContextBudgetProbe(ctx, reviewLensContextDependencies(), repo, state, revision)
+func reviewLensContextStatusBudgetExhausted(ctx context.Context, repo string, state reviewtransaction.CompactState, revision string) bool {
+	outcome, _ := reviewLensContextBudgetProbe(ctx, reviewLensContextDependencies(), repo, state, revision)
+	return outcome == reviewLensContextOverBudget
 }
 
 // reviewLensContextStartBudgetRefusal is START's representability check: it
-// proves the complete immutable evidence for every selected lens can actually
-// be assembled, before any durable authority exists.
+// refuses a candidate whose complete immutable evidence is proven not to fit,
+// before any durable authority exists.
 //
 // This is what makes the facade's stated invariant true rather than merely
 // intended -- "a candidate that starts here is a candidate STATUS can answer".
@@ -317,25 +336,27 @@ func reviewLensContextStatusBudgetExhausted(ctx context.Context, repo string, st
 // splitting the candidate anyway (issue #3367). Refusing here reports that
 // once, at the point of decision, with nothing to clean up afterwards.
 //
-// It fails closed: a probe that could not reach the budget refuses too, since
-// nothing is persisted and re-running START costs a caller nothing.
+// It refuses on the proven verdict and only that, and never hands back the
+// untyped error a consumer cannot route on. An unproven probe classified the
+// probe rather than the candidate, and refusing on it would block candidates
+// that review perfectly well whenever one inspection read refuses -- while
+// telling their author to split a change nothing ever measured. The launch
+// path re-runs this same assembly and answers with its own typed, refreshable
+// refusal, which is where an undecided budget belongs.
 func reviewLensContextStartBudgetRefusal(ctx context.Context, repo string, state reviewtransaction.CompactState) error {
 	if len(state.SelectedLenses) == 0 {
 		return nil
 	}
-	revision, err := reviewtransaction.CompactRevisionForState(state)
-	if err != nil {
-		return err
+	// An underivable revision is one more way the budget stays undecided.
+	outcome := reviewLensContextUnproven
+	if revision, err := reviewtransaction.CompactRevisionForState(state); err == nil {
+		outcome, _ = reviewLensContextBudgetProbe(ctx, reviewLensContextDependencies(), repo, state, revision)
 	}
-	exceeded, err := reviewLensContextBudgetProbe(ctx, reviewLensContextDependencies(), repo, state, revision)
-	if err != nil {
-		return err
+	if outcome != reviewLensContextOverBudget {
+		return nil
 	}
-	if exceeded {
-		return reviewPreflightRefusal(reviewLensContextStartBudgetReason,
-			&reviewLensContextError{Code: "lens_context_budget_exceeded", Action: reviewLensContextStartBudgetAction})
-	}
-	return nil
+	return reviewPreflightRefusal(reviewLensContextStartBudgetReason,
+		&reviewLensContextError{Code: "lens_context_budget_exceeded", Action: reviewLensContextStartBudgetAction})
 }
 
 // reviewLensContextStartBudgetReason classifies START's budget refusal. The

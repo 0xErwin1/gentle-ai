@@ -824,8 +824,8 @@ func deriveLensContextHandle(t *testing.T, repo string, record reviewtransaction
 
 // TestReviewLensContextBudgetProbeReportsFailureInsteadOfUnderBudget pins the
 // third outcome. A probe that never reached the budget used to return the same
-// false a comfortably-small candidate returns, so STATUS published a reviewer
-// slot nothing had verified was fillable (issue #3367 property 2).
+// false a comfortably-small candidate returns, so no caller could tell "fits"
+// apart from "never measured" (issue #3367 property 2).
 func TestReviewLensContextBudgetProbeReportsFailureInsteadOfUnderBudget(t *testing.T) {
 	reviewModeHome(t)
 	repo := initReviewCLIRepo(t)
@@ -840,9 +840,15 @@ func TestReviewLensContextBudgetProbeReportsFailureInsteadOfUnderBudget(t *testi
 		t.Fatal(err)
 	}
 
-	exhausted, err := reviewLensContextStatusBudgetExhausted(t.Context(), repo, record.State, record.Revision)
-	if err != nil || exhausted {
-		t.Fatalf("reachable small candidate probe = (%v, %v), want (false, nil)", exhausted, err)
+	if reviewLensContextStatusBudgetExhausted(t.Context(), repo, record.State, record.Revision) {
+		t.Fatal("reachable small candidate was classified as over budget")
+	}
+
+	// START routes the proven verdict only: an unproven probe defers to the
+	// launch path that can establish the truth, rather than refusing a
+	// candidate nothing measured or raising an untyped failure.
+	if startErr := reviewLensContextStartBudgetRefusal(t.Context(), filepath.Join(t.TempDir(), "absent"), record.State); startErr != nil {
+		t.Fatalf("START refused a candidate its probe never classified: %v", startErr)
 	}
 
 	for _, test := range []struct {
@@ -867,12 +873,12 @@ func TestReviewLensContextBudgetProbeReportsFailureInsteadOfUnderBudget(t *testi
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			exhausted, err := reviewLensContextBudgetProbe(t.Context(), test.deps(reviewLensContextDependencies()), repo, record.State, record.Revision)
+			outcome, err := reviewLensContextBudgetProbe(t.Context(), test.deps(reviewLensContextDependencies()), repo, record.State, record.Revision)
 			if err == nil {
-				t.Fatalf("probe answered exhausted=%v with no cause after it never evaluated the budget", exhausted)
+				t.Fatalf("probe answered outcome=%v with no cause after it never evaluated the budget", outcome)
 			}
-			if exhausted {
-				t.Fatalf("probe that failed to evaluate the budget reported it exhausted, inventing a refusal reason: %v", err)
+			if outcome != reviewLensContextUnproven {
+				t.Fatalf("probe that failed to evaluate the budget answered %v, inventing a verdict about the candidate: %v", outcome, err)
 			}
 		})
 	}
