@@ -27,6 +27,59 @@ func rarPathUnsafe(path string, info fs.FileInfo) bool {
 	return err != nil || attributes&windows.FILE_ATTRIBUTE_REPARSE_POINT != 0
 }
 
+// rarPrivateDirectoryCreate and rarPrivateDirectoryRepair mirror the POSIX
+// seam: the only two primitives that establish an owner-only RAR directory,
+// kept as variables so tests can reproduce a filesystem or token that ignores
+// the descriptor it is handed.
+var (
+	rarPrivateDirectoryCreate = windows.CreateDirectory
+	rarPrivateDirectoryRepair = repairPrivateRARDirectoryNoFollow
+)
+
+const rarDirectoryRepairAccess = windows.SYNCHRONIZE | windows.READ_CONTROL |
+	windows.FILE_READ_ATTRIBUTES | windows.WRITE_DAC | windows.WRITE_OWNER
+
+// repairPrivateRARDirectoryNoFollow reapplies the owner-only protected DACL
+// through a handle, never a name: SetNamedSecurityInfo resolves the name it is
+// handed and has no no-follow mode, so a directory swapped for a junction
+// between CreateDirectory and validation would take the repair on the
+// attacker's target. The handle comes from the validator's own OBJ_DONT_REPARSE
+// open, is refused when it is a reparse point, and carries both the write and
+// the owner/DACL readback that clears it.
+func repairPrivateRARDirectoryNoFollow(path string, _ fs.FileMode) error {
+	descriptor, err := ownerOnlyRARSecurityDescriptor(true)
+	if err != nil {
+		return err
+	}
+	owner, _, ownerErr := descriptor.Owner()
+	dacl, _, daclErr := descriptor.DACL()
+	if ownerErr != nil || daclErr != nil || owner == nil || dacl == nil {
+		return errUnsafeRARAuthorityPath
+	}
+	handle, err := openWindowsRARObject(ntPath(path), rarDirectoryRepairAccess, true)
+	if err != nil {
+		return err
+	}
+	file := os.NewFile(uintptr(handle), path)
+	defer file.Close()
+	if openWindowsRARFileUnsafe(file) {
+		return unsafeRARPathError(path, true)
+	}
+	err = windows.SetSecurityInfo(handle, windows.SE_FILE_OBJECT,
+		windows.OWNER_SECURITY_INFORMATION|windows.DACL_SECURITY_INFORMATION|
+			windows.PROTECTED_DACL_SECURITY_INFORMATION, owner, nil, dacl, nil)
+	runtime.KeepAlive(descriptor)
+	if err != nil {
+		return err
+	}
+	repaired, err := windows.GetSecurityInfo(handle, windows.SE_FILE_OBJECT,
+		windows.OWNER_SECURITY_INFORMATION|windows.DACL_SECURITY_INFORMATION)
+	if err != nil || !privateRARSecurityDescriptorSafe(repaired, true) {
+		return unsafeRARPathError(path, true)
+	}
+	return nil
+}
+
 func createPrivateRARDirectory(path string) (bool, error) {
 	descriptor, err := ownerOnlyRARSecurityDescriptor(true)
 	if err != nil {
@@ -40,7 +93,7 @@ func createPrivateRARDirectory(path string) (bool, error) {
 		Length:             uint32(unsafe.Sizeof(windows.SecurityAttributes{})),
 		SecurityDescriptor: descriptor,
 	}
-	err = windows.CreateDirectory(name, &attributes)
+	err = rarPrivateDirectoryCreate(name, &attributes)
 	runtime.KeepAlive(descriptor)
 	created := err == nil
 	if err != nil && !errors.Is(err, windows.ERROR_ALREADY_EXISTS) {
@@ -59,20 +112,9 @@ func createPrivateRARDirectory(path string) (bool, error) {
 		// Only a directory created by this very call is repaired. Rewriting the
 		// ACL of a directory that was already there is the world-action
 		// errUnsafeRARAuthorityPath refuses to take on the operator's behalf.
-		if owner, _, ownerErr := descriptor.Owner(); ownerErr == nil && owner != nil {
-			if dacl, _, daclErr := descriptor.DACL(); daclErr == nil && dacl != nil {
-				_ = windows.SetNamedSecurityInfo(
-					path,
-					windows.SE_FILE_OBJECT,
-					windows.OWNER_SECURITY_INFORMATION|
-						windows.DACL_SECURITY_INFORMATION|
-						windows.PROTECTED_DACL_SECURITY_INFORMATION,
-					owner, nil, dacl, nil,
-				)
-				validateErr = validatePrivateRARDirectory(path)
-			}
+		if repairErr := rarPrivateDirectoryRepair(path, 0o700); repairErr == nil {
+			validateErr = validatePrivateRARDirectory(path)
 		}
-		runtime.KeepAlive(descriptor)
 	}
 	if validateErr != nil {
 		// The just-created directory deliberately stays on disk. Removing it
@@ -191,7 +233,7 @@ func rarRepositoryOpenDirectorySafe(file *os.File, info fs.FileInfo) bool {
 }
 
 func openRARPathNoFollow(path string, directory bool) (*os.File, error) {
-	handle, err := openWindowsRARObject(ntPath(path), directory)
+	handle, err := openWindowsRARObject(ntPath(path), windows.FILE_GENERIC_READ|windows.READ_CONTROL, directory)
 	if err != nil {
 		return nil, err
 	}
@@ -212,7 +254,7 @@ func OpenPhysicalPath(path string, directory bool) (*os.File, error) {
 	return openRARPathNoFollow(absPath, directory)
 }
 
-func openWindowsRARObject(objectPath string, directory bool) (windows.Handle, error) {
+func openWindowsRARObject(objectPath string, access uint32, directory bool) (windows.Handle, error) {
 	open := func(path string) (windows.Handle, error) {
 		objectName, err := windows.NewNTUnicodeString(path)
 		if err != nil {
@@ -233,7 +275,7 @@ func openWindowsRARObject(objectPath string, directory bool) (windows.Handle, er
 		var status windows.IO_STATUS_BLOCK
 		err = windows.NtCreateFile(
 			&handle,
-			windows.FILE_GENERIC_READ|windows.READ_CONTROL,
+			access,
 			attributes,
 			&status,
 			nil,

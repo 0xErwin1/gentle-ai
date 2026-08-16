@@ -173,6 +173,49 @@ func rarWindowsDescriptorForOwner(
 	return descriptor
 }
 
+// ignoreRequestedRARDescriptor reproduces a filesystem or token that accepts the
+// descriptor handed to CreateDirectory and then ignores it.
+func ignoreRequestedRARDescriptor(t *testing.T) {
+	t.Helper()
+	previous := rarPrivateDirectoryCreate
+	rarPrivateDirectoryCreate = func(name *uint16, _ *windows.SecurityAttributes) error {
+		return windows.CreateDirectory(name, nil)
+	}
+	t.Cleanup(func() { rarPrivateDirectoryCreate = previous })
+}
+
+func TestCreatePrivateRARDirectoryRepairsADescriptorThatDidNotStick(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "v1")
+	ignoreRequestedRARDescriptor(t)
+
+	// A nil error is the revalidation: createPrivateRARDirectory only reports
+	// success once validatePrivateRARDirectory accepted the repaired handle.
+	created, err := createPrivateRARDirectory(path)
+	if err != nil || !created {
+		t.Fatalf("createPrivateRARDirectory on a mount that ignored the descriptor = (%t, %v), want (true, nil)", created, err)
+	}
+}
+
+func TestCreatePrivateRARDirectoryKeepsTheUnsafePathItNamesOnWindows(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "v1")
+	ignoreRequestedRARDescriptor(t)
+	previous := rarPrivateDirectoryRepair
+	// A repair that reports success and changes nothing, the way a mount
+	// without persistent ACL semantics behaves.
+	rarPrivateDirectoryRepair = func(string, fs.FileMode) error { return nil }
+	t.Cleanup(func() { rarPrivateDirectoryRepair = previous })
+
+	created, err := createPrivateRARDirectory(path)
+	var unsafePath *UnsafeRARPathError
+	if created || !errors.As(err, &unsafePath) || unsafePath.Path != path || !unsafePath.Directory {
+		t.Fatalf("createPrivateRARDirectory = (%t, %v), want (false, *UnsafeRARPathError naming %q)", created, err, path)
+	}
+	// Removing the refused directory is what made the printed repair unrunnable.
+	if _, statErr := os.Lstat(path); statErr != nil {
+		t.Fatalf("refused path %q is gone, so the printed repair cannot run: %v", path, statErr)
+	}
+}
+
 // classifierStub records every path it receives and returns a fixed filesystem type.
 type classifierStub struct {
 	calls []string
