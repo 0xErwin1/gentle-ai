@@ -358,6 +358,14 @@ func openCodeTransportStartBound(ctx context.Context, taskPrompt string) (openCo
 	return session, nil
 }
 
+// openCodeProviderRoleResultEnvelope renders the exact published
+// gentle-ai.opencode-review-provider-role/v1 envelope for a captured provider
+// role result. It is the single wording source for those bytes, so the
+// transport and the published-schema conformance test cannot drift apart.
+func openCodeProviderRoleResultEnvelope(role reviewProviderRole) string {
+	return `{"schema":"gentle-ai.opencode-review-provider-role/v1","role":"` + string(role) + `","captured":true}`
+}
+
 func openCodeTransportComplete(ctx context.Context, session openCodeTransportSession, envelope openCodeTransportEnvelope) (openCodeTransportEnvelope, error) {
 	if envelope.Error != "" {
 		return openCodeTransportEnvelope{}, openCodeTransportFailure("opencode_task_transport_failed")
@@ -381,7 +389,7 @@ func openCodeTransportComplete(ctx context.Context, session openCodeTransportSes
 		if err := openCodeTransportCaptureRole(ctx, session.root, store, record, session.binding.Role, hostOutput); err != nil {
 			return openCodeTransportEnvelope{}, openCodeTransportFailure("opencode_provider_role_result_refused")
 		}
-		output := `{"schema":"gentle-ai.opencode-review-provider-role/v1","role":"` + string(session.binding.Role) + `","captured":true}`
+		output := openCodeProviderRoleResultEnvelope(session.binding.Role)
 		return openCodeTransportEnvelope{Schema: openCodeReviewTransportSchema, Operation: "result", Output: &output}, nil
 	}
 	admitted, err := reviewProviderAdmitRaw(ctx, session.root, record.State, record.Revision, session.lensRequest.Frozen, session.lensRequest.Subject, hostOutput)
