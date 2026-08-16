@@ -8,24 +8,23 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
 )
 
-// Issue #3248 asks the declarative contract to cover every target adapter, so a
-// supported adapter without a renderer is unfinished work, not a design choice.
-// This list is that work, in code rather than in a document: it may only shrink,
-// and every run reports what is left. An entry removed without a provider fails
-// the guard, and a provider added without removing its entry fails it too, so
-// the list cannot drift out of step with the registry in either direction.
+// These adapters express no agent roles at all: they report
+// SupportsSubAgents() == false and expose no settings block that composes them.
+// A role declared for one of them has nothing to materialise, which the caller
+// reports rather than silently dropping.
+//
+// The list may only shrink. An entry removed while the adapter still has no
+// renderer fails the guard, and an adapter that gains one without losing its
+// entry fails it too, so the list cannot drift out of step with the registry in
+// either direction.
 var providersNotYetWritten = map[model.AgentID]bool{
-	model.AgentClaudeCode:    true,
 	model.AgentKilocode:      true,
 	model.AgentGeminiCLI:     true,
-	model.AgentCursor:        true,
 	model.AgentVSCodeCopilot: true,
 	model.AgentCodex:         true,
 	model.AgentAntigravity:   true,
 	model.AgentWindsurf:      true,
-	model.AgentKimi:          true,
 	model.AgentQwenCode:      true,
-	model.AgentKiroIDE:       true,
 	model.AgentOpenClaw:      true,
 	model.AgentPi:            true,
 	model.AgentTrae:          true,

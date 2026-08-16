@@ -26,6 +26,9 @@ type Selection struct {
 	Scope                            InstallScope                     // install scope; empty = unresolved
 	Channel                          InstallChannel                   // release track; empty = unresolved
 	RDDMode                          RDDMode                          // global review kill switch; empty = unresolved
+	MCPServers                       map[string]MCPServer             // declared MCP servers, keyed by name
+	Permissions                      *Permissions                     // declared permission rules layered over the shipped defaults
+	SkillAssignments                 map[AgentID][]SkillID            // per-adapter skill overrides; absent adapter takes the flat Skills list
 }
 
 func (s Selection) HasCommunityTool(tool CommunityToolID) bool {

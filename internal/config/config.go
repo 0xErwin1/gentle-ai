@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"sort"
 
 	"github.com/gentleman-programming/gentle-ai/v2/internal/catalog"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
@@ -83,6 +84,20 @@ type Selection struct {
 	Scope   model.InstallScope   `json:"scope,omitempty"`
 	Channel model.InstallChannel `json:"channel,omitempty"`
 
+	// SkillAssignments override the flat skill list for one adapter. An adapter
+	// without an entry takes the flat list, so the simple form keeps meaning
+	// "every adapter" and the map is only needed when they must differ.
+	SkillAssignments map[string][]model.SkillID `json:"skillAssignments,omitempty"`
+
+	// Permissions add to the guardrails gentle-ai ships rather than replacing
+	// them, so declaring an allowance never quietly removes a shipped deny.
+	Permissions *Permissions `json:"permissions,omitempty"`
+
+	// MCPServers are keyed by server name. A local server runs a command; a
+	// remote one is reached at a URL. Declaring both is rejected rather than
+	// silently preferring one.
+	MCPServers map[string]MCPServer `json:"mcpServers,omitempty"`
+
 	// RDDMode governs the global review kill switch only. The clone-local
 	// override stays out of the contract on purpose: it exists so that no
 	// repository can ship or force a review policy onto a clone.
@@ -152,6 +167,7 @@ func Normalize(document Document) (DesiredState, []Diagnostic) {
 
 	selection := normalizeSelection(document.Selection, &diagnostics)
 	roles := normalizeRoles(document.Roles, &diagnostics)
+	validateExtensions(document, &diagnostics)
 	if version == "" {
 		return DesiredState{}, diagnostics
 	}
@@ -191,6 +207,9 @@ func Project(state DesiredState) model.Selection {
 		Scope:                       state.Selection.Scope,
 		Channel:                     state.Selection.Channel,
 		RDDMode:                     state.Selection.RDDMode,
+		MCPServers:                  mcpServersToModel(state.Selection.MCPServers),
+		Permissions:                 permissionsToModel(state.Selection.Permissions),
+		SkillAssignments:            skillAssignmentsToModel(state.Selection.SkillAssignments),
 	}
 }
 
@@ -215,6 +234,9 @@ func FromSelection(selection model.Selection) DesiredState {
 		Scope:                       selection.Scope,
 		Channel:                     selection.Channel,
 		RDDMode:                     selection.RDDMode,
+		MCPServers:                  mcpServersFromModel(selection.MCPServers),
+		Permissions:                 permissionsFromModel(selection.Permissions),
+		SkillAssignments:            skillAssignmentsFromModel(selection.SkillAssignments),
 	}}
 }
 
@@ -253,6 +275,9 @@ func NormalizeSelection(selection model.Selection) (model.Selection, []Diagnosti
 	selection.Scope = projected.Scope
 	selection.Channel = projected.Channel
 	selection.RDDMode = projected.RDDMode
+	selection.MCPServers = projected.MCPServers
+	selection.Permissions = projected.Permissions
+	selection.SkillAssignments = projected.SkillAssignments
 	if !preserveUnsetPersona {
 		selection.Persona = projected.Persona
 	}
@@ -285,6 +310,8 @@ func normalizeSelection(selection Selection, diagnostics *[]Diagnostic) Selectio
 		*diagnostics = append(*diagnostics, diagnostic("config.channel.unsupported", "$.selection.channel", fmt.Sprintf("unsupported channel %q; use stable or beta", selection.Channel)))
 	}
 
+	validateMCPServers(selection, diagnostics)
+	validateSkillAssignments(selection, diagnostics)
 	validateAssignments(selection, diagnostics)
 	validateStructuredAssignments(selection, diagnostics)
 
@@ -325,6 +352,29 @@ func normalizeSelection(selection Selection, diagnostics *[]Diagnostic) Selectio
 	}
 
 	return selection
+}
+
+// validateExtensions rejects an extension addressed to an adapter the document
+// never declared. An extension is provider-specific by definition, so one whose
+// provider is absent applies to nothing and would sit in the document reading
+// as configuration that took effect.
+func validateExtensions(state Document, diagnostics *[]Diagnostic) {
+	declared := make(map[string]struct{}, len(state.Selection.Agents))
+	for _, agent := range state.Selection.Agents {
+		declared[string(agent)] = struct{}{}
+	}
+
+	providers := make([]string, 0, len(state.Extensions))
+	for provider := range state.Extensions {
+		providers = append(providers, provider)
+	}
+	sort.Strings(providers)
+
+	for _, provider := range providers {
+		if _, ok := declared[provider]; !ok {
+			*diagnostics = append(*diagnostics, diagnostic("config.extension.undeclared-provider", "$.extensions."+provider, fmt.Sprintf("extension targets provider %q, which the document does not declare; add it to agents or remove the extension", provider)))
+		}
+	}
 }
 
 func normalizeRoles(roles []Role, diagnostics *[]Diagnostic) []Role {

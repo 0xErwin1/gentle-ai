@@ -301,3 +301,144 @@ func validateStructuredAssignments(selection Selection, diagnostics *[]Diagnosti
 		*diagnostics = append(*diagnostics, diagnostic("config.codex-orchestrator.effort-unsupported", "$.selection.codexOrchestrator", fmt.Sprintf("unsupported Codex effort %q; use low, medium, high, or xhigh", orchestrator.Effort)))
 	}
 }
+
+// MCPServer is the contract form of one MCP server. Enabled is a pointer so an
+// omitted flag stays absent rather than declaring the server disabled.
+type MCPServer struct {
+	Command string            `json:"command,omitempty"`
+	Args    []string          `json:"args,omitempty"`
+	Env     map[string]string `json:"env,omitempty"`
+	URL     string            `json:"url,omitempty"`
+	Enabled *bool             `json:"enabled,omitempty"`
+}
+
+func mcpServersToModel(servers map[string]MCPServer) map[string]model.MCPServer {
+	if servers == nil {
+		return nil
+	}
+
+	converted := make(map[string]model.MCPServer, len(servers))
+	for name, server := range servers {
+		enabled := true
+		if server.Enabled != nil {
+			enabled = *server.Enabled
+		}
+		converted[name] = model.MCPServer{
+			Command: server.Command,
+			Args:    append([]string(nil), server.Args...),
+			Env:     copyMap(server.Env),
+			URL:     server.URL,
+			Enabled: enabled,
+		}
+	}
+
+	return converted
+}
+
+func mcpServersFromModel(servers map[string]model.MCPServer) map[string]MCPServer {
+	if servers == nil {
+		return nil
+	}
+
+	converted := make(map[string]MCPServer, len(servers))
+	for name, server := range servers {
+		enabled := server.Enabled
+		converted[name] = MCPServer{
+			Command: server.Command,
+			Args:    append([]string(nil), server.Args...),
+			Env:     copyMap(server.Env),
+			URL:     server.URL,
+			Enabled: &enabled,
+		}
+	}
+
+	return converted
+}
+
+// validateMCPServers rejects a server that declares neither a way to reach it
+// nor both ways at once, because either leaves the adapter guessing.
+func validateMCPServers(selection Selection, diagnostics *[]Diagnostic) {
+	for _, name := range sortedKeys(selection.MCPServers) {
+		server := selection.MCPServers[name]
+		path := "$.selection.mcpServers." + name
+
+		switch {
+		case server.Command == "" && server.URL == "":
+			*diagnostics = append(*diagnostics, diagnostic("config.mcp-server.unreachable", path, "an MCP server requires either a command or a url"))
+		case server.Command != "" && server.URL != "":
+			*diagnostics = append(*diagnostics, diagnostic("config.mcp-server.ambiguous", path, "an MCP server declares either a command or a url, not both"))
+		}
+	}
+}
+
+// Permissions is the contract form of declared permission rules.
+type Permissions struct {
+	Allow []string `json:"allow,omitempty"`
+	Deny  []string `json:"deny,omitempty"`
+	Ask   []string `json:"ask,omitempty"`
+}
+
+func permissionsToModel(permissions *Permissions) *model.Permissions {
+	if permissions == nil {
+		return nil
+	}
+
+	return &model.Permissions{
+		Allow: append([]string(nil), permissions.Allow...),
+		Deny:  append([]string(nil), permissions.Deny...),
+		Ask:   append([]string(nil), permissions.Ask...),
+	}
+}
+
+func permissionsFromModel(permissions *model.Permissions) *Permissions {
+	if permissions == nil {
+		return nil
+	}
+
+	return &Permissions{
+		Allow: append([]string(nil), permissions.Allow...),
+		Deny:  append([]string(nil), permissions.Deny...),
+		Ask:   append([]string(nil), permissions.Ask...),
+	}
+}
+
+func skillAssignmentsToModel(assignments map[string][]model.SkillID) map[model.AgentID][]model.SkillID {
+	if assignments == nil {
+		return nil
+	}
+
+	converted := make(map[model.AgentID][]model.SkillID, len(assignments))
+	for agent, skills := range assignments {
+		converted[model.AgentID(agent)] = append([]model.SkillID(nil), skills...)
+	}
+
+	return converted
+}
+
+func skillAssignmentsFromModel(assignments map[model.AgentID][]model.SkillID) map[string][]model.SkillID {
+	if assignments == nil {
+		return nil
+	}
+
+	converted := make(map[string][]model.SkillID, len(assignments))
+	for agent, skills := range assignments {
+		converted[string(agent)] = append([]model.SkillID(nil), skills...)
+	}
+
+	return converted
+}
+
+// validateSkillAssignments rejects an assignment for an adapter the document
+// never declared, because it would silently apply to nothing.
+func validateSkillAssignments(selection Selection, diagnostics *[]Diagnostic) {
+	declared := make(map[model.AgentID]struct{}, len(selection.Agents))
+	for _, agent := range selection.Agents {
+		declared[agent] = struct{}{}
+	}
+
+	for _, agent := range sortedKeys(selection.SkillAssignments) {
+		if _, ok := declared[model.AgentID(agent)]; !ok {
+			*diagnostics = append(*diagnostics, diagnostic("config.skill-assignment.undeclared-adapter", "$.selection.skillAssignments."+agent, fmt.Sprintf("adapter %q takes skill assignments but is not declared; add it to agents or remove the assignment", agent)))
+		}
+	}
+}

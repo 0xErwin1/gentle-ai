@@ -31,7 +31,13 @@ func TestPublicDocumentKeysAreContractNames(t *testing.T) {
 		t.Fatalf("decode document: %v", err)
 	}
 
+	// A map keyed by the operator holds names this package never chose: an
+	// environment variable, a phase, a server. Judging those by the schema's
+	// naming rule would fail a document for spelling its own key in capitals.
 	for _, key := range objectKeys(decoded, "$") {
+		if userKeyed(key.path) {
+			continue
+		}
 		first := []rune(key.name)[0]
 		if unicode.IsUpper(first) {
 			t.Errorf("%s publishes %q, a Go identifier; give its type an explicit json tag", key.path, key.name)
@@ -81,6 +87,28 @@ func TestLeakedGoIdentifiersAreRejected(t *testing.T) {
 	if diagnostics[0].Code != "config.document.unknown-field" {
 		t.Errorf("code = %q, want %q", diagnostics[0].Code, "config.document.unknown-field")
 	}
+}
+
+// userKeyedContainers are the fields whose immediate children are names the
+// operator supplies rather than names this contract defines.
+var userKeyedContainers = []string{
+	"mcpServers", "env", "modelAssignments", "claudeModelAssignments",
+	"kiroModelAssignments", "codexModelAssignments", "codexCarrilModelAssignments",
+	"codexPhaseModelAssignments", "claudePhaseAssignments", "phaseAssignments", "skillAssignments", "extensions",
+}
+
+func userKeyed(path string) bool {
+	segments := strings.Split(path, ".")
+	for index := len(segments) - 1; index >= 0; index-- {
+		segment := strings.Split(segments[index], "[")[0]
+		for _, container := range userKeyedContainers {
+			if segment == container {
+				return index == len(segments)-1
+			}
+		}
+	}
+
+	return false
 }
 
 type documentKey struct {
@@ -139,6 +167,9 @@ func fullyPopulatedDocument() Document {
 			CodexPhaseModelAssignments:  map[string]string{"sdd-apply": "gpt-5.6-sol"},
 			ClaudePhaseAssignments:      map[string]ClaudePhaseAssignment{"sdd-apply": {Model: "opus", Effort: "high"}},
 			CodexOrchestrator:           &CodexOrchestratorAssignment{Model: "gpt-5.6-sol", Effort: "medium"},
+			MCPServers:                  map[string]MCPServer{"atlas": {Command: "atlas", Args: []string{"mcp"}, Env: map[string]string{"TOKEN": "x"}}},
+			Permissions:                 &Permissions{Allow: []string{"Read(*)"}, Deny: []string{"Bash(curl *)"}, Ask: []string{"Edit(*.tf)"}},
+			SkillAssignments:            map[string][]model.SkillID{"opencode": {model.SkillSDDApply}},
 			Profiles: []Profile{{
 				Name:             "cheap",
 				Orchestrator:     &ModelAssignment{Provider: "anthropic", Model: "claude-haiku", Effort: "low"},
