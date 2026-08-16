@@ -256,12 +256,53 @@ func TestReviewInconclusiveCapturedValidationCompletesTheHostRelayRoute(t *testi
 	}
 
 	// The superseded non-verdict is archived, never destroyed.
-	archived := filepath.Join(store.Dir, reviewtransaction.CompactQuarantinedReviewerResultsDir,
-		strings.TrimPrefix(request.ExpectedRevision, "sha256:")[:16],
-		"targeted-validator-"+strings.TrimPrefix(request.CorrectionTargetIdentity, "sha256:")[:16]+".json")
+	archived := reviewQuarantinedTargetedValidatorPath(store.Dir, request, "")
 	preserved, err := os.ReadFile(archived)
 	if err != nil || !bytes.Equal(preserved, inconclusive) {
 		t.Fatalf("superseded inconclusive payload was not preserved at %s: %v", archived, err)
+	}
+}
+
+// TestReviewStatusStopsInconclusiveRecaptureAtItsBound drives the live route
+// rather than seeding the ledger: it re-reads STATUS and submits a real
+// recapture through the capture path all three entry points funnel into, so it
+// fails if the ledger reads but never advances. The occupant itself must be
+// injected -- this build refuses to publish a non-verdict, so a legacy artifact
+// is the only way one exists -- but every attempt after it is genuine.
+func TestReviewStatusStopsInconclusiveRecaptureAtItsBound(t *testing.T) {
+	repo, lineage, request := providerCorrectionReady(t)
+	inconclusive := providerInconclusiveValidationPayload(t, request)
+	store := seedCapturedValidatorSlot(t, repo, lineage, request, inconclusive)
+
+	// The occupant is attempt 1; every later attempt must still be offered and
+	// must still be a blind validator refusing to invent a verdict.
+	for attempt := 2; attempt <= maxInconclusiveTargetedValidations; attempt++ {
+		status := readInconclusiveRoutingStatus(t, repo, lineage)
+		if status.NextTransition == nil || status.NextTransition.Kind != reviewNextTransitionCollect ||
+			status.NextTransition.ReasonCode != "targeted_validation_inconclusive_recapture_required" {
+			t.Fatalf("attempt %d is not still offered a recapture: %#v", attempt, status.NextTransition)
+		}
+		record, err := store.Load()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, _, err := reviewProviderCaptureTargetedValidatorRaw(t.Context(), repo, store, record.State, record.Revision,
+			inconclusive); !errors.Is(err, errReviewTargetedValidationInconclusive) {
+			t.Fatalf("recapture %d = %v, want the inconclusive refusal", attempt, err)
+		}
+		if recorded := reviewInconclusiveTargetedValidationAttempts(store.Dir, request); recorded != attempt-1 {
+			t.Fatalf("ledger after recapture %d = %d, want %d", attempt, recorded, attempt-1)
+		}
+	}
+
+	status := readInconclusiveRoutingStatus(t, repo, lineage)
+	if status.NextTransition == nil || status.NextTransition.Kind != reviewNextTransitionStop ||
+		status.NextTransition.ReasonCode != "captured_artifacts_unverifiable" || status.NextTransition.Collect != nil {
+		t.Fatalf("exhausted inconclusive recapture transition = %#v", status.NextTransition)
+	}
+	after, err := store.Load()
+	if err != nil || after.State.State != reviewtransaction.StateCorrectionRequired || len(after.State.CorrectionAttempts) != 0 {
+		t.Fatalf("exhausted inconclusive recapture changed authority: %#v, %v", after, err)
 	}
 }
 

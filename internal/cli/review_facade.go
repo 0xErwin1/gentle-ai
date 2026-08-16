@@ -3050,7 +3050,7 @@ func runReviewFacadeFinalize(ctx context.Context, args []string, stdout io.Write
 				fmt.Errorf("validate FINALIZE current snapshot: %v", err))
 		}
 	}
-	plan, err := prepareFacadeFinalizePlan(ctx, root, record.Revision, state, reviewerResults, refuter, validation, evidence, *correctionLines, effectiveFailed, capturedVerification)
+	plan, err := prepareFacadeFinalizePlan(ctx, root, record.Revision, store.Dir, state, reviewerResults, refuter, validation, evidence, *correctionLines, effectiveFailed, capturedVerification)
 	if err != nil {
 		return reviewPreflightError(err)
 	}
@@ -3304,7 +3304,7 @@ type facadeFinalizePlan struct {
 // prepareFacadeFinalizePlan performs every deterministic validation before the
 // attempt journal exists. Its states are the only states later admitted and
 // written through the write-ahead journal.
-func prepareFacadeFinalizePlan(ctx context.Context, repo, revision string, state reviewtransaction.CompactState, results []facadeReviewerResult, refuter facadeRefuterResult, validation *facadeValidationResult, evidence []byte, correctionLines int, failed bool, captured *reviewtransaction.CapturedVerificationEvidence) (facadeFinalizePlan, error) {
+func prepareFacadeFinalizePlan(ctx context.Context, repo, revision, storeDir string, state reviewtransaction.CompactState, results []facadeReviewerResult, refuter facadeRefuterResult, validation *facadeValidationResult, evidence []byte, correctionLines int, failed bool, captured *reviewtransaction.CapturedVerificationEvidence) (facadeFinalizePlan, error) {
 	entryState, entryProposed := state.State, state.ProposedCorrectionLines != nil
 	plan := facadeFinalizePlan{Transitions: []facadeFinalizeTransition{}, Candidate: state.CurrentSnapshot, Evidence: evidence, CapturedEvidence: captured}
 	appendState := func(operation string) {
@@ -3363,7 +3363,10 @@ func prepareFacadeFinalizePlan(ctx context.Context, repo, revision string, state
 		}
 		native, err := validation.compact(reviewtransaction.FixDeltaHashForSnapshot(fix), state.FixFindingIDs, request)
 		if err != nil {
-			return plan, err
+			// The caller-authored recapture never reaches provider capture: it
+			// submits straight to here, so this is where its attempt is spent.
+			payload, _ := canonicalProviderRoleResult(*validation) // marshalling an already-decoded result cannot fail
+			return plan, reviewRecordInconclusiveTargetedValidation(storeDir, request, payload, err)
 		}
 		if err := state.CompleteCorrectionVerification(fix, actual, native, captured.Record, captured.Payload, complete); err != nil {
 			return plan, err
