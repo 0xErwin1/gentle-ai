@@ -133,17 +133,35 @@ func selectRenderProvider(desired configdomain.DesiredState) (render.Provider, [
 		return nil, unavailable
 	}
 
-	return composedProvider(selected), nil
+	owner := map[string]render.Provider{}
+	for _, provider := range selected {
+		declaring, ok := provider.(render.SelectorProvider)
+		if !ok {
+			continue
+		}
+		for path := range declaring.Selectors(desired) {
+			owner[path] = provider
+		}
+	}
+
+	return composedProvider{members: selected, owner: owner}, nil
 }
 
-// composedProvider concatenates the artifacts of every selected adapter. A
-// document declaring no adapter renders nothing, which is the honest reading of
-// a desired state that names no target.
-type composedProvider []render.Provider
+// composedProvider concatenates the artifacts of every selected adapter and
+// forwards each adapter's optional capabilities for the paths that adapter
+// owns. Dropping them here would silently downgrade a composed artifact to
+// whole-file ownership, which reconciliation then refuses as stale.
+//
+// A document declaring no adapter renders nothing, which is the honest reading
+// of a desired state that names no target.
+type composedProvider struct {
+	members []render.Provider
+	owner   map[string]render.Provider
+}
 
 func (composed composedProvider) Render(state configdomain.DesiredState, baseline map[string][]byte) ([]render.ArtifactContent, error) {
 	artifacts := make([]render.ArtifactContent, 0)
-	for _, provider := range composed {
+	for _, provider := range composed.members {
 		rendered, err := provider.Render(state, baseline)
 		if err != nil {
 			return nil, err
@@ -152,6 +170,39 @@ func (composed composedProvider) Render(state configdomain.DesiredState, baselin
 	}
 
 	return artifacts, nil
+}
+
+func (composed composedProvider) Selectors(state configdomain.DesiredState) map[string][]string {
+	selectors := map[string][]string{}
+	for _, provider := range composed.members {
+		declaring, ok := provider.(render.SelectorProvider)
+		if !ok {
+			continue
+		}
+		for path, owned := range declaring.Selectors(state) {
+			selectors[path] = append(selectors[path], owned...)
+		}
+	}
+
+	return selectors
+}
+
+func (composed composedProvider) Resources(path string, contents []byte, selectors []string) ([]render.Resource, error) {
+	decomposer, ok := composed.owner[path].(render.ResourceDecomposer)
+	if !ok {
+		return nil, fmt.Errorf("no adapter can decompose %q; remove the adapter that writes it from the document, then run gentle-ai config render again", path)
+	}
+
+	return decomposer.Resources(path, contents, selectors)
+}
+
+func (composed composedProvider) Merge(operation render.Operation, stagedPath string, target []byte) ([]byte, error) {
+	merger, ok := composed.owner[operation.Path].(render.ResourceMerger)
+	if !ok {
+		return nil, fmt.Errorf("no adapter can merge %q; remove the adapter that writes it from the document, then run gentle-ai config render again", operation.Path)
+	}
+
+	return merger.Merge(operation, stagedPath, target)
 }
 
 func readConfigManifest(home, destination string) (render.Manifest, error) {
