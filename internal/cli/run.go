@@ -219,7 +219,8 @@ func RunPreparedInstall(prepared PreparedInstall, detection system.DetectionResu
 		return InstallResult{}, fmt.Errorf("persist install state preflight: %w", stateErr)
 	}
 	restoreCodexServiceTier(&input.Selection, persistedState)
-	background, err := resolveOpenCodeBackgroundCLI(flags.OpenCodeBackgroundSubagentsSet, flags.OpenCodeBackgroundSubagents, persistedState)
+	backgroundSet, backgroundValue := backgroundIntentSource(flags.OpenCodeBackgroundSubagentsSet, flags.OpenCodeBackgroundSubagents, input.Selection)
+	background, err := resolveOpenCodeBackgroundCLI(backgroundSet, backgroundValue, persistedState)
 	if err != nil {
 		return InstallResult{}, err
 	}

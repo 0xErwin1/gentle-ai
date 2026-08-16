@@ -21,6 +21,7 @@ type Selection struct {
 	CodexCarrilModelAssignments      map[string]string                // key = carril profile (sdd-strong|sdd-mid|sdd-cheap); value = model id
 	CodexPhaseModelAssignments       map[string]string                // key = phase name; value = model id (Custom per-phase picker only)
 	CommunityTools                   []CommunityToolID                // optional cross-agent community tools/plugins
+	BackgroundIntent                 OpenCodeBackgroundIntent         // OpenCode background subagent choice; empty = unresolved
 }
 
 func (s Selection) HasCommunityTool(tool CommunityToolID) bool {
