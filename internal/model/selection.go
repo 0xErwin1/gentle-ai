@@ -25,6 +25,7 @@ type Selection struct {
 	BackgroundIntent                 OpenCodeBackgroundIntent         // OpenCode background subagent choice; empty = unresolved
 	Scope                            InstallScope                     // install scope; empty = unresolved
 	Channel                          InstallChannel                   // release track; empty = unresolved
+	RDDMode                          RDDMode                          // global review kill switch; empty = unresolved
 }
 
 func (s Selection) HasCommunityTool(tool CommunityToolID) bool {
