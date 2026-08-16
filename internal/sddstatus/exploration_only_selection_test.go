@@ -1,7 +1,9 @@
 package sddstatus
 
 import (
+	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -99,6 +101,34 @@ func TestAllExplorationOnlyDirectoriesBlockAsNoActiveChanges(t *testing.T) {
 	}
 	if !strings.Contains(reasons, "explore-widget-idea") {
 		t.Fatalf("the refusal must name the exploration-only directory so the operator can address it explicitly.\ngot:\n%s", reasons)
+	}
+}
+
+func TestUnstatableMarkerKeepsChangeAnActiveCandidate(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("relies on POSIX symlink semantics to force a non-ErrNotExist stat error")
+	}
+	root := t.TempDir()
+	seedReadyChange(t, root, "add-widget", "- [ ] 1.1 Wire widget\n")
+	changeRoot := filepath.Join(root, "openspec", "changes", "explore-broken")
+	write(t, filepath.Join(changeRoot, "exploration.md"), "# Exploration\n")
+	// A self-referential symlink makes os.Stat fail with ELOOP, not
+	// ErrNotExist. The classification is unprovable, so the directory must
+	// stay an active-change candidate (surfacing as ambiguity), never drop
+	// out of selection silently.
+	if err := os.Symlink("proposal.md", filepath.Join(changeRoot, "proposal.md")); err != nil {
+		t.Fatalf("Symlink() error = %v", err)
+	}
+
+	status, err := Resolve(ResolveOptions{CWD: root})
+	if err != nil {
+		t.Fatalf("Resolve() error = %v", err)
+	}
+	if status.NextRecommended != "select-change" {
+		t.Fatalf("NextRecommended = %q, want select-change: an unprovable exploration-only classification must fail toward ambiguity, not silent exclusion", status.NextRecommended)
+	}
+	if !strings.Contains(strings.Join(status.BlockedReasons, "\n"), "explore-broken") {
+		t.Fatalf("the unprovable directory must stay visible as a candidate.\ngot: %v", status.BlockedReasons)
 	}
 }
 

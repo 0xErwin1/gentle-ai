@@ -3,6 +3,7 @@ package sddstatus
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -428,13 +429,16 @@ func selectableOpenSpecChanges(changesDir string, changes []string) []string {
 
 // explorationOnlyChangeDir reports whether the change directory's only SDD
 // artifact is an exploration artifact: exploration.md is present and none of
-// proposal.md, design.md, tasks.md, or specs/ exist.
+// proposal.md, design.md, tasks.md, or specs/ exist. Only os.ErrNotExist
+// proves a marker absent; any other stat error makes the classification
+// unprovable, so the directory stays an active-change candidate (failing
+// toward visibility, never toward silent exclusion from selection).
 func explorationOnlyChangeDir(changeRoot string) bool {
 	if _, err := os.Stat(filepath.Join(changeRoot, "exploration.md")); err != nil {
 		return false
 	}
 	for _, marker := range []string{"proposal.md", "design.md", "tasks.md", "specs"} {
-		if _, err := os.Stat(filepath.Join(changeRoot, marker)); err == nil {
+		if _, err := os.Stat(filepath.Join(changeRoot, marker)); !errors.Is(err, os.ErrNotExist) {
 			return false
 		}
 	}
