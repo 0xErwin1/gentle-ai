@@ -40,10 +40,12 @@ func (provider RoleProvider) Stage(state config.DesiredState, stageRoot string) 
 		return fmt.Errorf("create sub-agent directory: %w", err)
 	}
 
+	rendered := renderedRoleNames(state.Roles)
+
 	for _, role := range state.Roles {
 		name := renderedRoleName(role)
 		path := filepath.Join(directory, name+".md")
-		if err := os.WriteFile(path, roleDocument(role, name), 0o644); err != nil {
+		if err := os.WriteFile(path, roleDocument(role, name, rendered), 0o644); err != nil {
 			return fmt.Errorf("write sub-agent %q: %w", name, err)
 		}
 	}
@@ -54,7 +56,7 @@ func (provider RoleProvider) Stage(state config.DesiredState, stageRoot string) 
 // roleDocument renders only what the document declared. A field the role left
 // out is left out of the file: filling it with a default would put words in the
 // operator's mouth and make the rendered agent disagree with the document.
-func roleDocument(role config.Role, name string) []byte {
+func roleDocument(role config.Role, name string, rendered map[config.RoleID]string) []byte {
 	frontmatter := []string{"---", "name: " + name}
 
 	if role.Description != "" {
@@ -69,7 +71,7 @@ func roleDocument(role config.Role, name string) []byte {
 	if len(role.Tools) > 0 {
 		frontmatter = append(frontmatter, "tools: "+strings.Join(role.Tools, ", "))
 	}
-	if references := referencedNames(role); len(references) > 0 {
+	if references := referencedNames(role, rendered); len(references) > 0 {
 		frontmatter = append(frontmatter, "references: "+strings.Join(references, ", "))
 	}
 	frontmatter = append(frontmatter, "---", "")
@@ -82,14 +84,31 @@ func roleDocument(role config.Role, name string) []byte {
 	return []byte(document)
 }
 
-func referencedNames(role config.Role) []string {
+// referencedNames resolves each reference to the name the adapter renders. A
+// document references logical identities so a rename is one edit, which only
+// holds if the generated file names the target as it was rendered: emitting the
+// logical id leaves the file pointing at an agent that does not exist.
+func referencedNames(role config.Role, rendered map[config.RoleID]string) []string {
 	names := make([]string, 0, len(role.References))
 	for _, reference := range role.References {
-		names = append(names, string(reference))
+		name, resolved := rendered[config.RoleID(reference)]
+		if !resolved {
+			name = string(reference)
+		}
+		names = append(names, name)
 	}
 	sort.Strings(names)
 
 	return names
+}
+
+func renderedRoleNames(roles []config.Role) map[config.RoleID]string {
+	rendered := make(map[config.RoleID]string, len(roles))
+	for _, role := range roles {
+		rendered[role.ID] = renderedRoleName(role)
+	}
+
+	return rendered
 }
 
 func renderedRoleName(role config.Role) string {
