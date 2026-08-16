@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/json"
 	"flag"
@@ -14,6 +15,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/render"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/state"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/system"
 )
 
 var writeConfigState = state.WriteDesiredAndManifest
@@ -85,9 +87,19 @@ func RunConfig(args []string, stdout io.Writer) error {
 	if err != nil {
 		return err
 	}
+	stager := configurationStager{adapters: desired.Selection.Agents, readRoot: *home}
+	provisioned := stager.ProvisionedResources(desired)
+	manifest.Resources = append(manifest.Resources, provisioned...)
 	result["manifest"] = manifest
 	if operation == "render" {
 		return writeConfigResult(stdout, result)
+	}
+	detection, err := system.Detect(context.Background())
+	if err != nil {
+		return fmt.Errorf("detect platform for provisioning check: %w", err)
+	}
+	for key, value := range liveProvisioning(provisioned, ResolveInstallProfile(detection)) {
+		live[key] = value
 	}
 	addLiveFileResources(live, *destination, manifest)
 	plan := render.Plan(render.Manifest{}, manifest, live)
@@ -106,6 +118,14 @@ func RunConfig(args []string, stdout io.Writer) error {
 		}
 	}
 	result["plan"] = plan
+	if pending := render.PendingProvisioning(plan); len(pending) > 0 {
+		result["pendingProvisioning"] = pending
+		result["pendingProvisioningReason"] = fmt.Sprintf(
+			"%d declared component(s) are installed rather than written and were not performed here; run gentle-ai install --config %s to provision them",
+			len(pending), *configPath,
+		)
+	}
+
 	return writeConfigResult(stdout, result)
 }
 
