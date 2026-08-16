@@ -7,6 +7,8 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+
+	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
 )
 
 type ResourceKey struct {
@@ -14,10 +16,22 @@ type ResourceKey struct {
 	Selector string `json:"selector"`
 }
 
+// ProvisionSelector marks a resource that is performed rather than written.
+// Its Path carries the component id so the resource still has a stable key,
+// and its Digest records presence because there are no desired bytes to compare.
+const (
+	ProvisionSelector = "provision"
+	ProvisionPresent  = "present"
+)
+
 type Resource struct {
 	Path     string `json:"path"`
 	Selector string `json:"selector"`
 	Digest   string `json:"digest"`
+
+	// Component names the provisioned component when the resource is an action.
+	// It is absent for the ordinary case of bytes at a path.
+	Component model.ComponentID `json:"component,omitempty"`
 }
 
 type Manifest struct {
@@ -35,11 +49,12 @@ const (
 )
 
 type Operation struct {
-	Kind     OperationKind `json:"kind"`
-	Path     string        `json:"path"`
-	Selector string        `json:"selector"`
-	Code     string        `json:"code,omitempty"`
-	Reason   string        `json:"reason,omitempty"`
+	Kind      OperationKind     `json:"kind"`
+	Path      string            `json:"path"`
+	Selector  string            `json:"selector"`
+	Code      string            `json:"code,omitempty"`
+	Reason    string            `json:"reason,omitempty"`
+	Component model.ComponentID `json:"component,omitempty"`
 }
 
 type ReconcilePlan struct {
@@ -83,6 +98,18 @@ func Plan(previous, desired Manifest, live map[ResourceKey]string) ReconcilePlan
 		key := resourceKey(resource)
 		old, wasManaged := prior[key]
 		actual, exists := live[key]
+
+		// Provisioning is reconciled by presence: there are no desired bytes, so
+		// the only questions are whether it is there and whether it must be.
+		if resource.Selector == ProvisionSelector {
+			if exists {
+				operations = append(operations, operation(Skip, resource, "render.provision.present", "provisioned component is already present"))
+			} else {
+				operations = append(operations, operation(Create, resource, "", ""))
+			}
+			continue
+		}
+
 		switch {
 		case !wasManaged && !exists:
 			operations = append(operations, operation(Create, resource, "", ""))
@@ -99,6 +126,12 @@ func Plan(previous, desired Manifest, live map[ResourceKey]string) ReconcilePlan
 
 	for key, resource := range prior {
 		if _, stillDesired := next[key]; stillDesired {
+			continue
+		}
+		// Dropping provisioning from a document does not uninstall it. Removing
+		// a binary someone else may depend on is a destructive action no
+		// document asked for, and reconciliation never invents one.
+		if resource.Selector == ProvisionSelector {
 			continue
 		}
 		if live[key] != resource.Digest {
@@ -138,7 +171,7 @@ func resourceKey(resource Resource) ResourceKey {
 }
 
 func operation(kind OperationKind, resource Resource, code, reason string) Operation {
-	return Operation{Kind: kind, Path: resource.Path, Selector: resource.Selector, Code: code, Reason: reason}
+	return Operation{Kind: kind, Path: resource.Path, Selector: resource.Selector, Code: code, Reason: reason, Component: resource.Component}
 }
 
 func operationRank(kind OperationKind) int {
@@ -149,4 +182,18 @@ func sortResources(resources []Resource) {
 	sort.Slice(resources, func(i, j int) bool {
 		return resources[i].Path+resources[i].Selector < resources[j].Path+resources[j].Selector
 	})
+}
+
+// PendingProvisioning lists the components a plan reports as absent. Apply does
+// not perform them, so a caller that reports success without naming them would
+// be claiming a desired state it did not reach.
+func PendingProvisioning(plan ReconcilePlan) []model.ComponentID {
+	pending := make([]model.ComponentID, 0)
+	for _, operation := range plan.Operations {
+		if operation.Selector == ProvisionSelector && operation.Kind == Create {
+			pending = append(pending, operation.Component)
+		}
+	}
+
+	return pending
 }
