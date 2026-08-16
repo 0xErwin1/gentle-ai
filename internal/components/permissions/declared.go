@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/gentleman-programming/gentle-ai/v2/internal/agents"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
 )
 
 // Declared are the permission rules a document adds on top of the guardrails
@@ -17,16 +18,52 @@ type Declared struct {
 	Ask   []string
 }
 
+// SupportsDeclaredRules reports whether an adapter expresses permissions as the
+// allow/deny/ask rule lists a document declares. It reads the shipped overlay
+// rather than naming adapters, so an adapter whose overlay changes shape stops
+// or starts qualifying on its own.
+//
+// The distinction matters because the adapters that do not qualify still have
+// an overlay: OpenCode keys its permissions per tool and glob under a different
+// name entirely. Writing rule lists into those settings adds a key the client
+// never reads, which looks configured and does nothing.
+func SupportsDeclaredRules(id model.AgentID) bool {
+	overlay := agentOverlay(id)
+	if overlay == nil {
+		return false
+	}
+
+	var shipped struct {
+		Permissions map[string]json.RawMessage `json:"permissions"`
+	}
+	if json.Unmarshal(overlay, &shipped) != nil {
+		return false
+	}
+
+	for _, rule := range []string{"allow", "deny", "ask"} {
+		raw, present := shipped.Permissions[rule]
+		if !present {
+			continue
+		}
+		var values []string
+		if json.Unmarshal(raw, &values) == nil {
+			return true
+		}
+	}
+
+	return false
+}
+
 // InjectDeclared merges declared permission rules into the adapter's settings.
-// An adapter whose permissions live outside settings.json takes none, which the
-// caller reports rather than dropping.
+// An adapter that does not express permissions as rule lists takes none, which
+// the caller reports rather than dropping.
 func InjectDeclared(homeDir string, adapter agents.Adapter, declared Declared) (InjectionResult, error) {
 	if declared.empty() {
 		return InjectionResult{}, nil
 	}
 
 	settingsPath := adapter.SettingsPath(homeDir)
-	if settingsPath == "" || agentOverlay(adapter.Agent()) == nil {
+	if settingsPath == "" || !SupportsDeclaredRules(adapter.Agent()) {
 		return InjectionResult{}, nil
 	}
 
