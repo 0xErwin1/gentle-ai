@@ -8,6 +8,7 @@ import (
 )
 
 type InstallFlags struct {
+	Config     string
 	Agents     []string
 	Components []string
 	Skills     []string
@@ -24,6 +25,17 @@ type InstallFlags struct {
 	PiBackgroundSubagents    string
 	PiBackgroundSubagentsSet bool
 }
+
+func HasConfigFlag(args []string) bool {
+	for _, arg := range args {
+		if arg == "--config" || strings.HasPrefix(arg, "--config=") {
+			return true
+		}
+	}
+	return false
+}
+
+func ValidateInstallConfigFlags(args []string) error { _, err := ParseInstallFlags(args); return err }
 
 const installChannelHelp = "Gentle AI channel: stable (default), beta, or nightly (alias for beta) — env: GENTLE_AI_CHANNEL"
 
@@ -56,6 +68,7 @@ func ParseInstallFlags(args []string) (InstallFlags, error) {
 
 	fs := flag.NewFlagSet("install", flag.ContinueOnError)
 	fs.SetOutput(ioDiscard{})
+	fs.StringVar(&opts.Config, "config", "", "desired configuration file")
 	registerListFlag(fs, "agent", &opts.Agents)
 	registerListFlag(fs, "agents", &opts.Agents)
 	registerListFlag(fs, "component", &opts.Components)
@@ -78,14 +91,23 @@ func ParseInstallFlags(args []string) (InstallFlags, error) {
 	if fs.NArg() > 0 {
 		return InstallFlags{}, fmt.Errorf("unexpected install argument %q", fs.Arg(0))
 	}
+	// A document is the whole selection, so a semantic flag alongside it has no
+	// unambiguous meaning. Tracking that a flag appeared keeps the config path
+	// intact for the error message instead of overwriting it with a marker.
+	semanticFlagUsed := false
 	fs.Visit(func(f *flag.Flag) {
 		switch f.Name {
 		case "opencode-background-subagents":
 			opts.OpenCodeBackgroundSubagentsSet = true
 		case "pi-background-subagents":
 			opts.PiBackgroundSubagentsSet = true
+		case "agent", "agents", "component", "components", "skill", "skills", "persona", "preset", "sdd-mode":
+			semanticFlagUsed = true
 		}
 	})
+	if opts.Config != "" && semanticFlagUsed {
+		return InstallFlags{}, fmt.Errorf("config.flags.exclusive: --config cannot be combined with semantic selection flags; run gentle-ai install --config <path> without selection flags")
+	}
 
 	return opts, nil
 }

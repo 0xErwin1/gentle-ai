@@ -8,26 +8,36 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 
 	configdomain "github.com/gentleman-programming/gentle-ai/v2/internal/config"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/render"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/state"
 )
 
 // RunConfig performs read-only declarative configuration operations.
 func RunConfig(args []string, stdout io.Writer) error {
 	if len(args) == 0 {
-		return fmt.Errorf("usage: gentle-ai config <validate|render|plan|diff> --config <path>")
+		return fmt.Errorf("usage: gentle-ai config <validate|render|plan|diff|export>")
 	}
 	operation := args[0]
 	flags := flag.NewFlagSet("config "+operation, flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
 	configPath := flags.String("config", "", "configuration file")
+	home := flags.String("home", "", "home directory for persisted state")
 	destination := flags.String("destination", "", "live destination to inspect")
 	stage := flags.String("stage", "", "isolated staging root")
 	if err := flags.Parse(args[1:]); err != nil {
 		return err
 	}
-	if flags.NArg() != 0 || *configPath == "" {
+	if flags.NArg() != 0 {
+		return fmt.Errorf("config %s does not accept positional arguments; run gentle-ai config %s --help", operation, operation)
+	}
+	if operation == "export" {
+		return exportConfig(stdout, *configPath, *home)
+	}
+	if *configPath == "" {
 		return fmt.Errorf("config %s requires --config; run gentle-ai config %s --config <path>", operation, operation)
 	}
 	document, err := os.ReadFile(*configPath)
@@ -82,7 +92,128 @@ func digest(contents []byte) string {
 	return fmt.Sprintf("%x", sum)
 }
 
-func writeConfigResult(stdout io.Writer, result map[string]any) error {
+func loadConfigSelection(path string) (model.Selection, error) {
+	document, err := os.ReadFile(path)
+	if err != nil {
+		return model.Selection{}, fmt.Errorf("read config: %w", err)
+	}
+	state, diagnostics := configdomain.Decode(document)
+	if len(diagnostics) != 0 {
+		return model.Selection{}, fmt.Errorf("config validation failed: %s; run gentle-ai config validate --config %q", diagnostics[0].Code, path)
+	}
+	return configdomain.Project(state), nil
+}
+
+func exportConfig(stdout io.Writer, configPath, home string) error {
+	if configPath != "" {
+		document, err := os.ReadFile(configPath)
+		if err != nil {
+			return fmt.Errorf("read config: %w", err)
+		}
+		desired, diagnostics := configdomain.Decode(document)
+		if len(diagnostics) != 0 {
+			return writeConfigResult(stdout, configdomain.ExportResult{Diagnostics: diagnostics})
+		}
+		return writeConfigResult(stdout, configdomain.Export(desired))
+	}
+	if home == "" {
+		var err error
+		home, err = os.UserHomeDir()
+		if err != nil {
+			return fmt.Errorf("resolve user home directory: %w", err)
+		}
+	}
+	desired, err := state.ReadDesired(home)
+	if err == nil {
+		return writeConfigResult(stdout, configdomain.Export(desired))
+	}
+	legacy, legacyErr := state.Read(home)
+	if legacyErr != nil {
+		return fmt.Errorf("read desired state: %w", err)
+	}
+	result := configdomain.Export(configdomain.FromSelection(model.Selection{
+		Agents:     legacyAgentIDs(legacy.InstalledAgents),
+		Components: legacy.Components,
+		Skills:     legacy.Skills,
+		Persona:    model.PersonaID(legacy.Persona),
+		Preset:     legacy.Preset,
+		SDDMode:    legacy.SDDMode,
+		StrictTDD:  legacy.StrictTDD,
+	}))
+	result.Diagnostics = append(result.Diagnostics, legacyExportDiagnostics(legacy)...)
+	result.Lossless = false
+	return writeConfigResult(stdout, result)
+}
+
+func legacyExportDiagnostics(legacy state.InstallState) []configdomain.Diagnostic {
+	diagnostics := make([]configdomain.Diagnostic, 0, len(legacy.CommunityTools)+len(legacy.ModelAssignments)+4)
+	communityTools := append([]string(nil), legacy.CommunityTools...)
+	sort.Strings(communityTools)
+	for index, tool := range communityTools {
+		diagnostics = append(diagnostics, configdomain.Diagnostic{
+			Code:     "config.export.loss.community-tool",
+			Path:     fmt.Sprintf("$.community_tools[%d]", index),
+			Severity: configdomain.Error,
+			Message:  fmt.Sprintf("legacy community tool %q cannot be represented; rerun gentle-ai install and select %q", tool, tool),
+		})
+	}
+
+	assignmentNames := make([]string, 0, len(legacy.ModelAssignments))
+	for name := range legacy.ModelAssignments {
+		assignmentNames = append(assignmentNames, name)
+	}
+	sort.Strings(assignmentNames)
+	for _, name := range assignmentNames {
+		assignment := legacy.ModelAssignments[name]
+		value := fmt.Sprintf("%s=%s/%s", name, assignment.ProviderID, assignment.ModelID)
+		if assignment.Effort != "" {
+			value += "@" + assignment.Effort
+		}
+		diagnostics = append(diagnostics, configdomain.Diagnostic{
+			Code:     "config.export.loss.model-assignment",
+			Path:     "$.model_assignments." + name,
+			Severity: configdomain.Error,
+			Message:  fmt.Sprintf("legacy model assignment %q cannot be represented; reconfigure it through gentle-ai's model picker", value),
+		})
+	}
+
+	if legacy.BackgroundIntent != "" {
+		diagnostics = append(diagnostics, configdomain.Diagnostic{
+			Code:     "config.export.loss.background-intent",
+			Path:     "$.opencode_background_subagents",
+			Severity: configdomain.Error,
+			Message:  fmt.Sprintf("legacy OpenCode background intent %q cannot be represented; rerun gentle-ai install with the same background preference", legacy.BackgroundIntent),
+		})
+	}
+
+	diagnostics = append(diagnostics, configdomain.Diagnostic{
+		Code: "config.export.loss.legacy-operational", Path: "$", Severity: configdomain.Error,
+		Message: "legacy install state omits runtime and provenance fields from desired configuration",
+	})
+	if !legacy.SelectionConfigured {
+		diagnostics = append(diagnostics, configdomain.Diagnostic{
+			Code: "config.export.loss.ambiguous-intent", Path: "$", Severity: configdomain.Error,
+			Message: "legacy install state cannot distinguish inferred defaults from an explicit selection",
+		})
+	}
+	if legacy.RDDMode != "" {
+		diagnostics = append(diagnostics, configdomain.Diagnostic{
+			Code: "config.export.loss.user-owned", Path: "$.rdd_mode", Severity: configdomain.Error,
+			Message: "user-owned review policy remains local and is excluded from desired configuration",
+		})
+	}
+	return diagnostics
+}
+
+func legacyAgentIDs(values []string) []model.AgentID {
+	agents := make([]model.AgentID, len(values))
+	for index, value := range values {
+		agents[index] = model.AgentID(value)
+	}
+	return agents
+}
+
+func writeConfigResult(stdout io.Writer, result any) error {
 	encoder := json.NewEncoder(stdout)
 	encoder.SetIndent("", "  ")
 	return encoder.Encode(result)
