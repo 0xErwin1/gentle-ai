@@ -102,6 +102,8 @@ func RunArgs(args []string, stdout io.Writer) error {
 			return cli.RunSDDVerifyValidate(args[1:], stdout)
 		case "codegraph":
 			return cli.RunCodeGraph(args[1:], stdout)
+		case "config":
+			return cli.RunConfig(args[1:], stdout)
 		case "review":
 			// The kill switch must stay reachable even when review authority
 			// itself is disabled, so it is dispatched ahead of the facade.
