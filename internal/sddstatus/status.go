@@ -487,7 +487,7 @@ func Resolve(options ResolveOptions) (Status, error) {
 	if err != nil {
 		return Status{}, err
 	}
-	runtimeStatus, runtimeAttemptTokens, runtimeStatusErr := loadNativeRuntimeStatus(context.Background(), workspaceRoot, changeName, instance)
+	runtimeStatus, runtimeAttemptTokens, repositoryRoot, runtimeStatusErr := loadNativeRuntimeStatus(context.Background(), workspaceRoot, changeName, instance)
 	var grantedRoots []string
 	if runtimeStatus != nil {
 		grantedRoots = runtimeStatus.GrantedRoots
@@ -601,11 +601,22 @@ func Resolve(options ResolveOptions) (Status, error) {
 		nextRecommended = "resolve-review"
 	}
 	var boundGate *ReviewGateState
+	legacyVerifyReportAttestationRequired := false
 	bridge := compactPreVerifyBridge{}
 	recoverable := authorityOnlyFailedReport(readText(firstPath(artifactPaths.VerifyReport)))
 	if governingRef != nil {
 		if !reviewDisabled {
 			result, reason, err := reviewtransaction.ValidateSDDReceiptRef(context.Background(), workspaceRoot, *governingRef)
+			allowReason := "explicit bound compact authority exactly matches the current repository"
+			if err == nil && result == reviewtransaction.GateScopeChanged {
+				switch classifyPostReviewVerifyReportAttestation(context.Background(), repositoryRoot, workspaceRoot, changeName, *governingRef, runtimeStatus, specCounts) {
+				case postReviewVerifyReportBound:
+					result = reviewtransaction.GateAllow
+					allowReason = "bound receipt differs only by the native-settlement-attested canonical passing verify report"
+				case postReviewVerifyReportRequired:
+					legacyVerifyReportAttestationRequired = true
+				}
+			}
 			if err == nil && result == reviewtransaction.GateAllow {
 				staleEvidence := artifacts["verifyReport"] == ArtifactDone && verifyResult.Stale && reviewState == nil
 				if applyState == ApplyAllDone && (artifacts["verifyReport"] != ArtifactDone || staleEvidence || runtimeRemediationComplete) {
@@ -616,7 +627,11 @@ func Resolve(options ResolveOptions) (Status, error) {
 						remediationState = RemediationState{}
 					}
 				}
-				boundGate = &ReviewGateState{Result: result, Reason: "explicit bound compact authority exactly matches the current repository"}
+				boundGate = &ReviewGateState{Result: result, Reason: allowReason}
+			} else if legacyVerifyReportAttestationRequired {
+				dependencies.Verify = DependencyReady
+				dependencies.Archive = DependencyBlocked
+				nextRecommended = string(PhaseVerify)
 			} else {
 				dependencies.Verify = DependencyBlocked
 				dependencies.Archive = DependencyBlocked
@@ -694,6 +709,9 @@ func Resolve(options ResolveOptions) (Status, error) {
 	if runtimeRemediationComplete && status.Dependencies.Verify == DependencyReady && status.Dependencies.Archive == DependencyBlocked && status.NextRecommended == string(PhaseVerify) {
 		status.verifyRefreshReason = runtimeRemediationVerifyRefreshInstruction
 	}
+	if legacyVerifyReportAttestationRequired {
+		status.verifyRefreshReason = legacyVerifyReportAttestationInstruction(workspaceRoot, changeName)
+	}
 	if options.IncludeInstructions {
 		instructions := renderPhaseInstructions(status)
 		status.PhaseInstructions = &instructions
@@ -707,32 +725,34 @@ func Resolve(options ResolveOptions) (Status, error) {
 // attempt's own token as the caller's continuation (#2463). A non-empty
 // instance binds the read to one change-instance identity (#2563, S4b of
 // #2540) so replay projects that instance's granted roots; an empty instance
-// keeps #2557's conservative containment and projects none.
-func loadNativeRuntimeStatus(ctx context.Context, workspaceRoot, changeName, instance string) (*RuntimeStatus, map[int]string, error) {
+// keeps #2557's conservative containment and projects none. The resolved
+// repository root rides along (empty without Git) to avoid re-deriving it.
+func loadNativeRuntimeStatus(ctx context.Context, workspaceRoot, changeName, instance string) (*RuntimeStatus, map[int]string, string, error) {
 	// SDD status remains useful for non-Git planning fixtures and repositories.
 	// A native runtime chain cannot exist without a Git common-dir, so the
 	// absence of a repository means there is no runtime authority to embed.
-	if _, err := (reviewtransaction.SnapshotBuilder{Repo: workspaceRoot}).ResolveRepositoryRoot(ctx); err != nil {
+	repositoryRoot, err := (reviewtransaction.SnapshotBuilder{Repo: workspaceRoot}).ResolveRepositoryRoot(ctx)
+	if err != nil {
 		if workspaceHasGitMetadata(workspaceRoot) {
-			return nil, nil, fmt.Errorf("resolve Git repository for native SDD runtime authority: %w", err)
+			return nil, nil, "", fmt.Errorf("resolve Git repository for native SDD runtime authority: %w", err)
 		}
-		return nil, nil, nil
+		return nil, nil, "", nil
 	}
 	store, err := OpenRuntimeStore(ctx, workspaceRoot, changeName)
 	if err != nil {
-		return nil, nil, fmt.Errorf("open native SDD runtime authority: %w", err)
+		return nil, nil, "", fmt.Errorf("open native SDD runtime authority: %w", err)
 	}
 	if instance != "" {
 		if store, err = store.ForInstance(instance); err != nil {
-			return nil, nil, fmt.Errorf("bind native SDD runtime authority to the change instance: %w", err)
+			return nil, nil, "", fmt.Errorf("bind native SDD runtime authority to the change instance: %w", err)
 		}
 	}
 	replay, err := store.load()
 	if err != nil {
-		return nil, nil, fmt.Errorf("read native SDD runtime authority: %w", err)
+		return nil, nil, "", fmt.Errorf("read native SDD runtime authority: %w", err)
 	}
 	status := replay.Status
-	return &status, replay.AttemptTokens, nil
+	return &status, replay.AttemptTokens, repositoryRoot, nil
 }
 
 func workspaceHasGitMetadata(workspaceRoot string) bool {
@@ -953,7 +973,7 @@ func resolveEngramStatus(workspaceRoot string, requestedChange string, includeIn
 	// resurrection hazard. The Engram path therefore keeps S1's honest block
 	// (naming both exits) without a consent envelope, and its runtime read
 	// stays instance-less, projecting no granted roots (#2563).
-	runtimeStatus, runtimeAttemptTokens, runtimeStatusErr := loadNativeRuntimeStatus(context.Background(), workspaceRoot, changeName, "")
+	runtimeStatus, runtimeAttemptTokens, _, runtimeStatusErr := loadNativeRuntimeStatus(context.Background(), workspaceRoot, changeName, "")
 	reviewState, reviewStateReason := readReviewTransaction("", artifactsByType["review/transaction"].Content)
 	coreReady := artifacts["proposal"] == ArtifactDone && artifacts["specs"] == ArtifactDone && artifacts["design"] == ArtifactDone && artifacts["tasks"] == ArtifactDone && taskProgress.Total > 0
 	applyState := resolveApplyState(coreReady, taskProgress)
@@ -1997,6 +2017,13 @@ func resolveNextRecommended(dependencies Dependencies, applyState ApplyState, ve
 }
 
 const runtimeRemediationVerifyRefreshInstruction = "A passing native remediation settlement completed after the persisted verification report; run fresh verification and persist a report bound after that settlement before archive."
+
+func legacyVerifyReportAttestationInstruction(workspaceRoot, changeName string) string {
+	return fmt.Sprintf(
+		"verification attestation required: persist the exact canonical passing verify-report, then run `gentle-ai sdd-attempt acquire --cwd %s --change %q --request-id \"<unique-request-id>\" --work-unit \"%s\" --evidence-goal \"attest final verification report\" --max-attempts 1 --max-changed-lines 20`; after state proceed, settle that token with the report's evidence_revision. This distinct current-binary settlement records the required native report digest.",
+		pathquote.Quote(workspaceRoot), changeName, finalVerifyAttestationWorkUnit,
+	)
+}
 
 func renderPhaseInstructions(status Status) PhaseInstructions {
 	change := "<unresolved>"
