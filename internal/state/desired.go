@@ -36,6 +36,18 @@ func ReadManifest(home, destination string) (render.Manifest, error) {
 	return manifest, err
 }
 
+// WriteDesired records the desired state alone, for a frontend that renders and
+// owns the client files itself. No manifest is written: the manifest records
+// which bytes gentle-ai owns, and such a frontend owns them instead.
+func WriteDesired(home string, desired config.DesiredState) error {
+	data, err := canonicalJSON(desired)
+	if err != nil {
+		return err
+	}
+
+	return writeAtomic(DesiredPath(home), data)
+}
+
 // WriteDesiredAndManifest atomically writes each store and restores both on a failed pair.
 func WriteDesiredAndManifest(home, destination string, desired config.DesiredState, manifest render.Manifest) error {
 	desiredPath, manifestPath := DesiredPath(home), ManifestPath(home, destination)

@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/system"
@@ -79,7 +80,7 @@ func rejects(diagnostics []configdomain.Diagnostic) bool {
 // RunConfig performs declarative configuration operations.
 func RunConfig(args []string, stdout io.Writer) error {
 	if len(args) == 0 {
-		return fmt.Errorf("usage: gentle-ai config <validate|render|plan|diff|apply|reconcile|export>")
+		return fmt.Errorf("usage: gentle-ai config <validate|render|plan|diff|apply|reconcile|adopt|export>")
 	}
 	operation := args[0]
 	flags := flag.NewFlagSet("config "+operation, flag.ContinueOnError)
@@ -97,6 +98,9 @@ func RunConfig(args []string, stdout io.Writer) error {
 	if operation == "export" {
 		return exportConfig(stdout, *configPath, *home)
 	}
+	if operation == "adopt" {
+		return adoptConfig(stdout, *configPath, *home)
+	}
 	if *configPath == "" {
 		return fmt.Errorf("config %s requires --config; run gentle-ai config %s --config <path>", operation, operation)
 	}
@@ -110,7 +114,7 @@ func RunConfig(args []string, stdout io.Writer) error {
 		return reportedDiagnostics(stdout, result, diagnostics)
 	}
 	if operation != "render" && operation != "plan" && operation != "diff" && operation != "apply" && operation != "reconcile" {
-		return fmt.Errorf("unknown config operation %q; run gentle-ai config <validate|render|plan|diff|apply|reconcile> --config <path>", operation)
+		return fmt.Errorf("unknown config operation %q; run gentle-ai config <validate|render|plan|diff|apply|reconcile|adopt> --config <path>", operation)
 	}
 	if *destination == "" || *stage == "" {
 		return fmt.Errorf("config %s requires --destination and --stage; run gentle-ai config %s --config <path> --destination <path> --stage <path>", operation, operation)
@@ -445,6 +449,72 @@ func loadConfigSelection(path string) (model.Selection, error) {
 		fmt.Fprintf(os.Stderr, "warning: %s at %s: %s\n", diagnostic.Code, diagnostic.Path, diagnostic.Message)
 	}
 	return configdomain.Project(state), nil
+}
+
+// adoptConfig records a document as the installation without writing a single
+// client file.
+//
+// A frontend that renders the tree itself -- a package manager, a
+// configuration system, anything that owns the files -- leaves gentle-ai unable
+// to see its own installation: doctor reads state.json, which only install and
+// sync ever wrote, so it reports an installation that is plainly there as
+// absent and recommends installing it again.
+//
+// The manifest is deliberately not written. It records which bytes gentle-ai
+// owns, and here it owns none of them: claiming them would let reconciliation
+// remove files that belong to whoever rendered them.
+func adoptConfig(stdout io.Writer, configPath, home string) error {
+	if configPath == "" {
+		return fmt.Errorf("config adopt requires --config; run gentle-ai config adopt --config <path> --home <path>")
+	}
+	if home == "" {
+		return fmt.Errorf("config adopt requires --home for persisted state; run gentle-ai config adopt --config <path> --home <path>")
+	}
+
+	document, err := os.ReadFile(configPath)
+	if err != nil {
+		return fmt.Errorf("read config: %w", err)
+	}
+
+	desired, diagnostics := decodeDesiredState(document)
+	result := map[string]any{"operation": "adopt", "diagnostics": diagnostics}
+	if rejects(diagnostics) {
+		return reportedDiagnostics(stdout, result, diagnostics)
+	}
+
+	selection := configdomain.Project(desired)
+	agentIDs := make([]string, 0, len(selection.Agents))
+	for _, agent := range selection.Agents {
+		agentIDs = append(agentIDs, string(agent))
+	}
+
+	if err := withInstallStateLock(home, func() error {
+		existing, err := state.Read(home)
+		if errors.Is(err, os.ErrNotExist) {
+			existing = state.InstallState{}
+		} else if err != nil {
+			return err
+		}
+
+		adopted := existing
+		adopted.InstalledAgents = agentIDs
+		adopted.InstalledBinaryVersion = AppVersion
+		adopted.SetSelection(selection)
+		adopted.RDDMode = string(selection.RDDMode)
+
+		return state.WriteReconciled(home, adopted)
+	}); err != nil {
+		return fmt.Errorf("record adopted installation: %w", err)
+	}
+
+	if err := state.WriteDesired(home, desired); err != nil {
+		return fmt.Errorf("record adopted desired state: %w", err)
+	}
+
+	result["adopted"] = map[string]any{"agents": agentIDs, "home": home}
+	result["note"] = "the client files are owned by whatever rendered them; gentle-ai records what is installed and claims none of the bytes"
+
+	return writeConfigResult(stdout, result)
 }
 
 func exportConfig(stdout io.Writer, configPath, home string) error {
