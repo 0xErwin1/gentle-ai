@@ -30,6 +30,7 @@ type Selection struct {
 	SkillExclusions                  []SkillID                        // skills removed from whatever the selection resolves to
 	ModelPresets                     map[string]string                // named model profile per provider; absent provider = unresolved
 	SkillAssignments                 map[AgentID][]SkillID            // per-adapter skill overrides; absent adapter takes the flat Skills list
+	MCPServerAssignments             map[AgentID]map[string]MCPServer // per-adapter server overrides; absent adapter takes the flat MCPServers set
 	Permissions                      *Permissions                     // declared permission rules layered over the shipped defaults
 	RDDMode                          RDDMode                          // global review kill switch; empty = unresolved
 }
