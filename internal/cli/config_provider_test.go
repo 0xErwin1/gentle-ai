@@ -23,7 +23,9 @@ func TestRenderRefusesAnAdapterWithoutAProvider(t *testing.T) {
 
 	stage := t.TempDir()
 	output := new(bytes.Buffer)
-	if err := RunConfig([]string{"render", "--config", configPath, "--destination", t.TempDir(), "--stage", stage}, output); err != nil {
+	// A rejected document reports its diagnostics and then fails, so a caller
+	// asserting on those diagnostics is asserting on a failing run.
+	if err := RunConfig([]string{"render", "--config", configPath, "--destination", t.TempDir(), "--stage", stage}, output); err != nil && !strings.HasPrefix(err.Error(), "configuration rejected:") {
 		t.Fatalf("render: %v", err)
 	}
 
