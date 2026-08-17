@@ -3,6 +3,7 @@ package render
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"testing"
 
@@ -96,7 +97,9 @@ func TestStagedTreeEnumerationIsDeterministic(t *testing.T) {
 		t.Fatalf("second manifest: %v", err)
 	}
 
-	if !slices.Equal(firstManifest.Resources, secondManifest.Resources) {
+	// A resource carries the commands a provisioned agent runs, which makes it
+	// a struct with a slice in it rather than a comparable one.
+	if !reflect.DeepEqual(firstManifest.Resources, secondManifest.Resources) {
 		t.Errorf("manifests differ across identical renders:\n%+v\n%+v", firstManifest.Resources, secondManifest.Resources)
 	}
 }
