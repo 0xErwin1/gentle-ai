@@ -152,6 +152,16 @@ A role whose `renderedName` matches an agent a selected component generates is r
 | `url` | string — a remote server. Mutually exclusive with `command`. |
 | `enabled` | boolean |
 
+## Adoption
+
+A frontend that renders the tree itself — a package manager, a configuration system, anything that owns the files — leaves Gentle AI unable to see its own installation, because `doctor` reads the state only `install` and `sync` ever wrote.
+
+```console
+gentle-ai config adopt --config gentle-ai.json --home ~
+```
+
+`adopt` records the document as the installation and writes no client file. It deliberately writes no ownership manifest: the manifest records which bytes Gentle AI owns, and here it owns none of them, so claiming them would let reconciliation remove files belonging to whoever rendered them.
+
 ## Diagnostics
 
 Every diagnostic carries a `code`, the JSON `path` it applies to, a `severity` and a message naming the resolution.
