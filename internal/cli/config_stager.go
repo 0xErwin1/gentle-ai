@@ -93,6 +93,10 @@ func (stager configurationStager) Stage(state configdomain.DesiredState, stageRo
 		return err
 	}
 
+	if err := stagePiBackgroundPolicy(stageRoot, selection, adapters); err != nil {
+		return err
+	}
+
 	return stager.rebaseStagedPaths(stageRoot)
 }
 
@@ -252,7 +256,55 @@ func (stager configurationStager) sddOptions(selection model.Selection, adapter 
 		StrictTDD:                   selection.StrictTDD,
 		Profiles:                    selection.Profiles,
 		CodeGraphGuidanceMarkdown:   codeGraphGuidanceMarkdownForSDD(stager.readRoot, selection.CommunityTools),
+
+		// The installer also asks the local OpenCode whether it can run
+		// background sub-agents, and a render cannot: probing the machine
+		// would make the same document produce different prompts on two of
+		// them. A document that says "on" has already made that call, which
+		// is why only the explicit value carries the policy and `auto` --
+		// the value that means "decide for me" -- carries nothing.
+		IncludeOpenCodeBackgroundPolicy: adapter.Agent() == model.AgentOpenCode &&
+			selection.BackgroundIntent == model.OpenCodeBackgroundOn,
 	}
+}
+
+// stagePiBackgroundPolicy writes the policy gentle-pi reads. It runs outside
+// the component loop because Pi's background sub-agents are not one of Gentle
+// AI's components: they are a choice about the client, and gentle-pi owns the
+// components that would otherwise have carried it.
+//
+// `auto` stages nothing, matching the installer: it means the runtime decides,
+// and a resolved file would answer that on the runtime's behalf.
+func stagePiBackgroundPolicy(stageRoot string, selection model.Selection, adapters []agents.Adapter) error {
+	intent := selection.PiBackgroundIntent
+	if intent == "" || intent == model.PiBackgroundAuto {
+		return nil
+	}
+
+	declared := false
+	for _, adapter := range adapters {
+		if adapter.Agent() == model.AgentPi {
+			declared = true
+		}
+	}
+	if !declared {
+		return nil
+	}
+
+	content, err := json.MarshalIndent(map[string]string{
+		"schema": piBackgroundPolicySchema,
+		"policy": string(intent),
+	}, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshal Pi background policy: %w", err)
+	}
+
+	path := piBackgroundPolicyPath(stageRoot)
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return fmt.Errorf("create Pi background policy directory: %w", err)
+	}
+
+	return os.WriteFile(path, append(content, '\n'), 0o644)
 }
 
 // provisionedComponents are performed rather than written: a download or a
