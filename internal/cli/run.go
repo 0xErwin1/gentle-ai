@@ -4225,6 +4225,11 @@ func componentPathsWithWorkspaceScoped(homeDir, workspaceDir string, scope Insta
 			paths = append(paths, gga.ConfigPath(homeDir))
 			paths = append(paths, gga.AgentsTemplatePath(homeDir))
 		case model.ComponentTheme:
+			// Pi resolves its own theme from its own packages; never surface
+			// its settings path for theme management.
+			if adapter.Agent() == model.AgentPi {
+				break
+			}
 			p := adapter.SettingsPath(homeDir)
 			if adapter.Agent() == model.AgentOpenCode {
 				p = openCodeLoadedSettingsPath(homeDir, workspaceDir, adapter)
