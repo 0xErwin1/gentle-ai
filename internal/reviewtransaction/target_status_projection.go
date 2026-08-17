@@ -341,13 +341,13 @@ func projectCompactTerminalHistory(state CompactState, live Snapshot) compactTer
 		// The reviewed bytes and modes are now the immutable HEAD base. A clean
 		// target or a disjoint next slice is not an applicability claim on the
 		// historical receipt.
-		if len(live.Paths) == 0 || classifyCompactPathSetRelation(state.GenesisPaths, live.Paths) == compactPathsDisjoint {
+		if len(live.Paths) == 0 || classifyCompactPathSetRelation(state.CorrectionScopePaths(), live.Paths) == compactPathsDisjoint {
 			return compactTerminalHistoryUnrelated
 		}
 		return compactTerminalHistoryScopeChanged
 	}
 
-	relation := classifyCompactTargetRelation(state.CurrentSnapshot, live, state.GenesisPaths, compactTargetRelationEvidence{})
+	relation := classifyCompactTargetRelation(state.CurrentSnapshot, live, state.CorrectionScopePaths(), compactTargetRelationEvidence{})
 	if relation.Kind != compactTargetUnsafe {
 		return compactTerminalHistoryScopeChanged
 	}
@@ -368,7 +368,7 @@ func compactLiveTargetMatchesValidatedSnapshot(state CompactState, live Snapshot
 	return compactTargetProjectionsCompatible(initial.Kind, initial.Projection, live.Kind, live.Projection) &&
 		compactStartTargetKindsCompatible(initial.Kind, live.Kind) &&
 		initial.BaseTree == live.BaseTree && (!requireCurrentCandidate || state.CurrentSnapshot.CandidateTree == live.CandidateTree) &&
-		pathsAreSubset(live.Paths, state.GenesisPaths) == nil && sideBandMatches && len(live.LedgerIDs) == 0
+		pathsAreSubset(live.Paths, state.CorrectionScopePaths()) == nil && sideBandMatches && len(live.LedgerIDs) == 0
 }
 
 func legacyLiveTargetMatchesValidatedSnapshot(transaction Transaction, live Snapshot) bool {
