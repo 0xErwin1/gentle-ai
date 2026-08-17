@@ -113,6 +113,7 @@ gentle-ai config diff --config gentle-ai.json --home ~ --destination ~ --stage /
 | `config render` | writes only into `--stage` | Produce the provider-specific files for inspection, packaging or comparison. |
 | `config plan` / `config diff` | no | Compare the document with the live installation and report what would change. |
 | `config apply` / `config reconcile` | yes | Bring the managed configuration to the declared state, with rollback on failure. |
+| `config adopt` | writes only to `--home` | Record a document as the installation without writing a client file, for a frontend that renders the tree itself. |
 | `config export` | no | Emit the current installation as a document, reporting what it cannot carry. |
 | `install --config` | yes | Full install pipeline driven by the document. |
 | `sync --config` | yes | Reconcile an existing installation against the document. |

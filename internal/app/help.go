@@ -16,7 +16,7 @@ COMMANDS
   install      Configure AI coding agents on this machine
   uninstall    Remove Gentle AI managed files from this machine
   sync         Sync agent configs and skills to current version
-  config <validate|render|plan|diff|apply|reconcile|export> --config <path>
+  config <validate|render|plan|diff|apply|reconcile|adopt|export> --config <path>
                Read, preview and reconcile the declarative desired state;
                'install --config' and 'sync --config' consume the same document
   skill-registry refresh
