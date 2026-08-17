@@ -110,7 +110,7 @@ func selfUpdate(ctx context.Context, version string, profile system.PlatformProf
 	results := update.CheckAllWithCooldown(ctx, version, profile, homeDir, update.UpdateCheckTTL,
 		selfUpdateNowFn,
 		func(c context.Context, ver string, prof system.PlatformProfile) []update.UpdateResult {
-			return updateCheckFiltered(c, ver, prof, []string{"gentle-ai"})
+			return updateCheckFiltered(c, ver, prof, []string{"gentle-ai"}, false)
 		},
 	)
 

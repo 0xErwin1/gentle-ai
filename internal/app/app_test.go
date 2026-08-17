@@ -1507,7 +1507,7 @@ func TestRunArgs_UpgradeSkipsSelfUpdate(t *testing.T) {
 		return nil
 	}
 
-	updateCheckFiltered = func(context.Context, string, system.PlatformProfile, []string) []update.UpdateResult {
+	updateCheckFiltered = func(context.Context, string, system.PlatformProfile, []string, bool) []update.UpdateResult {
 		return []update.UpdateResult{
 			{
 				Tool:             update.ToolInfo{Name: "gentle-ai", InstallMethod: update.InstallBinary},
@@ -2550,7 +2550,7 @@ func installUpgradeSentinels(t *testing.T, home string) {
 	selfUpdateFn = func(context.Context, string, system.PlatformProfile, io.Writer) error {
 		return fmt.Errorf("selfUpdate must not run for this upgrade invocation")
 	}
-	updateCheckFiltered = func(context.Context, string, system.PlatformProfile, []string) []update.UpdateResult {
+	updateCheckFiltered = func(context.Context, string, system.PlatformProfile, []string, bool) []update.UpdateResult {
 		t.Fatalf("updateCheckFiltered must not run for this upgrade invocation")
 		return nil
 	}
