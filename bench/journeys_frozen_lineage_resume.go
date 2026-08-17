@@ -320,11 +320,12 @@ func exerciseFrozenLineageResume(r *journeyRun) error {
 func frozenLineageResumeJourneys() []Journey {
 	return []Journey{{
 		ID:     "j90-explicit-frozen-reviewing-lineage-resumes-after-drift",
+		Review: reviewOptedIn,
 		Title:  "Explicit frozen reviewing lineage resumes its pending slot after live workspace drift",
 		Source: "issue #2016: explicit compact-v2 selection resumes only immutable pending review input, never live workspace drift",
 		Steps: []Step{
 			{Name: "fixture: repository", Fixture: baseRepo},
-			{Name: "enable review mode only in the disposable journey clone", Requires: modeCapability, Args: productArgs("review", "mode", "enable", "--scope", "clone", "--json")},
+			{Name: "clear any clone-local review override (a clone may only ever assert off)", Requires: modeCapability, Args: productArgs("review", "mode", "enable", "--scope", "clone", "--json")},
 			{Name: "v2 OpenCode frozen review resumes after tracked and intended-untracked drift", Requires: frozenLineageStatusCapability, Composite: exerciseFrozenLineageResume},
 		},
 	}}

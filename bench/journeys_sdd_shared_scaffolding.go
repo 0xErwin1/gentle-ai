@@ -11,6 +11,7 @@ import (
 func sddSharedScaffoldingJourneys() []Journey {
 	return []Journey{{
 		ID:     "j107-sdd-approved-active-change-allows-shared-openspec-scaffolding",
+		Review: reviewOptedIn,
 		Title:  "Approved active change remains eligible with exact fresh OpenSpec scaffolding",
 		Source: "shared OpenSpec review-gate policy: config.yaml and empty archive/spec roots are infrastructure, not foreign change payload",
 		Steps: append(sddApprovedAuthoritySteps(sddSharedScaffoldingAuthorityFixture),

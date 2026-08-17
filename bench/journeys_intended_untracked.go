@@ -224,6 +224,7 @@ func intendedUntrackedJourneys() []Journey {
 	return []Journey{
 		{
 			ID:     "j75-intended-untracked-selection-executes-printed-start",
+			Review: reviewOptedIn,
 			Title:  "Mixed workspace candidate: STATUS collects explicit untracked intent and its printed START executes exactly",
 			Source: "issue #2652: intended untracked files require explicit inventory-bound admission; #2394 keeps unrelated local bytes excluded",
 			Steps: []Step{
@@ -234,6 +235,7 @@ func intendedUntrackedJourneys() []Journey {
 		},
 		{
 			ID:     "j88-unborn-status-collects-untracked-selection",
+			Review: reviewOptedIn,
 			Title:  "Unborn repository: STATUS collects explicit untracked selection before snapshot assessment",
 			Source: "issue #2843: an unselected executable candidate must collect inventory-bound intent, never return generic retry or create authority",
 			Steps: []Step{
@@ -244,11 +246,12 @@ func intendedUntrackedJourneys() []Journey {
 		},
 		{
 			ID:     "j110-approved-unborn-intended-candidate-requires-staging",
+			Review: reviewOptedIn,
 			Title:  "Approved unborn intended candidate: empty staged STATUS stops until the exact candidate is staged",
 			Source: "issue #3307: read-only pre-commit applicability must classify an empty unborn staged projection as non-exact without rejecting STATUS",
 			Steps: []Step{
 				{Name: "fixture: unborn repository with one all-untracked candidate", Fixture: unbornIntendedDeliveryCandidate},
-				{Name: "enable review mode only in the disposable journey clone", Requires: modeCapability, Args: productArgs("review", "mode", "enable", "--scope", "clone", "--json")},
+				{Name: "clear any clone-local review override (a clone may only ever assert off)", Requires: modeCapability, Args: productArgs("review", "mode", "enable", "--scope", "clone", "--json")},
 				{Name: "select every untracked path and execute printed START", Requires: unbornIntendedUntrackedStatusCapability, Composite: selectAndStartUnbornIntendedDelivery},
 				{Name: "approve the unborn intended candidate", Requires: finalizeCapability, Args: productArgs("review", "finalize"), After: rememberLineage},
 				{Name: "empty real index stops without authority or index mutation", Requires: statusCapability, Composite: requireUnbornIntendedStagedDeliveryStop},
