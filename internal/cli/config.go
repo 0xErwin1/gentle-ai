@@ -27,7 +27,7 @@ var writeConfigState = state.WriteDesiredAndManifest
 // accepting it would write a key that looks configured and does nothing.
 func decodeDesiredState(document []byte) (configdomain.DesiredState, []configdomain.Diagnostic) {
 	desired, diagnostics := configdomain.Decode(document)
-	if len(diagnostics) > 0 || desired.Selection.Permissions == nil {
+	if rejects(diagnostics) || desired.Selection.Permissions == nil {
 		return desired, diagnostics
 	}
 
@@ -38,8 +38,8 @@ func decodeDesiredState(document []byte) (configdomain.DesiredState, []configdom
 		diagnostics = append(diagnostics, configdomain.Diagnostic{
 			Code:     "config.permissions.unsupported-adapter",
 			Path:     "$.selection.permissions",
-			Severity: configdomain.Error,
-			Message:  fmt.Sprintf("adapter %q does not express permissions as allow, deny and ask rules; remove the permissions from the document or drop that adapter", agent),
+			Severity: configdomain.Warning,
+			Message:  fmt.Sprintf("adapter %q does not express permissions as allow, deny and ask rules and takes none of them; every other declared adapter still does", agent),
 		})
 	}
 
@@ -56,13 +56,24 @@ func reportedDiagnostics(stdout io.Writer, result any, diagnostics []configdomai
 		return err
 	}
 
-	for _, diagnostic := range diagnostics {
-		if diagnostic.Severity == configdomain.Error {
-			return fmt.Errorf("configuration rejected: %d diagnostic(s), first is %s at %s; resolve each reported diagnostic, then run gentle-ai config validate --config <path>", len(diagnostics), diagnostics[0].Code, diagnostics[0].Path)
-		}
+	if rejects(diagnostics) {
+		return fmt.Errorf("configuration rejected: %d diagnostic(s), first is %s at %s; resolve each reported diagnostic, then run gentle-ai config validate --config <path>", len(diagnostics), diagnostics[0].Code, diagnostics[0].Path)
 	}
 
 	return nil
+}
+
+// rejects reports whether any diagnostic is severe enough to stop the
+// operation. A warning is delivered alongside the result rather than instead
+// of it.
+func rejects(diagnostics []configdomain.Diagnostic) bool {
+	for _, diagnostic := range diagnostics {
+		if diagnostic.Severity == configdomain.Error {
+			return true
+		}
+	}
+
+	return false
 }
 
 // RunConfig performs declarative configuration operations.
@@ -95,7 +106,7 @@ func RunConfig(args []string, stdout io.Writer) error {
 	}
 	desired, diagnostics := decodeDesiredState(document)
 	result := map[string]any{"operation": operation, "diagnostics": diagnostics}
-	if len(diagnostics) > 0 || operation == "validate" {
+	if rejects(diagnostics) || operation == "validate" {
 		return reportedDiagnostics(stdout, result, diagnostics)
 	}
 	if operation != "render" && operation != "plan" && operation != "diff" && operation != "apply" && operation != "reconcile" {
@@ -423,9 +434,15 @@ func loadConfigSelection(path string) (model.Selection, error) {
 	if err != nil {
 		return model.Selection{}, fmt.Errorf("read config: %w", err)
 	}
+	// A warning names a part of the document one adapter could not take; the
+	// rest is still what the operator asked for, so it is delivered and the
+	// warning travels with the result rather than replacing it.
 	state, diagnostics := decodeDesiredState(document)
-	if len(diagnostics) != 0 {
+	if rejects(diagnostics) {
 		return model.Selection{}, fmt.Errorf("config validation failed: %s; run gentle-ai config validate --config %q", diagnostics[0].Code, path)
+	}
+	for _, diagnostic := range diagnostics {
+		fmt.Fprintf(os.Stderr, "warning: %s at %s: %s\n", diagnostic.Code, diagnostic.Path, diagnostic.Message)
 	}
 	return configdomain.Project(state), nil
 }
