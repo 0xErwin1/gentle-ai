@@ -91,6 +91,10 @@ func (stager configurationStager) Stage(state configdomain.DesiredState, stageRo
 		return err
 	}
 
+	if err := stagePiBackgroundPolicy(stageRoot, selection, adapters); err != nil {
+		return err
+	}
+
 	return stager.rebaseStagedPaths(stageRoot)
 }
 
@@ -229,6 +233,45 @@ func (stager configurationStager) stageComponentForAdapter(
 	}
 
 	return nil
+}
+
+// stagePiBackgroundPolicy writes the policy gentle-pi reads. It runs outside
+// the component loop because Pi's background sub-agents are not one of Gentle
+// AI's components: they are a choice about the client, and gentle-pi owns the
+// components that would otherwise have carried it.
+//
+// `auto` stages nothing, matching the installer: it means the runtime decides,
+// and a resolved file would answer that on the runtime's behalf.
+func stagePiBackgroundPolicy(stageRoot string, selection model.Selection, adapters []agents.Adapter) error {
+	intent := selection.PiBackgroundIntent
+	if intent == "" || intent == model.PiBackgroundAuto {
+		return nil
+	}
+
+	declared := false
+	for _, adapter := range adapters {
+		if adapter.Agent() == model.AgentPi {
+			declared = true
+		}
+	}
+	if !declared {
+		return nil
+	}
+
+	content, err := json.MarshalIndent(map[string]string{
+		"schema": piBackgroundPolicySchema,
+		"policy": string(intent),
+	}, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshal Pi background policy: %w", err)
+	}
+
+	path := piBackgroundPolicyPath(stageRoot)
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return fmt.Errorf("create Pi background policy directory: %w", err)
+	}
+
+	return os.WriteFile(path, append(content, '\n'), 0o644)
 }
 
 // provisionedComponents are performed rather than written: a download or a
