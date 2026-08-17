@@ -200,6 +200,10 @@ func TestReviewOfferDeclineLeavesNoStateAndDoesNotSuppressLaterOffer(t *testing.
 // two different, both-correct dispositions that happen to agree on the one
 // property that matters for delivery: neither blocks archive.
 func TestReviewOfferDeclineNeverBlocksArchiveAtTheProjectionLevel(t *testing.T) {
+	// The comparison is switch-on versus switch-off, so the "on" half has to
+	// be a user who opted in; the "off" half stays an explicit
+	// ResolveOptions.ReviewDisabled toggle over the same fixture.
+	reviewEnabledHome(t)
 	root := t.TempDir()
 	changeRoot := seedReadyChange(t, root, "thin", "- [x] 1.1 Done\n")
 	write(t, filepath.Join(changeRoot, "verify-report.md"), boundedVerifyEnvelope(shaID("a"), "pass"))
@@ -258,6 +262,9 @@ func TestReviewOfferDeclineNeverBlocksArchiveAtTheProjectionLevel(t *testing.T) 
 // (there is no `--consent declined` verb and no decline state to record;
 // the user declines simply by proceeding to archive without acting).
 func TestReviewOfferPresentAndArchiveReadyForAGenuinelyMissingReceipt(t *testing.T) {
+	// "Switch on, verify passed, no receipt anywhere" is the repro shape, so
+	// the switch has to actually be on for the offer to be available.
+	reviewEnabledHome(t)
 	root := t.TempDir()
 	seedVerifiedReadyChangeForOffer(t, root)
 
