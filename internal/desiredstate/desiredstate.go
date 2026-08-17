@@ -1,4 +1,9 @@
-package state
+// Package desiredstate persists the declarative desired state and the render
+// manifest that records which destination bytes gentle-ai owns.
+//
+// It lives outside internal/state because it stores a render.Manifest, and
+// internal/render depends on internal/agents, which depends on internal/state.
+package desiredstate
 
 import (
 	"crypto/sha256"
@@ -12,6 +17,11 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v4/internal/render"
 )
 
+// stateDir mirrors the home-relative directory name internal/state keeps
+// private. It is duplicated rather than exported so internal/state keeps the
+// surface it has.
+const stateDir = ".gentle-ai"
+
 var writeAtomic = func(path string, data []byte) error {
 	_, err := filemerge.WriteFileAtomic(path, data, 0o644)
 	return err
@@ -19,7 +29,7 @@ var writeAtomic = func(path string, data []byte) error {
 
 func DesiredPath(home string) string { return filepath.Join(home, stateDir, "desired-state.json") }
 
-func DesiredManifestPath(home, destination string) string {
+func ManifestPath(home, destination string) string {
 	sum := sha256.Sum256([]byte(destination))
 	return filepath.Join(home, stateDir, "manifests", hex.EncodeToString(sum[:])+".json")
 }
@@ -30,15 +40,27 @@ func ReadDesired(home string) (config.DesiredState, error) {
 	return desired, err
 }
 
-func ReadDesiredManifest(home, destination string) (render.Manifest, error) {
+func ReadManifest(home, destination string) (render.Manifest, error) {
 	var manifest render.Manifest
-	err := readJSON(DesiredManifestPath(home, destination), &manifest)
+	err := readJSON(ManifestPath(home, destination), &manifest)
 	return manifest, err
+}
+
+// WriteDesired records the desired state alone, for a frontend that renders and
+// owns the client files itself. No manifest is written: the manifest records
+// which bytes gentle-ai owns, and such a frontend owns them instead.
+func WriteDesired(home string, desired config.DesiredState) error {
+	data, err := canonicalJSON(desired)
+	if err != nil {
+		return err
+	}
+
+	return writeAtomic(DesiredPath(home), data)
 }
 
 // WriteDesiredAndManifest atomically writes each store and restores both on a failed pair.
 func WriteDesiredAndManifest(home, destination string, desired config.DesiredState, manifest render.Manifest) error {
-	desiredPath, manifestPath := DesiredPath(home), DesiredManifestPath(home, destination)
+	desiredPath, manifestPath := DesiredPath(home), ManifestPath(home, destination)
 	desiredData, err := canonicalJSON(desired)
 	if err != nil {
 		return err
