@@ -18,6 +18,7 @@ type Server struct {
 	Args    []string
 	Env     map[string]string
 	URL     string
+	Headers map[string]string
 	Enabled bool
 }
 
@@ -83,7 +84,7 @@ func injectDeclaredTOML(targetDir string, adapter agents.Adapter, server Server)
 
 	updated := filemerge.UpsertCodexMCPServerBlock(string(existing), server.Name, server.Command, server.Args)
 	if server.URL != "" {
-		updated = filemerge.UpsertCodexRemoteMCPServerBlock(string(existing), server.Name, server.URL)
+		updated = filemerge.UpsertCodexRemoteMCPServerBlock(string(existing), server.Name, server.URL, server.Headers)
 	}
 
 	write, err := filemerge.WriteFileAtomic(path, []byte(updated), 0o644)
@@ -145,6 +146,9 @@ func declaredServerOverlay(server Server, openCodeShape bool) ([]byte, error) {
 	if len(server.Env) > 0 {
 		entry["environment"] = server.Env
 	}
+	if len(server.Headers) > 0 {
+		entry["headers"] = server.Headers
+	}
 	entry["enabled"] = server.Enabled
 
 	key := "mcpServers"
@@ -176,6 +180,9 @@ func plainServerEntry(server Server) map[string]any {
 	}
 	if len(server.Env) > 0 {
 		entry["env"] = server.Env
+	}
+	if len(server.Headers) > 0 {
+		entry["headers"] = server.Headers
 	}
 
 	return entry
