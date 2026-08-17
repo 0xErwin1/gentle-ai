@@ -91,15 +91,24 @@ var gentlemanCuteOpenCodeTheme = openCodeTheme{
 }
 
 func Inject(homeDir string, adapter agents.Adapter) (InjectionResult, error) {
+	// Pi resolves a theme by name against the themes its own packages ship,
+	// and none of them is called "gentleman" -- gentle-pi's is "Gentle". Naming
+	// it anyway configures a theme Pi cannot load, so it starts by reporting
+	// the failure and falling back. Pi's theme belongs to Pi's own packages,
+	// the same way its persona and models do.
+	if adapter.Agent() == model.AgentPi {
+		return InjectionResult{}, nil
+	}
+
 	// The overlay selects the "gentleman" theme by name, so it only belongs on
 	// adapters whose visual theme assets register that name (today: Claude Code
-	// and OpenCode). Elsewhere, e.g. in Pi's settings.json, that key names a
-	// theme the agent cannot resolve and breaks its startup after every install
-	// or sync (issue #4775). Those adapters still get their settings file created
-	// when it is missing, because sync verification requires the file to exist,
-	// but nothing is merged into it. Known limitations, left as-is on purpose:
-	// the theme name stays hardcoded, and a "gentleman" key already persisted by
-	// an earlier run is not cleaned up.
+	// and OpenCode). Elsewhere that key names a theme the agent cannot resolve
+	// and breaks its startup after every install or sync (issue #4775). Those
+	// adapters still get their settings file created when it is missing,
+	// because sync verification requires the file to exist, but nothing is
+	// merged into it. Known limitations, left as-is on purpose: the theme name
+	// stays hardcoded, and a "gentleman" key already persisted by an earlier
+	// run is not cleaned up.
 	settingsPath := agents.JSONSettingsPath(homeDir, adapter)
 	if len(VisualThemePaths(homeDir, adapter)) == 0 {
 		return ensureSettingsFile(settingsPath)
