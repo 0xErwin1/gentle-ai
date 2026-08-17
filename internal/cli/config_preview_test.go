@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/gentleman-programming/gentle-ai/v2/internal/render"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/state"
 )
 
 // The read-only preview and the reconciliation must read the same installation.
@@ -232,5 +233,82 @@ func TestARoleCollidingWithAComponentIsRefused(t *testing.T) {
 
 	if err == nil || !strings.Contains(err.Error(), "gentle-orchestrator") {
 		t.Fatalf("RunConfig(render) error = %v, want the colliding name reported", err)
+	}
+}
+
+// A frontend that renders the tree itself leaves gentle-ai unable to see its
+// own installation: doctor reads state.json, which only install and sync ever
+// wrote, so a plainly present installation reads as absent and doctor
+// recommends installing it again.
+func TestAdoptRecordsTheInstallationWithoutClaimingItsFiles(t *testing.T) {
+	home := t.TempDir()
+	configPath := filepath.Join(t.TempDir(), "desired.json")
+	writeConfigDocument(t, configPath, `{"version":"v1","selection":{"agents":["opencode","claude-code"],"components":["skills"]}}`)
+
+	var output bytes.Buffer
+	if err := RunConfig([]string{"adopt", "--config", configPath, "--home", home}, &output); err != nil {
+		t.Fatalf("RunConfig(adopt) error = %v", err)
+	}
+
+	recorded, err := state.Read(home)
+	if err != nil {
+		t.Fatalf("read recorded state: %v", err)
+	}
+	if got := recorded.InstalledAgents; !reflect.DeepEqual(got, []string{"opencode", "claude-code"}) {
+		t.Errorf("InstalledAgents = %v, want the declared clients", got)
+	}
+	if recorded.InstalledBinaryVersion != AppVersion {
+		t.Errorf("InstalledBinaryVersion = %q, want %q", recorded.InstalledBinaryVersion, AppVersion)
+	}
+
+	// The manifest records which bytes gentle-ai owns, and here it owns none:
+	// writing one would let reconciliation remove files that belong to whoever
+	// rendered them.
+	if _, err := os.Stat(filepath.Join(home, ".gentle-ai", "manifest")); !os.IsNotExist(err) {
+		t.Errorf("adopt wrote an ownership manifest for files it does not own")
+	}
+}
+
+// Adopting twice must leave the same record, so a frontend can run it on every
+// activation without the state drifting.
+func TestAdoptIsRepeatable(t *testing.T) {
+	home := t.TempDir()
+	configPath := filepath.Join(t.TempDir(), "desired.json")
+	writeConfigDocument(t, configPath, `{"version":"v1","selection":{"agents":["opencode"]}}`)
+
+	var output bytes.Buffer
+	if err := RunConfig([]string{"adopt", "--config", configPath, "--home", home}, &output); err != nil {
+		t.Fatalf("first adopt: %v", err)
+	}
+	first, err := os.ReadFile(filepath.Join(home, ".gentle-ai", "state.json"))
+	if err != nil {
+		t.Fatalf("read state: %v", err)
+	}
+
+	if err := RunConfig([]string{"adopt", "--config", configPath, "--home", home}, &output); err != nil {
+		t.Fatalf("second adopt: %v", err)
+	}
+	second, err := os.ReadFile(filepath.Join(home, ".gentle-ai", "state.json"))
+	if err != nil {
+		t.Fatalf("read state: %v", err)
+	}
+
+	if !bytes.Equal(first, second) {
+		t.Errorf("adopting twice changed the record:\n%s\n%s", first, second)
+	}
+}
+
+// A document adopt cannot deliver must not be recorded as installed.
+func TestAdoptRefusesARejectedDocument(t *testing.T) {
+	home := t.TempDir()
+	configPath := filepath.Join(t.TempDir(), "desired.json")
+	writeConfigDocument(t, configPath, `{"version":"v1","selection":{"agents":["not-an-agent"]}}`)
+
+	var output bytes.Buffer
+	if err := RunConfig([]string{"adopt", "--config", configPath, "--home", home}, &output); err == nil {
+		t.Fatal("adopt accepted a document the contract rejects")
+	}
+	if _, err := os.Stat(filepath.Join(home, ".gentle-ai", "state.json")); !os.IsNotExist(err) {
+		t.Error("adopt recorded a rejected document")
 	}
 }

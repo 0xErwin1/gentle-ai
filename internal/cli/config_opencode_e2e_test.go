@@ -9,8 +9,8 @@ import (
 	"testing"
 
 	configdomain "github.com/gentleman-programming/gentle-ai/v2/internal/config"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/desiredstate"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/render"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/state"
 )
 
 func TestConfigOpenCodeEndToEnd(t *testing.T) {
@@ -34,13 +34,13 @@ func TestConfigOpenCodeEndToEnd(t *testing.T) {
 	assertConfigOutput(t, []string{"export", "--config", configPath}, `"version": "v1"`)
 
 	runConfigMutation(t, "apply", configPath, home, destination)
-	desired, err := state.ReadDesired(home)
+	desired, err := desiredstate.ReadDesired(home)
 	if err != nil || desired.Version != configdomain.CurrentVersion || desired.Roles[0].RenderedName != "writer-v1" {
 		t.Fatalf("persisted desired = %#v, %v", desired, err)
 	}
 	// The manifest covers the staged component tree as well, so what this pins
 	// is that both declared roles are owned inside the settings file.
-	manifest, err := state.ReadManifest(home, destination)
+	manifest, err := desiredstate.ReadManifest(home, destination)
 	if err != nil {
 		t.Fatalf("read persisted manifest: %v", err)
 	}
