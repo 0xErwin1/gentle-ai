@@ -12,6 +12,10 @@
 //     gate allow) and one medium-candidate consent/v3 round-trip (granted).
 //     With --with-model it additionally runs the real compiled claude-code
 //     reviewer runtime, which is why this battery lives outside CI.
+//   - advisory lane: the middle path neither of the two lanes above reaches —
+//     a review that arrives at an approved receipt WHILE carrying findings
+//     that do not block. Fully deterministic (the reviewer result is supplied
+//     through capture-result --input), so it costs no model or host spend.
 //   - schema lane: every envelope captured along the way is validated
 //     against the published schemas in contracts/review-integration/.
 //     Any emitter/schema divergence fails the battery.
@@ -81,6 +85,7 @@ func run() int {
 	b.captureCapabilities()
 	b.runOpenCodeLane()
 	b.runClaudeLane()
+	b.runAdvisoryLane()
 	b.runHostLanes()
 	b.runSchemaLane()
 

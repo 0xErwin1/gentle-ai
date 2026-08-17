@@ -145,6 +145,13 @@ func TestReviewModeCloneScopeEnableMigratesLegacyRevision(t *testing.T) {
 		t.Fatalf("read current record: %v", err)
 	}
 	legacyRoot := filepath.Join(repo, ".git", "gentle-ai", "review-transactions")
+	// The seeding write publishes into both locations, because the switch is
+	// machine state rather than build state (#3284). This fixture is the clone
+	// that only ever had the pre-relocation one, so its mirror is dropped
+	// before the relocated root takes that name.
+	if err := os.RemoveAll(legacyRoot); err != nil {
+		t.Fatalf("drop the mirrored fixture copy: %v", err)
+	}
 	if err := os.Rename(filepath.Join(repo, ".git", "gentle-ai", "review-mode"), legacyRoot); err != nil {
 		t.Fatalf("relocate secure legacy fixture: %v", err)
 	}
