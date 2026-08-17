@@ -56,7 +56,7 @@ func TestRunUpgrade_ReturnsErrorBeforeExecutingWhenChecksFail(t *testing.T) {
 	})
 
 	called := false
-	updateCheckFiltered = func(context.Context, string, system.PlatformProfile, []string) []update.UpdateResult {
+	updateCheckFiltered = func(context.Context, string, system.PlatformProfile, []string, bool) []update.UpdateResult {
 		return []update.UpdateResult{
 			{
 				Tool:   update.ToolInfo{Name: "engram"},
@@ -119,7 +119,7 @@ func TestRunUpgrade_RestartsAfterGentleAIUpgrade(t *testing.T) {
 		upgradeExecuteWithOptions = origUpgradeExecuteWithOptions
 	})
 
-	updateCheckFiltered = func(context.Context, string, system.PlatformProfile, []string) []update.UpdateResult {
+	updateCheckFiltered = func(context.Context, string, system.PlatformProfile, []string, bool) []update.UpdateResult {
 		return []update.UpdateResult{{
 			Tool:             update.ToolInfo{Name: "gentle-ai", InstallMethod: update.InstallBinary},
 			InstalledVersion: "1.36.1",
@@ -189,7 +189,7 @@ func TestRunUpgrade_DryRunDoesNotRestartAfterGentleAIUpgrade(t *testing.T) {
 		upgradeExecuteWithOptions = origUpgradeExecuteWithOptions
 	})
 
-	updateCheckFiltered = func(context.Context, string, system.PlatformProfile, []string) []update.UpdateResult {
+	updateCheckFiltered = func(context.Context, string, system.PlatformProfile, []string, bool) []update.UpdateResult {
 		return []update.UpdateResult{{Tool: update.ToolInfo{Name: "gentle-ai"}, Status: update.UpdateAvailable}}
 	}
 	upgradeExecuteWithOptions = func(context.Context, []update.UpdateResult, system.PlatformProfile, string, bool, upgrade.ExecuteOptions) upgrade.UpgradeReport {
@@ -241,7 +241,7 @@ func TestRunUpgrade_ForwardsParsedArgsOnceWithoutReparsing(t *testing.T) {
 
 	var checkFilters []string
 	checkCalls := 0
-	updateCheckFiltered = func(_ context.Context, _ string, _ system.PlatformProfile, filters []string) []update.UpdateResult {
+	updateCheckFiltered = func(_ context.Context, _ string, _ system.PlatformProfile, filters []string, _ bool) []update.UpdateResult {
 		checkCalls++
 		checkFilters = filters
 		return []update.UpdateResult{{Tool: update.ToolInfo{Name: "gentle-ai"}, Status: update.UpToDate}}
@@ -315,7 +315,7 @@ func TestRunUpgrade_PrintsDoctorAdvisoryAfterGentleAIUpgrade(t *testing.T) {
 		upgradeExecuteWithOptions = origUpgradeExecuteWithOptions
 	})
 
-	updateCheckFiltered = func(context.Context, string, system.PlatformProfile, []string) []update.UpdateResult {
+	updateCheckFiltered = func(context.Context, string, system.PlatformProfile, []string, bool) []update.UpdateResult {
 		return []update.UpdateResult{{
 			Tool:             update.ToolInfo{Name: "gentle-ai", InstallMethod: update.InstallBinary},
 			InstalledVersion: "1.36.1",
@@ -363,7 +363,7 @@ func TestRunUpgrade_DryRunDoesNotPrintDoctorAdvisory(t *testing.T) {
 		upgradeExecuteWithOptions = origUpgradeExecuteWithOptions
 	})
 
-	updateCheckFiltered = func(context.Context, string, system.PlatformProfile, []string) []update.UpdateResult {
+	updateCheckFiltered = func(context.Context, string, system.PlatformProfile, []string, bool) []update.UpdateResult {
 		return []update.UpdateResult{{Tool: update.ToolInfo{Name: "gentle-ai"}, Status: update.UpdateAvailable}}
 	}
 	upgradeExecuteWithOptions = func(context.Context, []update.UpdateResult, system.PlatformProfile, string, bool, upgrade.ExecuteOptions) upgrade.UpgradeReport {
@@ -391,7 +391,7 @@ func TestRunUpgrade_NonGentleAIUpgradeDoesNotPrintDoctorAdvisory(t *testing.T) {
 		upgradeExecuteWithOptions = origUpgradeExecuteWithOptions
 	})
 
-	updateCheckFiltered = func(context.Context, string, system.PlatformProfile, []string) []update.UpdateResult {
+	updateCheckFiltered = func(context.Context, string, system.PlatformProfile, []string, bool) []update.UpdateResult {
 		return []update.UpdateResult{{
 			Tool:             update.ToolInfo{Name: "engram", InstallMethod: update.InstallBinary},
 			InstalledVersion: "0.5.0",

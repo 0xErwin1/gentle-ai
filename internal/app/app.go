@@ -33,7 +33,7 @@ var Version = "dev"
 
 var (
 	updateCheckAll            = update.CheckAll
-	updateCheckFiltered       = update.CheckFiltered
+	updateCheckFiltered       = update.CheckFilteredInChannel
 	upgradeExecute            = upgrade.Execute
 	upgradeExecuteWithOptions = upgrade.ExecuteWithOptions
 	selfUpdateFn              = selfUpdate
@@ -531,7 +531,14 @@ func runUpgrade(ctx context.Context, args upgradeArgs, detection system.Detectio
 
 	// Check for available updates (filtered to requested tools if specified).
 	sp := upgrade.NewSpinner(stdout, "Checking for updates")
-	checkResults := updateCheckFiltered(ctx, Version, profile, toolFilter)
+	// A beta upgrade of gentle-ai means its newest release candidate; for every
+	// other tool the channel keeps whatever meaning it already had.
+	channel, channelErr := cli.ResolveInstallChannel(args.channel)
+	if channelErr != nil {
+		return channelErr
+	}
+
+	checkResults := updateCheckFiltered(ctx, Version, profile, toolFilter, channel.IsBeta())
 	checkErr := updateCheckError(checkResults)
 	sp.Finish(checkErr == nil)
 	if checkErr != nil {

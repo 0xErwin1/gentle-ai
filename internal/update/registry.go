@@ -16,11 +16,12 @@ import (
 // the fallback strategy.
 var Tools = []ToolInfo{
 	{
-		Name:          "gentle-ai",
-		Owner:         "Gentleman-Programming",
-		Repo:          "gentle-ai",
-		DetectCmd:     nil, // version comes from build-time ldflags (app.Version)
-		VersionPrefix: "v",
+		Name:              "gentle-ai",
+		Owner:             "Gentleman-Programming",
+		Repo:              "gentle-ai",
+		DetectCmd:         nil, // version comes from build-time ldflags (app.Version)
+		VersionPrefix:     "v",
+		PrereleaseChannel: true,
 		// gentle-ai: Homebrew when the package is brew-owned, authenticated binary
 		// release download on Linux/macOS, and `go install` on Windows, where no
 		// official signed binary is published.
