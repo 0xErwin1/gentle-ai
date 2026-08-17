@@ -263,11 +263,19 @@ var provisionedComponents = map[model.ComponentID]bool{
 	model.ComponentGGA:    true,
 }
 
+// provisionedAgents install harness content through their own tool rather than
+// installing the client. Every other adapter's install command installs the
+// client itself, which is the machine's business and never a document's, so
+// only these are carried.
+var provisionedAgents = map[model.AgentID]bool{
+	model.AgentPi: true,
+}
+
 // Resources declares what the document provisions, so a plan reports it instead
 // of a document silently asking for something no operation ever mentions.
 func (stager configurationStager) ProvisionedResources(state configdomain.DesiredState) []render.Resource {
 	selection := configdomain.Project(state)
-	resources := make([]render.Resource, 0, len(selection.Components))
+	resources := make([]render.Resource, 0, len(selection.Components)+len(selection.Agents))
 
 	for _, component := range selection.Components {
 		if !provisionedComponents[component] {
@@ -278,6 +286,46 @@ func (stager configurationStager) ProvisionedResources(state configdomain.Desire
 			Selector:  render.ProvisionSelector,
 			Digest:    render.ProvisionPresent,
 			Component: component,
+		})
+	}
+
+	resources = append(resources, agentProvisioning(selection.Agents)...)
+
+	return resources
+}
+
+// agentProvisioning reads each adapter's own install commands rather than
+// restating them, so the packages a harness is made of stay the adapter's to
+// name and a consumer never renders a stale copy of that list.
+func agentProvisioning(selected []model.AgentID) []render.Resource {
+	resources := make([]render.Resource, 0, len(selected))
+
+	for _, agent := range selected {
+		if !provisionedAgents[agent] {
+			continue
+		}
+
+		adapter, err := agents.NewAdapter(agent)
+		if err != nil {
+			continue
+		}
+
+		// The profile is deliberately empty. Reading the local machine here
+		// would make the same document render different commands on two
+		// machines, and the commands these adapters return do not vary by
+		// platform: they run the adapter's own tool, which is a precondition
+		// rather than something a platform provides.
+		commands, err := adapter.InstallCommand(system.PlatformProfile{})
+		if err != nil || len(commands) == 0 {
+			continue
+		}
+
+		resources = append(resources, render.Resource{
+			Path:     string(agent),
+			Selector: render.ProvisionSelector,
+			Digest:   render.ProvisionPresent,
+			Agent:    agent,
+			Commands: commands,
 		})
 	}
 

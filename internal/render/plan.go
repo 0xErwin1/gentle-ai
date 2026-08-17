@@ -32,6 +32,13 @@ type Resource struct {
 	// Component names the provisioned component when the resource is an action.
 	// It is absent for the ordinary case of bytes at a path.
 	Component model.ComponentID `json:"component,omitempty"`
+
+	// Agent names the adapter whose own tool performs the action, and Commands
+	// are what it runs. They carry the part of a harness that is not files at
+	// all, so a consumer that only writes the staged tree can still see what it
+	// is leaving undone instead of reporting a complete installation.
+	Agent    model.AgentID `json:"agent,omitempty"`
+	Commands [][]string    `json:"commands,omitempty"`
 }
 
 type Manifest struct {
@@ -55,6 +62,7 @@ type Operation struct {
 	Code      string            `json:"code,omitempty"`
 	Reason    string            `json:"reason,omitempty"`
 	Component model.ComponentID `json:"component,omitempty"`
+	Agent     model.AgentID     `json:"agent,omitempty"`
 }
 
 type ReconcilePlan struct {
@@ -171,7 +179,7 @@ func resourceKey(resource Resource) ResourceKey {
 }
 
 func operation(kind OperationKind, resource Resource, code, reason string) Operation {
-	return Operation{Kind: kind, Path: resource.Path, Selector: resource.Selector, Code: code, Reason: reason, Component: resource.Component}
+	return Operation{Kind: kind, Path: resource.Path, Selector: resource.Selector, Code: code, Reason: reason, Component: resource.Component, Agent: resource.Agent}
 }
 
 func operationRank(kind OperationKind) int {
@@ -190,8 +198,23 @@ func sortResources(resources []Resource) {
 func PendingProvisioning(plan ReconcilePlan) []model.ComponentID {
 	pending := make([]model.ComponentID, 0)
 	for _, operation := range plan.Operations {
-		if operation.Selector == ProvisionSelector && operation.Kind == Create {
+		if operation.Selector == ProvisionSelector && operation.Kind == Create && operation.Component != "" {
 			pending = append(pending, operation.Component)
+		}
+	}
+
+	return pending
+}
+
+// PendingAgentProvisioning lists the agents whose own tool still has to install
+// their harness. It is separate from the component list because the two are
+// answered by different commands, and one list of ids with two meanings would
+// send a caller to the wrong one.
+func PendingAgentProvisioning(plan ReconcilePlan) []model.AgentID {
+	pending := make([]model.AgentID, 0)
+	for _, operation := range plan.Operations {
+		if operation.Selector == ProvisionSelector && operation.Kind == Create && operation.Agent != "" {
+			pending = append(pending, operation.Agent)
 		}
 	}
 
