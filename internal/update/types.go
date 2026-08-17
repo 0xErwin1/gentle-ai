@@ -37,12 +37,18 @@ const (
 
 // ToolInfo describes a managed tool that can be checked for updates.
 type ToolInfo struct {
-	Name              string        // human-readable name (e.g., "gentle-ai")
-	Owner             string        // GitHub repository owner
-	Repo              string        // GitHub repository name
-	DetectCmd         []string      // command to detect installed version; nil = use build var
-	VersionPrefix     string        // prefix to strip from version output (e.g., "v")
-	ReleaseTagPattern string        // optional regexp for selecting the correct GitHub release channel
+	Name              string   // human-readable name (e.g., "gentle-ai")
+	Owner             string   // GitHub repository owner
+	Repo              string   // GitHub repository name
+	DetectCmd         []string // command to detect installed version; nil = use build var
+	VersionPrefix     string   // prefix to strip from version output (e.g., "v")
+	ReleaseTagPattern string   // optional regexp for selecting the correct GitHub release channel
+
+	// PrereleaseChannel marks a tool whose beta track is its own prereleases
+	// rather than a separate source. Engram's beta is main's HEAD; gentle-ai
+	// publishes release candidates, so asking for its beta means taking the
+	// newest tag rather than the newest stable one.
+	PrereleaseChannel bool
 	InstallMethod     InstallMethod // how this tool is installed (used by upgrade executor)
 	GoImportPath      string        // for go-install tools (e.g. "github.com/.../cmd/engram")
 	NpmPackage        string        // for OpenCode community plugins installed in ~/.config/opencode/node_modules
