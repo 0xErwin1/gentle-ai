@@ -7,5 +7,10 @@ type MCPServer struct {
 	Args    []string
 	Env     map[string]string
 	URL     string
+
+	// Headers authenticate a remote server. A hosted MCP endpoint takes its
+	// credential in a header rather than in the environment.
+	Headers map[string]string
+
 	Enabled bool
 }

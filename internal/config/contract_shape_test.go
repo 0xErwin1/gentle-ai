@@ -74,7 +74,7 @@ var userKeyedContainers = []string{
 	"mcpServers", "env", "modelAssignments", "claudeModelAssignments",
 	"kiroModelAssignments", "codexModelAssignments", "codexCarrilModelAssignments",
 	"codexPhaseModelAssignments", "claudePhaseAssignments", "phaseAssignments",
-	"skillAssignments", "extensions", "modelPresets",
+	"skillAssignments", "extensions", "modelPresets", "headers",
 }
 
 func userKeyed(path string) bool {
@@ -152,7 +152,7 @@ func fullyPopulatedDocument() Document {
 			CodexPhaseModelAssignments:  map[string]string{"sdd-apply": "gpt-5.6-sol"},
 			ClaudePhaseAssignments:      map[string]ClaudePhaseAssignment{"sdd-apply": {Model: "opus", Effort: "high"}},
 			CodexOrchestrator:           &CodexOrchestratorAssignment{Model: "gpt-5.6-sol", Effort: "medium"},
-			MCPServers:                  map[string]MCPServer{"atlas": {Command: "atlas", Args: []string{"mcp"}, Env: map[string]string{"TOKEN": "x"}}},
+			MCPServers:                  map[string]MCPServer{"atlas": {Command: "atlas", Args: []string{"mcp"}, Env: map[string]string{"TOKEN": "x"}, Headers: map[string]string{"Authorization": "Bearer x"}}},
 			Permissions:                 &Permissions{Allow: []string{"Read(*)"}, Deny: []string{"Bash(curl *)"}, Ask: []string{"Edit(*.tf)"}},
 			SkillAssignments:            map[string][]model.SkillID{"opencode": {model.SkillSDDApply}},
 			Profiles: []Profile{{
