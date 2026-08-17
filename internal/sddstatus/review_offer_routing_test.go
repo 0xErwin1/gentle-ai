@@ -38,6 +38,10 @@ func seedVerifiedReadyChangeForOffer(t *testing.T, root string) {
 // Archive stays whatever resolveDependencies already computed for a passing
 // verify report (Ready), never gated on the offer.
 func TestReviewOfferBlockPresentWhenVerifiedAndEnabled(t *testing.T) {
+	// "Enabled" is this fixture's premise, so it has to be stated. Without
+	// the opt-in the offer still arrives, but unavailable, and the nil check
+	// below accepts it -- the test would keep passing while proving nothing.
+	reviewEnabledHome(t)
 	root := t.TempDir()
 	changeRoot := seedReadyChange(t, root, "thin", "- [x] 1.1 Done\n")
 	write(t, filepath.Join(changeRoot, "verify-report.md"), boundedVerifyEnvelope(shaID("a"), "pass"))
@@ -149,6 +153,9 @@ func TestReviewOfferJourneyFiresZeroTimesAcrossFullFlowWhenDisabled(t *testing.T
 // repository policy regardless — there is no new state and no new
 // persistence to represent "declined".
 func TestReviewOfferDeclineLeavesNoStateAndDoesNotSuppressLaterOffer(t *testing.T) {
+	// Declining an offer is only meaningful when there is a real one to
+	// decline, which takes a user who switched receipt-driven development on.
+	reviewEnabledHome(t)
 	root := t.TempDir()
 	seedVerifiedReadyChangeForOffer(t, root)
 
