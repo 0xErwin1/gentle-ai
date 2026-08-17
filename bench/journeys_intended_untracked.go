@@ -243,7 +243,7 @@ func intendedUntrackedJourneys() []Journey {
 			},
 		},
 		{
-			ID:     "j106-approved-unborn-intended-candidate-requires-staging",
+			ID:     "j110-approved-unborn-intended-candidate-requires-staging",
 			Title:  "Approved unborn intended candidate: empty staged STATUS stops until the exact candidate is staged",
 			Source: "issue #3307: read-only pre-commit applicability must classify an empty unborn staged projection as non-exact without rejecting STATUS",
 			Steps: []Step{
