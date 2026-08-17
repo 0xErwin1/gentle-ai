@@ -120,10 +120,15 @@ release adds -- is reported and left in place rather than guessed at.
 
 Reviews that have not reached a terminal state (anything other than approved,
 escalated, or invalidated, plus any record that cannot be parsed) are refused by
-default and listed by name. The reset holds the same exclusive maintenance lease
-every other maintenance operation takes, and it runs while review mode is
-disabled -- gating cleanup on the kill switch would rebuild the dead end it
-exists to remove.
+default and listed by name. The reset takes the same exclusive maintenance lease
+every other maintenance operation takes *before* it reads the store, so that
+classification and the removal it authorizes are one atomic step: a review that
+starts while the reset is waiting for the lease is seen and refused, never
+destroyed by a run that reported none open. Each category is removed all at once
+or not at all -- a category that cannot be moved aside is reported with its
+reason and left exactly as it was found, worktree registrations included. The
+reset runs while review mode is disabled: gating cleanup on the kill switch
+would rebuild the dead end it exists to remove.
 
 The TUI exposes the same action as **Reset review store** in the main menu,
 between *Manage backups* and *Managed uninstall*, showing the same survey behind
