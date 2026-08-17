@@ -309,7 +309,7 @@ func stageDeclaredMCPServers(stageRoot string, selection model.Selection, adapte
 		declared := selection.MCPServers[name]
 		servers = append(servers, mcp.Server{
 			Name: name, Command: declared.Command, Args: declared.Args,
-			Env: declared.Env, URL: declared.URL, Enabled: declared.Enabled,
+			Env: declared.Env, URL: declared.URL, Headers: declared.Headers, Enabled: declared.Enabled,
 		})
 	}
 
