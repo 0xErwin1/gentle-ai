@@ -25,6 +25,14 @@ func CheckAll(ctx context.Context, currentVersion string, profile system.Platfor
 // If toolNames is nil or empty, it behaves identically to CheckAll (all tools).
 // Unknown tool names in toolNames are silently ignored.
 func CheckFiltered(ctx context.Context, currentVersion string, profile system.PlatformProfile, toolNames []string) []UpdateResult {
+	return CheckFilteredInChannel(ctx, currentVersion, profile, toolNames, false)
+}
+
+// CheckFilteredInChannel is CheckFiltered with the release channel stated. With
+// includePrerelease set, a tool whose beta track is its own prereleases reports
+// the newest tag rather than the newest stable one; every other tool is
+// unaffected, because its beta means something else or it has none.
+func CheckFilteredInChannel(ctx context.Context, currentVersion string, profile system.PlatformProfile, toolNames []string, includePrerelease bool) []UpdateResult {
 	// Build the target slice: all tools when filter is empty, otherwise only matching ones.
 	var targets []ToolInfo
 	if len(toolNames) == 0 {
@@ -48,7 +56,7 @@ func CheckFiltered(ctx context.Context, currentVersion string, profile system.Pl
 		wg.Add(1)
 		go func(idx int, t ToolInfo) {
 			defer wg.Done()
-			results[idx] = checkSingleTool(ctx, t, currentVersion, profile)
+			results[idx] = checkSingleTool(ctx, t, currentVersion, profile, includePrerelease)
 		}(i, tool)
 	}
 
@@ -57,7 +65,7 @@ func CheckFiltered(ctx context.Context, currentVersion string, profile system.Pl
 }
 
 // checkSingleTool checks a single tool: detects local version, fetches remote, compares.
-func checkSingleTool(ctx context.Context, tool ToolInfo, currentBuildVersion string, profile system.PlatformProfile) UpdateResult {
+func checkSingleTool(ctx context.Context, tool ToolInfo, currentBuildVersion string, profile system.PlatformProfile, includePrerelease bool) UpdateResult {
 	result := UpdateResult{Tool: tool}
 	homebrewOwnership := HomebrewNone
 	if profile.PackageManager == "brew" && strings.TrimSpace(tool.NpmPackage) == "" {
@@ -102,7 +110,7 @@ func checkSingleTool(ctx context.Context, tool ToolInfo, currentBuildVersion str
 			mainCommit, fetchErr = fetchMainCommit(ctx, tool.Owner, tool.Repo)
 			return
 		}
-		release, fetchErr = fetchLatestReleaseForTool(ctx, tool)
+		release, fetchErr = fetchLatestReleaseForTool(ctx, tool, includePrerelease)
 	}()
 
 	wg.Wait()
@@ -320,7 +328,10 @@ func shortCommit(sha string) string {
 	return sha[:12]
 }
 
-func fetchLatestReleaseForTool(ctx context.Context, tool ToolInfo) (githubRelease, error) {
+func fetchLatestReleaseForTool(ctx context.Context, tool ToolInfo, includePrerelease bool) (githubRelease, error) {
+	if includePrerelease && tool.PrereleaseChannel {
+		return fetchNewestRelease(ctx, tool.Owner, tool.Repo, tool.ReleaseTagPattern)
+	}
 	if pattern := strings.TrimSpace(tool.ReleaseTagPattern); pattern != "" {
 		return fetchLatestReleaseMatchingPattern(ctx, tool.Owner, tool.Repo, pattern)
 	}

@@ -69,7 +69,9 @@ COMPATIBILITY COMMANDS
   sdd-attempt <status|begin|finish|reset|repair> --cwd <repo> --change <change>
                Diagnose or explicitly recover the full native runtime-attempt ledger
   update       Check for available updates
-  upgrade      Apply updates to managed tools
+  upgrade [--channel=stable|beta] [--dry-run] [--no-backup] [-- <tool>...]
+               Apply updates to managed tools; beta takes gentle-ai's newest
+               release candidate and Engram from main
   telemetry <status|enable|disable|preview|trigger> [--json]
                Anonymous, opt-out usage telemetry; preview shows the exact payload without sending it;
                trigger runs the opportunistic check for hosts that never call install/update/sync
