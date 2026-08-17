@@ -48,6 +48,10 @@ type githubCommit struct {
 // 2. GH_TOKEN env var (gh CLI convention)
 // 3. `gh auth token` CLI output (if gh is available)
 // Returns empty string if neither is available.
+// githubAPIBase is the API root, swappable so the release-channel tests can
+// serve their own catalogue instead of reaching GitHub.
+var githubAPIBase = "https://api.github.com"
+
 func resolveGitHubToken() string {
 	if token := strings.TrimSpace(os.Getenv("GITHUB_TOKEN")); token != "" {
 		return token
@@ -71,7 +75,7 @@ func resolveGitHubToken() string {
 // fetchLatestRelease fetches the latest release from a GitHub repository.
 // Supports optional GITHUB_TOKEN/GH_TOKEN env vars or `gh auth token` to avoid rate limits.
 func fetchLatestRelease(ctx context.Context, owner, repo string) (githubRelease, error) {
-	url := fmt.Sprintf("https://api.github.com/repos/%s/%s/releases/latest", owner, repo)
+	url := fmt.Sprintf("%s/repos/%s/%s/releases/latest", githubAPIBase, owner, repo)
 
 	resp, err := doGitHubRequest(ctx, url)
 	if err != nil {
@@ -92,7 +96,7 @@ func fetchLatestRelease(ctx context.Context, owner, repo string) (githubRelease,
 }
 
 func fetchMainCommit(ctx context.Context, owner, repo string) (githubCommit, error) {
-	url := fmt.Sprintf("https://api.github.com/repos/%s/%s/commits/main", owner, repo)
+	url := fmt.Sprintf("%s/repos/%s/%s/commits/main", githubAPIBase, owner, repo)
 
 	resp, err := doGitHubRequest(ctx, url)
 	if err != nil {
@@ -120,7 +124,7 @@ func fetchLatestReleaseMatchingPattern(ctx context.Context, owner, repo, tagPatt
 		return githubRelease{}, fmt.Errorf("compile release tag pattern for %s/%s: %w", owner, repo, err)
 	}
 
-	releasesURL := fmt.Sprintf("https://api.github.com/repos/%s/%s/releases?per_page=100", owner, repo)
+	releasesURL := fmt.Sprintf("%s/repos/%s/%s/releases?per_page=100", githubAPIBase, owner, repo)
 	seenPages := make(map[string]struct{})
 	for releasesURL != "" {
 		if _, seen := seenPages[releasesURL]; seen {
@@ -153,6 +157,50 @@ func fetchLatestReleaseMatchingPattern(ctx context.Context, owner, repo, tagPatt
 		releasesURL = nextGitHubPage(resp.Header.Get("Link"))
 	}
 	return githubRelease{}, fmt.Errorf("no release matching %q found for %s/%s", tagPattern, owner, repo)
+}
+
+// fetchNewestRelease returns the newest release, prereleases included, matching
+// tagPattern when one is given. The releases endpoint answers newest first, so
+// the first match is the newest -- which is the whole point of asking for a
+// beta: a release candidate is by definition newer than the stable it precedes.
+func fetchNewestRelease(ctx context.Context, owner, repo, tagPattern string) (githubRelease, error) {
+	var pattern *regexp.Regexp
+	if trimmed := strings.TrimSpace(tagPattern); trimmed != "" {
+		compiled, err := regexp.Compile(trimmed)
+		if err != nil {
+			return githubRelease{}, fmt.Errorf("compile release tag pattern %q: %w", trimmed, err)
+		}
+		pattern = compiled
+	}
+
+	url := fmt.Sprintf("%s/repos/%s/%s/releases?per_page=100", githubAPIBase, owner, repo)
+	resp, err := doGitHubRequest(ctx, url)
+	if err != nil {
+		return githubRelease{}, err
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	body, err := readSuccessfulGitHubBody(resp, owner, repo, "releases")
+	if err != nil {
+		return githubRelease{}, err
+	}
+
+	releases, err := decodeGitHubReleases(body)
+	if err != nil {
+		return githubRelease{}, err
+	}
+
+	for _, release := range releases {
+		if release.Draft {
+			continue
+		}
+		if pattern != nil && !pattern.MatchString(strings.TrimSpace(release.TagName)) {
+			continue
+		}
+		return release, nil
+	}
+
+	return githubRelease{}, fmt.Errorf("no release found for %s/%s; the repository publishes none this channel can take", owner, repo)
 }
 
 func readSuccessfulGitHubBody(resp *http.Response, owner, repo, bodyName string) ([]byte, error) {
