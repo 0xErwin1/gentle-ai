@@ -20,6 +20,7 @@ var capturedProviderValidatorStatusCapability = &Capability{Verb: []string{"revi
 func capturedProviderValidatorJourneys() []Journey {
 	return []Journey{{
 		ID:     "j106-captured-provider-validator-slot-finalizes-generically",
+		Review: reviewOptedIn,
 		Title:  "Captured provider validator slot finalizes through generic STATUS without a runtime token",
 		Source: "provider-slot continuation: occupied Go-admitted validator slots are provider facts, not OpenCode finalizer behavior",
 		Steps: []Step{

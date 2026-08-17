@@ -72,12 +72,13 @@ func stopOversizedLensContextReview(r *journeyRun) error {
 func lensContextBudgetJourneys() []Journey {
 	return []Journey{{
 		ID:     "j102-status-stops-oversized-lens-context",
+		Review: reviewOptedIn,
 		Title:  "An unrepresentable immutable reviewer context is refused by START instead of becoming a dead lineage",
 		Source: "issues #2773 and #3367: a frozen candidate whose complete reviewer evidence exceeds the native budget must be refused before any authority is created",
 		Steps: []Step{
 			{Name: "fixture: repository", Fixture: baseRepo},
 			{Name: "fixture: staged reviewer evidence beyond the byte budget", Fixture: oversizedLensContextCandidate},
-			{Name: "enable review mode only in the disposable journey clone", Requires: modeCapability, Args: productArgs("review", "mode", "enable", "--scope", "clone", "--json")},
+			{Name: "clear any clone-local review override (a clone may only ever assert off)", Requires: modeCapability, Args: productArgs("review", "mode", "enable", "--scope", "clone", "--json")},
 			{Name: "negotiated START refuses the oversized frozen reviewer context without persisting authority", Requires: frozenLineageStatusCapability, Composite: stopOversizedLensContextReview},
 		},
 	}}

@@ -303,8 +303,12 @@ func interactiveObservation(args []string, exitCode int, stdout, stderr string) 
 // inside the product, and a fixture that assumed them instead of reading them
 // back is the failure this corpus refuses to ship.
 func (s *Sandbox) readBack(args ...string) Observation {
+	return s.readBackAt(s.Repo, args...)
+}
+
+func (s *Sandbox) readBackAt(dir string, args ...string) Observation {
 	cmd := exec.Command(s.Binary, args...)
-	cmd.Dir = s.Repo
+	cmd.Dir = dir
 	env := s.env()
 	for index, entry := range env {
 		if strings.HasPrefix(entry, "GIT_TRACE=") {
@@ -444,16 +448,94 @@ type Step struct {
 	AbortOnBlock bool
 }
 
+// ReviewPrecondition is a journey's declared receipt-driven-development
+// starting state, and every journey must declare one.
+//
+// Receipt-driven development is opt-in: a fresh install has the switch off, and
+// the sandbox HOME every journey runs under IS a fresh install. So a journey
+// whose subject is the review lifecycle no longer gets a review by standing
+// still — it has to opt in the way a user does. Leaving that to whatever the
+// product's default happens to be is what this type exists to stop: the corpus
+// once measured the lifecycle only because the default happened to say yes, and
+// the day the default changed those journeys did not fail, they quietly
+// measured a different flow.
+//
+// The declaration is what the RUNNER does with the switch, because that is the
+// part the harness can verify. It is not a prediction about what the product's
+// default resolves to.
+type ReviewPrecondition string
+
+const (
+	// reviewPreconditionUndeclared is the zero value, and validateCorpus
+	// rejects it. A new journey has to say which world it runs in.
+	reviewPreconditionUndeclared ReviewPrecondition = ""
+	// reviewOptedIn runs `gentle-ai review mode enable --scope global` in the
+	// sandbox HOME before the journey's first product command, exactly as a
+	// user opts in, and fails the journey if the product does not then report
+	// the switch on. Global is the only scope that can assert "on": a clone may
+	// only ever assert "off".
+	reviewOptedIn ReviewPrecondition = "opted-in"
+	// reviewUntouched runs no mode command at all. The journey either drives
+	// the switch itself (its subject IS the switch) or its subject is what
+	// happens with reviews off, and a runner that reached in first would be
+	// overwriting the state under test.
+	reviewUntouched ReviewPrecondition = "untouched"
+)
+
 // Journey is one end-to-end flow through the review lifecycle.
 type Journey struct {
 	ID     string
 	Title  string
 	Source string
+	// Review is the journey's receipt-driven-development precondition. It is
+	// mandatory: see ReviewPrecondition.
+	Review ReviewPrecondition
 	Steps  []Step
 	// NewLineageActivation propagates to the journey's own Sandbox (task
 	// 6.7): a journey exercising the new-lineage lifecycle sets this true;
 	// every other journey leaves it false and is unaffected.
 	NewLineageActivation bool
+}
+
+// optIntoReviewMode turns receipt-driven development on for one sandbox through
+// the product's own documented command, and reads the answer back instead of
+// assuming it. The corpus is black-box: the switch is opted into the way a user
+// opts in, never by writing the install state the product owns.
+//
+// It runs before the journey's first step, from a throwaway checkout of its
+// own, for two reasons a journey's own repository cannot satisfy. The
+// repository frequently does not exist yet — several fixtures drive `review
+// start` themselves while building the state under test — and one journey's
+// repository is deliberately bare, which the mode command refuses because a
+// review candidate is a working-tree diff. The switch it writes is global, so
+// where it is written from changes nothing about what the journey then sees.
+//
+// It is sandbox setup rather than operator work — the equivalent of the git
+// init that precedes it — so it runs through readBack and is never counted in
+// commands_to_completion.
+func optIntoReviewMode(sandbox *Sandbox) error {
+	anchor := filepath.Join(sandbox.Root, "review-opt-in")
+	if err := os.MkdirAll(anchor, 0o755); err != nil {
+		return err
+	}
+	if err := sandbox.git(anchor, "init", "-b", "main", "-q"); err != nil {
+		return err
+	}
+	observation := sandbox.readBackAt(anchor, "review", "mode", "enable", "--scope", "global", "--json")
+	if IsUnsupported(observation) {
+		return errors.New("this build has no `review mode enable --scope global` surface to opt in with")
+	}
+	if observation.ExitCode != 0 {
+		return fmt.Errorf("review mode enable --scope global exited %d: %s", observation.ExitCode, strings.TrimSpace(observation.Stderr))
+	}
+	effective, ok := envelopeString(observation.Stdout, "status", "effective")
+	if !ok {
+		return fmt.Errorf("review mode enable --scope global printed no status.effective: %s", strings.TrimSpace(observation.Stdout))
+	}
+	if effective != "on" {
+		return fmt.Errorf("review mode enable --scope global left the switch %q, so this journey would measure a flow with reviews off", effective)
+	}
+	return nil
 }
 
 // validateCorpus checks every author-declared classifier input in the corpus
@@ -470,6 +552,14 @@ type Journey struct {
 func validateCorpus(journeys []Journey) error {
 	problems := []string{}
 	for _, journey := range journeys {
+		switch journey.Review {
+		case reviewOptedIn, reviewUntouched:
+		case reviewPreconditionUndeclared:
+			problems = append(problems, journey.ID+
+				": declares no review precondition, so whether it measures the review lifecycle at all would be inherited from the product's default instead of stated (set Review: reviewOptedIn or Review: reviewUntouched)")
+		default:
+			problems = append(problems, journey.ID+": declares an unrecognised review precondition "+string(journey.Review))
+		}
 		for _, step := range journey.Steps {
 			for _, problem := range stepDeclarationProblems(step) {
 				problems = append(problems, journey.ID+" / "+step.Name+": "+problem)
@@ -566,6 +656,14 @@ func runJourney(binary string, journey Journey) JourneyResult {
 	accumulator := newAccumulator()
 	probe := newCapabilityProbe(sandbox)
 	run := &journeyRun{sandbox: sandbox, probe: probe, accumulator: accumulator}
+
+	if journey.Review == reviewOptedIn {
+		if err := optIntoReviewMode(sandbox); err != nil {
+			result.Status = StatusFailed
+			result.FailureReason = "review precondition: " + err.Error()
+			return result
+		}
+	}
 
 	for _, step := range journey.Steps {
 		run.step = step.Name
