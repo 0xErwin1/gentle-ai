@@ -11,6 +11,7 @@ import (
 
 	"github.com/gentleman-programming/gentle-ai/v2/internal/agents"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/components/engram"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/components/gga"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/components/mcp"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/components/opencodeplugin"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/components/permissions"
@@ -45,10 +46,14 @@ type configurationStager struct {
 	destination string
 }
 
-// stageableComponents are the components whose entire contribution is files.
-// Provisioning components are deliberately absent: downloading a binary or
-// cloning a repository is an action, and an action has no staged bytes.
+// stageableComponents are the components that contribute files. Engram and GGA
+// appear here as well as in provisionedComponents because they do both: they
+// install a binary and they configure the clients to use it. Treating them as
+// provisioning alone left a document declaring them producing no configuration
+// at all, which read as an installation that simply did not want them.
 var stageableComponents = map[model.ComponentID]bool{
+	model.ComponentEngram:             true,
+	model.ComponentGGA:                true,
 	model.ComponentSkills:             true,
 	model.ComponentPersona:            true,
 	model.ComponentPermission:         true,
@@ -128,6 +133,16 @@ func (stager configurationStager) rebaseStagedPaths(stageRoot string) error {
 }
 
 func (stager configurationStager) stageComponent(component model.ComponentID, stageRoot string, selection model.Selection, adapters []agents.Adapter) error {
+	// GGA configures every declared client at once rather than one at a time,
+	// so it never enters the per-adapter loop.
+	if component == model.ComponentGGA {
+		if _, err := gga.Inject(stageRoot, agentIDs(adapters)); err != nil {
+			return fmt.Errorf("stage GGA: %w", err)
+		}
+
+		return nil
+	}
+
 	if component == model.ComponentOpenCodeGentleLogo {
 		if _, err := opencodeplugin.Install(stageRoot, model.OpenCodePluginGentleLogo); err != nil {
 			return fmt.Errorf("stage OpenCode logo plugin: %w", err)
@@ -171,6 +186,20 @@ func (stager configurationStager) stageComponentForAdapter(
 
 	case model.ComponentPermission:
 		_, err := permissions.Inject(stageRoot, adapter)
+
+		return err
+
+	case model.ComponentEngram:
+		// Version is deliberately absent. It selects between two renderings of
+		// the Engram protocol from whichever binary happens to be installed
+		// where the render runs, which would make the same document render
+		// differently on two machines. The unversioned reading is the
+		// documented safe default.
+		_, err := engram.InjectWithOptions(target, adapter, engram.InjectOptions{
+			CodexOrchestratorAssignment: selection.CodexOrchestratorAssignment,
+			CodexCarrilModelAssignments: selection.CodexCarrilModelAssignments,
+			CodexModelAssignments:       selection.CodexModelAssignments,
+		})
 
 		return err
 
@@ -314,6 +343,15 @@ func stageDeclaredPermissions(stageRoot string, selection model.Selection, adapt
 	}
 
 	return nil
+}
+
+func agentIDs(adapters []agents.Adapter) []model.AgentID {
+	ids := make([]model.AgentID, 0, len(adapters))
+	for _, adapter := range adapters {
+		ids = append(ids, adapter.Agent())
+	}
+
+	return ids
 }
 
 func sortedServerNames(servers map[string]model.MCPServer) []string {
