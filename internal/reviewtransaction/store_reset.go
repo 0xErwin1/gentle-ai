@@ -69,6 +69,12 @@ const storeResetStagingPrefix = ".store-reset-"
 // compact_reclaim.go so partial-failure paths stay testable.
 var storeResetRename = os.Rename
 
+// storeResetAcquireLease is the lease seam. Production always takes the real
+// exclusive maintenance lease; a test substitutes a wrapper around it to prove,
+// from a barrier rather than from timing, that the store is classified only
+// after the lease is held.
+var storeResetAcquireLease = AcquireReviewMaintenanceExclusive
+
 // storeResetTarget names one path under <git-common-dir>/gentle-ai and why it
 // is in the list it is in. The reason is not decoration: this command destroys
 // data, and every entry it touches or spares has to be able to justify itself
@@ -78,8 +84,9 @@ type storeResetTarget struct {
 	parts  []string
 	reason string
 	// candidateViews marks the one category that is not merely files.
-	// Candidate views are registered Git worktrees written read-only, so they
-	// need their permissions relaxed and their admin directories removed.
+	// Candidate views are registered Git worktrees written read-only, so the
+	// administrative directories that register them go with the checkouts and
+	// the permissions have to be relaxed before anything can be unlinked.
 	candidateViews bool
 }
 
@@ -492,6 +499,31 @@ func storeResetLineages(root string) ([]StoreResetLineage, int, error) {
 // holding authoritative artifacts -- which is all of them. Reclaiming the space
 // is the point, so the space is reclaimed and the report says so plainly.
 func ResetReviewStore(ctx context.Context, repo string, request StoreResetRequest) (StoreResetReport, error) {
+	// The lease is taken before the store is read, and everything that decides
+	// what happens is decided under it.
+	//
+	// Surveying first and leasing afterwards would make the in-flight refusal
+	// advisory against exactly the population the lease exists to exclude. A
+	// review started, or transitioned out of a terminal state, in the window
+	// between the read and the lease is invisible to a decision already made,
+	// and what follows is not a per-lineage delete that would simply miss it:
+	// it renames whole categories, so the new lineage is destroyed by a run
+	// that reported zero reviews in flight. Every review writer takes the
+	// shared side of this same lease before touching a per-lineage store
+	// (acquireStoreLock), so holding it exclusively is what makes the
+	// classification and the removal one atomic step against other processes.
+	lockCtx, cancel := context.WithTimeout(ctx, storeResetLockTimeout)
+	defer cancel()
+	lock, err := storeResetAcquireLease(lockCtx, repo)
+	if err != nil {
+		// No report is returned with this. Nothing was read under the lease, so
+		// there is no classification this command is entitled to state, and a
+		// report rendered from an unleased read is the same stale picture the
+		// ordering above exists to refuse.
+		return StoreResetReport{}, fmt.Errorf("acquire review maintenance lease: %w", err)
+	}
+	defer func() { _ = lock.Release() }()
+
 	report, root, err := surveyReviewStore(ctx, repo)
 	if err != nil {
 		return report, err
@@ -501,17 +533,6 @@ func ResetReviewStore(ctx context.Context, repo string, request StoreResetReques
 		report.Complete = false
 		return report, &StoreResetInFlightError{Repository: report.Repository, Lineages: report.InFlight}
 	}
-
-	// Hold the same advisory lease every other maintenance operation takes, so
-	// a reset cannot race a review that is mid-transition.
-	lockCtx, cancel := context.WithTimeout(ctx, storeResetLockTimeout)
-	defer cancel()
-	lock, err := AcquireReviewMaintenanceExclusive(lockCtx, repo)
-	if err != nil {
-		report.Complete = false
-		return report, fmt.Errorf("acquire review maintenance lease: %w", err)
-	}
-	defer func() { _ = lock.Release() }()
 
 	return storeResetExecute(ctx, report, root)
 }
@@ -538,20 +559,31 @@ func storeResetExecute(ctx context.Context, report StoreResetReport, root string
 		}
 		target := targets[entry.Name]
 		source := filepath.Join(append([]string{root}, target.parts...)...)
+		var stagedAdmin []storeResetStagedAdminDir
+		restoreMode := func() {}
 		if target.candidateViews {
-			// Candidate views are registered worktrees written read-only.
-			// Relaxing the permissions and detaching the admin directories has
-			// to happen before the move, because after it the linkage that
-			// proves which admin directories are ours is gone.
-			if err := storeResetPrepareCandidateViews(root, source); err != nil {
-				report.Removable[index].Skipped = err.Error()
+			// Candidate views are registered worktrees, so which administrative
+			// directories belong to them has to be established before the move:
+			// the gitdir linkage that proves ownership names each view at its
+			// current path. They are moved aside rather than deleted, so this
+			// preparation is undoable right up until the rename below commits.
+			var err error
+			stagedAdmin, err = storeResetStageCandidateViewAdminDirs(root, source, staging)
+			if err != nil {
+				report.Removable[index].Skipped = storeResetSkipReason(err, storeResetRestoreAdminDirs(stagedAdmin))
 				report.Complete = false
 				continue
 			}
+			// Moving a directory to a new parent needs write permission on the
+			// directory itself, and the adapter writes candidate views
+			// read-only. Only this one directory is relaxed, and only until the
+			// rename either commits or is undone.
+			restoreMode = storeResetRelaxForRename(source)
 		}
 		destination := filepath.Join(staging, strings.ReplaceAll(entry.Path, "/", "-"))
 		if err := storeResetRename(source, destination); err != nil {
-			report.Removable[index].Skipped = err.Error()
+			restoreMode()
+			report.Removable[index].Skipped = storeResetSkipReason(err, storeResetRestoreAdminDirs(stagedAdmin))
 			report.Complete = false
 			continue
 		}
@@ -589,33 +621,94 @@ func storeResetSkipped(report StoreResetReport) []StoreResetEntry {
 	return skipped
 }
 
-// storeResetPrepareCandidateViews makes a candidate-views tree removable and
-// detaches the Git worktree administrative directories that point into it.
+// storeResetStagedAdminDir records one Git worktree administrative directory
+// moved out of the way, and where it came from.
+type storeResetStagedAdminDir struct{ original, staged string }
+
+// storeResetStageCandidateViewAdminDirs moves aside the Git worktree
+// administrative directories that point into a candidate-views tree.
 //
-// An admin directory is removed only when its own gitdir file proves it belongs
+// It moves rather than deletes because the category is not actually removed
+// until the rename that follows succeeds, and until then the store has to be
+// exactly as it was found. Deleting first is unrepairable: a rename that then
+// fails leaves the checkouts on disk with their registrations gone, so Git
+// commands inside them fail, the repository's worktree list no longer names
+// them, and a later review cannot register the same view again. A rename into
+// the same staging directory the categories go to costs nothing, is undone by
+// renaming back, and is deleted along with everything else once the category is
+// really gone.
+//
+// An admin directory is moved only when its own gitdir file proves it belongs
 // to this exact candidate view. That check is what keeps the operation from
 // touching a worktree the user created: a global `git worktree prune` would
 // also clear unrelated stale entries, and this command has no business
 // deciding that.
-func storeResetPrepareCandidateViews(root, views string) error {
+func storeResetStageCandidateViewAdminDirs(root, views, staging string) ([]storeResetStagedAdminDir, error) {
 	commonDir := filepath.Dir(root)
 	entries, err := os.ReadDir(views)
 	if err != nil {
-		return err
+		return nil, err
 	}
+	staged := []storeResetStagedAdminDir{}
 	for _, entry := range entries {
 		if !entry.IsDir() {
 			continue
 		}
 		view := filepath.Join(views, entry.Name())
 		admin := filepath.Join(commonDir, "worktrees", entry.Name())
-		if storeResetAdminDirBelongsTo(admin, view) {
-			if err := storeResetRemoveAll(admin); err != nil {
-				return fmt.Errorf("remove worktree administrative directory for candidate view %q: %w", entry.Name(), err)
-			}
+		if !storeResetAdminDirBelongsTo(admin, view) {
+			continue
+		}
+		destination := filepath.Join(staging, "worktrees-"+entry.Name())
+		if err := storeResetRename(admin, destination); err != nil {
+			return staged, fmt.Errorf("stage worktree administrative directory for candidate view %q: %w", entry.Name(), err)
+		}
+		staged = append(staged, storeResetStagedAdminDir{original: admin, staged: destination})
+	}
+	return staged, nil
+}
+
+// storeResetRestoreAdminDirs puts back every administrative directory staged
+// for a category that was then not removed.
+func storeResetRestoreAdminDirs(staged []storeResetStagedAdminDir) error {
+	failures := []error{}
+	for _, entry := range staged {
+		if err := storeResetRename(entry.staged, entry.original); err != nil {
+			failures = append(failures, err)
 		}
 	}
-	return storeResetMakeWritable(views)
+	return errors.Join(failures...)
+}
+
+// storeResetSkipReason names why a category was left alone, and says so louder
+// when undoing the preparation for it did not fully work: a restore that failed
+// is the one case where the store is not exactly as this run found it.
+func storeResetSkipReason(cause, restore error) string {
+	if restore == nil {
+		return cause.Error()
+	}
+	return fmt.Sprintf(
+		"%v; and the worktree administrative directories moved aside for it could not be restored: %v",
+		cause, restore,
+	)
+}
+
+// storeResetRelaxForRename grants write permission on one directory so it can
+// be moved to a new parent, and returns the undo. It changes nothing when the
+// directory is already writable, missing, or not a directory.
+func storeResetRelaxForRename(path string) func() {
+	info, err := os.Lstat(path)
+	if err != nil || !info.IsDir() {
+		return func() {}
+	}
+	mode := info.Mode().Perm()
+	if mode&0o200 != 0 {
+		return func() {}
+	}
+	if err := os.Chmod(path, mode|0o700); err != nil {
+		return func() {}
+	}
+	return func() { _ = os.Chmod(path, mode) }
 }
 
 // storeResetAdminDirBelongsTo reports whether a worktree admin directory points

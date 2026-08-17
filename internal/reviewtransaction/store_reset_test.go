@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // writeStoreResetFile creates one fixture file and every parent directory it
@@ -36,7 +37,14 @@ func storeResetGentleAIRoot(t *testing.T, repo string) string {
 // seedStoreResetLineage writes one compact-v2 lineage holding the given state.
 func seedStoreResetLineage(t *testing.T, repo, lineage string, state State) {
 	t.Helper()
-	root := storeResetGentleAIRoot(t, repo)
+	seedStoreResetLineageAt(t, storeResetGentleAIRoot(t, repo), lineage, state)
+}
+
+// seedStoreResetLineageAt writes the same lineage against an already-resolved
+// store root. Resolving the root shells out to Git, so a caller standing inside
+// a timed window uses this one and pays that cost before the window opens.
+func seedStoreResetLineageAt(t *testing.T, root, lineage string, state State) {
+	t.Helper()
 	writeStoreResetFile(t, filepath.Join(root, "review-transactions", "v2", lineage, "review-state.json"),
 		`{"schema":"gentle-ai.review-state-record/v2","revision":"sha256:00","state":{"schema":"gentle-ai.review-state/v2","lineage_id":"`+lineage+`","state":"`+string(state)+`"}}`+"\n")
 }
@@ -60,6 +68,28 @@ func stubStoreResetRename(t *testing.T, rename func(oldpath, newpath string) err
 	previous := storeResetRename
 	storeResetRename = rename
 	t.Cleanup(func() { storeResetRename = previous })
+}
+
+// stubStoreResetAcquireLease swaps the lease seam for one test and restores it
+// afterwards, mirroring stubStoreResetRename.
+func stubStoreResetAcquireLease(t *testing.T, acquire func(ctx context.Context, repo string) (*MaintenanceLock, error)) {
+	t.Helper()
+	previous := storeResetAcquireLease
+	storeResetAcquireLease = acquire
+	t.Cleanup(func() { storeResetAcquireLease = previous })
+}
+
+// seedStoreResetCandidateView writes one candidate view and the Git worktree
+// administrative directory that registers it, linked the way Git links them.
+func seedStoreResetCandidateView(t *testing.T, repo, name string) (view, admin string) {
+	t.Helper()
+	root := storeResetGentleAIRoot(t, repo)
+	view = filepath.Join(root, "candidate-views", name)
+	admin = filepath.Join(filepath.Dir(root), "worktrees", name)
+	writeStoreResetFile(t, filepath.Join(view, "README.md"), "checkout\n")
+	writeStoreResetFile(t, filepath.Join(view, ".git"), "gitdir: "+admin+"\n")
+	writeStoreResetFile(t, filepath.Join(admin, "gitdir"), filepath.Join(view, ".git")+"\n")
+	return view, admin
 }
 
 func storeResetEntryByName(t *testing.T, entries []StoreResetEntry, name string) StoreResetEntry {
@@ -454,6 +484,216 @@ func TestResetReviewStoreLeavesNoStagingResidue(t *testing.T) {
 	for _, entry := range entries {
 		if strings.HasPrefix(entry.Name(), storeResetStagingPrefix) {
 			t.Fatalf("reset left staging residue %q", entry.Name())
+		}
+	}
+}
+
+// TestResetReviewStoreClassifiesLineagesUnderTheMaintenanceLease is the
+// serialization contract, and it is a real race rather than an assertion about
+// where a line of code sits.
+//
+// The test holds the shared side of the maintenance lease, which is exactly
+// what a live review holds: every review writer takes it before it opens a
+// per-lineage store. A reset that decides what is in flight before it wins that
+// contention is deciding from a picture another process is still free to
+// change, and because removal renames whole categories rather than the
+// lineages the survey enumerated, a review that starts inside that window is
+// destroyed by a run that reported none open.
+//
+// The lease seam is used only as a barrier. It fires at the one point both a
+// correct and an incorrect ordering pass through, so the new lineage is created
+// strictly after anything the reset decided without mutual exclusion, and
+// strictly before the lease it is waiting for is free.
+func TestResetReviewStoreClassifiesLineagesUnderTheMaintenanceLease(t *testing.T) {
+	repo := initSnapshotRepo(t)
+	root := storeResetGentleAIRoot(t, repo)
+	seedStoreResetLineageAt(t, root, "review-approved", StateApproved)
+
+	writer, err := acquireMaintenanceLock(context.Background(),
+		filepath.Join(root, "REVIEW-MAINTENANCE.lock"), maintenanceShared)
+	if err != nil {
+		t.Fatalf("hold the shared maintenance lease: %v", err)
+	}
+	held := true
+	defer func() {
+		if held {
+			_ = writer.Release()
+		}
+	}()
+
+	asked := make(chan struct{})
+	acquire := storeResetAcquireLease
+	stubStoreResetAcquireLease(t, func(ctx context.Context, repo string) (*MaintenanceLock, error) {
+		close(asked)
+		return acquire(ctx, repo)
+	})
+
+	type outcome struct {
+		report StoreResetReport
+		err    error
+	}
+	done := make(chan outcome, 1)
+	go func() {
+		report, err := ResetReviewStore(context.Background(), repo, StoreResetRequest{})
+		done <- outcome{report: report, err: err}
+	}()
+
+	<-asked
+	// The window: a review starts while the reset is still waiting for the
+	// lease. Nothing about it is visible to a survey taken before this point.
+	seedStoreResetLineageAt(t, root, "review-active", StateReviewing)
+	held = false
+	if err := writer.Release(); err != nil {
+		t.Fatalf("release the shared maintenance lease: %v", err)
+	}
+
+	var result outcome
+	select {
+	case result = <-done:
+	case <-time.After(60 * time.Second):
+		t.Fatal("reset never returned")
+	}
+
+	var inFlight *StoreResetInFlightError
+	if !errors.As(result.err, &inFlight) {
+		t.Fatalf("reset racing a review that started before the lease = %v, want a typed refusal", result.err)
+	}
+	if len(inFlight.Lineages) != 1 || inFlight.Lineages[0].LineageID != "review-active" {
+		t.Fatalf("refusal named %#v, want the lineage created inside the window", inFlight.Lineages)
+	}
+	if result.report.RemovedFiles != 0 || result.report.RemovedBytes != 0 {
+		t.Fatalf("the refused reset removed %d file(s)", result.report.RemovedFiles)
+	}
+	for _, lineage := range []string{"review-approved", "review-active"} {
+		path := filepath.Join(root, "review-transactions", "v2", lineage, "review-state.json")
+		if _, err := os.Stat(path); err != nil {
+			t.Fatalf("the reset destroyed %q: %v", lineage, err)
+		}
+	}
+}
+
+// TestResetReviewStoreReleasesTheLeaseAfterRefusing covers the cost of holding
+// the lease across the decision: the refusal now returns from inside the
+// critical section, so it has to hand the lease back or the next review is
+// blocked by a command that removed nothing.
+func TestResetReviewStoreReleasesTheLeaseAfterRefusing(t *testing.T) {
+	repo := initSnapshotRepo(t)
+	seedStoreResetLineage(t, repo, "review-active", StateReviewing)
+
+	if _, err := ResetReviewStore(context.Background(), repo, StoreResetRequest{}); err == nil {
+		t.Fatal("reset with an in-flight lineage reported success")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	lock, err := AcquireReviewMaintenanceExclusive(ctx, repo)
+	if err != nil {
+		t.Fatalf("the refusal kept the maintenance lease: %v", err)
+	}
+	if err := lock.Release(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestResetReviewStoreRestoresWorktreeAdminDirsWhenTheCategoryCannotMove is the
+// all-or-nothing contract for the one category that is not merely files.
+//
+// Detaching a candidate view's worktree registration is not reversible by
+// deletion, so it must not happen before the move that decides success. If it
+// did, a failed rename would leave a checkout on disk whose .git file points at
+// an administrative directory that no longer exists: Git commands inside it
+// fail, the repository's worktree list no longer names it, and a later review
+// that wants the same view finds a directory it can no longer register -- while
+// the report calls the category SKIPPED, meaning untouched.
+func TestResetReviewStoreRestoresWorktreeAdminDirsWhenTheCategoryCannotMove(t *testing.T) {
+	repo := initSnapshotRepo(t)
+	root := storeResetGentleAIRoot(t, repo)
+	view, admin := seedStoreResetCandidateView(t, repo, "1a09d6f9")
+
+	stubStoreResetRename(t, func(oldpath, newpath string) error {
+		if filepath.Base(oldpath) == "candidate-views" {
+			return errors.New("simulated rename failure")
+		}
+		return os.Rename(oldpath, newpath)
+	})
+
+	report, err := ResetReviewStore(context.Background(), repo, StoreResetRequest{})
+	var incomplete *StoreResetIncompleteError
+	if !errors.As(err, &incomplete) {
+		t.Fatalf("reset over an unmovable category = %v, want a typed incomplete run", err)
+	}
+	entry := storeResetEntryByName(t, report.Removable, "candidate-views")
+	if entry.Removed {
+		t.Fatalf("the unmovable category counted as removed: %#v", entry)
+	}
+	if !strings.Contains(entry.Skipped, "simulated rename failure") {
+		t.Fatalf("the unmovable category does not carry its reason: %#v", entry)
+	}
+	if strings.Contains(entry.Skipped, "could not be restored") {
+		t.Fatalf("the restore itself failed: %#v", entry)
+	}
+
+	// SKIPPED has to mean untouched, and for a registered worktree that covers
+	// the registration as much as the checkout.
+	if _, err := os.Stat(filepath.Join(view, "README.md")); err != nil {
+		t.Fatalf("the skipped candidate view lost its contents: %v", err)
+	}
+	payload, err := os.ReadFile(filepath.Join(admin, "gitdir"))
+	if err != nil {
+		t.Fatalf("the skipped candidate view lost its worktree registration: %v", err)
+	}
+	if got, want := strings.TrimSpace(string(payload)), filepath.Join(view, ".git"); got != want {
+		t.Fatalf("restored gitdir = %q, want %q", got, want)
+	}
+
+	// The restore puts registrations back where they were rather than leaving
+	// them parked in the store.
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, staging := range entries {
+		if strings.HasPrefix(staging.Name(), storeResetStagingPrefix) {
+			t.Fatalf("the failed run left staging residue %q", staging.Name())
+		}
+	}
+}
+
+// TestResetReviewStoreRestoresWorktreeAdminDirsWhenStagingHalfSucceeds covers
+// the same rule one step earlier: the preparation itself can fail partway, and
+// the views it already detached have to go back too.
+func TestResetReviewStoreRestoresWorktreeAdminDirsWhenStagingHalfSucceeds(t *testing.T) {
+	repo := initSnapshotRepo(t)
+	firstView, firstAdmin := seedStoreResetCandidateView(t, repo, "view-a")
+	secondView, secondAdmin := seedStoreResetCandidateView(t, repo, "view-b")
+
+	stubStoreResetRename(t, func(oldpath, newpath string) error {
+		if filepath.Base(newpath) == "worktrees-view-b" {
+			return errors.New("simulated staging failure")
+		}
+		return os.Rename(oldpath, newpath)
+	})
+
+	report, err := ResetReviewStore(context.Background(), repo, StoreResetRequest{})
+	var incomplete *StoreResetIncompleteError
+	if !errors.As(err, &incomplete) {
+		t.Fatalf("reset over a half-staged category = %v, want a typed incomplete run", err)
+	}
+	entry := storeResetEntryByName(t, report.Removable, "candidate-views")
+	if entry.Removed || !strings.Contains(entry.Skipped, "simulated staging failure") {
+		t.Fatalf("the half-staged category = %#v", entry)
+	}
+
+	for view, admin := range map[string]string{firstView: firstAdmin, secondView: secondAdmin} {
+		if _, err := os.Stat(filepath.Join(view, "README.md")); err != nil {
+			t.Fatalf("candidate view %s lost its contents: %v", view, err)
+		}
+		payload, err := os.ReadFile(filepath.Join(admin, "gitdir"))
+		if err != nil {
+			t.Fatalf("candidate view %s lost its worktree registration: %v", view, err)
+		}
+		if got, want := strings.TrimSpace(string(payload)), filepath.Join(view, ".git"); got != want {
+			t.Fatalf("restored gitdir for %s = %q, want %q", view, got, want)
 		}
 	}
 }
