@@ -2412,7 +2412,7 @@ func componentPathsWithWorkspaceScoped(homeDir, workspaceDir string, scope Insta
 			paths = append(paths, gga.ConfigPath(homeDir))
 			paths = append(paths, gga.AgentsTemplatePath(homeDir))
 		case model.ComponentTheme:
-			if p := adapter.SettingsPath(homeDir); p != "" {
+			if p := adapter.SettingsPath(homeDir); p != "" && adapter.Agent() != model.AgentPi {
 				paths = append(paths, p)
 			}
 		case model.ComponentClaudeTheme:
