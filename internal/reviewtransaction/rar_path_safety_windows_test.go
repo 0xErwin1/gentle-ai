@@ -121,6 +121,48 @@ func TestRARSharedOwnerAcceptsOnlyCurrentWindowsPrincipals(t *testing.T) {
 	})
 }
 
+// TestRARWindowsOwnerOnlyConstantsMatchWindows binds the constants the pure
+// rule is table-tested against to the real Windows values, so the
+// cross-platform table cannot drift away from the platform it describes.
+func TestRARWindowsOwnerOnlyConstantsMatchWindows(t *testing.T) {
+	wantFlags := uint8(windows.OBJECT_INHERIT_ACE | windows.CONTAINER_INHERIT_ACE)
+	if rarWindowsInheritDirectoryACEFlags != wantFlags {
+		t.Fatalf("directory ACE flags = %#04x, want %#04x",
+			rarWindowsInheritDirectoryACEFlags, wantFlags)
+	}
+	// The written mask and the accepted masks have to be the same access set,
+	// which is the whole reason the SDDL may say FA instead of GA.
+	if !ownerOnlyRARWindowsAccessMask(windows.GENERIC_ALL) {
+		t.Fatal("GENERIC_ALL is not an accepted owner-only mask")
+	}
+	const fileAllAccess = windows.ACCESS_MASK(0x001f01ff)
+	if !ownerOnlyRARWindowsAccessMask(fileAllAccess) {
+		t.Fatal("FILE_ALL_ACCESS is not an accepted owner-only mask")
+	}
+	if ownerOnlyRARWindowsAccessMask(windows.FILE_GENERIC_READ) {
+		t.Fatal("a read-only mask is accepted as owner-only")
+	}
+}
+
+// TestRARWindowsOwnerOnlyDescriptorRoundTrips proves the descriptor the repair
+// writes is the descriptor the validator accepts, through the real SDDL
+// builder and the real observation layer rather than a hand-built table.
+func TestRARWindowsOwnerOnlyDescriptorRoundTrips(t *testing.T) {
+	for _, directory := range []bool{false, true} {
+		descriptor, err := ownerOnlyRARSecurityDescriptor(directory)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if mismatch := privateRARSecurityDescriptorMismatch(descriptor, directory); mismatch != "" {
+			t.Fatalf("the descriptor gentle-ai writes (directory=%t) is refused by its own rule: %s",
+				directory, mismatch)
+		}
+		if !privateRARSecurityDescriptorSafe(descriptor, directory) {
+			t.Fatalf("mismatch and safe disagree for directory=%t", directory)
+		}
+	}
+}
+
 func TestRARPrivateOwnerRemainsTokenUserOnly(t *testing.T) {
 	descriptor, err := ownerOnlyRARSecurityDescriptor(false)
 	if err != nil {
