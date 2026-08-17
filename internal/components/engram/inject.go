@@ -197,6 +197,15 @@ type InjectOptions struct {
 	// raw string (rather than a bool) is required to support the inclusive
 	// at-floor v1.4.0 boundary comparison.
 	Version string
+
+	// SkipRuntimeProbe suppresses the checks that ask what is installed on the
+	// machine running this code. Rendering describes the configuration a
+	// destination should hold, and that destination is not necessarily here:
+	// probing locally would make the same document render differently on two
+	// machines, and fail outright wherever the client is not installed at all.
+	// Installing keeps the probe, because there the machine being asked about
+	// is the machine being configured.
+	SkipRuntimeProbe bool
 }
 
 func Inject(homeDir string, adapter agents.Adapter) (InjectionResult, error) {
@@ -422,8 +431,10 @@ func injectWithOptions(configHomeDir, promptDir string, adapter agents.Adapter, 
 		if configPath == "" {
 			break
 		}
-		if err := codex.ValidateGPT56Runtime(); err != nil {
-			return InjectionResult{}, err
+		if !opts.SkipRuntimeProbe {
+			if err := codex.ValidateGPT56Runtime(); err != nil {
+				return InjectionResult{}, err
+			}
 		}
 
 		// Determine instruction file paths before mutating the config.

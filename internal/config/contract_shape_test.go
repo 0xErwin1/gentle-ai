@@ -148,6 +148,8 @@ func fullyPopulatedDocument() Document {
 			Agents:             []model.AgentID{model.AgentOpenCode},
 			Components:         []model.ComponentID{model.ComponentEngram},
 			Skills:             []model.SkillID{model.SkillSDDApply},
+			SkillExclusions:    []model.SkillID{model.SkillGoTesting},
+			CodexModelPreset:   string(model.CodexPresetRecommended),
 			Persona:            model.PersonaGentleman,
 			Preset:             model.PresetFullGentleman,
 			SDDMode:            model.SDDModeSingle,
