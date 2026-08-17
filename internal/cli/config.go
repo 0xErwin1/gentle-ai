@@ -46,6 +46,25 @@ func decodeDesiredState(document []byte) (configdomain.DesiredState, []configdom
 	return desired, diagnostics
 }
 
+// reportedDiagnostics writes the machine-readable result and then fails when it
+// carries an error. The diagnostics are the answer, so they still go to stdout
+// for a consumer that parses them; the exit status is for every consumer that
+// does not, where a rejected document reported as success is indistinguishable
+// from a valid one.
+func reportedDiagnostics(stdout io.Writer, result any, diagnostics []configdomain.Diagnostic) error {
+	if err := writeConfigResult(stdout, result); err != nil {
+		return err
+	}
+
+	for _, diagnostic := range diagnostics {
+		if diagnostic.Severity == configdomain.Error {
+			return fmt.Errorf("configuration rejected: %d diagnostic(s), first is %s at %s; resolve each reported diagnostic, then run gentle-ai config validate --config <path>", len(diagnostics), diagnostics[0].Code, diagnostics[0].Path)
+		}
+	}
+
+	return nil
+}
+
 // RunConfig performs declarative configuration operations.
 func RunConfig(args []string, stdout io.Writer) error {
 	if len(args) == 0 {
@@ -77,7 +96,7 @@ func RunConfig(args []string, stdout io.Writer) error {
 	desired, diagnostics := decodeDesiredState(document)
 	result := map[string]any{"operation": operation, "diagnostics": diagnostics}
 	if len(diagnostics) > 0 || operation == "validate" {
-		return writeConfigResult(stdout, result)
+		return reportedDiagnostics(stdout, result, diagnostics)
 	}
 	if operation != "render" && operation != "plan" && operation != "diff" && operation != "apply" && operation != "reconcile" {
 		return fmt.Errorf("unknown config operation %q; run gentle-ai config <validate|render|plan|diff|apply|reconcile> --config <path>", operation)
@@ -107,7 +126,7 @@ func RunConfig(args []string, stdout io.Writer) error {
 	provider, unavailable := selectRenderProvider(desired, *home, *destination)
 	if len(unavailable) > 0 {
 		result["diagnostics"] = unavailable
-		return writeConfigResult(stdout, result)
+		return reportedDiagnostics(stdout, result, unavailable)
 	}
 
 	snapshot, err := render.New(provider).Render(render.Request{State: desired, Destination: *destination, StageRoot: *stage, Baseline: baseline})

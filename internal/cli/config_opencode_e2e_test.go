@@ -91,8 +91,11 @@ func TestConfigOpenCodeEndToEnd(t *testing.T) {
 func assertConfigOutput(t *testing.T, args []string, want string) {
 	t.Helper()
 
+	// A rejected document reports its diagnostics on stdout and then fails, so
+	// the caller asserting on a diagnostic is asserting on a failing run.
 	var output bytes.Buffer
-	if err := RunConfig(args, &output); err != nil {
+	err := RunConfig(args, &output)
+	if err != nil && !strings.HasPrefix(err.Error(), "configuration rejected:") {
 		t.Fatalf("RunConfig(%s) error = %v", args[0], err)
 	}
 	if !strings.Contains(output.String(), want) {
