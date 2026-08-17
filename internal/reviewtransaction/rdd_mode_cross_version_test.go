@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -268,6 +269,80 @@ func TestCloneScopeWriteStaysReachableWhenTheOtherLocationIsNot(t *testing.T) {
 	}
 	if head, err := cloneLocalRDDOverrideHeadGeneration(current); err != nil || head != 1 {
 		t.Fatalf("repeated damaged-tree disable published generation %d, %v", head, err)
+	}
+}
+
+// TestCloneScopeWriteNeverClaimsTheMachineOverAnUnscannableMirror is the
+// reproduction for R4-mirror-head-zero.
+//
+// The pre-relocation location can open, lock, and validate and still refuse to
+// enumerate its published slots. Its head is then unknown, not zero, and the
+// difference decides everything: publishing this build's next slot number into
+// a location whose head is higher lands the decision UNDERNEATH the record a
+// pre-relocation gentle-ai actually reads. That build keeps enforcing the
+// mode the operator just changed while the write reports it reached the whole
+// machine, which is #3284 wearing a success message.
+func TestCloneScopeWriteNeverClaimsTheMachineOverAnUnscannableMirror(t *testing.T) {
+	ctx := context.Background()
+	repo := initSnapshotRepo(t)
+	global := RDDGlobalMode{Value: "on"}
+
+	disabled, err := SetCloneLocalRDDMode(ctx, repo, RDDModeOff, "", global)
+	if err != nil {
+		t.Fatalf("SetCloneLocalRDDMode(off) error = %v", err)
+	}
+	// A pre-relocation gentle-ai then published generations of its own, so the
+	// other location has gone further than this build's root. Its slot 2 is
+	// free, which is exactly what makes the mis-publish silent instead of loud.
+	legacy := legacyCloneModeRootForTest(t, ctx, repo)
+	foreign := publishCurrentModeRecordForTest(t, legacy, rddModeOverrideRecord{Generation: 4}, string(RDDModeOff))
+	if status := preRelocationCloneMode(t, ctx, repo); status.Enabled() {
+		t.Fatalf("staging failed: the pre-relocation location must decide off, got %#v", status)
+	}
+	failCloneModeMirrorSlotScanForTest(t, legacy)
+
+	status, err := SetCloneLocalRDDMode(ctx, repo, RDDModeUnset, disabled.Revision, global)
+	if err != nil {
+		t.Fatalf("clone-scope enable refused while the other location could not be enumerated: %v", err)
+	}
+	// The #2882 exit stays open: this build's own decision is recorded.
+	if !status.Enabled() || status.CloneLocal != RDDModeUnset {
+		t.Fatalf("clone-scope enable status = %#v; want this build's override cleared", status)
+	}
+	if status.Reach == RDDModeReachMachine {
+		if pre := preRelocationCloneMode(t, ctx, repo); !pre.Enabled() {
+			t.Fatalf("the write claimed machine-wide reach while a pre-relocation gentle-ai still reads reviews off: %#v", pre)
+		}
+	}
+	if status.Reach != RDDModeReachThisBuild {
+		t.Fatalf("reach over a mirror whose slots cannot be read = %q, want %q", status.Reach, RDDModeReachThisBuild)
+	}
+	// Nothing may be published into a location whose layout this build could
+	// not read: a record under its head is invisible to the only reader it was
+	// written for.
+	stray := filepath.Join(legacy, rddModeGenerationName(2))
+	if _, err := os.Lstat(stray); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("a record was published at slot 2, underneath the pre-relocation head %d: %v", foreign.Generation, err)
+	}
+	if head, err := cloneLocalRDDOverrideHeadGeneration(legacy); err != nil || head != foreign.Generation {
+		t.Fatalf("pre-relocation head = %d, %v; want the untouched %d", head, err, foreign.Generation)
+	}
+}
+
+// failCloneModeMirrorSlotScanForTest reproduces a mirror directory that opens,
+// validates, and then refuses to enumerate. The scan is a variable for the
+// same reason the private-directory primitives are: no test on ext4 or tmpfs
+// can produce a directory that passes the no-follow owner-only walk and then
+// fails readdir(2).
+func failCloneModeMirrorSlotScanForTest(t *testing.T, dir string) {
+	t.Helper()
+	real := cloneLocalRDDModeMirrorSlotScan
+	t.Cleanup(func() { cloneLocalRDDModeMirrorSlotScan = real })
+	cloneLocalRDDModeMirrorSlotScan = func(scanned string) (int, error) {
+		if scanned == dir {
+			return 0, fmt.Errorf("enumerate %q: %w", scanned, os.ErrPermission)
+		}
+		return real(scanned)
 	}
 }
 

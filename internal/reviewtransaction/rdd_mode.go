@@ -491,6 +491,17 @@ type cloneLocalRDDModeMirror struct {
 	readErr   error
 }
 
+// cloneLocalRDDModeMirrorSlotScan reads the mirror's published slot numbers.
+//
+// It is a variable for the same reason rarPrivateDirectoryMkdir is: the
+// failure it has to survive cannot be produced by a test on ext4 or tmpfs. A
+// directory that fails the owner-only no-follow walk never becomes a mirror at
+// all, so the only way to reach an unreadable head is a directory that
+// validates and then refuses readdir(2) -- a permission change racing the
+// walk, EIO, or ESTALE on a network mount. Production always uses the real
+// scan.
+var cloneLocalRDDModeMirrorSlotScan = cloneLocalRDDOverrideHeadGeneration
+
 func openCloneLocalRDDModeMirror(ctx context.Context, repo string) *cloneLocalRDDModeMirror {
 	mirror := &cloneLocalRDDModeMirror{}
 	// An unreachable location is not an error here. It is reported as reach,
@@ -509,9 +520,26 @@ func openCloneLocalRDDModeMirror(ctx context.Context, repo string) *cloneLocalRD
 	// The slot scan is kept separate from the record read: an unparseable head
 	// still occupies its slot, and the successor that supersedes it has to
 	// clear that slot rather than collide with it.
-	head, headErr := cloneLocalRDDOverrideHeadGeneration(dir)
+	head, headErr := cloneLocalRDDModeMirrorSlotScan(dir)
 	if headErr != nil {
-		mirror.readErr = headErr
+		// A location whose slots cannot be enumerated has an UNKNOWN head, not
+		// an empty one, and the difference is the whole switch. Leaving it
+		// available with head zero published this build's next slot number
+		// into it: below the record a pre-relocation gentle-ai actually reads,
+		// invisible to the only reader it was written for, and reported as
+		// machine-wide reach -- #3284 with a success message on it.
+		//
+		// So it joins the location that cannot be opened at all. Not reached
+		// is the honest answer, the write still applies here, the operator is
+		// told reach=this_build, and nothing is published into a layout this
+		// build could not read. The lock stays held and released for the rest
+		// of this write, because the location itself is real.
+		//
+		// The scan error is dropped rather than carried, exactly like the two
+		// opens above: readErr is the record's own problem, consulted only
+		// while this location is still writable, and an unavailable mirror is
+		// never written to or asked what it decides.
+		mirror.available = false
 		return mirror
 	}
 	mirror.head = head
