@@ -309,6 +309,11 @@ type MCPServer struct {
 	Args    []string          `json:"args,omitempty"`
 	Env     map[string]string `json:"env,omitempty"`
 	URL     string            `json:"url,omitempty"`
+
+	// Headers authenticate a remote server. A hosted MCP endpoint takes its
+	// credential in a header rather than in the environment, so without them a
+	// remote server can be named but not reached.
+	Headers map[string]string `json:"headers,omitempty"`
 	Enabled *bool             `json:"enabled,omitempty"`
 }
 
@@ -328,6 +333,7 @@ func mcpServersToModel(servers map[string]MCPServer) map[string]model.MCPServer 
 			Args:    append([]string(nil), server.Args...),
 			Env:     copyMap(server.Env),
 			URL:     server.URL,
+			Headers: copyStringMap(server.Headers),
 			Enabled: enabled,
 		}
 	}
@@ -348,6 +354,7 @@ func mcpServersFromModel(servers map[string]model.MCPServer) map[string]MCPServe
 			Args:    append([]string(nil), server.Args...),
 			Env:     copyMap(server.Env),
 			URL:     server.URL,
+			Headers: copyStringMap(server.Headers),
 			Enabled: &enabled,
 		}
 	}
