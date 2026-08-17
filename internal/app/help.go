@@ -20,7 +20,7 @@ COMMANDS
                Missing mappings or unsafe shell config leave config unchanged with guidance.
   codegraph init --cwd <project-root>
                Initialize a project's CodeGraph index; codegraph [init] --help shows local help
-  config <validate|render|plan|diff|apply|reconcile|export> --config <path>
+  config <validate|render|plan|diff|apply|reconcile|adopt|export> --config <path>
                Read, preview and reconcile the declarative desired state;
                'install --config' and 'sync --config' consume the same document
   skill-registry refresh
