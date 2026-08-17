@@ -252,6 +252,7 @@ func TestDetectInstalledVersionFallbackPathsNoFallbackDefined(t *testing.T) {
 	}
 }
 
+
 func TestBetaTargetBindsModuleAndFullCommit(t *testing.T) {
 	t.Setenv("GENTLE_AI_CHANNEL", "beta")
 	const sha = "972997650b51abcdef0123456789abcdef012345"
@@ -349,7 +350,7 @@ func TestCheckSingleToolGentleAIBetaComparesMainHead(t *testing.T) {
 	httpClient = server.Client()
 	httpClient.Transport = &testTransport{server: server}
 
-	result := checkSingleTool(context.Background(), Tools[0], "1.40.3-0.20260614151827-6eff4a1ba110", system.PlatformProfile{})
+	result := checkSingleTool(context.Background(), Tools[0], "1.40.3-0.20260614151827-6eff4a1ba110", system.PlatformProfile{}, false)
 
 	if result.Status != UpdateAvailable {
 		t.Fatalf("status = %q, want %q", result.Status, UpdateAvailable)
@@ -385,7 +386,7 @@ func TestCheckSingleToolGentleAIPseudoVersionComparesMainHeadWithoutChannel(t *t
 	httpClient = server.Client()
 	httpClient.Transport = &testTransport{server: server}
 
-	result := checkSingleTool(context.Background(), Tools[0], "1.40.3-0.20260614211459-6eff4a1ba110", system.PlatformProfile{})
+	result := checkSingleTool(context.Background(), Tools[0], "1.40.3-0.20260614211459-6eff4a1ba110", system.PlatformProfile{}, false)
 
 	if result.Status != UpdateAvailable {
 		t.Fatalf("status = %q, want %q", result.Status, UpdateAvailable)
@@ -493,7 +494,7 @@ func TestCheckSingleToolGentleAIStableVersionWithoutChannelComparesLatestRelease
 
 	simulateStrayForeignRequest(t, server)
 
-	result := checkSingleTool(context.Background(), Tools[0], "1.40.3", system.PlatformProfile{})
+	result := checkSingleTool(context.Background(), Tools[0], "1.40.3", system.PlatformProfile{}, false)
 
 	if mainHeadRequested.Load() || moduleRequested.Load() {
 		t.Fatal("stable channel must not request main HEAD or beta go.mod")
@@ -532,7 +533,7 @@ func TestCheckSingleToolGentleAIBetaAcceptsLocalCommitPrefix(t *testing.T) {
 	httpClient = server.Client()
 	httpClient.Transport = &testTransport{server: server}
 
-	result := checkSingleTool(context.Background(), Tools[0], "1.40.3-0.20260614151827-6eff4a1ba110", system.PlatformProfile{})
+	result := checkSingleTool(context.Background(), Tools[0], "1.40.3-0.20260614151827-6eff4a1ba110", system.PlatformProfile{}, false)
 
 	if result.Status != UpToDate {
 		t.Fatalf("status = %q, want %q", result.Status, UpToDate)
@@ -578,7 +579,7 @@ func TestCheckSingleToolBrewOwnedGentleAIAdvertisesStableChannel(t *testing.T) {
 	httpClient.Transport = &testTransport{server: server}
 
 	profile := system.PlatformProfile{OS: "darwin", PackageManager: "brew"}
-	result := checkSingleTool(context.Background(), Tools[0], "1.40.3-0.20260614151827-6eff4a1ba110", profile)
+	result := checkSingleTool(context.Background(), Tools[0], "1.40.3-0.20260614151827-6eff4a1ba110", profile, false)
 
 	if mainHeadRequested.Load() {
 		t.Fatal("brew-owned gentle-ai must not request main HEAD: brew cannot deliver a main@sha target")
@@ -624,7 +625,7 @@ func TestCheckSingleToolGentleAIBetaHintNamesAdvertisedTarget(t *testing.T) {
 	httpClient.Transport = &testTransport{server: server}
 
 	profile := system.PlatformProfile{OS: "linux", PackageManager: "apt"}
-	result := checkSingleTool(context.Background(), Tools[0], "1.40.3-0.20260614151827-6eff4a1ba110", profile)
+	result := checkSingleTool(context.Background(), Tools[0], "1.40.3-0.20260614151827-6eff4a1ba110", profile, false)
 
 	if result.Status != UpdateAvailable {
 		t.Fatalf("status = %q, want %q", result.Status, UpdateAvailable)
@@ -674,7 +675,7 @@ func TestCheckSingleToolGentleAIBetaNewerLocalPseudoVersionIsNotOffered(t *testi
 
 	// Local pseudo-version timestamp 2026-08-01 15:26:09 UTC is newer than the
 	// remote commit date 2026-07-25.
-	result := checkSingleTool(context.Background(), Tools[0], "1.40.3-0.20260801152609-6eff4a1ba110", system.PlatformProfile{})
+	result := checkSingleTool(context.Background(), Tools[0], "1.40.3-0.20260801152609-6eff4a1ba110", system.PlatformProfile{}, false)
 
 	if result.Status != UpToDate {
 		t.Fatalf("status = %q, want %q: local build is newer than remote main HEAD", result.Status, UpToDate)
@@ -707,7 +708,7 @@ func TestCheckSingleToolGentleAIBetaOlderLocalPseudoVersionStillOffered(t *testi
 	httpClient.Transport = &testTransport{server: server}
 
 	// Local pseudo-version timestamp 2026-06-14 predates the remote commit.
-	result := checkSingleTool(context.Background(), Tools[0], "1.40.3-0.20260614151827-6eff4a1ba110", system.PlatformProfile{})
+	result := checkSingleTool(context.Background(), Tools[0], "1.40.3-0.20260614151827-6eff4a1ba110", system.PlatformProfile{}, false)
 
 	if result.Status != UpdateAvailable {
 		t.Fatalf("status = %q, want %q", result.Status, UpdateAvailable)
@@ -1094,7 +1095,7 @@ func TestCheckSingleTool_EngramUsesBinaryReleaseChannel(t *testing.T) {
 		return exec.Command("false")
 	}
 
-	result := checkSingleTool(context.Background(), Tools[1], "dev", system.PlatformProfile{OS: "darwin", PackageManager: "brew", Supported: true})
+	result := checkSingleTool(context.Background(), Tools[1], "dev", system.PlatformProfile{OS: "darwin", PackageManager: "brew", Supported: true}, false)
 	assertResult(t, result, "engram", UpToDate, "1.15.13", "1.15.13")
 	if result.ReleaseURL != "https://github.com/Gentleman-Programming/engram/releases/tag/v1.15.13" {
 		t.Fatalf("ReleaseURL = %q, want binary channel release", result.ReleaseURL)
