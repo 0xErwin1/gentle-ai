@@ -104,7 +104,11 @@ func TestPreCommitGateDiscoverySkipsAssessmentForGenesisDisjointTerminalLeaves(t
 
 	_, _, discoveryErr := discoverCompactFacadeGateReview(context.Background(), repo, "", reviewtransaction.NativeGateRequestInput{Gate: reviewtransaction.GatePreCommit})
 	var discovery *ReviewReceiptDiscoveryError
-	if !errors.As(discoveryErr, &discovery) || discovery.Kind != ReviewReceiptUnrelated || len(discovery.Candidates) != n {
+	// issue #3408: the unrelated denial no longer enumerates the terminal
+	// leaves it walked -- none of them is actionable for this candidate -- so
+	// the surviving observable is the kind, and the skip count below is what
+	// this test actually proves.
+	if !errors.As(discoveryErr, &discovery) || discovery.Kind != ReviewReceiptUnrelated || len(discovery.Candidates) != 0 {
 		t.Fatalf("pre-commit discovery over %d disjoint terminal leaves = %#v, err=%v", n, discovery, discoveryErr)
 	}
 	if assessed >= n {
@@ -152,6 +156,78 @@ func TestPreCommitGateDiscoveryStillSelectsExactReceiptAmongDisjointNoiseLineage
 		t.Fatalf("expensive assessment ran %d times for %d noise lineages plus the governing one, want at most %d", assessed, n, n+1)
 	}
 	t.Logf("expensive per-leaf assessment ran %d times for %d disjoint noise lineages plus the governing one", assessed, n)
+}
+
+// TestUnrelatedReceiptDenialNamesTheCandidateSituationNotOtherLineages is
+// issue #3408 at the live gate boundary. The denial itself is correct and
+// stays a denial: a candidate with no approved receipt must be refused.
+// What was wrong is what the refusal REPORTED. It carried every terminal
+// lineage the discovery walk had examined -- an enumeration that grows with
+// the store, because lineages accumulate and nothing reaps them (#1656) --
+// and worded itself as "terminal review receipts exist only for unrelated
+// targets", so an operator read it as "some old lineage is blocking me",
+// went looking for the connection, and found none, because there is none.
+//
+// Every lineage in that set assessed as UNRELATED to this candidate. None of
+// them can be selected, recovered, or acted on here, so none of them belongs
+// in the refusal. The refusal must state the candidate's own situation and
+// the one route out of it.
+func TestUnrelatedReceiptDenialNamesTheCandidateSituationNotOtherLineages(t *testing.T) {
+	reviewModeHome(t)
+	repo := initReviewCLIRepo(t)
+	const n = 6
+	lineages := make([]string, 0, n)
+	for index := 0; index < n; index++ {
+		lineage := fmt.Sprintf("unrelated-denial-noise-%02d", index)
+		approveDiscoveryMarkdown(t, repo, lineage, fmt.Sprintf("docs/unrelated-denial-%02d.md", index), fmt.Sprintf("noise %d\n", index))
+		runReviewCLIGit(t, repo, "add", "-A")
+		runReviewCLIGit(t, repo, "commit", "-qm", lineage)
+		lineages = append(lineages, lineage)
+	}
+	// The live candidate touches a path none of those lineages reviewed, so
+	// discovery classifies every one of them unrelated and denies.
+	if err := os.WriteFile(filepath.Join(repo, "live-candidate.txt"), []byte("live staged change\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runReviewCLIGit(t, repo, "add", "-A")
+
+	var output bytes.Buffer
+	gateErr := RunReviewFacadeValidate([]string{"--cwd", repo, "--gate", string(reviewtransaction.GatePreCommit)}, &output)
+	var denied ReviewGateDeniedError
+	if !errors.As(gateErr, &denied) {
+		t.Fatalf("candidate with no approved receipt was not denied: %T %v\n%s", gateErr, gateErr, output.String())
+	}
+	var result ReviewValidateResult
+	decodeStrictReviewJSON(t, output.Bytes(), &result)
+	if result.Allowed || result.Context.Denial == nil || result.Context.Denial.Code != string(ReviewReceiptUnrelated) {
+		t.Fatalf("denial = %#v, want a fail-closed %q\n%s", result.Context.Denial, ReviewReceiptUnrelated, output.String())
+	}
+	if !strings.Contains(result.Reason, "no approved review receipt covers this candidate") ||
+		!strings.Contains(result.Reason, "gentle-ai review start") {
+		t.Fatalf("denial reason = %q, want it to lead with this candidate's own situation and name its route", result.Reason)
+	}
+	payload := output.String()
+	for _, lineage := range lineages {
+		if strings.Contains(payload, lineage) {
+			t.Fatalf("denial reported unrelated lineage %q as though it were the obstacle:\n%s", lineage, payload)
+		}
+	}
+
+	// The typed discovery error carries no enumeration either, so no other
+	// renderer can grow one back.
+	_, _, discoveryErr := discoverCompactFacadeGateReview(context.Background(), repo, "", reviewtransaction.NativeGateRequestInput{Gate: reviewtransaction.GatePreCommit})
+	var discovery *ReviewReceiptDiscoveryError
+	if !errors.As(discoveryErr, &discovery) || discovery.Kind != ReviewReceiptUnrelated || len(discovery.Candidates) != 0 {
+		t.Fatalf("unrelated discovery over %d terminal lineages = %#v, err=%v", n, discovery, discoveryErr)
+	}
+
+	// The negotiated failure envelope leads with the same statement.
+	failure := newReviewIntegrationFailure("review.validate", nil, discoveryErr)
+	if failure.Code != string(ReviewReceiptUnrelated) ||
+		!strings.Contains(failure.Message, "No approved review receipt covers this candidate") ||
+		!strings.Contains(failure.Message, "gentle-ai review start") {
+		t.Fatalf("negotiated unrelated failure = %#v", failure)
+	}
 }
 
 func TestReceiptlessTerminalLegacyChainIsInventoryReadableButNeverGateAuthority(t *testing.T) {

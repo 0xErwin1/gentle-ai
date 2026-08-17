@@ -1020,9 +1020,16 @@ func newReviewIntegrationFailure(operation string, args []string, runErr error) 
 			// should not have to consult documentation to find it.
 			failure.NextAction = "review.start"
 		case ReviewReceiptUnrelated:
-			// Every terminal receipt on file targets something else. STATUS
-			// re-derives the same discovery and can name the candidate
-			// lineages (or confirm none apply) without guessing.
+			// issue #3408: discovery assessed every terminal receipt on file
+			// against this candidate and none of them governs it, so the
+			// message leads with the candidate's own situation and its route
+			// instead of the generic "no unique exact receipt applies", which
+			// read as though one of those other receipts were the obstacle.
+			// NextAction stays review.status: STATUS is the negotiated entry
+			// that re-derives this discovery and returns the exact
+			// transition, which for a candidate nothing governs is the
+			// review.start the message names.
+			failure.Message = "No approved review receipt covers this candidate; review it with gentle-ai review start."
 			failure.NextAction = "review.status"
 		case ReviewReceiptScopeChanged:
 			if discovery.Context != nil {
