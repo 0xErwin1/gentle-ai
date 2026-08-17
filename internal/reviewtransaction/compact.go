@@ -502,7 +502,11 @@ func (state CompactState) Validate() error {
 	if err := validateCompactCorrectionAddedPaths(state); err != nil {
 		return err
 	}
-	if err := pathsAreSubset(state.CurrentSnapshot.Paths, state.CorrectionScopePaths()); err != nil {
+	candidateScope, err := compactCorrectionCandidateScope(state)
+	if err != nil {
+		return err
+	}
+	if err := pathsAreSubset(state.CurrentSnapshot.Paths, candidateScope); err != nil {
 		return err
 	}
 	if !validSHA256(state.PolicyHash) || !validSHA256(state.FixDeltaHash) {
@@ -808,10 +812,14 @@ func validateCompactCorrection(state CompactState) error {
 		return errors.New("compact cumulative correction lines require persisted attempts")
 	}
 	if len(state.CorrectionAttempts) > 0 {
+		candidateScope, scopeErr := compactCorrectionCandidateScope(state)
+		if scopeErr != nil {
+			return errors.New("compact correction attempt is outside frozen scope")
+		}
 		base, cumulative := state.InitialSnapshot.CandidateTree, 0
 		for _, attempt := range state.CorrectionAttempts {
 			if attempt.ProposedLines <= 0 || attempt.ActualLines < 0 || attempt.Snapshot.Kind != TargetFixDiff || attempt.Snapshot.Projection != state.InitialSnapshot.Projection || attempt.Snapshot.BaseTree != base ||
-				!equalStrings(attempt.Snapshot.LedgerIDs, state.FixFindingIDs) || pathsAreSubset(attempt.Snapshot.Paths, state.CorrectionScopePaths()) != nil ||
+				!equalStrings(attempt.Snapshot.LedgerIDs, state.FixFindingIDs) || pathsAreSubset(attempt.Snapshot.Paths, candidateScope) != nil ||
 				validateCompactSnapshot(attempt.Snapshot) != nil || validateCompactSnapshotMetadata(attempt.Snapshot) != nil ||
 				attempt.FixDeltaHash != FixDeltaHashForSnapshot(attempt.Snapshot) {
 				return errors.New("compact correction attempt is outside frozen scope")
@@ -928,11 +936,15 @@ func validateCompactCorrection(state CompactState) error {
 
 func validateCompactCorrectedCandidate(state CompactState, correction Snapshot) error {
 	current, initial := state.CurrentSnapshot, state.InitialSnapshot
+	candidateScope, scopeErr := compactCorrectionCandidateScope(state)
+	if scopeErr != nil {
+		return errors.New("terminal correction authority does not preserve the complete reviewed candidate") // refusal:by-design world-action: contradictory persisted authority requires code or storage repair
+	}
 	if current.Kind != initial.Kind || current.Projection != initial.Projection || current.UnbornHead != correction.UnbornHead ||
 		current.BaseTree != initial.BaseTree || current.CandidateTree != correction.CandidateTree ||
 		current.IntendedUntrackedProof != correction.IntendedUntrackedProof ||
 		!equalStrings(current.IntendedUntracked, initial.IntendedUntracked) || !equalStrings(current.LedgerIDs, initial.LedgerIDs) ||
-		pathsAreSubset(current.Paths, state.CorrectionScopePaths()) != nil {
+		pathsAreSubset(current.Paths, candidateScope) != nil {
 		return errors.New("terminal correction authority does not preserve the complete reviewed candidate") // refusal:by-design world-action: contradictory persisted authority requires code or storage repair
 	}
 	return nil
@@ -1456,9 +1468,6 @@ func (state *CompactState) CompleteCorrection(snapshot Snapshot, actual int, val
 		OriginalCriteria: validation.OriginalCriteria, CorrectionRegression: validation.CorrectionRegression,
 		TargetedValidationRequestHash: validation.TargetedValidationRequestHash, CorrectionTargetIdentity: validation.CorrectionTargetIdentity}
 	state.CorrectionAttempts = append(state.CorrectionAttempts, attempt)
-	if len(added) > 0 {
-		state.CorrectionAddedPaths = added
-	}
 	state.CumulativeCorrectionLines += actual
 	state.CurrentSnapshot = snapshot
 	state.FollowUps = append(state.FollowUps, validation.FollowUps...)
@@ -1466,9 +1475,18 @@ func (state *CompactState) CompleteCorrection(snapshot Snapshot, actual int, val
 	original, regression := validation.OriginalCriteria, validation.CorrectionRegression
 	state.OriginalCriteria, state.CorrectionRegression = &original, &regression
 	if state.CumulativeCorrectionLines > state.CorrectionBudget || !original.Passed || !regression.Passed {
+		// The correction did not complete, so it never earned the widened
+		// delivery scope. The attempt stays on record -- it consumed the one
+		// correction, and its snapshot still names every path it touched --
+		// but CorrectionScopePaths keeps the frozen reviewed manifest, so a
+		// companion path an escalated correction merely attempted can never
+		// ride out through a delivery gate.
 		state.State = StateEscalated
 	} else {
 		state.State = StateValidating
+		if len(added) > 0 {
+			state.CorrectionAddedPaths = added
+		}
 	}
 	return state.Validate()
 }

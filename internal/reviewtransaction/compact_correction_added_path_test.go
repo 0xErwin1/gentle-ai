@@ -403,3 +403,54 @@ func TestCompactCorrectionRefusesCompiledSourceInATestDirectory(t *testing.T) {
 		t.Fatalf("a refused correction must not mutate the authority: %q", state.State)
 	}
 }
+
+// TestCompactCorrectionEscalationRollsBackTheWidenedScope is the reproduction
+// of R4-escalated-scope-not-rolled-back. A correction that escalates did not
+// complete, so the companion path it tried to add never earned a place in the
+// scope an approved candidate may deliver. The attempt itself stays on record,
+// and the single-correction rule still binds.
+func TestCompactCorrectionEscalationRollsBackTheWidenedScope(t *testing.T) {
+	requireSnapshotGit(t)
+	for _, tt := range []struct {
+		name    string
+		overrun int
+		passing bool
+	}{
+		{name: "over-budget", overrun: 1, passing: true},
+		{name: "failed-targeted-check", overrun: 0, passing: false},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			repo := initSnapshotRepo(t)
+			state := coverageCorrectionFixture(t, repo, "coverage-escalated-"+tt.name, 1)
+			writeSnapshotFile(t, repo, "internal/widget/widget_windows_test.go", "package widget\n\nimport \"testing\"\n")
+			fix := buildCoverageFix(t, repo, state, "internal/widget/widget_windows_test.go")
+			validation := passingCoverageValidation(state, fix)
+			actual := 1
+			if tt.overrun > 0 {
+				actual = state.CorrectionBudget + tt.overrun
+			}
+			if !tt.passing {
+				validation.CorrectionRegression.Passed = false
+			}
+			if err := state.CompleteCorrection(fix, actual, validation); err != nil {
+				t.Fatalf("CompleteCorrection: %v", err)
+			}
+			if state.State != StateEscalated {
+				t.Fatalf("state after a failed path-adding correction = %q, want escalated", state.State)
+			}
+			if len(state.CorrectionAddedPaths) != 0 {
+				t.Fatalf("a correction that did not complete kept its widened scope: %v", state.CorrectionAddedPaths)
+			}
+			if !equalStrings(state.CorrectionScopePaths(), state.GenesisPaths) {
+				t.Fatalf("delivery scope after a failed correction = %v, want the frozen reviewed manifest %v",
+					state.CorrectionScopePaths(), state.GenesisPaths)
+			}
+			if err := state.Validate(); err != nil {
+				t.Fatalf("the escalated authority must still be a valid record of its attempt: %v", err)
+			}
+			if len(state.CorrectionAttempts) != 1 || !state.CorrectionAttemptConsumed() {
+				t.Fatalf("a failed path-adding correction must still consume the one attempt: %d attempts", len(state.CorrectionAttempts))
+			}
+		})
+	}
+}
