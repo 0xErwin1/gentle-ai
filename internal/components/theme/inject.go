@@ -87,6 +87,15 @@ var gentlemanCuteOpenCodeTheme = openCodeTheme{
 }
 
 func Inject(homeDir string, adapter agents.Adapter) (InjectionResult, error) {
+	// Pi resolves a theme by name against the themes its own packages ship,
+	// and none of them is called "gentleman" -- gentle-pi's is "Gentle". Naming
+	// it anyway configures a theme Pi cannot load, so it starts by reporting
+	// the failure and falling back. Pi's theme belongs to Pi's own packages,
+	// the same way its persona and models do.
+	if adapter.Agent() == model.AgentPi {
+		return InjectionResult{}, nil
+	}
+
 	settingsPath := adapter.SettingsPath(homeDir)
 	if settingsPath == "" {
 		return InjectionResult{}, nil
