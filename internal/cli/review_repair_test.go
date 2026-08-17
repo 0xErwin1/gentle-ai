@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -879,6 +880,26 @@ func TestReviewRepairSchemasRejectShortContractArrays(t *testing.T) {
 	if err := repairSchema.Validate(document); err != nil {
 		t.Fatalf("valid repair fixture rejected: %v", err)
 	}
+	// issue #3409: the truncated preflight's way forward travels on the wire,
+	// under a schema whose additionalProperties is false, and it is required
+	// exactly where nothing else is offered.
+	truncatedAssessment := reviewtransaction.UnsupportedAuthorityRepairAssessment()
+	truncatedAssessment.Status = reviewtransaction.AuthorityRepairTruncated
+	truncatedPayload, err := json.Marshal(newReviewRepairPreflightResult(truncatedAssessment))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var truncatedDocument map[string]any
+	if err := json.Unmarshal(truncatedPayload, &truncatedDocument); err != nil {
+		t.Fatal(err)
+	}
+	if err := repairSchema.Validate(truncatedDocument); err != nil {
+		t.Fatalf("truncated preflight naming its way forward rejected: %v", err)
+	}
+	delete(truncatedDocument, "continuation")
+	if err := repairSchema.Validate(truncatedDocument); err == nil {
+		t.Fatal("repair schema accepted a truncated preflight that names no way forward")
+	}
 	shortInputs := cloneReviewJSONDocument(t, document)
 	shortInputs["required_inputs"] = []any{"actor", "reason"}
 	if err := repairSchema.Validate(shortInputs); err == nil {
@@ -949,5 +970,99 @@ func TestWindowsRuntimeIncludesRepairAndMaintenanceLockRegressions(t *testing.T)
 		if !bytes.Contains(payload, []byte(name)) {
 			t.Fatalf("Windows PR runtime allowlist is missing %s", name)
 		}
+	}
+}
+
+// TestReviewRepairPreflightNamesAWayForwardWhenTheStoreExceedsTheBound is
+// issue #3409. `gentle-ai review repair --preflight` exists so a maintainer
+// can classify a damaged authority store and act on it. Its assessment is
+// bounded, and the bound is honest: exceeding it yields a typed `truncated`
+// status rather than a partial classification presented as complete, which is
+// the right failure direction and is not what this test changes.
+//
+// What this test pins is what a `truncated` preflight LEAVES the maintainer
+// holding. A store crosses that bound by ordinary use, because lineages
+// accumulate and nothing reaps them (retention is #1656, out of scope here);
+// from that point preflight classified nothing, named nothing, and the
+// documented repair route simply closed -- on exactly the stores most likely
+// to need it. So the truncated result must name a way forward, and that way
+// forward must actually work on the same oversized store, which is why this
+// test runs it rather than only asserting a string.
+//
+// The store here is real: authority entries are planted on disk past the
+// bound and the assessment is driven through the CLI, never constructed.
+func TestReviewRepairPreflightNamesAWayForwardWhenTheStoreExceedsTheBound(t *testing.T) {
+	repo := initReviewCLIRepo(t)
+	compactRoot := filepath.Join(repo, ".git", "gentle-ai", "review-transactions", "v2")
+	// Comfortably past the bounded assessment's ceiling, and past the
+	// 271-lineage store the report measured, without this test naming an
+	// internal constant it does not own.
+	const oversizedLineages = 512
+	for index := 0; index < oversizedLineages; index++ {
+		entry := filepath.Join(compactRoot, fmt.Sprintf("oversized-store-lineage-%04d", index))
+		if err := os.MkdirAll(entry, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	var output bytes.Buffer
+	if err := RunReview([]string{"repair", "--preflight", "--cwd", repo}, &output); err != nil {
+		t.Fatalf("repair preflight over an oversized store: %v\n%s", err, output.String())
+	}
+	var preflight ReviewRepairResult
+	decoder := json.NewDecoder(bytes.NewReader(output.Bytes()))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&preflight); err != nil {
+		t.Fatal(err)
+	}
+	if err := preflight.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	// Still fails closed: no candidate, no provider inputs, no required
+	// inputs, and no partial classification dressed up as a complete one.
+	if preflight.Assessment.Status != reviewtransaction.AuthorityRepairTruncated ||
+		preflight.Assessment.Candidate != nil || preflight.ProviderInputs != nil || len(preflight.RequiredInputs) != 0 {
+		t.Fatalf("oversized-store preflight = %#v", preflight)
+	}
+	if preflight.Continuation != reviewRepairTruncatedContinuation {
+		t.Fatalf("truncated preflight continuation = %q, want the named way forward %q", preflight.Continuation, reviewRepairTruncatedContinuation)
+	}
+	if !strings.Contains(output.String(), "gentle-ai review inspect-authority") {
+		t.Fatalf("truncated preflight named no runnable continuation:\n%s", output.String())
+	}
+
+	// The named continuation is not a string: it classifies this exact store
+	// the bounded assessment refused to walk.
+	var inspection bytes.Buffer
+	if err := RunReviewInspectAuthority([]string{"--cwd", repo}, &inspection); err != nil {
+		t.Fatalf("the continuation named by a truncated preflight does not run on the store that truncated: %v\n%s", err, inspection.String())
+	}
+	var inspected ReviewInspectAuthorityResult
+	decodeStrictReviewJSON(t, inspection.Bytes(), &inspected)
+	if inspected.Totals.CompactEntries != oversizedLineages || inspected.Totals.EntryDiagnostics != oversizedLineages {
+		t.Fatalf("the continuation classified %d of %d entries: %#v", inspected.Totals.EntryDiagnostics, oversizedLineages, inspected.Totals)
+	}
+}
+
+// TestReviewRepairResultRejectsAMisplacedContinuation keeps the way forward
+// bound to the one status that has no other exit: a completed classification
+// must never carry it, and a truncated one must never lose it.
+func TestReviewRepairResultRejectsAMisplacedContinuation(t *testing.T) {
+	truncated := reviewtransaction.UnsupportedAuthorityRepairAssessment()
+	truncated.Status = reviewtransaction.AuthorityRepairTruncated
+
+	missing := newReviewRepairPreflightResult(truncated)
+	missing.Continuation = ""
+	if err := missing.Validate(); err == nil {
+		t.Fatal("a truncated preflight validated with no way forward at all")
+	}
+
+	unsupported := newReviewRepairPreflightResult(reviewtransaction.UnsupportedAuthorityRepairAssessment())
+	if unsupported.Continuation != "" {
+		t.Fatalf("a completed classification carried a truncation continuation: %q", unsupported.Continuation)
+	}
+	unsupported.Continuation = reviewRepairTruncatedContinuation
+	if err := unsupported.Validate(); err == nil {
+		t.Fatal("a completed classification validated while claiming it was truncated")
 	}
 }
