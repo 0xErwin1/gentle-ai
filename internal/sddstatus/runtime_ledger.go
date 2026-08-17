@@ -11,7 +11,6 @@ import (
 	"io"
 	"os"
 	"os/exec"
-	"path"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -1015,25 +1014,15 @@ func (store RuntimeStore) captureFinalVerifyReport(ctx context.Context, active R
 	if err != nil {
 		return ""
 	}
-	reportPath := filepath.Join(changeRoot, "verify-report.md")
 	// The canonical report path is anchored at the planning workspace (--cwd),
 	// never at the Git repository root: a workspace that is a subdirectory of
-	// its repository still owns exactly one canonical active-change report.
-	workspacePath, err := filepath.Rel(store.Workspace, reportPath)
+	// its repository still owns exactly one canonical active-change report. The
+	// settled candidate tree is built at the repository root, so the blob read
+	// addresses that same report through its repository-relative path.
+	logicalPath, err := canonicalVerifyReportPaths(store.Repo, store.Workspace, changeRoot, store.Change)
 	if err != nil {
 		return ""
 	}
-	wantPath := path.Join("openspec", "changes", store.Change, "verify-report.md")
-	if filepath.ToSlash(workspacePath) != wantPath {
-		return ""
-	}
-	// The settled candidate tree is built at the repository root, so the blob
-	// read addresses the same report through its repository-relative path.
-	logicalPath, err := filepath.Rel(store.Repo, reportPath)
-	if err != nil {
-		return ""
-	}
-	logicalPath = filepath.ToSlash(logicalPath)
 	artifactPaths, err := resolveArtifactPaths(changeRoot)
 	if err != nil {
 		return ""

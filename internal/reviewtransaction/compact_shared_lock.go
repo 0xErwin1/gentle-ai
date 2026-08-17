@@ -15,6 +15,21 @@ import (
 // willing to read; a healthy owner record is a few hundred bytes.
 const sharedStoreLockReadLimit int64 = 64 << 10
 
+// storeLockCoordinationBytes is the length of the byte range the platform
+// lock primitive covers: store_lock_windows.go locks exactly [0, 1) through
+// LockFileEx, and POSIX flock is whole-file but advisory. It is therefore the
+// only region of a lock file another handle can be denied.
+const storeLockCoordinationBytes int64 = 1
+
+// storeLockOwnerDocumentPrefix is the first byte of every owner record
+// acquireLocalStoreLock writes: encoding/json marshals the owner struct
+// opening with '{' and never emits leading whitespace. Reading a live lock
+// file past the coordination byte drops exactly this byte, so the reader can
+// restore it instead of losing the whole record (see
+// readStoreLockOwnerRecord). compact_shared_lock_test.go pins that invariant
+// against the bytes the writer actually produces.
+const storeLockOwnerDocumentPrefix = '{'
+
 // CompactSharedStoreLockEvidence describes the live coordination state of the
 // shared compact store lock (v2/LOCK) for retry-safe gate classification
 // (issue #3342). Inspection is read-only: it never creates, truncates, or
@@ -64,14 +79,10 @@ func InspectCompactSharedStoreLock(ctx context.Context, repo string) (CompactSha
 	}
 	defer file.Close()
 	evidence.Exists = true
-	if payload, readErr := io.ReadAll(io.LimitReader(file, sharedStoreLockReadLimit)); readErr == nil {
-		var owner storeLockOwner
-		if decodeErr := json.NewDecoder(bytes.NewReader(payload)).Decode(&owner); decodeErr == nil &&
-			owner.Schema == storeLockSchema && owner.PID > 0 && strings.TrimSpace(owner.Host) != "" {
-			evidence.HolderRecorded = true
-			evidence.HolderPID = owner.PID
-			evidence.HolderHost = owner.Host
-		}
+	if owner, recorded := readStoreLockOwnerRecord(file); recorded {
+		evidence.HolderRecorded = true
+		evidence.HolderPID = owner.PID
+		evidence.HolderHost = owner.Host
 	}
 	locked, probeErr := tryLockFile(file)
 	if probeErr != nil {
@@ -88,4 +99,63 @@ func InspectCompactSharedStoreLock(ctx context.Context, repo string) (CompactSha
 		}
 	}
 	return evidence, nil
+}
+
+// readStoreLockOwnerRecord reads the holder record from a lock file opened by
+// a handle that does NOT own the lock.
+//
+// The whole-file read is the plain case and the only one POSIX ever needs:
+// flock is advisory, so a concurrent holder never denies a reader. Windows
+// byte-range locks are mandatory instead: while a holder is live, any read
+// overlapping the locked coordination byte fails with a lock violation from
+// every other handle, including another handle in the locking process itself.
+// That is why a live-contention gate denial named the lock but not its holder
+// on Windows while naming both on Linux: the holder record was never
+// unreadable, only the byte range in front of it was.
+//
+// Retrying past the coordination byte reads the exact same bytes the holder
+// wrote, minus its first one, which storeLockOwnerDocumentPrefix restores.
+// The record still has to decode and validate; nothing is inferred from the
+// retry itself.
+func readStoreLockOwnerRecord(source io.ReaderAt) (storeLockOwner, bool) {
+	if payload, err := readStoreLockRegion(source, 0); err == nil {
+		return decodeStoreLockOwnerRecord(payload, 0)
+	}
+	payload, err := readStoreLockRegion(source, storeLockCoordinationBytes)
+	if err != nil {
+		return storeLockOwner{}, false
+	}
+	return decodeStoreLockOwnerRecord(payload, storeLockCoordinationBytes)
+}
+
+func readStoreLockRegion(source io.ReaderAt, offset int64) ([]byte, error) {
+	return io.ReadAll(io.NewSectionReader(source, offset, sharedStoreLockReadLimit))
+}
+
+// decodeStoreLockOwnerRecord decodes the holder record out of lock-file bytes
+// read starting at offset. It is pure so the platform-specific read geometry
+// stays verifiable without a Windows runner.
+func decodeStoreLockOwnerRecord(payload []byte, offset int64) (storeLockOwner, bool) {
+	if owner, decoded := decodeStoreLockOwnerDocument(payload); decoded {
+		return owner, true
+	}
+	if offset != storeLockCoordinationBytes {
+		return storeLockOwner{}, false
+	}
+	return decodeStoreLockOwnerDocument(append([]byte{storeLockOwnerDocumentPrefix}, payload...))
+}
+
+// decodeStoreLockOwnerDocument decodes one owner document tolerantly:
+// interrupted-holder residue may leave trailing bytes after it, and the
+// record feeds operator guidance, never authorization, and kernel advisory
+// ownership remains the only liveness truth.
+func decodeStoreLockOwnerDocument(payload []byte) (storeLockOwner, bool) {
+	var owner storeLockOwner
+	if err := json.NewDecoder(bytes.NewReader(payload)).Decode(&owner); err != nil {
+		return storeLockOwner{}, false
+	}
+	if owner.Schema != storeLockSchema || owner.PID <= 0 || strings.TrimSpace(owner.Host) == "" {
+		return storeLockOwner{}, false
+	}
+	return owner, true
 }
