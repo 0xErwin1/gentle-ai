@@ -28,7 +28,7 @@ type Selection struct {
 	Channel                          InstallChannel                   // release track; empty = unresolved
 	MCPServers                       map[string]MCPServer             // declared MCP servers, keyed by name
 	SkillExclusions                  []SkillID                        // skills removed from whatever the selection resolves to
-	CodexModelPreset                 string                           // named Codex model profile; empty = unresolved
+	ModelPresets                     map[string]string                // named model profile per provider; absent provider = unresolved
 	SkillAssignments                 map[AgentID][]SkillID            // per-adapter skill overrides; absent adapter takes the flat Skills list
 	Permissions                      *Permissions                     // declared permission rules layered over the shipped defaults
 	RDDMode                          RDDMode                          // global review kill switch; empty = unresolved

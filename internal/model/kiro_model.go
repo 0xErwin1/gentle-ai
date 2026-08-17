@@ -53,8 +53,36 @@ func KiroModelID(alias KiroModelAlias) string {
 	}
 }
 
+// KiroModelPresetKey names a Kiro model profile, for the same reason as Claude.
+type KiroModelPresetKey string
+
+const (
+	KiroPresetBalanced    KiroModelPresetKey = "balanced"
+	KiroPresetPerformance KiroModelPresetKey = "performance"
+	KiroPresetEconomy     KiroModelPresetKey = "economy"
+	KiroPresetOpenWeight  KiroModelPresetKey = "open-weight"
+)
+
+// KiroModelPresetAssignments resolves a named profile, returning nil for an
+// unknown name so the caller reports it.
+func KiroModelPresetAssignments(preset string) map[string]KiroModelAlias {
+	switch KiroModelPresetKey(preset) {
+	case KiroPresetBalanced:
+		return KiroModelPresetBalanced()
+	case KiroPresetPerformance:
+		return KiroModelPresetPerformance()
+	case KiroPresetEconomy:
+		return KiroModelPresetEconomy()
+	case KiroPresetOpenWeight:
+		return KiroModelPresetOpenWeight()
+	default:
+		return nil
+	}
+}
+
 // KiroModelPresetBalanced lets Kiro route review roles automatically. ODD
 // worker classes have no installed Kiro agent, so presets carry no odd-* keys.
+
 func KiroModelPresetBalanced() map[string]KiroModelAlias {
 	return map[string]KiroModelAlias{
 		"orchestrator": KiroModelAuto,
