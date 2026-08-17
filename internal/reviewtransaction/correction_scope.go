@@ -247,6 +247,47 @@ func (state CompactState) CorrectionScopePaths() []string {
 	return scope
 }
 
+// compactCorrectionCandidateScope is the path set a persisted authority may
+// legitimately describe: the delivery scope, plus whatever an on-record
+// correction attempt actually added.
+//
+// The two differ for exactly one shape, and it is why this exists. A
+// correction that escalated — over budget, or with a failed targeted check —
+// consumed the single attempt and is recorded together with the snapshot it
+// produced, while its widened delivery scope was rolled back. The authority
+// still has to be a valid record of that attempt, so every addition an attempt
+// carries is re-checked here against the exact admission the correction itself
+// had to pass. Nothing enters this set that the correction could not have
+// added, and nothing in it widens what may be delivered.
+func compactCorrectionCandidateScope(state CompactState) ([]string, error) {
+	scope := state.CorrectionScopePaths()
+	if len(state.CorrectionAttempts) == 0 {
+		return scope, nil
+	}
+	known := make(map[string]struct{}, len(scope))
+	for _, item := range scope {
+		known[item] = struct{}{}
+	}
+	var additions []string
+	for _, attempt := range state.CorrectionAttempts {
+		added, err := admitCorrectionScope(attempt.Snapshot.Paths, state.GenesisPaths)
+		if err != nil {
+			return nil, err
+		}
+		for _, item := range added {
+			if _, ok := known[item]; ok {
+				continue
+			}
+			known[item] = struct{}{}
+			additions = append(additions, item)
+		}
+	}
+	if len(additions) == 0 {
+		return scope, nil
+	}
+	return canonicalPaths(append(append([]string(nil), scope...), additions...))
+}
+
 // validateCompactCorrectionAddedPaths keeps the widened scope from becoming a
 // forgery surface: the field is meaningful only alongside a real completed
 // correction, may never restate a genesis path, and every entry must still
