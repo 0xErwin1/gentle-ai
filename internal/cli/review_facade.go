@@ -322,7 +322,15 @@ func (err *ReviewReceiptDiscoveryError) Error() string {
 	case ReviewReceiptMissing:
 		message = "no terminal review receipt exists for gate validation"
 	case ReviewReceiptUnrelated:
-		message = "terminal review receipts exist only for unrelated targets"
+		// issue #3408: the old wording ("terminal review receipts exist only
+		// for unrelated targets") reported OTHER lineages' existence as
+		// though one of them were the obstacle, so an operator went looking
+		// for what those receipts had to do with their work and found
+		// nothing, because there is nothing. Discovery has proven the exact
+		// opposite: every terminal receipt on file was assessed against this
+		// candidate and none of them governs it. That is the candidate's own
+		// situation, and it has one route, so the denial states both.
+		message = "no approved review receipt covers this candidate; review it with gentle-ai review start"
 	case ReviewReceiptScopeChanged:
 		message = "terminal review receipts do not exactly match the live gate target"
 	case ReviewReceiptAmbiguous:
@@ -3804,7 +3812,6 @@ func discoverCompactFacadeGateReview(ctx context.Context, repo, lineage string, 
 	}
 	targetResolution := []targetResolutionFailure{}
 	terminalCount := 0
-	allLineages := []string{}
 	// organic-dx Phase 3d: as terminal lineages accumulate, most of them can
 	// never govern the live candidate again, yet every gate call re-assessed
 	// every one of them with AssessCompactGateTarget's several git
@@ -3857,7 +3864,6 @@ func discoverCompactFacadeGateReview(ctx context.Context, repo, lineage string, 
 			return reviewtransaction.CompactStore{}, reviewtransaction.CompactRecord{}, &ReviewReceiptDiscoveryError{Kind: ReviewAuthorityCorrupted}
 		}
 		terminalCount++
-		allLineages = append(allLineages, record.State.LineageID)
 		if input.Gate == reviewtransaction.GatePreCommit {
 			if !preCommitBaselineTried {
 				preCommitBaselineTried = true
@@ -4042,8 +4048,16 @@ func discoverCompactFacadeGateReview(ctx context.Context, repo, lineage string, 
 	if len(targetResolution) > 0 {
 		return reviewtransaction.CompactStore{}, reviewtransaction.CompactRecord{}, &ReviewReceiptDiscoveryError{Kind: ReviewAuthorityCorrupted}
 	}
-	sort.Strings(allLineages)
-	return reviewtransaction.CompactStore{}, reviewtransaction.CompactRecord{}, &ReviewReceiptDiscoveryError{Kind: ReviewReceiptUnrelated, Candidates: allLineages}
+	// issue #3408: reaching here means every terminal lineage the walk above
+	// examined assessed as UNRELATED to this candidate -- it contributed to
+	// no discovery bucket, so none of them can be recovered, selected, or
+	// acted on for THIS candidate. The denial used to carry all of them as
+	// Candidates, an enumeration that grows with the store (lineages
+	// accumulate and nothing reaps them, #1656) and is actionable for
+	// nothing. Candidates stays empty here on purpose; the kinds that DO
+	// carry it -- ambiguous, scope-changed -- carry only lineages a caller
+	// can genuinely select or recover.
+	return reviewtransaction.CompactStore{}, reviewtransaction.CompactRecord{}, &ReviewReceiptDiscoveryError{Kind: ReviewReceiptUnrelated}
 }
 
 // reviewAuthorityCorruptionConfinedToLegacyEntries reports whether every cause
