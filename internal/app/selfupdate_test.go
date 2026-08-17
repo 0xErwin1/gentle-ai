@@ -83,7 +83,7 @@ func swapSelfUpdateDeps(t *testing.T, checkResult []update.UpdateResult, upgrade
 	// Use a fixed "now" far in the future so any stale state would still trigger.
 	selfUpdateNowFn = func() time.Time { return time.Date(2099, 1, 1, 0, 0, 0, 0, time.UTC) }
 
-	updateCheckFiltered = func(_ context.Context, _ string, _ system.PlatformProfile, _ []string) []update.UpdateResult {
+	updateCheckFiltered = func(_ context.Context, _ string, _ system.PlatformProfile, _ []string, _ bool) []update.UpdateResult {
 		stubs.checkCalled++
 		return checkResult
 	}
@@ -367,7 +367,7 @@ func TestSelfUpdate_BrewInstallMethod_PassedToUpgradeExecutor(t *testing.T) {
 	selfUpdateHomeDirFn = func() (string, error) { return tmpHome, nil }
 	selfUpdateNowFn = func() time.Time { return time.Date(2099, 1, 1, 0, 0, 0, 0, time.UTC) }
 
-	updateCheckFiltered = func(_ context.Context, _ string, _ system.PlatformProfile, _ []string) []update.UpdateResult {
+	updateCheckFiltered = func(_ context.Context, _ string, _ system.PlatformProfile, _ []string, _ bool) []update.UpdateResult {
 		return checkResults
 	}
 
