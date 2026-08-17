@@ -180,6 +180,16 @@ func (stager configurationStager) stageComponentForAdapter(
 		return err
 
 	case model.ComponentPersona:
+		// Pi reads its persona from a runtime config that gentle-pi owns, not
+		// from the prompt file the shared injection appends to. Routing it
+		// through that shared path writes nothing at all, which is how a
+		// declared persona disappeared from a Pi render.
+		if adapter.Agent() == model.AgentPi {
+			_, err := persona.InjectPiPersona(stageRoot, selection.Persona)
+
+			return err
+		}
+
 		_, err := persona.Inject(target, adapter, selection.Persona)
 
 		return err
