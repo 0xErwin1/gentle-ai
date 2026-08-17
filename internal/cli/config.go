@@ -195,6 +195,13 @@ func RunConfig(args []string, stdout io.Writer) error {
 			len(pending), *configPath,
 		)
 	}
+	if pending := render.PendingAgentProvisioning(plan); len(pending) > 0 {
+		result["pendingAgentProvisioning"] = pending
+		result["pendingAgentProvisioningReason"] = fmt.Sprintf(
+			"%d declared agent(s) install their harness through their own tool and were not provisioned here; the manifest carries the exact commands, or run gentle-ai install --config %s",
+			len(pending), *configPath,
+		)
+	}
 
 	return writeConfigResult(stdout, result)
 }
