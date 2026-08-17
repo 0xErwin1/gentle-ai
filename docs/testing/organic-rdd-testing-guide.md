@@ -77,7 +77,7 @@ It does NOT hang, it does NOT review. A refusal that exits non-zero and names no
 3. [ ] `gentle-ai review mode enable --scope global --cwd $HOME/demo` then `status` → **Expected**: effective `on`, source `global`.
 4. [ ] `gentle-ai review mode disable --cwd $HOME/demo` → **Expected**: it confirms reviews are off.
 5. [ ] `status` again → **Expected**: effective `off`, source `global` (an explicit off, not the default).
-6. [ ] `gentle-ai review start --cwd $HOME/demo` → **Expected**: the same shape of refusal, with the scope naming the source that actually decided. If you turned it off at clone scope, the scope in the message must say `clone`, not `global`.
+6. [ ] `gentle-ai review start --cwd $HOME/demo` → **Expected**: the same shape of refusal, naming commands that actually reach `on` from where you are. If you turned it off at clone scope, the message must name `--scope=global` **then** `--scope=clone`: clearing the clone override alone drops you on the opt-in default, still off.
 7. [ ] `enable --scope global` and `status` → **Expected**: `on` again.
 8. [ ] `disable --scope clone`, clone (`git clone $HOME/demo $HOME/demo2`) and `status` in `demo2` → **Expected**: `demo2` gives **on** (the global enable still applies) — turning a clone off is NOT inherited.
 7. [ ] **Before moving on**: `enable --scope clone` in `demo` → **Expected**: `on`.
