@@ -83,6 +83,54 @@ defer to ordinary repository policy without fabricating approval.
 
 In stable [`v2.3.0`](https://github.com/Gentleman-Programming/gentle-ai/releases/tag/v2.3.0), prerelease [`v2.4.0-rc.1`](https://github.com/Gentleman-Programming/gentle-ai/releases/tag/v2.4.0-rc.1), and unreleased `main`, disabled SDD status skips review authority and leaves `reviewGate` structurally absent. Pre-verify continues without routing to review, and archive proceeds under ordinary repository policy when `reviewGate` is absent. A present `reviewGate.result: allow` is required only when review activity was discovered for the candidate. Native delivery gates remain distinct: when no exact governing receipt applies, they report `disabled/unmanaged`. See the [SDD status contract](../internal/assets/skills/_shared/sdd-status-contract.md).
 
+## Review store reset
+
+Review authority accumulates without bound: every candidate leaves a lineage
+behind and nothing removes a delivered one, so a long-lived clone eventually
+holds hundreds of lineages and hundreds of megabytes of candidate checkouts.
+`review abandon` refuses terminal states and `review reclaim` refuses any entry
+holding authoritative artifacts, so until now a degraded store had no exit.
+
+| Command | Effect |
+|---|---|
+| `gentle-ai review store-reset --cwd <repo>` | Report, per category, what a reset would remove and what it would preserve. Removes nothing. |
+| `gentle-ai review store-reset --cwd <repo> --confirm` | Remove this clone's review lineage state. Irreversible. |
+| `gentle-ai review store-reset --cwd <repo> --confirm --include-in-flight` | Also remove reviews that have not reached a terminal state. |
+| `gentle-ai review store-reset --cwd <repo> --json` | The same report, machine-readable. |
+
+Every sub-action is user-initiated only; no adapter and no automation reaches
+it, because the verb carries no negotiated contract row. Preview is the default
+and `--confirm` is required to remove anything: the operation is irreversible
+and clone-wide, so the invocation typed from memory has to be the one that only
+looks. It is clone-scoped and never touches a global or machine-wide location.
+
+It **removes** `candidate-views/`, `reviews/`, and the `v1`, `v2`, `quarantine`,
+`effect-markers`, and `incidents` subtrees of `review-transactions/`. Candidate
+views are registered Git worktrees, so their administrative directories are
+removed too, but only when each one's own `gitdir` file proves it belongs to
+that exact view; no unrelated worktree is pruned.
+
+It **preserves** the receipt-driven-development kill switch in both the
+`review-mode/` location and the pre-#2882 mirror inside
+`review-transactions/rar-authority/`, along with `sdd-runtime/`,
+`defect-reports/`, `review-artifacts/`, `incidents/`, and
+`REVIEW-MAINTENANCE.lock`. Reviews that were off stay off. The list is an
+allowlist, so any path the command does not recognize -- including one a future
+release adds -- is reported and left in place rather than guessed at.
+
+Reviews that have not reached a terminal state (anything other than approved,
+escalated, or invalidated, plus any record that cannot be parsed) are refused by
+default and listed by name. The reset holds the same exclusive maintenance lease
+every other maintenance operation takes, and it runs while review mode is
+disabled -- gating cleanup on the kill switch would rebuild the dead end it
+exists to remove.
+
+The TUI exposes the same action as **Reset review store** in the main menu,
+between *Manage backups* and *Managed uninstall*, showing the same survey behind
+a confirmation. The TUI has no `--include-in-flight` equivalent: when open
+reviews exist it refuses and prints the CLI invocation instead, so destroying
+in-flight work is never one keystroke away.
+
 ## Installation and refresh
 
 `gentle-ai install` and `gentle-ai sync` project the same canonical rules into
