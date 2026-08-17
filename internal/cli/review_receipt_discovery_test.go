@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -1330,6 +1331,98 @@ func TestNegotiatedStatusRequiresExactStagedDeliveryCandidate(t *testing.T) {
 	}
 }
 
+func TestNegotiatedStatusRequiresStagingApprovedUnbornIntendedCandidate(t *testing.T) {
+	repo := initUnbornReviewCLIRepo(t)
+	const (
+		lineage = "review-unborn-intended-staged-delivery"
+		path    = "docs/candidate.md"
+	)
+	writeUndeclaredWorkspaceFile(t, repo, path, "# Reviewed candidate\n", 0o644)
+	digest, inventory := intendedUntrackedSelection(t, intendedUntrackedStatus(t, repo))
+	if !reflect.DeepEqual(inventory, []string{path}) {
+		t.Fatalf("unborn inventory = %v, want %q", inventory, path)
+	}
+	_, store := approveDiscoveryMarkdownFilesWithIntendedProjection(t, repo, lineage,
+		map[string]string{path: "# Reviewed candidate\n"}, reviewtransaction.ProjectionWorkspace, []string{path})
+	record, err := store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if record.State.State != reviewtransaction.StateApproved || !record.State.InitialSnapshot.UnbornHead ||
+		!reflect.DeepEqual(record.State.CurrentSnapshot.IntendedUntracked, []string{path}) {
+		t.Fatalf("approved unborn intended authority = %#v", record.State)
+	}
+	if err := exec.Command("git", "-C", repo, "rev-parse", "--verify", "HEAD").Run(); err == nil {
+		t.Fatal("fixture unexpectedly has a born HEAD")
+	}
+	if cached := strings.TrimSpace(runReviewCLIGit(t, repo, "ls-files", "--cached")); cached != "" {
+		t.Fatalf("real index is not empty: %q", cached)
+	}
+	stateBefore, err := os.ReadFile(store.StatePath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	receiptBefore, err := os.ReadFile(store.ReceiptPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	indexPath := strings.TrimSpace(runReviewCLIGit(t, repo, "rev-parse", "--git-path", "index"))
+	if !filepath.IsAbs(indexPath) {
+		indexPath = filepath.Join(repo, indexPath)
+	}
+	indexBefore, indexBeforeErr := os.ReadFile(indexPath)
+
+	status := func(selectors ...string) ReviewTargetStatusResult {
+		t.Helper()
+		args := []string{"status", "--cwd", repo, "--contract", ReviewIntegrationContractV2, "--next-transition", "--lineage", lineage, "--gate", "pre-commit"}
+		args = append(args, selectors...)
+		var output bytes.Buffer
+		if err := RunReview(args, &output); err != nil {
+			t.Fatalf("STATUS %v: %v\n%s", selectors, err, output.String())
+		}
+		var result ReviewTargetStatusResult
+		decodeStrictReviewJSON(t, output.Bytes(), &result)
+		return result
+	}
+
+	blocked := status(intendedUntrackedSelectArgs(digest, path)...)
+	if blocked.NextTransition == nil || blocked.NextTransition.Kind != reviewNextTransitionStop ||
+		blocked.NextTransition.ReasonCode != "staged_delivery_candidate_required" || blocked.NextTransition.Execute != nil {
+		t.Fatalf("empty unborn staged delivery transition = %#v", blocked.NextTransition)
+	}
+	stateAfter, stateErr := os.ReadFile(store.StatePath())
+	receiptAfter, receiptErr := os.ReadFile(store.ReceiptPath())
+	indexAfter, indexAfterErr := os.ReadFile(indexPath)
+	indexChanged := false
+	switch {
+	case indexBeforeErr == nil && indexAfterErr == nil:
+		indexChanged = !bytes.Equal(indexBefore, indexAfter)
+	case errors.Is(indexBeforeErr, os.ErrNotExist) && errors.Is(indexAfterErr, os.ErrNotExist):
+	default:
+		indexChanged = true
+	}
+	if stateErr != nil || receiptErr != nil || !bytes.Equal(stateBefore, stateAfter) || !bytes.Equal(receiptBefore, receiptAfter) ||
+		indexChanged {
+		t.Fatalf("STATUS mutated authority, receipt, or index: state=%v receipt=%v index_before=%v index_after=%v", stateErr, receiptErr, indexBeforeErr, indexAfterErr)
+	}
+
+	runReviewCLIGit(t, repo, "add", "--", path)
+	ready := status("--projection", "staged")
+	if ready.NextTransition == nil || ready.NextTransition.Kind != reviewNextTransitionExecute || ready.NextTransition.Execute == nil ||
+		ready.NextTransition.Execute.Operation != "review.validate" || ready.NextTransition.ReasonCode != "approved_receipt_ready" {
+		t.Fatalf("exact unborn staged delivery transition = %#v", ready.NextTransition)
+	}
+	payload, err := runSelectorTransition(repo, ready)
+	if err != nil {
+		t.Fatalf("execute exact unborn staged validation: %v\n%s", err, payload)
+	}
+	var validation ReviewValidateResult
+	decodeStrictReviewJSON(t, payload, &validation)
+	if !validation.Allowed || validation.Result != reviewtransaction.GateAllow {
+		t.Fatalf("exact unborn staged validation = %#v", validation)
+	}
+}
+
 // approveDiscoveryMarkdownProjection builds and finalizes a LOW-risk legacy
 // (compact-v2) approved receipt over one passive markdown candidate.
 //
@@ -1350,6 +1443,10 @@ func approveDiscoveryMarkdownProjection(t *testing.T, repo, lineage, logicalPath
 }
 
 func approveDiscoveryMarkdownFilesProjection(t *testing.T, repo, lineage string, files map[string]string, projection reviewtransaction.Projection) (ReviewFacadeStartResult, reviewtransaction.CompactStore) {
+	return approveDiscoveryMarkdownFilesWithIntendedProjection(t, repo, lineage, files, projection, []string{})
+}
+
+func approveDiscoveryMarkdownFilesWithIntendedProjection(t *testing.T, repo, lineage string, files map[string]string, projection reviewtransaction.Projection, intended []string) (ReviewFacadeStartResult, reviewtransaction.CompactStore) {
 	t.Helper()
 	for logicalPath, content := range files {
 		path := filepath.Join(repo, filepath.FromSlash(logicalPath))
@@ -1360,9 +1457,11 @@ func approveDiscoveryMarkdownFilesProjection(t *testing.T, repo, lineage string,
 			t.Fatal(err)
 		}
 	}
-	// #2394: a new file is reviewable only once the user declared it, and the
-	// index is that declaration for both projections.
-	runReviewCLIGit(t, repo, "add", "-A")
+	// #2394: a new file is reviewable only once the user declared it. The index
+	// declares ordinary paths; intended-untracked paths carry explicit intent.
+	if len(intended) == 0 {
+		runReviewCLIGit(t, repo, "add", "-A")
+	}
 
 	ctx := context.Background()
 	builder := reviewtransaction.SnapshotBuilder{Repo: repo}
@@ -1371,7 +1470,7 @@ func approveDiscoveryMarkdownFilesProjection(t *testing.T, repo, lineage string,
 		t.Fatalf("resolve discovery fixture repository root: %v", err)
 	}
 	rootBuilder := reviewtransaction.SnapshotBuilder{Repo: root}
-	snapshot, err := rootBuilder.Build(ctx, reviewtransaction.Target{Kind: reviewtransaction.TargetCurrentChanges, Projection: projection, IntendedUntracked: []string{}})
+	snapshot, err := rootBuilder.Build(ctx, reviewtransaction.Target{Kind: reviewtransaction.TargetCurrentChanges, Projection: projection, IntendedUntracked: append([]string{}, intended...)})
 	if err != nil {
 		t.Fatalf("build discovery fixture target %q: %v", lineage, err)
 	}
