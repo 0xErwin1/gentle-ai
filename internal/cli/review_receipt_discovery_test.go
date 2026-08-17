@@ -1353,6 +1353,7 @@ func TestNegotiatedStatusRequiresExactStagedDeliveryCandidate(t *testing.T) {
 }
 
 func TestNegotiatedStatusRequiresStagingApprovedUnbornIntendedCandidate(t *testing.T) {
+	reviewEnabledHome(t)
 	repo := initUnbornReviewCLIRepo(t)
 	const (
 		lineage = "review-unborn-intended-staged-delivery"
