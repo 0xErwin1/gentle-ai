@@ -2,6 +2,7 @@ package filemerge
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 )
 
@@ -113,10 +114,28 @@ func UpsertCodexMCPServerBlock(content, serverID, command string, args []string)
 // Codex's `url = "..."`
 // shape. This migrates legacy local stdio blocks by dropping stale command/args
 // lines while preserving unrelated config.
-func UpsertCodexRemoteMCPServerBlock(content, serverID, url string) string {
+func UpsertCodexRemoteMCPServerBlock(content, serverID, url string, headers ...map[string]string) string {
 	header := "[mcp_servers." + serverID + "]"
 	escapedURL := strings.ReplaceAll(url, `\`, `\\`)
 	block := header + "\nurl = \"" + escapedURL + "\""
+
+	// A hosted endpoint takes its credential in a header, which Codex reads
+	// from a sub-table. Emitting the URL alone would name a server that cannot
+	// authenticate, which fails only when something tries to use it.
+	if len(headers) > 0 && len(headers[0]) > 0 {
+		names := make([]string, 0, len(headers[0]))
+		for name := range headers[0] {
+			names = append(names, name)
+		}
+		sort.Strings(names)
+
+		block += "\n\n[mcp_servers." + serverID + ".headers]"
+		for _, name := range names {
+			value := strings.ReplaceAll(headers[0][name], `\`, `\\`)
+			value = strings.ReplaceAll(value, `"`, `\"`)
+			block += "\n" + name + " = \"" + value + "\""
+		}
+	}
 
 	content = strings.ReplaceAll(content, "\r\n", "\n")
 	lines := strings.Split(content, "\n")
