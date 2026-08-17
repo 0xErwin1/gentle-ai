@@ -15,6 +15,7 @@ const legacyFinalVerificationWorkUnit = "post-correction-final-verification"
 func sddPostReviewVerifyReportJourneys() []Journey {
 	return []Journey{{
 		ID:     "j108-sdd-post-review-verify-report-is-natively-bound",
+		Review: reviewOptedIn,
 		Title:  "Post-review final verify report is admitted only through native settlement attestation",
 		Source: "native SDD archive-status report-attestation contract",
 		Steps: append(sddApprovedAuthoritySteps(sddSharedScaffoldingAuthorityFixture),
@@ -45,6 +46,7 @@ func sddPostReviewVerifyReportJourneys() []Journey {
 		),
 	}, {
 		ID:     "j109-sdd-legacy-post-review-report-requires-current-attestation",
+		Review: reviewOptedIn,
 		Title:  "Legacy post-review report settlement with an arbitrary work-unit label requires one current native attestation",
 		Source: "native SDD report-attestation upgrade compatibility contract",
 		Steps: append(sddApprovedAuthoritySteps(sddSharedScaffoldingAuthorityFixture),

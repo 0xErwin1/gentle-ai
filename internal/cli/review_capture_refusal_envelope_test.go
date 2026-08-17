@@ -82,6 +82,7 @@ func writeCaptureEvidenceInput(t *testing.T) string {
 // honest machine classification is a not_started preflight refusal whose
 // continuation is a fresh STATUS (STATUS re-renders fresh slot tokens).
 func TestCaptureEvidenceBindingRefusalEmitsTypedFailureEnvelope(t *testing.T) {
+	reviewEnabledHome(t)
 	const staleTarget = "sha256:6718ffa9d77c4965113517101482479c71763d40de8c366d2ebac11a367e6e1d"
 	tests := []struct {
 		name     string
@@ -136,6 +137,7 @@ func TestCaptureEvidenceBindingRefusalEmitsTypedFailureEnvelope(t *testing.T) {
 // success path: routing capture-evidence refusals through envelope emission
 // must not touch the bytes a successful capture prints on stdout.
 func TestCaptureEvidenceSuccessEnvelopeIsByteIdenticalThroughRunReview(t *testing.T) {
+	reviewEnabledHome(t)
 	repo, lineage, validating := validatingEvidenceReview(t)
 	var output bytes.Buffer
 	if err := RunReview([]string{
@@ -166,6 +168,7 @@ func TestCaptureEvidenceSuccessEnvelopeIsByteIdenticalThroughRunReview(t *testin
 // the immutably captured record. Nothing is written, so the honest machine
 // classification is a not_started refusal whose continuation is a fresh STATUS.
 func TestCaptureEvidenceConflictRefusalEmitsTypedFailureEnvelope(t *testing.T) {
+	reviewEnabledHome(t)
 	repo, lineage, validating := validatingEvidenceReview(t)
 	args := []string{
 		"capture-evidence", "--cwd", repo, "--lineage", lineage,
@@ -197,6 +200,7 @@ func TestCaptureEvidenceConflictRefusalEmitsTypedFailureEnvelope(t *testing.T) {
 // the binding refusal earns the typed capture_binding_mismatch whose
 // continuation is a fresh STATUS.
 func TestCaptureResultRefusalsEmitTypedFailureEnvelopes(t *testing.T) {
+	reviewEnabledHome(t)
 	t.Run("missing inputs", func(t *testing.T) {
 		repo := initReviewCLIRepo(t)
 		var output bytes.Buffer

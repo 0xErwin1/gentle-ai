@@ -37,14 +37,16 @@ type ReviewModeResult struct {
 	Status    reviewtransaction.RDDModeStatus `json:"status"`
 }
 
-// RunReviewMode is the user-controlled receipt-driven-development kill switch.
-// The global mode lives in uncommitted user state; the clone-local override
-// lives under this clone's Git common directory and can only disable. Any off
-// wins, status never mutates, and re-enabling applies to future candidates only.
+// RunReviewMode is the user-controlled receipt-driven-development switch.
+// Receipt-driven development is opt-in: with no source expressing an opinion it
+// resolves to off, and only an explicit global enable turns it on. The global
+// mode lives in uncommitted user state; the clone-local override lives under
+// this clone's Git common directory and can only disable. Any off wins, status
+// never mutates, and enabling applies to future candidates only.
 func RunReviewMode(args []string, stdout io.Writer) error {
 	if len(args) == 0 || args[0] == "help" || args[0] == "-h" || args[0] == "--help" {
 		_, _ = fmt.Fprintln(stdout, "Usage: gentle-ai review mode <enable|disable|status> [--cwd <repo>] [--scope <global|clone>] [--expected-revision <revision>] [--json]")
-		_, _ = fmt.Fprintln(stdout, "User-owned kill switch. Any off wins: a repository may disable receipt-driven development for this clone but can never require it, and no other clone inherits the override. status is read-only and reports both sources plus the effective mode. Re-enabling applies to future candidates only.")
+		_, _ = fmt.Fprintln(stdout, "User-owned switch. Receipt-driven development is off until you enable it: run 'gentle-ai review mode enable --scope global' to opt in. Any off wins: a repository may disable it for this clone but can never require it, and no other clone inherits the override. status is read-only and reports both sources plus the effective mode. Enabling applies to future candidates only.")
 		return nil
 	}
 	operation := args[0]
@@ -534,16 +536,13 @@ const (
 	reviewConsentQuestion       = "Choose 1 or 2 [1]: "
 
 	// reviewConsentSkippedNotice keeps the fail-safe default discoverable: an
-	// unanswerable question must never look like a silent yes.
+	// unanswerable question must never look like a silent yes. It carries no
+	// provenance sentence about how reviews got switched on, because with
+	// receipt-driven development opt-in there is only one way: an explicit
+	// enable. A clone that never opted in is refused long before this point.
 	reviewConsentSkippedNotice = "Gentle AI reviewed this change without asking, because this session has no terminal to answer on. " +
 		"Run 'gentle-ai review mode disable' to turn reviews off, or 'gentle-ai review mode status' to see the current setting."
 
-	// reviewConsentSkippedDefaultProvenance rides with the skip notice only
-	// when the resolved mode source is `default`: reviews are on because
-	// nobody chose anything, and the operator deserves to know the switch was
-	// never explicitly set, with both commands that make it a real choice.
-	reviewConsentSkippedDefaultProvenance = "Reviews are on by default; this was never explicitly chosen. " +
-		"Run 'gentle-ai review mode enable' to make reviews an explicit choice, or 'gentle-ai review mode disable' to turn them off."
 	reviewConsentUnreadableNotice = "Gentle AI could not read an answer, so it reviewed this change and will ask again next time."
 	reviewConsentUnknownNotice    = "Gentle AI did not recognize that answer, so it reviewed this change and will ask again next time."
 
@@ -648,9 +647,8 @@ func authorizeReviewStart(ctx context.Context, repo string, assessment reviewtra
 	if err != nil {
 		return err
 	}
-	status, err := reviewtransaction.AuthorizeRDDOperation(
-		ctx, repo, global, reviewtransaction.RDDOperationStart)
-	if err != nil {
+	if _, err := reviewtransaction.AuthorizeRDDOperation(
+		ctx, repo, global, reviewtransaction.RDDOperationStart); err != nil {
 		return reviewModeUnreadable(ctx, repo, global, err)
 	}
 	if err := authorizeManagedReviewerAssets(); err != nil {
@@ -716,13 +714,6 @@ func authorizeReviewStart(ctx context.Context, repo string, assessment reviewtra
 		// occurrence must never be silently suppressed.
 		if shown, shownErr := reviewConsentNoticeAlreadyShown(ctx, repo); shownErr != nil || !shown {
 			_, _ = fmt.Fprintln(console.Output, reviewConsentSkippedNotice)
-			if status.Source == reviewtransaction.RDDModeSourceDefault {
-				// The status already knows this provenance: reviews are on
-				// because no source expressed an opinion, and the operator
-				// working headless deserves to learn the switch was never
-				// explicitly chosen.
-				_, _ = fmt.Fprintln(console.Output, reviewConsentSkippedDefaultProvenance)
-			}
 			_ = recordReviewConsentNoticeShown(ctx, repo)
 		}
 		return nil

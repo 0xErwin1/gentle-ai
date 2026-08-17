@@ -101,6 +101,7 @@ func readInconclusiveRoutingStatus(t *testing.T, repo, lineage string) ReviewTar
 // continuations (inspect the authority store, or disable review for the
 // clone) are both wrong here. It must instead re-offer the validation capture.
 func TestReviewStatusRoutesInconclusiveCapturedValidationToRetryableCapture(t *testing.T) {
+	reviewEnabledHome(t)
 	repo, lineage, request := providerCorrectionReady(t)
 	store := seedCapturedValidatorSlot(t, repo, lineage, request, providerInconclusiveValidationPayload(t, request))
 
@@ -137,6 +138,7 @@ func TestReviewStatusRoutesInconclusiveCapturedValidationToRetryableCapture(t *t
 // so it never touches the occupied slot at all. Executing exactly what STATUS
 // emits must drive the lineage all the way to an approved receipt.
 func TestReviewInconclusiveCapturedValidationReachesApprovedReceipt(t *testing.T) {
+	reviewEnabledHome(t)
 	repo, lineage, request := providerCorrectionReady(t)
 	inconclusive := providerInconclusiveValidationPayload(t, request)
 	store := seedCapturedValidatorSlot(t, repo, lineage, request, inconclusive)
@@ -185,6 +187,7 @@ func TestReviewInconclusiveCapturedValidationReachesApprovedReceipt(t *testing.T
 // STATUS emits -- the provider role capture funnel `review capture-validation`
 // uses -- and then the finalize STATUS emits next, all the way to the receipt.
 func TestReviewInconclusiveCapturedValidationCompletesTheHostRelayRoute(t *testing.T) {
+	reviewEnabledHome(t)
 	repo, lineage, request := providerCorrectionReady(t)
 	inconclusive := providerInconclusiveValidationPayload(t, request)
 	store := seedCapturedValidatorSlot(t, repo, lineage, request, inconclusive)
@@ -270,6 +273,7 @@ func TestReviewInconclusiveCapturedValidationCompletesTheHostRelayRoute(t *testi
 // injected -- this build refuses to publish a non-verdict, so a legacy artifact
 // is the only way one exists -- but every attempt after it is genuine.
 func TestReviewStatusStopsInconclusiveRecaptureAtItsBound(t *testing.T) {
+	reviewEnabledHome(t)
 	repo, lineage, request := providerCorrectionReady(t)
 	inconclusive := providerInconclusiveValidationPayload(t, request)
 	store := seedCapturedValidatorSlot(t, repo, lineage, request, inconclusive)
@@ -311,6 +315,7 @@ func TestReviewStatusStopsInconclusiveRecaptureAtItsBound(t *testing.T) {
 // here a genuine failed one, the exact shape a widened detector must never
 // misread as inconclusive -- keeps the immutable slot it already owns.
 func TestReviewCapturedVerdictStaysUnreplaceable(t *testing.T) {
+	reviewEnabledHome(t)
 	repo, lineage, request := providerCorrectionReady(t)
 	failed, err := canonicalProviderRoleResult(facadeValidationResult{
 		TargetedValidationRequestHash: request.RequestHash,
@@ -344,6 +349,7 @@ func TestReviewCapturedVerdictStaysUnreplaceable(t *testing.T) {
 // not inconclusive: it keeps the terminal captured_artifacts_unverifiable stop
 // it has today. Only the "no verdict was produced" case becomes retryable.
 func TestReviewStatusKeepsTerminalStopForInadmissibleValidatorSlot(t *testing.T) {
+	reviewEnabledHome(t)
 	repo, lineage, request := providerCorrectionReady(t)
 	foreign, err := canonicalProviderRoleResult(facadeValidationResult{
 		TargetedValidationRequestHash: "sha256:" + strings.Repeat("a", 64),

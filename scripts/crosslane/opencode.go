@@ -543,7 +543,16 @@ func (b *battery) runHookCase(harnessDir string, c harnessCase) (harnessResult, 
 	}
 	command := exec.Command("node", "harness.mts", configPath)
 	command.Dir = harnessDir
-	command.Env = append(os.Environ(), "PATH="+filepath.Join(harnessDir, "bin")+string(os.PathListSeparator)+os.Getenv("PATH"))
+	// The harness spawns gentle-ai itself, so it has to inherit the battery's
+	// sandbox HOME too. Without it the transport child resolves the operator's
+	// own review mode instead of the battery's, and on any machine that never
+	// opted in the lane fails as an unavailable materialization rather than
+	// telling the truth: reviews were off.
+	command.Env = mergeEnvironment([]string{
+		"HOME=" + b.sandboxHome,
+		"USERPROFILE=" + b.sandboxHome,
+		"PATH=" + filepath.Join(harnessDir, "bin") + string(os.PathListSeparator) + os.Getenv("PATH"),
+	})
 	output, err := command.Output()
 	if err != nil {
 		detail := ""
