@@ -340,6 +340,7 @@ func mergeFullInstallState(existing, fresh state.InstallState) state.InstallStat
 	merged.InstalledBinaryVersion = fresh.InstalledBinaryVersion
 
 	merged.SelectionConfigured, merged.Components, merged.Skills = fresh.SelectionConfigured, fresh.Components, fresh.Skills
+	merged.SkillExclusions, merged.CodexModelPreset = fresh.SkillExclusions, fresh.CodexModelPreset
 	merged.Preset, merged.SDDMode, merged.StrictTDD = fresh.Preset, fresh.SDDMode, fresh.StrictTDD
 	merged.CommunityTools, merged.CommunityToolsConfigured = fresh.CommunityTools, fresh.CommunityToolsConfigured
 	merged.ClaudeModelAssignments, merged.ClaudePhaseAssignments = fresh.ClaudeModelAssignments, fresh.ClaudePhaseAssignments
@@ -1994,12 +1995,36 @@ func executeCommand(name string, args ...string) error {
 
 // selectedSkillIDs returns the skill IDs to install. If the selection
 // has explicit skills, those are used; otherwise skills are derived from the preset.
+// selectedSkillIDs resolves the skills an installation receives. Exclusions
+// apply to whatever it resolved to, including the full set a preset means, so
+// dropping one skill never requires restating every other.
 func selectedSkillIDs(selection model.Selection) []model.SkillID {
-	if len(selection.Skills) > 0 {
-		return selection.Skills
+	resolved := selection.Skills
+	if len(resolved) == 0 {
+		resolved = skills.SkillsForPreset(selection.Preset)
 	}
 
-	return skills.SkillsForPreset(selection.Preset)
+	return withoutSkills(resolved, selection.SkillExclusions)
+}
+
+func withoutSkills(resolved, excluded []model.SkillID) []model.SkillID {
+	if len(excluded) == 0 {
+		return resolved
+	}
+
+	drop := make(map[model.SkillID]struct{}, len(excluded))
+	for _, skill := range excluded {
+		drop[skill] = struct{}{}
+	}
+
+	kept := make([]model.SkillID, 0, len(resolved))
+	for _, skill := range resolved {
+		if _, dropped := drop[skill]; !dropped {
+			kept = append(kept, skill)
+		}
+	}
+
+	return kept
 }
 
 func backupTargets(homeDir, workspaceDir string, scope InstallScope, selection model.Selection, resolved planner.ResolvedPlan) ([]string, error) {
