@@ -177,7 +177,7 @@ func TestPreCommitGateDiscoveryStillSelectsExactReceiptAmongDisjointNoiseLineage
 // in the refusal. The refusal must state the candidate's own situation and
 // the one route out of it.
 func TestUnrelatedReceiptDenialNamesTheCandidateSituationNotOtherLineages(t *testing.T) {
-	reviewModeHome(t)
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	const n = 6
 	lineages := make([]string, 0, n)
