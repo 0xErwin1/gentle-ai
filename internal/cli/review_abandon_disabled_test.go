@@ -299,7 +299,7 @@ func breakForeignCompactSnapshotIdentity(t *testing.T, repo, lineage string) {
 // same property through the command an operator actually runs, because a
 // scoped walk is only useful if the CLI path reaches it.
 func TestReviewAbandonOfAPristineLineageIgnoresAnUnrelatedUnloadableApprovedLineage(t *testing.T) {
-	reviewModeHome(t)
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	approveDiscoveryMarkdown(t, repo, "abandon-foreign-approved", "docs/foreign.md", "foreign\n")
 	runReviewCLIGit(t, repo, "add", "-A")
