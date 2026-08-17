@@ -358,8 +358,8 @@ func mergeFullInstallState(existing, fresh state.InstallState) state.InstallStat
 	merged.InstalledBinaryVersion = fresh.InstalledBinaryVersion
 
 	merged.SelectionConfigured, merged.Components, merged.Skills = fresh.SelectionConfigured, fresh.Components, fresh.Skills
-	merged.SkillExclusions, merged.CodexModelPreset = fresh.SkillExclusions, fresh.CodexModelPreset
-	merged.Preset, merged.SDDMode, merged.StrictTDD = fresh.Preset, fresh.SDDMode, false
+	merged.SkillExclusions, merged.ModelPresets = fresh.SkillExclusions, fresh.ModelPresets
+	merged.Preset, merged.SDDMode, merged.StrictTDD = fresh.Preset, "", false
 	merged.CommunityTools, merged.CommunityToolsConfigured = fresh.CommunityTools, fresh.CommunityToolsConfigured
 	merged.ClaudeModelAssignments, merged.ClaudePhaseAssignments = fresh.ClaudeModelAssignments, fresh.ClaudePhaseAssignments
 	merged.KiroModelAssignments, merged.CodexModelAssignments = fresh.KiroModelAssignments, fresh.CodexModelAssignments
