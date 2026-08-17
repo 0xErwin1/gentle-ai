@@ -15,6 +15,11 @@ type upgradeArgs struct {
 	dryRun     bool
 	noBackup   bool
 	toolFilter []string
+
+	// channel selects the release track. Empty leaves the environment's
+	// GENTLE_AI_CHANNEL in charge, which is how it behaved before the flag
+	// existed, so omitting it changes nothing.
+	channel string
 }
 
 // errUnsupportedUpgradeArgument is the identifiable sentinel returned when an
@@ -54,7 +59,16 @@ func parseUpgradeArgs(args []string) (upgradeArgs, error) {
 			parsed.dryRun = true
 		case "--no-backup":
 			parsed.noBackup = true
+		case "--channel=stable", "--channel=beta", "--channel=nightly":
+			parsed.channel = strings.TrimPrefix(arg, "--channel=")
 		default:
+			// A channel with a value the tracks do not name is rejected here
+			// rather than silently falling back to stable, which would upgrade
+			// to something other than what was asked for.
+			if strings.HasPrefix(arg, "--channel=") {
+				return upgradeArgs{}, fmt.Errorf("%w: %q; use --channel=stable or --channel=beta", errUnsupportedUpgradeArgument, arg)
+			}
+
 			// Positional tokens (no leading dash) are tool filters; unknown
 			// dash-prefixed options are rejected with the exact token so the
 			// caller can report it without ambiguity.

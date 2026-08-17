@@ -69,7 +69,9 @@ COMPATIBILITY COMMANDS
                Validate read-only legacy v1 authority; ordinary repository policy decides delivery
                Bundle, policy, ledger, fix-delta, evidence, CI, and release flags are compatibility inputs
   update       Check for available updates
-  upgrade      Apply updates to managed tools
+  upgrade [--channel=stable|beta] [--dry-run] [--no-backup] [-- <tool>...]
+               Apply updates to managed tools; beta takes gentle-ai's newest
+               release candidate and Engram from main
   telemetry <status|enable|disable|preview|trigger> [--json]
                Anonymous, opt-out usage telemetry; preview shows the exact payload without sending it;
                trigger runs the opportunistic check for hosts that never call install/update/sync
