@@ -970,7 +970,17 @@ func validateCompactRecoveredCorrection(state CompactState, evidence CompactReco
 		attempt.Snapshot.CandidateTree != state.InitialSnapshot.CandidateTree ||
 		attempt.Snapshot.Projection != state.InitialSnapshot.Projection ||
 		!equalStrings(attempt.Snapshot.LedgerIDs, state.FixFindingIDs) ||
-		pathsAreSubset(attempt.Snapshot.Paths, state.CorrectionScopePaths()) != nil ||
+		// The imported attempt is measured the way every other attempt-facing
+		// check measures one (validateCompactCorrection, correctionTargetFrozen,
+		// targetedValidationRequestForCorrection): against the frozen genesis
+		// manifest THROUGH the correction admission, not against the delivery
+		// scope. The delivery scope is rolled back when a correction escalates,
+		// and an accounting-only escalation is exactly what this recovery
+		// imports, so measuring against it would refuse a companion test path
+		// the correction was entitled to add and leave the attempt with no way
+		// to be revalidated. Admission still refuses everything a correction
+		// could not have added, so nothing unreviewed enters here.
+		correctionScopeRefused(attempt.Snapshot.Paths, state.GenesisPaths) ||
 		attempt.FixDeltaHash != FixDeltaHashForSnapshot(attempt.Snapshot) || state.FixDeltaHash != attempt.FixDeltaHash ||
 		state.OriginalCriteria == nil || state.CorrectionRegression == nil ||
 		*state.OriginalCriteria != attempt.OriginalCriteria || *state.CorrectionRegression != attempt.CorrectionRegression ||

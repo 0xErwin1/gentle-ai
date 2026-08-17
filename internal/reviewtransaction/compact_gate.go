@@ -347,7 +347,11 @@ func evaluateCompactGate(ctx context.Context, repo string, receipt CompactReceip
 	validatePublicationRange := request.Gate == GatePrePush && (record.State.InitialSnapshot.Kind == TargetBaseDiff || bootstrapPublication) ||
 		record.State.InitialSnapshot.Kind == TargetBaseWorkspaceOverlay && (request.Gate == GatePrePush || request.Gate == GatePrePR)
 	if validatePublicationRange && !subsetProof.Allowed {
-		publicationGenesis := record.State.GenesisPaths
+		// "Nothing unreviewed rides along" is stated against the delivered
+		// scope, the same set prepr.go measures the boundary-compatible range
+		// against, so an admitted companion test path is not treated as a
+		// stowaway in the intermediate commits that carry it.
+		publicationGenesis := record.State.CorrectionScopePaths()
 		if record.State.Recovery != nil {
 			if chain, ok, chainErr := deriveCompactRecoveryBinding(ctx, repo, record.State); chainErr == nil && ok {
 				publicationGenesis = chain.GenesisPaths
@@ -440,7 +444,12 @@ func evaluateCompactGate(ctx context.Context, repo string, receipt CompactReceip
 		boundary := resolvedPrePR.Selection
 		gateContext.PrePRBoundary = &boundary
 	}
-	pathsMismatch := pathsAreSubset(snapshot.Paths, record.State.GenesisPaths) != nil && !compatibleAdvance
+	// The delivered paths are proven against the scope the receipt authorizes,
+	// which is the reviewed manifest plus whatever one admitted correction
+	// added. Measuring the frozen manifest here would refuse the companion test
+	// file the correction was granted -- the exact delivery the widened scope
+	// exists to permit -- at the last step before it ships.
+	pathsMismatch := pathsAreSubset(snapshot.Paths, record.State.CorrectionScopePaths()) != nil && !compatibleAdvance
 	if strictBinding {
 		pathsMismatch = snapshot.PathsDigest != binding.PathsDigest && !squashedFixDelivery && !compatibleAdvance
 	}
