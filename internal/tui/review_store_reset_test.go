@@ -273,3 +273,109 @@ func TestReviewStoreResetConfirmNamesWhatItSpares(t *testing.T) {
 		t.Fatalf("the confirmation does not say the removal is irreversible:\n%s", rendered)
 	}
 }
+
+// TestReviewStoreResetResultIsNeverDropped covers the one message in this flow
+// that reports something already irreversible.
+//
+// The handler used to ignore it unless the model still sat on the confirmation
+// screen. Everything else in this flow can be re-derived by asking again; this
+// cannot. A dropped result leaves the user on some other screen with a store
+// that was just emptied and nothing anywhere saying so, which is strictly worse
+// than the failure it was guarding against.
+func TestReviewStoreResetResultIsNeverDropped(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenWelcome
+	m.OperationRunning = true
+	report := settledStoreResetReport()
+	report.Operation = reviewtransaction.StoreResetApplied
+	report.RemovedFiles, report.RemovedBytes = 12, 4096
+	report.Removable[0].Removed = true
+
+	updated, _ := m.Update(ReviewStoreResetDoneMsg{Report: report})
+	state := updated.(Model)
+	if state.Screen != ScreenReviewStoreResetResult {
+		t.Fatalf("screen = %v, want the result screen: a completed removal was never reported", state.Screen)
+	}
+	if state.OperationRunning {
+		t.Fatal("the model still thinks the removal is running")
+	}
+	if state.ReviewStoreResetReport.RemovedBytes != 4096 {
+		t.Fatalf("the result carries %#v, want the applied report", state.ReviewStoreResetReport)
+	}
+	if !strings.Contains(state.View(), "4.0 KB") {
+		t.Fatalf("the result view does not report what was freed:\n%s", state.View())
+	}
+}
+
+// TestReviewStoreResetConfirmStartsOnCancel keeps the destructive row off the
+// path of least resistance.
+//
+// Reaching this screen already costs one Enter from the main menu. With the
+// cursor resting on "Delete permanently", the second Enter empties the store --
+// while the CLI equivalent makes the user type --confirm. Two keystrokes and a
+// typed flag are not the same bar.
+func TestReviewStoreResetConfirmStartsOnCancel(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenWelcome
+	m.ReviewStoreResetSurveyFn = func() (reviewtransaction.StoreResetReport, error) {
+		return settledStoreResetReport(), nil
+	}
+	m.ReviewStoreResetFn = func() (reviewtransaction.StoreResetReport, error) {
+		t.Fatal("the second Enter after entering the screen destroyed the store")
+		return reviewtransaction.StoreResetReport{}, nil
+	}
+	options := screens.WelcomeOptions(m.UpdateResults, m.UpdateCheckDone, m.hasDetectedOpenCode(), len(m.ProfileList), m.hasAgentBuilderEngines())
+	for index, option := range options {
+		if option == "Reset review store" {
+			m.Cursor = index
+		}
+	}
+
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	state := drainReviewStoreResetCmd(t, updated.(Model), cmd)
+
+	confirmOptions := screens.ReviewStoreResetConfirmOptions(state.ReviewStoreResetReport, state.ReviewStoreResetSurveyErr)
+	if state.Cursor >= len(confirmOptions) || confirmOptions[state.Cursor] != "Cancel" {
+		t.Fatalf("cursor %d selects %#v, want Cancel", state.Cursor, confirmOptions)
+	}
+
+	// The second Enter has to be inert, which is the property the cursor
+	// position exists to produce.
+	updated, _ = state.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if after := updated.(Model); after.Screen != ScreenWelcome {
+		t.Fatalf("the second Enter went to %v, want back to the menu", after.Screen)
+	}
+}
+
+// TestReviewStoreResetResultNamesStrandedWorktreeRegistrations keeps the one
+// exception to "not removed means untouched" visible in the interface a user
+// actually reads. A run can free nothing and still have left a candidate view
+// unregistered, so it must not render as "Nothing was removed".
+func TestReviewStoreResetResultNamesStrandedWorktreeRegistrations(t *testing.T) {
+	report := settledStoreResetReport()
+	report.Operation = reviewtransaction.StoreResetApplied
+	report.Complete = false
+	report.RemovedFiles, report.RemovedBytes = 0, 0
+	report.Removable = []reviewtransaction.StoreResetEntry{{
+		Name: "candidate-views", Present: true, Files: 4, Bytes: 2048,
+		Skipped: "simulated staging failure; and the worktree administrative directories moved aside for it could not be restored: simulated restore failure",
+	}}
+	report.Residue = "/repo/.git/gentle-ai/.store-reset-42"
+	report.UnrestoredAdminDirs = []reviewtransaction.StoreResetUnrestoredAdminDir{{
+		Original: "/repo/.git/worktrees/view-a",
+		Staged:   "/repo/.git/gentle-ai/.store-reset-42/worktrees-view-a",
+	}}
+
+	rendered := screens.RenderReviewStoreResetResult(report, errors.New("review store reset was incomplete"))
+	if strings.Contains(rendered, "Nothing was removed") {
+		t.Fatalf("a run that stranded a registration claimed nothing was removed:\n%s", rendered)
+	}
+	for _, want := range []string{
+		"/repo/.git/worktrees/view-a",
+		"/repo/.git/gentle-ai/.store-reset-42/worktrees-view-a",
+	} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("the result screen does not name %q:\n%s", want, rendered)
+		}
+	}
+}

@@ -251,7 +251,7 @@ func TestReviewStoreResetReportsPartialFailureWithoutClaimingSuccess(t *testing.
 	t.Cleanup(func() { _ = os.Chmod(reviews, 0o755) })
 
 	var output bytes.Buffer
-	err := RunReview([]string{"store-reset", "--cwd", repo, "--confirm", "--json"}, &output)
+	err := RunReview([]string{"store-reset", "--cwd", repo, "--confirm", "--include-adapter-reviews", "--json"}, &output)
 	if err == nil {
 		t.Fatalf("a partial reset exited zero\n%s", output.String())
 	}
@@ -298,5 +298,114 @@ func TestReviewStoreResetIsNotOnTheNegotiatedRoute(t *testing.T) {
 		if operation.Command == "store-reset" || strings.Contains(string(operation.Operation), "store-reset") {
 			t.Fatalf("store-reset is reachable on the negotiated machine route: %#v", operation)
 		}
+	}
+}
+
+// TestReviewStoreResetWithdrawsTheUntouchedPromiseWhenARestoreFailed is the
+// line that must not survive a stranded worktree registration.
+//
+// "nothing above marked SKIPPED was removed" is the whole reassurance a partial
+// run offers. When the run moved a candidate view's worktree administrative
+// directory aside and could not put it back, that sentence is false: the
+// checkout is where it was, but the registration that makes it a worktree is
+// not, and printing the reassurance anyway leaves the user with no reason to go
+// looking.
+func TestReviewStoreResetWithdrawsTheUntouchedPromiseWhenARestoreFailed(t *testing.T) {
+	report := reviewtransaction.StoreResetReport{
+		Schema: reviewtransaction.StoreResetReportSchema, Operation: reviewtransaction.StoreResetApplied,
+		Repository: "/repo", StoreRoot: "/repo/.git/gentle-ai",
+		Removable: []reviewtransaction.StoreResetEntry{{
+			Name: "candidate-views", Present: true, Files: 4, Bytes: 2048,
+			Skipped: "simulated staging failure; and the worktree administrative directories moved aside for it could not be restored: simulated restore failure",
+		}},
+		Residue: "/repo/.git/gentle-ai/.store-reset-42",
+		UnrestoredAdminDirs: []reviewtransaction.StoreResetUnrestoredAdminDir{{
+			Original: "/repo/.git/worktrees/view-a",
+			Staged:   "/repo/.git/gentle-ai/.store-reset-42/worktrees-view-a",
+		}},
+		Complete: false,
+	}
+
+	var output bytes.Buffer
+	if err := renderReviewStoreReset(&output, report, true, true); err != nil {
+		t.Fatal(err)
+	}
+	rendered := output.String()
+	if strings.Contains(rendered, "nothing above marked SKIPPED was removed") {
+		t.Fatalf("a run that stranded a registration still promised nothing was removed:\n%s", rendered)
+	}
+	for _, want := range []string{
+		"/repo/.git/worktrees/view-a",
+		"/repo/.git/gentle-ai/.store-reset-42/worktrees-view-a",
+	} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("the output does not name %q:\n%s", want, rendered)
+		}
+	}
+}
+
+// TestReviewStoreResetKeepsTheUntouchedPromiseForAnOrdinaryPartialRun is the
+// other side: withdrawing the reassurance whenever anything failed would drop
+// it from the case it was written for.
+func TestReviewStoreResetKeepsTheUntouchedPromiseForAnOrdinaryPartialRun(t *testing.T) {
+	report := reviewtransaction.StoreResetReport{
+		Schema: reviewtransaction.StoreResetReportSchema, Operation: reviewtransaction.StoreResetApplied,
+		Repository: "/repo", StoreRoot: "/repo/.git/gentle-ai",
+		Removable: []reviewtransaction.StoreResetEntry{{
+			Name: "review-transactions/v2", Present: true, Files: 4, Bytes: 2048, Skipped: "permission denied",
+		}},
+		Complete: false,
+	}
+
+	var output bytes.Buffer
+	if err := renderReviewStoreReset(&output, report, true, true); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(output.String(), "nothing above marked SKIPPED was removed") {
+		t.Fatalf("an ordinary partial run lost its reassurance:\n%s", output.String())
+	}
+}
+
+// TestReviewStoreResetSparesTheAdapterReviewStoreByDefault is the coverage rule
+// at the surface the user types. reviews/ is written by the gentle-pi adapter,
+// which this command's maintenance lease does not exclude and whose reviews its
+// in-flight refusal cannot see, so a default run has to leave it alone and say
+// why.
+func TestReviewStoreResetSparesTheAdapterReviewStoreByDefault(t *testing.T) {
+	reviewModeHome(t)
+	repo := initReviewCLIRepo(t)
+	storeResetSeedLineage(t, repo, "review-approved", reviewtransaction.StateApproved)
+	root := storeResetStoreRoot(t, repo)
+	identity := filepath.Join(root, "reviews", "IDENTITY")
+	if err := os.MkdirAll(filepath.Dir(identity), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(identity, []byte("{}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var output bytes.Buffer
+	if err := RunReview([]string{"store-reset", "--cwd", repo, "--confirm", "--json"}, &output); err != nil {
+		t.Fatalf("reset: %v\n%s", err, output.String())
+	}
+	var result ReviewStoreResetResult
+	decodeStrictReviewJSON(t, output.Bytes(), &result)
+	for _, entry := range result.Report.Removable {
+		if entry.Name == "reviews" {
+			t.Fatalf("a default run offered to remove the adapter review store: %#v", entry)
+		}
+	}
+	if _, err := os.Stat(identity); err != nil {
+		t.Fatalf("a default run destroyed the adapter review store: %v", err)
+	}
+
+	// And the override actually removes it, so the withholding is a decision
+	// rather than a dead end.
+	output.Reset()
+	if err := RunReview([]string{"store-reset", "--cwd", repo, "--confirm", "--include-adapter-reviews"}, &output); err != nil {
+		t.Fatalf("opted-in reset: %v\n%s", err, output.String())
+	}
+	if _, err := os.Lstat(filepath.Join(root, "reviews")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("the override did not remove the adapter review store: %v", err)
 	}
 }

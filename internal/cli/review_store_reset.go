@@ -36,10 +36,11 @@ type ReviewStoreResetResult struct {
 // the user a second invocation is a much smaller price than the first mistake.
 func RunReviewStoreReset(args []string, stdout io.Writer) error {
 	flags := newReviewFlagSet("review store-reset", stdout,
-		"Remove this clone's accumulated review lineage state so reviews start from nothing. Previews by default and reports what it would remove per category; --confirm applies it. Removal is irreversible: nothing is copied aside. The receipt-driven-development kill switch, SDD runtime state, defect reports, and any path this command does not recognize are always preserved and reported. Reviews that have not reached a terminal state are refused unless --include-in-flight is given.")
+		"Remove this clone's accumulated review lineage state so reviews start from nothing. Previews by default and reports what it would remove per category; --confirm applies it. Removal is irreversible: nothing is copied aside. The receipt-driven-development kill switch, SDD runtime state, defect reports, the adapter-written reviews/ graph store, and any path this command does not recognize are preserved and reported. Reviews that have not reached a terminal state are refused unless --include-in-flight is given.")
 	cwd := flags.String("cwd", ".", "repository path")
 	confirm := flags.Bool("confirm", false, "apply the removal instead of previewing it")
 	includeInFlight := flags.Bool("include-in-flight", false, "also remove reviews that have not reached a terminal state")
+	includeAdapterReviews := flags.Bool("include-adapter-reviews", false, "also remove the adapter-written reviews/ graph store, which this command's maintenance lease and in-flight refusal do not cover")
 	emitJSON := flags.Bool("json", false, "emit the machine-readable review store reset report")
 	if err := parseReviewFlags(flags, args); err != nil {
 		return err
@@ -53,14 +54,17 @@ func RunReviewStoreReset(args []string, stdout io.Writer) error {
 	}
 
 	ctx := context.Background()
+	// The preview is the preview of the run these same flags would make, so
+	// the request is built once and both paths get it.
+	request := reviewtransaction.StoreResetRequest{
+		IncludeInFlight: *includeInFlight, IncludeAdapterReviews: *includeAdapterReviews,
+	}
 	var report reviewtransaction.StoreResetReport
 	var err error
 	if *confirm {
-		report, err = reviewtransaction.ResetReviewStore(ctx, *cwd, reviewtransaction.StoreResetRequest{
-			IncludeInFlight: *includeInFlight,
-		})
+		report, err = reviewtransaction.ResetReviewStore(ctx, *cwd, request)
 	} else {
-		report, err = reviewtransaction.SurveyReviewStore(ctx, *cwd)
+		report, err = reviewtransaction.SurveyReviewStore(ctx, *cwd, request)
 	}
 	// A refusal is not an attempt. It returns before touching anything, so the
 	// report has to be rendered in the same voice as a preview -- reporting it
@@ -148,9 +152,21 @@ func renderReviewStoreReset(stdout io.Writer, report reviewtransaction.StoreRese
 	case attempted:
 		fmt.Fprintf(&out, "freed %s across %d file(s).\n", reviewStoreResetBytes(report.RemovedBytes), report.RemovedFiles)
 		if report.Residue != "" {
-			fmt.Fprintf(&out, "staging directory %s could not be deleted; those bytes are not reclaimed.\n", report.Residue)
+			fmt.Fprintf(&out, "staging directory %s still exists; the bytes it holds are not reclaimed.\n", report.Residue)
 		}
-		if !report.Complete {
+		switch {
+		case len(report.UnrestoredAdminDirs) > 0:
+			// The usual line is withdrawn here, and it has to be. It promises
+			// that SKIPPED means untouched, and for these views that promise
+			// is already broken: the checkouts are where they were, but the
+			// worktree registrations that make them usable are not.
+			fmt.Fprintf(&out, "this reset was incomplete, and it did not leave everything it skipped untouched.\n")
+			fmt.Fprintf(&out, "these worktree administrative directories were moved aside for a SKIPPED category and could not be put back:\n")
+			for _, dir := range report.UnrestoredAdminDirs {
+				fmt.Fprintf(&out, "  %s\n    now at %s\n", dir.Original, dir.Staged)
+			}
+			fmt.Fprintf(&out, "move each one back to its original path before using those candidate views again.\n")
+		case !report.Complete:
 			fmt.Fprintf(&out, "this reset was incomplete; nothing above marked SKIPPED was removed.\n")
 		}
 	case confirmed:

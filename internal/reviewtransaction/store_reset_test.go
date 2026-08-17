@@ -114,7 +114,7 @@ func TestSurveyReviewStoreReportsEveryCategoryWithoutMutating(t *testing.T) {
 	writeStoreResetFile(t, filepath.Join(root, "reviews", "IDENTITY"), "{}\n")
 	seedStoreResetKillSwitch(t, repo)
 
-	report, err := SurveyReviewStore(context.Background(), repo)
+	report, err := SurveyReviewStore(context.Background(), repo, StoreResetRequest{})
 	if err != nil {
 		t.Fatalf("survey: %v", err)
 	}
@@ -124,7 +124,7 @@ func TestSurveyReviewStoreReportsEveryCategoryWithoutMutating(t *testing.T) {
 	if report.Schema != StoreResetReportSchema {
 		t.Fatalf("schema = %q", report.Schema)
 	}
-	for _, name := range []string{"candidate-views", "review-transactions/v2", "reviews"} {
+	for _, name := range []string{"candidate-views", "review-transactions/v2"} {
 		entry := storeResetEntryByName(t, report.Removable, name)
 		if !entry.Present || entry.Files == 0 || entry.Bytes == 0 {
 			t.Fatalf("removable %q = %#v, want a present non-empty category", name, entry)
@@ -155,7 +155,7 @@ func TestSurveyReviewStoreReportsEveryCategoryWithoutMutating(t *testing.T) {
 func TestSurveyReviewStoreCreatesNoStateOnACleanClone(t *testing.T) {
 	repo := initSnapshotRepo(t)
 
-	report, err := SurveyReviewStore(context.Background(), repo)
+	report, err := SurveyReviewStore(context.Background(), repo, StoreResetRequest{})
 	if err != nil {
 		t.Fatalf("survey: %v", err)
 	}
@@ -441,7 +441,7 @@ func TestResetReviewStoreReportsPartialFailureHonestly(t *testing.T) {
 		return os.Rename(oldpath, newpath)
 	})
 
-	report, err := ResetReviewStore(context.Background(), repo, StoreResetRequest{})
+	report, err := ResetReviewStore(context.Background(), repo, StoreResetRequest{IncludeAdapterReviews: true})
 	if err == nil {
 		t.Fatal("a partial reset reported success")
 	}
@@ -695,5 +695,384 @@ func TestResetReviewStoreRestoresWorktreeAdminDirsWhenStagingHalfSucceeds(t *tes
 		if got, want := strings.TrimSpace(string(payload)), filepath.Join(view, ".git"); got != want {
 			t.Fatalf("restored gitdir for %s = %q, want %q", view, got, want)
 		}
+	}
+}
+
+// stubStoreResetRemoveTree swaps the deletion seam for one test and restores it
+// afterwards, mirroring stubStoreResetRename.
+func stubStoreResetRemoveTree(t *testing.T, remove func(path string) error) {
+	t.Helper()
+	previous := storeResetRemoveTree
+	storeResetRemoveTree = remove
+	t.Cleanup(func() { storeResetRemoveTree = previous })
+}
+
+// TestResetReviewStoreKeepsWorktreeAdminDirsItCouldNotRestore is the failure
+// this command has no second chance at.
+//
+// The category is skipped, so the report calls it untouched. But the run had
+// already moved its worktree administrative directories into the staging
+// directory it is about to delete, and putting one back can fail on its own:
+// something recreated the path in the window, the disk is full, or -- on
+// Windows -- a process holds a handle inside the directory, which is also the
+// most likely reason the first move failed, so this path is at its least
+// reliable exactly when it is reached.
+//
+// Deleting staging then destroys a registration for a checkout that is still on
+// disk and still reported as spared. Git commands inside that view fail, the
+// repository's worktree list no longer names it, no later run can rebuild it,
+// and nothing in the report ever said so. The bytes have to survive, and the
+// report has to point at them.
+func TestResetReviewStoreKeepsWorktreeAdminDirsItCouldNotRestore(t *testing.T) {
+	repo := initSnapshotRepo(t)
+	root := storeResetGentleAIRoot(t, repo)
+	firstView, firstAdmin := seedStoreResetCandidateView(t, repo, "view-a")
+	_, secondAdmin := seedStoreResetCandidateView(t, repo, "view-b")
+
+	stubStoreResetRename(t, func(oldpath, newpath string) error {
+		if filepath.Base(newpath) == "worktrees-view-b" {
+			return errors.New("simulated staging failure")
+		}
+		if filepath.Base(oldpath) == "worktrees-view-a" {
+			return errors.New("simulated restore failure")
+		}
+		return os.Rename(oldpath, newpath)
+	})
+
+	report, err := ResetReviewStore(context.Background(), repo, StoreResetRequest{})
+	var incomplete *StoreResetIncompleteError
+	if !errors.As(err, &incomplete) {
+		t.Fatalf("reset over an unrestorable registration = %v, want a typed incomplete run", err)
+	}
+	entry := storeResetEntryByName(t, report.Removable, "candidate-views")
+	if entry.Removed || !strings.Contains(entry.Skipped, "could not be restored") {
+		t.Fatalf("the skipped category does not admit the failed restore: %#v", entry)
+	}
+
+	// The report has to name the directory and where it went. A skip reason
+	// alone is prose; the user needs the path to put back.
+	if len(report.UnrestoredAdminDirs) != 1 {
+		t.Fatalf("unrestored registrations = %#v, want exactly the one that failed", report.UnrestoredAdminDirs)
+	}
+	stranded := report.UnrestoredAdminDirs[0]
+	if stranded.Original != firstAdmin {
+		t.Fatalf("unrestored registration names %q, want %q", stranded.Original, firstAdmin)
+	}
+	if report.Residue == "" || !strings.HasPrefix(stranded.Staged, report.Residue) {
+		t.Fatalf("staged registration %q is not reported under residue %q", stranded.Staged, report.Residue)
+	}
+
+	// The bytes are still there, and still usable: the gitdir file that proves
+	// which view it registers has to survive with them.
+	payload, err := os.ReadFile(filepath.Join(stranded.Staged, "gitdir"))
+	if err != nil {
+		t.Fatalf("the unrestored registration was destroyed with the staging directory: %v", err)
+	}
+	if got, want := strings.TrimSpace(string(payload)), filepath.Join(firstView, ".git"); got != want {
+		t.Fatalf("stranded gitdir = %q, want %q", got, want)
+	}
+
+	// The one that did restore is back where it belongs, and is not reported
+	// as stranded.
+	if _, err := os.Stat(filepath.Join(secondAdmin, "gitdir")); err != nil {
+		t.Fatalf("the restorable registration was not put back: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(firstView, "README.md")); err != nil {
+		t.Fatalf("the skipped candidate view lost its contents: %v", err)
+	}
+	if report.Complete {
+		t.Fatalf("a run that stranded a registration reported Complete: %#v", report)
+	}
+	if !strings.HasPrefix(report.Residue, filepath.Join(root, storeResetStagingPrefix)) {
+		t.Fatalf("residue %q is not the staging directory under %q", report.Residue, root)
+	}
+}
+
+// TestResetReviewStoreStillClearsStagingAroundAnUnrestorableRegistration is the
+// other half of that rule: keeping what could not be restored must not turn
+// into keeping everything. A category that really was removed still goes.
+func TestResetReviewStoreStillClearsStagingAroundAnUnrestorableRegistration(t *testing.T) {
+	repo := initSnapshotRepo(t)
+	root := storeResetGentleAIRoot(t, repo)
+	seedStoreResetLineage(t, repo, "review-approved", StateApproved)
+	seedStoreResetCandidateView(t, repo, "view-a")
+	seedStoreResetCandidateView(t, repo, "view-b")
+
+	stubStoreResetRename(t, func(oldpath, newpath string) error {
+		if filepath.Base(newpath) == "worktrees-view-b" {
+			return errors.New("simulated staging failure")
+		}
+		if filepath.Base(oldpath) == "worktrees-view-a" {
+			return errors.New("simulated restore failure")
+		}
+		return os.Rename(oldpath, newpath)
+	})
+
+	report, err := ResetReviewStore(context.Background(), repo, StoreResetRequest{})
+	if err == nil {
+		t.Fatal("a run that stranded a registration reported success")
+	}
+	if _, err := os.Lstat(filepath.Join(root, "review-transactions", "v2")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("the removable category survived: %v", err)
+	}
+	entries, err := os.ReadDir(report.Residue)
+	if err != nil {
+		t.Fatalf("read the kept staging directory: %v", err)
+	}
+	if len(entries) != 1 || entries[0].Name() != "worktrees-view-a" {
+		names := make([]string, 0, len(entries))
+		for _, entry := range entries {
+			names = append(names, entry.Name())
+		}
+		t.Fatalf("staging kept %v, want only the registration that could not be restored", names)
+	}
+}
+
+// TestResetReviewStoreNeverReportsNegativeFreedBytes covers the accounting on
+// the one path that subtracts.
+//
+// The administrative directories move into staging with their category, so
+// their bytes are freed with it; counting them only on the residual side of the
+// subtraction made a failed deletion print a size smaller than nothing. A
+// negative freed size is not a small inaccuracy -- it is the report saying the
+// command consumed disk, which is the opposite of what it does.
+func TestResetReviewStoreNeverReportsNegativeFreedBytes(t *testing.T) {
+	repo := initSnapshotRepo(t)
+	seedStoreResetCandidateView(t, repo, "view-a")
+
+	// A deletion that fails without unlinking anything: the tree survives, so
+	// the residual is everything that was staged, administrative directories
+	// included.
+	stubStoreResetRemoveTree(t, func(string) error {
+		return errors.New("simulated device failure")
+	})
+
+	report, err := ResetReviewStore(context.Background(), repo, StoreResetRequest{})
+	var incomplete *StoreResetIncompleteError
+	if !errors.As(err, &incomplete) {
+		t.Fatalf("reset whose staging survived = %v, want a typed incomplete run", err)
+	}
+	if report.RemovedBytes < 0 {
+		t.Fatalf("freed bytes = %d, want never less than nothing", report.RemovedBytes)
+	}
+	if report.RemovedBytes != 0 {
+		t.Fatalf("freed bytes = %d, want 0: nothing left the disk", report.RemovedBytes)
+	}
+	if report.Residue == "" || report.Complete {
+		t.Fatalf("a run whose staging survived = residue %q complete %v", report.Residue, report.Complete)
+	}
+}
+
+// TestResetReviewStoreCountsWorktreeAdminBytesAsFreed is the same accounting
+// from the successful side: the registrations really are deleted, so their
+// bytes really were reclaimed and belong in the total.
+func TestResetReviewStoreCountsWorktreeAdminBytesAsFreed(t *testing.T) {
+	repo := initSnapshotRepo(t)
+	view, admin := seedStoreResetCandidateView(t, repo, "view-a")
+
+	_, viewBytes := storeResetUsage(view)
+	_, adminBytes := storeResetUsage(admin)
+	if adminBytes == 0 {
+		t.Fatal("the fixture registration is empty; the assertion below would prove nothing")
+	}
+
+	report, err := ResetReviewStore(context.Background(), repo, StoreResetRequest{})
+	if err != nil {
+		t.Fatalf("reset: %v", err)
+	}
+	if report.RemovedBytes != viewBytes+adminBytes {
+		t.Fatalf("freed bytes = %d, want %d (candidate view %d + its registration %d)",
+			report.RemovedBytes, viewBytes+adminBytes, viewBytes, adminBytes)
+	}
+}
+
+// TestSurveyReviewStoreWithholdsTheAdapterReviewStore is the coverage rule.
+//
+// reviews/ is written by the gentle-pi adapter, and neither guarantee this
+// command advertises reaches it: maintenanceLockPathForStoreLock returns no
+// lease path for anything under it, so the exclusive lease excludes no writer
+// there, and storeResetLineages reads only review-transactions/v2, so no review
+// living there can ever be listed as in flight. A default run removing it would
+// destroy a live review while reporting none open -- the exact failure the
+// lease ordering exists to prevent, arrived at from the other direction.
+func TestSurveyReviewStoreWithholdsTheAdapterReviewStore(t *testing.T) {
+	repo := initSnapshotRepo(t)
+	root := storeResetGentleAIRoot(t, repo)
+	writeStoreResetFile(t, filepath.Join(root, "reviews", "IDENTITY"), "{}\n")
+
+	report, err := SurveyReviewStore(context.Background(), repo, StoreResetRequest{})
+	if err != nil {
+		t.Fatalf("survey: %v", err)
+	}
+	for _, entry := range report.Removable {
+		if entry.Name == "reviews" {
+			t.Fatalf("a default survey offers to remove the adapter review store: %#v", entry)
+		}
+	}
+	spared := storeResetEntryByName(t, report.Preserved, "reviews")
+	if !spared.Present || spared.Files == 0 {
+		t.Fatalf("the withheld category was not measured: %#v", spared)
+	}
+	// The reason has to name the way out, or the category is simply
+	// undeletable as far as the user can tell.
+	if !strings.Contains(spared.Reason, "--include-adapter-reviews") {
+		t.Fatalf("the withheld category does not name its override: %q", spared.Reason)
+	}
+
+	// The lease genuinely does not cover it. This is the claim the reason
+	// makes, checked rather than asserted in prose.
+	lease, err := maintenanceLockPathForStoreLock(filepath.Join(root, "reviews", "graph-v1", "objects", "aa"))
+	if err != nil {
+		t.Fatalf("resolve a lease path under the adapter review store: %v", err)
+	}
+	if lease != "" {
+		t.Fatalf("the maintenance lease covers %q after all; the withholding reason is stale", lease)
+	}
+}
+
+// TestResetReviewStoreSparesTheAdapterReviewStoreByDefault is the behavior that
+// rule buys: the bytes stay, and the run is still complete, because a spared
+// category is not a failed one.
+func TestResetReviewStoreSparesTheAdapterReviewStoreByDefault(t *testing.T) {
+	repo := initSnapshotRepo(t)
+	root := storeResetGentleAIRoot(t, repo)
+	seedStoreResetLineage(t, repo, "review-approved", StateApproved)
+	identity := filepath.Join(root, "reviews", "IDENTITY")
+	writeStoreResetFile(t, identity, "{}\n")
+	graph := filepath.Join(root, "reviews", "graph-v1", "objects", "aa", "record.json")
+	writeStoreResetFile(t, graph, "{}\n")
+
+	report, err := ResetReviewStore(context.Background(), repo, StoreResetRequest{})
+	if err != nil {
+		t.Fatalf("reset: %v", err)
+	}
+	if !report.Complete {
+		t.Fatalf("sparing an opt-in category made the run incomplete: %#v", report)
+	}
+	for _, path := range []string{identity, graph} {
+		if _, err := os.Stat(path); err != nil {
+			t.Fatalf("a default reset destroyed the adapter review store at %s: %v", path, err)
+		}
+	}
+	if _, err := os.Lstat(filepath.Join(root, "review-transactions", "v2")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("sparing reviews/ also spared the categories this command does cover: %v", err)
+	}
+}
+
+// TestResetReviewStoreRemovesTheAdapterReviewStoreWhenAsked keeps the exit
+// real. Withholding a category is only defensible while there is a way to say
+// yes to it.
+func TestResetReviewStoreRemovesTheAdapterReviewStoreWhenAsked(t *testing.T) {
+	repo := initSnapshotRepo(t)
+	root := storeResetGentleAIRoot(t, repo)
+	writeStoreResetFile(t, filepath.Join(root, "reviews", "IDENTITY"), "{}\n")
+
+	report, err := ResetReviewStore(context.Background(), repo, StoreResetRequest{IncludeAdapterReviews: true})
+	if err != nil {
+		t.Fatalf("opted-in reset: %v", err)
+	}
+	if entry := storeResetEntryByName(t, report.Removable, "reviews"); !entry.Removed {
+		t.Fatalf("the opted-in category was not removed: %#v", entry)
+	}
+	if _, err := os.Lstat(filepath.Join(root, "reviews")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("the opted-in category survived: %v", err)
+	}
+}
+
+// TestResetReviewStoreRefusalIsNotReportedAsAnAttempt covers the one field a
+// machine reader routes on. The refusal returns before the staging directory
+// exists, so nothing was opened and nothing was skipped; labelling that run
+// "reset" describes a removal that tried every category and failed at all of
+// them, which is a far worse outcome than the one that happened.
+func TestResetReviewStoreRefusalIsNotReportedAsAnAttempt(t *testing.T) {
+	repo := initSnapshotRepo(t)
+	seedStoreResetLineage(t, repo, "review-active", StateReviewing)
+
+	report, err := ResetReviewStore(context.Background(), repo, StoreResetRequest{})
+	var inFlight *StoreResetInFlightError
+	if !errors.As(err, &inFlight) {
+		t.Fatalf("reset with an in-flight lineage = %v, want a typed refusal", err)
+	}
+	if report.Operation != StoreResetPreview {
+		t.Fatalf("refused run reported operation %q, want %q", report.Operation, StoreResetPreview)
+	}
+	for _, entry := range report.Removable {
+		if entry.Skipped != "" || entry.Removed {
+			t.Fatalf("a refusal reported per-category outcomes: %#v", entry)
+		}
+	}
+}
+
+// TestResetReviewStoreLeaseDeadlineTracksTheRealBound keeps the constant honest
+// about what actually bounds the wait.
+//
+// storeResetLockTimeout is only the context deadline handed to the acquisition;
+// the acquisition applies maintenanceLockTimeout internally, and that shorter
+// bound is what a contended lease expires on. The previous 30s literal
+// documented a wait no run has ever performed, and a comment justifying
+// behavior that does not happen is worse than no comment: the next reader
+// reasons about contention from a number that is off by an order of magnitude.
+func TestResetReviewStoreLeaseDeadlineTracksTheRealBound(t *testing.T) {
+	if storeResetLockTimeout != maintenanceLockTimeout+storeResetIdentitySlack {
+		t.Fatalf("storeResetLockTimeout = %s, want the real lease bound %s plus its documented identity slack %s",
+			storeResetLockTimeout, maintenanceLockTimeout, storeResetIdentitySlack)
+	}
+	if storeResetLockTimeout <= maintenanceLockTimeout {
+		t.Fatalf("storeResetLockTimeout = %s must exceed the lease bound %s, or a slow identity probe cancels an uncontended lease",
+			storeResetLockTimeout, maintenanceLockTimeout)
+	}
+
+	// And the bound the constant claims to track is the one that fires.
+	repo := initSnapshotRepo(t)
+	root := storeResetGentleAIRoot(t, repo)
+	seedStoreResetLineageAt(t, root, "review-approved", StateApproved)
+
+	ctx, cancel := context.WithTimeout(context.Background(), storeResetLockTimeout)
+	defer cancel()
+	holder, err := acquireMaintenanceLock(ctx, filepath.Join(root, "REVIEW-MAINTENANCE.lock"), maintenanceExclusive)
+	if err != nil {
+		t.Fatalf("hold the exclusive maintenance lease: %v", err)
+	}
+	defer func() { _ = holder.Release() }()
+
+	start := time.Now()
+	if _, err := ResetReviewStore(context.Background(), repo, StoreResetRequest{}); err == nil {
+		t.Fatal("a reset that never won the lease reported success")
+	}
+	elapsed := time.Since(start)
+	if elapsed >= storeResetLockTimeout {
+		t.Fatalf("contended reset waited %s, so the context deadline bounded it, not the lease bound %s",
+			elapsed, maintenanceLockTimeout)
+	}
+	if _, err := os.Stat(filepath.Join(root, "review-transactions", "v2", "review-approved", "review-state.json")); err != nil {
+		t.Fatalf("a reset that never won the lease still removed state: %v", err)
+	}
+}
+
+// TestReviewStoreResetFreedBytesNeverGoesNegative pins the clamp on its own.
+//
+// The two counts it subtracts are measured at different moments against a tree
+// other processes can touch, so their difference can invert for reasons no
+// accounting fix inside this command prevents. What the command controls is
+// what it prints, and a negative freed size tells the user this command
+// consumed disk -- the opposite of what it does, and a claim no reader can
+// check.
+func TestReviewStoreResetFreedBytesNeverGoesNegative(t *testing.T) {
+	for _, testCase := range []struct {
+		name             string
+		staged, residual int64
+		want             int64
+	}{
+		{name: "everything went away", staged: 4096, residual: 0, want: 4096},
+		{name: "some of it survived", staged: 4096, residual: 1024, want: 3072},
+		{name: "all of it survived", staged: 4096, residual: 4096, want: 0},
+		{name: "more survived than was staged", staged: 4096, residual: 8192, want: 0},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			if got := storeResetFreedBytes(testCase.staged, testCase.residual); got != testCase.want {
+				t.Fatalf("storeResetFreedBytes(%d, %d) = %d, want %d",
+					testCase.staged, testCase.residual, got, testCase.want)
+			}
+		})
 	}
 }
