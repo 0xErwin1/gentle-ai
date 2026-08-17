@@ -79,6 +79,8 @@ gentle-ai install --config gentle-ai.json
 
 Unknown fields are rejected rather than ignored, so a typo fails validation instead of silently doing nothing.
 
+Every field, what it accepts and what omitting it means is in the [reference](declarative-config-reference.md).
+
 ### Logical identity and rendered names
 
 A role's `id` is its logical identity and never appears in generated output. `renderedName` is the name a client sees. `references` always name logical ids.
