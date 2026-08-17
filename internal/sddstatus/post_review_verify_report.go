@@ -4,7 +4,6 @@ import (
 	"context"
 	"os"
 	"os/exec"
-	"path"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -66,18 +65,13 @@ func classifyPostReviewVerifyReportAttestation(
 	if err != nil {
 		return postReviewVerifyReportUnproven
 	}
-	reportPath := filepath.Join(changeRoot, "verify-report.md")
+	reportPath := filepath.Join(changeRoot, verifyReportFileName)
 	// Mirror captureFinalVerifyReport: the canonical path is anchored at the
 	// planning workspace, tree reads at the repository root (which may differ).
-	workspaceReportPath, err := filepath.Rel(workspace, reportPath)
-	if err != nil || filepath.ToSlash(workspaceReportPath) != path.Join("openspec", "changes", change, "verify-report.md") {
-		return postReviewVerifyReportUnproven
-	}
-	logicalReportPath, err := filepath.Rel(repo, reportPath)
+	logicalReportPath, err := canonicalVerifyReportPaths(repo, workspace, changeRoot, change)
 	if err != nil {
 		return postReviewVerifyReportUnproven
 	}
-	logicalReportPath = filepath.ToSlash(logicalReportPath)
 
 	// Legacy records had no native digest and work-unit labels are caller-owned.
 	// Their label cannot grant archive authority, but with nothing to attest
