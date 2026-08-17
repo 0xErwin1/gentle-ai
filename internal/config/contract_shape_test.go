@@ -93,7 +93,7 @@ var userKeyedContainers = []string{
 	"mcpServers", "env", "modelAssignments", "claudeModelAssignments",
 	"kiroModelAssignments", "codexModelAssignments", "codexCarrilModelAssignments",
 	"codexPhaseModelAssignments", "claudePhaseAssignments", "phaseAssignments",
-	"skillAssignments", "extensions", "modelPresets", "headers",
+	"skillAssignments", "extensions", "modelPresets", "headers", "mcpServerAssignments",
 }
 
 func userKeyed(path string) bool {
@@ -174,6 +174,7 @@ func fullyPopulatedDocument() Document {
 			MCPServers:                  map[string]MCPServer{"atlas": {Command: "atlas", Args: []string{"mcp"}, Env: map[string]string{"TOKEN": "x"}, Headers: map[string]string{"Authorization": "Bearer x"}}},
 			Permissions:                 &Permissions{Allow: []string{"Read(*)"}, Deny: []string{"Bash(curl *)"}, Ask: []string{"Edit(*.tf)"}},
 			SkillAssignments:            map[string][]model.SkillID{"opencode": {model.SkillSDDApply}},
+			MCPServerAssignments:        map[string]map[string]MCPServer{"opencode": {"atlas": {Command: "atlas"}}},
 			Profiles: []Profile{{
 				Name:             "cheap",
 				Orchestrator:     &ModelAssignment{Provider: "anthropic", Model: "claude-haiku", Effort: "low"},

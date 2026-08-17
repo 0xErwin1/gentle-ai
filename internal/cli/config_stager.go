@@ -300,20 +300,12 @@ func liveProvisioning(resources []render.Resource, profile system.PlatformProfil
 // declared server is configuration in its own right, not something the Context7
 // component happens to bring along.
 func stageDeclaredMCPServers(stageRoot string, selection model.Selection, adapters []agents.Adapter) error {
-	if len(selection.MCPServers) == 0 {
-		return nil
-	}
-
-	servers := make([]mcp.Server, 0, len(selection.MCPServers))
-	for _, name := range sortedServerNames(selection.MCPServers) {
-		declared := selection.MCPServers[name]
-		servers = append(servers, mcp.Server{
-			Name: name, Command: declared.Command, Args: declared.Args,
-			Env: declared.Env, URL: declared.URL, Headers: declared.Headers, Enabled: declared.Enabled,
-		})
-	}
-
 	for _, adapter := range adapters {
+		servers := mcpServersForAdapter(selection, adapter.Agent())
+		if len(servers) == 0 {
+			continue
+		}
+
 		target := componentInjectionDirScoped(stageRoot, "", ScopeGlobal, adapter)
 		if _, err := mcp.InjectDeclared(target, adapter, servers); err != nil {
 			return fmt.Errorf("stage MCP servers for %q: %w", adapter.Agent(), err)
@@ -321,6 +313,29 @@ func stageDeclaredMCPServers(stageRoot string, selection model.Selection, adapte
 	}
 
 	return nil
+}
+
+// mcpServersForAdapter resolves what one adapter receives. A per-adapter set
+// replaces the flat one for that adapter only, so the simple form keeps meaning
+// "every adapter" and an adapter is only named when it must differ -- a client
+// that identifies itself to a server, or an installation that gives one client
+// tools another has no use for.
+func mcpServersForAdapter(selection model.Selection, agent model.AgentID) []mcp.Server {
+	declared := selection.MCPServers
+	if assigned, ok := selection.MCPServerAssignments[agent]; ok {
+		declared = assigned
+	}
+
+	servers := make([]mcp.Server, 0, len(declared))
+	for _, name := range sortedServerNames(declared) {
+		server := declared[name]
+		servers = append(servers, mcp.Server{
+			Name: name, Command: server.Command, Args: server.Args,
+			Env: server.Env, URL: server.URL, Headers: server.Headers, Enabled: server.Enabled,
+		})
+	}
+
+	return servers
 }
 
 // stageDeclaredPermissions layers the rules a document declares over whatever
