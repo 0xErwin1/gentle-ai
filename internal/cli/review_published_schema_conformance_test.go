@@ -75,8 +75,7 @@ func validatePublishedReviewSchema(t *testing.T, schema *jsonschema.Schema, payl
 // (real, load-bearing fields validated by
 // validateReviewRepositoryContextReference) that the schema did not admit.
 func TestNegotiatedStartEnvelopeMatchesPublishedStartSchemaV3(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
-	t.Setenv("USERPROFILE", os.Getenv("HOME"))
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	writeReviewStartCandidate(t, repo, "candidate.go", "package candidate\n\nfunc conformance() {}\n", 0o644)
 
@@ -104,8 +103,7 @@ func TestNegotiatedStartEnvelopeMatchesPublishedStartSchemaV3(t *testing.T) {
 // live negotiated STATUS envelope, including the top-level repository_context
 // reference the battery found missing from status-v5.schema.json.
 func TestNegotiatedStatusEnvelopeMatchesPublishedStatusSchemaV5(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
-	t.Setenv("USERPROFILE", os.Getenv("HOME"))
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	writeReviewStartCandidate(t, repo, "candidate.go", "package candidate\n\nfunc conformance() {}\n", 0o644)
 	runNegotiatedReviewStart(t, repo, "published-schema-status")
@@ -208,7 +206,7 @@ func TestConsentEnvelopeWithDeclaredRuntimeMatchesPublishedConsentSchemaV3(t *te
 			if agent == model.AgentPi {
 				t.Setenv(reviewPiHostRelayContractEnvironment, reviewPiHostRelayContract)
 			}
-			reviewModeHome(t)
+			reviewEnabledHome(t)
 			repo := initReviewCLIRepo(t)
 			stubReviewConsole(t, false, "")
 			writeReviewStartCandidate(t, repo, "scripts/deploy.sh", "echo deploy\n", 0o644)
@@ -234,6 +232,7 @@ func TestConsentEnvelopeWithDeclaredRuntimeMatchesPublishedConsentSchemaV3(t *te
 // real emitter output the published status-v5 schema must admit (cross-lane
 // battery conformance finding).
 func TestPiHostRelayStatusEnvelopeMatchesPublishedStatusSchemaV5(t *testing.T) {
+	reviewEnabledHome(t)
 	t.Setenv(reviewPiHostRelayContractEnvironment, reviewPiHostRelayContract)
 	repo, _, record, _ := newCandidateInspectionReview(t, "candidate\n", true)
 
@@ -265,8 +264,7 @@ func TestPiHostRelayStatusEnvelopeMatchesPublishedStatusSchemaV5(t *testing.T) {
 // emitted gentle-ai.review-gate-result/v1 envelope against its published
 // schema — the envelope the battery found had no published schema at all.
 func TestReviewGateResultEnvelopeMatchesPublishedSchema(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
-	t.Setenv("USERPROFILE", os.Getenv("HOME"))
+	reviewEnabledHome(t)
 	// Compiled before the printed-command execution below changes the working
 	// directory, because the contracts/ tree is addressed repo-relative.
 	schema := compileWholePublishedReviewSchema(t, "v2", "gate-result.schema.json")

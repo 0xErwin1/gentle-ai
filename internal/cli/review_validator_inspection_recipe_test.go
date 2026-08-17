@@ -39,6 +39,7 @@ var reviewValidatorRecipeFlags = []string{
 }
 
 func TestTargetedValidatorPromptCarriesTheInspectionRecipe(t *testing.T) {
+	reviewEnabledHome(t)
 	repo, state, revision := driveReviewToOpenTargetedValidation(t)
 	prompt := string(targetedValidatorProviderPrompt(t, repo, state, revision))
 
@@ -58,6 +59,7 @@ func TestTargetedValidatorPromptCarriesTheInspectionRecipe(t *testing.T) {
 }
 
 func TestTargetedValidatorPromptCarriesEveryInspectionArgument(t *testing.T) {
+	reviewEnabledHome(t)
 	repo, state, revision := driveReviewToOpenTargetedValidation(t)
 	request := decodeTargetedValidatorPromptRequest(t, targetedValidatorProviderPrompt(t, repo, state, revision))
 
@@ -84,6 +86,7 @@ func TestTargetedValidatorPromptCarriesEveryInspectionArgument(t *testing.T) {
 // prompt describes, using only values parsed out of that prompt. A recipe that
 // reads well and does not run is the same defect in nicer prose.
 func TestTargetedValidatorInspectionRecipeExecutes(t *testing.T) {
+	reviewEnabledHome(t)
 	repo, state, revision := driveReviewToOpenTargetedValidation(t)
 	request := decodeTargetedValidatorPromptRequest(t, targetedValidatorProviderPrompt(t, repo, state, revision))
 

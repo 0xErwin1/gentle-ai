@@ -681,6 +681,7 @@ func coreJourneys() []Journey {
 	return []Journey{
 		{
 			ID:     "j01-docs-happy-path",
+			Review: reviewOptedIn,
 			Title:  "Documentation change: review, approve, commit, push gate",
 			Source: "guide flow 3 + flow 9 step 2",
 			Steps: []Step{
@@ -696,6 +697,7 @@ func coreJourneys() []Journey {
 		},
 		{
 			ID:     "j02-high-risk-four-lens",
+			Review: reviewOptedIn,
 			Title:  "High-risk code change: four lenses, evidence, approval",
 			Source: "guide flow 4 + the full native bounded review contract",
 			Steps: []Step{
@@ -712,6 +714,7 @@ func coreJourneys() []Journey {
 		},
 		{
 			ID:     "j03-kill-switch",
+			Review: reviewUntouched,
 			Title:  "Kill switch: disable, start refused, re-enable, review",
 			Source: "guide flow 2",
 			Steps: []Step{
@@ -728,6 +731,7 @@ func coreJourneys() []Journey {
 		},
 		{
 			ID:     "j04-size-does-not-escalate",
+			Review: reviewOptedIn,
 			Title:  "1200 lines of prose still reviews as low risk",
 			Source: "guide flow 4 step 3",
 			Steps: []Step{
@@ -740,6 +744,7 @@ func coreJourneys() []Journey {
 		},
 		{
 			ID:     "j05-gate-without-any-review",
+			Review: reviewOptedIn,
 			Title:  "Failure path: lifecycle gate before any review exists",
 			Source: "community failure path: receipt missing",
 			Steps: []Step{
@@ -751,6 +756,7 @@ func coreJourneys() []Journey {
 		},
 		{
 			ID:     "j06-pre-push-after-publication",
+			Review: reviewOptedIn,
 			Title:  "Failure path: pre-push after the reviewed commit was already pushed",
 			Source: "guide flow 9",
 			Steps: []Step{
@@ -768,6 +774,7 @@ func coreJourneys() []Journey {
 		},
 		{
 			ID:     "j97-pre-push-preserves-ls-remote-failure",
+			Review: reviewOptedIn,
 			Title:  "Failure path: pre-push preserves an advertised remote query failure",
 			Source: "issue #1890: advertised remote identity and ls-remote failures must not become semantic selector errors",
 			Steps: []Step{
@@ -784,6 +791,7 @@ func coreJourneys() []Journey {
 		},
 		{
 			ID:     "j100-pre-push-unqualified-selector-ignores-unreachable-remote",
+			Review: reviewOptedIn,
 			Title:  "Failure path: pre-push selects the valid remote for an unqualified selector",
 			Source: "issue #1890: an unqualified advertised branch ignores unrelated remote identity or query failures when exactly one valid match remains",
 			Steps: []Step{
@@ -800,6 +808,7 @@ func coreJourneys() []Journey {
 		},
 		{
 			ID:     "j07-disabled-with-stale-receipts",
+			Review: reviewOptedIn,
 			Title:  "Failure path: reviews disabled with two stale receipts present",
 			Source: "guide flow 6 + flow 9 step 5",
 			Steps: []Step{
@@ -821,6 +830,7 @@ func coreJourneys() []Journey {
 		},
 		{
 			ID:     "j08-finalize-without-reviewer-results",
+			Review: reviewOptedIn,
 			Title:  "Failure path: finalize a high-risk review with no reviewer results",
 			Source: "community failure path",
 			Steps: []Step{
@@ -833,6 +843,7 @@ func coreJourneys() []Journey {
 		},
 		{
 			ID:     "j09-finalize-without-evidence",
+			Review: reviewOptedIn,
 			Title:  "Failure path: finalize with results but no captured evidence",
 			Source: "guide flow 12",
 			Steps: []Step{
@@ -847,6 +858,7 @@ func coreJourneys() []Journey {
 		},
 		{
 			ID:     "j10-invalid-flag-combination",
+			Review: reviewOptedIn,
 			Title:  "Failure path: staged projection combined with a base ref",
 			Source: "guide flow 13",
 			Steps: []Step{
@@ -860,6 +872,7 @@ func coreJourneys() []Journey {
 		},
 		{
 			ID:     "j11-unborn-head",
+			Review: reviewOptedIn,
 			Title:  "Failure path: first commit in a repository with no history",
 			Source: "guide flow 10",
 			Steps: []Step{
@@ -873,6 +886,7 @@ func coreJourneys() []Journey {
 		},
 		{
 			ID:     "j12-rejected-capture-then-recapture",
+			Review: reviewOptedIn,
 			Title:  "Failure path: a reviewer result the product rejects, then a recapture",
 			Source: "#2614: incomplete inspection coverage refuses, then an unordered complete manifest recaptures",
 			Steps: []Step{
@@ -887,6 +901,7 @@ func coreJourneys() []Journey {
 		},
 		{
 			ID:     "j13-next-transition-runs-verbatim",
+			Review: reviewOptedIn,
 			Title:  "Agent path: the printed transition executes exactly as printed",
 			Source: "guide flow 11",
 			Steps: []Step{
@@ -899,6 +914,7 @@ func coreJourneys() []Journey {
 		},
 		{
 			ID:     "j14-abandon-needs-a-hand-built-token",
+			Review: reviewOptedIn,
 			Title:  "Maintainer path: abandoning a non-terminal lineage binds its discarded work",
 			Source: "review abandon contract",
 			Steps: []Step{
@@ -910,6 +926,7 @@ func coreJourneys() []Journey {
 		},
 		{
 			ID:     "j85-review-parse-refusals-are-preflight",
+			Review: reviewOptedIn,
 			Title:  "START and FINALIZE parser refusals are preflight and non-mutating",
 			Source: "#1956: argv parsing happens before review authority can mutate",
 			Steps: []Step{

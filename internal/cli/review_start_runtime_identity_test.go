@@ -59,6 +59,7 @@ func initLensSelectingReviewCLIRepo(t *testing.T) (repo, baseRef string) {
 // from the repository where it was emitted so executability is proved without
 // filling a placeholder or guessing a transport identity.
 func TestDirectReviewStartRefusalInventsNoRuntimeIdentity(t *testing.T) {
+	reviewEnabledHome(t)
 	repo, baseRef := initLensSelectingReviewCLIRepo(t)
 
 	var stdout bytes.Buffer

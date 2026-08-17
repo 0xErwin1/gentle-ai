@@ -747,6 +747,7 @@ func TestNegotiatedReadOnlyCatchAllStaysContentFreeAndNeverAbsorbsProcessControl
 }
 
 func TestNegotiatedFinalizePostTransitionGitTimeoutRequiresStatus(t *testing.T) {
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("base\none\ntwo\nthree\nfour\n"), 0o644); err != nil {
 		t.Fatal(err)
@@ -999,6 +1000,7 @@ func TestNegotiatedLegacyReadOnlyFailurePreservesTypedCauseAcrossMutationRoutes(
 }
 
 func TestNegotiatedGateDenialUsesFailureEnvelopeWithoutAuthorityDrift(t *testing.T) {
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	writeNegotiatedOperationChange(t, repo, "thin")
 	lineage := "review-failure-gate"
@@ -1032,6 +1034,7 @@ func TestNegotiatedGateDenialUsesFailureEnvelopeWithoutAuthorityDrift(t *testing
 }
 
 func TestNegotiatedReceiptPublicationFailureIsSanitizedAndExactlyReplayable(t *testing.T) {
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	writeNegotiatedOperationChange(t, repo, "thin")
 	started := startFacadeReview(t, repo)

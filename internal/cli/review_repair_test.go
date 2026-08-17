@@ -294,6 +294,7 @@ func TestClassifiedRepairAuthorizationHelperIsExact(t *testing.T) {
 }
 
 func TestReviewRepairPreflightIsReadOnlyAndExactExecutionReplays(t *testing.T) {
+	reviewEnabledHome(t)
 	repo, lineage, head := classifiedRepairCLIFixture(t, "repair-command")
 	store, err := reviewtransaction.AuthoritativeStore(context.Background(), repo, lineage)
 	if err != nil {
@@ -400,6 +401,7 @@ func TestReviewRepairPreflightSelectorStillClassifiesCompleteInventory(t *testin
 }
 
 func TestNegotiatedReviewRepairFailureNeverPublishesAuthorizationOrPaths(t *testing.T) {
+	reviewEnabledHome(t)
 	repo, _, _ := classifiedRepairCLIFixture(t, "repair-private-failure")
 	assessment, err := reviewtransaction.AssessAuthorityRepair(context.Background(), repo)
 	if err != nil {
@@ -629,6 +631,7 @@ func TestReviewRepairDispositionExecutionRequiresAllFlagsBeforeLockAcquisition(t
 // nothing left to derive; this test proves that follow-on preflight then
 // reports it has nothing more to surface, not a second identical execution.
 func TestReviewRepairDispositionExecutionQuarantinesEligibleLeaf(t *testing.T) {
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	writeInspectCLIRecoveryPair(t, repo, "leaf-execute", false, dispositionForgedAuthorization)
 	authorityRoot := reviewCLIAuthorityRoot(t, repo)
@@ -700,6 +703,7 @@ func TestReviewRepairDispositionExecutionQuarantinesEligibleLeaf(t *testing.T) {
 // appended a saved-defect-report clause even though nothing mutated and
 // nothing is actually wrong with the tool.
 func TestReviewRepairDispositionExecutionDigestMismatchRefusesWithoutDefectReport(t *testing.T) {
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	writeInspectCLIRecoveryPair(t, repo, "leaf-digest-mismatch", false, dispositionForgedAuthorization)
 
@@ -743,6 +747,7 @@ func TestReviewRepairDispositionExecutionDigestMismatchRefusesWithoutDefectRepor
 // with empty actor/reason) MUST equal the digest execution re-derives (with
 // the real actor/reason) for the same graph state.
 func TestReviewRepairDispositionExecutionAcceptsPreflightPublishedDigest(t *testing.T) {
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	writeInspectCLIRecoveryPair(t, repo, "leaf-preflight-digest", false, dispositionForgedAuthorization)
 

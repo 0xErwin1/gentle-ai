@@ -45,6 +45,15 @@ type battery struct {
 	withModel bool
 	withHost  bool
 
+	// sandboxHome is the battery's own HOME for every deterministic-lane
+	// invocation. The lanes used to inherit the operator's real HOME, which
+	// silently made their results depend on that machine's global review mode.
+	// Receipt-driven development is opt-in, so on a machine nobody configured
+	// every lifecycle lane would be refused at start; on the maintainer's own
+	// machine it would pass. Owning the HOME makes the battery answer the same
+	// way everywhere, and keeps it from ever writing to the operator's state.
+	sandboxHome string
+
 	envelopes  []capturedEnvelope
 	checks     []check
 	hostCosts  []string
@@ -81,6 +90,9 @@ func (b *battery) run(dir string, args ...string) (string, string, int) {
 	command := exec.CommandContext(ctx, b.binary, args...)
 	command.WaitDelay = 30 * time.Second
 	command.Dir = dir
+	if b.sandboxHome != "" {
+		command.Env = mergeEnvironment([]string{"HOME=" + b.sandboxHome, "USERPROFILE=" + b.sandboxHome})
+	}
 	var stdout, stderr bytes.Buffer
 	command.Stdout = &stdout
 	command.Stderr = &stderr

@@ -113,7 +113,7 @@ func TestNegotiatedStatusStopIsByteSilentOnStderr(t *testing.T) {
 // Neither the one-time consent latch nor the once-per-clone notice marker is
 // consumed, so a later plain (non-negotiated) start still shows the notice.
 func TestNegotiatedStartUndeclaredConsentIsByteSilentOnStderr(t *testing.T) {
-	reviewModeHome(t)
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	console := stubReviewConsole(t, false, "")
 	writeReviewStartCandidate(t, repo, "scripts/deploy.sh", "echo deploy\n", 0o644)
@@ -145,7 +145,7 @@ func TestNegotiatedStartUndeclaredConsentIsByteSilentOnStderr(t *testing.T) {
 // declared consent shapes stay silent on success: relay answers with the typed
 // question envelope, granted starts the review, and neither touches stderr.
 func TestNegotiatedStartConsentAnswersStayByteSilentOnStderr(t *testing.T) {
-	reviewModeHome(t)
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	console := stubReviewConsole(t, false, "")
 	writeReviewStartCandidate(t, repo, "scripts/deploy.sh", "echo deploy\n", 0o644)
@@ -182,7 +182,7 @@ func TestNegotiatedStartConsentAnswersStayByteSilentOnStderr(t *testing.T) {
 // and requires zero stderr bytes from every successful operation, the exact
 // sequence gentle-pi drives fail-closed.
 func TestNegotiatedLifecycleOperationsAreByteSilentOnStderr(t *testing.T) {
-	reviewModeHome(t)
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	stubReviewConsole(t, false, "")
 	writeReviewStartCandidate(t, repo, "docs/notes.md", "lifecycle\n", 0o644)
@@ -242,7 +242,7 @@ func TestNegotiatedLifecycleOperationsAreByteSilentOnStderr(t *testing.T) {
 // human narration surface: the prompt bytes below are the registered Tier A
 // vocabulary reaching a real console through authorizeReviewStart.
 func TestNegotiatedStartUndeclaredInteractiveKeepsConsentCeremony(t *testing.T) {
-	reviewModeHome(t)
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	console := stubReviewConsole(t, true, "2\n")
 	writeReviewStartCandidate(t, repo, "scripts/deploy.sh", "echo deploy\n", 0o644)
@@ -264,7 +264,7 @@ func TestNegotiatedStartUndeclaredInteractiveKeepsConsentCeremony(t *testing.T) 
 // leaves both the consent latch and the once-per-clone notice marker exactly
 // as it found them.
 func TestNegotiatedStartUndeclaredAskedLatchProceedsSilently(t *testing.T) {
-	reviewModeHome(t)
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	console := stubReviewConsole(t, false, "")
 	writeReviewStartCandidate(t, repo, "scripts/deploy.sh", "echo deploy\n", 0o644)
@@ -293,11 +293,10 @@ func TestNegotiatedStartUndeclaredAskedLatchProceedsSilently(t *testing.T) {
 
 // TestPlainStartConsentNoticeStaysByteIdentical pins requirement 3 of the
 // negotiated-silence contract: non-negotiated (human) invocations keep their
-// narration byte-identical. A fresh headless clone with the default mode
-// source prints exactly the skip notice and the default-provenance line, each
-// as its own line, and nothing else.
+// narration byte-identical. A headless clone that opted in prints exactly the
+// skip notice on its own line and nothing else.
 func TestPlainStartConsentNoticeStaysByteIdentical(t *testing.T) {
-	reviewModeHome(t)
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	console := stubReviewConsole(t, false, "")
 	writeReviewStartCandidate(t, repo, "scripts/deploy.sh", "echo deploy\n", 0o644)
@@ -306,7 +305,7 @@ func TestPlainStartConsentNoticeStaysByteIdentical(t *testing.T) {
 	if err := RunReviewFacadeStart([]string{"--cwd", repo, "--lineage", "review-plain-notice"}, &output); err != nil {
 		t.Fatalf("plain headless start: %v\n%s", err, output.String())
 	}
-	want := reviewConsentSkippedNotice + "\n" + reviewConsentSkippedDefaultProvenance + "\n"
+	want := reviewConsentSkippedNotice + "\n"
 	if console.String() != want {
 		t.Fatalf("plain start notice drifted:\n got %q\nwant %q", console.String(), want)
 	}
