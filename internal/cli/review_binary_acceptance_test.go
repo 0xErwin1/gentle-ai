@@ -40,6 +40,10 @@ func TestWindowsPowerShell51ArtifactManifestFileFinalize(t *testing.T) {
 		t.Skipf("requires Windows PowerShell 5.1, got %q", got)
 	}
 
+	// The spawned binary resolves the kill switch from the inherited HOME, so
+	// the opt-in has to be persisted there or every `review start` below exits
+	// non-zero on an install nobody enabled.
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("candidate\n"), 0o644); err != nil {
 		t.Fatal(err)
@@ -151,6 +155,7 @@ func TestMainBinaryAcceptsCorrectedCandidateFromLinkedWorktree(t *testing.T) {
 	if _, err := os.Stat(binary); err != nil {
 		t.Fatalf("GENTLE_AI_TEST_BINARY: %v", err)
 	}
+	reviewEnabledHome(t)
 
 	t.Run("approves corrected linked worktree", func(t *testing.T) {
 		_, corrected, started := prepareBinaryCorrection(t, binary)
@@ -239,6 +244,7 @@ func TestMainBinaryExecutesSubmissionDescriptorsFromArbitraryCWD(t *testing.T) {
 	if _, err := os.Stat(binary); err != nil {
 		t.Fatalf("GENTLE_AI_TEST_BINARY: %v", err)
 	}
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	outside := t.TempDir()
 	writeBinaryCandidate(t, repo, "wrong")
