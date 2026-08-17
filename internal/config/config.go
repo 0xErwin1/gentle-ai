@@ -116,6 +116,18 @@ type Selection struct {
 	Scope   model.InstallScope   `json:"scope,omitempty"`
 	Channel model.InstallChannel `json:"channel,omitempty"`
 
+	// SkillExclusions remove skills from whatever the selection resolves to,
+	// including the full set an omitted Skills list means. Without them the only
+	// way to drop one skill is to restate every other, which makes the document
+	// carry a copy of gentle-ai's catalogue and go stale the moment it grows.
+	SkillExclusions []model.SkillID `json:"skillExclusions,omitempty"`
+
+	// CodexModelPreset names one of gentle-ai's own Codex model profiles rather
+	// than restating the models and efforts it resolves to. Spelling those out
+	// pins today's matrix into the document, so a profile gentle-ai retunes
+	// stops being the profile the operator asked for.
+	CodexModelPreset string `json:"codexModelPreset,omitempty"`
+
 	// SkillAssignments override the flat skill list for one adapter. An adapter
 	// without an entry takes the flat list, so the simple form keeps meaning
 	// "every adapter" and the map is only needed when they must differ.
@@ -214,10 +226,12 @@ func Normalize(document Document) (DesiredState, []Diagnostic) {
 
 // Project provides the existing planner and installer semantic selection.
 func Project(state DesiredState) model.Selection {
-	return model.Selection{
+	return withCodexModelPreset(model.Selection{
 		Agents:             append([]model.AgentID(nil), state.Selection.Agents...),
 		Components:         append([]model.ComponentID(nil), state.Selection.Components...),
 		Skills:             append([]model.SkillID(nil), state.Selection.Skills...),
+		SkillExclusions:    append([]model.SkillID(nil), state.Selection.SkillExclusions...),
+		CodexModelPreset:   state.Selection.CodexModelPreset,
 		Persona:            state.Selection.Persona,
 		Preset:             state.Selection.Preset,
 		SDDMode:            state.Selection.SDDMode,
@@ -243,6 +257,41 @@ func Project(state DesiredState) model.Selection {
 		MCPServers:                  mcpServersToModel(state.Selection.MCPServers),
 		Permissions:                 permissionsToModel(state.Selection.Permissions),
 		SkillAssignments:            skillAssignmentsToModel(state.Selection.SkillAssignments),
+	})
+}
+
+// withCodexModelPreset materialises a named Codex model profile into the maps
+// the renderers read, leaving anything the document assigned explicitly alone.
+//
+// The profile is kept in the document by name rather than by its resolved
+// values: spelling the values out pins today's matrix, so a profile gentle-ai
+// retunes silently stops being the profile the operator asked for.
+func withCodexModelPreset(selection model.Selection) model.Selection {
+	if selection.CodexModelPreset == "" {
+		return selection
+	}
+
+	if len(selection.CodexModelAssignments) == 0 {
+		selection.CodexModelAssignments = codexPresetEfforts(selection.CodexModelPreset)
+	}
+	if len(selection.CodexCarrilModelAssignments) == 0 {
+		selection.CodexCarrilModelAssignments = model.CodexCarrilModelsForPreset(selection.CodexModelPreset)
+	}
+	if selection.CodexOrchestratorAssignment == nil {
+		selection.CodexOrchestratorAssignment = model.CodexPresetOrchestratorAssignment(selection.CodexModelPreset)
+	}
+
+	return selection
+}
+
+func codexPresetEfforts(preset string) map[string]model.CodexEffort {
+	switch model.CodexPresetKey(preset) {
+	case model.CodexPresetLowCost:
+		return model.CodexModelPresetLowCost()
+	case model.CodexPresetPowerful:
+		return model.CodexModelPresetPowerful()
+	default:
+		return model.CodexModelPresetRecommended()
 	}
 }
 
@@ -250,6 +299,7 @@ func Project(state DesiredState) model.Selection {
 func FromSelection(selection model.Selection) DesiredState {
 	return DesiredState{Version: CurrentVersion, Selection: Selection{
 		Agents: selection.Agents, Components: selection.Components, Skills: selection.Skills,
+		SkillExclusions: selection.SkillExclusions, CodexModelPreset: selection.CodexModelPreset,
 		Persona: selection.Persona, Preset: selection.Preset, SDDMode: selection.SDDMode,
 		SDDProfileStrategy: selection.SDDProfileStrategy, StrictTDD: selection.StrictTDD,
 		Profiles: profilesFromModel(selection.Profiles), BackgroundIntent: selection.BackgroundIntent, PiBackgroundIntent: selection.PiBackgroundIntent,
@@ -355,6 +405,7 @@ func normalizeSelection(selection Selection, diagnostics *[]Diagnostic) Selectio
 	selection.Agents = unique(selection.Agents)
 	selection.Components = unique(selection.Components)
 	selection.Skills = unique(selection.Skills)
+	selection.SkillExclusions = unique(selection.SkillExclusions)
 	selection.CommunityTools = unique(selection.CommunityTools)
 	selection.OpenCodePlugins = unique(selection.OpenCodePlugins)
 
@@ -369,6 +420,29 @@ func normalizeSelection(selection Selection, diagnostics *[]Diagnostic) Selectio
 		case model.OpenCodePluginSubAgentStatusline, model.OpenCodePluginSDDEngramManage, model.OpenCodePluginGentleLogo:
 		default:
 			*diagnostics = append(*diagnostics, diagnostic("config.opencode-plugin.unsupported", "$.selection.openCodePlugins", fmt.Sprintf("unsupported OpenCode plugin %q", plugin)))
+		}
+	}
+
+	known := make(map[model.SkillID]struct{}, len(catalog.MVPSkills()))
+	for _, skill := range catalog.MVPSkills() {
+		known[skill.ID] = struct{}{}
+	}
+	for path, declared := range map[string][]model.SkillID{
+		"$.selection.skills":          selection.Skills,
+		"$.selection.skillExclusions": selection.SkillExclusions,
+	} {
+		for _, skill := range declared {
+			if _, ok := known[skill]; !ok {
+				*diagnostics = append(*diagnostics, diagnostic("config.skill.unsupported", path, fmt.Sprintf("unsupported skill %q", skill)))
+			}
+		}
+	}
+
+	if preset := selection.CodexModelPreset; preset != "" {
+		switch model.CodexPresetKey(preset) {
+		case model.CodexPresetLowCost, model.CodexPresetRecommended, model.CodexPresetPowerful:
+		default:
+			*diagnostics = append(*diagnostics, diagnostic("config.codex-model-preset.unsupported", "$.selection.codexModelPreset", fmt.Sprintf("unsupported Codex model preset %q; use %s, %s or %s", preset, model.CodexPresetLowCost, model.CodexPresetRecommended, model.CodexPresetPowerful)))
 		}
 	}
 
