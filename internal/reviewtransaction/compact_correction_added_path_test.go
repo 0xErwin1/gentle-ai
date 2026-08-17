@@ -277,15 +277,26 @@ func TestCorrectionAddedPathAdmission(t *testing.T) {
 		{path: "internal/widget/tests/widget_test.go", want: true},
 		{path: "internal/tests/widget_test.go", want: true},
 		{path: "src/app/service.spec.ts", want: true},
-		{path: "src/app/__tests__/service.ts", want: true},
+		{path: "src/app/service.test.ts", want: true},
 		{path: "lib/test_calc.py", want: true},
-		{path: "lib/CalcTests.cs", want: true},
+		{path: "lib/calc_test.py", want: true},
 		// Not a test file.
 		{path: "internal/widget/helper.go", want: false},
 		{path: "internal/widget/latest.go", want: false},
 		{path: "internal/widget/testable.go", want: false},
 		{path: "internal/widget/protest.go", want: false},
 		{path: "src/app/service.ts", want: false},
+		// Compilable production source the old table admitted: the pytest
+		// prefix on a Go file, and any name at all inside a directory called
+		// tests. Both ship inside the ordinary package.
+		{path: "internal/widget/test_helper.go", want: false},
+		{path: "internal/widget/tests/helper.go", want: false},
+		{path: "internal/tests/helper.go", want: false},
+		{path: "src/app/__tests__/service.ts", want: false},
+		{path: "lib/tests/helper.py", want: false},
+		// An extension whose toolchain this table cannot decide from a path.
+		{path: "lib/CalcTests.cs", want: false},
+		{path: "internal/widget/tests/notes.md", want: false},
 		// A test file, but no reviewed path it could be evidence about.
 		{path: "cmd/other/main_test.go", want: false},
 		{path: "internal/widget/deep/nested/widget_test.go", want: false},
@@ -295,5 +306,100 @@ func TestCorrectionAddedPathAdmission(t *testing.T) {
 				t.Fatalf("correctionAddedPathAdmissible(%q) = %t, want %t", tt.path, got, tt.want)
 			}
 		})
+	}
+}
+
+// TestCorrectionTestFileNameIsLanguageAware pins the property the whole guard
+// rests on: a name counts as a test only under the discovery rule of the
+// toolchain that owns that exact extension. A convention borrowed from another
+// ecosystem is how compilable production source got in -- test_helper.go
+// carries pytest's prefix and is compiled into the ordinary Go package, and
+// _test.go is the only spelling the Go toolchain itself excludes.
+func TestCorrectionTestFileNameIsLanguageAware(t *testing.T) {
+	for _, tt := range []struct {
+		base string
+		want bool
+	}{
+		// Go: the compiler keys on the _test.go suffix and nothing else.
+		{base: "widget_test.go", want: true},
+		{base: "test_helper.go", want: false},
+		{base: "TestHelper.go", want: false},
+		{base: "helper_spec.go", want: false},
+		{base: "_test.go", want: false},
+		{base: "widget_Test.go", want: false},
+		// Python: pytest discovers test_*.py and *_test.py.
+		{base: "test_calc.py", want: true},
+		{base: "calc_test.py", want: true},
+		{base: "conftest.py", want: false},
+		{base: "calc.spec.py", want: false},
+		// The JS/TS family: the .test/.spec infix every runner defaults to.
+		{base: "service.test.ts", want: true},
+		{base: "service.spec.tsx", want: true},
+		{base: "service.test.mjs", want: true},
+		{base: "service-test.js", want: false},
+		{base: "service.ts", want: false},
+		// Ruby and Elixir.
+		{base: "calc_test.rb", want: true},
+		{base: "calc_spec.rb", want: true},
+		{base: "calc_test.exs", want: true},
+		{base: "calc_test.ex", want: false},
+		// Extensions this table cannot decide from a name: the suffix says
+		// test, the build system ships the file anyway.
+		{base: "CalcTests.cs", want: false},
+		{base: "WidgetTest.java", want: false},
+		{base: "WidgetTest.kt", want: false},
+		{base: "widget_test.rs", want: false},
+		{base: "widget_test.txt", want: false},
+		{base: "widget_test", want: false},
+	} {
+		t.Run(tt.base, func(t *testing.T) {
+			if got := correctionTestFileName(tt.base); got != tt.want {
+				t.Fatalf("correctionTestFileName(%q) = %t, want %t", tt.base, got, tt.want)
+			}
+		})
+	}
+}
+
+// TestCompactCorrectionRefusesGoSourceWithAPytestPrefix is the behaviour-first
+// reproduction of R1-correction-scope-test-prefix. internal/widget/test_helper.go
+// is an ordinary member of package widget: the Go toolchain compiles it into
+// the shipped binary, and only the _test.go SUFFIX excludes a file from that
+// build. Admitting it as a "test file" ships production source no lens
+// inspected inside an approved candidate.
+func TestCompactCorrectionRefusesGoSourceWithAPytestPrefix(t *testing.T) {
+	requireSnapshotGit(t)
+	repo := initSnapshotRepo(t)
+	state := coverageCorrectionFixture(t, repo, "coverage-pytest-prefix", 3)
+	writeSnapshotFile(t, repo, "internal/widget/test_helper.go",
+		"package widget\n\n// Helper ships inside the ordinary package.\nfunc Helper() string {\n\treturn \"shipped\"\n}\n")
+	fix := buildCoverageFix(t, repo, state, "internal/widget/test_helper.go")
+	before := state
+	err := state.CompleteCorrection(fix, 3, passingCoverageValidation(state, fix))
+	if err == nil || !strings.Contains(err.Error(), "internal/widget/test_helper.go") {
+		t.Fatalf("CompleteCorrection(compiled Go source named test_helper.go) = %v, want a refusal naming the path", err)
+	}
+	if state.State != before.State || len(state.CorrectionAttempts) != 0 || len(state.CorrectionAddedPaths) != 0 {
+		t.Fatalf("a refused correction must not mutate the authority: %q", state.State)
+	}
+}
+
+// TestCompactCorrectionRefusesCompiledSourceInATestDirectory is the
+// behaviour-first reproduction of R1-correction-scope-test-directory. A Go
+// directory named tests is an ordinary compiled package, so the file's own
+// name has to decide; a reserved directory segment may never answer for it.
+func TestCompactCorrectionRefusesCompiledSourceInATestDirectory(t *testing.T) {
+	requireSnapshotGit(t)
+	repo := initSnapshotRepo(t)
+	state := coverageCorrectionFixture(t, repo, "coverage-test-directory", 3)
+	writeSnapshotFile(t, repo, "internal/widget/tests/helper.go",
+		"package tests\n\n// Helper is compiled and importable from production code.\nfunc Helper() string {\n\treturn \"shipped\"\n}\n")
+	fix := buildCoverageFix(t, repo, state, "internal/widget/tests/helper.go")
+	before := state
+	err := state.CompleteCorrection(fix, 3, passingCoverageValidation(state, fix))
+	if err == nil || !strings.Contains(err.Error(), "internal/widget/tests/helper.go") {
+		t.Fatalf("CompleteCorrection(compiled Go source under tests/) = %v, want a refusal naming the path", err)
+	}
+	if state.State != before.State || len(state.CorrectionAttempts) != 0 || len(state.CorrectionAddedPaths) != 0 {
+		t.Fatalf("a refused correction must not mutate the authority: %q", state.State)
 	}
 }

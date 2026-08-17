@@ -34,7 +34,8 @@ import (
 // This file narrows the guard instead of removing it. A correction may add a
 // path only when that path is BOTH:
 //
-//  1. recognized as a test path under the closed convention table below, and
+//  1. named the way the toolchain that owns its extension names a test, under
+//     the closed convention table below, and
 //  2. a companion of an already-reviewed genesis path — living in a reviewed
 //     directory, or in a test directory immediately inside or immediately
 //     beside one.
@@ -47,14 +48,34 @@ import (
 // terminal receipt, so an auditor can always see exactly which delivered
 // paths no lens inspected.
 //
-// The honest limit of rule 1 is that "is a test file" is a naming convention
-// in every ecosystem except Go, where the compiler enforces it. The table is
-// deliberately closed and conservative: an unrecognized name is refused, not
-// guessed at, so the failure mode is the status quo (recovery) rather than an
-// unreviewed file slipping into an approved candidate.
+// Rule 1 answers one question and refuses everything it cannot answer: does
+// the toolchain that owns THIS extension treat THIS name as a test, rather
+// than as source it compiles into the shipped package? Two properties follow,
+// and both are load-bearing:
+//
+//   - A convention is never borrowed across ecosystems. pytest's test_ prefix
+//     says nothing about a Go file: only the _test.go suffix keeps a file out
+//     of the ordinary build, so test_helper.go is production source and is
+//     refused. That refusal is the whole point of the guard.
+//   - A directory name never decides for a file. A Go package under a
+//     directory called tests is compiled and importable exactly like any
+//     other, so an ancestor segment may not answer a question about the file.
+//     The reserved directory names below still describe where a test may
+//     LIVE relative to the code it covers (rule 2), never what a file IS.
+//
+// Where the path alone cannot decide the answer, the extension is absent from
+// the table and the addition is refused. Java, Kotlin, C#, and Rust are the
+// deliberate omissions: their test sources are separated by build
+// configuration (a test source root, a separate project, a cargo target)
+// rather than by a name a path can be checked against, so FooTest.java under
+// src/main/java and widget_test.rs under src/ both compile into the shipped
+// artifact. Refusing them costs a recovery, which is the status quo; admitting
+// them would ship unreviewed production code inside an approved candidate.
 
 // correctionTestDirectoryNames is the closed set of directory names a
-// repository conventionally reserves for tests.
+// repository conventionally reserves for tests. It decides only WHERE an
+// admitted test file may live relative to the reviewed code it covers; it
+// never decides whether a file is a test.
 var correctionTestDirectoryNames = map[string]struct{}{
 	"test": {}, "tests": {}, "__tests__": {}, "spec": {}, "specs": {},
 }
@@ -64,49 +85,73 @@ func correctionTestDirectoryName(segment string) bool {
 	return ok
 }
 
-// correctionTestFileName reports whether one base name is a test file under
-// the closed convention table.
+// correctionTestFileConvention is one extension's discovery rule: the stem
+// prefixes and suffixes the toolchain that owns that extension uses to tell a
+// test apart from source it builds into the shipped package.
+type correctionTestFileConvention struct {
+	prefixes []string
+	suffixes []string
+}
+
+// correctionJavaScriptTestConvention is shared by every extension the JS/TS
+// runners treat alike.
+var correctionJavaScriptTestConvention = correctionTestFileConvention{suffixes: []string{".test", ".spec"}}
+
+// correctionTestFileConventions is the closed table. Matching is
+// case-sensitive and extension-exact because every toolchain here matches that
+// way: the go tool ignores a file called widget_Test.go as a test and a file
+// called widget.GO as Go source at all, so anything looser would admit names
+// the toolchain does not.
+var correctionTestFileConventions = map[string]correctionTestFileConvention{
+	// Go: the compiler itself excludes _test.go from the ordinary build. This
+	// is the only entry in the table that is enforced rather than conventional.
+	".go": {suffixes: []string{"_test"}},
+	// Python: pytest's default python_files, test_*.py and *_test.py.
+	".py": {prefixes: []string{"test_"}, suffixes: []string{"_test"}},
+	// Ruby: minitest's test/*_test.rb and RSpec's spec/*_spec.rb.
+	".rb": {suffixes: []string{"_test", "_spec"}},
+	// Elixir: mix test loads *_test.exs, and .exs is never compiled into a
+	// release the way .ex is.
+	".exs": {suffixes: []string{"_test"}},
+	// The JS/TS family: the .test/.spec infix in the default Jest and Vitest
+	// patterns. A -test or -spec dash is deliberately absent: no default
+	// configuration collects it, so those files are bundled as ordinary
+	// modules.
+	".js":  correctionJavaScriptTestConvention,
+	".jsx": correctionJavaScriptTestConvention,
+	".mjs": correctionJavaScriptTestConvention,
+	".cjs": correctionJavaScriptTestConvention,
+	".ts":  correctionJavaScriptTestConvention,
+	".tsx": correctionJavaScriptTestConvention,
+	".mts": correctionJavaScriptTestConvention,
+	".cts": correctionJavaScriptTestConvention,
+}
+
+// correctionTestFileName reports whether one base name is a test file to the
+// toolchain that owns its extension. An unrecognized extension is refused
+// rather than guessed at, so the failure mode is the status quo (recovery)
+// rather than an unreviewed file slipping into an approved candidate.
 func correctionTestFileName(base string) bool {
-	stem := strings.TrimSuffix(base, path.Ext(base))
-	if stem == "" {
+	extension := path.Ext(base)
+	convention, recognized := correctionTestFileConventions[extension]
+	if !recognized {
 		return false
 	}
-	lower := strings.ToLower(stem)
-	// pytest and unittest: test_calc.py.
-	if strings.HasPrefix(lower, "test_") {
-		return true
-	}
-	// Go, Rust, Ruby, Elixir, and the JS/TS family: widget_test.go,
-	// calc_spec.rb, service.test.ts, service.spec.ts, service-test.js.
-	for _, marker := range []string{"_test", "_spec", ".test", ".spec", "-test", "-spec"} {
-		if strings.HasSuffix(lower, marker) {
+	// A stem no longer than the marker it matches is that marker and nothing
+	// else: _test.go names no unit under test, and the go tool ignores a
+	// leading underscore outright.
+	stem := strings.TrimSuffix(base, extension)
+	for _, prefix := range convention.prefixes {
+		if len(stem) > len(prefix) && strings.HasPrefix(stem, prefix) {
 			return true
 		}
 	}
-	// .NET, Java, and Kotlin: CalcTests.cs, WidgetTest.java. The capital T is
-	// load-bearing rather than incidental: it is the CamelCase word boundary
-	// that separates a real suffix from an ordinary word merely ending in the
-	// same letters, so "latest.go" and "protest.go" stay production files.
-	for _, marker := range []string{"Test", "Tests"} {
-		if strings.HasSuffix(stem, marker) && len(stem) > len(marker) {
+	for _, suffix := range convention.suffixes {
+		if len(stem) > len(suffix) && strings.HasSuffix(stem, suffix) {
 			return true
 		}
 	}
 	return false
-}
-
-// correctionTestPath reports whether a repository-relative path is a test
-// path, either by its own name or by living under a recognized test
-// directory.
-func correctionTestPath(candidate string) bool {
-	if directory := path.Dir(candidate); directory != "." {
-		for _, segment := range strings.Split(directory, "/") {
-			if correctionTestDirectoryName(segment) {
-				return true
-			}
-		}
-	}
-	return correctionTestFileName(path.Base(candidate))
 }
 
 // correctionCompanionDirectory reports whether a test living in addedDir is
@@ -128,7 +173,7 @@ func correctionCompanionDirectory(addedDir, genesisDir string) bool {
 // correctionAddedPathAdmissible reports whether one path a correction adds
 // beyond the frozen genesis scope may enter the reviewed candidate.
 func correctionAddedPathAdmissible(added string, genesis []string) bool {
-	if !correctionTestPath(added) {
+	if !correctionTestFileName(path.Base(added)) {
 		return false
 	}
 	directory := path.Dir(added)
