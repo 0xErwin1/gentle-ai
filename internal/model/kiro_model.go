@@ -56,6 +56,33 @@ func KiroModelID(alias KiroModelAlias) string {
 
 // KiroModelPresetBalanced returns the default Kiro-native assignment table.
 // Auto lets Kiro route most phases while keeping archive/onboard lightweight.
+// KiroModelPresetKey names a Kiro model profile, for the same reason as Claude.
+type KiroModelPresetKey string
+
+const (
+	KiroPresetBalanced    KiroModelPresetKey = "balanced"
+	KiroPresetPerformance KiroModelPresetKey = "performance"
+	KiroPresetEconomy     KiroModelPresetKey = "economy"
+	KiroPresetOpenWeight  KiroModelPresetKey = "open-weight"
+)
+
+// KiroModelPresetAssignments resolves a named profile, returning nil for an
+// unknown name so the caller reports it.
+func KiroModelPresetAssignments(preset string) map[string]KiroModelAlias {
+	switch KiroModelPresetKey(preset) {
+	case KiroPresetBalanced:
+		return KiroModelPresetBalanced()
+	case KiroPresetPerformance:
+		return KiroModelPresetPerformance()
+	case KiroPresetEconomy:
+		return KiroModelPresetEconomy()
+	case KiroPresetOpenWeight:
+		return KiroModelPresetOpenWeight()
+	default:
+		return nil
+	}
+}
+
 func KiroModelPresetBalanced() map[string]KiroModelAlias {
 	return map[string]KiroModelAlias{
 		"orchestrator": KiroModelAuto,
