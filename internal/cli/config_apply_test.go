@@ -9,8 +9,8 @@ import (
 	"testing"
 
 	configdomain "github.com/gentleman-programming/gentle-ai/v2/internal/config"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/desiredstate"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/render"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/state"
 )
 
 func TestConfigApplyAndReconcilePersistManagedState(t *testing.T) {
@@ -31,7 +31,7 @@ func TestConfigApplyAndReconcilePersistManagedState(t *testing.T) {
 		t.Fatalf("reconciled settings = %s, want only the renamed target", settings)
 	}
 
-	desired, err := state.ReadDesired(home)
+	desired, err := desiredstate.ReadDesired(home)
 	if err != nil || desired.Roles[0].RenderedName != "writer-v2" {
 		t.Fatalf("persisted desired = %#v, %v", desired, err)
 	}
@@ -39,7 +39,7 @@ func TestConfigApplyAndReconcilePersistManagedState(t *testing.T) {
 	// its size tracks the preset rather than this document. What this test pins
 	// is the ownership the rename produced: the renamed agent is owned and the
 	// old name is gone.
-	manifest, err := state.ReadManifest(home, destination)
+	manifest, err := desiredstate.ReadManifest(home, destination)
 	if err != nil {
 		t.Fatalf("read persisted manifest: %v", err)
 	}
