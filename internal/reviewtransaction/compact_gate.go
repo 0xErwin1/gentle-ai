@@ -76,6 +76,10 @@ func AssessCompactGateTarget(ctx context.Context, repo string, state CompactStat
 		return assessment, nil
 	}
 	snapshot, resolvedPrePR, err := buildCompactLifecycleSnapshot(ctx, repo, request)
+	if err != nil && request.Gate == GatePreCommit && errors.Is(err, errUnbornStagedCandidateEmpty) {
+		assessment.Applicability = CompactGateTargetScopeChanged
+		return assessment, nil
+	}
 	if err != nil {
 		return assessment, fmt.Errorf("build compact gate target: %w", err)
 	}
