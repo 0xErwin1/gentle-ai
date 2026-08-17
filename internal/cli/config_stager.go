@@ -199,6 +199,7 @@ func (stager configurationStager) stageComponentForAdapter(
 			CodexOrchestratorAssignment: selection.CodexOrchestratorAssignment,
 			CodexCarrilModelAssignments: selection.CodexCarrilModelAssignments,
 			CodexModelAssignments:       selection.CodexModelAssignments,
+			SkipRuntimeProbe:            true,
 		})
 
 		return err
