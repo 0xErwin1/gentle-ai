@@ -132,6 +132,35 @@ func ClaudePhaseAssignmentsFromModelPreset(assignments map[string]ClaudeModelAli
 // ClaudeModelPresetBalanced returns the default model assignment table.
 // It balances cost and capability for Claude sub-agents: architecture phases use opus;
 // implementation and validation use sonnet; archiving uses haiku.
+// ClaudeModelPresetKey names a Claude model profile. The names live here rather
+// than in the picker that displays them because the declarative contract has to
+// name the same profiles, and two spellings of one profile would drift.
+type ClaudeModelPresetKey string
+
+const (
+	ClaudePresetBalanced    ClaudeModelPresetKey = "balanced"
+	ClaudePresetPerformance ClaudeModelPresetKey = "performance"
+	ClaudePresetEconomy     ClaudeModelPresetKey = "economy"
+	ClaudePresetDiversity   ClaudeModelPresetKey = "diversity"
+)
+
+// ClaudeModelPresetAssignments resolves a named profile. An unknown name
+// returns nil so the caller reports it rather than silently substituting one.
+func ClaudeModelPresetAssignments(preset string) map[string]ClaudeModelAlias {
+	switch ClaudeModelPresetKey(preset) {
+	case ClaudePresetBalanced:
+		return ClaudeModelPresetBalanced()
+	case ClaudePresetPerformance:
+		return ClaudeModelPresetPerformance()
+	case ClaudePresetEconomy:
+		return ClaudeModelPresetEconomy()
+	case ClaudePresetDiversity:
+		return ClaudeModelPresetDiversity()
+	default:
+		return nil
+	}
+}
+
 func ClaudeModelPresetBalanced() map[string]ClaudeModelAlias {
 	return map[string]ClaudeModelAlias{
 		"orchestrator": ClaudeModelOpus,
