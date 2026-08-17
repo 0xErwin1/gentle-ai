@@ -1,6 +1,9 @@
 package reviewtransaction
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 // The syscall layer that gathers these SIDs is Windows-only and stays
 // compile-only off Windows. The decision made from them is not: it is the part
@@ -227,5 +230,272 @@ func TestRARWindowsRepairOwnerRefusesEveryPrincipalOutsideTheToken(t *testing.T)
 				t.Fatalf("%s accepted foreign owner %s", name, owner)
 			}
 		}
+	}
+}
+
+// ownerOnlyDirectory is exactly what gentle-ai writes for an owner-only RAR
+// directory, as it reads back from Windows: protected DACL, this process's
+// principal as owner, one inheritable access-allowed entry granting that same
+// principal FILE_ALL_ACCESS.
+func ownerOnlyDirectory() rarWindowsOwnerOnlyDescriptor {
+	return rarWindowsOwnerOnlyDescriptor{
+		Readable:      true,
+		Control:       0x9014,
+		DACLPresent:   true,
+		DACLProtected: true,
+		DACLReadable:  true,
+		Owner:         ownerTrustTokenUser,
+		ACECount:      1,
+		ACEs: []rarWindowsOwnerOnlyACE{{
+			AccessAllowed:  true,
+			Flags:          rarWindowsInheritDirectoryACEFlags,
+			Mask:           0x001f01ff,
+			MaskAcceptable: true,
+			SID:            ownerTrustTokenUser,
+		}},
+	}
+}
+
+func withOwnerOnlyDirectory(
+	mutate func(*rarWindowsOwnerOnlyDescriptor),
+) rarWindowsOwnerOnlyDescriptor {
+	observed := ownerOnlyDirectory()
+	mutate(&observed)
+	return observed
+}
+
+func TestRARWindowsOwnerOnlyMismatch(t *testing.T) {
+	tests := []struct {
+		name      string
+		observed  rarWindowsOwnerOnlyDescriptor
+		principal string
+		directory bool
+		accept    bool
+		names     string
+	}{
+		{
+			name:      "the descriptor gentle-ai writes for a directory",
+			observed:  ownerOnlyDirectory(),
+			principal: ownerTrustTokenUser,
+			directory: true,
+			accept:    true,
+		},
+		{
+			name: "a directory still carrying the unmapped generic mask",
+			observed: withOwnerOnlyDirectory(func(observed *rarWindowsOwnerOnlyDescriptor) {
+				observed.ACEs[0].Mask = 0x10000000
+			}),
+			principal: ownerTrustTokenUser,
+			directory: true,
+			accept:    true,
+		},
+		{
+			name: "the descriptor gentle-ai writes for a file",
+			observed: withOwnerOnlyDirectory(func(observed *rarWindowsOwnerOnlyDescriptor) {
+				observed.ACEs[0].Flags = 0
+			}),
+			principal: ownerTrustTokenUser,
+			accept:    true,
+		},
+		{
+			name:      "the descriptor could not be read",
+			observed:  rarWindowsOwnerOnlyDescriptor{},
+			principal: ownerTrustTokenUser,
+			directory: true,
+			names:     "unreadable or invalid",
+		},
+		{
+			name: "no DACL is present",
+			observed: withOwnerOnlyDirectory(func(observed *rarWindowsOwnerOnlyDescriptor) {
+				observed.DACLPresent = false
+			}),
+			principal: ownerTrustTokenUser,
+			directory: true,
+			names:     "no DACL is present",
+		},
+		{
+			name: "the DACL is not protected, so inherited entries survive",
+			observed: withOwnerOnlyDirectory(func(observed *rarWindowsOwnerOnlyDescriptor) {
+				observed.DACLProtected = false
+			}),
+			principal: ownerTrustTokenUser,
+			directory: true,
+			names:     "not protected",
+		},
+		{
+			name:      "this process has no principal to compare against",
+			observed:  ownerOnlyDirectory(),
+			principal: "  ",
+			directory: true,
+			names:     "current Windows user SID is unavailable",
+		},
+		{
+			name: "another principal owns it",
+			observed: withOwnerOnlyDirectory(func(observed *rarWindowsOwnerOnlyDescriptor) {
+				observed.Owner = ownerTrustAdministrators
+			}),
+			principal: ownerTrustTokenUser,
+			directory: true,
+			names:     "the owner is " + ownerTrustAdministrators,
+		},
+		{
+			name: "the owner could not be read",
+			observed: withOwnerOnlyDirectory(func(observed *rarWindowsOwnerOnlyDescriptor) {
+				observed.Owner = ""
+			}),
+			principal: ownerTrustTokenUser,
+			directory: true,
+			names:     "the owner is <unreadable>",
+		},
+		{
+			name: "the DACL is present but unreadable",
+			observed: withOwnerOnlyDirectory(func(observed *rarWindowsOwnerOnlyDescriptor) {
+				observed.DACLReadable = false
+			}),
+			principal: ownerTrustTokenUser,
+			directory: true,
+			names:     "present but unreadable",
+		},
+		{
+			name: "the DACL is defaulted",
+			observed: withOwnerOnlyDirectory(func(observed *rarWindowsOwnerOnlyDescriptor) {
+				observed.DACLDefaulted = true
+			}),
+			principal: ownerTrustTokenUser,
+			directory: true,
+			names:     "defaulted",
+		},
+		{
+			name: "an inherited entry survived alongside ours",
+			observed: withOwnerOnlyDirectory(func(observed *rarWindowsOwnerOnlyDescriptor) {
+				observed.ACECount = 2
+				observed.ACEs = append(observed.ACEs, rarWindowsOwnerOnlyACE{
+					AccessAllowed:  true,
+					Flags:          0x13,
+					Mask:           0x001f01ff,
+					MaskAcceptable: true,
+					SID:            ownerTrustAdministrators,
+				})
+			}),
+			principal: ownerTrustTokenUser,
+			directory: true,
+			names:     "carries 2 entries",
+		},
+		{
+			name: "the DACL is empty",
+			observed: withOwnerOnlyDirectory(func(observed *rarWindowsOwnerOnlyDescriptor) {
+				observed.ACECount = 0
+				observed.ACEs = nil
+			}),
+			principal: ownerTrustTokenUser,
+			directory: true,
+			names:     "carries 0 entries",
+		},
+		{
+			name: "the entry count and the observed entries disagree",
+			observed: withOwnerOnlyDirectory(func(observed *rarWindowsOwnerOnlyDescriptor) {
+				observed.ACEs = nil
+			}),
+			principal: ownerTrustTokenUser,
+			directory: true,
+			names:     "could not be observed",
+		},
+		{
+			name: "the only entry denies rather than allows",
+			observed: withOwnerOnlyDirectory(func(observed *rarWindowsOwnerOnlyDescriptor) {
+				observed.ACEs[0].AccessAllowed = false
+			}),
+			principal: ownerTrustTokenUser,
+			directory: true,
+			names:     "not an access-allowed entry",
+		},
+		{
+			name: "the only entry is malformed",
+			observed: withOwnerOnlyDirectory(func(observed *rarWindowsOwnerOnlyDescriptor) {
+				observed.ACEs[0].Malformed = "the entry is too small to carry a SID"
+			}),
+			principal: ownerTrustTokenUser,
+			directory: true,
+			names:     "too small to carry a SID",
+		},
+		{
+			name: "the entry was marked inherited, so protection did not hold",
+			observed: withOwnerOnlyDirectory(func(observed *rarWindowsOwnerOnlyDescriptor) {
+				observed.ACEs[0].Flags = 0x13
+			}),
+			principal: ownerTrustTokenUser,
+			directory: true,
+			names:     "inheritance flags 0x13, want 0x03",
+		},
+		{
+			name: "a directory entry lost its inheritance flags",
+			observed: withOwnerOnlyDirectory(func(observed *rarWindowsOwnerOnlyDescriptor) {
+				observed.ACEs[0].Flags = 0
+			}),
+			principal: ownerTrustTokenUser,
+			directory: true,
+			names:     "inheritance flags 0x00, want 0x03",
+		},
+		{
+			name:      "a file entry carries directory inheritance flags",
+			observed:  ownerOnlyDirectory(),
+			principal: ownerTrustTokenUser,
+			names:     "inheritance flags 0x03, want 0x00",
+		},
+		{
+			name: "the entry grants less than full access",
+			observed: withOwnerOnlyDirectory(func(observed *rarWindowsOwnerOnlyDescriptor) {
+				observed.ACEs[0].Mask = 0x00120089
+				observed.ACEs[0].MaskAcceptable = false
+			}),
+			principal: ownerTrustTokenUser,
+			directory: true,
+			names:     "grants 0x00120089",
+		},
+		{
+			name: "the entry grants somebody else",
+			observed: withOwnerOnlyDirectory(func(observed *rarWindowsOwnerOnlyDescriptor) {
+				observed.ACEs[0].SID = ownerTrustForeignUser
+			}),
+			principal: ownerTrustTokenUser,
+			directory: true,
+			names:     "entry grants " + ownerTrustForeignUser,
+		},
+		{
+			name: "SID text differing only in case is the same principal",
+			observed: withOwnerOnlyDirectory(func(observed *rarWindowsOwnerOnlyDescriptor) {
+				observed.Owner = strings.ToLower(ownerTrustTokenUser)
+				observed.ACEs[0].SID = strings.ToLower(ownerTrustTokenUser)
+			}),
+			principal: ownerTrustTokenUser,
+			directory: true,
+			accept:    true,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got := rarWindowsOwnerOnlyMismatch(test.observed, test.principal, test.directory)
+			if test.accept {
+				if got != "" {
+					t.Fatalf("descriptor was refused: %s", got)
+				}
+				return
+			}
+			if got == "" {
+				t.Fatal("descriptor was accepted, want a refusal")
+			}
+			if !strings.Contains(got, test.names) {
+				t.Fatalf("refusal %q does not name %q", got, test.names)
+			}
+			// Every refusal carries the whole observation, so one CI round
+			// closes the question instead of one field per round.
+			for _, fact := range []string{"observed control=", "present=", "protected=",
+				"owner=", "entries=", "want owner="} {
+				if !strings.Contains(got, fact) {
+					t.Fatalf("refusal %q does not report %q", got, fact)
+				}
+			}
+		})
 	}
 }

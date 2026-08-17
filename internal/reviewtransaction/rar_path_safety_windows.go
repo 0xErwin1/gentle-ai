@@ -114,9 +114,9 @@ func repairPrivateRARDirectoryNoFollow(path string, _ fs.FileMode) error {
 	if err != nil {
 		return fmt.Errorf("read back the repaired RAR directory descriptor: %w", err)
 	}
-	if !privateRARSecurityDescriptorSafe(repaired, true) {
+	if mismatch := privateRARSecurityDescriptorMismatch(repaired, true); mismatch != "" {
 		return rarWindowsRepairRefusal(path,
-			"the descriptor the repair wrote is still not owner-only")
+			"the descriptor the repair wrote is still not owner-only: "+mismatch)
 	}
 	return nil
 }
@@ -452,59 +452,89 @@ func privateRARSecurityDescriptorSafe(
 	descriptor *windows.SECURITY_DESCRIPTOR,
 	directory bool,
 ) bool {
+	return privateRARSecurityDescriptorMismatch(descriptor, directory) == ""
+}
+
+// privateRARSecurityDescriptorMismatch reduces a live descriptor to the facts
+// the owner-only rule decides from and returns what differs, or "" when it is
+// exactly the descriptor gentle-ai writes. The unsafe pointer arithmetic and
+// the bounds checks that make reading a raw ACE safe stay here; the rule
+// applied to what they find is rarWindowsOwnerOnlyMismatch, which is pure and
+// table-tested on every platform.
+func privateRARSecurityDescriptorMismatch(
+	descriptor *windows.SECURITY_DESCRIPTOR,
+	directory bool,
+) string {
+	principal := ""
+	if currentUser, err := currentRARWindowsUserSID(); err == nil {
+		principal = currentUser.String()
+	}
+	return rarWindowsOwnerOnlyMismatch(
+		observeRARWindowsDescriptor(descriptor), principal, directory)
+}
+
+// rarWindowsObservedACELimit bounds how much of a foreign ACL a refusal
+// copies: the rule needs the entry count and the first entry, never an
+// unbounded walk of somebody else's DACL.
+const rarWindowsObservedACELimit = 4
+
+func observeRARWindowsDescriptor(
+	descriptor *windows.SECURITY_DESCRIPTOR,
+) rarWindowsOwnerOnlyDescriptor {
 	if descriptor == nil || !descriptor.IsValid() {
-		return false
+		return rarWindowsOwnerOnlyDescriptor{}
 	}
 	control, _, err := descriptor.Control()
-	if err != nil || control&windows.SE_DACL_PRESENT == 0 ||
-		control&windows.SE_DACL_PROTECTED == 0 {
-		return false
-	}
-	if !rarSecurityDescriptorOwnedByCurrentUser(descriptor) {
-		return false
-	}
-	currentUser, err := currentRARWindowsUserSID()
 	if err != nil {
-		return false
+		return rarWindowsOwnerOnlyDescriptor{}
 	}
-	dacl, defaulted, err := descriptor.DACL()
-	if err != nil || dacl == nil || defaulted || dacl.AceCount != 1 {
-		return false
+	observed := rarWindowsOwnerOnlyDescriptor{
+		Readable:      true,
+		Control:       uint16(control),
+		DACLPresent:   control&windows.SE_DACL_PRESENT != 0,
+		DACLProtected: control&windows.SE_DACL_PROTECTED != 0,
 	}
+	if owner, _, ownerErr := descriptor.Owner(); ownerErr == nil &&
+		owner != nil && owner.IsValid() {
+		observed.Owner = owner.String()
+	}
+	dacl, defaulted, daclErr := descriptor.DACL()
+	observed.DACLDefaulted = defaulted
+	if daclErr != nil || dacl == nil {
+		return observed
+	}
+	observed.DACLReadable = true
+	observed.ACECount = int(dacl.AceCount)
+	for index := 0; index < observed.ACECount && index < rarWindowsObservedACELimit; index++ {
+		observed.ACEs = append(observed.ACEs, observeRARWindowsACE(dacl, uint32(index)))
+	}
+	return observed
+}
+
+func observeRARWindowsACE(dacl *windows.ACL, index uint32) rarWindowsOwnerOnlyACE {
 	var ace *windows.ACCESS_ALLOWED_ACE
-	if err := windows.GetAce(dacl, 0, &ace); err != nil || ace == nil ||
-		ace.Header.AceType != windows.ACCESS_ALLOWED_ACE_TYPE {
-		return false
+	if err := windows.GetAce(dacl, index, &ace); err != nil || ace == nil {
+		return rarWindowsOwnerOnlyACE{Malformed: "the entry could not be read"}
 	}
-	wantFlags := uint8(0)
-	if directory {
-		wantFlags = windows.OBJECT_INHERIT_ACE | windows.CONTAINER_INHERIT_ACE
-	}
-	if ace.Header.AceFlags != wantFlags || !ownerOnlyRARWindowsAccessMask(ace.Mask) {
-		return false
+	observed := rarWindowsOwnerOnlyACE{
+		AccessAllowed:  ace.Header.AceType == windows.ACCESS_ALLOWED_ACE_TYPE,
+		Flags:          ace.Header.AceFlags,
+		Mask:           uint32(ace.Mask),
+		MaskAcceptable: ownerOnlyRARWindowsAccessMask(ace.Mask),
 	}
 	const sidOffset = unsafe.Offsetof(windows.ACCESS_ALLOWED_ACE{}.SidStart)
 	if uintptr(ace.Header.AceSize) < sidOffset+unsafe.Sizeof(ace.SidStart) {
-		return false
+		observed.Malformed = "the entry is too small to carry a SID"
+		return observed
 	}
 	aceSID := (*windows.SID)(unsafe.Pointer(&ace.SidStart))
-	return aceSID.IsValid() &&
-		uintptr(ace.Header.AceSize) >= sidOffset+uintptr(aceSID.Len()) &&
-		aceSID.Equals(currentUser)
-}
-
-func rarSecurityDescriptorOwnedByCurrentUser(
-	descriptor *windows.SECURITY_DESCRIPTOR,
-) bool {
-	if descriptor == nil || !descriptor.IsValid() {
-		return false
+	if !aceSID.IsValid() ||
+		uintptr(ace.Header.AceSize) < sidOffset+uintptr(aceSID.Len()) {
+		observed.Malformed = "the entry carries an invalid or oversized SID"
+		return observed
 	}
-	owner, _, err := descriptor.Owner()
-	if err != nil || owner == nil || !owner.IsValid() {
-		return false
-	}
-	currentUser, err := currentRARWindowsUserSID()
-	return err == nil && owner.Equals(currentUser)
+	observed.SID = aceSID.String()
+	return observed
 }
 
 func rarSharedSecurityDescriptorOwnedByCurrentProcess(
@@ -611,8 +641,20 @@ func ownerOnlyRARSecurityDescriptor(directory bool) (*windows.SECURITY_DESCRIPTO
 	if directory {
 		inheritance = "OICI"
 	}
+	// FA (FILE_ALL_ACCESS), not GA (GENERIC_ALL). The two grant the identical
+	// access set on a file object -- GENERIC_ALL maps to exactly FILE_ALL_ACCESS
+	// under the file generic mapping, which is why the readback rule accepts
+	// both and why every directory already on disk stays valid. What changes is
+	// that Windows no longer has to transform the ACL it is handed. Mapping
+	// generic rights is the one transformation the kernel is documented to
+	// apply to a supplied ACL, and it is applied by a different code path for
+	// CreateDirectory's SeAssignSecurity than for SetSecurityInfo's
+	// auto-inherit conversion. The create path demonstrably produces a DACL
+	// this rule accepts; the repair path writes the same ACL through the other
+	// one and its readback is what refuses. Handing both paths an already
+	// specific mask removes that asymmetry from the question entirely.
 	descriptor, err := windows.SecurityDescriptorFromString(
-		"O:" + sid + "D:P(A;" + inheritance + ";GA;;;" + sid + ")",
+		"O:" + sid + "D:P(A;" + inheritance + ";FA;;;" + sid + ")",
 	)
 	if err != nil || descriptor == nil || !descriptor.IsValid() {
 		if err != nil {
