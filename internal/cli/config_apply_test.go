@@ -96,7 +96,9 @@ func TestConfigApplyRejectsInvalidInputAndRollsBackPersistenceFailure(t *testing
 			if test.wantErr != "" && (err == nil || !strings.Contains(err.Error(), test.wantErr)) {
 				t.Fatalf("RunConfig(apply) error = %v, want %q", err, test.wantErr)
 			}
-			if test.wantOutput != "" && (err != nil || !strings.Contains(output.String(), test.wantOutput)) {
+			// A rejected document reports its diagnostics and then fails, so the
+			// output is asserted on a run that also returns an error.
+			if test.wantOutput != "" && !strings.Contains(output.String(), test.wantOutput) {
 				t.Fatalf("RunConfig(apply) output/error = %s/%v, want %q", output.String(), err, test.wantOutput)
 			}
 
