@@ -19,7 +19,18 @@ const (
 
 type Severity string
 
-const Error Severity = "error"
+const (
+	// Error rejects the document: it declares something that cannot be
+	// delivered, so acting on it would produce an installation the operator did
+	// not ask for.
+	Error Severity = "error"
+
+	// Warning delivers the document and reports what part of it one adapter
+	// could not take. Rejecting instead would make a capability that varies by
+	// adapter unusable the moment an installation has more than one client,
+	// while staying silent is the failure this severity exists to prevent.
+	Warning Severity = "warning"
+)
 
 type Diagnostic struct {
 	Code     string   `json:"code"`
