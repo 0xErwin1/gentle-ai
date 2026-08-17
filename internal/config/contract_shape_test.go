@@ -93,7 +93,7 @@ var userKeyedContainers = []string{
 	"mcpServers", "env", "modelAssignments", "claudeModelAssignments",
 	"kiroModelAssignments", "codexModelAssignments", "codexCarrilModelAssignments",
 	"codexPhaseModelAssignments", "claudePhaseAssignments", "phaseAssignments",
-	"skillAssignments", "extensions",
+	"skillAssignments", "extensions", "modelPresets",
 }
 
 func userKeyed(path string) bool {
@@ -149,7 +149,7 @@ func fullyPopulatedDocument() Document {
 			Components:         []model.ComponentID{model.ComponentEngram},
 			Skills:             []model.SkillID{model.SkillSDDApply},
 			SkillExclusions:    []model.SkillID{model.SkillGoTesting},
-			CodexModelPreset:   string(model.CodexPresetRecommended),
+			ModelPresets:       map[string]string{"codex": string(model.CodexPresetRecommended)},
 			Persona:            model.PersonaGentleman,
 			Preset:             model.PresetFullGentleman,
 			SDDMode:            model.SDDModeSingle,

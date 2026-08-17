@@ -12,11 +12,14 @@ import (
 type KiroModelPreset string
 
 const (
-	KiroPresetBalanced    KiroModelPreset = "balanced"
-	KiroPresetPerformance KiroModelPreset = "performance"
-	KiroPresetEconomy     KiroModelPreset = "economy"
-	KiroPresetOpenWeight  KiroModelPreset = "open-weight"
-	KiroPresetCustom      KiroModelPreset = "custom"
+	KiroPresetBalanced    KiroModelPreset = KiroModelPreset(model.KiroPresetBalanced)
+	KiroPresetPerformance KiroModelPreset = KiroModelPreset(model.KiroPresetPerformance)
+	KiroPresetEconomy     KiroModelPreset = KiroModelPreset(model.KiroPresetEconomy)
+	KiroPresetOpenWeight  KiroModelPreset = KiroModelPreset(model.KiroPresetOpenWeight)
+
+	// Custom is a picker mode rather than a profile, so it has no counterpart
+	// in the contract: a document states the assignments it wants directly.
+	KiroPresetCustom KiroModelPreset = "custom"
 )
 
 var kiroPresetDescriptions = map[KiroModelPreset]string{

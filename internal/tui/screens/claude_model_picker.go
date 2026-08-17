@@ -12,11 +12,14 @@ import (
 type ClaudeModelPreset string
 
 const (
-	ClaudePresetBalanced    ClaudeModelPreset = "balanced"
-	ClaudePresetPerformance ClaudeModelPreset = "performance"
-	ClaudePresetEconomy     ClaudeModelPreset = "economy"
-	ClaudePresetDiversity   ClaudeModelPreset = "diversity"
-	ClaudePresetCustom      ClaudeModelPreset = "custom"
+	ClaudePresetBalanced    ClaudeModelPreset = ClaudeModelPreset(model.ClaudePresetBalanced)
+	ClaudePresetPerformance ClaudeModelPreset = ClaudeModelPreset(model.ClaudePresetPerformance)
+	ClaudePresetEconomy     ClaudeModelPreset = ClaudeModelPreset(model.ClaudePresetEconomy)
+	ClaudePresetDiversity   ClaudeModelPreset = ClaudeModelPreset(model.ClaudePresetDiversity)
+
+	// Custom is a picker mode rather than a profile, so it has no counterpart
+	// in the contract: a document states the assignments it wants directly.
+	ClaudePresetCustom ClaudeModelPreset = "custom"
 )
 
 // claudePresetDescriptions describes each preset.
