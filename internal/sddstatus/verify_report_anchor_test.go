@@ -216,10 +216,13 @@ func TestBoundArchiveGateAttestsPostReviewReportThroughAnAliasedWorkspace(t *tes
 	if err := os.MkdirAll(root, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Symlink(root, filepath.Join(base, "alias")); err != nil {
-		t.Fatal(err)
-	}
+	// Creating a directory symlink needs SeCreateSymbolicLinkPrivilege or
+	// Developer Mode on Windows, so the aliased spelling is not creatable for
+	// every test process. Where it is not, only the subtest that needs it skips
+	// by name; the canonical spelling still runs, and the aliased reproduction
+	// still runs wherever symlinks are available.
 	alias := filepath.Join(base, "alias")
+	aliasErr := os.Symlink(root, alias)
 
 	changeRoot := seedReadyChange(t, root, change, "- [x] 1.1 Done\n")
 	verifyPath := filepath.Join(changeRoot, "verify-report.md")
@@ -252,13 +255,17 @@ func TestBoundArchiveGateAttestsPostReviewReportThroughAnAliasedWorkspace(t *tes
 	}
 
 	for _, spelling := range []struct {
-		name string
-		cwd  string
+		name     string
+		cwd      string
+		aliasErr error
 	}{
 		{name: "canonical workspace", cwd: root},
-		{name: "aliased workspace", cwd: alias},
+		{name: "aliased workspace", cwd: alias, aliasErr: aliasErr},
 	} {
 		t.Run(spelling.name, func(t *testing.T) {
+			if spelling.aliasErr != nil {
+				t.Skipf("creating a directory symlink is unavailable, so this spelling cannot be built (Windows requires SeCreateSymbolicLinkPrivilege or Developer Mode): %v", spelling.aliasErr)
+			}
 			settled, err := Resolve(ResolveOptions{CWD: spelling.cwd, ChangeName: change})
 			if err != nil {
 				t.Fatal(err)
