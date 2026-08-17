@@ -365,9 +365,16 @@ func mcpServersFromModel(servers map[string]model.MCPServer) map[string]MCPServe
 // validateMCPServers rejects a server that declares neither a way to reach it
 // nor both ways at once, because either leaves the adapter guessing.
 func validateMCPServers(selection Selection, diagnostics *[]Diagnostic) {
-	for _, name := range sortedKeys(selection.MCPServers) {
-		server := selection.MCPServers[name]
-		path := "$.selection.mcpServers." + name
+	validateMCPServerSet(selection.MCPServers, "$.selection.mcpServers", diagnostics)
+}
+
+// validateMCPServerSet checks one set of servers, so the flat set and every
+// per-adapter override are held to the same rule rather than the override
+// escaping the check the flat one gets.
+func validateMCPServerSet(servers map[string]MCPServer, prefix string, diagnostics *[]Diagnostic) {
+	for _, name := range sortedKeys(servers) {
+		server := servers[name]
+		path := prefix + "." + name
 
 		switch {
 		case server.Command == "" && server.URL == "":
@@ -376,6 +383,32 @@ func validateMCPServers(selection Selection, diagnostics *[]Diagnostic) {
 			*diagnostics = append(*diagnostics, diagnostic("config.mcp-server.ambiguous", path, "an MCP server declares either a command or a url, not both"))
 		}
 	}
+}
+
+func mcpAssignmentsToModel(assignments map[string]map[string]MCPServer) map[model.AgentID]map[string]model.MCPServer {
+	if len(assignments) == 0 {
+		return nil
+	}
+
+	projected := make(map[model.AgentID]map[string]model.MCPServer, len(assignments))
+	for adapter, servers := range assignments {
+		projected[model.AgentID(adapter)] = mcpServersToModel(servers)
+	}
+
+	return projected
+}
+
+func mcpAssignmentsFromModel(assignments map[model.AgentID]map[string]model.MCPServer) map[string]map[string]MCPServer {
+	if len(assignments) == 0 {
+		return nil
+	}
+
+	restored := make(map[string]map[string]MCPServer, len(assignments))
+	for adapter, servers := range assignments {
+		restored[string(adapter)] = mcpServersFromModel(servers)
+	}
+
+	return restored
 }
 
 // Permissions is the contract form of declared permission rules.

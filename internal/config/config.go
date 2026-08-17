@@ -143,6 +143,12 @@ type Selection struct {
 	// them, so declaring an allowance never quietly removes a shipped deny.
 	Permissions *Permissions `json:"permissions,omitempty"`
 
+	// MCPServerAssignments override the flat server set for one adapter. A
+	// client identifies itself to some servers, and an installation rarely gives
+	// every client the same tools, so an adapter named here takes its own set
+	// and the others keep the flat one.
+	MCPServerAssignments map[string]map[string]MCPServer `json:"mcpServerAssignments,omitempty"`
+
 	// MCPServers are keyed by server name. A local server runs a command; a
 	// remote one is reached at a URL. Declaring both is rejected rather than
 	// silently preferring one.
@@ -263,6 +269,7 @@ func Project(state DesiredState) model.Selection {
 		MCPServers:                  mcpServersToModel(state.Selection.MCPServers),
 		Permissions:                 permissionsToModel(state.Selection.Permissions),
 		SkillAssignments:            skillAssignmentsToModel(state.Selection.SkillAssignments),
+		MCPServerAssignments:        mcpAssignmentsToModel(state.Selection.MCPServerAssignments),
 	})
 }
 
@@ -416,6 +423,7 @@ func normalizeSelection(selection Selection, diagnostics *[]Diagnostic) Selectio
 
 	validateMCPServers(selection, diagnostics)
 	validateSkillAssignments(selection, diagnostics)
+	validateMCPAssignments(selection, diagnostics)
 	validateAssignments(selection, diagnostics)
 	validateStructuredAssignments(selection, diagnostics)
 
@@ -536,6 +544,27 @@ func validateModelPresets(selection Selection, diagnostics *[]Diagnostic) {
 		if !slices.Contains(known, preset) {
 			*diagnostics = append(*diagnostics, diagnostic("config.model-preset.unsupported", path, fmt.Sprintf("unsupported %s model profile %q; use %s", provider, preset, strings.Join(known, ", "))))
 		}
+	}
+}
+
+func validateMCPAssignments(selection Selection, diagnostics *[]Diagnostic) {
+	declared := make(map[string]struct{}, len(selection.Agents))
+	for _, agent := range selection.Agents {
+		declared[string(agent)] = struct{}{}
+	}
+
+	adapters := make([]string, 0, len(selection.MCPServerAssignments))
+	for adapter := range selection.MCPServerAssignments {
+		adapters = append(adapters, adapter)
+	}
+	sort.Strings(adapters)
+
+	for _, adapter := range adapters {
+		if _, ok := declared[adapter]; !ok {
+			*diagnostics = append(*diagnostics, diagnostic("config.mcp-assignment.undeclared-adapter", "$.selection.mcpServerAssignments."+adapter, fmt.Sprintf("adapter %q takes MCP servers but is not declared; add it to agents or remove the assignment", adapter)))
+			continue
+		}
+		validateMCPServerSet(selection.MCPServerAssignments[adapter], "$.selection.mcpServerAssignments."+adapter, diagnostics)
 	}
 }
 
