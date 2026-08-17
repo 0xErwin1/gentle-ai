@@ -48,7 +48,7 @@ type InstallState struct {
 	Components             []model.ComponentID `json:"components,omitempty"`
 	Skills                 []model.SkillID     `json:"skills,omitempty"`
 	SkillExclusions        []model.SkillID     `json:"skill_exclusions,omitempty"`
-	CodexModelPreset       string              `json:"codex_model_preset,omitempty"`
+	ModelPresets           map[string]string   `json:"model_presets,omitempty"`
 	Preset                 model.PresetID      `json:"preset,omitempty"`
 	SDDMode                model.SDDModeID     `json:"sdd_mode,omitempty"`
 	StrictTDD              bool                `json:"strict_tdd,omitempty"`
@@ -190,7 +190,7 @@ func (s *InstallState) SetSelection(selection model.Selection) {
 	s.Components = append([]model.ComponentID(nil), selection.Components...)
 	s.Skills = append([]model.SkillID(nil), selection.Skills...)
 	s.SkillExclusions = append([]model.SkillID(nil), selection.SkillExclusions...)
-	s.CodexModelPreset = selection.CodexModelPreset
+	s.ModelPresets = selection.ModelPresets
 	s.Preset, s.SDDMode, s.StrictTDD = selection.Preset, selection.SDDMode, selection.StrictTDD
 }
 
@@ -201,7 +201,7 @@ func (s InstallState) RestoreSelection(selection *model.Selection) {
 	selection.Components = append([]model.ComponentID(nil), s.Components...)
 	selection.Skills = append([]model.SkillID(nil), s.Skills...)
 	selection.SkillExclusions = append([]model.SkillID(nil), s.SkillExclusions...)
-	selection.CodexModelPreset = s.CodexModelPreset
+	selection.ModelPresets = s.ModelPresets
 	selection.Preset, selection.SDDMode, selection.StrictTDD = s.Preset, s.SDDMode, s.StrictTDD
 }
 
@@ -239,7 +239,7 @@ func MergeAgents(existing InstallState, newAgents []string) InstallState {
 		Components:                  existing.Components,
 		Skills:                      existing.Skills,
 		SkillExclusions:             existing.SkillExclusions,
-		CodexModelPreset:            existing.CodexModelPreset,
+		ModelPresets:                existing.ModelPresets,
 		Preset:                      existing.Preset,
 		SDDMode:                     existing.SDDMode,
 		StrictTDD:                   existing.StrictTDD,

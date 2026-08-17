@@ -6,7 +6,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"slices"
 	"sort"
+	"strings"
 
 	"github.com/gentleman-programming/gentle-ai/v2/internal/catalog"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
@@ -122,11 +124,15 @@ type Selection struct {
 	// carry a copy of gentle-ai's catalogue and go stale the moment it grows.
 	SkillExclusions []model.SkillID `json:"skillExclusions,omitempty"`
 
-	// CodexModelPreset names one of gentle-ai's own Codex model profiles rather
-	// than restating the models and efforts it resolves to. Spelling those out
-	// pins today's matrix into the document, so a profile gentle-ai retunes
-	// stops being the profile the operator asked for.
-	CodexModelPreset string `json:"codexModelPreset,omitempty"`
+	// ModelPresets name one of gentle-ai's own model profiles per provider,
+	// rather than restating the models and efforts each resolves to. Spelling
+	// those out pins today's matrix into the document, so a profile gentle-ai
+	// retunes stops being the profile the operator asked for.
+	//
+	// The map is keyed by provider because subscriptions are: an operator can
+	// afford the expensive tier on one client and wants the cheap one on
+	// another, which a single global profile cannot say.
+	ModelPresets map[string]string `json:"modelPresets,omitempty"`
 
 	// SkillAssignments override the flat skill list for one adapter. An adapter
 	// without an entry takes the flat list, so the simple form keeps meaning
@@ -226,12 +232,12 @@ func Normalize(document Document) (DesiredState, []Diagnostic) {
 
 // Project provides the existing planner and installer semantic selection.
 func Project(state DesiredState) model.Selection {
-	return withCodexModelPreset(model.Selection{
+	return withModelPresets(model.Selection{
 		Agents:             append([]model.AgentID(nil), state.Selection.Agents...),
 		Components:         append([]model.ComponentID(nil), state.Selection.Components...),
 		Skills:             append([]model.SkillID(nil), state.Selection.Skills...),
 		SkillExclusions:    append([]model.SkillID(nil), state.Selection.SkillExclusions...),
-		CodexModelPreset:   state.Selection.CodexModelPreset,
+		ModelPresets:       copyStringMap(state.Selection.ModelPresets),
 		Persona:            state.Selection.Persona,
 		Preset:             state.Selection.Preset,
 		SDDMode:            state.Selection.SDDMode,
@@ -260,25 +266,36 @@ func Project(state DesiredState) model.Selection {
 	})
 }
 
-// withCodexModelPreset materialises a named Codex model profile into the maps
-// the renderers read, leaving anything the document assigned explicitly alone.
+// withModelPresets materialises each named profile into the maps the renderers
+// read, leaving anything the document assigned explicitly alone.
 //
-// The profile is kept in the document by name rather than by its resolved
-// values: spelling the values out pins today's matrix, so a profile gentle-ai
-// retunes silently stops being the profile the operator asked for.
-func withCodexModelPreset(selection model.Selection) model.Selection {
-	if selection.CodexModelPreset == "" {
-		return selection
-	}
+// A profile is kept in the document by name rather than by its resolved values:
+// spelling the values out pins today's matrix, so a profile gentle-ai retunes
+// silently stops being the profile the operator asked for.
+func withModelPresets(selection model.Selection) model.Selection {
+	for provider, preset := range selection.ModelPresets {
+		switch model.AgentID(provider) {
+		case model.AgentClaudeCode:
+			if len(selection.ClaudeModelAssignments) == 0 {
+				selection.ClaudeModelAssignments = model.ClaudeModelPresetAssignments(preset)
+			}
 
-	if len(selection.CodexModelAssignments) == 0 {
-		selection.CodexModelAssignments = codexPresetEfforts(selection.CodexModelPreset)
-	}
-	if len(selection.CodexCarrilModelAssignments) == 0 {
-		selection.CodexCarrilModelAssignments = model.CodexCarrilModelsForPreset(selection.CodexModelPreset)
-	}
-	if selection.CodexOrchestratorAssignment == nil {
-		selection.CodexOrchestratorAssignment = model.CodexPresetOrchestratorAssignment(selection.CodexModelPreset)
+		case model.AgentKiroIDE:
+			if len(selection.KiroModelAssignments) == 0 {
+				selection.KiroModelAssignments = model.KiroModelPresetAssignments(preset)
+			}
+
+		case model.AgentCodex:
+			if len(selection.CodexModelAssignments) == 0 {
+				selection.CodexModelAssignments = codexPresetEfforts(preset)
+			}
+			if len(selection.CodexCarrilModelAssignments) == 0 {
+				selection.CodexCarrilModelAssignments = model.CodexCarrilModelsForPreset(preset)
+			}
+			if selection.CodexOrchestratorAssignment == nil {
+				selection.CodexOrchestratorAssignment = model.CodexPresetOrchestratorAssignment(preset)
+			}
+		}
 	}
 
 	return selection
@@ -299,7 +316,7 @@ func codexPresetEfforts(preset string) map[string]model.CodexEffort {
 func FromSelection(selection model.Selection) DesiredState {
 	return DesiredState{Version: CurrentVersion, Selection: Selection{
 		Agents: selection.Agents, Components: selection.Components, Skills: selection.Skills,
-		SkillExclusions: selection.SkillExclusions, CodexModelPreset: selection.CodexModelPreset,
+		SkillExclusions: selection.SkillExclusions, ModelPresets: copyStringMap(selection.ModelPresets),
 		Persona: selection.Persona, Preset: selection.Preset, SDDMode: selection.SDDMode,
 		SDDProfileStrategy: selection.SDDProfileStrategy, StrictTDD: selection.StrictTDD,
 		Profiles: profilesFromModel(selection.Profiles), BackgroundIntent: selection.BackgroundIntent, PiBackgroundIntent: selection.PiBackgroundIntent,
@@ -438,13 +455,7 @@ func normalizeSelection(selection Selection, diagnostics *[]Diagnostic) Selectio
 		}
 	}
 
-	if preset := selection.CodexModelPreset; preset != "" {
-		switch model.CodexPresetKey(preset) {
-		case model.CodexPresetLowCost, model.CodexPresetRecommended, model.CodexPresetPowerful:
-		default:
-			*diagnostics = append(*diagnostics, diagnostic("config.codex-model-preset.unsupported", "$.selection.codexModelPreset", fmt.Sprintf("unsupported Codex model preset %q; use %s, %s or %s", preset, model.CodexPresetLowCost, model.CodexPresetRecommended, model.CodexPresetPowerful)))
-		}
-	}
+	validateModelPresets(selection, diagnostics)
 
 	for _, agent := range selection.Agents {
 		if !catalog.IsSupportedAgent(agent) {
@@ -484,6 +495,46 @@ func validateExtensions(state Document, diagnostics *[]Diagnostic) {
 	for _, provider := range providers {
 		if _, ok := declared[provider]; !ok {
 			*diagnostics = append(*diagnostics, diagnostic("config.extension.undeclared-provider", "$.extensions."+provider, fmt.Sprintf("extension targets provider %q, which the document does not declare; add it to agents or remove the extension", provider)))
+		}
+	}
+}
+
+// modelPresetNames are the profiles each provider offers. A provider absent
+// from this table expresses no profile at all: its models are assigned
+// directly, and naming one for it would look configured and do nothing.
+var modelPresetNames = map[model.AgentID][]string{
+	model.AgentClaudeCode: {
+		string(model.ClaudePresetBalanced), string(model.ClaudePresetPerformance),
+		string(model.ClaudePresetEconomy), string(model.ClaudePresetDiversity),
+	},
+	model.AgentKiroIDE: {
+		string(model.KiroPresetBalanced), string(model.KiroPresetPerformance),
+		string(model.KiroPresetEconomy), string(model.KiroPresetOpenWeight),
+	},
+	model.AgentCodex: {
+		string(model.CodexPresetLowCost), string(model.CodexPresetRecommended),
+		string(model.CodexPresetPowerful),
+	},
+}
+
+func validateModelPresets(selection Selection, diagnostics *[]Diagnostic) {
+	providers := make([]string, 0, len(selection.ModelPresets))
+	for provider := range selection.ModelPresets {
+		providers = append(providers, provider)
+	}
+	sort.Strings(providers)
+
+	for _, provider := range providers {
+		path := "$.selection.modelPresets." + provider
+		known, offered := modelPresetNames[model.AgentID(provider)]
+		if !offered {
+			*diagnostics = append(*diagnostics, diagnostic("config.model-preset.unsupported-provider", path, fmt.Sprintf("provider %q offers no model profiles; assign its models directly", provider)))
+			continue
+		}
+
+		preset := selection.ModelPresets[provider]
+		if !slices.Contains(known, preset) {
+			*diagnostics = append(*diagnostics, diagnostic("config.model-preset.unsupported", path, fmt.Sprintf("unsupported %s model profile %q; use %s", provider, preset, strings.Join(known, ", "))))
 		}
 	}
 }

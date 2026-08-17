@@ -402,6 +402,21 @@ func permissionsFromModel(permissions *model.Permissions) *Permissions {
 	}
 }
 
+// copyStringMap detaches a decoded map so a later mutation of the projection
+// cannot reach back into the document it came from.
+func copyStringMap(values map[string]string) map[string]string {
+	if len(values) == 0 {
+		return nil
+	}
+
+	copied := make(map[string]string, len(values))
+	for key, value := range values {
+		copied[key] = value
+	}
+
+	return copied
+}
+
 func skillAssignmentsToModel(assignments map[string][]model.SkillID) map[model.AgentID][]model.SkillID {
 	if assignments == nil {
 		return nil
