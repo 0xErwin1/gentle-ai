@@ -1126,15 +1126,16 @@ func tuiReviewStoreSurvey() (reviewtransaction.StoreResetReport, error) {
 	if err != nil {
 		return reviewtransaction.StoreResetReport{}, err
 	}
-	return reviewtransaction.SurveyReviewStore(context.Background(), cwd)
+	return reviewtransaction.SurveyReviewStore(context.Background(), cwd, reviewtransaction.StoreResetRequest{})
 }
 
 // tuiReviewStoreReset applies the reset for that same clone.
 //
-// It never sets IncludeInFlight. The TUI has no keystroke that destroys a
-// review somebody is in the middle of: the confirmation screen refuses outright
-// and prints the CLI invocation that overrides it, so the override stays an act
-// the user has to type out.
+// It never sets IncludeInFlight, and never sets IncludeAdapterReviews either.
+// The TUI has no keystroke that destroys a review somebody is in the middle of,
+// nor one that destroys a store this command cannot classify: the confirmation
+// screen refuses outright and prints the CLI invocation that overrides it, so
+// every override stays an act the user has to type out.
 func tuiReviewStoreReset() (reviewtransaction.StoreResetReport, error) {
 	cwd, err := os.Getwd()
 	if err != nil {

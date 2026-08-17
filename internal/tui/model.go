@@ -958,12 +958,19 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.OperationRunning = false
 		m.ReviewStoreResetReport = msg.Report
 		m.ReviewStoreResetSurveyErr = msg.Err
-		m.Cursor = 0
+		// The cursor lands on the non-destructive option. Reaching this
+		// screen already costs one Enter from the main menu, so a cursor
+		// resting on "Delete permanently" would make an irreversible
+		// clone-wide removal the second keystroke of a two-keystroke
+		// sequence -- while the CLI equivalent requires typing --confirm.
+		m.Cursor = screens.ReviewStoreResetConfirmDefaultCursor(msg.Report, msg.Err)
 		return m, nil
 	case ReviewStoreResetDoneMsg:
-		if m.Screen != ScreenReviewStoreResetConfirm {
-			return m, nil
-		}
+		// Deliberately not guarded on the current screen. This message reports
+		// an irreversible removal that has already happened; dropping it
+		// because the model moved on would leave the user with a destroyed
+		// store and no statement that anything occurred, which is the one
+		// outcome this flow must never produce.
 		m.OperationRunning = false
 		m.ReviewStoreResetReport = msg.Report
 		m.ReviewStoreResetErr = msg.Err

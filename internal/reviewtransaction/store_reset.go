@@ -42,6 +42,14 @@ import (
 // Honest accounting beats a clean-looking report. Bytes are counted as freed
 // only after they are actually gone. A category that could not be moved is
 // reported with its reason, is not counted, and makes the whole run incomplete.
+//
+// A fourth rule follows from the third. The safety this command advertises --
+// the exclusive maintenance lease and the in-flight refusal -- only covers the
+// state gentle-ai itself writes. A category outside that coverage cannot be
+// removed by a default run no matter how dead it looks, because "we could not
+// find a live writer" is not the same claim as "there is no live writer". Such
+// a category is spared, reported under Preserved with the coverage it lacks,
+// and removed only when the caller names it (storeResetTarget.optIn).
 
 // StoreResetReportSchema identifies the clone-scoped review store reset
 // projection.
@@ -54,10 +62,25 @@ const (
 	StoreResetApplied = "reset"
 )
 
-// storeResetLockTimeout bounds the exclusive maintenance lease. A reset that
-// cannot get the lease promptly is competing with a live review, and waiting
-// longer only makes the collision worse.
-const storeResetLockTimeout = 30 * time.Second
+// storeResetLockTimeout is the context deadline this command hands to
+// AcquireReviewMaintenanceExclusive. It is not an independent waiting budget,
+// and reading it as one is how the previous 30s literal came to describe
+// behavior that never happened: the acquisition applies maintenanceLockTimeout
+// internally, so that shorter bound is what a contended lease actually expires
+// on. The only reason this is larger is that the same context also covers the
+// Git identity resolution the acquisition performs first, and pinning it to the
+// lease bound would let a slow repository probe cancel an uncontended lease.
+//
+// A reset that cannot get the lease promptly is competing with a live review,
+// and waiting longer only makes the collision worse -- which is exactly what
+// the 2s bound already enforces, so this constant tracks it rather than
+// competing with it.
+const storeResetLockTimeout = maintenanceLockTimeout + storeResetIdentitySlack
+
+// storeResetIdentitySlack is the headroom storeResetLockTimeout adds for the
+// repository identity resolution that runs inside the same context, before the
+// lease bound applies.
+const storeResetIdentitySlack = 8 * time.Second
 
 // storeResetStagingPrefix names the directory a run moves categories into
 // before deleting them. Staging is what makes the store consistent at one
@@ -68,6 +91,15 @@ const storeResetStagingPrefix = ".store-reset-"
 // storeResetRename is the rename seam, mirroring reclaimQuarantineResidue in
 // compact_reclaim.go so partial-failure paths stay testable.
 var storeResetRename = os.Rename
+
+// storeResetRemoveTree is the deletion seam, and it exists for the same reason
+// the rename seam does. The interesting deletion failure is the one that leaves
+// the tree behind -- ENOSPC, EIO, a busy mount -- because that is when the byte
+// accounting has to subtract what survived, and no portable arrangement of
+// permissions reproduces it: every permission failure this package can stage on
+// a developer's disk is either retried into success or leaves a subtree the
+// accounting cannot read and therefore counts as zero.
+var storeResetRemoveTree = os.RemoveAll
 
 // storeResetAcquireLease is the lease seam. Production always takes the real
 // exclusive maintenance lease; a test substitutes a wrapper around it to prove,
@@ -88,6 +120,15 @@ type storeResetTarget struct {
 	// administrative directories that register them go with the checkouts and
 	// the permissions have to be relaxed before anything can be unlinked.
 	candidateViews bool
+	// optIn marks a category no default run removes. Such a category is
+	// reported under Preserved carrying withheldReason until the caller names
+	// it explicitly, and only then does it appear under Removable.
+	optIn bool
+	// withheldReason explains, to the person reading the preview, why the
+	// default run spares an optIn category. It is a different sentence from
+	// reason: reason says what the category is, withheldReason says what this
+	// command cannot promise about removing it.
+	withheldReason string
 }
 
 // storeResetRemovableTargets is the complete inclusion list. Every entry is
@@ -119,8 +160,10 @@ var storeResetRemovableTargets = []storeResetTarget{
 		reason: "per-lineage preserved raw reviewer results",
 	},
 	{
-		name: "reviews", parts: []string{"reviews"},
-		reason: "superseded review graph store written by the gentle-pi adapter; per-lineage authority in an earlier format",
+		name: "reviews", parts: []string{"reviews"}, optIn: true,
+		reason: "review graph store written by the gentle-pi adapter, outside this command's lease and in-flight coverage; removed only because --include-adapter-reviews was given",
+		withheldReason: "review graph store the gentle-pi adapter writes and this command cannot vouch for: " +
+			"REVIEW-MAINTENANCE.lock does not cover it and the in-flight refusal never reads it, so a default run cannot tell a dead graph from a live review; pass --include-adapter-reviews to remove it anyway",
 	},
 }
 
@@ -202,21 +245,44 @@ type StoreResetReport struct {
 	Settled      int                 `json:"settled_lineages"`
 	RemovedFiles int                 `json:"removed_files"`
 	RemovedBytes int64               `json:"removed_bytes"`
-	// Residue names a staging directory a failed run could not delete. Its
-	// contents are already out of the store, but the bytes are still on disk
-	// and are not counted as freed.
+	// Residue names a staging directory that outlived the run. Its contents
+	// are already out of the store, but the bytes are still on disk and are
+	// not counted as freed. It is set both when the deletion failed and when
+	// the run deliberately kept the directory to hold UnrestoredAdminDirs.
 	Residue string `json:"residue,omitempty"`
+	// UnrestoredAdminDirs names every Git worktree administrative directory
+	// this run moved aside for a category it then did not remove, and could
+	// not put back. They are the one case where a category reported SKIPPED is
+	// not in the state the run found it: the checkouts are still there, but
+	// their registrations are parked under Residue instead of at Original.
+	UnrestoredAdminDirs []StoreResetUnrestoredAdminDir `json:"unrestored_admin_dirs,omitempty"`
 	// Complete is false whenever any present removable category was not
 	// removed, for any reason. A partial run never reports success.
 	Complete bool `json:"complete"`
 }
 
-// StoreResetRequest carries the one decision the caller owns.
+// StoreResetUnrestoredAdminDir names one Git worktree administrative directory
+// a run moved aside and could not move back, and where it ended up.
+type StoreResetUnrestoredAdminDir struct {
+	// Original is where the directory belongs, and where it has to be put back
+	// before the candidate view it registers works again.
+	Original string `json:"original"`
+	// Staged is where the run left it.
+	Staged string `json:"staged"`
+}
+
+// StoreResetRequest carries the decisions the caller owns.
 type StoreResetRequest struct {
 	// IncludeInFlight permits removing lineages that have not reached a
 	// terminal state. It exists so the refusal has an exit, not so callers can
 	// set it by default.
 	IncludeInFlight bool
+	// IncludeAdapterReviews permits removing the adapter-written reviews/
+	// graph store. It is separate from IncludeInFlight because it overrides a
+	// different guarantee: IncludeInFlight discards reviews this command can
+	// see and named, while this one discards a category it cannot see into at
+	// all, and so cannot list, count as in flight, or lock out a writer from.
+	IncludeAdapterReviews bool
 }
 
 // StoreResetInFlightError refuses a reset that would destroy open reviews.
@@ -256,7 +322,11 @@ func (err *StoreResetIncompleteError) Error() string {
 	for _, entry := range err.Skipped {
 		names = append(names, fmt.Sprintf("%s (%s)", entry.Name, entry.Skipped))
 	}
-	return fmt.Sprintf("review store reset was incomplete: %s", strings.Join(names, "; "))
+	message := fmt.Sprintf("review store reset was incomplete: %s", strings.Join(names, "; "))
+	if err.Residue != "" {
+		message += fmt.Sprintf("; state this run moved aside is parked in %s", err.Residue)
+	}
+	return message
 }
 
 // storeResetRoot resolves <git-common-dir>/gentle-ai for one clone.
@@ -279,12 +349,17 @@ func storeResetRoot(ctx context.Context, repo string) (root, repository string, 
 // SurveyReviewStore reports what a reset would remove without touching
 // anything. It creates no directories, takes no lock, and is safe to run
 // against a store no other operation can open.
-func SurveyReviewStore(ctx context.Context, repo string) (StoreResetReport, error) {
-	report, _, err := surveyReviewStore(ctx, repo)
+//
+// It takes the same request the reset takes because the preview has to be the
+// preview of the run the caller is about to make: an opt-in category shown as
+// removable when the flag is absent would promise a removal that never comes,
+// and shown as preserved when the flag is present would hide one that does.
+func SurveyReviewStore(ctx context.Context, repo string, request StoreResetRequest) (StoreResetReport, error) {
+	report, _, err := surveyReviewStore(ctx, repo, request)
 	return report, err
 }
 
-func surveyReviewStore(ctx context.Context, repo string) (StoreResetReport, string, error) {
+func surveyReviewStore(ctx context.Context, repo string, request StoreResetRequest) (StoreResetReport, string, error) {
 	if err := ctx.Err(); err != nil {
 		return StoreResetReport{}, "", err
 	}
@@ -299,18 +374,43 @@ func surveyReviewStore(ctx context.Context, repo string) (StoreResetReport, stri
 		Unrecognized: []StoreResetEntry{}, InFlight: []StoreResetLineage{},
 		Complete: true,
 	}
+	withheld := []StoreResetEntry{}
 	for _, target := range storeResetRemovableTargets {
+		if target.optIn && !storeResetOptedIn(target, request) {
+			spared := target
+			spared.reason = target.withheldReason
+			withheld = append(withheld, storeResetMeasure(root, spared))
+			continue
+		}
 		report.Removable = append(report.Removable, storeResetMeasure(root, target))
 	}
 	for _, target := range storeResetPreservedTargets {
 		report.Preserved = append(report.Preserved, storeResetMeasure(root, target))
 	}
+	// Withheld categories go last so the standing exclusion list keeps its
+	// order and the conditional entries are visibly the conditional ones.
+	report.Preserved = append(report.Preserved, withheld...)
 	report.Unrecognized = storeResetUnrecognized(root)
 	report.InFlight, report.Settled, err = storeResetLineages(root)
 	if err != nil {
 		return report, root, err
 	}
 	return report, root, nil
+}
+
+// storeResetOptedIn reports whether the caller asked for one opt-in category by
+// name. It is a switch per category rather than a single "include everything"
+// flag on purpose: each opt-in category overrides a different guarantee, and a
+// blanket flag would let a caller who wanted one of them discard the others
+// without ever reading why they were withheld.
+func storeResetOptedIn(target storeResetTarget, request StoreResetRequest) bool {
+	if target.name == "reviews" {
+		return request.IncludeAdapterReviews
+	}
+	// An opt-in category nobody wired a switch for stays withheld. Failing
+	// closed here means adding a category to the list can spare data by
+	// accident, never destroy it by accident.
+	return false
 }
 
 // storeResetMeasure sizes one target without following symlinks into it.
@@ -443,6 +543,11 @@ type storeResetStateRecord struct {
 // Legacy v1 lineages are not classified. Their state lives in an append-only
 // event chain no current build can advance, so there is no open v1 review to
 // protect; the directory is removed as settled residue.
+//
+// Nothing outside review-transactions/v2 is classified at all, and that is the
+// whole reason the adapter-written reviews/ graph store is opt-in: a review
+// living there is invisible here, so "no lineages in flight" is a statement
+// about compact-v2 and must never be read as a statement about the store.
 func storeResetLineages(root string) ([]StoreResetLineage, int, error) {
 	inFlight := []StoreResetLineage{}
 	settled := 0
@@ -524,15 +629,21 @@ func ResetReviewStore(ctx context.Context, repo string, request StoreResetReques
 	}
 	defer func() { _ = lock.Release() }()
 
-	report, root, err := surveyReviewStore(ctx, repo)
+	report, root, err := surveyReviewStore(ctx, repo, request)
 	if err != nil {
 		return report, err
 	}
-	report.Operation = StoreResetApplied
 	if len(report.InFlight) > 0 && !request.IncludeInFlight {
+		// The operation stays the preview one. A refusal returns before the
+		// staging directory is created, so nothing was opened, nothing was
+		// moved, and nothing can be reconciled: labelling that run "reset"
+		// tells every machine reader that a removal was attempted and every
+		// category skipped, which is a different and much more alarming
+		// outcome than the one that occurred.
 		report.Complete = false
 		return report, &StoreResetInFlightError{Repository: report.Repository, Lineages: report.InFlight}
 	}
+	report.Operation = StoreResetApplied
 
 	return storeResetExecute(ctx, report, root)
 }
@@ -549,6 +660,13 @@ func storeResetExecute(ctx context.Context, report StoreResetReport, root string
 		targets[target.name] = target
 	}
 	staged := int64(0)
+	// stranded collects every administrative directory this run moved aside
+	// for a category it then did not remove, and could not move back. Those
+	// bytes are emphatically not this run's to delete: the category they
+	// belong to is reported SKIPPED, meaning untouched, and deleting the
+	// staging directory with them inside would make that report a lie that
+	// nothing on disk can contradict afterwards.
+	stranded := []storeResetStagedAdminDir{}
 	for index, entry := range report.Removable {
 		if err := ctx.Err(); err != nil {
 			report.Complete = false
@@ -570,7 +688,9 @@ func storeResetExecute(ctx context.Context, report StoreResetReport, root string
 			var err error
 			stagedAdmin, err = storeResetStageCandidateViewAdminDirs(root, source, staging)
 			if err != nil {
-				report.Removable[index].Skipped = storeResetSkipReason(err, storeResetRestoreAdminDirs(stagedAdmin))
+				unrestored, restoreErr := storeResetRestoreAdminDirs(stagedAdmin)
+				stranded = append(stranded, unrestored...)
+				report.Removable[index].Skipped = storeResetSkipReason(err, restoreErr)
 				report.Complete = false
 				continue
 			}
@@ -583,32 +703,147 @@ func storeResetExecute(ctx context.Context, report StoreResetReport, root string
 		destination := filepath.Join(staging, strings.ReplaceAll(entry.Path, "/", "-"))
 		if err := storeResetRename(source, destination); err != nil {
 			restoreMode()
-			report.Removable[index].Skipped = storeResetSkipReason(err, storeResetRestoreAdminDirs(stagedAdmin))
+			unrestored, restoreErr := storeResetRestoreAdminDirs(stagedAdmin)
+			stranded = append(stranded, unrestored...)
+			report.Removable[index].Skipped = storeResetSkipReason(err, restoreErr)
 			report.Complete = false
 			continue
 		}
 		report.Removable[index].Removed = true
 		report.RemovedFiles += entry.Files
-		staged += entry.Bytes
+		// The administrative directories went into staging alongside the
+		// category, so their bytes are freed with it. Leaving them out of the
+		// accumulator is what let the residual subtraction below outweigh it
+		// and print a negative size.
+		staged += entry.Bytes + storeResetStagedAdminBytes(stagedAdmin)
 	}
 	_ = SyncReviewDirectory(root)
+
+	report.UnrestoredAdminDirs = storeResetUnrestoredAdminDirs(stranded)
 
 	// Bytes count as freed only once they are actually gone. If the staging
 	// directory survives, the categories are out of the store but the disk is
 	// not back, and saying otherwise would be the exact dishonest report this
 	// command must not produce.
-	if err := storeResetRemoveAll(staging); err != nil {
-		_, residual := storeResetUsage(staging)
-		report.RemovedBytes = staged - residual
+	if err := storeResetRemoveStaging(staging, stranded); err != nil {
+		report.RemovedBytes = storeResetFreedBytes(staged, storeResetResidualBytes(staging, stranded))
 		report.Residue = staging
 		report.Complete = false
 		return report, &StoreResetIncompleteError{Skipped: storeResetSkipped(report), Residue: staging}
 	}
-	report.RemovedBytes = staged
+	report.RemovedBytes = storeResetFreedBytes(staged, 0)
+	if len(stranded) > 0 {
+		// The staging directory survived on purpose, holding registrations
+		// this run could not put back. Naming it as residue is the only thing
+		// that tells the user those bytes are still on disk and where the
+		// registrations went; without it the report says a category was
+		// skipped and shows nothing left over, which reads as "no harm done".
+		report.Residue = staging
+	}
 	if !report.Complete {
-		return report, &StoreResetIncompleteError{Skipped: storeResetSkipped(report)}
+		return report, &StoreResetIncompleteError{Skipped: storeResetSkipped(report), Residue: report.Residue}
 	}
 	return report, nil
+}
+
+// storeResetStagedAdminBytes sizes administrative directories already moved
+// into staging.
+func storeResetStagedAdminBytes(staged []storeResetStagedAdminDir) int64 {
+	total := int64(0)
+	for _, entry := range staged {
+		_, bytes := storeResetUsage(entry.staged)
+		total += bytes
+	}
+	return total
+}
+
+// storeResetUnrestoredAdminDirs projects the internal staging records into the
+// report.
+func storeResetUnrestoredAdminDirs(stranded []storeResetStagedAdminDir) []StoreResetUnrestoredAdminDir {
+	if len(stranded) == 0 {
+		return nil
+	}
+	entries := make([]StoreResetUnrestoredAdminDir, 0, len(stranded))
+	for _, entry := range stranded {
+		entries = append(entries, StoreResetUnrestoredAdminDir{Original: entry.original, Staged: entry.staged})
+	}
+	sort.Slice(entries, func(i, j int) bool { return entries[i].Original < entries[j].Original })
+	return entries
+}
+
+// storeResetRemoveStaging deletes the staging directory, except for anything
+// the run has to keep.
+//
+// With nothing to keep this is the whole directory, which is the ordinary case.
+// With something to keep the directory itself has to survive to hold it, so the
+// deletion becomes per-child: every category that really was removed still goes
+// away, and the administrative directories that could not be restored stay put
+// where the report can point at them. Deleting them here would destroy a
+// worktree registration for a checkout this same run reported as untouched, and
+// no later run could rebuild it.
+func storeResetRemoveStaging(staging string, keep []storeResetStagedAdminDir) error {
+	if len(keep) == 0 {
+		return storeResetRemoveAll(staging)
+	}
+	kept := storeResetKeptPaths(keep)
+	entries, err := os.ReadDir(staging)
+	if err != nil {
+		return err
+	}
+	failures := []error{}
+	for _, entry := range entries {
+		path := filepath.Join(staging, entry.Name())
+		if kept[filepath.Clean(path)] {
+			continue
+		}
+		if err := storeResetRemoveAll(path); err != nil {
+			failures = append(failures, err)
+		}
+	}
+	return errors.Join(failures...)
+}
+
+func storeResetKeptPaths(keep []storeResetStagedAdminDir) map[string]bool {
+	kept := map[string]bool{}
+	for _, entry := range keep {
+		kept[filepath.Clean(entry.staged)] = true
+	}
+	return kept
+}
+
+// storeResetResidualBytes sizes what is left in staging that the run meant to
+// delete. Anything deliberately kept is excluded: it was never counted as
+// staged for removal, so subtracting it would charge the run for bytes it never
+// claimed to free.
+func storeResetResidualBytes(staging string, keep []storeResetStagedAdminDir) int64 {
+	kept := storeResetKeptPaths(keep)
+	entries, err := os.ReadDir(staging)
+	if err != nil {
+		_, bytes := storeResetUsage(staging)
+		return bytes
+	}
+	total := int64(0)
+	for _, entry := range entries {
+		path := filepath.Join(staging, entry.Name())
+		if kept[filepath.Clean(path)] {
+			continue
+		}
+		_, bytes := storeResetUsage(path)
+		total += bytes
+	}
+	return total
+}
+
+// storeResetFreedBytes reports what a run actually reclaimed, and never reports
+// less than nothing. The two counts are measured at different moments against a
+// tree other processes can touch, so their difference can invert; a negative
+// size printed to a user is a bug report about the accounting, not information
+// about their disk.
+func storeResetFreedBytes(staged, residual int64) int64 {
+	if freed := staged - residual; freed > 0 {
+		return freed
+	}
+	return 0
 }
 
 func storeResetSkipped(report StoreResetReport) []StoreResetEntry {
@@ -669,15 +904,28 @@ func storeResetStageCandidateViewAdminDirs(root, views, staging string) ([]store
 }
 
 // storeResetRestoreAdminDirs puts back every administrative directory staged
-// for a category that was then not removed.
-func storeResetRestoreAdminDirs(staged []storeResetStagedAdminDir) error {
+// for a category that was then not removed, and names the ones it could not.
+//
+// The names matter as much as the error. A directory left in staging is still a
+// worktree registration, and the run is about to delete staging; returning only
+// an error would fold that fact into a sentence in a skip reason and let the
+// deletion take it. Returning the entries lets the caller keep them.
+//
+// The second rename is not a formality that always works. It fails when
+// something recreated the path in the window, on a full or failing disk, and on
+// Windows whenever any process holds a handle inside the directory -- which is
+// also when the first rename is most likely to have failed, so the restore path
+// is at its least reliable exactly when it is reached.
+func storeResetRestoreAdminDirs(staged []storeResetStagedAdminDir) ([]storeResetStagedAdminDir, error) {
+	unrestored := []storeResetStagedAdminDir{}
 	failures := []error{}
 	for _, entry := range staged {
 		if err := storeResetRename(entry.staged, entry.original); err != nil {
+			unrestored = append(unrestored, entry)
 			failures = append(failures, err)
 		}
 	}
-	return errors.Join(failures...)
+	return unrestored, errors.Join(failures...)
 }
 
 // storeResetSkipReason names why a category was left alone, and says so louder
@@ -748,12 +996,12 @@ func storeResetMakeWritable(path string) error {
 // attempt is refused. Retrying exactly once keeps a genuine fault (a busy file,
 // a full disk, a vanished mount) from turning into a loop.
 func storeResetRemoveAll(path string) error {
-	err := os.RemoveAll(path)
+	err := storeResetRemoveTree(path)
 	if err == nil || !errors.Is(err, os.ErrPermission) {
 		return err
 	}
 	if writableErr := storeResetMakeWritable(path); writableErr != nil {
 		return err
 	}
-	return os.RemoveAll(path)
+	return storeResetRemoveTree(path)
 }

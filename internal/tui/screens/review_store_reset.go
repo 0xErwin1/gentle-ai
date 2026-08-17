@@ -33,6 +33,22 @@ func ReviewStoreResetConfirmOptions(report reviewtransaction.StoreResetReport, s
 	return []string{"Delete permanently", "Cancel"}
 }
 
+// ReviewStoreResetConfirmDefaultCursor reports where the cursor should rest
+// when this screen is first shown.
+//
+// It is the "Cancel" row whenever a destructive row exists. The option order is
+// kept the way every other confirmation in this TUI orders it, so the change is
+// only in what is preselected: an accidental Enter cancels, and destroying the
+// store takes a deliberate move onto a row labelled "Delete permanently". In
+// every other state the sole option is "Back", which is already inert.
+func ReviewStoreResetConfirmDefaultCursor(report reviewtransaction.StoreResetReport, surveyErr error) int {
+	options := ReviewStoreResetConfirmOptions(report, surveyErr)
+	if len(options) == 2 {
+		return 1
+	}
+	return 0
+}
+
 // RenderReviewStoreResetConfirm renders the survey and asks for confirmation.
 // Cursor 0 = "Delete permanently", Cursor 1 = "Cancel", unless the survey found
 // open reviews, in which case the only option is "Back".
@@ -136,7 +152,11 @@ func RenderReviewStoreResetResult(report reviewtransaction.StoreResetReport, err
 	b.WriteString("\n\n")
 
 	switch {
-	case err != nil && report.RemovedFiles == 0:
+	// "Nothing was removed" is only true when nothing left its place. A run
+	// that freed no bytes can still have moved a worktree registration it
+	// could not put back, and that is a change to the store the user has to be
+	// told about, so it routes to the partial branch instead.
+	case err != nil && report.RemovedFiles == 0 && len(report.UnrestoredAdminDirs) == 0:
 		b.WriteString(styles.ErrorStyle.Render("✗ Nothing was removed"))
 		b.WriteString("\n\n")
 		b.WriteString(styles.ErrorStyle.Render("  " + err.Error()))
@@ -160,6 +180,22 @@ func RenderReviewStoreResetResult(report reviewtransaction.StoreResetReport, err
 			b.WriteString(styles.WarningStyle.Render("Staging directory left behind: " + report.Residue))
 			b.WriteString("\n")
 			b.WriteString(styles.SubtextStyle.Render("Those bytes are not reclaimed until it is deleted."))
+			b.WriteString("\n")
+		}
+		if len(report.UnrestoredAdminDirs) > 0 {
+			// "Not removed" above means untouched everywhere else on this
+			// screen. For these views it does not, so the exception is
+			// spelled out rather than left to be inferred from a byte count.
+			b.WriteString("\n")
+			b.WriteString(styles.ErrorStyle.Render("Worktree registrations moved aside and not put back:"))
+			b.WriteString("\n")
+			for _, dir := range report.UnrestoredAdminDirs {
+				b.WriteString(styles.ErrorStyle.Render("  " + dir.Original))
+				b.WriteString("\n")
+				b.WriteString(styles.SubtextStyle.Render("    now at " + dir.Staged))
+				b.WriteString("\n")
+			}
+			b.WriteString(styles.SubtextStyle.Render("Move each one back before using those candidate views again."))
 		}
 	default:
 		b.WriteString(styles.SuccessStyle.Render("✓ Review store reset"))
