@@ -256,3 +256,42 @@ func restoreCodeGraphPaths(snapshots []codeGraphSnapshot) error {
 	}
 	return restoreErr
 }
+
+// CodeGraphTargetsFor maps declared adapters to the target ids CodeGraph's own
+// installer takes. It reads the declaration rather than the machine, which is
+// what lets a rendered configuration produce the same commands everywhere.
+//
+// Only the adapters CodeGraph wires natively appear. The reconciled ones are
+// Gentle AI's to write, so naming them here would ask CodeGraph to overwrite
+// what the render already owns.
+func CodeGraphTargetsFor(declared []model.AgentID) []string {
+	targets := make([]string, 0, len(declared))
+	for _, agent := range declared {
+		compatibility, ok := codeGraphCompatibilityFor(agent)
+		if ok && compatibility.Strategy == codeGraphNative && compatibility.Target != "" {
+			targets = append(targets, compatibility.Target)
+		}
+	}
+	slices.Sort(targets)
+
+	return slices.Compact(targets)
+}
+
+// WiringCommandsFor returns the commands that point a community tool at the
+// declared adapters. Installing the tool itself is deliberately absent: which
+// package manager to reach for is a property of the machine, and a declaration
+// that carried one would render differently on the next one.
+func WiringCommandsFor(id model.CommunityToolID, declared []model.AgentID) [][]string {
+	if id != model.CommunityToolCodeGraph {
+		return nil
+	}
+
+	targets := CodeGraphTargetsFor(declared)
+	if len(targets) == 0 {
+		return nil
+	}
+
+	return [][]string{
+		{"codegraph", "install", "--target", strings.Join(targets, ","), "--location", "global", "--yes"},
+	}
+}
