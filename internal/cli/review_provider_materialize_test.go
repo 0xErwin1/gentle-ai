@@ -131,9 +131,14 @@ func TestReviewCaptureResultMaterializeRefusals(t *testing.T) {
 			want: "materializes internally",
 		},
 		{
+			// #3441: this refusal used to be byte-identical to the opposite
+			// one (--materialize omitted for a non-capture runtime), so the
+			// assertion could not tell them apart either. The exact texts of
+			// both live in
+			// TestCaptureResultHostMediatedRefusalsAreDistinguishable.
 			name: "opencode keeps its host-mediated refusal", env: reviewPiHostRelayContract,
 			argv: append(slices.Clone(fakeBinding), "--agent", string(model.AgentOpenCode), "--materialize=true"),
-			want: "is host-mediated; use its live transport collection",
+			want: "--materialize is unavailable for \"opencode\": printing the Go-materialized provider task is the host-relay form",
 		},
 		{
 			name: "combined with input", env: reviewPiHostRelayContract,
