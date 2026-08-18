@@ -16,7 +16,7 @@ import (
 // that -- "advances existing authority. Disabled mode rejects it" -- and then
 // never reached the CLI surface, so the only guarded operation was START. A
 // lineage started before the switch went off could still be finalized to an
-// approved terminal receipt while review-driven development was switched off,
+// approved terminal receipt while receipt-driven development was switched off,
 // which also defeats the second half of the rule: re-enabling would rediscover
 // approved authority and skip the re-validation that makes the switch safe.
 //
@@ -25,12 +25,18 @@ import (
 // unit test on AuthorizeRDDOperation passed the entire time.
 
 // disabledReviewRepo freezes an in-flight low-risk lineage and then turns
-// review-driven development off for this clone, which is the exact shape the
+// receipt-driven development off for this clone, which is the exact shape the
 // hand reproduction hit: authority that already exists, and a switch that is
 // now off.
+//
+// Reaching that shape needs both halves of the switch in order. Receipt-driven
+// development is opt-in, so the START that creates the authority to freeze only
+// runs for a user who explicitly turned reviews on -- hence the enabled home.
+// The clone-local disable that follows is what the tests here are actually
+// about, and it still wins over that explicit global "on".
 func disabledReviewRepo(t *testing.T, lineage string) (repo string, started ReviewFacadeStartResult) {
 	t.Helper()
-	reviewModeHome(t)
+	reviewEnabledHome(t)
 	repo = initReviewCLIRepo(t)
 	if err := os.MkdirAll(filepath.Join(repo, "docs"), 0o755); err != nil {
 		t.Fatal(err)
@@ -38,6 +44,7 @@ func disabledReviewRepo(t *testing.T, lineage string) (repo string, started Revi
 	if err := os.WriteFile(filepath.Join(repo, "docs", "frozen.md"), []byte("frozen by the kill switch\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	runReviewCLIGit(t, repo, "add", "docs/frozen.md")
 	started = startFacadeReviewResult(t, repo, lineage)
 	disableReviewForClone(t, repo)
 	return repo, started
@@ -107,7 +114,7 @@ func TestDisabledReviewFreezesAuthorityInsteadOfDestroyingIt(t *testing.T) {
 	}
 }
 
-// TestDisabledReviewRefusesEveryAuthorityMutatingVerb sweeps the whole verb
+// TestDisabledReviewRefusesEveryAuthorityProgressingVerb sweeps the whole verb
 // surface, and it is the anti-drift guard for this fix: the original defect was
 // one guard wired to one verb out of twenty, so a per-verb assertion is what
 // keeps the next verb from quietly reopening the hole.
@@ -117,7 +124,7 @@ func TestDisabledReviewFreezesAuthorityInsteadOfDestroyingIt(t *testing.T) {
 // a malformed request with "run review mode enable" would name a command that
 // does not resolve the block -- so a sweep built from malformed requests would
 // prove nothing about the switch.
-func TestDisabledReviewRefusesEveryAuthorityMutatingVerb(t *testing.T) {
+func TestDisabledReviewRefusesEveryAuthorityProgressingVerb(t *testing.T) {
 	const digest = "sha256:0000000000000000000000000000000000000000000000000000000000000000"
 	const authorization = "gentle-ai.maintainer-authorization/v1"
 	input := filepath.Join(t.TempDir(), "input.json")
@@ -147,21 +154,15 @@ func TestDisabledReviewRefusesEveryAuthorityMutatingVerb(t *testing.T) {
 		{verb: "start"},
 		{verb: "finalize"},
 		{verb: "capture-result", args: []string{"--lineage", "review-disabled-sweep", "--target", digest, "--lens", "review-risk", "--order", "0", "--input", input}},
-		{verb: "capture-evidence", args: []string{"--lineage", "review-disabled-sweep", "--target", digest, "--expected-revision", digest, "--input", input}},
+		{verb: "capture-evidence", args: []string{"--lineage", "review-disabled-sweep", "--target", digest, "--expected-revision", digest, "--outcome", "passed", "--input", input}},
 		{verb: "preserve-result", args: []string{"--lineage", "review-disabled-sweep", "--target", digest, "--lens", "review-risk", "--order", "0", "--input", input}},
 		{verb: "repair", args: []string{"--contract", ReviewIntegrationContractV1}},
 		{verb: "invalidate", args: []string{"--lineage", "review-disabled-sweep", "--expected-revision", digest}},
-		{verb: "abandon", args: []string{"--lineage", "review-disabled-sweep", "--expected-revision", digest, "--reason", "reason", "--actor", "maintainer", "--maintainer-authorization", authorization}},
 		{verb: "recover", args: []string{"--predecessor-lineage", "review-disabled-sweep", "--expected-predecessor-revision", digest, "--successor-lineage", "review-disabled-successor", "--disposition", "scope_changed"}},
 		{verb: "retry-final-verification", args: []string{"--predecessor-lineage", "review-disabled-sweep", "--expected-predecessor-revision", digest, "--successor-lineage", "review-disabled-successor", "--incident", incident, "--actor", "maintainer", "--reason", "reason", "--maintainer-authorization", authorization}},
 		{verb: "reclaim", args: []string{"--lineage", "review-disabled-sweep", "--reason", "reason", "--actor", "maintainer"}},
-		{verb: "reconcile-authority", args: []string{"--predecessor-lineage", "review-disabled-sweep", "--expected-predecessor-revision", digest, "--successor-lineage", "review-disabled-successor", "--expected-successor-revision", digest, "--reason", "reason", "--actor", "maintainer", "--maintainer-authorization", authorization}},
-		{verb: "reconcile-authority-batch", args: []string{"--input", input}},
 		{verb: "dispose-result", args: []string{"--lineage", "review-disabled-sweep", "--expected-revision", digest, "--target", digest, "--lens", "review-risk", "--order", "0", "--artifact-digest", digest, "--class", "empty_result", "--diagnostic", "diagnostic", "--reason", "reason", "--actor", "maintainer", "--maintainer-authorization", authorization}},
 		{verb: "reopen-results", args: []string{"--lineage", "review-disabled-sweep", "--expected-revision", digest, "--target", digest, "--reason", "reason", "--actor", "maintainer", "--maintainer-authorization", authorization}},
-		{verb: "quarantine-legacy", args: []string{"--lineage", "review-disabled-sweep", "--expected-revision", digest, "--diagnostic", "diagnostic", "--disposition", "quarantined", "--reason", "reason", "--actor", "maintainer", "--maintainer-authorization", authorization}},
-		{verb: "quarantine-legacy-fix-scope", args: []string{"--lineage", "review-disabled-sweep", "--expected-revision", digest, "--diagnostic", "diagnostic", "--disposition", "quarantined", "--anomaly-set", "anomaly", "--reason", "reason", "--actor", "maintainer", "--maintainer-authorization", authorization}},
-		{verb: "repair-legacy-alias", args: []string{"--lineage", "review-disabled-sweep", "--expected-revision", digest, "--diagnostic", "diagnostic", "--disposition", "repaired", "--reason", "reason", "--actor", "maintainer", "--maintainer-authorization", authorization}},
 		{verb: "bind-sdd", args: []string{"--change", "some-change", "--lineage", "review-disabled-sweep", "--expected-binding-revision", digest}},
 	} {
 		t.Run(testCase.verb, func(t *testing.T) {
@@ -189,8 +190,7 @@ func TestDisabledReviewLetsMalformedRequestsAnswerFirst(t *testing.T) {
 		args []string
 		want string
 	}{
-		{name: "unknown flag", args: []string{"reconcile-authority-batch", "--cwd", repo, "--nonexistent"}, want: "flag provided but not defined"},
-		{name: "missing required input", args: []string{"reconcile-authority-batch", "--cwd", repo}, want: "requires --input"},
+		{name: "unknown flag", args: []string{"invalidate", "--cwd", repo, "--nonexistent"}, want: "flag provided but not defined"},
 		{name: "stray positional", args: []string{"invalidate", "--cwd", repo, "extra"}, want: "unexpected review invalidate argument"},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
@@ -257,7 +257,7 @@ func TestDisabledReviewKeepsReadOnlyInspectionAndDeliveryReachable(t *testing.T)
 // unreachable, and would break replay-based recovery for anyone who switched
 // reviews off afterwards.
 func TestDisabledReviewReplaysTerminalAuthorityWhileDisabled(t *testing.T) {
-	reviewModeHome(t)
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	if err := os.MkdirAll(filepath.Join(repo, "docs"), 0o755); err != nil {
 		t.Fatal(err)
@@ -265,6 +265,7 @@ func TestDisabledReviewReplaysTerminalAuthorityWhileDisabled(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(repo, "docs", "terminal.md"), []byte("approved before the switch went off\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	runReviewCLIGit(t, repo, "add", "docs/terminal.md")
 	const lineage = "review-disabled-terminal-replay"
 	startFacadeReviewResult(t, repo, lineage)
 

@@ -71,7 +71,7 @@ func TestComponentPathsSDDMultiIncludesOpenCodePlugins(t *testing.T) {
 
 	paths := componentPaths(home, model.Selection{SDDMode: model.SDDModeMulti}, adapters, model.ComponentSDD)
 
-	for _, plugin := range []string{"background-agents.ts", "model-variants.ts", "review-result-artifacts.ts", "skill-registry.ts"} {
+	for _, plugin := range []string{"background-agents.ts", "model-variants.ts", "opencode-review-transport.ts", "sdd-task-result-artifacts.ts", "skill-registry.ts"} {
 		path := filepath.Join(home, ".config", "opencode", "plugins", plugin)
 		if !containsPath(paths, path) {
 			t.Fatalf("componentPaths(sdd multi) missing OpenCode plugin path %q\npaths=%v", path, paths)
@@ -85,7 +85,7 @@ func TestComponentPathsSDDSingleIncludesOpenCodePlugins(t *testing.T) {
 
 	paths := componentPaths(home, model.Selection{SDDMode: model.SDDModeSingle}, adapters, model.ComponentSDD)
 
-	for _, plugin := range []string{"background-agents.ts", "model-variants.ts", "review-result-artifacts.ts", "skill-registry.ts"} {
+	for _, plugin := range []string{"background-agents.ts", "model-variants.ts", "opencode-review-transport.ts", "sdd-task-result-artifacts.ts", "skill-registry.ts"} {
 		path := filepath.Join(home, ".config", "opencode", "plugins", plugin)
 		if !containsPath(paths, path) {
 			t.Fatalf("componentPaths(sdd single) missing OpenCode plugin path %q\npaths=%v", path, paths)
@@ -106,6 +106,8 @@ func TestComponentPathsWorkspaceScopedOpenCodeSDDUsesWorkspaceManagedPaths(t *te
 		filepath.Join(workspace, ".config", "opencode", "commands", "sdd-init.md"),
 		filepath.Join(workspace, ".config", "opencode", "plugins", "background-agents.ts"),
 		filepath.Join(workspace, ".config", "opencode", "plugins", "model-variants.ts"),
+		filepath.Join(workspace, ".config", "opencode", "plugins", "opencode-review-transport.ts"),
+		filepath.Join(workspace, ".config", "opencode", "plugins", "sdd-task-result-artifacts.ts"),
 		filepath.Join(workspace, ".config", "opencode", "plugins", "skill-registry.ts"),
 		filepath.Join(workspace, ".config", "opencode", "prompts", "sdd", "sdd-apply.md"),
 		filepath.Join(workspace, ".config", "opencode", "skills", "sdd-apply", "SKILL.md"),
@@ -127,6 +129,81 @@ func TestComponentPathsWorkspaceScopedOpenCodeSDDUsesWorkspaceManagedPaths(t *te
 		if containsPath(paths, unwanted) {
 			t.Fatalf("componentPathsWithWorkspaceScoped(sdd,opencode,workspace) must not include home-scoped path %q\npaths=%v", unwanted, paths)
 		}
+	}
+}
+
+func TestComponentPersonaPiUsesResolvedScopePath(t *testing.T) {
+	home := t.TempDir()
+	workspace := t.TempDir()
+	adapters := resolveAdapters([]model.AgentID{model.AgentPi})
+	selection := model.Selection{Persona: model.PersonaNeutral}
+
+	global := componentPathsWithWorkspaceScoped(home, workspace, ScopeGlobal, selection, adapters, model.ComponentPersona)
+	if !containsPath(global, filepath.Join(home, ".pi", "gentle-ai", "persona.json")) {
+		t.Fatalf("global Pi persona paths = %v, missing home-scoped config", global)
+	}
+	if !containsPath(global, filepath.Join(workspace, ".pi", "gentle-ai", "persona.json")) {
+		t.Fatalf("global Pi persona paths = %v, missing active workspace config", global)
+	}
+
+	workspacePaths := componentPathsWithWorkspaceScoped(home, workspace, ScopeWorkspace, selection, adapters, model.ComponentPersona)
+	if !containsPath(workspacePaths, filepath.Join(workspace, ".pi", "gentle-ai", "persona.json")) {
+		t.Fatalf("workspace Pi persona paths = %v, missing workspace-scoped config", workspacePaths)
+	}
+	if containsPath(workspacePaths, filepath.Join(home, ".pi", "gentle-ai", "persona.json")) {
+		t.Fatalf("workspace Pi persona paths = %v, unexpectedly contains home config", workspacePaths)
+	}
+
+	custom := componentPathsWithWorkspaceScoped(home, workspace, ScopeWorkspace, model.Selection{Persona: model.PersonaCustom}, adapters, model.ComponentPersona)
+	if len(custom) != 0 {
+		t.Fatalf("custom Pi persona paths = %v, want none", custom)
+	}
+}
+
+func TestInstallPiPersonaWritesManagedScopePaths(t *testing.T) {
+	for _, tt := range []struct {
+		name  string
+		scope InstallScope
+	}{
+		{name: "global", scope: ScopeGlobal},
+		{name: "workspace", scope: ScopeWorkspace},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			home := t.TempDir()
+			workspace := t.TempDir()
+			root, other := home, workspace
+			if tt.scope == ScopeWorkspace {
+				root, other = workspace, home
+			}
+
+			step := componentApplyStep{
+				component:    model.ComponentPersona,
+				homeDir:      home,
+				workspaceDir: workspace,
+				scope:        tt.scope,
+				agents:       []model.AgentID{model.AgentPi},
+				selection:    model.Selection{Persona: model.PersonaNeutral},
+			}
+			if err := step.Run(); err != nil {
+				t.Fatalf("componentApplyStep.Run() error = %v", err)
+			}
+
+			want := filepath.Join(root, ".pi", "gentle-ai", "persona.json")
+			if _, err := os.Stat(want); err != nil {
+				t.Fatalf("Pi persona config %q was not written: %v", want, err)
+			}
+			if tt.scope == ScopeGlobal {
+				workspacePath := filepath.Join(workspace, ".pi", "gentle-ai", "persona.json")
+				if _, err := os.Stat(workspacePath); err != nil {
+					t.Fatalf("global Pi persona config %q was not seeded: %v", workspacePath, err)
+				}
+				return
+			}
+			unwanted := filepath.Join(other, ".pi", "gentle-ai", "persona.json")
+			if _, err := os.Stat(unwanted); !os.IsNotExist(err) {
+				t.Fatalf("workspace-scoped Pi persona config %q was written outside scope; stat err = %v", unwanted, err)
+			}
+		})
 	}
 }
 
@@ -355,19 +432,71 @@ func TestComponentPathsContext7KimiIncludesMCPConfig(t *testing.T) {
 	}
 }
 
-func TestComponentPathsContext7ClaudeUsesSettingsFile(t *testing.T) {
+// TestComponentPathsContext7ClaudeUsesUserRegistry pins Claude Context7 to
+// the file injection actually writes: ~/.claude.json (issue #1868).
+// settings.json is only mutated best-effort and may not exist, and the legacy
+// managed ~/.claude/mcp/context7.json is removed by injection, so verifying
+// either would fail on a healthy install.
+func TestComponentPathsContext7ClaudeUsesUserRegistry(t *testing.T) {
 	home := t.TempDir()
 	adapters := resolveAdapters([]model.AgentID{model.AgentClaudeCode})
 
 	paths := componentPaths(home, model.Selection{}, adapters, model.ComponentContext7)
 
-	want := filepath.Join(home, ".claude", "settings.json")
-	if !containsPath(paths, want) {
-		t.Fatalf("componentPaths(context7,claude) missing %q\npaths=%v", want, paths)
+	registry := filepath.Join(home, ".claude.json")
+	if !containsPath(paths, registry) {
+		t.Fatalf("componentPaths(context7,claude) missing %q\npaths=%v", registry, paths)
 	}
-	legacy := filepath.Join(home, ".claude", "mcp", "context7.json")
-	if containsPath(paths, legacy) {
-		t.Fatalf("componentPaths(context7,claude) should not verify legacy path %q\npaths=%v", legacy, paths)
+	for _, absent := range []string{
+		filepath.Join(home, ".claude", "mcp", "context7.json"),
+		filepath.Join(home, ".claude", "settings.json"),
+	} {
+		if containsPath(paths, absent) {
+			t.Fatalf("componentPaths(context7,claude) must not require %q\npaths=%v", absent, paths)
+		}
+	}
+}
+
+func TestComponentPathsContext7ClaudeRespectsWorkspaceScope(t *testing.T) {
+	home := t.TempDir()
+	workspace := t.TempDir()
+	adapters := resolveAdapters([]model.AgentID{model.AgentClaudeCode})
+
+	paths := componentPathsWithWorkspaceScoped(home, workspace, ScopeWorkspace, model.Selection{}, adapters, model.ComponentContext7)
+
+	// Workspace scope writes <project-root>/.mcp.json, the file Claude Code
+	// loads project-scoped MCP servers from (issue #2213). The legacy
+	// .claude/settings.json key is inert for MCP discovery and is not declared.
+	want := filepath.Join(workspace, ".mcp.json")
+	if !containsPath(paths, want) {
+		t.Fatalf("componentPathsWithWorkspaceScoped(context7,claude) with ScopeWorkspace missing %q\npaths=%v", want, paths)
+	}
+	for _, absent := range []string{
+		filepath.Join(workspace, ".claude", "settings.json"),
+		filepath.Join(home, ".claude.json"),
+	} {
+		if containsPath(paths, absent) {
+			t.Fatalf("componentPathsWithWorkspaceScoped(context7,claude) with ScopeWorkspace must not require %q\npaths=%v", absent, paths)
+		}
+	}
+}
+
+func TestComponentPathsEngramClaudeUsesUserRegistryAndPreservesWorkspaceScope(t *testing.T) {
+	home := t.TempDir()
+	workspace := t.TempDir()
+	adapters := resolveAdapters([]model.AgentID{model.AgentClaudeCode})
+
+	global := componentPaths(home, model.Selection{}, adapters, model.ComponentEngram)
+	registry := filepath.Join(home, ".claude.json")
+	legacy := filepath.Join(home, ".claude", "mcp", "engram.json")
+	if !containsPath(global, registry) || containsPath(global, legacy) {
+		t.Fatalf("global Engram paths must use only Claude's user registry; paths=%v", global)
+	}
+
+	workspacePaths := componentPathsWithWorkspaceScoped(home, workspace, ScopeWorkspace, model.Selection{}, adapters, model.ComponentEngram)
+	workspaceLegacy := filepath.Join(workspace, ".claude", "mcp", "engram.json")
+	if !containsPath(workspacePaths, workspaceLegacy) || containsPath(workspacePaths, filepath.Join(workspace, ".claude.json")) {
+		t.Fatalf("workspace Engram paths must remain unchanged; paths=%v", workspacePaths)
 	}
 }
 
@@ -844,7 +973,10 @@ func TestBackupTargetsIncludeRoutingGuidancePathsWithoutAnyComponent(t *testing.
 	selection := model.Selection{Agents: []model.AgentID{agent}}
 	resolved := planner.ResolvedPlan{Agents: selection.Agents}
 
-	targets := backupTargets(home, "", ScopeGlobal, selection, resolved)
+	targets, err := backupTargets(home, "", ScopeGlobal, selection, resolved)
+	if err != nil {
+		t.Fatalf("backupTargets() error = %v", err)
+	}
 
 	routing, err := agentguidance.RoutingPaths(home, agent)
 	if err != nil {
@@ -860,6 +992,78 @@ func TestBackupTargetsIncludeRoutingGuidancePathsWithoutAnyComponent(t *testing.
 	}
 }
 
+func TestBackupTargetsEngramClaudeIncludeRegistryAndLegacyMigrationSource(t *testing.T) {
+	home := t.TempDir()
+	selection := model.Selection{Agents: []model.AgentID{model.AgentClaudeCode}, Components: []model.ComponentID{model.ComponentEngram}}
+	resolved := planner.ResolvedPlan{Agents: selection.Agents, OrderedComponents: selection.Components}
+
+	targets, err := backupTargets(home, "", ScopeGlobal, selection, resolved)
+	if err != nil {
+		t.Fatalf("backupTargets() error = %v", err)
+	}
+	for _, want := range []string{
+		filepath.Join(home, ".claude.json"),
+		filepath.Join(home, ".claude", "mcp", "engram.json"),
+	} {
+		if !containsPath(targets, want) {
+			t.Fatalf("backupTargets missing Claude Engram path %q; targets=%v", want, targets)
+		}
+	}
+}
+
+func TestBackupTargetsClaudeContext7IncludeCleanupWithoutVerificationRequirement(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		scope         InstallScope
+		sameWorkspace bool
+		wantRoot      string
+	}{
+		{name: "user scope", scope: ScopeGlobal, wantRoot: "home"},
+		{name: "workspace scope", scope: ScopeWorkspace, wantRoot: "workspace"},
+		{name: "workspace is home", scope: ScopeWorkspace, sameWorkspace: true, wantRoot: "home"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			home := t.TempDir()
+			workspace := t.TempDir()
+			if tc.sameWorkspace {
+				workspace = home
+			}
+			selection := model.Selection{
+				Agents:     []model.AgentID{model.AgentClaudeCode},
+				Components: []model.ComponentID{model.ComponentContext7},
+			}
+			resolved := planner.ResolvedPlan{Agents: selection.Agents, OrderedComponents: selection.Components}
+			adapters := resolveAdapters(selection.Agents)
+
+			targets, err := backupTargets(home, workspace, tc.scope, selection, resolved)
+			if err != nil {
+				t.Fatalf("backupTargets() error = %v", err)
+			}
+			root := home
+			if tc.wantRoot == "workspace" {
+				root = workspace
+			}
+			wantSettings := adapters[0].SettingsPath(root)
+			if !containsPath(targets, wantSettings) {
+				t.Fatalf("backupTargets missing cleanup path %q; targets=%v", wantSettings, targets)
+			}
+
+			verificationPaths := componentPathsWithWorkspaceScoped(home, workspace, tc.scope, selection, adapters, model.ComponentContext7)
+			if containsPath(verificationPaths, wantSettings) {
+				t.Fatalf("component verification must not require best-effort cleanup path %q; paths=%v", wantSettings, verificationPaths)
+			}
+
+			otherRoot := workspace
+			if root == workspace {
+				otherRoot = home
+			}
+			if !tc.sameWorkspace && containsPath(targets, adapters[0].SettingsPath(otherRoot)) {
+				t.Fatalf("backupTargets selected the wrong scope's cleanup path; targets=%v", targets)
+			}
+		})
+	}
+}
+
 func TestBackupTargetsContainNoDuplicatePaths(t *testing.T) {
 	home := t.TempDir()
 	agentIDs := []model.AgentID{model.AgentClaudeCode, model.AgentOpenCode, model.AgentKimi}
@@ -870,7 +1074,10 @@ func TestBackupTargetsContainNoDuplicatePaths(t *testing.T) {
 	}
 	resolved := planner.ResolvedPlan{Agents: agentIDs, OrderedComponents: selection.Components}
 
-	targets := backupTargets(home, "", ScopeGlobal, selection, resolved)
+	targets, err := backupTargets(home, "", ScopeGlobal, selection, resolved)
+	if err != nil {
+		t.Fatalf("backupTargets() error = %v", err)
+	}
 
 	assertNoDuplicatePaths(t, "backupTargets", targets)
 }

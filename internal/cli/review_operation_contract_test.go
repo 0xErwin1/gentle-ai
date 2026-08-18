@@ -17,6 +17,7 @@ import (
 )
 
 func TestNegotiatedReviewFinalizePreservesLegacyResultAndCanonicalIdentities(t *testing.T) {
+	reviewEnabledHome(t)
 	legacyRepo := initReviewCLIRepo(t)
 	negotiatedRepo := initReviewCLIRepo(t)
 	for _, repo := range []string{legacyRepo, negotiatedRepo} {
@@ -55,6 +56,7 @@ func TestNegotiatedReviewFinalizePreservesLegacyResultAndCanonicalIdentities(t *
 }
 
 func TestNegotiatedReviewValidateCoversAllGatesAndPreservesLegacyResult(t *testing.T) {
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	writeNegotiatedOperationChange(t, repo, "thin")
 	lineage := "review-operation-validate"
@@ -124,6 +126,7 @@ func TestNegotiatedReviewValidateCoversAllGatesAndPreservesLegacyResult(t *testi
 }
 
 func TestNegotiatedReviewBindSDDPreservesLegacyResultAndBindingHashes(t *testing.T) {
+	reviewEnabledHome(t)
 	legacyRepo := initReviewCLIRepo(t)
 	negotiatedRepo := initReviewCLIRepo(t)
 	for _, repo := range []string{legacyRepo, negotiatedRepo} {
@@ -170,6 +173,7 @@ func TestNegotiatedReviewBindSDDPreservesLegacyResultAndBindingHashes(t *testing
 }
 
 func TestNegotiatedReviewBindSDDAcceptsSemanticallyEquivalentCompactReceiptArrays(t *testing.T) {
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	writeNegotiatedOperationChange(t, repo, "thin")
 	runReviewCLIGit(t, repo, "add", "-A")
@@ -212,6 +216,7 @@ func TestNegotiatedReviewBindSDDAcceptsSemanticallyEquivalentCompactReceiptArray
 }
 
 func TestNegotiatedReviewBindSDDRejectsHistoricalLegacyThroughTypedFailureEnvelope(t *testing.T) {
+	reviewEnabledHome(t)
 	fixture := newLegacyCLIFixture(t, "historical-bind-sdd")
 	writeNegotiatedOperationChange(t, fixture.repo, "thin")
 	commonDir := strings.TrimSpace(runReviewCLIGit(t, fixture.repo, "rev-parse", "--path-format=absolute", "--git-common-dir"))
@@ -249,7 +254,8 @@ func TestNegotiatedReviewBindSDDRejectsHistoricalLegacyThroughTypedFailureEnvelo
 }
 
 func TestNegotiatedReviewOperationsRejectInvalidContractsBeforeMutation(t *testing.T) {
-	for _, contract := range []string{"", "gentle-ai.review-integration/v2"} {
+	reviewEnabledHome(t)
+	for _, contract := range []string{"", "gentle-ai.review-integration/v3"} {
 		t.Run("finalize_"+contract, func(t *testing.T) {
 			repo := initReviewCLIRepo(t)
 			writeNegotiatedOperationChange(t, repo, "thin")
@@ -388,17 +394,10 @@ func startReviewOperationFixture(t *testing.T, repo, lineage string) ReviewFacad
 
 func writeNegotiatedOperationChange(t *testing.T, repo, change string) {
 	t.Helper()
-	root := filepath.Join(repo, "openspec", "changes", change)
 	for path, content := range map[string]string{
 		"tasks.md": "- [x] 1.1 Done\n", "proposal.md": "# Proposal\n", "design.md": "# Design\n", "specs/binding/spec.md": "# Spec\n",
 	} {
-		fullPath := filepath.Join(root, filepath.FromSlash(path))
-		if err := os.MkdirAll(filepath.Dir(fullPath), 0o755); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(fullPath, []byte(content), 0o644); err != nil {
-			t.Fatal(err)
-		}
+		writeReviewStartCandidate(t, repo, "openspec/changes/"+change+"/"+path, content, 0o644)
 	}
 }
 

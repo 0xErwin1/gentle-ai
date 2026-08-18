@@ -4,13 +4,13 @@
 
 ## 1. What changed at the top
 
-Review-Driven Development used to be a control plane. A change was routed into a work-run, the run carried capabilities, and the capabilities decided ceremony. That plane was deleted (`feat!: delete the retired work-routing control plane`) and replaced by three ideas that fit in a paragraph each.
+Receipt-Driven Development used to be a control plane. A change was routed into a work-run, the run carried capabilities, and the capabilities decided ceremony. That plane was deleted (`feat!: delete the retired work-routing control plane`) and replaced by three ideas that fit in a paragraph each.
 
 **Review happens after the candidate, not before the work.** There is no plan to approve, no run to open. You change something, and if it is worth reviewing, a review is offered on the exact bytes you produced.
 
 **Tier is decided by evidence, never by size.** A thousand-line documentation change is tier 0 and gets no reviewer. Two lines touching authentication are tier 2 and get four. The classifier names its own reason, so the cost is never unexplained.
 
-**The switch is a switch.** `gentle-ai review mode disable` means RDD does not exist: nothing blocks, nothing gates, delivery falls to ordinary repository policy. Turning it back on re-validates from the current state rather than resuming stale obligations.
+**The switch is a switch, and it starts off.** RDD is opt-in: until someone runs `gentle-ai review mode enable --scope global`, RDD does not exist — nothing blocks, nothing gates, delivery falls to ordinary repository policy. `gentle-ai review mode disable` returns to that same state. Turning it on re-validates from the current state rather than resuming stale obligations.
 
 ## 2. The lifecycle
 
@@ -88,11 +88,11 @@ It now reaches: the negotiated gate for every discovery kind, both non-stale amb
 
 Three invariants hold while disabled:
 
-- **It never fabricates approval.** `disabled/unmanaged` keeps `allowed: false`. It exits 0 because it defers, not because it approved.
+- **It never fabricates approval.** When no exact governing receipt applies, `disabled/unmanaged` keeps `allowed: false`. It exits 0 because it defers, not because it approved.
 - **It never destroys information.** An outcome the gate could not decide says so and carries its typed cause.
 - **An unreadable switch is not a disabled switch.** It resolves to managed, so a damaged or tampered mode record can never manufacture an unmanaged result.
 
-Declining consent deliberately does *not* suppress the gate. The prompt's own off-path text says a decline is not the kill switch, and each decline is scoped to one candidate; making it suppress delivery would silently turn "skip once" into "off".
+Declining relayed consent creates no review lineage or receipt. Instead, it atomically records one canonical native candidate-decline authorization in the Git common directory, bound to the frozen candidate identity, trees, paths, modes, base, and untracked proof. With RDD still enabled, that record permits only exact `pre-commit`, `pre-push`, and `pre-pr` delivery under ordinary repository policy and reports `candidate_declined/unmanaged`; it never reports approval and never authorizes release. A changed candidate, base, path, mode, untracked set, publication range, or advertised head cannot inherit the choice. Replaying the exact decline recovers lost output, while corruption or multiple matching records fail closed. The prompt's off-path text still matters: decline is one candidate's unmanaged delivery choice, not the global kill switch, and every later candidate asks again.
 
 ## 6. Platform work
 
@@ -116,7 +116,7 @@ Four mechanical guards now cover that class, all derived from source rather than
 | `TestEveryNamedReviewContinuationIsStructurallyReal` | AST-walks refusal strings; every named verb and flag resolves against the real dispatch and `FlagSet` |
 | mode parity in `review_preflight_reason_test.go` | every distinguishing token of the human refusal is recoverable from the negotiated envelope |
 | `scripts/deadcode-ratchet.sh` | fails on a new unreachable function; the 230 already present are frozen |
-| [guard population declarations](guard-population.md) | AST-binds eight scoped population claims to production guards and rejects exact registry drift |
+| [guard population declarations](guard-population.md) | AST-binds ten scoped population claims to production guards and rejects exact registry drift |
 
 The ratchet is a ratchet on purpose. Demanding zero before it could exist would have meant it never existed.
 
@@ -161,8 +161,10 @@ Two harness defects found by pointing it at itself are worth knowing about, beca
 
 ## 10. Known open
 
-- **SDD `verify` still blocks with reviews off.** The archive gate honors the switch; `applyPreVerifyReviewRouting` blocks verify one phase earlier with `next: "review"`, and `review start` refuses. Unblocking it decides whether verify may run with no review at all.
-- **The `sdd-archive` assets still require `reviewGate.result: allow`** in prose, so the agent-facing contract blocks where the native projection now allows.
 - **`review status` and `--next-transition` do not carry escalation numbers.** `finalize` and the gates do.
 - **Reviewer-result authoring is discover-by-iteration strict.** `finding.lens` must be the unprefixed name; supplying the selector's own output string is rejected.
 - **`max` reasoning effort does not exist.** The Codex effort type accepts `low`, `medium`, `high`, `xhigh`. Codex itself validates nothing, so an unknown value would be silently ignored rather than rejected.
+
+### Resolved disabled-mode SDD behavior
+
+The disabled-mode SDD limitations previously listed here were resolved in `v2.3.0` and remain resolved in `v2.4.0-rc.1` and `main`. When review is disabled, SDD status skips review authority, omits `reviewGate`, and pre-verify does not route to review. Archive proceeds under ordinary policy when `reviewGate` is absent; `reviewGate.result: allow` is required only for a present gate representing discovered review activity. Native lifecycle delivery gates remain separate and, when no exact governing receipt applies, report `disabled/unmanaged`.

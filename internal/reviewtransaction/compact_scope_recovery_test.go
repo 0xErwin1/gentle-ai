@@ -408,6 +408,95 @@ func TestCompactStartAndStatusAgreeOnApprovedScopeChangedCandidate(t *testing.T)
 	}
 }
 
+func TestCompactStartAndStatusDiscoverApprovedRebasedPredecessor(t *testing.T) {
+	repo, predecessor, _, _ := approvedCurrentChangesScopeRecoveryFixtureForProjection(t, "approved-rebase-predecessor", ProjectionStaged)
+	featureBranch := currentBranch(context.Background(), repo)
+	originalBase := strings.TrimSpace(gitSnapshot(t, repo, "rev-parse", "HEAD"))
+	gitSnapshot(t, repo, "add", "--", "tracked.txt")
+	gitSnapshot(t, repo, "commit", "-m", "approved feature")
+	gitSnapshot(t, repo, "branch", "advanced-base", originalBase)
+	gitSnapshot(t, repo, "checkout", "advanced-base")
+	writeSnapshotFile(t, repo, "base-advance.txt", "unrelated base advance\n")
+	gitSnapshot(t, repo, "add", "--", "base-advance.txt")
+	gitSnapshot(t, repo, "commit", "-m", "advance base")
+	currentBase := strings.TrimSpace(gitSnapshot(t, repo, "rev-parse", "HEAD"))
+	gitSnapshot(t, repo, "checkout", featureBranch)
+	gitSnapshot(t, repo, "rebase", "advanced-base")
+
+	target := Target{Kind: TargetBaseDiff, BaseRef: currentBase, Projection: ProjectionStaged, IntendedUntracked: []string{}}
+	requested := newCompactStartStateForTarget(t, repo, "approved-rebase-probe", target)
+	if !equalStrings(requested.InitialSnapshot.Paths, predecessor.GenesisPaths) ||
+		requested.InitialSnapshot.BaseTree == predecessor.InitialSnapshot.BaseTree ||
+		requested.InitialSnapshot.CandidateTree == predecessor.CurrentSnapshot.CandidateTree {
+		t.Fatalf("fixture is not a rebased equivalent target: live=%#v predecessor=%#v", requested.InitialSnapshot, predecessor.InitialSnapshot)
+	}
+
+	started, startErr := StartCompactAuthority(context.Background(), repo, CompactStartRequest{State: requested})
+	status, statusErr := AssessTargetStatus(context.Background(), repo, TargetStatusRequest{Target: target})
+	if startErr != nil || statusErr != nil {
+		t.Fatalf("rebased START/STATUS errors = %v/%v", startErr, statusErr)
+	}
+	if started.Action != CompactStartRecover || started.Record.State.LineageID != predecessor.LineageID {
+		t.Fatalf("rebased START = %q lineage %q, want recovery of %q", started.Action, started.Record.State.LineageID, predecessor.LineageID)
+	}
+	if status.Applicability != TargetApplicabilityCurrent || status.Action != TargetStatusActionRecover ||
+		status.ActionDisposition != RecoveryScopeChanged || status.LineageID != predecessor.LineageID {
+		t.Fatalf("rebased STATUS = %#v", status)
+	}
+
+	writeSnapshotFile(t, repo, "tracked.txt", "approved feature mutated after rebase\n")
+	gitSnapshot(t, repo, "add", "--", "tracked.txt")
+	gitSnapshot(t, repo, "commit", "-m", "mutate rebased feature")
+	mutatedStatus, err := AssessTargetStatus(context.Background(), repo, TargetStatusRequest{
+		Target: target, LineageID: predecessor.LineageID,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if mutatedStatus.Applicability != TargetApplicabilityUnrelated || mutatedStatus.Action != TargetStatusActionStart {
+		t.Fatalf("mutated rebased patch retained predecessor authority: %#v", mutatedStatus)
+	}
+}
+
+func TestCompactStartAndStatusIgnoreApprovedRebasedPredecessorWithPrunedCandidateTree(t *testing.T) {
+	repo, predecessor, _, _ := approvedCurrentChangesScopeRecoveryFixtureForProjection(t, "approved-pruned-predecessor", ProjectionStaged)
+	historicalCandidate := predecessor.CurrentSnapshot.CandidateTree
+	gitSnapshot(t, repo, "reset", "--hard", "HEAD")
+	writeSnapshotFile(t, repo, "base-advance.txt", "unrelated base advance\n")
+	gitSnapshot(t, repo, "add", "--", "base-advance.txt")
+	gitSnapshot(t, repo, "commit", "-m", "advance base")
+	currentBase := strings.TrimSpace(gitSnapshot(t, repo, "rev-parse", "HEAD"))
+	writeSnapshotFile(t, repo, "tracked.txt", "approved candidate\n")
+	gitSnapshot(t, repo, "add", "--", "tracked.txt")
+	gitSnapshot(t, repo, "commit", "-m", "reapply approved feature")
+
+	target := Target{Kind: TargetBaseDiff, BaseRef: currentBase, Projection: ProjectionStaged, IntendedUntracked: []string{}}
+	requested := newCompactStartStateForTarget(t, repo, "approved-pruned-successor", target)
+	if !equalStrings(requested.InitialSnapshot.Paths, predecessor.GenesisPaths) ||
+		requested.InitialSnapshot.BaseTree == predecessor.InitialSnapshot.BaseTree ||
+		requested.InitialSnapshot.CandidateTree == historicalCandidate {
+		t.Fatalf("fixture is not a later same-patch base-diff: live=%#v predecessor=%#v", requested.InitialSnapshot, predecessor.InitialSnapshot)
+	}
+	gitSnapshot(t, repo, "prune", "--expire=now")
+	if _, err := runGit(context.Background(), repo, nil, nil, "cat-file", "-e", historicalCandidate+"^{tree}"); err == nil {
+		t.Fatalf("historical candidate tree %s remains available", historicalCandidate)
+	}
+
+	before, beforeErr := AssessTargetStatus(context.Background(), repo, TargetStatusRequest{Target: target})
+	if beforeErr != nil || before.Applicability != TargetApplicabilityUnrelated || before.Action != TargetStatusActionStart {
+		t.Fatalf("STATUS before new review = %#v, %v", before, beforeErr)
+	}
+	started, startErr := StartCompactAuthority(context.Background(), repo, CompactStartRequest{State: requested})
+	if startErr != nil || started.Action != CompactStartCreated || started.Record.State.LineageID != requested.LineageID {
+		t.Fatalf("START = %#v, %v", started, startErr)
+	}
+	after, afterErr := AssessTargetStatus(context.Background(), repo, TargetStatusRequest{Target: target})
+	if afterErr != nil || after.Applicability != TargetApplicabilityCurrent || after.LineageID != requested.LineageID ||
+		after.Action != TargetStatusActionFinalize {
+		t.Fatalf("STATUS after new review = %#v, %v", after, afterErr)
+	}
+}
+
 func TestCorrectionRequiredScopeRecoveryContractionGuards(t *testing.T) {
 	t.Run("missing authorization", func(t *testing.T) {
 		repo, predecessor, _, record := correctionContractionRecoveryFixture(t, "contraction-noauth-predecessor")
@@ -589,10 +678,19 @@ func TestCorrectionRequiredLineageDoesNotCaptureDisjointCandidate(t *testing.T) 
 // change, so before the supplied-authorization gate existed the caller's
 // --maintainer-authorization was recorded verbatim without ever being compared.
 func approvedCurrentChangesScopeRecoveryFixture(t *testing.T, lineage string) (string, CompactState, CompactStore, CompactRecord) {
+	return approvedCurrentChangesScopeRecoveryFixtureForProjection(t, lineage, ProjectionWorkspace)
+}
+
+func approvedCurrentChangesScopeRecoveryFixtureForProjection(t *testing.T, lineage string, projection Projection) (string, CompactState, CompactStore, CompactRecord) {
 	t.Helper()
 	repo := initSnapshotRepo(t)
 	writeSnapshotFile(t, repo, "tracked.txt", "approved candidate\n")
-	state := newCompactTestState(t, repo, lineage)
+	if projection == ProjectionStaged {
+		gitSnapshot(t, repo, "add", "--", "tracked.txt")
+	}
+	state := newCompactStartStateForTarget(t, repo, lineage, Target{
+		Kind: TargetCurrentChanges, Projection: projection, IntendedUntracked: []string{},
+	})
 	store := storeCompactStartAuthority(t, repo, state)
 	record, err := store.Load()
 	if err != nil {

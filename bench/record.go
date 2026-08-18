@@ -41,7 +41,7 @@ var knownEnvelopes = []string{
 	"gentle-ai.review-integration.status/v2",
 	"gentle-ai.review-capture-preflight/v1",
 	"gentle-ai.review-result-artifact/v2",
-	"gentle-ai.review-verification-evidence/v1",
+	"gentle-ai.review-verification-evidence/v2",
 	"gentle-ai.review-mode/v1",
 	"gentle-ai.rdd-mode-status/v1",
 }

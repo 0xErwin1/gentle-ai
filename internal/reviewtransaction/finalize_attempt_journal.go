@@ -23,16 +23,18 @@ var writeFinalizeAttemptAtomic = writeAtomic
 // intentionally do not appear here: paths are transport, their payloads are
 // the authority-relevant request.
 type FinalizeAttemptRequest struct {
-	LineageID                string `json:"lineage_id"`
-	ExpectedRevision         string `json:"expected_revision"`
-	CandidateDigest          string `json:"candidate_digest"`
-	ReviewerResultsDigest    string `json:"reviewer_results_digest"`
-	CorrectionForecastDigest string `json:"correction_forecast_digest"`
-	ValidationDigest         string `json:"validation_digest"`
-	RefuterDigest            string `json:"refuter_digest"`
-	EvidenceDigest           string `json:"evidence_digest"`
-	FailedDigest             string `json:"failed_digest"`
-	RequestDigest            string `json:"request_digest"`
+	LineageID                string              `json:"lineage_id"`
+	ExpectedRevision         string              `json:"expected_revision"`
+	CandidateDigest          string              `json:"candidate_digest"`
+	ReviewerResultsDigest    string              `json:"reviewer_results_digest"`
+	CorrectionForecastDigest string              `json:"correction_forecast_digest"`
+	ValidationDigest         string              `json:"validation_digest"`
+	RefuterDigest            string              `json:"refuter_digest"`
+	EvidenceDigest           string              `json:"evidence_digest"`
+	FailedDigest             string              `json:"failed_digest"`
+	EvidenceRecordDigest     string              `json:"evidence_record_digest,omitempty"`
+	VerificationOutcome      VerificationOutcome `json:"verification_outcome,omitempty"`
+	RequestDigest            string              `json:"request_digest"`
 }
 
 type FinalizeAttemptTransition struct {
@@ -393,6 +395,12 @@ func validateFinalizeAttemptRequest(lineageID string, request FinalizeAttemptReq
 		if !validSHA256(digest) {
 			return errors.New("invalid finalize attempt input digest")
 		}
+	}
+	if (request.EvidenceRecordDigest == "") != (request.VerificationOutcome == "") {
+		return errors.New("finalize attempt captured evidence binding is incomplete") // refusal:by-design world-action: persisted journal evidence metadata is partial and cannot be reconstructed safely
+	}
+	if request.EvidenceRecordDigest != "" && (!validSHA256(request.EvidenceRecordDigest) || !validVerificationOutcome(request.VerificationOutcome)) {
+		return errors.New("invalid finalize attempt captured evidence binding") // refusal:by-design world-action: persisted journal evidence metadata failed closed validation and requires code or storage repair
 	}
 	return nil
 }

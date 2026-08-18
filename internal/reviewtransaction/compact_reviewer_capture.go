@@ -13,6 +13,10 @@ import (
 	"reflect"
 )
 
+// ErrCapturedReviewerResultSlotConflict reports an immutable reviewer result
+// slot occupied by different canonical bytes.
+var ErrCapturedReviewerResultSlotConflict = errors.New("captured reviewer result slot conflicts with different canonical bytes") // refusal:by-design world-action: transaction-layer capture cannot alter an immutable occupied slot
+
 // CompactAdmittedReviewerResultRequest contains one provider-observed reviewer
 // result and the exact native authority preimages that result must bind.
 type CompactAdmittedReviewerResultRequest struct {
@@ -24,11 +28,27 @@ type CompactAdmittedReviewerResultRequest struct {
 	Result                    LensResult
 	CandidateCausalFindingIDs []string
 	RawPayload                []byte
+	// PreparePublication performs caller-owned quarantine work under the authority lock.
+	PreparePublication func(CompactState) error
+}
+
+// CompactAdmittedReviewerCapture is the canonical readback from one durable
+// selected-lens slot. Its subject, admission, payload, and digest originate
+// from immutable storage, never from the provider's in-memory host output.
+type CompactAdmittedReviewerCapture struct {
+	LensResult
+	Slot      CompactReviewerResultSlot
+	Subject   ArtifactSubject
+	Admission ArtifactAdmission
 }
 
 // ResolveAdmittedReviewerResult reads and re-admits one already captured
 // reviewer slot without publishing or changing compact authority.
 func (store CompactStore) ResolveAdmittedReviewerResult(ctx context.Context, expectedRevision, targetIdentity string, frozen FrozenCandidateContext, subject ArtifactSubject) (result LensResult, found bool, err error) {
+	return store.resolveAdmittedReviewerResult(ctx, expectedRevision, targetIdentity, frozen, subject, nil)
+}
+
+func (store CompactStore) resolveAdmittedReviewerResult(ctx context.Context, expectedRevision, targetIdentity string, frozen FrozenCandidateContext, subject ArtifactSubject, expectedAdmission *ArtifactAdmission) (result LensResult, found bool, err error) {
 	if ctx == nil {
 		return LensResult{}, false, errors.New("resolve admitted reviewer result context is nil")
 	}
@@ -38,102 +58,120 @@ func (store CompactStore) ResolveAdmittedReviewerResult(ctx context.Context, exp
 	if !validSHA256(expectedRevision) || !validSHA256(targetIdentity) || targetIdentity != subject.TargetIdentity || subject.AuthorityRevision != expectedRevision {
 		return LensResult{}, false, errors.New("resolve admitted reviewer result requires an exact revision and target")
 	}
-	err = store.CaptureReviewerResult(expectedRevision, targetIdentity, subject.Lens, subject.SelectedOrder, func(state CompactState) error {
-		nativeFrozen, err := (SnapshotBuilder{Repo: store.repo}).FrozenCandidateContext(ctx, state.InitialSnapshot)
-		if err != nil {
-			return err
-		}
-		expected, err := NewArtifactSubject(state, expectedRevision, nativeFrozen, subject.Lens, subject.SelectedOrder, subject.CorrectionTargetIdentity)
-		if err != nil {
-			return err
-		}
-		if !reflect.DeepEqual(nativeFrozen, frozen) || expected != subject {
-			return errors.New("resolved reviewer result does not match repository authority")
-		}
-		path := filepath.Join(store.Dir, CompactReviewerResultsDir, fmt.Sprintf("%02d-%s.json", subject.SelectedOrder, subject.Lens))
-		if _, err := os.Lstat(path); errors.Is(err, fs.ErrNotExist) {
-			return nil
-		} else if err != nil {
-			return err
-		}
-		payload, _, err := readCompactReviewerArtifact(path)
-		if err != nil {
-			return err
-		}
-		decoder := json.NewDecoder(bytes.NewReader(payload))
-		decoder.DisallowUnknownFields()
-		var envelope compactAdmittedReviewerResult
-		if err := decoder.Decode(&envelope); err != nil {
-			return fmt.Errorf("decode admitted reviewer result: %w", err)
-		}
-		var extra any
-		if err := decoder.Decode(&extra); err != io.EOF || envelope.Schema != AdmittedReviewerResultSchema || envelope.Subject != expected || envelope.Admission.Validate(expected) != nil || len(envelope.Result) == 0 {
-			return errors.New("admitted reviewer result does not match locked authority")
-		}
-		result, found = reAdmitCompactReviewerResult(envelope, expected, nativeFrozen)
-		if !found {
-			return errors.New("admitted reviewer result failed native re-admission")
-		}
-		return nil
-	})
-	return result, found, err
+	record, err := store.LoadContext(ctx)
+	if err != nil {
+		return LensResult{}, false, err
+	}
+	state := record.State
+	if record.HistoricalCompat {
+		return LensResult{}, false, NewLegacyReadOnlyError("review/capture-result", state.LineageID)
+	}
+	if record.Revision != expectedRevision || state.State != StateReviewing || state.InitialSnapshot.Identity != targetIdentity ||
+		subject.SelectedOrder < 0 || subject.SelectedOrder >= len(state.SelectedLenses) || state.SelectedLenses[subject.SelectedOrder] != subject.Lens {
+		// refusal:by-design operator-knowledge: the provider must refresh the exact current revision, target, lens, and order before resolving this slot
+		return LensResult{}, false, errors.New("resolve binding does not match the current reviewing authority")
+	}
+	builder := SnapshotBuilder{Repo: store.repo}
+	nativeFrozen, err := builder.FrozenCandidateContext(ctx, state.InitialSnapshot)
+	if err != nil {
+		return LensResult{}, false, err
+	}
+	nativeFrozen, expected, err := artifactSubjectForSchema(ctx, builder, state, expectedRevision, nativeFrozen, subject.Lens, subject.SelectedOrder, subject.CorrectionTargetIdentity, subject.Schema)
+	if err != nil {
+		return LensResult{}, false, err
+	}
+	if !reflect.DeepEqual(nativeFrozen, frozen) || expected != subject {
+		return LensResult{}, false, errors.New("resolved reviewer result does not match repository authority")
+	}
+	path := filepath.Join(store.Dir, CompactReviewerResultsDir, fmt.Sprintf("%02d-%s.json", subject.SelectedOrder, subject.Lens))
+	if _, err := os.Lstat(path); errors.Is(err, fs.ErrNotExist) {
+		return LensResult{}, false, nil
+	} else if err != nil {
+		return LensResult{}, false, err
+	}
+	payload, _, err := readCompactReviewerArtifact(path)
+	if err != nil {
+		return LensResult{}, false, err
+	}
+	decoder := json.NewDecoder(bytes.NewReader(payload))
+	decoder.DisallowUnknownFields()
+	var envelope compactAdmittedReviewerResult
+	if err := decoder.Decode(&envelope); err != nil {
+		return LensResult{}, false, fmt.Errorf("decode admitted reviewer result: %w", err)
+	}
+	var extra any
+	if err := decoder.Decode(&extra); err != io.EOF || envelope.Schema != admittedReviewerResultSchemaForSubject(expected) || envelope.Subject != expected || envelope.Admission.Validate(expected) != nil || len(envelope.Result) == 0 || expectedAdmission != nil && !reflect.DeepEqual(envelope.Admission, *expectedAdmission) {
+		// refusal:by-design world-action: only an exact provider-admitted artifact can satisfy this immutable slot; conflicting bytes must remain refused
+		return LensResult{}, false, errors.New("admitted reviewer result does not match repository authority")
+	}
+	result, found = reAdmitCompactReviewerResult(ctx, envelope, expected, nativeFrozen)
+	if !found {
+		return LensResult{}, false, errors.New("admitted reviewer result failed native re-admission")
+	}
+	return result, true, nil
 }
 
-// CaptureAdmittedReviewerResult admits and durably publishes one real reviewer
-// result while the compact reviewing authority and selected lens slot remain
-// locked to the request's exact revision and target.
+// CaptureAdmittedReviewerResult admits, durably publishes, and reads back one
+// real reviewer result while the compact reviewing authority and selected lens
+// slot remain locked to the request's exact revision and target.
 func (store CompactStore) CaptureAdmittedReviewerResult(
 	ctx context.Context,
 	request CompactAdmittedReviewerResultRequest,
-) (LensResult, error) {
+) (CompactAdmittedReviewerCapture, error) {
 	if ctx == nil {
-		return LensResult{}, errors.New("capture admitted reviewer result context is nil")
+		return CompactAdmittedReviewerCapture{}, errors.New("capture admitted reviewer result context is nil")
 	}
 	if err := ctx.Err(); err != nil {
-		return LensResult{}, err
+		return CompactAdmittedReviewerCapture{}, err
 	}
 	if !validSHA256(request.ExpectedRevision) ||
 		!validSHA256(request.TargetIdentity) ||
 		request.TargetIdentity != request.ArtifactSubject.TargetIdentity {
-		return LensResult{}, errors.New(
+		return CompactAdmittedReviewerCapture{}, errors.New(
 			"capture admitted reviewer result requires an exact revision and target",
 		)
 	}
 	if err := ValidateArtifactSubject(request.ArtifactSubject); err != nil {
-		return LensResult{}, err
+		return CompactAdmittedReviewerCapture{}, err
 	}
 	if request.ArtifactSubject.AuthorityRevision != request.ExpectedRevision ||
 		request.Result.Lens != request.ArtifactSubject.Lens {
-		return LensResult{}, errors.New(
+		return CompactAdmittedReviewerCapture{}, errors.New(
 			"reviewer result does not bind the requested authority lens",
 		)
 	}
 	if len(request.RawPayload) == 0 ||
 		len(request.RawPayload) > compactReviewerResultSizeLimit {
-		return LensResult{}, errors.New(
+		return CompactAdmittedReviewerCapture{}, errors.New(
 			"raw reviewer result is empty or outside the native size bound",
 		)
 	}
 
+	canonicalInspection := request.Inspection
+	canonicalInspectionPaths, err := canonicalPaths(request.Inspection.Paths)
+	if err != nil {
+		return CompactAdmittedReviewerCapture{}, err
+	}
+	canonicalInspection.Paths = canonicalInspectionPaths
 	canonicalResult, err := CanonicalCompactLensResult(request.Result)
 	if err != nil {
-		return LensResult{}, err
+		return CompactAdmittedReviewerCapture{}, err
 	}
 	providerResult := compactProviderReviewerResult{
 		SubjectHash: request.ArtifactSubject.SubjectHash,
-		Inspection:  request.Inspection,
+		Inspection:  canonicalInspection,
 		Lens:        request.ArtifactSubject.Lens,
 		Findings:    canonicalResult.Findings,
 		Evidence:    canonicalResult.Evidence,
 	}
 	canonicalPayload, err := json.Marshal(providerResult)
 	if err != nil {
-		return LensResult{}, err
+		return CompactAdmittedReviewerCapture{}, err
 	}
 	canonicalPayload = append(canonicalPayload, '\n')
 
-	var admitted LensResult
-	err = store.CaptureReviewerResult(
+	var published CompactReviewerResultSlot
+	err = store.captureReviewerResult(
 		request.ExpectedRevision,
 		request.TargetIdentity,
 		request.ArtifactSubject.Lens,
@@ -142,9 +180,17 @@ func (store CompactStore) CaptureAdmittedReviewerResult(
 			if err := ctx.Err(); err != nil {
 				return err
 			}
-			nativeContext, err := (SnapshotBuilder{
+			builder := SnapshotBuilder{
 				Repo: store.repo,
-			}).FrozenCandidateContext(ctx, state.InitialSnapshot)
+			}
+			nativeContext, err := builder.FrozenCandidateContext(ctx, state.InitialSnapshot)
+			if err != nil {
+				return err
+			}
+			nativeContext, expected, err := artifactSubjectForSchema(
+				ctx, builder, state, request.ExpectedRevision, nativeContext, request.ArtifactSubject.Lens,
+				request.ArtifactSubject.SelectedOrder, request.ArtifactSubject.CorrectionTargetIdentity, request.ArtifactSubject.Schema,
+			)
 			if err != nil {
 				return err
 			}
@@ -153,28 +199,18 @@ func (store CompactStore) CaptureAdmittedReviewerResult(
 					"reviewer frozen context does not match repository authority",
 				)
 			}
-			expected, err := NewArtifactSubject(
-				state,
-				request.ExpectedRevision,
-				nativeContext,
-				request.ArtifactSubject.Lens,
-				request.ArtifactSubject.SelectedOrder,
-				request.ArtifactSubject.CorrectionTargetIdentity,
-			)
-			if err != nil {
-				return err
-			}
 			if expected != request.ArtifactSubject {
 				return errors.New(
 					"reviewer artifact subject does not match the locked authority",
 				)
 			}
-			admissionResult, admission, err := AdmitArtifact(
+			_, admission, err := AdmitArtifact(
+				ctx,
 				ArtifactAdmissionRequest{
 					ExpectedSubject:           expected,
 					FrozenContext:             nativeContext,
 					EchoedSubjectHash:         providerResult.SubjectHash,
-					Inspection:                providerResult.Inspection,
+					Inspection:                canonicalInspection,
 					Result:                    canonicalResult,
 					CandidateCausalFindingIDs: request.CandidateCausalFindingIDs,
 					RawPayload:                request.RawPayload,
@@ -185,7 +221,7 @@ func (store CompactStore) CaptureAdmittedReviewerResult(
 				return err
 			}
 			envelopePayload, err := json.Marshal(compactAdmittedReviewerResult{
-				Schema:    AdmittedReviewerResultSchema,
+				Schema:    admittedReviewerResultSchemaForSubject(expected),
 				Subject:   expected,
 				Admission: admission,
 				Result: append(
@@ -202,84 +238,104 @@ func (store CompactStore) CaptureAdmittedReviewerResult(
 					"admitted reviewer result exceeds the native size bound",
 				)
 			}
-			admitted = admissionResult
-			return publishCompactAdmittedReviewerResult(
+			if request.PreparePublication != nil {
+				if err := request.PreparePublication(state); err != nil {
+					return err
+				}
+			}
+			published, err = publishCompactAdmittedReviewerResult(
 				store.Dir,
 				expected,
 				envelopePayload,
 			)
+			return err
 		},
 	)
 	if err != nil {
-		return LensResult{}, err
+		if errors.Is(err, ErrAuthorityLockTimeout) {
+			_, expectedAdmission, admissionErr := AdmitArtifact(ctx, ArtifactAdmissionRequest{
+				ExpectedSubject: request.ArtifactSubject, FrozenContext: request.FrozenContext,
+				EchoedSubjectHash: request.ArtifactSubject.SubjectHash, Inspection: canonicalInspection,
+				Result: request.Result, CandidateCausalFindingIDs: request.CandidateCausalFindingIDs,
+				RawPayload: request.RawPayload, CanonicalPayload: canonicalPayload,
+			})
+			if admissionErr == nil {
+				_, found, replayErr := store.resolveAdmittedReviewerResult(
+					ctx, request.ExpectedRevision, request.TargetIdentity, request.FrozenContext,
+					request.ArtifactSubject, &expectedAdmission,
+				)
+				if replayErr == nil && found {
+					published, replayErr = ReadCompactReviewerResultSlot(store.Dir, request.ArtifactSubject.SelectedOrder, request.ArtifactSubject.Lens)
+					if replayErr == nil {
+						return compactAdmittedReviewerCaptureFromSlot(ctx, published, request.FrozenContext, request.ArtifactSubject)
+					}
+				}
+			}
+		}
+		return CompactAdmittedReviewerCapture{}, err
 	}
-	return admitted, nil
+	return compactAdmittedReviewerCaptureFromSlot(ctx, published, request.FrozenContext, request.ArtifactSubject)
+}
+
+func compactAdmittedReviewerCaptureFromSlot(
+	ctx context.Context,
+	slot CompactReviewerResultSlot,
+	frozen FrozenCandidateContext,
+	subject ArtifactSubject,
+) (CompactAdmittedReviewerCapture, error) {
+	if !slot.Occupied {
+		// refusal:by-design human-authority: a successful immutable publication without a verifiable readback requires storage inspection, not a retry that could misstate evidence
+		return CompactAdmittedReviewerCapture{}, errors.New("admitted reviewer result readback is missing")
+	}
+	decoder := json.NewDecoder(bytes.NewReader(slot.Payload))
+	decoder.DisallowUnknownFields()
+	var envelope compactAdmittedReviewerResult
+	if err := decoder.Decode(&envelope); err != nil {
+		return CompactAdmittedReviewerCapture{}, fmt.Errorf("decode admitted reviewer result readback: %w", err)
+	}
+	var extra any
+	if err := decoder.Decode(&extra); err != io.EOF || envelope.Schema != admittedReviewerResultSchemaForSubject(subject) ||
+		envelope.Subject != subject || envelope.Admission.Validate(subject) != nil {
+		// refusal:by-design human-authority: immutable readback bytes that no longer bind the admitted authority require storage inspection rather than replacement
+		return CompactAdmittedReviewerCapture{}, errors.New("admitted reviewer result readback does not match repository authority")
+	}
+	result, found := reAdmitCompactReviewerResult(ctx, envelope, subject, frozen)
+	if !found {
+		// refusal:by-design human-authority: immutable evidence that fails native re-admission must be inspected or quarantined by an authorized maintainer
+		return CompactAdmittedReviewerCapture{}, errors.New("admitted reviewer result readback failed native re-admission")
+	}
+	return CompactAdmittedReviewerCapture{LensResult: result, Slot: slot, Subject: envelope.Subject, Admission: envelope.Admission}, nil
+}
+
+func artifactSubjectForSchema(
+	ctx context.Context,
+	builder SnapshotBuilder,
+	state CompactState,
+	revision string,
+	frozen FrozenCandidateContext,
+	lens string,
+	order int,
+	correctionTargetIdentity string,
+	schema string,
+) (FrozenCandidateContext, ArtifactSubject, error) {
+	if schema == ArtifactSubjectSchemaV1 {
+		legacy, err := builder.WithLegacyCandidateDiff(ctx, state.InitialSnapshot, frozen)
+		if err != nil {
+			return FrozenCandidateContext{}, ArtifactSubject{}, err
+		}
+		subject, err := NewLegacyArtifactSubject(state, revision, legacy, lens, order, correctionTargetIdentity)
+		return legacy, subject, err
+	}
+	subject, err := NewArtifactSubject(state, revision, frozen, lens, order, correctionTargetIdentity)
+	return frozen, subject, err
 }
 
 func publishCompactAdmittedReviewerResult(
 	storeDir string,
 	subject ArtifactSubject,
 	payload []byte,
-) error {
-	dir := filepath.Join(storeDir, CompactReviewerResultsDir)
-	_, err := createPrivateRARDirectory(dir)
-	if err != nil {
-		return fmt.Errorf("create private reviewer result directory: %w", err)
-	}
-	// Sync on every attempt rather than only the creating attempt. If a prior
-	// parent sync was interrupted, exact replay must repair that durability
-	// boundary before publishing either child artifact.
-	if err := SyncReviewDirectory(storeDir); err != nil {
-		return fmt.Errorf(
-			"sync reviewer result parent directory: %w",
-			err,
-		)
-	}
-	path := filepath.Join(
-		dir,
-		fmt.Sprintf("%02d-%s.json", subject.SelectedOrder, subject.Lens),
-	)
-	digestPayload := []byte(compactPreservedPayloadDigest(payload) + "\n")
-
-	// Preflight both immutable slots so a known sidecar conflict cannot leave a
-	// newly published payload without its matching digest.
-	if err := requireCompactReviewerSlotCompatible(
-		path,
-		payload,
-		compactReviewerResultSizeLimit,
-	); err != nil {
-		return err
-	}
-	if err := requireCompactReviewerSlotCompatible(
-		path+".sha256",
-		digestPayload,
-		256,
-	); err != nil {
-		return err
-	}
-	if err := publishPrivateCompactReviewerFile(
-		path,
-		payload,
-		compactReviewerResultSizeLimit,
-	); err != nil {
-		return fmt.Errorf("publish admitted reviewer result: %w", err)
-	}
-	if err := publishPrivateCompactReviewerFile(
-		path+".sha256",
-		digestPayload,
-		256,
-	); err != nil {
-		return fmt.Errorf("publish admitted reviewer result digest: %w", err)
-	}
-	readBack, digest, err := readCompactReviewerArtifact(path)
-	if err != nil {
-		return fmt.Errorf("read back admitted reviewer result: %w", err)
-	}
-	if !bytes.Equal(readBack, payload) ||
-		digest != compactPreservedPayloadDigest(payload) {
-		return errors.New("admitted reviewer result readback mismatch")
-	}
-	return nil
+) (CompactReviewerResultSlot, error) {
+	return publishCompactRoleResultSlot(storeDir, compactLensRoleResultSlotKey(subject.SelectedOrder, subject.Lens), payload)
 }
 
 func requireCompactReviewerSlotCompatible(
@@ -295,9 +351,7 @@ func requireCompactReviewerSlotCompatible(
 		return err
 	}
 	if !bytes.Equal(existing, payload) {
-		return errors.New(
-			"captured reviewer result already exists with different canonical bytes",
-		)
+		return fmt.Errorf("%w: existing bytes differ from the requested payload", ErrCapturedReviewerResultSlotConflict)
 	}
 	return nil
 }

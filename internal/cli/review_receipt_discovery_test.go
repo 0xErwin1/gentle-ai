@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -30,6 +31,7 @@ func assertScopeChangeRecovery(t *testing.T, failure ReviewIntegrationFailure, l
 }
 
 func TestUnqualifiedGateDiscoverySelectsOneExactReceiptAcrossUnrelatedHistory(t *testing.T) {
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	first, _ := approveDiscoveryMarkdown(t, repo, "review-discovery-first", "docs/first.md", "first\n")
 	runReviewCLIGit(t, repo, "add", "-A")
@@ -69,6 +71,7 @@ func TestUnqualifiedGateDiscoverySelectsOneExactReceiptAcrossUnrelatedHistory(t 
 // "exact recommit" branch AssessCompactGateTarget itself special-cases) still
 // needs the expensive path.
 func TestPreCommitGateDiscoverySkipsAssessmentForGenesisDisjointTerminalLeaves(t *testing.T) {
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	const n = 12
 	for index := 0; index < n; index++ {
@@ -104,7 +107,11 @@ func TestPreCommitGateDiscoverySkipsAssessmentForGenesisDisjointTerminalLeaves(t
 
 	_, _, discoveryErr := discoverCompactFacadeGateReview(context.Background(), repo, "", reviewtransaction.NativeGateRequestInput{Gate: reviewtransaction.GatePreCommit})
 	var discovery *ReviewReceiptDiscoveryError
-	if !errors.As(discoveryErr, &discovery) || discovery.Kind != ReviewReceiptUnrelated || len(discovery.Candidates) != n {
+	// issue #3408: the unrelated denial no longer enumerates the terminal
+	// leaves it walked -- none of them is actionable for this candidate -- so
+	// the surviving observable is the kind, and the skip count below is what
+	// this test actually proves.
+	if !errors.As(discoveryErr, &discovery) || discovery.Kind != ReviewReceiptUnrelated || len(discovery.Candidates) != 0 {
 		t.Fatalf("pre-commit discovery over %d disjoint terminal leaves = %#v, err=%v", n, discovery, discoveryErr)
 	}
 	if assessed >= n {
@@ -122,6 +129,7 @@ func TestPreCommitGateDiscoverySkipsAssessmentForGenesisDisjointTerminalLeaves(t
 // lineages -- so it must still be discovered and selected exactly as
 // AssessCompactGateTarget's un-skipped path would.
 func TestPreCommitGateDiscoveryStillSelectsExactReceiptAmongDisjointNoiseLineages(t *testing.T) {
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	const n = 8
 	for index := 0; index < n; index++ {
@@ -154,7 +162,80 @@ func TestPreCommitGateDiscoveryStillSelectsExactReceiptAmongDisjointNoiseLineage
 	t.Logf("expensive per-leaf assessment ran %d times for %d disjoint noise lineages plus the governing one", assessed, n)
 }
 
+// TestUnrelatedReceiptDenialNamesTheCandidateSituationNotOtherLineages is
+// issue #3408 at the live gate boundary. The denial itself is correct and
+// stays a denial: a candidate with no approved receipt must be refused.
+// What was wrong is what the refusal REPORTED. It carried every terminal
+// lineage the discovery walk had examined -- an enumeration that grows with
+// the store, because lineages accumulate and nothing reaps them (#1656) --
+// and worded itself as "terminal review receipts exist only for unrelated
+// targets", so an operator read it as "some old lineage is blocking me",
+// went looking for the connection, and found none, because there is none.
+//
+// Every lineage in that set assessed as UNRELATED to this candidate. None of
+// them can be selected, recovered, or acted on here, so none of them belongs
+// in the refusal. The refusal must state the candidate's own situation and
+// the one route out of it.
+func TestUnrelatedReceiptDenialNamesTheCandidateSituationNotOtherLineages(t *testing.T) {
+	reviewEnabledHome(t)
+	repo := initReviewCLIRepo(t)
+	const n = 6
+	lineages := make([]string, 0, n)
+	for index := 0; index < n; index++ {
+		lineage := fmt.Sprintf("unrelated-denial-noise-%02d", index)
+		approveDiscoveryMarkdown(t, repo, lineage, fmt.Sprintf("docs/unrelated-denial-%02d.md", index), fmt.Sprintf("noise %d\n", index))
+		runReviewCLIGit(t, repo, "add", "-A")
+		runReviewCLIGit(t, repo, "commit", "-qm", lineage)
+		lineages = append(lineages, lineage)
+	}
+	// The live candidate touches a path none of those lineages reviewed, so
+	// discovery classifies every one of them unrelated and denies.
+	if err := os.WriteFile(filepath.Join(repo, "live-candidate.txt"), []byte("live staged change\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runReviewCLIGit(t, repo, "add", "-A")
+
+	var output bytes.Buffer
+	gateErr := RunReviewFacadeValidate([]string{"--cwd", repo, "--gate", string(reviewtransaction.GatePreCommit)}, &output)
+	var denied ReviewGateDeniedError
+	if !errors.As(gateErr, &denied) {
+		t.Fatalf("candidate with no approved receipt was not denied: %T %v\n%s", gateErr, gateErr, output.String())
+	}
+	var result ReviewValidateResult
+	decodeStrictReviewJSON(t, output.Bytes(), &result)
+	if result.Allowed || result.Context.Denial == nil || result.Context.Denial.Code != string(ReviewReceiptUnrelated) {
+		t.Fatalf("denial = %#v, want a fail-closed %q\n%s", result.Context.Denial, ReviewReceiptUnrelated, output.String())
+	}
+	if !strings.Contains(result.Reason, "no approved review receipt covers this candidate") ||
+		!strings.Contains(result.Reason, "gentle-ai review start") {
+		t.Fatalf("denial reason = %q, want it to lead with this candidate's own situation and name its route", result.Reason)
+	}
+	payload := output.String()
+	for _, lineage := range lineages {
+		if strings.Contains(payload, lineage) {
+			t.Fatalf("denial reported unrelated lineage %q as though it were the obstacle:\n%s", lineage, payload)
+		}
+	}
+
+	// The typed discovery error carries no enumeration either, so no other
+	// renderer can grow one back.
+	_, _, discoveryErr := discoverCompactFacadeGateReview(context.Background(), repo, "", reviewtransaction.NativeGateRequestInput{Gate: reviewtransaction.GatePreCommit})
+	var discovery *ReviewReceiptDiscoveryError
+	if !errors.As(discoveryErr, &discovery) || discovery.Kind != ReviewReceiptUnrelated || len(discovery.Candidates) != 0 {
+		t.Fatalf("unrelated discovery over %d terminal lineages = %#v, err=%v", n, discovery, discoveryErr)
+	}
+
+	// The negotiated failure envelope leads with the same statement.
+	failure := newReviewIntegrationFailure("review.validate", nil, discoveryErr)
+	if failure.Code != string(ReviewReceiptUnrelated) ||
+		!strings.Contains(failure.Message, "No approved review receipt covers this candidate") ||
+		!strings.Contains(failure.Message, "gentle-ai review start") {
+		t.Fatalf("negotiated unrelated failure = %#v", failure)
+	}
+}
+
 func TestReceiptlessTerminalLegacyChainIsInventoryReadableButNeverGateAuthority(t *testing.T) {
+	reviewEnabledHome(t)
 	fixture := newLegacyCLIFixture(t, "legacy-pre-receipt")
 	if err := os.Remove(fixture.receiptPath); err != nil {
 		t.Fatal(err)
@@ -199,6 +280,7 @@ func TestReceiptlessTerminalLegacyChainIsInventoryReadableButNeverGateAuthority(
 }
 
 func TestUnqualifiedGateDiscoveryReturnsTypedMissingAndScopeChanged(t *testing.T) {
+	reviewEnabledHome(t)
 	t.Run("missing", func(t *testing.T) {
 		repo := initReviewCLIRepo(t)
 		var output bytes.Buffer
@@ -284,6 +366,7 @@ func TestUnqualifiedGateDiscoveryReturnsTypedMissingAndScopeChanged(t *testing.T
 }
 
 func TestUnqualifiedPrePushDiscoveryReportsTargetResolutionWithoutMutation(t *testing.T) {
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	_, store := approveDiscoveryMarkdown(t, repo, "review-discovery-missing-upstream", "docs/reviewed.md", "reviewed\n")
 	runReviewCLIGit(t, repo, "add", "-A")
@@ -342,11 +425,33 @@ func TestUnqualifiedPrePushDiscoveryReportsTargetResolutionWithoutMutation(t *te
 	}
 }
 
+// TestUnqualifiedPrePushDiscoveryKeepsCorruptAuthorityPrecedence pinned an
+// ordering between two denials the unqualified path can no longer produce
+// together, because an unrelated corrupt entry is no longer a denial of this
+// candidate at all. The precedence that survives is the one that was ever
+// load-bearing: naming the corrupt lineage produces the corruption
+// classification, and nothing else silently takes its place.
 func TestUnqualifiedPrePushDiscoveryKeepsCorruptAuthorityPrecedence(t *testing.T) {
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	approveDiscoveryMarkdown(t, repo, "review-discovery-target-and-corruption", "docs/reviewed.md", "reviewed\n")
 	runReviewCLIGit(t, repo, "add", "-A")
 	runReviewCLIGit(t, repo, "commit", "-qm", "deliver reviewed target")
+	unqualifiedPrePush := func() (string, error) {
+		var output bytes.Buffer
+		err := RunReview([]string{
+			"validate", "--contract", ReviewIntegrationContractV1, "--cwd", repo,
+			"--gate", string(reviewtransaction.GatePrePush),
+		}, &output)
+		return output.String(), err
+	}
+
+	// The same fixture, evaluated twice, with the corrupt entry as the only
+	// difference. Anything the unqualified path says about this candidate has
+	// to be identical on both sides, because nothing about this candidate
+	// changed.
+	beforeOutput, beforeErr := unqualifiedPrePush()
+
 	commonDir := filepath.Clean(strings.TrimSpace(runReviewCLIGit(t, repo, "rev-parse", "--path-format=absolute", "--git-common-dir")))
 	broken := filepath.Join(commonDir, "gentle-ai", "review-transactions", "v2", "corrupt-target-candidate")
 	if err := os.MkdirAll(broken, 0o755); err != nil {
@@ -356,22 +461,32 @@ func TestUnqualifiedPrePushDiscoveryKeepsCorruptAuthorityPrecedence(t *testing.T
 		t.Fatal(err)
 	}
 
-	var output bytes.Buffer
-	runErr := RunReview([]string{
-		"validate", "--contract", ReviewIntegrationContractV1, "--cwd", repo,
-		"--gate", string(reviewtransaction.GatePrePush),
-	}, &output)
-	if runErr == nil {
-		t.Fatal("corrupt authority with missing upstream validated")
+	afterOutput, afterErr := unqualifiedPrePush()
+	if afterOutput != beforeOutput || (afterErr == nil) != (beforeErr == nil) {
+		t.Fatalf("an unrelated corrupt entry changed the unqualified answer:\nbefore(%v):\n%s\nafter(%v):\n%s",
+			beforeErr, beforeOutput, afterErr, afterOutput)
 	}
-	failure := decodeReviewIntegrationFailure(t, output.Bytes())
+
+	// Naming the corrupt lineage still fails closed, and still names it.
+	var scoped bytes.Buffer
+	scopedErr := RunReview([]string{
+		"validate", "--contract", ReviewIntegrationContractV1, "--cwd", repo,
+		"--gate", string(reviewtransaction.GatePrePush), "--lineage", "corrupt-target-candidate",
+	}, &scoped)
+	if scopedErr == nil {
+		t.Fatal("naming the corrupt lineage validated")
+	}
+	if !strings.Contains(scoped.String(), "corrupt-target-candidate") {
+		t.Fatalf("the scoped refusal does not name the lineage it refuses:\n%s", scoped.String())
+	}
 	var targetErr *reviewtransaction.GateTargetResolutionError
-	if failure.Code != "authority_corrupted" || failure.AuthorityApplicability != "corrupted" || errors.As(runErr, &targetErr) {
-		t.Fatalf("corrupt-authority precedence = %#v, %T %v", failure, runErr, runErr)
+	if errors.As(scopedErr, &targetErr) {
+		t.Fatalf("a corrupt named lineage was reported as a target-resolution failure: %v", scopedErr)
 	}
 }
 
 func TestUnqualifiedGateDiscoveryRoutesCommittedNextSliceWorkspace(t *testing.T) {
+	reviewEnabledHome(t)
 	// #1401: after one approved slice is committed exactly as reviewed, new
 	// dirty tracked work on top must classify as unrelated or scope-changed,
 	// never as authority_corrupted against the healthy predecessor.
@@ -429,6 +544,7 @@ func TestUnqualifiedGateDiscoveryRoutesCommittedNextSliceWorkspace(t *testing.T)
 }
 
 func TestUnqualifiedGateDiscoveryRejectsMultipleExactReceiptsButExplicitLineageIsDirect(t *testing.T) {
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	started, store := approveDiscoveryMarkdown(t, repo, "review-discovery-exact-a", "docs/exact.md", "exact\n")
 	record, err := store.Load()
@@ -497,6 +613,7 @@ func TestUnqualifiedGateDiscoveryRejectsMultipleExactReceiptsButExplicitLineageI
 }
 
 func TestUnqualifiedGateDiscoveryRequiresSelectionForMultipleScopeChangedReceipts(t *testing.T) {
+	reviewEnabledHome(t)
 	for _, tt := range []struct {
 		name       string
 		projection reviewtransaction.Projection
@@ -617,6 +734,7 @@ func TestUnqualifiedGateDiscoveryRequiresSelectionForMultipleScopeChangedReceipt
 // receipt, and defers to ordinary repository policy, so the contest has no
 // delivery consequence until the operator turns reviews back on.
 func TestUnqualifiedGateDiscoveryOnMixedCompactAndLegacyAuthorityHonorsTheKillSwitch(t *testing.T) {
+	reviewEnabledHome(t)
 	fixture := newLegacyCLIFixture(t, "review-discovery-mixed-legacy")
 	// Reviews the identical, still-dirty candidate a second time under an
 	// independent compact v2 lineage: nothing changed on disk between the two
@@ -630,6 +748,21 @@ func TestUnqualifiedGateDiscoveryOnMixedCompactAndLegacyAuthorityHonorsTheKillSw
 	}, &enabled)
 	if err == nil {
 		t.Fatal("mixed compact/legacy authority was silently resolved while enabled")
+	}
+	// Wave 5 Slice 2 supersession: this is now the sole home of the
+	// competing-stores-named-in-the-message property that
+	// review_disabled_reach_test.go's
+	// TestReviewValidateReportsDisabledUnmanagedDeliveryOverMixedCompactAndLegacyAuthority
+	// used to assert on its DISABLED half too (removed there -- design
+	// decision 4 means that half no longer discovers the contest at all).
+	// The negotiated envelope wraps the raw error behind a fixed catch-all
+	// message with no Cause populated for this unclassified error type, so
+	// the raw (non-negotiated) call is what still carries
+	// errReviewMixedCompactLegacyAuthority's own text verbatim.
+	var rawEnabled bytes.Buffer
+	rawErr := RunReviewFacadeValidate([]string{"--cwd", fixture.repo, "--gate", string(reviewtransaction.GatePostApply)}, &rawEnabled)
+	if rawErr == nil || !strings.Contains(rawErr.Error(), "compact v2 and legacy v1") {
+		t.Fatalf("enabled mixed-authority error hid the competing stores: %v", rawErr)
 	}
 
 	disableReviewForClone(t, fixture.repo)
@@ -651,6 +784,7 @@ func TestUnqualifiedGateDiscoveryOnMixedCompactAndLegacyAuthorityHonorsTheKillSw
 }
 
 func TestUnscopedGateDiscoveryToleratesCorruptedUnrelatedLegacyInventory(t *testing.T) {
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	started, _ := approveDiscoveryMarkdown(t, repo, "review-discovery-valid", "docs/valid.md", "valid\n")
 	commonDir := filepath.Clean(string(bytes.TrimSpace([]byte(runReviewCLIGit(t, repo, "rev-parse", "--path-format=absolute", "--git-common-dir")))))
@@ -709,6 +843,7 @@ func TestUnscopedGateDiscoveryToleratesCorruptedUnrelatedLegacyInventory(t *test
 }
 
 func TestReleaseGateToleratesCorruptionConfinedToLegacyEntriesIncludingLockResidue(t *testing.T) {
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	started, _ := approveDiscoveryMarkdown(t, repo, "review-release-tolerance", "docs/valid.md", "valid\n")
 	runReviewCLIGit(t, repo, "add", "-A")
@@ -844,6 +979,7 @@ func TestReleaseGateToleratesCorruptionConfinedToLegacyEntriesIncludingLockResid
 }
 
 func TestUnscopedGateDiscoveryExcludesTamperedLegacyReceiptFromCandidates(t *testing.T) {
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	started, _ := approveDiscoveryMarkdown(t, repo, "review-discovery-valid", "docs/valid.md", "valid\n")
 	legacyStore, authoritative := approveLegacyDiscoveryChain(t, repo, "review-legacy-tampered")
@@ -961,7 +1097,13 @@ func approveLegacyDiscoveryChain(t *testing.T, repo, lineage string) (reviewtran
 	return store, receipt
 }
 
+// TestUnscopedGateDiscoveryFailsClosedOnCorruptedCompactLeaf is the shape
+// #2167 reported: a healthy approved lineage and one unrelated corrupt leaf in
+// the same shared store, and the healthy candidate denied `authority_corrupted`
+// with no way to tell which entry caused it. The corrupt leaf still fails
+// closed -- when something names it.
 func TestUnscopedGateDiscoveryFailsClosedOnCorruptedCompactLeaf(t *testing.T) {
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	approveDiscoveryMarkdown(t, repo, "review-discovery-valid", "docs/valid.md", "valid\n")
 	commonDir := filepath.Clean(string(bytes.TrimSpace([]byte(runReviewCLIGit(t, repo, "rev-parse", "--path-format=absolute", "--git-common-dir")))))
@@ -974,23 +1116,39 @@ func TestUnscopedGateDiscoveryFailsClosedOnCorruptedCompactLeaf(t *testing.T) {
 	}
 
 	var unscoped bytes.Buffer
-	err := RunReview([]string{
+	unscopedErr := RunReview([]string{
 		"validate", "--contract", ReviewIntegrationContractV1, "--cwd", repo,
 		"--gate", string(reviewtransaction.GatePostApply),
 	}, &unscoped)
+	if unscopedErr != nil {
+		failure := decodeReviewIntegrationFailure(t, unscoped.Bytes())
+		if failure.Code == "authority_corrupted" || failure.AuthorityApplicability == "corrupted" {
+			t.Fatalf("an unrelated corrupted leaf became this candidate's verdict: %#v", failure)
+		}
+	}
+
+	var scoped bytes.Buffer
+	err := RunReview([]string{
+		"validate", "--contract", ReviewIntegrationContractV1, "--cwd", repo,
+		"--gate", string(reviewtransaction.GatePostApply), "--lineage", "unrelated-broken",
+	}, &scoped)
 	if err == nil {
-		t.Fatal("unscoped discovery ignored corrupted compact leaf")
+		t.Fatal("naming the corrupted compact leaf validated")
 	}
-	failure := decodeReviewIntegrationFailure(t, unscoped.Bytes())
-	if failure.Code != "authority_corrupted" || failure.AuthorityApplicability != "corrupted" || failure.CauseCategory != "record_or_graph_invalid" || failure.RetrySafe || failure.NextAction != "stop" {
-		t.Fatalf("corrupted compact leaf failure = %#v", failure)
+	// The named refusal must be closed, must name the entry it refuses, and
+	// must not leak the store path. Its exact code is the explicit-selector
+	// path's own classification and is not asserted here: what this test owns
+	// is that the leaf refuses for itself and for nobody else.
+	if !strings.Contains(scoped.String(), "unrelated-broken") {
+		t.Fatalf("the scoped refusal does not name the leaf it refuses:\n%s", scoped.String())
 	}
-	if strings.Contains(unscoped.String(), broken) {
-		t.Fatalf("corrupted compact leaf failure exposed private payload: %s", unscoped.String())
+	if strings.Contains(scoped.String(), broken) {
+		t.Fatalf("corrupted compact leaf failure exposed private payload: %s", scoped.String())
 	}
 }
 
 func TestExplicitMalformedLineageFailsClosedWithoutMutation(t *testing.T) {
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	started, store := approveDiscoveryMarkdown(t, repo, "review-selected-malformed", "docs/selected.md", "selected\n")
 	malformed := []byte("{\n")
@@ -1008,7 +1166,23 @@ func TestExplicitMalformedLineageFailsClosedWithoutMutation(t *testing.T) {
 	}
 }
 
-func TestUnqualifiedPrePRDiscoveryComposesExactSequentialCompactReceipts(t *testing.T) {
+// TestUnqualifiedPrePRDiscoveryDeniesSequentialCompactReceiptsWithoutComposition
+// supersedes TestUnqualifiedPrePRDiscoveryComposesExactSequentialCompactReceipts
+// (pre-Wave-5-Slice-5 name; S1's characterization corpus pinned the identical
+// fixture's "before" allow at the package level via
+// TestPrePRChainCompositionRemovalDelta, compact_chain_test.go, now itself
+// superseded by TestPrePRChainCompositionDeletionSupersedesRemovalDelta,
+// internal/reviewtransaction). Before this slice, three sequentially
+// delivered, individually-approved lineages composed into one allow for the
+// full delivered range. EvaluateCompactPrePRChain is deleted
+// (TestPrePRComposition_ZeroCallers proves it by call-absence), so the
+// lineage-free discovery this test drives can no longer resolve to a single
+// governing receipt: three terminal candidates each cover only their own
+// segment, none spans the whole delivered range, so discovery reports
+// receipt_ambiguous with review.start as the runnable next action -- a
+// named divergence, not a silent one.
+func TestUnqualifiedPrePRDiscoveryDeniesSequentialCompactReceiptsWithoutComposition(t *testing.T) {
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	branch := strings.TrimSpace(runReviewCLIGit(t, repo, "symbolic-ref", "--short", "HEAD"))
 	remote := filepath.Join(t.TempDir(), "remote.git")
@@ -1023,29 +1197,44 @@ func TestUnqualifiedPrePRDiscoveryComposesExactSequentialCompactReceipts(t *test
 	}
 
 	var output bytes.Buffer
-	if err := RunReview([]string{
+	err := RunReview([]string{
 		"validate", "--contract", ReviewIntegrationContractV1, "--cwd", repo,
 		"--gate", string(reviewtransaction.GatePrePR), "--base-ref", "origin/" + branch,
-	}, &output); err != nil {
-		t.Fatalf("composed pre-PR facade validation: %v\n%s", err, output.String())
+	}, &output)
+	if err == nil {
+		t.Fatalf("lineage-free pre-PR discovery unexpectedly allowed without composition:\n%s", output.String())
 	}
-	var result ReviewValidateResult
-	decodeStrictReviewJSON(t, decodeReviewOperationEnvelope(t, output.Bytes()).Result, &result)
-	if !result.Allowed || result.Context.LineageID != lineages[2] || result.Context.ChainIdentity == "" || result.Context.PrePRBoundary == nil {
-		t.Fatalf("composed pre-PR result = %#v", result)
+	var failure struct {
+		Code       string `json:"code"`
+		NextAction string `json:"next_action"`
+	}
+	if err := json.Unmarshal(output.Bytes(), &failure); err != nil {
+		t.Fatal(err)
+	}
+	if failure.Code != "receipt_ambiguous" || failure.NextAction != "review.start" {
+		t.Fatalf("unqualified pre-PR discovery denial = %#v\n%s", failure, output.String())
 	}
 
 	output.Reset()
-	err := RunReview([]string{
+	err = RunReview([]string{
 		"validate", "--contract", ReviewIntegrationContractV1, "--cwd", repo, "--lineage", lineages[2],
 		"--gate", string(reviewtransaction.GatePrePR), "--base-ref", "origin/" + branch,
 	}, &output)
 	if err == nil {
-		t.Fatal("explicit terminal lineage unexpectedly entered composition")
+		t.Fatal("explicit terminal lineage unexpectedly allowed a receipt that only covers its own segment")
 	}
 }
 
-func TestUnqualifiedPrePRDiscoveryComposesSequentialReceiptsForSamePath(t *testing.T) {
+// TestUnqualifiedPrePRDiscoveryDeniesSequentialReceiptsForSamePathWithoutComposition
+// supersedes TestUnqualifiedPrePRDiscoveryComposesSequentialReceiptsForSamePath.
+// Three lineages reviewing the SAME path in sequence used to compose to an
+// allow for the last lineage; auto-discovery here resolves a single
+// candidate (the same path narrows the ambiguity the sibling test above
+// hits), but that candidate's own receipt only covers its own segment, so
+// EvaluateCompactGate denies it directly -- gate_invalidated, not
+// receipt_ambiguous, since discovery itself was unambiguous.
+func TestUnqualifiedPrePRDiscoveryDeniesSequentialReceiptsForSamePathWithoutComposition(t *testing.T) {
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	branch := strings.TrimSpace(runReviewCLIGit(t, repo, "symbolic-ref", "--short", "HEAD"))
 	remote := filepath.Join(t.TempDir(), "remote.git")
@@ -1059,20 +1248,26 @@ func TestUnqualifiedPrePRDiscoveryComposesSequentialReceiptsForSamePath(t *testi
 	}
 
 	var output bytes.Buffer
-	if err := RunReview([]string{
+	err := RunReview([]string{
 		"validate", "--contract", ReviewIntegrationContractV1, "--cwd", repo,
 		"--gate", string(reviewtransaction.GatePrePR), "--base-ref", "origin/" + branch,
-	}, &output); err != nil {
-		t.Fatalf("same-path composed pre-PR validation: %v\n%s", err, output.String())
+	}, &output)
+	if err == nil {
+		t.Fatalf("same-path lineage-free pre-PR discovery unexpectedly allowed without composition:\n%s", output.String())
 	}
-	var result ReviewValidateResult
-	decodeStrictReviewJSON(t, decodeReviewOperationEnvelope(t, output.Bytes()).Result, &result)
-	if !result.Allowed || result.Context.LineageID != "review-chain-overlap-third" {
-		t.Fatalf("same-path composed pre-PR result = %#v", result)
+	var failure struct {
+		Code string `json:"code"`
+	}
+	if err := json.Unmarshal(output.Bytes(), &failure); err != nil {
+		t.Fatal(err)
+	}
+	if failure.Code != "gate_invalidated" {
+		t.Fatalf("same-path unqualified pre-PR discovery denial code = %q, want gate_invalidated\n%s", failure.Code, output.String())
 	}
 }
 
 func TestUnqualifiedPrePRDiscoveryReconcilesCurrentChangesReceiptAcrossDivergedBase(t *testing.T) {
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	branch := strings.TrimSpace(runReviewCLIGit(t, repo, "symbolic-ref", "--short", "HEAD"))
 	initialCommit := strings.TrimSpace(runReviewCLIGit(t, repo, "rev-parse", "HEAD"))
@@ -1107,6 +1302,7 @@ func TestUnqualifiedPrePRDiscoveryReconcilesCurrentChangesReceiptAcrossDivergedB
 }
 
 func TestUnqualifiedPrePRDiscoveryKeepsExactSingleReceiptContext(t *testing.T) {
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	branch := strings.TrimSpace(runReviewCLIGit(t, repo, "symbolic-ref", "--short", "HEAD"))
 	remote := filepath.Join(t.TempDir(), "remote.git")
@@ -1138,27 +1334,278 @@ func approveDiscoveryMarkdown(t *testing.T, repo, lineage, logicalPath, content 
 	return approveDiscoveryMarkdownProjection(t, repo, lineage, logicalPath, content, reviewtransaction.ProjectionWorkspace)
 }
 
+// TestNegotiatedStatusRequiresExactStagedDeliveryCandidate proves #2758 at the
+// negotiated CLI boundary. A workspace receipt remains applicable to the
+// workspace while the index is empty, partial, or different, so STATUS must
+// inspect the pre-commit candidate before it offers validation.
+func TestNegotiatedStatusRequiresExactStagedDeliveryCandidate(t *testing.T) {
+	reviewEnabledHome(t)
+	repo := initReviewCLIRepo(t)
+	const lineage = "review-staged-delivery-candidate"
+	for path, content := range map[string]string{"docs/alpha.md": "baseline alpha\n", "docs/bravo.md": "baseline bravo\n"} {
+		fullPath := filepath.Join(repo, filepath.FromSlash(path))
+		if err := os.MkdirAll(filepath.Dir(fullPath), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(fullPath, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	runReviewCLIGit(t, repo, "add", "docs/alpha.md", "docs/bravo.md")
+	runReviewCLIGit(t, repo, "commit", "-qm", "fixture: add tracked delivery paths")
+	files := map[string]string{
+		"docs/alpha.md": "# Alpha\n",
+		"docs/bravo.md": "# Bravo\n",
+	}
+	_, store := approveDiscoveryMarkdownFilesProjection(t, repo, lineage, files, reviewtransaction.ProjectionWorkspace)
+	stateBefore, err := os.ReadFile(store.StatePath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	receiptBefore, err := os.ReadFile(store.ReceiptPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	status := func(selectors ...string) ReviewTargetStatusResult {
+		t.Helper()
+		args := []string{"status", "--cwd", repo, "--contract", ReviewIntegrationContractV2, "--next-transition", "--lineage", lineage, "--gate", "pre-commit"}
+		args = append(args, selectors...)
+		var output bytes.Buffer
+		if err := RunReview(args, &output); err != nil {
+			t.Fatalf("STATUS %v: %v\n%s", selectors, err, output.String())
+		}
+		var result ReviewTargetStatusResult
+		decodeStrictReviewJSON(t, output.Bytes(), &result)
+		return result
+	}
+	requireBlocked := func(name string) {
+		t.Helper()
+		result := status()
+		if result.NextTransition == nil || result.NextTransition.Kind != reviewNextTransitionStop ||
+			result.NextTransition.ReasonCode != "staged_delivery_candidate_required" ||
+			result.NextTransition.Execute != nil || result.NextTransition.Collect != nil {
+			t.Fatalf("%s staged delivery transition = %#v", name, result.NextTransition)
+		}
+		stateAfter, stateErr := os.ReadFile(store.StatePath())
+		receiptAfter, receiptErr := os.ReadFile(store.ReceiptPath())
+		if stateErr != nil || receiptErr != nil || !bytes.Equal(stateBefore, stateAfter) || !bytes.Equal(receiptBefore, receiptAfter) {
+			t.Fatalf("%s STATUS mutated authority: state=%v receipt=%v", name, stateErr, receiptErr)
+		}
+	}
+
+	runReviewCLIGit(t, repo, "reset", "--", "docs/alpha.md", "docs/bravo.md")
+	requireBlocked("empty index")
+
+	runReviewCLIGit(t, repo, "add", "docs/alpha.md")
+	requireBlocked("partial index")
+
+	runReviewCLIGit(t, repo, "add", "docs/bravo.md")
+	if err := os.WriteFile(filepath.Join(repo, "docs", "alpha.md"), []byte("# Different\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runReviewCLIGit(t, repo, "add", "docs/alpha.md")
+	if err := os.WriteFile(filepath.Join(repo, "docs", "alpha.md"), []byte(files["docs/alpha.md"]), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	requireBlocked("different index")
+
+	runReviewCLIGit(t, repo, "add", "docs/alpha.md", "docs/bravo.md")
+	ready := status("--projection", "staged")
+	if ready.NextTransition == nil || ready.NextTransition.Kind != reviewNextTransitionExecute ||
+		ready.NextTransition.Execute == nil || ready.NextTransition.Execute.Operation != "review.validate" ||
+		ready.NextTransition.ReasonCode != "approved_receipt_ready" {
+		t.Fatalf("exact staged delivery transition = %#v", ready.NextTransition)
+	}
+	payload, err := runSelectorTransition(repo, ready)
+	if err != nil {
+		t.Fatalf("execute exact staged validation: %v\n%s", err, payload)
+	}
+	var validation ReviewValidateResult
+	decodeStrictReviewJSON(t, payload, &validation)
+	if !validation.Allowed || validation.Result != reviewtransaction.GateAllow {
+		t.Fatalf("exact staged validation = %#v", validation)
+	}
+}
+
+func TestNegotiatedStatusRequiresStagingApprovedUnbornIntendedCandidate(t *testing.T) {
+	reviewEnabledHome(t)
+	repo := initUnbornReviewCLIRepo(t)
+	const (
+		lineage = "review-unborn-intended-staged-delivery"
+		path    = "docs/candidate.md"
+	)
+	writeUndeclaredWorkspaceFile(t, repo, path, "# Reviewed candidate\n", 0o644)
+	digest, inventory := intendedUntrackedSelection(t, intendedUntrackedStatus(t, repo))
+	if !reflect.DeepEqual(inventory, []string{path}) {
+		t.Fatalf("unborn inventory = %v, want %q", inventory, path)
+	}
+	_, store := approveDiscoveryMarkdownFilesWithIntendedProjection(t, repo, lineage,
+		map[string]string{path: "# Reviewed candidate\n"}, reviewtransaction.ProjectionWorkspace, []string{path})
+	record, err := store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if record.State.State != reviewtransaction.StateApproved || !record.State.InitialSnapshot.UnbornHead ||
+		!reflect.DeepEqual(record.State.CurrentSnapshot.IntendedUntracked, []string{path}) {
+		t.Fatalf("approved unborn intended authority = %#v", record.State)
+	}
+	if err := exec.Command("git", "-C", repo, "rev-parse", "--verify", "HEAD").Run(); err == nil {
+		t.Fatal("fixture unexpectedly has a born HEAD")
+	}
+	if cached := strings.TrimSpace(runReviewCLIGit(t, repo, "ls-files", "--cached")); cached != "" {
+		t.Fatalf("real index is not empty: %q", cached)
+	}
+	stateBefore, err := os.ReadFile(store.StatePath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	receiptBefore, err := os.ReadFile(store.ReceiptPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	indexPath := strings.TrimSpace(runReviewCLIGit(t, repo, "rev-parse", "--git-path", "index"))
+	if !filepath.IsAbs(indexPath) {
+		indexPath = filepath.Join(repo, indexPath)
+	}
+	indexBefore, indexBeforeErr := os.ReadFile(indexPath)
+
+	status := func(selectors ...string) ReviewTargetStatusResult {
+		t.Helper()
+		args := []string{"status", "--cwd", repo, "--contract", ReviewIntegrationContractV2, "--next-transition", "--lineage", lineage, "--gate", "pre-commit"}
+		args = append(args, selectors...)
+		var output bytes.Buffer
+		if err := RunReview(args, &output); err != nil {
+			t.Fatalf("STATUS %v: %v\n%s", selectors, err, output.String())
+		}
+		var result ReviewTargetStatusResult
+		decodeStrictReviewJSON(t, output.Bytes(), &result)
+		return result
+	}
+
+	blocked := status(intendedUntrackedSelectArgs(digest, path)...)
+	if blocked.NextTransition == nil || blocked.NextTransition.Kind != reviewNextTransitionStop ||
+		blocked.NextTransition.ReasonCode != "staged_delivery_candidate_required" || blocked.NextTransition.Execute != nil {
+		t.Fatalf("empty unborn staged delivery transition = %#v", blocked.NextTransition)
+	}
+	stateAfter, stateErr := os.ReadFile(store.StatePath())
+	receiptAfter, receiptErr := os.ReadFile(store.ReceiptPath())
+	indexAfter, indexAfterErr := os.ReadFile(indexPath)
+	indexChanged := false
+	switch {
+	case indexBeforeErr == nil && indexAfterErr == nil:
+		indexChanged = !bytes.Equal(indexBefore, indexAfter)
+	case errors.Is(indexBeforeErr, os.ErrNotExist) && errors.Is(indexAfterErr, os.ErrNotExist):
+	default:
+		indexChanged = true
+	}
+	if stateErr != nil || receiptErr != nil || !bytes.Equal(stateBefore, stateAfter) || !bytes.Equal(receiptBefore, receiptAfter) ||
+		indexChanged {
+		t.Fatalf("STATUS mutated authority, receipt, or index: state=%v receipt=%v index_before=%v index_after=%v", stateErr, receiptErr, indexBeforeErr, indexAfterErr)
+	}
+
+	runReviewCLIGit(t, repo, "add", "--", path)
+	ready := status("--projection", "staged")
+	if ready.NextTransition == nil || ready.NextTransition.Kind != reviewNextTransitionExecute || ready.NextTransition.Execute == nil ||
+		ready.NextTransition.Execute.Operation != "review.validate" || ready.NextTransition.ReasonCode != "approved_receipt_ready" {
+		t.Fatalf("exact unborn staged delivery transition = %#v", ready.NextTransition)
+	}
+	payload, err := runSelectorTransition(repo, ready)
+	if err != nil {
+		t.Fatalf("execute exact unborn staged validation: %v\n%s", err, payload)
+	}
+	var validation ReviewValidateResult
+	decodeStrictReviewJSON(t, payload, &validation)
+	if !validation.Allowed || validation.Result != reviewtransaction.GateAllow {
+		t.Fatalf("exact unborn staged validation = %#v", validation)
+	}
+}
+
+// approveDiscoveryMarkdownProjection builds and finalizes a LOW-risk legacy
+// (compact-v2) approved receipt over one passive markdown candidate.
+//
+// Before Wave 7 S7 (WU18), this called the CLI's own `review start` with the
+// (default, unset) activation switch off, which took the legacy compact-v2
+// branch. WU18 removed that branch entirely -- `review start` is now
+// unconditionally v3, so there is no CLI-reachable way left to create a NEW
+// legacy authority. Every one of this helper's ~44 call sites across 9 files
+// specifically needs genuine compact-v2 authority (proven by their own
+// reviewtransaction.CompactAuthoritativeStore/CompactStore-typed return
+// value and downstream use), so this constructs it directly through the
+// same reviewtransaction API runReviewFacadeStart's now-deleted legacy
+// branch used to call -- identical to finalizeApprovedFacadeReview's own
+// fix -- then finalizes through the unchanged CLI RunReviewFacadeFinalize
+// (finalize's discovery-by-kind logic never depended on the switch).
 func approveDiscoveryMarkdownProjection(t *testing.T, repo, lineage, logicalPath, content string, projection reviewtransaction.Projection) (ReviewFacadeStartResult, reviewtransaction.CompactStore) {
+	return approveDiscoveryMarkdownFilesProjection(t, repo, lineage, map[string]string{logicalPath: content}, projection)
+}
+
+func approveDiscoveryMarkdownFilesProjection(t *testing.T, repo, lineage string, files map[string]string, projection reviewtransaction.Projection) (ReviewFacadeStartResult, reviewtransaction.CompactStore) {
+	return approveDiscoveryMarkdownFilesWithIntendedProjection(t, repo, lineage, files, projection, []string{})
+}
+
+func approveDiscoveryMarkdownFilesWithIntendedProjection(t *testing.T, repo, lineage string, files map[string]string, projection reviewtransaction.Projection, intended []string) (ReviewFacadeStartResult, reviewtransaction.CompactStore) {
 	t.Helper()
-	path := filepath.Join(repo, filepath.FromSlash(logicalPath))
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		t.Fatal(err)
+	for logicalPath, content := range files {
+		path := filepath.Join(repo, filepath.FromSlash(logicalPath))
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
 	}
-	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if projection == reviewtransaction.ProjectionStaged {
+	// #2394: a new file is reviewable only once the user declared it. The index
+	// declares ordinary paths; intended-untracked paths carry explicit intent.
+	if len(intended) == 0 {
 		runReviewCLIGit(t, repo, "add", "-A")
 	}
-	var output bytes.Buffer
-	if err := RunReviewFacadeStart([]string{"--cwd", repo, "--lineage", lineage, "--projection", string(projection)}, &output); err != nil {
-		t.Fatal(err)
+
+	ctx := context.Background()
+	builder := reviewtransaction.SnapshotBuilder{Repo: repo}
+	root, err := builder.ResolveRepositoryRoot(ctx)
+	if err != nil {
+		t.Fatalf("resolve discovery fixture repository root: %v", err)
 	}
-	var started ReviewFacadeStartResult
-	decodeStrictReviewJSON(t, output.Bytes(), &started)
+	rootBuilder := reviewtransaction.SnapshotBuilder{Repo: root}
+	snapshot, err := rootBuilder.Build(ctx, reviewtransaction.Target{Kind: reviewtransaction.TargetCurrentChanges, Projection: projection, IntendedUntracked: append([]string{}, intended...)})
+	if err != nil {
+		t.Fatalf("build discovery fixture target %q: %v", lineage, err)
+	}
+	assessment, err := rootBuilder.AssessSnapshotRisk(ctx, snapshot)
+	if err != nil {
+		t.Fatalf("classify discovery fixture target %q: %v", lineage, err)
+	}
+	if assessment.Level != reviewtransaction.RiskLow {
+		t.Fatalf("discovery fixture risk = %q", assessment.Level)
+	}
+	lenses, err := facadeSelectedLenses(assessment, "reliability")
+	if err != nil {
+		t.Fatalf("select discovery fixture lenses %q: %v", lineage, err)
+	}
+	policy, err := facadePolicyBytes("")
+	if err != nil {
+		t.Fatalf("read discovery fixture policy %q: %v", lineage, err)
+	}
+	state, err := reviewtransaction.NewCompactState(reviewtransaction.Start{
+		LineageID: lineage, Mode: reviewtransaction.ModeOrdinaryBounded, Generation: 1,
+		Snapshot: snapshot, PolicyHash: facadePayloadHash(policy), RiskLevel: assessment.Level,
+		SelectedLenses: lenses, OriginalChangedLines: &assessment.ChangedLines,
+	})
+	if err != nil {
+		t.Fatalf("create discovery fixture state %q: %v", lineage, err)
+	}
+	compactStarted, err := reviewtransaction.StartCompactAuthority(ctx, root, reviewtransaction.CompactStartRequest{
+		State: state, ExplicitLineage: true,
+	})
+	if err != nil {
+		t.Fatalf("start discovery fixture compact authority %q: %v", lineage, err)
+	}
+	started := reviewFacadeStartResultFor(compactStarted.Action, compactStarted.LensesRequired, compactStarted.Record.State)
 	if started.RiskLevel != reviewtransaction.RiskLow {
 		t.Fatalf("discovery fixture risk = %q", started.RiskLevel)
 	}
+
 	if err := RunReviewFacadeFinalize([]string{"--cwd", repo, "--lineage", lineage}, &bytes.Buffer{}); err != nil {
 		t.Fatal(err)
 	}

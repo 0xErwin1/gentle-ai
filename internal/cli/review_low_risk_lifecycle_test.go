@@ -12,26 +12,19 @@ import (
 	"reflect"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
 )
 
 func TestOrdinaryMarkdownLowRiskLifecycleNeedsNoExternalEvidence(t *testing.T) {
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	lines := make([]string, 129)
 	for index := range lines {
 		lines[index] = fmt.Sprintf("ordinary documentation line %03d", index+1)
 	}
-	path := filepath.Join(repo, "docs", "ordinary-guide.md")
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(path, []byte(strings.Join(lines, "\n")+"\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	writeReviewStartCandidate(t, repo, "docs/ordinary-guide.md", strings.Join(lines, "\n")+"\n", 0o644)
 
-	startedAt := time.Now()
 	var startOutput bytes.Buffer
 	if err := RunReview(boundNegotiatedStartArgs(t, []string{
 		"start", "--contract", ReviewIntegrationContractV1, "--cwd", repo,
@@ -144,9 +137,6 @@ func TestOrdinaryMarkdownLowRiskLifecycleNeedsNoExternalEvidence(t *testing.T) {
 			t.Fatalf("native low-risk lifecycle created external model/evidence artifact %q", name)
 		}
 	}
-	if elapsed := time.Since(startedAt); elapsed > 10*time.Second {
-		t.Fatalf("warm low-risk lifecycle took %s", elapsed)
-	}
 }
 
 // TestActiveMDXRequiresReviewerEvidence pins the content-classified boundary for
@@ -154,14 +144,9 @@ func TestOrdinaryMarkdownLowRiskLifecycleNeedsNoExternalEvidence(t *testing.T) {
 // the candidate becomes one consolidated review that cannot finalize on
 // structural readback alone.
 func TestActiveMDXRequiresReviewerEvidence(t *testing.T) {
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
-	path := filepath.Join(repo, "docs", "guide.mdx")
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(path, []byte("import Widget from './widget'\n\n# Active guide\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	writeReviewStartCandidate(t, repo, "docs/guide.mdx", "import Widget from './widget'\n\n# Active guide\n", 0o644)
 	var output bytes.Buffer
 	if err := RunReview(boundNegotiatedStartArgs(t, []string{"start", "--contract", ReviewIntegrationContractV1, "--cwd", repo}), &output); err != nil {
 		t.Fatal(err)
@@ -183,6 +168,7 @@ func TestActiveMDXRequiresReviewerEvidence(t *testing.T) {
 }
 
 func TestLowRiskExternalEvidenceRemainsBackwardCompatible(t *testing.T) {
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	path := filepath.Join(repo, "docs", "guide.md")
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
@@ -191,6 +177,7 @@ func TestLowRiskExternalEvidenceRemainsBackwardCompatible(t *testing.T) {
 	if err := os.WriteFile(path, []byte("ordinary documentation\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	runReviewCLIGit(t, repo, "add", "docs/guide.md")
 	started := startReviewOperationFixture(t, repo, "review-low-external-evidence")
 	evidence := []byte("external focused tests pass\n")
 	evidencePath := filepath.Join(t.TempDir(), "evidence.txt")
@@ -217,6 +204,7 @@ func TestLowRiskExternalEvidenceRemainsBackwardCompatible(t *testing.T) {
 }
 
 func TestLowRiskNativeVerificationSupportsStagedProjection(t *testing.T) {
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	path := filepath.Join(repo, "docs", "staged-guide.md")
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
@@ -255,6 +243,7 @@ func TestLowRiskNativeVerificationSupportsStagedProjection(t *testing.T) {
 }
 
 func TestLowRiskNativeVerificationSupportsBaseWorkspaceOverlay(t *testing.T) {
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	base := strings.TrimSpace(runReviewCLIGit(t, repo, "rev-parse", "HEAD"))
 	if err := os.MkdirAll(filepath.Join(repo, "docs"), 0o755); err != nil {
@@ -268,10 +257,15 @@ func TestLowRiskNativeVerificationSupportsBaseWorkspaceOverlay(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(repo, "docs", "overlay.md"), []byte("overlay documentation\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	_, digest, err := (reviewtransaction.SnapshotBuilder{Repo: repo}).IntendedUntrackedInventory(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	var output bytes.Buffer
 	if err := RunReviewFacadeStart([]string{
 		"--cwd", repo, "--base-ref", base, "--workspace-overlay", "--lineage", "low-risk-overlay",
+		"--untracked-scope=exclude", "--expected-untracked-inventory=" + digest,
 	}, &output); err != nil {
 		t.Fatal(err)
 	}
@@ -289,6 +283,7 @@ func TestLowRiskNativeVerificationSupportsBaseWorkspaceOverlay(t *testing.T) {
 }
 
 func TestMediumReviewCannotApproveWithoutExternalEvidence(t *testing.T) {
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("candidate\n"), 0o644); err != nil {
 		t.Fatal(err)

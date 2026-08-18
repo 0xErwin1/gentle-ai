@@ -2,9 +2,11 @@ package cli
 
 import (
 	"bytes"
+	"encoding/json"
 	"io"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -69,6 +71,7 @@ func preserveEnvelopelessIncident(t *testing.T, repo string, started ReviewFacad
 // and the same lineage/lens must then accept a corrected well-formed capture,
 // because a slot whose admission was REJECTED was never consumed.
 func TestReviewCaptureResultRecapturesSameLensAfterRejectedAdmission(t *testing.T) {
+	reviewEnabledHome(t)
 	repo, started, store, record := newArtifactReview(t, false)
 	err := failEnvelopelessCapture(t, repo, started, record)
 	// Discoverability contract: the admission-incomplete rejection must name
@@ -134,26 +137,133 @@ func TestReviewCaptureResultRecapturesSameLensAfterRejectedAdmission(t *testing.
 	}
 }
 
+func TestReviewCaptureResultRecapturesSameLensAfterPreInspectionAccessFailure(t *testing.T) {
+	reviewEnabledHome(t)
+	repo, started, store, record := newArtifactReview(t, false)
+	statusArgs := []string{
+		"status", "--contract", ReviewIntegrationContractV2, "--next-transition",
+		"--cwd", repo, "--lineage", started.LineageID,
+	}
+	readStatus := func() ReviewTargetStatusResult {
+		t.Helper()
+		var output bytes.Buffer
+		if err := RunReview(statusArgs, &output); err != nil {
+			t.Fatal(err)
+		}
+		var status ReviewTargetStatusResult
+		decodeStrictReviewJSON(t, output.Bytes(), &status)
+		return status
+	}
+
+	firstStatus := readStatus()
+	if firstStatus.NextTransition == nil || firstStatus.NextTransition.Kind != reviewNextTransitionCollect ||
+		firstStatus.NextTransition.ReasonCode != "reviewer_results_required" || firstStatus.NextTransition.Collect == nil ||
+		len(firstStatus.NextTransition.Collect.Inputs) != 1 {
+		t.Fatalf("initial reviewer transition = %#v", firstStatus.NextTransition)
+	}
+	offered := firstStatus.NextTransition.Collect.Inputs[0]
+	arguments, err := reviewTransitionArgumentMap(offered.Arguments)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lens := record.State.SelectedLenses[0]
+	for name, want := range map[string]string{
+		"lineage": started.LineageID, "target": record.State.InitialSnapshot.Identity,
+		"expected-revision": record.Revision, "lens": lens, "order": "0",
+	} {
+		if arguments[name] != want {
+			t.Fatalf("initial reviewer argument %q = %q, want %q", name, arguments[name], want)
+		}
+	}
+	if offered.ArtifactSubject == nil || offered.ArtifactSubject.LineageID != started.LineageID ||
+		offered.ArtifactSubject.AuthorityRevision != record.Revision ||
+		offered.ArtifactSubject.TargetIdentity != record.State.InitialSnapshot.Identity ||
+		offered.ArtifactSubject.Lens != lens || offered.ArtifactSubject.SelectedOrder != 0 {
+		t.Fatalf("initial reviewer subject = %#v", offered.ArtifactSubject)
+	}
+
+	incomplete := admittedReviewerResultForTest(t, repo, record, lens, 0)
+	incomplete.Inspection.Status = reviewtransaction.ArtifactInspectionStatus("incomplete")
+	incomplete.Inspection.Paths = []string{}
+	incomplete.Evidence = []string{"provider access failed before candidate inspection"}
+	if incomplete.SubjectHash != offered.ArtifactSubject.SubjectHash {
+		t.Fatalf("incomplete result subject = %q, want %q", incomplete.SubjectHash, offered.ArtifactSubject.SubjectHash)
+	}
+	payload, err := json.Marshal(incomplete)
+	if err != nil {
+		t.Fatal(err)
+	}
+	failed := filepath.Join(t.TempDir(), "incomplete.json")
+	if err := os.WriteFile(failed, payload, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	captureArgs := []string{
+		"--cwd", repo, "--lineage", started.LineageID, "--expected-revision", record.Revision,
+		"--target", record.State.InitialSnapshot.Identity, "--lens", lens, "--order", "0", "--input", failed,
+	}
+	if err := RunReviewCaptureResult(captureArgs, io.Discard); err == nil ||
+		!strings.Contains(err.Error(), "reviewer did not report completed candidate inspection") {
+		t.Fatalf("incomplete inspection capture error = %v", err)
+	}
+	afterFailure, err := store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if afterFailure.Revision != record.Revision || len(afterFailure.State.LensResults) != 0 {
+		t.Fatalf("incomplete inspection mutated authority = %#v", afterFailure)
+	}
+	if _, statErr := os.Stat(filepath.Join(store.Dir, reviewtransaction.CompactReviewerResultsDir)); !os.IsNotExist(statErr) {
+		t.Fatalf("incomplete inspection consumed the reviewer slot: %v", statErr)
+	}
+
+	reofferedStatus := readStatus()
+	if reofferedStatus.NextTransition == nil || reofferedStatus.NextTransition.Collect == nil ||
+		len(reofferedStatus.NextTransition.Collect.Inputs) != 1 ||
+		!reflect.DeepEqual(reofferedStatus.NextTransition.Collect.Inputs[0], offered) {
+		t.Fatalf("fresh STATUS did not reoffer the exact reviewer slot: %#v", reofferedStatus.NextTransition)
+	}
+
+	corrected := filepath.Join(t.TempDir(), "corrected.json")
+	if err := os.WriteFile(corrected, admittedReviewerPayloadForTest(t, repo, record, lens, 0), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	captureArgs[len(captureArgs)-1] = corrected
+	var captured bytes.Buffer
+	if err := RunReviewCaptureResult(captureArgs, &captured); err != nil {
+		t.Fatalf("corrected capture after STATUS reoffer: %v", err)
+	}
+	var artifact reviewResultArtifact
+	decodeStrictReviewJSON(t, captured.Bytes(), &artifact)
+	if artifact.AdmissionDecision != reviewtransaction.ArtifactAdmissionCompleted {
+		t.Fatalf("corrected capture admission = %q", artifact.AdmissionDecision)
+	}
+	if err := RunReviewFacadeFinalize([]string{
+		"--cwd", repo, "--lineage", started.LineageID,
+		"--result-artifact", strings.TrimSpace(captured.String()),
+	}, io.Discard); err != nil {
+		t.Fatalf("finalize after STATUS-mediated recapture: %v", err)
+	}
+}
+
 // TestReviewAbandonAfterRejectedAdmissionIncidentArtifact answers the open
-// pristineness question from the community report: a quarantined incident
+// disposition question from the community report: a quarantined incident
 // artifact records a REJECTED admission — never a capture — so it must not
-// disqualify the reviewing lineage from `review abandon`, which accepts "a
-// reviewing authority that never captured lens results". The incident lives
+// alter the discarded-work summary bound by `review abandon`. The incident lives
 // beside the authority root (incidents/<lineage>), not inside the store entry,
 // and it survives the quarantine as audit history.
 func TestReviewAbandonAfterRejectedAdmissionIncidentArtifact(t *testing.T) {
+	reviewEnabledHome(t)
 	repo, started, _, record := newArtifactReview(t, false)
 	failEnvelopelessCapture(t, repo, started, record)
 	incident := preserveEnvelopelessIncident(t, repo, started, record)
 
-	binding := "gentle-ai.review-abandon-authorization/v1\nlineage=" + started.LineageID +
-		"\nrevision=" + record.Revision +
-		"\nsnapshot_identity=" + record.State.InitialSnapshot.Identity +
-		"\nactor=maintainer@example.com\nreason=abandon after rejected reviewer admission"
+	const actor = "maintainer@example.com"
+	const reason = reviewtransaction.CompactAbandonReasonOperatorDisposition
+	binding := abandonBindingFromInventory(t, repo, started.LineageID, record.Revision, record.State.InitialSnapshot.Identity, actor, reason)
 	var output bytes.Buffer
 	err := RunReviewAbandon([]string{
 		"--cwd", repo, "--lineage", started.LineageID, "--expected-revision", record.Revision,
-		"--reason", "abandon after rejected reviewer admission", "--actor", "maintainer@example.com",
+		"--reason", reason, "--actor", actor,
 		"--maintainer-authorization", binding,
 	}, &output)
 	if err != nil {
@@ -162,8 +272,8 @@ func TestReviewAbandonAfterRejectedAdmissionIncidentArtifact(t *testing.T) {
 	var result ReviewAbandonResult
 	decodeStrictReviewJSON(t, output.Bytes(), &result)
 	if result.Record.Status != reviewtransaction.CompactReclaimCommitted ||
-		result.Record.PristineAbandonment == nil ||
-		result.Record.PristineAbandonment.State != reviewtransaction.StateReviewing {
+		result.Record.Abandonment == nil ||
+		result.Record.Abandonment.Schema != reviewtransaction.CompactAbandonAuthorizationSchema {
 		t.Fatalf("abandon after incident result = %#v", result)
 	}
 	if _, statErr := os.Stat(filepath.Join(reviewCLIAuthorityRoot(t, repo), "v2", started.LineageID)); !os.IsNotExist(statErr) {

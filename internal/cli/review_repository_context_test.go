@@ -16,8 +16,7 @@ import (
 )
 
 func TestRepositoryContextCaptureFromUnrelatedCWDProducesFinalizeArtifact(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
-	t.Setenv("USERPROFILE", os.Getenv("HOME"))
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	writeReviewStartCandidate(t, repo, "candidate.go", "package candidate\n\nfunc capture() {}\n", 0o644)
 	started := runNegotiatedReviewStart(t, repo, "repository-context-capture")
@@ -128,8 +127,7 @@ func TestPreserveResultRequiresExactLiveSelectedLensBinding(t *testing.T) {
 			name = "opaque-context"
 		}
 		t.Run(name, func(t *testing.T) {
-			t.Setenv("HOME", t.TempDir())
-			t.Setenv("USERPROFILE", os.Getenv("HOME"))
+			reviewEnabledHome(t)
 			repo := initReviewCLIRepo(t)
 			writeReviewStartCandidate(t, repo, "candidate.go", "package candidate\n\nfunc preserveBinding() {}\n", 0o644)
 			started := runNegotiatedReviewStart(t, repo, "preserve-selected-binding-"+name)
@@ -170,9 +168,7 @@ func TestPreserveResultRequiresExactLiveSelectedLensBinding(t *testing.T) {
 func TestOpaqueContextErrorsDoNotExposeProviderPaths(t *testing.T) {
 	for _, damage := range []string{"locator", "authority"} {
 		t.Run(damage, func(t *testing.T) {
-			home := t.TempDir()
-			t.Setenv("HOME", home)
-			t.Setenv("USERPROFILE", home)
+			home := reviewEnabledHome(t)
 			repo := initReviewCLIRepo(t)
 			writeReviewStartCandidate(t, repo, "candidate.go", "package candidate\n\nfunc opaqueFailure() {}\n", 0o644)
 			started := runNegotiatedReviewStart(t, repo, "opaque-error-"+damage)
@@ -204,8 +200,7 @@ func TestOpaqueContextErrorsDoNotExposeProviderPaths(t *testing.T) {
 }
 
 func TestNativeNextTransitionCarriesRepositoryContextCaptureBinding(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
-	t.Setenv("USERPROFILE", os.Getenv("HOME"))
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	writeReviewStartCandidate(t, repo, "candidate.go", "package candidate\n\nfunc transition() {}\n", 0o644)
 	started := runNegotiatedReviewStart(t, repo, "repository-context-transition")
@@ -259,8 +254,7 @@ func TestNativeNextTransitionCarriesRepositoryContextCaptureBinding(t *testing.T
 }
 
 func TestNegotiatedFinalizeReturnsProviderOwnedTargetedValidationRequest(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
-	t.Setenv("USERPROFILE", os.Getenv("HOME"))
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	writeReviewStartCandidate(t, repo, "candidate.go", "package candidate\n\nfunc corrected() int { return 1 }\n", 0o644)
 	started := runNegotiatedReviewStart(t, repo, "typed-validation-request")
@@ -328,10 +322,20 @@ func TestNegotiatedFinalizeReturnsProviderOwnedTargetedValidationRequest(t *test
 	if err := statusWithoutAnyRequest.Validate(); err == nil {
 		t.Fatal("status accepted a targeted-validation transition without its provider-owned request")
 	}
+	evidencePath := filepath.Join(t.TempDir(), "correction-evidence.txt")
+	if err := os.WriteFile(evidencePath, []byte("targeted and full repository verification passed\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := RunReviewCaptureEvidence([]string{
+		"--cwd", repo, "--lineage", started.LineageID, "--target", status.ValidationRequest.CorrectionTargetIdentity,
+		"--expected-revision", status.Authority.Revision, "--outcome", string(reviewtransaction.VerificationOutcomePassed), "--input", evidencePath,
+	}, io.Discard); err != nil {
+		t.Fatal(err)
+	}
 
 	var output bytes.Buffer
 	if err := RunReviewFacadeFinalize([]string{
-		"--cwd", repo, "--contract", ReviewIntegrationContractV1, "--next-transition", "--lineage", started.LineageID,
+		"--cwd", repo, "--contract", ReviewIntegrationContractV1, "--next-transition", "--lineage", started.LineageID, "--captured-evidence",
 	}, &output); err != nil {
 		t.Fatal(err)
 	}
@@ -370,8 +374,7 @@ func TestNegotiatedFinalizeReturnsProviderOwnedTargetedValidationRequest(t *test
 }
 
 func TestNegotiatedStatusAcceptsCorrectionSubsetDigest(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
-	t.Setenv("USERPROFILE", os.Getenv("HOME"))
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	writeReviewStartCandidate(t, repo, "corrected.go", "package candidate\n\nfunc correctedSubset() int { return 0 }\n", 0o644)
 	writeReviewStartCandidate(t, repo, "untouched.go", "package candidate\n\nfunc untouchedSubset() int { return 0 }\n", 0o644)
@@ -433,12 +436,11 @@ func TestNegotiatedStatusAcceptsCorrectionSubsetDigest(t *testing.T) {
 }
 
 func TestNegotiatedStartPublishesStableOpaqueRepositoryContext(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
-	t.Setenv("USERPROFILE", os.Getenv("HOME"))
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	writeReviewStartCandidate(t, repo, "candidate.go", "package candidate\n\nfunc value() int { return 2 }\n", 0o644)
 
-	args := boundNegotiatedStartArgs(t, []string{"--cwd", repo, "--contract", ReviewIntegrationContractV1, "--lineage", "repository-context-start"})
+	args := boundNegotiatedStartArgs(t, []string{"--cwd", repo, "--contract", ReviewIntegrationContractV2, "--lineage", "repository-context-start"})
 	var first bytes.Buffer
 	if err := RunReviewFacadeStart(args, &first); err != nil {
 		t.Fatal(err)
@@ -446,7 +448,8 @@ func TestNegotiatedStartPublishesStableOpaqueRepositoryContext(t *testing.T) {
 	var started ReviewIntegrationStartResult
 	decodeStrictReviewJSON(t, first.Bytes(), &started)
 	if started.RepositoryContext == nil || started.RepositoryContext.Capability != reviewtransaction.ReviewRepositoryContextCapability ||
-		started.RepositoryContext.Handle == "" || !validReviewCapabilitySHA256(started.RepositoryContext.Revision) {
+		started.RepositoryContext.Handle == "" || !validReviewCapabilitySHA256(started.RepositoryContext.Revision) ||
+		!validReviewCapabilitySHA256(started.RepositoryContext.EventID) || started.RepositoryContext.Outcome != reviewtransaction.CompactRepositoryContextApplied {
 		t.Fatalf("repository context = %#v", started.RepositoryContext)
 	}
 	if bytes.Contains(first.Bytes(), []byte(repo)) || bytes.Contains(first.Bytes(), []byte(filepath.Join(repo, ".git"))) {
@@ -468,6 +471,73 @@ func TestNegotiatedStartPublishesStableOpaqueRepositoryContext(t *testing.T) {
 	if retry.Action != string(reviewtransaction.CompactStartResumed) || retry.RepositoryContext == nil ||
 		retry.RepositoryContext.Handle != started.RepositoryContext.Handle || retry.RepositoryContext.Revision != started.RepositoryContext.Revision {
 		t.Fatalf("resumed repository context = %#v", retry)
+	}
+	var statusOutput bytes.Buffer
+	if err := RunReviewStatus([]string{"--cwd", repo, "--contract", ReviewIntegrationContractV2, "--lineage", started.LineageID, "--next-transition"}, &statusOutput); err != nil {
+		t.Fatal(err)
+	}
+	var status ReviewTargetStatusResult
+	decodeStrictReviewJSON(t, statusOutput.Bytes(), &status)
+	if status.RepositoryContext == nil || status.RepositoryContext.Handle != started.RepositoryContext.Handle ||
+		status.RepositoryContext.EventID != started.RepositoryContext.EventID || status.RepositoryContext.Outcome != reviewtransaction.CompactRepositoryContextApplied {
+		t.Fatalf("status repository context = %#v", status.RepositoryContext)
+	}
+	wrongRevision := status
+	wrongRevisionContext := *status.RepositoryContext
+	wrongRevisionContext.Revision = "sha256:" + strings.Repeat("f", 64)
+	wrongRevision.RepositoryContext = &wrongRevisionContext
+	if err := wrongRevision.Validate(); err == nil {
+		t.Fatal("STATUS accepted repository context bound to the wrong authority revision")
+	}
+	wrongTarget := status
+	wrongTargetContext := *status.RepositoryContext
+	wrongTargetContext.TargetIdentity = "sha256:" + strings.Repeat("f", 64)
+	wrongTarget.RepositoryContext = &wrongTargetContext
+	if err := wrongTarget.Validate(); err == nil {
+		t.Fatal("STATUS accepted repository context bound to the wrong authority target")
+	}
+	wrongStartRevision := started
+	wrongStartRevisionContext := *started.RepositoryContext
+	wrongStartRevisionContext.Revision = "sha256:" + strings.Repeat("f", 64)
+	wrongStartRevision.RepositoryContext = &wrongStartRevisionContext
+	if err := wrongStartRevision.Validate(); err == nil {
+		t.Fatal("START accepted repository context bound to the wrong authority revision")
+	}
+}
+
+func TestStatusRepositoryContextIntentSelection(t *testing.T) {
+	if hasRepositoryContextIntent([]reviewtransaction.CompactEffectIntent{{Class: "requested_trace"}}) {
+		t.Fatal("START/STATUS effect-only authority selected repository context reconciliation")
+	}
+	if !hasRepositoryContextIntent([]reviewtransaction.CompactEffectIntent{{Class: reviewtransaction.CompactEffectClassRepositoryContext}}) {
+		t.Fatal("repository context authority preserved direct publication fallback")
+	}
+}
+
+func TestRepositoryContextReferenceRejectsInvalidEventContract(t *testing.T) {
+	valid := ReviewRepositoryContextReference{
+		Capability: reviewtransaction.ReviewRepositoryContextCapability,
+		Handle:     "rctx1_" + strings.Repeat("a", 64), Revision: "sha256:" + strings.Repeat("b", 64),
+		TargetIdentity: "sha256:" + strings.Repeat("c", 64), EventID: "sha256:" + strings.Repeat("d", 64),
+		Outcome: reviewtransaction.CompactRepositoryContextApplied,
+	}
+	tests := []struct {
+		name   string
+		mutate func(*ReviewRepositoryContextReference)
+	}{
+		{name: "event without outcome", mutate: func(reference *ReviewRepositoryContextReference) { reference.Outcome = "" }},
+		{name: "outcome without event", mutate: func(reference *ReviewRepositoryContextReference) { reference.EventID = "" }},
+		{name: "invalid event shape", mutate: func(reference *ReviewRepositoryContextReference) { reference.EventID = "event" }},
+		{name: "unknown outcome", mutate: func(reference *ReviewRepositoryContextReference) { reference.Outcome = "unknown" }},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			reference := valid
+			tt.mutate(&reference)
+			if err := validateReviewRepositoryContextReference(reference); err == nil {
+				t.Fatal("invalid repository context event contract was accepted")
+			}
+		})
 	}
 }
 
@@ -496,8 +566,7 @@ func TestNegotiatedStartRepositoryContextCoversWorkspaceStagedAndOverlay(t *test
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			t.Setenv("HOME", t.TempDir())
-			t.Setenv("USERPROFILE", os.Getenv("HOME"))
+			reviewEnabledHome(t)
 			repo := initReviewCLIRepo(t)
 			args := boundNegotiatedStartArgs(t, append([]string{"--cwd", repo, "--contract", ReviewIntegrationContractV1, "--lineage", "repository-context-" + strings.ReplaceAll(tt.name, " ", "-")}, tt.args(t, repo)...))
 			var output bytes.Buffer
@@ -523,6 +592,7 @@ func TestNegotiatedStartRepositoryContextCoversWorkspaceStagedAndOverlay(t *test
 }
 
 func TestLegacyStartBytesDoNotContainRepositoryContext(t *testing.T) {
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	writeReviewStartCandidate(t, repo, "candidate.go", "package candidate\n\nfunc legacy() {}\n", 0o644)
 	var output bytes.Buffer

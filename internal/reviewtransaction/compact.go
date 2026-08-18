@@ -10,6 +10,7 @@ import (
 	"io"
 	"reflect"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -26,6 +27,14 @@ const (
 	historicalCompactCorrectionAttempts       = 3
 )
 
+// CorrectionBudgetPolicy names the persisted budget formula a compact state
+// uses. New states persist CorrectionBudgetPolicyFloorTwo so every positive
+// budget admits one atomic line replacement; historical states omit the field
+// and retain the legacy CorrectionBudget formula byte-for-byte (issue #2247).
+const (
+	CorrectionBudgetPolicyFloorTwo = "floor_two"
+)
+
 var ErrCompactCorrectionConsumed = errors.New("ordinary compact correction already consumed")
 
 // CompactSemanticStateError identifies a CompactState.Validate() failure with
@@ -38,6 +47,20 @@ type CompactSemanticStateError struct {
 	LineageID string
 	State     State
 	Problem   string
+	// OutdatedIdentity marks the one semantic failure a retired
+	// snapshot-identity formula leaves behind (#2743): the record's bytes
+	// parse and its structure is intact, but the identity it froze was
+	// computed by an earlier release's formula, so recomputation under the
+	// current formula no longer matches. Outdated means gate-invalid, not
+	// damaged: diagnostics classify it historical instead of malformed, and
+	// no scoped walk lets it block another lineage's operation.
+	OutdatedIdentity bool
+	// PriorSchemaPredecessorLineageID names the recovery predecessor an
+	// OutdatedIdentity record froze, recovered through the same read-only
+	// forensic parse that proved the prior-schema classification. It lets a
+	// scoped ancestry audit keep walking past inert prior-schema history; it
+	// is forensic classification only and never live authority.
+	PriorSchemaPredecessorLineageID string
 }
 
 func (err *CompactSemanticStateError) Error() string {
@@ -67,37 +90,61 @@ func compactLineageQuarantinable(err error) (*CompactSemanticStateError, bool) {
 }
 
 type CompactState struct {
-	Schema                    string                       `json:"schema"`
-	LineageID                 string                       `json:"lineage_id"`
-	Generation                int                          `json:"generation"`
-	State                     State                        `json:"state"`
-	InitialSnapshot           Snapshot                     `json:"initial_snapshot"`
-	CurrentSnapshot           Snapshot                     `json:"current_snapshot"`
-	GenesisPaths              []string                     `json:"genesis_paths"`
-	PolicyHash                string                       `json:"policy_hash"`
-	RiskLevel                 RiskLevel                    `json:"risk_level"`
-	SelectedLenses            []string                     `json:"selected_lenses"`
-	OriginalChangedLines      int                          `json:"original_changed_lines"`
-	CorrectionBudget          int                          `json:"correction_budget"`
-	LensResults               []LensResult                 `json:"lens_results"`
-	Findings                  []Finding                    `json:"findings"`
-	Classifications           map[string]FindingEvidence   `json:"classifications"`
-	Outcomes                  map[string]EvidenceOutcome   `json:"outcomes"`
-	FixFindingIDs             []string                     `json:"fix_finding_ids"`
-	FollowUps                 []FollowUp                   `json:"follow_ups"`
-	ProposedCorrectionLines   *int                         `json:"proposed_correction_lines,omitempty"`
-	ActualCorrectionLines     *int                         `json:"actual_correction_lines,omitempty"`
-	FixDeltaHash              string                       `json:"fix_delta_hash"`
-	OriginalCriteria          *ValidationCheck             `json:"original_criteria,omitempty"`
-	CorrectionRegression      *ValidationCheck             `json:"correction_regression,omitempty"`
-	EvidenceHash              string                       `json:"evidence_hash,omitempty"`
-	InvalidationReason        string                       `json:"invalidation_reason,omitempty"`
-	InvalidationEvidence      *CompactInvalidationEvidence `json:"invalidation_evidence,omitempty"`
-	Recovery                  *CompactRecoveryProvenance   `json:"recovery,omitempty"`
-	CorrectionAttempts        []CompactCorrectionAttempt   `json:"correction_attempts,omitempty"`
-	CumulativeCorrectionLines int                          `json:"cumulative_correction_lines,omitempty"`
-	ResultDispositions        []CompactResultDisposition   `json:"result_dispositions,omitempty"`
-	ResultReopens             []CompactResultReopen        `json:"result_reopens,omitempty"`
+	Schema                       string                       `json:"schema"`
+	LineageID                    string                       `json:"lineage_id"`
+	Generation                   int                          `json:"generation"`
+	State                        State                        `json:"state"`
+	InitialSnapshot              Snapshot                     `json:"initial_snapshot"`
+	CurrentSnapshot              Snapshot                     `json:"current_snapshot"`
+	GenesisPaths                 []string                     `json:"genesis_paths"`
+	CorrectionAddedPaths         []string                     `json:"correction_added_paths,omitempty"`
+	PolicyHash                   string                       `json:"policy_hash"`
+	RiskLevel                    RiskLevel                    `json:"risk_level"`
+	SelectedLenses               []string                     `json:"selected_lenses"`
+	OriginalChangedLines         int                          `json:"original_changed_lines"`
+	CorrectionBudget             int                          `json:"correction_budget"`
+	CorrectionBudgetPolicy       string                       `json:"correction_budget_policy,omitempty"`
+	LensResults                  []LensResult                 `json:"lens_results"`
+	Findings                     []Finding                    `json:"findings"`
+	Classifications              map[string]FindingEvidence   `json:"classifications"`
+	Outcomes                     map[string]EvidenceOutcome   `json:"outcomes"`
+	FixFindingIDs                []string                     `json:"fix_finding_ids"`
+	FollowUps                    []FollowUp                   `json:"follow_ups"`
+	ProposedCorrectionLines      *int                         `json:"proposed_correction_lines,omitempty"`
+	ActualCorrectionLines        *int                         `json:"actual_correction_lines,omitempty"`
+	FixDeltaHash                 string                       `json:"fix_delta_hash"`
+	OriginalCriteria             *ValidationCheck             `json:"original_criteria,omitempty"`
+	CorrectionRegression         *ValidationCheck             `json:"correction_regression,omitempty"`
+	EvidenceHash                 string                       `json:"evidence_hash,omitempty"`
+	EvidenceRecordDigest         string                       `json:"evidence_record_digest,omitempty"`
+	EvidenceOutcome              VerificationOutcome          `json:"evidence_outcome,omitempty"`
+	EvidenceTargetIdentity       string                       `json:"evidence_target_identity,omitempty"`
+	EvidenceAuthorityRevision    string                       `json:"evidence_authority_revision,omitempty"`
+	CorrectionVerificationTarget *Snapshot                    `json:"correction_verification_target,omitempty"`
+	InvalidationReason           string                       `json:"invalidation_reason,omitempty"`
+	InvalidationEvidence         *CompactInvalidationEvidence `json:"invalidation_evidence,omitempty"`
+	Recovery                     *CompactRecoveryProvenance   `json:"recovery,omitempty"`
+	CorrectionAttempts           []CompactCorrectionAttempt   `json:"correction_attempts,omitempty"`
+	CumulativeCorrectionLines    int                          `json:"cumulative_correction_lines,omitempty"`
+	ResultDispositions           []CompactResultDisposition   `json:"result_dispositions,omitempty"`
+	ResultReopens                []CompactResultReopen        `json:"result_reopens,omitempty"`
+	ReviewerContextLevel         ReviewerContextLevel         `json:"reviewer_context_level,omitempty"`
+}
+
+// CorrectionBudgetExceededError identifies a repository-derived correction
+// whose changed lines exceed the authority's remaining correction budget.
+type CorrectionBudgetExceededError struct {
+	Actual    int
+	Remaining int
+}
+
+func (err *CorrectionBudgetExceededError) Error() string {
+	return fmt.Sprintf("actual correction is %d changed lines, exceeding the remaining budget of %d", err.Actual, err.Remaining)
+}
+
+func IsCorrectionBudgetExceeded(err error) bool {
+	var budgetErr *CorrectionBudgetExceededError
+	return errors.As(err, &budgetErr)
 }
 
 // CompactResultReopenSlot binds one selected lens artifact at the exact
@@ -223,15 +270,17 @@ const (
 )
 
 type CompactRecoveryProvenance struct {
-	PredecessorLineageID    string                              `json:"predecessor_lineage_id"`
-	PredecessorRevision     string                              `json:"predecessor_revision"`
-	Disposition             RecoveryDisposition                 `json:"disposition"`
-	Reason                  string                              `json:"reason"`
-	Actor                   string                              `json:"actor"`
-	RecoveredAt             time.Time                           `json:"recovered_at"`
-	MaintainerAuthorization string                              `json:"maintainer_authorization,omitempty"`
-	Evidence                *CompactRecoveredEvidence           `json:"evidence,omitempty"`
-	FinalVerificationRetry  *CompactFinalVerificationRetryProof `json:"final_verification_retry,omitempty"`
+	PredecessorLineageID       string                              `json:"predecessor_lineage_id"`
+	PredecessorRevision        string                              `json:"predecessor_revision"`
+	Disposition                RecoveryDisposition                 `json:"disposition"`
+	Reason                     string                              `json:"reason"`
+	Actor                      string                              `json:"actor"`
+	RecoveredAt                time.Time                           `json:"recovered_at"`
+	MaintainerAuthorization    string                              `json:"maintainer_authorization,omitempty"`
+	ConsumedCorrectionAttempts int                                 `json:"consumed_correction_attempts,omitempty"`
+	ConsumedCorrectionLines    int                                 `json:"consumed_correction_lines,omitempty"`
+	Evidence                   *CompactRecoveredEvidence           `json:"evidence,omitempty"`
+	FinalVerificationRetry     *CompactFinalVerificationRetryProof `json:"final_verification_retry,omitempty"`
 }
 
 // CompactRecoveredEvidence is the self-contained provenance for the only
@@ -252,21 +301,46 @@ type CompactRecoveredEvidence struct {
 }
 
 type CompactReceipt struct {
-	Schema             string        `json:"schema"`
-	LineageID          string        `json:"lineage_id"`
-	Projection         Projection    `json:"projection,omitempty"`
-	Generation         int           `json:"generation"`
-	BaseTree           string        `json:"base_tree"`
-	InitialReviewTree  string        `json:"initial_review_tree"`
-	FinalCandidateTree string        `json:"final_candidate_tree"`
-	PathsDigest        string        `json:"paths_digest"`
-	FixDeltaHash       string        `json:"fix_delta_hash"`
-	PolicyHash         string        `json:"policy_hash"`
-	EvidenceHash       string        `json:"evidence_hash"`
-	RiskLevel          RiskLevel     `json:"risk_level"`
-	SelectedLenses     []string      `json:"selected_lenses"`
-	ResolvedFindingIDs []string      `json:"resolved_finding_ids"`
-	TerminalState      TerminalState `json:"terminal_state"`
+	Schema             string     `json:"schema"`
+	LineageID          string     `json:"lineage_id"`
+	Projection         Projection `json:"projection,omitempty"`
+	Generation         int        `json:"generation"`
+	BaseTree           string     `json:"base_tree"`
+	InitialReviewTree  string     `json:"initial_review_tree"`
+	FinalCandidateTree string     `json:"final_candidate_tree"`
+	PathsDigest        string     `json:"paths_digest"`
+	// CorrectionAddedPaths discloses the companion test paths one admitted
+	// bounded correction added beyond the reviewed genesis manifest (issue
+	// #3375). PathsDigest already covers them, so delivery works; this field
+	// exists so an auditor can see WHICH delivered paths no lens inspected
+	// rather than having to infer it. It is omitempty, and absence means the
+	// correction stayed inside the reviewed manifest — which is every receipt
+	// issued before this field existed, so each of those stays byte-identical
+	// under re-derivation.
+	CorrectionAddedPaths      []string            `json:"correction_added_paths,omitempty"`
+	FixDeltaHash              string              `json:"fix_delta_hash"`
+	PolicyHash                string              `json:"policy_hash"`
+	EvidenceHash              string              `json:"evidence_hash"`
+	EvidenceRecordDigest      string              `json:"evidence_record_digest,omitempty"`
+	EvidenceOutcome           VerificationOutcome `json:"evidence_outcome,omitempty"`
+	EvidenceTargetIdentity    string              `json:"evidence_target_identity,omitempty"`
+	EvidenceAuthorityRevision string              `json:"evidence_authority_revision,omitempty"`
+	RiskLevel                 RiskLevel           `json:"risk_level"`
+	SelectedLenses            []string            `json:"selected_lenses"`
+	ResolvedFindingIDs        []string            `json:"resolved_finding_ids"`
+	TerminalState             TerminalState       `json:"terminal_state"`
+	// ReviewerContextLevel records the mechanism that put the immutable
+	// candidate evidence in front of this review's reviewers. It is recorded
+	// only, never gated on, and never compared to another level: whether any
+	// delivery gate ever requires a particular mechanism is a separate
+	// decision, and this field exists now because it cannot be backfilled — a
+	// receipt issued without it can never be classified later.
+	//
+	// It is omitempty, and absence means "not recorded" rather than any
+	// particular mechanism. That keeps every receipt issued before this field
+	// existed re-derivable byte-identically, which its immutable publication
+	// requires.
+	ReviewerContextLevel ReviewerContextLevel `json:"reviewer_context_level,omitempty"`
 }
 
 type CompactReviewInput struct {
@@ -298,7 +372,7 @@ func NewCompactState(start Start) (CompactState, error) {
 	if err != nil {
 		return CompactState{}, err
 	}
-	budget, err := CorrectionBudget(*start.OriginalChangedLines)
+	budget, err := CompactCorrectionBudget(*start.OriginalChangedLines)
 	if err != nil {
 		return CompactState{}, err
 	}
@@ -307,11 +381,28 @@ func NewCompactState(start Start) (CompactState, error) {
 		State: StateReviewing, InitialSnapshot: start.Snapshot, CurrentSnapshot: start.Snapshot,
 		GenesisPaths: append([]string(nil), start.Snapshot.Paths...), PolicyHash: start.PolicyHash,
 		RiskLevel: start.RiskLevel, SelectedLenses: lenses, OriginalChangedLines: *start.OriginalChangedLines,
-		CorrectionBudget: budget, LensResults: []LensResult{}, Findings: []Finding{},
+		CorrectionBudget: budget, CorrectionBudgetPolicy: CorrectionBudgetPolicyFloorTwo,
+		LensResults: []LensResult{}, Findings: []Finding{},
 		Classifications: map[string]FindingEvidence{}, Outcomes: map[string]EvidenceOutcome{},
 		FixFindingIDs: []string{}, FollowUps: []FollowUp{}, FixDeltaHash: EmptyFixDeltaHash,
 	}
 	return state, state.Validate()
+}
+
+// CompactExpectedBudget derives the budget a compact state should carry under
+// its persisted policy. Floor-two states use CompactCorrectionBudget;
+// historical states with no policy field retain the legacy CorrectionBudget
+// formula byte-for-byte. An unrecognized policy is rejected (issue #2247).
+func CompactExpectedBudget(originalChangedLines int, policy string) (int, error) {
+	switch policy {
+	case CorrectionBudgetPolicyFloorTwo:
+		return CompactCorrectionBudget(originalChangedLines)
+	case "":
+		return CorrectionBudget(originalChangedLines)
+	default:
+		// refusal:by-design world-action: a persisted policy outside the closed contract cannot be repaired safely without provider-owned authority
+		return 0, errors.New("compact correction budget policy is unrecognized")
+	}
 }
 
 func (state CompactState) Validate() error {
@@ -351,6 +442,14 @@ func (state CompactState) Validate() error {
 		}
 		if recovery.FinalVerificationRetry != nil && recovery.Disposition != RecoveryFinalVerificationRetry {
 			return errors.New("only final-verification retry recovery may carry final-verification source proof")
+		}
+		if recovery.ConsumedCorrectionAttempts < 0 || recovery.ConsumedCorrectionAttempts > MaxCompactCorrectionAttempts ||
+			recovery.ConsumedCorrectionLines < 0 || recovery.ConsumedCorrectionLines > state.CorrectionBudget ||
+			recovery.ConsumedCorrectionAttempts == 0 && recovery.ConsumedCorrectionLines != 0 {
+			return errors.New("compact recovery correction accounting is invalid") // refusal:by-design world-action: malformed persisted accounting cannot be repaired without replacing its provider-owned authority
+		}
+		if recovery.ConsumedCorrectionAttempts > 0 && recovery.Disposition != RecoveryScopeChanged {
+			return errors.New("only scope-changed recovery may preserve consumed correction accounting") // refusal:by-design world-action: contradictory persisted recovery provenance requires code or storage repair
 		}
 	}
 	if err := validateCompactResultDispositions(state); err != nil {
@@ -400,7 +499,14 @@ func (state CompactState) Validate() error {
 	if err != nil || !equalStrings(paths, state.GenesisPaths) || !equalStrings(state.GenesisPaths, state.InitialSnapshot.Paths) {
 		return errors.New("compact genesis paths must exactly match the canonical initial scope")
 	}
-	if err := pathsAreSubset(state.CurrentSnapshot.Paths, state.GenesisPaths); err != nil {
+	if err := validateCompactCorrectionAddedPaths(state); err != nil {
+		return err
+	}
+	candidateScope, err := compactCorrectionCandidateScope(state)
+	if err != nil {
+		return err
+	}
+	if err := pathsAreSubset(state.CurrentSnapshot.Paths, candidateScope); err != nil {
 		return err
 	}
 	if !validSHA256(state.PolicyHash) || !validSHA256(state.FixDeltaHash) {
@@ -410,8 +516,12 @@ func (state CompactState) Validate() error {
 	if err != nil || !equalStrings(selected, state.SelectedLenses) {
 		return errors.New("compact selected lenses are invalid")
 	}
-	wantBudget, err := CorrectionBudget(state.OriginalChangedLines)
-	if err != nil || state.CorrectionBudget != wantBudget {
+	wantBudget, err := CompactExpectedBudget(state.OriginalChangedLines, state.CorrectionBudgetPolicy)
+	preservedRecoveryBudget := state.Recovery != nil && state.Recovery.ConsumedCorrectionAttempts > 0
+	if err != nil {
+		return err
+	}
+	if state.CorrectionBudget != wantBudget && !preservedRecoveryBudget {
 		return errors.New("compact correction budget does not match original changed lines")
 	}
 	if state.LensResults == nil || state.Findings == nil || state.Classifications == nil || state.Outcomes == nil || state.FixFindingIDs == nil || state.FollowUps == nil {
@@ -439,6 +549,9 @@ func (state CompactState) Validate() error {
 		return errors.New("compact actual correction lines must be within the frozen budget")
 	}
 	if err := validateCompactCorrection(state); err != nil {
+		return err
+	}
+	if err := validateCompactVerificationEvidence(state); err != nil {
 		return err
 	}
 	switch state.State {
@@ -470,6 +583,36 @@ func (state CompactState) Validate() error {
 	case StateEscalated:
 	default:
 		return fmt.Errorf("invalid compact review state %q", state.State)
+	}
+	return nil
+}
+
+func validateCompactVerificationEvidence(state CompactState) error {
+	hasRecordBinding := state.EvidenceRecordDigest != "" || state.EvidenceOutcome != "" ||
+		state.EvidenceTargetIdentity != "" || state.EvidenceAuthorityRevision != ""
+	if !hasRecordBinding {
+		return nil
+	}
+	expectedTarget := state.CurrentSnapshot.Identity
+	if state.CorrectionVerificationTarget != nil {
+		expectedTarget = state.CorrectionVerificationTarget.Identity
+	} else if len(state.CorrectionAttempts) > 0 {
+		expectedTarget = state.CorrectionAttempts[len(state.CorrectionAttempts)-1].Snapshot.Identity
+	}
+	if !validSHA256(state.EvidenceHash) || !validSHA256(state.EvidenceRecordDigest) ||
+		!validSHA256(state.EvidenceTargetIdentity) || !validSHA256(state.EvidenceAuthorityRevision) ||
+		state.EvidenceTargetIdentity != expectedTarget || !validVerificationOutcome(state.EvidenceOutcome) {
+		return errors.New("compact verification evidence record binding is incomplete or invalid") // refusal:by-design world-action: persisted authority metadata is corrupt and cannot be reconstructed from an untrusted partial binding
+	}
+	switch state.EvidenceOutcome {
+	case VerificationOutcomePassed:
+		if state.State != StateApproved {
+			return errors.New("passed compact verification evidence requires approved authority") // refusal:by-design world-action: persisted outcome and lifecycle state contradict each other and require code or storage repair
+		}
+	case VerificationOutcomeFailed, VerificationOutcomeProceduralFailure:
+		if state.State != StateEscalated {
+			return errors.New("failed compact verification evidence requires escalated authority") // refusal:by-design world-action: persisted outcome and lifecycle state contradict each other and require code or storage repair
+		}
 	}
 	return nil
 }
@@ -513,10 +656,21 @@ func validateCompactSnapshotMetadata(snapshot Snapshot) error {
 	}
 	wantIdentity := snapshotIdentityForProjection(snapshot.Kind, snapshot.Projection, snapshot.BaseTree, snapshot.CandidateTree, snapshot.PathsDigest, snapshot.IntendedUntrackedProof, snapshot.IntendedUntracked, snapshot.LedgerIDs)
 	if snapshot.Identity != wantIdentity {
-		return errors.New("compact snapshot identity does not match its metadata")
+		return errCompactSnapshotIdentityMismatch
 	}
 	return nil
 }
+
+// errCompactSnapshotIdentityMismatch is the exact semantic failure a record
+// frozen under a retired snapshot-identity formula produces when the current
+// formula recomputes its identity (#2743: every pre-rc.2 compact-v2 record
+// fails here after the #2659/PR-#2667 identity purification). It is a
+// sentinel so parseCompactRecord can mark the resulting typed
+// *CompactSemanticStateError as OutdatedIdentity — the clean-break policy
+// keeps such records gate-invalid without rewriting their bytes, and
+// diagnostics owe them an honest historical classification instead of
+// narrating them as damage.
+var errCompactSnapshotIdentityMismatch = errors.New("compact snapshot identity does not match its metadata")
 
 func validateCompactFindings(state CompactState) error {
 	if state.State == StateReviewing || state.State == StateInvalidated {
@@ -658,10 +812,15 @@ func validateCompactCorrection(state CompactState) error {
 		return errors.New("compact cumulative correction lines require persisted attempts")
 	}
 	if len(state.CorrectionAttempts) > 0 {
+		candidateScope, scopeErr := compactCorrectionCandidateScope(state)
+		if scopeErr != nil {
+			return errors.New("compact correction attempt is outside frozen scope")
+		}
 		base, cumulative := state.InitialSnapshot.CandidateTree, 0
 		for _, attempt := range state.CorrectionAttempts {
 			if attempt.ProposedLines <= 0 || attempt.ActualLines < 0 || attempt.Snapshot.Kind != TargetFixDiff || attempt.Snapshot.Projection != state.InitialSnapshot.Projection || attempt.Snapshot.BaseTree != base ||
-				!equalStrings(attempt.Snapshot.LedgerIDs, state.FixFindingIDs) || pathsAreSubset(attempt.Snapshot.Paths, state.GenesisPaths) != nil ||
+				!equalStrings(attempt.Snapshot.LedgerIDs, state.FixFindingIDs) || pathsAreSubset(attempt.Snapshot.Paths, candidateScope) != nil ||
+				validateCompactSnapshot(attempt.Snapshot) != nil || validateCompactSnapshotMetadata(attempt.Snapshot) != nil ||
 				attempt.FixDeltaHash != FixDeltaHashForSnapshot(attempt.Snapshot) {
 				return errors.New("compact correction attempt is outside frozen scope")
 			}
@@ -677,7 +836,9 @@ func validateCompactCorrection(state CompactState) error {
 			}
 			base, cumulative = attempt.Snapshot.CandidateTree, cumulative+attempt.ActualLines
 		}
-		if cumulative != state.CumulativeCorrectionLines || cumulative > state.CorrectionBudget && state.State != StateEscalated || !snapshotsEqual(state.CurrentSnapshot, state.CorrectionAttempts[len(state.CorrectionAttempts)-1].Snapshot) {
+		last := state.CorrectionAttempts[len(state.CorrectionAttempts)-1].Snapshot
+		if cumulative != state.CumulativeCorrectionLines || cumulative > state.CorrectionBudget && state.State != StateEscalated ||
+			!snapshotsEqual(state.CurrentSnapshot, last) && validateCompactCorrectedCandidate(state, last) != nil {
 			return errors.New("compact cumulative correction accounting is invalid")
 		}
 		if state.State == StateCorrectionRequired {
@@ -697,6 +858,22 @@ func validateCompactCorrection(state CompactState) error {
 			state.OriginalCriteria == nil && state.CorrectionRegression == nil && state.EvidenceHash == "" {
 			return nil
 		}
+	}
+	if state.CorrectionVerificationTarget != nil {
+		target := state.CorrectionVerificationTarget
+		if state.State != StateEscalated || state.EvidenceOutcome != VerificationOutcomeProceduralFailure ||
+			len(state.CorrectionAttempts) != 0 || state.CumulativeCorrectionLines != 0 || state.ProposedCorrectionLines == nil ||
+			*state.ProposedCorrectionLines > state.CorrectionBudget || state.ActualCorrectionLines != nil ||
+			state.OriginalCriteria != nil || state.CorrectionRegression != nil || state.FixDeltaHash != EmptyFixDeltaHash ||
+			target.Kind != TargetFixDiff || target.Projection != state.InitialSnapshot.Projection ||
+			target.BaseTree != state.CurrentSnapshot.CandidateTree || !equalStrings(target.LedgerIDs, state.FixFindingIDs) ||
+			correctionScopeRefused(target.Paths, state.GenesisPaths) {
+			return errors.New("procedural correction verification target is invalid") // refusal:by-design world-action: persisted terminal evidence targets an invalid correction snapshot and cannot authorize continuation
+		}
+		if err := validateCompactSnapshot(*target); err != nil {
+			return err
+		}
+		return nil
 	}
 	corrected := !snapshotsEqual(state.CurrentSnapshot, state.InitialSnapshot) || state.FixDeltaHash != EmptyFixDeltaHash || state.ActualCorrectionLines != nil || state.OriginalCriteria != nil || state.CorrectionRegression != nil
 	if !corrected {
@@ -722,12 +899,16 @@ func validateCompactCorrection(state CompactState) error {
 	if state.ProposedCorrectionLines == nil || *state.ProposedCorrectionLines > state.CorrectionBudget || state.ActualCorrectionLines == nil {
 		return errors.New("completed compact correction requires in-budget forecast and actual size")
 	}
-	if state.CurrentSnapshot.Kind != TargetFixDiff || len(state.CorrectionAttempts) == 0 && state.CurrentSnapshot.BaseTree != state.InitialSnapshot.CandidateTree ||
-		!equalStrings(state.CurrentSnapshot.LedgerIDs, state.FixFindingIDs) ||
-		!equalStrings(state.CurrentSnapshot.IntendedUntracked, state.InitialSnapshot.IntendedUntracked) {
+	correction := state.CurrentSnapshot
+	if len(state.CorrectionAttempts) > 0 {
+		correction = state.CorrectionAttempts[len(state.CorrectionAttempts)-1].Snapshot
+	}
+	if correction.Kind != TargetFixDiff || len(state.CorrectionAttempts) == 0 && correction.BaseTree != state.InitialSnapshot.CandidateTree ||
+		!equalStrings(correction.LedgerIDs, state.FixFindingIDs) ||
+		!equalStrings(correction.IntendedUntracked, state.InitialSnapshot.IntendedUntracked) {
 		return errors.New("completed compact correction snapshot is not bound to the original candidate and causal findings")
 	}
-	if state.FixDeltaHash != FixDeltaHashForSnapshot(state.CurrentSnapshot) {
+	if state.FixDeltaHash != FixDeltaHashForSnapshot(correction) {
 		return errors.New("compact fix delta hash does not match the correction snapshot")
 	}
 	if state.OriginalCriteria == nil || state.CorrectionRegression == nil {
@@ -753,6 +934,22 @@ func validateCompactCorrection(state CompactState) error {
 	return nil
 }
 
+func validateCompactCorrectedCandidate(state CompactState, correction Snapshot) error {
+	current, initial := state.CurrentSnapshot, state.InitialSnapshot
+	candidateScope, scopeErr := compactCorrectionCandidateScope(state)
+	if scopeErr != nil {
+		return errors.New("terminal correction authority does not preserve the complete reviewed candidate") // refusal:by-design world-action: contradictory persisted authority requires code or storage repair
+	}
+	if current.Kind != initial.Kind || current.Projection != initial.Projection || current.UnbornHead != correction.UnbornHead ||
+		current.BaseTree != initial.BaseTree || current.CandidateTree != correction.CandidateTree ||
+		current.IntendedUntrackedProof != correction.IntendedUntrackedProof ||
+		!equalStrings(current.IntendedUntracked, initial.IntendedUntracked) || !equalStrings(current.LedgerIDs, initial.LedgerIDs) ||
+		pathsAreSubset(current.Paths, candidateScope) != nil {
+		return errors.New("terminal correction authority does not preserve the complete reviewed candidate") // refusal:by-design world-action: contradictory persisted authority requires code or storage repair
+	}
+	return nil
+}
+
 func validateCompactRecoveredCorrection(state CompactState, evidence CompactRecoveredEvidence) error {
 	if evidence.Schema != CompactRecoveredEvidenceSchema ||
 		evidence.Relation != string(compactTargetChangedScope) || evidence.PathRelation != string(compactPathsSame) ||
@@ -773,7 +970,17 @@ func validateCompactRecoveredCorrection(state CompactState, evidence CompactReco
 		attempt.Snapshot.CandidateTree != state.InitialSnapshot.CandidateTree ||
 		attempt.Snapshot.Projection != state.InitialSnapshot.Projection ||
 		!equalStrings(attempt.Snapshot.LedgerIDs, state.FixFindingIDs) ||
-		pathsAreSubset(attempt.Snapshot.Paths, state.GenesisPaths) != nil ||
+		// The imported attempt is measured the way every other attempt-facing
+		// check measures one (validateCompactCorrection, correctionTargetFrozen,
+		// targetedValidationRequestForCorrection): against the frozen genesis
+		// manifest THROUGH the correction admission, not against the delivery
+		// scope. The delivery scope is rolled back when a correction escalates,
+		// and an accounting-only escalation is exactly what this recovery
+		// imports, so measuring against it would refuse a companion test path
+		// the correction was entitled to add and leave the attempt with no way
+		// to be revalidated. Admission still refuses everything a correction
+		// could not have added, so nothing unreviewed enters here.
+		correctionScopeRefused(attempt.Snapshot.Paths, state.GenesisPaths) ||
 		attempt.FixDeltaHash != FixDeltaHashForSnapshot(attempt.Snapshot) || state.FixDeltaHash != attempt.FixDeltaHash ||
 		state.OriginalCriteria == nil || state.CorrectionRegression == nil ||
 		*state.OriginalCriteria != attempt.OriginalCriteria || *state.CorrectionRegression != attempt.CorrectionRegression ||
@@ -950,28 +1157,123 @@ func (state *CompactState) CompleteReview(input CompactReviewInput) error {
 }
 
 func findingLocationInGenesis(location string, genesisPaths []string) bool {
+	finding, err := parseFindingLocation(location)
+	return err == nil && stringIndex(genesisPaths, finding.Path) >= 0
+}
+
+// ErrInvalidFindingLocation identifies reviewer locations that cannot be used
+// as repository line evidence.
+var ErrInvalidFindingLocation = errors.New("invalid reviewer finding location; correct it to repository/path:<positive-line> or repository/path:<positive-start>-<positive-end> before running gentle-ai review capture-result again")
+
+// FindingLocationErrorReason is a stable machine-readable validation reason.
+type FindingLocationErrorReason string
+
+const (
+	FindingLocationExpectedPathAndLine  FindingLocationErrorReason = "expected_path_and_line"
+	FindingLocationLineNotInteger       FindingLocationErrorReason = "line_suffix_not_integer"
+	FindingLocationLineNotPositive      FindingLocationErrorReason = "line_must_be_positive"
+	FindingLocationLineOverflowsInteger FindingLocationErrorReason = "line_overflows_integer"
+	FindingLocationRangeNotAscending    FindingLocationErrorReason = "range_must_be_ascending"
+	FindingLocationPathNotRelative      FindingLocationErrorReason = "path_must_be_repository_relative"
+	FindingLocationPathNotCanonical     FindingLocationErrorReason = "path_must_be_canonical"
+)
+
+// FindingLocationError describes why a reviewer location is invalid.
+type FindingLocationError struct {
+	Location string
+	Reason   FindingLocationErrorReason
+}
+
+func (err *FindingLocationError) Error() string {
+	return fmt.Sprintf("%v: %s", ErrInvalidFindingLocation, err.Reason)
+}
+
+func (err *FindingLocationError) Unwrap() error { return ErrInvalidFindingLocation }
+
+type findingLocation struct {
+	Path      string
+	StartLine int
+	EndLine   int
+}
+
+// findingLocationHasPositiveLines reports whether a parsed finding location
+// carries strictly positive 1-based line numbers. It is a defense-in-depth
+// lower bound for causality: source lines are numbered from 1, so a location
+// whose start or end line is below 1 can never designate a line that exists in
+// the candidate and must never be treated as candidate-causal. This holds the
+// invariant even if a parser path ever yielded a non-positive line.
+func findingLocationHasPositiveLines(finding findingLocation) bool {
+	return finding.StartLine >= 1 && finding.EndLine >= 1
+}
+
+func parseFindingLocation(location string) (findingLocation, error) {
+	fail := func(reason FindingLocationErrorReason) (findingLocation, error) {
+		return findingLocation{}, &FindingLocationError{Location: location, Reason: reason}
+	}
 	separator := strings.LastIndexByte(location, ':')
 	if separator <= 0 || separator == len(location)-1 {
-		return false
+		return fail(FindingLocationExpectedPathAndLine)
 	}
-	line := location[separator+1:]
-	nonzero := false
-	for index := range line {
-		if line[index] < '0' || line[index] > '9' {
-			return false
+	lineSuffix := location[separator+1:]
+	if strings.HasPrefix(lineSuffix, "-") && strings.Count(lineSuffix, "-") == 1 {
+		return fail(FindingLocationLineNotPositive)
+	}
+	startText, endText, ranged := strings.Cut(lineSuffix, "-")
+	if strings.Count(lineSuffix, "-") > 1 {
+		return fail(FindingLocationLineNotInteger)
+	}
+	start, reason := parseFindingLocationLine(startText)
+	if reason != "" {
+		return fail(reason)
+	}
+	end := start
+	if ranged {
+		end, reason = parseFindingLocationLine(endText)
+		if reason != "" {
+			return fail(reason)
 		}
-		nonzero = nonzero || line[index] != '0'
+		if start > end {
+			return fail(FindingLocationRangeNotAscending)
+		}
 	}
 	logicalPath := location[:separator]
 	if len(logicalPath) >= 3 && logicalPath[1] == ':' && logicalPath[2] == '/' &&
 		((logicalPath[0] >= 'A' && logicalPath[0] <= 'Z') || (logicalPath[0] >= 'a' && logicalPath[0] <= 'z')) {
-		return false
+		return fail(FindingLocationPathNotRelative)
 	}
-	canonical, err := normalizeLogicalPath(logicalPath)
-	if err != nil || canonical != logicalPath || !nonzero {
-		return false
+	if _, pathErr := normalizeLogicalPath(strings.ReplaceAll(logicalPath, ":", "/")); pathErr != nil {
+		return fail(FindingLocationPathNotCanonical)
 	}
-	return stringIndex(genesisPaths, canonical) >= 0
+	canonical, pathErr := normalizeLogicalPath(logicalPath)
+	if pathErr != nil || canonical != logicalPath {
+		return fail(FindingLocationPathNotCanonical)
+	}
+	return findingLocation{Path: canonical, StartLine: start, EndLine: end}, nil
+}
+
+func parseFindingLocationLine(value string) (int, FindingLocationErrorReason) {
+	if value == "" {
+		return 0, FindingLocationLineNotInteger
+	}
+	for index := range value {
+		if value[index] < '0' || value[index] > '9' {
+			return 0, FindingLocationLineNotInteger
+		}
+	}
+	// The all-digits check above guarantees no sign character reaches here, so
+	// the value is a non-negative literal. Parse it as an unsigned integer that
+	// must fit a positive Go int: bit size strconv.IntSize-1 caps the result at
+	// the platform's MaxInt, so any value above it (including the [2^63, 2^64-1]
+	// band that a full 64-bit parse accepted before wrapping negative via int())
+	// refuses as an overflow instead of silently becoming a negative line.
+	line, err := strconv.ParseUint(value, 10, strconv.IntSize-1)
+	if err != nil {
+		return 0, FindingLocationLineOverflowsInteger
+	}
+	if line == 0 {
+		return 0, FindingLocationLineNotPositive
+	}
+	return int(line), ""
 }
 
 func (state *CompactState) Invalidate(reason string) error {
@@ -984,22 +1286,6 @@ func (state *CompactState) Invalidate(reason string) error {
 	}
 	state.State, state.InvalidationReason = StateInvalidated, reason
 	return nil
-}
-
-func (state *CompactState) invalidateApproved(evaluation NativeGateEvaluation) error {
-	reason := strings.TrimSpace(evaluation.Reason)
-	if reason == "" {
-		return errors.New("approved invalidation reason is required")
-	}
-	if evaluation.Result != GateInvalidated {
-		return fmt.Errorf("approved invalidation requires an invalidated gate result, got %q", evaluation.Result)
-	}
-	if state.State != StateApproved {
-		return fmt.Errorf("cannot invalidate approved authority from compact state %q", state.State)
-	}
-	state.State, state.InvalidationReason = StateInvalidated, reason
-	state.InvalidationEvidence = &CompactInvalidationEvidence{Gate: evaluation.Context.Gate, Reason: reason, Context: evaluation.Context}
-	return state.Validate()
 }
 
 // validateCompactResultDispositions enforces the persisted shape of audited
@@ -1124,7 +1410,8 @@ func compactPristineReviewing(state CompactState) bool {
 	return state.State == StateReviewing && len(state.ResultDispositions) == 0 && snapshotsEqual(state.CurrentSnapshot, state.InitialSnapshot) &&
 		len(state.LensResults) == 0 && len(state.Findings) == 0 && len(state.Classifications) == 0 && len(state.Outcomes) == 0 &&
 		len(state.FixFindingIDs) == 0 && len(state.FollowUps) == 0 && state.ProposedCorrectionLines == nil && state.ActualCorrectionLines == nil &&
-		state.FixDeltaHash == EmptyFixDeltaHash && state.OriginalCriteria == nil && state.CorrectionRegression == nil && state.EvidenceHash == "" && state.InvalidationReason == "" &&
+		state.FixDeltaHash == EmptyFixDeltaHash && state.OriginalCriteria == nil && state.CorrectionRegression == nil && state.EvidenceHash == "" &&
+		state.EvidenceRecordDigest == "" && state.EvidenceOutcome == "" && state.EvidenceTargetIdentity == "" && state.EvidenceAuthorityRevision == "" && state.CorrectionVerificationTarget == nil && state.InvalidationReason == "" &&
 		len(state.CorrectionAttempts) == 0 && state.CumulativeCorrectionLines == 0
 }
 
@@ -1132,7 +1419,11 @@ func compactPristineReviewing(state CompactState) bool {
 // ordinary correction append. Historical records may remain readable without
 // regaining permission to mutate their predecessor authority.
 func (state CompactState) CorrectionAttemptConsumed() bool {
-	return len(state.CorrectionAttempts) >= MaxCompactCorrectionAttempts
+	consumed := len(state.CorrectionAttempts)
+	if state.Recovery != nil {
+		consumed += state.Recovery.ConsumedCorrectionAttempts
+	}
+	return consumed >= MaxCompactCorrectionAttempts
 }
 
 func (state *CompactState) BeginCorrection(proposed int) error {
@@ -1166,7 +1457,8 @@ func (state *CompactState) CompleteCorrection(snapshot Snapshot, actual int, val
 	if snapshot.CandidateTree == snapshot.BaseTree {
 		return errors.New("compact correction has an unchanged candidate tree")
 	}
-	if err := pathsAreSubset(snapshot.Paths, state.GenesisPaths); err != nil {
+	added, err := admitCorrectionScope(snapshot.Paths, state.GenesisPaths)
+	if err != nil {
 		return err
 	}
 	if actual < 0 {
@@ -1193,11 +1485,93 @@ func (state *CompactState) CompleteCorrection(snapshot Snapshot, actual int, val
 	original, regression := validation.OriginalCriteria, validation.CorrectionRegression
 	state.OriginalCriteria, state.CorrectionRegression = &original, &regression
 	if state.CumulativeCorrectionLines > state.CorrectionBudget || !original.Passed || !regression.Passed {
+		// The correction did not complete, so it never earned the widened
+		// delivery scope. The attempt stays on record -- it consumed the one
+		// correction, and its snapshot still names every path it touched --
+		// but CorrectionScopePaths keeps the frozen reviewed manifest, so a
+		// companion path an escalated correction merely attempted can never
+		// ride out through a delivery gate.
 		state.State = StateEscalated
 	} else {
 		state.State = StateValidating
+		if len(added) > 0 {
+			state.CorrectionAddedPaths = added
+		}
 	}
 	return state.Validate()
+}
+
+// CompleteCorrectionVerification crosses the correction and repository
+// verification boundary in one state value. No correction accounting becomes
+// authoritative unless both candidate-bound checks pass.
+func (state *CompactState) CompleteCorrectionVerification(snapshot Snapshot, actual int, validation ScopedValidationResult, record VerificationEvidenceRecord, payload []byte, complete ...Snapshot) error {
+	if len(complete) > 1 {
+		return errors.New("compact correction accepts at most one complete candidate snapshot") // refusal:by-design world-action: provider code must submit one exact terminal authority
+	}
+	if record.Outcome != VerificationOutcomePassed {
+		return errors.New("compact correction repository verification must pass before acceptance") // refusal:by-design operator-knowledge: the caller must retain the open correction and submit only a passed candidate-bound verification bundle
+	}
+	if err := record.ValidatePayload(payload); err != nil {
+		return err
+	}
+	if err := record.ValidateBinding(state.LineageID, record.AuthorityRevision, snapshot); err != nil {
+		return err
+	}
+	next, err := cloneCompactStateValue(*state)
+	if err != nil {
+		return err
+	}
+	if err := next.CompleteCorrection(snapshot, actual, validation); err != nil {
+		return err
+	}
+	if next.State != StateValidating {
+		return errors.New("compact correction checks and budget must pass before repository verification acceptance") // refusal:by-design operator-knowledge: the atomic caller must adjust the candidate or validation result without consuming the open correction
+	}
+	if err := next.CompleteVerificationRecord(record, payload); err != nil {
+		return err
+	}
+	if len(complete) == 1 {
+		next.CurrentSnapshot = complete[0]
+		if err := next.Validate(); err != nil {
+			return err
+		}
+	}
+	*state = next
+	return nil
+}
+
+func (state *CompactState) EscalateCorrectionVerification(snapshot Snapshot, record VerificationEvidenceRecord, payload []byte) error {
+	if state.State != StateCorrectionRequired || state.ProposedCorrectionLines == nil || record.Outcome != VerificationOutcomeProceduralFailure {
+		return errors.New("procedural correction verification escalation requires one open correction transaction") // refusal:by-design operator-knowledge: this edge accepts only tooling-failure evidence for the current forecasted correction
+	}
+	if snapshot.Kind != TargetFixDiff || snapshot.Projection != state.InitialSnapshot.Projection ||
+		snapshot.BaseTree != state.CurrentSnapshot.CandidateTree || !equalStrings(snapshot.LedgerIDs, state.FixFindingIDs) ||
+		correctionScopeRefused(snapshot.Paths, state.GenesisPaths) {
+		return errors.New("procedural correction verification target is outside the open correction transaction") // refusal:by-design world-action: candidate mutation invalidated the captured correction target and requires a fresh stable evidence capture
+	}
+	if err := record.ValidatePayload(payload); err != nil {
+		return err
+	}
+	if err := record.ValidateBinding(state.LineageID, record.AuthorityRevision, snapshot); err != nil {
+		return err
+	}
+	next, err := cloneCompactStateValue(*state)
+	if err != nil {
+		return err
+	}
+	target := snapshot
+	next.State = StateEscalated
+	next.CorrectionVerificationTarget = &target
+	next.EvidenceHash = record.RawPayloadSHA256
+	next.EvidenceRecordDigest = record.RecordDigest
+	next.EvidenceOutcome = record.Outcome
+	next.EvidenceTargetIdentity = record.TargetIdentity
+	next.EvidenceAuthorityRevision = record.AuthorityRevision
+	if err := next.Validate(); err != nil {
+		return err
+	}
+	*state = next
+	return nil
 }
 
 // CompactEscalationAccounting labels are deliberately distinct so no consumer
@@ -1232,6 +1606,9 @@ type CompactEscalationAccounting struct {
 // Validate() invariant is required.
 func (state CompactState) EscalationAccounting() CompactEscalationAccounting {
 	spent := state.CumulativeCorrectionLines
+	if state.Recovery != nil {
+		spent += state.Recovery.ConsumedCorrectionLines
+	}
 	// A correction forecast that never ran still crossed the budget:
 	// BeginCorrection escalates on CumulativeCorrectionLines+proposed and
 	// leaves ActualCorrectionLines nil, so for that shape the lines that
@@ -1280,6 +1657,29 @@ func (state *CompactState) CompleteVerification(evidence []byte, approved bool) 
 	return state.Validate()
 }
 
+func (state *CompactState) CompleteVerificationRecord(record VerificationEvidenceRecord, payload []byte) error {
+	if state.State != StateValidating {
+		return fmt.Errorf("cannot complete verification from compact state %q", state.State)
+	}
+	if err := record.ValidatePayload(payload); err != nil {
+		return err
+	}
+	if err := record.ValidateBinding(state.LineageID, record.AuthorityRevision, state.CurrentSnapshot); err != nil {
+		return err
+	}
+	state.EvidenceHash = record.RawPayloadSHA256
+	state.EvidenceRecordDigest = record.RecordDigest
+	state.EvidenceOutcome = record.Outcome
+	state.EvidenceTargetIdentity = record.TargetIdentity
+	state.EvidenceAuthorityRevision = record.AuthorityRevision
+	if record.Outcome == VerificationOutcomePassed {
+		state.State = StateApproved
+	} else {
+		state.State = StateEscalated
+	}
+	return state.Validate()
+}
+
 func (state CompactState) Receipt() (CompactReceipt, error) {
 	var terminal TerminalState
 	switch state.State {
@@ -1294,14 +1694,30 @@ func (state CompactState) Receipt() (CompactReceipt, error) {
 	if evidence == "" {
 		evidence = EmptyFixDeltaHash
 	}
+	pathsDigest := state.CurrentSnapshot.PathsDigest
+	if state.CurrentSnapshot.Kind == TargetFixDiff {
+		// A fix diff names only the correction's own paths, so the reviewed
+		// manifest is the authority for what was delivered. When an admitted
+		// correction widened that manifest, the digest must cover the widened
+		// scope or delivery would refuse the very file the correction was
+		// granted. With no added paths the two expressions are identical.
+		pathsDigest = state.InitialSnapshot.PathsDigest
+		if len(state.CorrectionAddedPaths) > 0 {
+			pathsDigest = digestPaths(state.CorrectionScopePaths())
+		}
+	}
 	receipt := CompactReceipt{
 		Schema: CompactReceiptSchema, LineageID: state.LineageID, Generation: state.Generation,
 		Projection: state.InitialSnapshot.Projection,
 		BaseTree:   state.InitialSnapshot.BaseTree, InitialReviewTree: state.InitialSnapshot.CandidateTree,
-		FinalCandidateTree: state.CurrentSnapshot.CandidateTree, PathsDigest: state.InitialSnapshot.PathsDigest,
-		FixDeltaHash: state.FixDeltaHash, PolicyHash: state.PolicyHash, EvidenceHash: evidence,
+		FinalCandidateTree: state.CurrentSnapshot.CandidateTree, PathsDigest: pathsDigest,
+		CorrectionAddedPaths: append([]string(nil), state.CorrectionAddedPaths...),
+		FixDeltaHash:         state.FixDeltaHash, PolicyHash: state.PolicyHash, EvidenceHash: evidence,
+		EvidenceRecordDigest: state.EvidenceRecordDigest, EvidenceOutcome: state.EvidenceOutcome,
+		EvidenceTargetIdentity: state.EvidenceTargetIdentity, EvidenceAuthorityRevision: state.EvidenceAuthorityRevision,
 		RiskLevel: state.RiskLevel, SelectedLenses: append([]string{}, state.SelectedLenses...),
 		ResolvedFindingIDs: append([]string(nil), state.FixFindingIDs...), TerminalState: terminal,
+		ReviewerContextLevel: state.ReviewerContextLevel,
 	}
 	if err := receipt.Validate(); err != nil {
 		return CompactReceipt{}, err
@@ -1380,8 +1796,30 @@ func (receipt CompactReceipt) Validate() error {
 	if err != nil || !equalStrings(ids, receipt.ResolvedFindingIDs) {
 		return errors.New("compact receipt resolved finding IDs must be canonical")
 	}
+	if len(receipt.CorrectionAddedPaths) > 0 {
+		added, addedErr := canonicalPaths(receipt.CorrectionAddedPaths)
+		if addedErr != nil || !equalStrings(added, receipt.CorrectionAddedPaths) {
+			// refusal:by-design world-action: an immutably published receipt carrying non-canonical bytes requires storage repair, not an operator command
+			return errors.New("compact receipt correction added paths must be canonical")
+		}
+	}
 	if receipt.TerminalState != TerminalApproved && receipt.TerminalState != TerminalEscalated {
 		return errors.New("compact receipt terminal state is invalid")
+	}
+	// Shape only, deliberately never membership: an unknown level recorded by a
+	// later release must stay readable here. See ReviewerContextLevel.
+	if receipt.ReviewerContextLevel != "" && !ReviewerContextLevelWellFormed(receipt.ReviewerContextLevel) {
+		return errors.New("compact receipt reviewer context level is malformed") // refusal:by-design world-action: a persisted receipt carrying unreadable bytes in an audit field requires storage repair, not an operator command
+	}
+	hasRecordBinding := receipt.EvidenceRecordDigest != "" || receipt.EvidenceOutcome != "" ||
+		receipt.EvidenceTargetIdentity != "" || receipt.EvidenceAuthorityRevision != ""
+	if hasRecordBinding {
+		if !validSHA256(receipt.EvidenceRecordDigest) || !validSHA256(receipt.EvidenceTargetIdentity) ||
+			!validSHA256(receipt.EvidenceAuthorityRevision) || !validVerificationOutcome(receipt.EvidenceOutcome) ||
+			receipt.EvidenceOutcome == VerificationOutcomePassed && receipt.TerminalState != TerminalApproved ||
+			receipt.EvidenceOutcome != VerificationOutcomePassed && receipt.TerminalState != TerminalEscalated {
+			return errors.New("compact receipt verification evidence binding is invalid") // refusal:by-design world-action: a contradictory persisted receipt cannot safely authorize delivery and requires code or storage repair
+		}
 	}
 	return nil
 }

@@ -7,9 +7,13 @@ import (
 	"path/filepath"
 	"reflect"
 	"testing"
+
+	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
 )
 
 func TestFinalVerificationIncidentSchemaIsClosedToProceduralToolingFailure(t *testing.T) {
+	t.Parallel()
+
 	var output bytes.Buffer
 	if err := RunReviewSchema([]string{"final-verification-incident"}, &output); err != nil {
 		t.Fatal(err)
@@ -43,6 +47,8 @@ func TestFinalVerificationIncidentSchemaIsClosedToProceduralToolingFailure(t *te
 }
 
 func TestReviewerSchemaMatchesProviderAdmissionEnvelope(t *testing.T) {
+	t.Parallel()
+
 	var output bytes.Buffer
 	if err := RunReviewSchema([]string{"reviewer"}, &output); err != nil {
 		t.Fatal(err)
@@ -69,10 +75,18 @@ func TestReviewerSchemaMatchesProviderAdmissionEnvelope(t *testing.T) {
 	if !containsString(inspectionRequired, "status") || !containsString(inspectionRequired, "paths") {
 		t.Fatalf("reviewer inspection required fields = %v", inspectionRequired)
 	}
+	paths := inspection["properties"].(map[string]any)["paths"].(map[string]any)
+	if paths["uniqueItems"] != true || paths["description"] != "Complete unique unordered set of every changed_path_manifest.path." {
+		t.Fatalf("reviewer inspection.paths schema = %#v", paths)
+	}
 	finding := properties["findings"].(map[string]any)["items"].(map[string]any)
 	id := finding["properties"].(map[string]any)["id"].(map[string]any)
 	if id["pattern"] != "^R[1-4]-[A-Za-z0-9][A-Za-z0-9._-]*$" {
 		t.Fatalf("reviewer finding id pattern = %#v", id)
+	}
+	location := finding["properties"].(map[string]any)["location"].(map[string]any)
+	if location["pattern"] != "^.+:[1-9][0-9]*(?:-[1-9][0-9]*)?$" || location["description"] != "One canonical repository-relative path:line or inclusive path:start-end span." {
+		t.Fatalf("reviewer finding location schema = %#v", location)
 	}
 }
 
@@ -82,6 +96,8 @@ func TestReviewerSchemaMatchesProviderAdmissionEnvelope(t *testing.T) {
 // non-empty evidence content up to the native artifact bound — not an
 // invented structured shape.
 func TestReviewSchemaVerificationEvidenceEntry(t *testing.T) {
+	t.Parallel()
+
 	var output bytes.Buffer
 	if err := RunReviewSchema([]string{"verification-evidence"}, &output); err != nil {
 		t.Fatal(err)
@@ -106,6 +122,39 @@ func TestReviewSchemaVerificationEvidenceEntry(t *testing.T) {
 	err := RunReviewSchema(nil, &usageOutput)
 	if err == nil || !containsAll(err.Error(), []string{"verification-evidence"}) {
 		t.Fatalf("review schema usage error = %v, want it to name verification-evidence", err)
+	}
+}
+
+func TestReviewSchemaVerificationEvidenceRecordMatchesContractFixture(t *testing.T) {
+	t.Parallel()
+
+	var output bytes.Buffer
+	if err := RunReviewSchema([]string{"verification-evidence-record"}, &output); err != nil {
+		t.Fatal(err)
+	}
+	contractPath := filepath.Join("..", "..", "contracts", "review-integration", "v1", "schemas", "verification-evidence.schema.json")
+	contract, err := os.ReadFile(contractPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var emitted, published any
+	if err := json.Unmarshal(output.Bytes(), &emitted); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(contract, &published); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(emitted, published) {
+		t.Fatalf("verification evidence record schema differs from published contract\nemitted=%#v\npublished=%#v", emitted, published)
+	}
+	fixturePath := filepath.Join("..", "..", "contracts", "review-integration", "v1", "fixtures", "verification-evidence.fixture.json")
+	fixture, err := os.ReadFile(fixturePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	record, err := reviewtransaction.ParseVerificationEvidenceRecord(fixture)
+	if err != nil || record.Outcome != reviewtransaction.VerificationOutcomePassed {
+		t.Fatalf("verification evidence fixture = %#v, %v", record, err)
 	}
 }
 

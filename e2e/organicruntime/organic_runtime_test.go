@@ -15,8 +15,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -28,6 +32,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/opencode"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/assets"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/components/sdd"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewerprovider"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/versions"
 )
 
@@ -56,12 +65,17 @@ const (
 // never escalates its own route. Re-executing the compiled test binary keeps
 // that real without adding a language runtime dependency to the suite.
 const (
-	organicActorRoleEnvironment    = "GENTLE_AI_ORGANIC_ACTOR_ROLE"
-	organicActorRepoEnvironment    = "GENTLE_AI_ORGANIC_ACTOR_REPO"
-	organicActorPathEnvironment    = "GENTLE_AI_ORGANIC_ACTOR_PATH"
-	organicActorBodyEnvironment    = "GENTLE_AI_ORGANIC_ACTOR_BODY"
-	organicActorMessageEnvironment = "GENTLE_AI_ORGANIC_ACTOR_MESSAGE"
-	organicActorBinaryEnvironment  = "GENTLE_AI_ORGANIC_ACTOR_BINARY"
+	organicActorRoleEnvironment                     = "GENTLE_AI_ORGANIC_ACTOR_ROLE"
+	organicActorRepoEnvironment                     = "GENTLE_AI_ORGANIC_ACTOR_REPO"
+	organicActorPathEnvironment                     = "GENTLE_AI_ORGANIC_ACTOR_PATH"
+	organicActorBodyEnvironment                     = "GENTLE_AI_ORGANIC_ACTOR_BODY"
+	organicActorMessageEnvironment                  = "GENTLE_AI_ORGANIC_ACTOR_MESSAGE"
+	organicActorBinaryEnvironment                   = "GENTLE_AI_ORGANIC_ACTOR_BINARY"
+	organicTestBinaryEnvironment                    = "GENTLE_AI_ORGANIC_TEST_BINARY"
+	organicProviderCaptureFakeAgentEnvironment      = "GENTLE_AI_ORGANIC_PROVIDER_CAPTURE_FAKE_AGENT"
+	organicProviderCaptureFakePayloadEnvironment    = "GENTLE_AI_ORGANIC_PROVIDER_CAPTURE_FAKE_PAYLOAD"
+	organicProviderCaptureFakeFailureEnvironment    = "GENTLE_AI_ORGANIC_PROVIDER_CAPTURE_FAKE_FAILURE"
+	organicProviderCaptureFakeInvocationEnvironment = "GENTLE_AI_ORGANIC_PROVIDER_CAPTURE_FAKE_INVOCATION"
 
 	organicActorRoleDirect    = "direct"
 	organicActorRoleDelegated = "delegated"
@@ -87,13 +101,26 @@ const (
 
 	organicGateAllow = "allow"
 	organicModeOff   = "off"
+	organicModeOn    = "on"
 )
 
 var organicBinary string
 
 func TestMain(m *testing.M) {
+	if agent := strings.TrimSpace(os.Getenv(organicProviderCaptureFakeAgentEnvironment)); agent != "" {
+		os.Exit(runOrganicProviderCaptureFake(agent))
+	}
 	if role := strings.TrimSpace(os.Getenv(organicActorRoleEnvironment)); role != "" {
 		os.Exit(runOrganicActor(role))
+	}
+	if binary := strings.TrimSpace(os.Getenv(organicTestBinaryEnvironment)); binary != "" {
+		resolvedBinary, err := exec.LookPath(binary)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "%s=%q does not resolve to an executable: %v\n", organicTestBinaryEnvironment, binary, err)
+			os.Exit(1)
+		}
+		organicBinary = resolvedBinary
+		os.Exit(m.Run())
 	}
 	workspace, err := os.MkdirTemp("", "organic-e2e-binary")
 	if err != nil {
@@ -233,71 +260,1023 @@ func TestOrganicDirectoryIdentityAcceptsCanonicalAliases(t *testing.T) {
 	}
 }
 
+func TestClaudeProviderAdapterUsesPinnedNetworkNoneRuntime(t *testing.T) {
+	if testing.Short() || os.Getenv("GENTLE_AI_CLAUDE_RUNTIME_E2E") != "1" {
+		t.Skip("claude_network_none_skipped: requires the pinned Docker proof image")
+	}
+	binary := os.Getenv("GENTLE_AI_CLAUDE_RUNTIME_BINARY")
+	if binary == "" {
+		t.Fatal("claude_network_none_unavailable: pinned binary path is empty")
+	}
+	adapter := reviewerprovider.NewClaudeAdapter()
+	originalLookPath := adapter.LookPath
+	adapter.LookPath = func(string) (string, error) { return binary, nil }
+	t.Cleanup(func() { adapter.LookPath = originalLookPath })
+	response := []byte(`{"subject_hash":"local-subject","inspection":{"status":"completed","paths":["internal/provider/candidate.go"]},"lens":"reliability","findings":[],"evidence":["loopback inspected the frozen candidate"]}`)
+	var requests int
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.Method == http.MethodHead && request.URL.Path == "/api/hello" {
+			writer.WriteHeader(http.StatusOK)
+			return
+		}
+		requests++
+		if request.Method != http.MethodPost || request.URL.Path != "/v1/messages" {
+			t.Errorf("Claude request = %s %s, want POST /v1/messages", request.Method, request.URL.Path)
+			writer.WriteHeader(http.StatusNotFound)
+			return
+		}
+		payload, err := io.ReadAll(request.Body)
+		if err != nil {
+			t.Errorf("read Claude request: %v", err)
+			writer.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		if !bytes.Contains(payload, []byte("provider transport")) {
+			t.Error("Claude Messages request omitted the provider prompt")
+			writer.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		writer.Header().Set("Content-Type", "text/event-stream")
+		_, _ = fmt.Fprint(writer, "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_local\",\"type\":\"message\",\"role\":\"assistant\",\"model\":\"claude-sonnet-4-20250514\",\"content\":[],\"stop_reason\":null,\"stop_sequence\":null,\"usage\":{\"input_tokens\":1,\"output_tokens\":1}}}\n\n")
+		_, _ = fmt.Fprint(writer, "event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n")
+		encoded, _ := json.Marshal(map[string]any{"type": "content_block_delta", "index": 0, "delta": map[string]string{"type": "text_delta", "text": string(response)}})
+		_, _ = fmt.Fprintf(writer, "event: content_block_delta\ndata: %s\n\n", encoded)
+		_, _ = fmt.Fprint(writer, "event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\n")
+		_, _ = fmt.Fprint(writer, "event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\",\"stop_sequence\":null},\"usage\":{\"output_tokens\":1}}\n\n")
+		_, _ = fmt.Fprint(writer, "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n")
+	}))
+	defer server.Close()
+	t.Setenv("ANTHROPIC_BASE_URL", server.URL)
+	t.Setenv("ANTHROPIC_API_KEY", "local-loopback-key")
+	raw, err := adapter.Review(t.Context(), reviewerprovider.NewInvocation([]byte("provider transport")))
+	if err != nil {
+		t.Fatalf("pinned Claude adapter loopback: %v", err)
+	}
+	if want := append(response, '\n'); !bytes.Equal(raw, want) || requests == 0 {
+		t.Fatalf("pinned Claude loopback = %q with %d Messages requests, want %q with at least one request", raw, requests, want)
+	}
+	completedRequests := requests
+	ctx, cancel := context.WithTimeout(t.Context(), time.Nanosecond)
+	defer cancel()
+	<-ctx.Done()
+	if raw, err := adapter.Review(ctx, reviewerprovider.NewInvocation([]byte(`{"review":"provider transport"}`))); err == nil || len(raw) != 0 || requests != completedRequests {
+		t.Fatalf("pinned Claude adapter failure = %q, %v; want no bytes and a transport error", raw, err)
+	}
+}
+
+func TestCodexProviderAdapterUsesPinnedLocalRuntime(t *testing.T) {
+	if testing.Short() || strings.TrimSpace(os.Getenv("GENTLE_AI_CODEX_RUNTIME_E2E")) != "1" {
+		t.Skip("set GENTLE_AI_CODEX_RUNTIME_E2E=1 to run the pinned local Codex transport proof")
+	}
+	if runtime.GOOS != "linux" {
+		t.Skip("the Codex egress proof requires Linux strace")
+	}
+	strace, err := exec.LookPath("strace")
+	if err != nil {
+		t.Fatalf("Codex egress isolation unavailable: strace is required: %v", err)
+	}
+	binary, err := exec.LookPath("codex")
+	if err != nil {
+		t.Fatal(err)
+	}
+	version, err := exec.Command(binary, "--version").Output()
+	if err != nil || strings.TrimSpace(string(version)) != "codex-cli 0.147.0" {
+		t.Fatalf("Codex version = %q, %v", strings.TrimSpace(string(version)), err)
+	}
+	harness := newOrganicHarness(t)
+	harness.writeFiles(map[string]string{"internal/provider/candidate.go": "package provider\n\nfunc Value() int { return 1 }\n"})
+	const lineage = "codex-loopback-egress-proof"
+	_ = organicProviderStart(t, harness, lineage, "codex")
+	binding := organicProviderBinding(t, organicProviderStatus(t, harness, lineage, "codex"))
+	order, err := strconv.Atoi(binding["order"])
+	if err != nil {
+		t.Fatal(err)
+	}
+	response, err := json.Marshal(map[string]any{
+		"subject_hash": binding["subject-hash"],
+		"inspection":   map[string]any{"status": "completed", "paths": []string{"internal/provider/candidate.go"}},
+		"lens":         binding["lens"],
+		"findings":     []any{},
+		"evidence":     []string{"loopback inspected the frozen candidate"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var rootRequests, modelRequests, responseRequests int
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.Method == http.MethodGet && request.URL.Path == "/" {
+			rootRequests++
+			writer.WriteHeader(http.StatusNoContent)
+			return
+		}
+		if request.Method == http.MethodGet && request.URL.Path == "/v1/models" {
+			modelRequests++
+			writer.Header().Set("Content-Type", "application/json")
+			_, _ = fmt.Fprint(writer, `{"object":"list","data":[{"id":"gpt-5.6-terra","object":"model","created":0,"owned_by":"gentle-ai-loopback"}]}`)
+			return
+		}
+		if request.Method != http.MethodPost || request.URL.Path != "/v1/responses" {
+			t.Errorf("Codex request = %s %s, want GET /, GET /v1/models, or POST /v1/responses", request.Method, request.URL.Path)
+			writer.WriteHeader(http.StatusNotFound)
+			return
+		}
+		responseRequests++
+		_, err := io.ReadAll(request.Body)
+		if err != nil {
+			t.Errorf("read Codex request: %v", err)
+			writer.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		writeCodexResponsesLoopback(t, writer, response)
+	}))
+	defer server.Close()
+
+	proxy := newLoopbackDenyingProxy(t)
+	defer proxy.Close()
+
+	traceBase := filepath.Join(t.TempDir(), "codex-connect")
+	bin := t.TempDir()
+	wrapper := filepath.Join(bin, "codex")
+	if err := os.WriteFile(wrapper, []byte(`#!/bin/sh
+set -eu
+exec "$GENTLE_AI_RUNTIME_TRACE_BINARY" -ff -o "$GENTLE_AI_RUNTIME_TRACE_LOG" -e trace=connect "$GENTLE_AI_RUNTIME_TRACE_TARGET" "$@"
+`), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	environment := append(harness.environment(),
+		"PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"),
+		"GENTLE_AI_CODEX_REVIEWER_LOOPBACK_BASE_URL="+server.URL+"/v1",
+		"GENTLE_AI_RUNTIME_TRACE_BINARY="+strace,
+		"GENTLE_AI_RUNTIME_TRACE_LOG="+traceBase,
+		"GENTLE_AI_RUNTIME_TRACE_TARGET="+binary,
+		"HTTP_PROXY="+proxy.URL,
+		"HTTPS_PROXY="+proxy.URL,
+		"ALL_PROXY="+proxy.URL,
+		"http_proxy="+proxy.URL,
+		"https_proxy="+proxy.URL,
+		"all_proxy="+proxy.URL,
+		"NO_PROXY=127.0.0.1,localhost,::1",
+		"no_proxy=127.0.0.1,localhost,::1",
+	)
+	arguments := []string{
+		"review", "capture-result", "--agent", "codex",
+		"--repository-context", binding["repository-context"], "--expected-revision", binding["expected-revision"],
+		"--lineage", binding["lineage"], "--target", binding["target"], "--lens", binding["lens"], "--order", strconv.Itoa(order),
+	}
+	if stdout, stderr, err := runOrganicCommand(t, organicBinary, harness.repo.worktree, environment, arguments...); err != nil {
+		t.Fatalf("registered Codex provider route: %v\nstdout:\n%s\nstderr:\n%s", err, stdout, stderr)
+	}
+	if responseRequests != 1 {
+		t.Fatalf("registered Codex loopback made %d root, %d model, and %d Responses requests; want exactly one Responses request", rootRequests, modelRequests, responseRequests)
+	}
+	denied := proxy.deniedRequests()
+	if denied == 0 {
+		t.Fatal("Codex made no externally addressed request through the denying proxy; the external-refusal path was not exercised")
+	}
+	connections, err := codexTracedConnectAddresses(traceBase)
+	if err != nil {
+		t.Fatalf("Codex egress trace is unavailable: %v", err)
+	}
+	for _, address := range connections {
+		if !address.IsLoopback() {
+			t.Fatalf("Codex bypassed egress isolation with a non-loopback connect to %s", address)
+		}
+	}
+	t.Logf("Codex egress proof: %d external attempts denied by the loopback proxy; strace observed %d Internet-socket connects, all loopback: %v", denied, len(connections), connections)
+	if result := harness.finalize(lineage, "--captured-results=true"); result.State != organicStateValidating {
+		t.Fatalf("registered Codex provider capture did not enter validation: %#v", result)
+	}
+}
+
+// codexTracedConnectAddresses parses one trace per child process. strace -ff
+// avoids interleaving unfinished connect calls from Codex's concurrent workers.
+// Every Internet-socket connection is returned, including failed attempts, so
+// a direct external bypass is rejected before it can be mistaken for isolation.
+func codexTracedConnectAddresses(traceBase string) ([]netip.Addr, error) {
+	paths, err := filepath.Glob(traceBase + ".*")
+	if err != nil {
+		return nil, fmt.Errorf("discover strace output: %w", err)
+	}
+	if len(paths) == 0 {
+		return nil, errors.New("strace produced no child trace files")
+	}
+	sort.Strings(paths)
+	addresses := make([]netip.Addr, 0)
+	for _, path := range paths {
+		trace, err := os.ReadFile(path)
+		if err != nil {
+			return nil, fmt.Errorf("read strace output %q: %w", path, err)
+		}
+		for _, line := range strings.Split(string(trace), "\n") {
+			address, internet, err := codexTracedConnectAddress(line)
+			if err != nil {
+				return nil, fmt.Errorf("parse strace connect %q: %w", line, err)
+			}
+			if internet {
+				addresses = append(addresses, address)
+			}
+		}
+	}
+	if len(addresses) == 0 {
+		return nil, errors.New("strace observed no Internet-socket connects")
+	}
+	return addresses, nil
+}
+
+func codexTracedConnectAddress(line string) (netip.Addr, bool, error) {
+	if !strings.Contains(line, "connect(") {
+		return netip.Addr{}, false, nil
+	}
+	prefix := ""
+	switch {
+	case strings.Contains(line, "sa_family=AF_INET,"):
+		prefix = `sin_addr=inet_addr("`
+	case strings.Contains(line, "sa_family=AF_INET6,"):
+		prefix = `sin6_addr=inet_pton(AF_INET6, "`
+	default:
+		return netip.Addr{}, false, nil
+	}
+	start := strings.Index(line, prefix)
+	if start < 0 {
+		return netip.Addr{}, false, errors.New("missing numeric address")
+	}
+	remaining := line[start+len(prefix):]
+	end := strings.IndexByte(remaining, '"')
+	if end < 0 {
+		return netip.Addr{}, false, errors.New("unterminated numeric address")
+	}
+	address, err := netip.ParseAddr(remaining[:end])
+	if err != nil {
+		return netip.Addr{}, false, err
+	}
+	return address, true, nil
+}
+
+type loopbackDenyingProxy struct {
+	*httptest.Server
+	lock     sync.Mutex
+	requests int
+}
+
+func newLoopbackDenyingProxy(t *testing.T) *loopbackDenyingProxy {
+	t.Helper()
+	proxy := &loopbackDenyingProxy{}
+	proxy.Server = httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if !denyingProxyTargetIsExternal(request) {
+			forwarded := request.Clone(request.Context())
+			forwarded.RequestURI = ""
+			transport := http.DefaultTransport.(*http.Transport).Clone()
+			transport.Proxy = nil
+			defer transport.CloseIdleConnections()
+			response, err := transport.RoundTrip(forwarded)
+			if err != nil {
+				http.Error(writer, fmt.Sprintf("loopback proxy forward: %v", err), http.StatusBadGateway)
+				return
+			}
+			defer response.Body.Close()
+			for name, values := range response.Header {
+				writer.Header()[name] = append([]string{}, values...)
+			}
+			writer.WriteHeader(response.StatusCode)
+			_, _ = io.Copy(writer, response.Body)
+			return
+		}
+		proxy.lock.Lock()
+		proxy.requests++
+		proxy.lock.Unlock()
+		// The proxy is process-scoped through a command's environment. Any
+		// attempted external request receives an explicit refusal instead of a
+		// route to the host network.
+		writer.WriteHeader(http.StatusForbidden)
+	}))
+	return proxy
+}
+
+func (proxy *loopbackDenyingProxy) deniedRequests() int {
+	proxy.lock.Lock()
+	defer proxy.lock.Unlock()
+	return proxy.requests
+}
+
+func denyingProxyTargetIsExternal(request *http.Request) bool {
+	host := request.URL.Hostname()
+	if host == "" {
+		host = request.Host
+		if hostname, _, err := net.SplitHostPort(host); err == nil {
+			host = hostname
+		}
+	}
+	host = strings.Trim(host, "[]")
+	if host == "" || strings.EqualFold(host, "localhost") {
+		return false
+	}
+	address, err := netip.ParseAddr(host)
+	return err != nil || !address.IsLoopback()
+}
+
+func writeCodexResponsesLoopback(t *testing.T, writer http.ResponseWriter, response []byte) {
+	t.Helper()
+	writer.Header().Set("Content-Type", "text/event-stream")
+	completed := map[string]any{
+		"id":                 "resp_local",
+		"object":             "response",
+		"created_at":         0,
+		"status":             "completed",
+		"error":              nil,
+		"incomplete_details": nil,
+		"instructions":       nil,
+		"model":              "gpt-5.6-terra",
+		"output": []any{map[string]any{
+			"id":     "msg_local",
+			"type":   "message",
+			"status": "completed",
+			"role":   "assistant",
+			"content": []any{map[string]any{
+				"type":        "output_text",
+				"text":        string(response),
+				"annotations": []any{},
+			}},
+		}},
+		"parallel_tool_calls":  false,
+		"previous_response_id": nil,
+		"store":                false,
+		"temperature":          1,
+		"text":                 map[string]any{"format": map[string]string{"type": "text"}},
+		"tool_choice":          "auto",
+		"tools":                []any{},
+		"top_p":                1,
+		"truncation":           "disabled",
+		"usage":                nil,
+		"user":                 nil,
+		"metadata":             map[string]any{},
+	}
+	created := maps.Clone(completed)
+	created["status"] = "in_progress"
+	created["output"] = []any{}
+	for _, event := range []struct {
+		name string
+		data any
+	}{
+		{name: "response.created", data: map[string]any{"type": "response.created", "response": created}},
+		{name: "response.output_item.added", data: map[string]any{"type": "response.output_item.added", "output_index": 0, "item": map[string]any{"id": "msg_local", "type": "message", "status": "in_progress", "role": "assistant", "content": []any{}}}},
+		{name: "response.content_part.added", data: map[string]any{"type": "response.content_part.added", "item_id": "msg_local", "output_index": 0, "content_index": 0, "part": map[string]any{"type": "output_text", "text": "", "annotations": []any{}}}},
+		{name: "response.output_text.delta", data: map[string]any{"type": "response.output_text.delta", "item_id": "msg_local", "output_index": 0, "content_index": 0, "delta": string(response)}},
+		{name: "response.output_text.done", data: map[string]any{"type": "response.output_text.done", "item_id": "msg_local", "output_index": 0, "content_index": 0, "text": string(response)}},
+		{name: "response.content_part.done", data: map[string]any{"type": "response.content_part.done", "item_id": "msg_local", "output_index": 0, "content_index": 0, "part": completed["output"].([]any)[0].(map[string]any)["content"].([]any)[0]}},
+		{name: "response.output_item.done", data: map[string]any{"type": "response.output_item.done", "output_index": 0, "item": completed["output"].([]any)[0]}},
+		{name: "response.completed", data: map[string]any{"type": "response.completed", "response": completed}},
+	} {
+		encoded, err := json.Marshal(event.data)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := fmt.Fprintf(writer, "event: %s\ndata: %s\n\n", event.name, encoded); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func TestOpenCodeRuntimeIsPinnedForTheLiveProviderTransport(t *testing.T) {
+	if testing.Short() || strings.TrimSpace(os.Getenv("GENTLE_AI_OPENCODE_RUNTIME_E2E")) != "1" {
+		t.Skip("set GENTLE_AI_OPENCODE_RUNTIME_E2E=1 to verify the pinned ordinary OpenCode runtime")
+	}
+	if runtime.GOOS != "linux" {
+		t.Fatal("OpenCode egress isolation requires Linux")
+	}
+	strace, err := exec.LookPath("strace")
+	if err != nil {
+		t.Fatalf("OpenCode egress isolation unavailable: strace is required: %v", err)
+	}
+	binary, err := exec.LookPath("opencode")
+	if err != nil {
+		t.Fatal(err)
+	}
+	version, err := exec.Command(binary, "--version").Output()
+	if err != nil || strings.TrimSpace(string(version)) != pinnedOpenCodeVersion {
+		t.Fatalf("OpenCode version = %q, want %q (error %v)", strings.TrimSpace(string(version)), pinnedOpenCodeVersion, err)
+	}
+
+	harness := newOrganicHarness(t)
+	harness.writeFiles(map[string]string{"internal/provider/candidate.go": "package provider\n\nfunc Value() int { return 1 }\n"})
+	const lineage = "opencode-current-session-poison"
+	_ = organicProviderStart(t, harness, lineage, "opencode")
+	binding := organicProviderBinding(t, organicProviderStatus(t, harness, lineage, "opencode"))
+	order, err := strconv.Atoi(binding["order"])
+	if err != nil {
+		t.Fatal(err)
+	}
+	boundTask, err := json.Marshal(map[string]any{
+		"lineage": binding["lineage"], "target": binding["target"], "lens": binding["lens"], "order": order,
+		"revision": binding["expected-revision"], "repository_context": binding["repository-context"], "subject_hash": binding["subject-hash"],
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	const poison = "OPENCODE_CURRENT_SESSION_POISON_MUST_NOT_REACH_REVIEWER"
+	const reviewerSystemMarker = "GENTLE_AI_OPENCODE_REVIEWER_SYSTEM_MARKER"
+	hostPrompt := "GENTLE_AI_REVIEW_BINDING " + string(boundTask) + "\n" + poison
+	reviewerRaw, err := json.Marshal(map[string]any{
+		"subject_hash": binding["subject-hash"], "inspection": map[string]any{"status": "completed", "paths": []string{"internal/provider/candidate.go"}},
+		"lens": binding["lens"], "findings": []any{}, "evidence": []string{"loopback inspected the frozen candidate"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var lock sync.Mutex
+	var titleAnswered, taskIssued, canonicalPromptSeen bool
+	var providerRequests int
+	var handlerFailure string
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.Method == http.MethodGet && request.URL.Path == "/" {
+			writer.WriteHeader(http.StatusNoContent)
+			return
+		}
+		if request.Method != http.MethodPost || request.URL.Path != "/v1/chat/completions" {
+			lock.Lock()
+			handlerFailure = fmt.Sprintf("OpenCode request = %s %s, want GET / or POST /v1/chat/completions", request.Method, request.URL.Path)
+			lock.Unlock()
+			writer.WriteHeader(http.StatusNotFound)
+			return
+		}
+		payload, err := io.ReadAll(request.Body)
+		if err != nil {
+			lock.Lock()
+			handlerFailure = fmt.Sprintf("read OpenCode request: %v", err)
+			lock.Unlock()
+			writer.WriteHeader(http.StatusBadRequest)
+			return
+		}
+
+		lock.Lock()
+		defer lock.Unlock()
+		if strings.Contains(string(payload), poison) {
+			handlerFailure = "OpenCode passed the poisoned host Task prompt to the reviewer"
+			writer.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		if bytes.Contains(payload, []byte(reviewerSystemMarker)) {
+			if !bytes.Contains(payload, []byte("GENTLE_AI_REVIEW_CONTEXT_END")) {
+				handlerFailure = "OpenCode reviewer request omitted the Go-materialized canonical prompt"
+				writer.WriteHeader(http.StatusBadRequest)
+				return
+			}
+			canonicalPromptSeen = true
+			providerRequests++
+			writeOpenCodeChatText(writer, string(reviewerRaw))
+			return
+		}
+		if !titleAnswered {
+			titleAnswered = true
+			writeOpenCodeChatText(writer, "review transport")
+			return
+		}
+		if !taskIssued {
+			taskIssued = true
+			writeOpenCodeChatTask(writer, map[string]string{
+				"description": "run the Go-bound reviewer", "subagent_type": "review-reliability", "prompt": hostPrompt,
+			})
+			return
+		}
+		writeOpenCodeChatText(writer, "review task complete")
+	}))
+	defer server.Close()
+	proxy := newLoopbackDenyingProxy(t)
+	defer proxy.Close()
+	proxyURL, err := url.Parse(proxy.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	probe := &http.Client{Transport: &http.Transport{Proxy: http.ProxyURL(proxyURL)}}
+	response, err := probe.Get("http://opencode-egress-proof.invalid/")
+	if err != nil {
+		t.Fatalf("loopback denying proxy probe: %v", err)
+	}
+	if response.StatusCode != http.StatusForbidden {
+		_ = response.Body.Close()
+		t.Fatalf("loopback denying proxy probe status = %d, want %d", response.StatusCode, http.StatusForbidden)
+	}
+	_ = response.Body.Close()
+	if proxy.deniedRequests() != 1 {
+		t.Fatal("loopback denying proxy did not refuse the external egress probe")
+	}
+
+	pluginSource, err := assets.Read("opencode/plugins/opencode-review-transport.ts")
+	if err != nil {
+		t.Fatal(err)
+	}
+	configDirectory := t.TempDir()
+	pluginDirectory := filepath.Join(configDirectory, "plugins")
+	if err := os.MkdirAll(pluginDirectory, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(pluginDirectory, "opencode-review-transport.ts"), []byte(pluginSource), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	config, err := json.Marshal(map[string]any{
+		"autoupdate":  false,
+		"share":       "disabled",
+		"snapshot":    false,
+		"model":       "loopback/loopback",
+		"small_model": "loopback/loopback",
+		"provider": map[string]any{"loopback": map[string]any{
+			"npm": "@ai-sdk/openai-compatible", "name": "Gentle AI loopback",
+			"options": map[string]any{"baseURL": server.URL + "/v1", "apiKey": "loopback-key"},
+			"models":  map[string]any{"loopback": map[string]any{"name": "Loopback", "limit": map[string]int{"context": 32000, "output": 2048}}},
+		}},
+		"agent": map[string]any{"review-reliability": map[string]any{
+			"mode": "subagent", "hidden": true, "description": "test reviewer", "prompt": reviewerSystemMarker,
+			"tools": map[string]bool{"read": false, "write": false, "edit": false, "bash": false, "task": false},
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	context, cancel := context.WithTimeout(t.Context(), organicAgentTimeout)
+	defer cancel()
+	traceBase := filepath.Join(t.TempDir(), "opencode-connect")
+	bin := t.TempDir()
+	wrapper := filepath.Join(bin, "opencode")
+	if err := os.WriteFile(wrapper, []byte(`#!/bin/sh
+set -eu
+exec "$GENTLE_AI_RUNTIME_TRACE_BINARY" -ff -o "$GENTLE_AI_RUNTIME_TRACE_LOG" -e trace=connect "$GENTLE_AI_RUNTIME_TRACE_TARGET" "$@"
+`), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	command := exec.CommandContext(context, wrapper, "run", "--format", "json", "--dir", harness.repo.worktree, "--model", "loopback/loopback", "start the Go-bound reviewer task")
+	command.Dir = harness.repo.worktree
+	command.Env = append(harness.environment(),
+		"OPENCODE_CONFIG_DIR="+configDirectory,
+		"OPENCODE_CONFIG_CONTENT="+string(config),
+		"PATH="+bin+string(os.PathListSeparator)+filepath.Dir(organicBinary)+string(os.PathListSeparator)+os.Getenv("PATH"),
+		"GENTLE_AI_RUNTIME_TRACE_BINARY="+strace,
+		"GENTLE_AI_RUNTIME_TRACE_LOG="+traceBase,
+		"GENTLE_AI_RUNTIME_TRACE_TARGET="+binary,
+		"HTTP_PROXY="+proxy.URL,
+		"HTTPS_PROXY="+proxy.URL,
+		"ALL_PROXY="+proxy.URL,
+		"http_proxy="+proxy.URL,
+		"https_proxy="+proxy.URL,
+		"all_proxy="+proxy.URL,
+		"NO_PROXY=127.0.0.1,localhost,::1",
+		"no_proxy=127.0.0.1,localhost,::1",
+	)
+	output, runErr := command.CombinedOutput()
+	lock.Lock()
+	failed, issued, seen, calls := handlerFailure, taskIssued, canonicalPromptSeen, providerRequests
+	lock.Unlock()
+	if failed != "" {
+		t.Fatalf("ordinary OpenCode provider session: %v\n%s\n%s", runErr, failed, output)
+	}
+	if runErr != nil {
+		t.Fatalf("ordinary OpenCode provider session: %v\n%s", runErr, output)
+	}
+	if !issued || !seen || calls == 0 {
+		t.Fatalf("ordinary OpenCode transport task=%t canonical=%t provider_requests=%d\n%s", issued, seen, calls, output)
+	}
+	connections, err := codexTracedConnectAddresses(traceBase)
+	if err != nil {
+		t.Fatalf("OpenCode egress trace is unavailable: %v", err)
+	}
+	for _, address := range connections {
+		if !address.IsLoopback() {
+			t.Fatalf("OpenCode bypassed egress isolation with a non-loopback connect to %s", address)
+		}
+	}
+	t.Logf("OpenCode egress proof: %d external attempts denied by the loopback proxy; strace observed %d Internet-socket connects, all loopback: %v", proxy.deniedRequests(), len(connections), connections)
+	if result := harness.finalize(lineage, "--captured-results=true"); result.State != organicStateValidating {
+		t.Fatalf("OpenCode capture did not enter validation: %#v", result)
+	}
+}
+
+func writeOpenCodeChatTask(writer http.ResponseWriter, arguments map[string]string) {
+	encodedArguments, _ := json.Marshal(arguments)
+	writeOpenCodeChatChunk(writer, map[string]any{
+		"role": "assistant", "tool_calls": []map[string]any{{
+			"index": 0, "id": "call_review", "type": "function", "function": map[string]string{"name": "task", "arguments": ""},
+		}},
+	}, nil)
+	writeOpenCodeChatChunk(writer, map[string]any{"tool_calls": []map[string]any{{
+		"index": 0, "function": map[string]string{"arguments": string(encodedArguments)},
+	}}}, nil)
+	writeOpenCodeChatChunk(writer, map[string]any{}, "tool_calls")
+	_, _ = fmt.Fprint(writer, "data: [DONE]\n\n")
+}
+
+func writeOpenCodeChatText(writer http.ResponseWriter, text string) {
+	writeOpenCodeChatChunk(writer, map[string]any{"role": "assistant", "content": text}, nil)
+	writeOpenCodeChatChunk(writer, map[string]any{}, "stop")
+	_, _ = fmt.Fprint(writer, "data: [DONE]\n\n")
+}
+
+func writeOpenCodeChatChunk(writer http.ResponseWriter, delta map[string]any, finishReason any) {
+	writer.Header().Set("Content-Type", "text/event-stream")
+	encoded, _ := json.Marshal(map[string]any{
+		"id": "chatcmpl-loopback", "object": "chat.completion.chunk", "created": 0, "model": "loopback",
+		"choices": []map[string]any{{"index": 0, "delta": delta, "finish_reason": finishReason}},
+	})
+	_, _ = fmt.Fprintf(writer, "data: %s\n\n", encoded)
+}
+
+func TestNativeProviderCaptureResultCLIUsesCompiledAdapters(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		agent  string
+		binary string
+	}{
+		{name: "Claude", agent: "claude-code", binary: "claude"},
+		{name: "Codex", agent: "codex", binary: "codex"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			harness := newOrganicHarness(t)
+			harness.writeFiles(map[string]string{"internal/provider/candidate.go": "package provider\n\nfunc Value() int { return 1 }\n"})
+			lineage := "provider-capture-" + test.agent
+			start := organicProviderStart(t, harness, lineage, test.agent)
+			if len(start.SelectedLenses) != 1 {
+				t.Fatalf("selected lenses = %v, want one", start.SelectedLenses)
+			}
+			status := organicProviderStatus(t, harness, lineage, test.agent)
+			binding := organicProviderBinding(t, status)
+			bin := t.TempDir()
+			fake := organicWriteProviderCaptureFake(t, bin, test.binary, test.agent, binding, []string{"internal/provider/candidate.go"})
+			environment := append(harness.environment(), fake.environment...)
+			arguments := []string{"review", "capture-result", "--agent", test.agent, "--repository-context", binding["repository-context"],
+				"--expected-revision", binding["expected-revision"], "--lineage", binding["lineage"], "--target", binding["target"],
+				"--lens", binding["lens"], "--order", binding["order"]}
+			stdout, stderr, err := runOrganicCommand(t, organicBinary, harness.repo.worktree, environment, arguments...)
+			fake.assertInvoked(t)
+			if err != nil {
+				t.Fatalf("provider capture: %v\nstdout:\n%s\nstderr:\n%s", err, stdout, stderr)
+			}
+			if result := harness.finalize(lineage, "--captured-results=true"); result.State != organicStateValidating {
+				t.Fatalf("provider capture did not enter validation: %#v", result)
+			}
+		})
+	}
+}
+
+func TestNativeProviderCaptureFailureReoffersTheSameBinding(t *testing.T) {
+	for _, test := range []struct{ agent, binary string }{{"claude-code", "claude"}, {"codex", "codex"}} {
+		t.Run(test.agent, func(t *testing.T) {
+			harness := newOrganicHarness(t)
+			harness.writeFiles(map[string]string{"internal/provider/failure.go": "package provider\n\nfunc Failure() int { return 1 }\n"})
+			lineage := "provider-failure-" + test.agent
+			_ = organicProviderStart(t, harness, lineage, test.agent)
+			before := organicProviderBinding(t, organicProviderStatus(t, harness, lineage, test.agent))
+			bin := t.TempDir()
+			fake := organicWriteProviderCaptureFake(t, bin, test.binary, test.agent, nil, nil)
+			environment := append(harness.environment(), fake.environment...)
+			arguments := []string{"review", "capture-result", "--agent", test.agent, "--repository-context", before["repository-context"],
+				"--expected-revision", before["expected-revision"], "--lineage", before["lineage"], "--target", before["target"], "--lens", before["lens"], "--order", before["order"]}
+			_, _, err := runOrganicCommand(t, organicBinary, harness.repo.worktree, environment, arguments...)
+			fake.assertInvoked(t)
+			if err == nil {
+				t.Fatal("provider transport failure unexpectedly captured a result")
+			}
+			after := organicProviderBinding(t, organicProviderStatus(t, harness, lineage, test.agent))
+			for _, name := range []string{"lineage", "expected-revision", "target", "repository-context", "lens", "order", "subject-hash"} {
+				if after[name] != before[name] {
+					t.Fatalf("failure changed pending %s: before=%q after=%q", name, before[name], after[name])
+				}
+			}
+		})
+	}
+}
+
+func organicProviderStart(t *testing.T, harness *organicHarness, lineage, agent string) organicStartResult {
+	t.Helper()
+	status := organicProviderStatus(t, harness, lineage, agent)
+	if status.NextTransition == nil || status.NextTransition.Execute == nil {
+		t.Fatalf("provider START transition = %#v", status.NextTransition)
+	}
+	transition := status.NextTransition.Execute
+	stdout, stderr, err := harness.gentleAllowFailure("review", "start", "--cwd", harness.repo.worktree,
+		"--contract", "gentle-ai.review-integration/v2", "--target", transition.argument("target"), "--projection", transition.argument("projection"),
+		"--lineage", lineage, "--agent", agent, "--consent", "granted", "--focus", "reliability")
+	if err != nil {
+		t.Fatalf("provider START: %v\nstdout:\n%s\nstderr:\n%s", err, stdout, stderr)
+	}
+	var start organicStartResult
+	if err := json.Unmarshal([]byte(stdout), &start); err != nil {
+		t.Fatalf("decode provider START: %v\n%s", err, stdout)
+	}
+	return start
+}
+
+type organicProviderStatusResult struct {
+	NextTransition *organicProviderTransition `json:"next_transition"`
+}
+
+type organicProviderTransition struct {
+	Kind    string                  `json:"kind"`
+	Execute *organicProviderExecute `json:"execute"`
+	Collect *organicProviderCollect `json:"collect"`
+}
+
+type organicProviderExecute struct {
+	Arguments []organicProviderArgument `json:"arguments"`
+}
+
+type organicProviderCollect struct {
+	Inputs []organicProviderCollectInput `json:"inputs"`
+}
+
+type organicProviderCollectInput struct {
+	Arguments []organicProviderArgument `json:"arguments"`
+}
+
+type organicProviderArgument struct {
+	Name  string `json:"name"`
+	Value string `json:"value"`
+}
+
+func (execute organicProviderExecute) argument(name string) string {
+	for _, argument := range execute.Arguments {
+		if argument.Name == name {
+			return argument.Value
+		}
+	}
+	return ""
+}
+
+func organicProviderStatus(t *testing.T, harness *organicHarness, lineage, agent string) organicProviderStatusResult {
+	t.Helper()
+	payload := harness.gentle("review", "status", "--cwd", harness.repo.worktree, "--contract", "gentle-ai.review-integration/v2", "--agent", agent, "--lineage", lineage, "--next-transition", "--projection", "workspace")
+	var status organicProviderStatusResult
+	if err := json.Unmarshal(payload, &status); err != nil {
+		t.Fatalf("decode provider status: %v\n%s", err, payload)
+	}
+	return status
+}
+
+func organicProviderBinding(t *testing.T, status organicProviderStatusResult) map[string]string {
+	t.Helper()
+	if status.NextTransition == nil || status.NextTransition.Collect == nil || len(status.NextTransition.Collect.Inputs) != 1 {
+		t.Fatalf("provider collect transition = %#v", status.NextTransition)
+	}
+	binding := map[string]string{}
+	for _, argument := range status.NextTransition.Collect.Inputs[0].Arguments {
+		binding[argument.Name] = argument.Value
+	}
+	for _, name := range []string{"lineage", "expected-revision", "target", "repository-context", "lens", "order", "subject-hash"} {
+		if binding[name] == "" {
+			t.Fatalf("provider collect binding missing %q: %#v", name, status.NextTransition)
+		}
+	}
+	return binding
+}
+
+func TestOrganicProviderCaptureFakeWindowsDispatch(t *testing.T) {
+	for _, test := range []struct {
+		name, goos, binary, wantExecutable, wantPathPrefix, wantPathExt string
+	}{
+		{name: "Unix Claude", goos: "linux", binary: "claude", wantExecutable: "claude", wantPathPrefix: "PATH=/fake-bin:"},
+		{name: "Windows Claude", goos: "windows", binary: "claude", wantExecutable: "claude.exe", wantPathPrefix: "PATH=/fake-bin;", wantPathExt: "PATHEXT=.EXE"},
+		{name: "Windows Codex", goos: "windows", binary: "codex", wantExecutable: "codex.exe", wantPathPrefix: "PATH=/fake-bin;", wantPathExt: "PATHEXT=.EXE"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if got := organicProviderCaptureFakeExecutableName(test.binary, test.goos); got != test.wantExecutable {
+				t.Fatalf("fake executable = %q, want %q", got, test.wantExecutable)
+			}
+			environment := organicProviderCaptureFakeDispatchEnvironment("/fake-bin", test.goos)
+			if !strings.HasPrefix(environment[0], test.wantPathPrefix) {
+				t.Fatalf("fake PATH = %q, want prefix %q", environment[0], test.wantPathPrefix)
+			}
+			if got := strings.TrimPrefix(environment[0], test.wantPathPrefix); got != os.Getenv("PATH") {
+				t.Fatalf("fake inherited PATH = %q, want %q", got, os.Getenv("PATH"))
+			}
+			if test.wantPathExt == "" {
+				if len(environment) != 1 {
+					t.Fatalf("Unix fake environment = %q, want only PATH", environment)
+				}
+				return
+			}
+			if len(environment) != 2 || environment[1] != test.wantPathExt {
+				t.Fatalf("Windows fake environment = %q, want PATHEXT %q", environment, test.wantPathExt)
+			}
+		})
+	}
+}
+
+type organicProviderCaptureFake struct {
+	agent          string
+	payload        string
+	failure        bool
+	invocationPath string
+	environment    []string
+}
+
+type organicProviderCaptureFakeInvocation struct {
+	Agent             string   `json:"agent"`
+	Failure           bool     `json:"failure"`
+	Payload           string   `json:"payload"`
+	Arguments         []string `json:"arguments"`
+	OutputLastMessage string   `json:"output_last_message"`
+}
+
+func organicWriteProviderCaptureFake(t *testing.T, directory, binary, agent string, binding map[string]string, paths []string) organicProviderCaptureFake {
+	t.Helper()
+	fake := organicProviderCaptureFake{
+		agent:          agent,
+		failure:        binding == nil,
+		invocationPath: filepath.Join(directory, "provider-capture-invocation.json"),
+		environment:    organicProviderCaptureFakeDispatchEnvironment(directory, runtime.GOOS),
+	}
+	if binding != nil {
+		payload, err := json.Marshal(map[string]any{"subject_hash": binding["subject-hash"], "inspection": map[string]any{"status": "completed", "paths": paths}, "findings": []any{}, "evidence": []string{"inspected the complete frozen candidate"}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		fake.payload = string(payload) + "\n"
+	}
+	fake.environment = append(fake.environment,
+		organicProviderCaptureFakeAgentEnvironment+"="+fake.agent,
+		organicProviderCaptureFakePayloadEnvironment+"="+fake.payload,
+		organicProviderCaptureFakeFailureEnvironment+"="+strconv.FormatBool(fake.failure),
+		organicProviderCaptureFakeInvocationEnvironment+"="+fake.invocationPath,
+	)
+	path := filepath.Join(directory, organicProviderCaptureFakeExecutableName(binary, runtime.GOOS))
+	source, err := os.Open(os.Args[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer source.Close()
+	destination, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o755)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := io.Copy(destination, source); err != nil {
+		_ = destination.Close()
+		t.Fatal(err)
+	}
+	if err := destination.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(path, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return fake
+}
+
+func organicProviderCaptureFakeExecutableName(binary, goos string) string {
+	if goos == "windows" {
+		return binary + ".exe"
+	}
+	return binary
+}
+
+func organicProviderCaptureFakeDispatchEnvironment(directory, goos string) []string {
+	separator := ":"
+	if goos == "windows" {
+		separator = ";"
+	}
+	environment := []string{"PATH=" + directory + separator + os.Getenv("PATH")}
+	if goos == "windows" {
+		environment = append(environment, "PATHEXT=.EXE")
+	}
+	return environment
+}
+
+func (fake organicProviderCaptureFake) assertInvoked(t *testing.T) {
+	t.Helper()
+	data, err := os.ReadFile(fake.invocationPath)
+	if err != nil {
+		t.Fatalf("provider capture fake was not invoked: %v", err)
+	}
+	var invocation organicProviderCaptureFakeInvocation
+	if err := json.Unmarshal(data, &invocation); err != nil {
+		t.Fatalf("decode provider capture fake invocation: %v\n%s", err, data)
+	}
+	if invocation.Agent != fake.agent || invocation.Failure != fake.failure {
+		t.Fatalf("provider capture fake invocation = %#v, want agent=%q failure=%t", invocation, fake.agent, fake.failure)
+	}
+	if !fake.failure && invocation.Payload != fake.payload {
+		t.Fatalf("provider capture fake payload = %q, want %q", invocation.Payload, fake.payload)
+	}
+	switch fake.agent {
+	case "claude-code":
+		if invocation.OutputLastMessage != "" {
+			t.Fatalf("Claude fake received --output-last-message=%q", invocation.OutputLastMessage)
+		}
+	case "codex":
+		if invocation.OutputLastMessage == "" {
+			t.Fatalf("Codex fake did not receive --output-last-message: %q", invocation.Arguments)
+		}
+	default:
+		t.Fatalf("unsupported provider capture fake agent %q", fake.agent)
+	}
+}
+
+func runOrganicProviderCaptureFake(agent string) int {
+	if _, err := io.Copy(io.Discard, os.Stdin); err != nil {
+		return 1
+	}
+	invocation := organicProviderCaptureFakeInvocation{
+		Agent:     agent,
+		Failure:   os.Getenv(organicProviderCaptureFakeFailureEnvironment) == "true",
+		Payload:   os.Getenv(organicProviderCaptureFakePayloadEnvironment),
+		Arguments: os.Args[1:],
+	}
+	for index, argument := range invocation.Arguments {
+		if argument == "--output-last-message" && index+1 < len(invocation.Arguments) {
+			invocation.OutputLastMessage = invocation.Arguments[index+1]
+			break
+		}
+	}
+	encoded, err := json.Marshal(invocation)
+	if err != nil {
+		return 1
+	}
+	if err := os.WriteFile(os.Getenv(organicProviderCaptureFakeInvocationEnvironment), encoded, 0o600); err != nil {
+		return 1
+	}
+	if invocation.Failure {
+		return 1
+	}
+	if invocation.Payload == "" {
+		return 1
+	}
+	switch agent {
+	case "claude-code":
+		_, err = fmt.Fprint(os.Stdout, invocation.Payload)
+	case "codex":
+		if invocation.OutputLastMessage == "" {
+			return 1
+		}
+		err = os.WriteFile(invocation.OutputLastMessage, []byte(invocation.Payload), 0o600)
+	default:
+		return 1
+	}
+	if err != nil {
+		return 1
+	}
+	return 0
+}
+
 // TestOrganicConfiguredAgentReceivesRoutingGuidance is the optional-SDD
 // "proposed" leg. Every configured agent is told the same thing through its own
 // delivery strategy: three routes exist, SDD is only ever proposed, and it is
 // selected only by an explicit request or an accepted proposal.
-func TestOrganicConfiguredAgentReceivesRoutingGuidance(t *testing.T) {
+// organicRoutingGuidanceRequiredFragments is the routing-guidance content
+// every configured agent must receive, shared between this file's Cursor
+// case and organic_runtime_real_agent_detection_test.go's Claude Code /
+// OpenCode cases (see that file for why they're split).
+var organicRoutingGuidanceRequiredFragments = []string{
+	"Direct inline",
+	"Delegated direct",
+	"Optional SDD",
+	"never selects SDD",
+	"never create SDD artifacts",
+	"gentle-ai review mode enable|disable|status",
+	"disabled/unmanaged",
+}
+
+// TestOrganicConfiguredAgentReceivesRoutingGuidanceCursor proves the
+// markdown-rules delivery strategy for Cursor. Cursor's Detect is
+// config-dir-only (~/.cursor, no PATH lookup — see
+// internal/agents/cursor/adapter.go), so this case needs no real agent
+// binary and runs unconditionally in the ordinary unit sweep.
+//
+// Claude Code and OpenCode's equivalent cases used to live in this same
+// table-driven test, but their detection follows the inherited PATH to a
+// real installed binary — install refuses instead of installing a missing
+// runtime now (agentInstallStep in internal/cli/run.go) — so running them
+// here depended on those binaries happening to be on the machine running
+// `go test ./...`, which is true on developer machines but not on every CI
+// runner. They now live in
+// organic_runtime_real_agent_detection_test.go, gated behind the
+// real_agent_e2e build tag so they run only in the organic-runtime-e2e CI
+// job, which installs both runtimes first.
+func TestOrganicConfiguredAgentReceivesRoutingGuidanceCursor(t *testing.T) {
 	t.Parallel()
-	// One row per adapter delivery strategy: a markdown section, an always-loaded
-	// orchestrator prompt inside agent settings, and a markdown rules file. The
-	// orchestrator prompt lives in the home settings document even under
-	// workspace scope, because that is the only settings document the OpenCode
-	// family ever loads (issue #1825).
-	agents := []struct {
-		name    string
-		agentID string
-		path    string
-		inHome  bool
-	}{
-		{name: "markdown section", agentID: "claude-code", path: ".claude/CLAUDE.md"},
-		{name: "orchestrator prompt", agentID: "opencode", path: ".config/opencode/opencode.json", inHome: true},
-		{name: "markdown rules", agentID: "cursor", path: ".cursor/rules/gentle-ai.mdc"},
+	workspace := t.TempDir()
+	home := t.TempDir()
+	if _, err := organicGitOutput(context.Background(), workspace, "init", "--quiet", "--initial-branch=main", "."); err != nil {
+		t.Fatal(err)
 	}
-	required := []string{
-		"Direct inline",
-		"Delegated direct",
-		"Optional SDD",
-		"never selects SDD",
-		"never create SDD artifacts",
-		"gentle-ai review mode enable|disable|status",
-		"disabled/unmanaged",
+	// Cursor's Detect looks for ~/.cursor, which this fake isolated HOME
+	// never has. Simulate Cursor as already installed so gentle-ai does not
+	// correctly refuse an undetected agent here — this test targets
+	// routing-guidance delivery, not agent install behavior.
+	if err := os.MkdirAll(filepath.Join(home, ".cursor"), 0o755); err != nil {
+		t.Fatal(err)
 	}
-	for _, agent := range agents {
-		t.Run(agent.name, func(t *testing.T) {
-			t.Parallel()
-			workspace := t.TempDir()
-			home := t.TempDir()
-			if _, err := organicGitOutput(context.Background(), workspace, "init", "--quiet", "--initial-branch=main", "."); err != nil {
-				t.Fatal(err)
-			}
-			output, stderr, err := runOrganicCommand(
-				t, organicBinary, workspace, organicEnvironment(home),
-				"install", "--agent", agent.agentID, "--scope", "workspace", "--components", "permissions",
-			)
-			if err != nil {
-				t.Fatalf("install %s: %v\nstdout:\n%s\nstderr:\n%s", agent.agentID, err, output, stderr)
-			}
-			root := workspace
-			if agent.inHome {
-				root = home
-			}
-			rendered, readErr := os.ReadFile(filepath.Join(root, filepath.FromSlash(agent.path)))
-			if readErr != nil {
-				t.Fatalf("configured agent %s received no routing guidance at %s: %v", agent.agentID, agent.path, readErr)
-			}
-			for _, fragment := range required {
-				if !bytes.Contains(rendered, []byte(fragment)) {
-					t.Fatalf("routing guidance for %s omits %q:\n%s", agent.agentID, fragment, rendered)
-				}
-			}
-			if agent.inHome {
-				stranded := filepath.Join(workspace, filepath.FromSlash(agent.path))
-				if _, statErr := os.Stat(stranded); !os.IsNotExist(statErr) {
-					t.Fatalf("workspace-scoped install stranded a settings document the agent never loads at %s (stat err = %v)", stranded, statErr)
-				}
-			}
-		})
+	const path = ".cursor/rules/gentle-ai.mdc"
+	output, stderr, err := runOrganicCommand(
+		t, organicBinary, workspace, organicEnvironment(home),
+		"install", "--agent", "cursor", "--scope", "workspace", "--components", "permissions",
+	)
+	if err != nil {
+		t.Fatalf("install cursor: %v\nstdout:\n%s\nstderr:\n%s", err, output, stderr)
+	}
+	rendered, readErr := os.ReadFile(filepath.Join(workspace, filepath.FromSlash(path)))
+	if readErr != nil {
+		t.Fatalf("configured agent cursor received no routing guidance at %s: %v", path, readErr)
+	}
+	for _, fragment := range organicRoutingGuidanceRequiredFragments {
+		if !bytes.Contains(rendered, []byte(fragment)) {
+			t.Fatalf("routing guidance for cursor omits %q:\n%s", fragment, rendered)
+		}
 	}
 }
 
@@ -562,19 +1541,45 @@ func TestOrganicBoundedCorrectionAllowsExactlyOne(t *testing.T) {
 	}
 
 	harness.writeFiles(map[string]string{path: organicLimitSource("fixed")})
-	validation := harness.writeJSON("validation.json", organicValidationResult{
-		OriginalCriteria:     organicValidationCheck{Passed: true, Evidence: []string{"the original acceptance test passed"}},
-		CorrectionRegression: organicValidationCheck{Passed: true, Evidence: []string{"the targeted regression test passed"}},
-		FollowUps:            []any{},
-	})
-	validating := harness.finalize(lineage, "--validation", validation)
-	if validating.State != organicStateValidating {
-		t.Fatalf("scoped correction did not reach validation: %#v", validating)
+	waiting := harnessCorrectionStatus(t, harness, lineage)
+	if waiting.NextTransition == nil || waiting.NextTransition.Kind != "collect" ||
+		waiting.NextTransition.ReasonCode != "correction_repository_verification_required" ||
+		waiting.NextTransition.Collect == nil || len(waiting.NextTransition.Collect.Inputs) != 1 {
+		t.Fatalf("corrected candidate did not request repository verification evidence: %#v", waiting)
 	}
-
-	approved := harness.finalize(lineage, "--evidence", harness.writeEvidence())
+	input := waiting.NextTransition.Collect.Inputs[0]
+	if input.CaptureOperation != "review.capture-evidence" {
+		t.Fatalf("correction evidence capture operation = %q", input.CaptureOperation)
+	}
+	var correctionTarget string
+	for _, argument := range input.Arguments {
+		if argument.Name == "target" {
+			correctionTarget = argument.Value
+		}
+	}
+	if correctionTarget == "" {
+		t.Fatalf("correction evidence transition omitted its candidate target: %#v", input)
+	}
+	harness.gentle(
+		"review", "capture-evidence", "--cwd", harness.repo.worktree, "--lineage", lineage,
+		"--target", correctionTarget, "--expected-revision", waiting.Authority.Revision,
+		"--outcome", "passed", "--input", harness.writeEvidence(),
+	)
+	ready := harnessCorrectionStatus(t, harness, lineage)
+	if ready.ValidationRequest == nil || ready.ValidationRequest.CorrectionTargetIdentity != correctionTarget ||
+		ready.NextTransition == nil || ready.NextTransition.Kind != "collect" || ready.NextTransition.ReasonCode != "targeted_validation_required" {
+		t.Fatalf("passed correction evidence did not expose the bound targeted-validation request: %#v", ready)
+	}
+	validation := harness.writeJSON("validation.json", organicValidationResult{
+		TargetedValidationRequestHash: ready.ValidationRequest.RequestHash,
+		CorrectionTargetIdentity:      ready.ValidationRequest.CorrectionTargetIdentity,
+		OriginalCriteria:              organicValidationCheck{Passed: true, Evidence: []string{"the original acceptance test passed"}},
+		CorrectionRegression:          organicValidationCheck{Passed: true, Evidence: []string{"the targeted regression test passed"}},
+		FollowUps:                     []any{},
+	})
+	approved := harness.finalize(lineage, "--validation", validation, "--captured-evidence")
 	if approved.State != organicStateApproved || approved.ReceiptPath == "" {
-		t.Fatalf("one bounded correction did not produce a terminal receipt: %#v", approved)
+		t.Fatalf("atomic correction acceptance did not produce a terminal receipt: %#v", approved)
 	}
 
 	before := harness.lineageDigest(lineage)
@@ -682,13 +1687,20 @@ func TestOrganicKillSwitchStopsAtTheDeliveryBoundary(t *testing.T) {
 		t.Fatal("the kill-switch journey never reached a committed candidate")
 	}
 
+	// The universal empty-candidate guard (issue #2586) refuses a clean tree
+	// before the kill switch can name itself, so the disabled attempt carries
+	// a real pending candidate: the refusal under test here is the kill
+	// switch's, and it must name its deciding source.
+	harness.writeFiles(map[string]string{"docs/disabled-attempt.md": organicLines("pending while disabled", 3)})
+	harness.git("add", "--", "docs/disabled-attempt.md")
 	_, stderr, err := harness.gentleAllowFailure("review", "start", "--cwd", harness.repo.worktree, "--lineage", "organic-killed")
 	if err == nil {
-		t.Fatal("review start succeeded while review-driven development was disabled")
+		t.Fatal("review start succeeded while receipt-driven development was disabled")
 	}
-	if !strings.Contains(stderr, "review-driven development is disabled") || !strings.Contains(stderr, "clone_local") {
+	if !strings.Contains(stderr, "receipt-driven development is disabled") || !strings.Contains(stderr, "clone_local") {
 		t.Fatalf("disabled start was refused without naming the deciding source: %s", stderr)
 	}
+	harness.git("rm", "-f", "-q", "--", "docs/disabled-attempt.md")
 
 	// The delivery boundary reports an unmanaged, receiptless candidate instead of
 	// inventing an approval.
@@ -696,8 +1708,12 @@ func TestOrganicKillSwitchStopsAtTheDeliveryBoundary(t *testing.T) {
 	if gate.Schema != organicGateSchema || gate.Allowed || gate.Result == organicGateAllow {
 		t.Fatalf("disabled delivery gate did not fail closed: %#v", gate)
 	}
-	if gate.Context.Denial == nil || gate.Context.Denial.Stage != "receipt-discovery" {
-		t.Fatalf("disabled delivery gate denial is not discoverable: %#v", gate.Context.Denial)
+	// Wave 5 Slice 2 (design decision 4): the kill switch is consulted
+	// before any authority read, so this report carries no discovery-kind
+	// detail at all -- there is no receipt-discovery outcome to describe,
+	// because discovery never runs.
+	if gate.Context.Denial != nil {
+		t.Fatalf("disabled delivery gate leaked discovery-kind detail: %#v", gate.Context.Denial)
 	}
 	// The guidance installed on all 16 adapters promises this exact token under a
 	// disabled switch. Asserting it here is what keeps that promise honest, and
@@ -764,8 +1780,11 @@ func TestOrganicKillSwitchReportsUnmanagedDeliveryOverPriorReceipts(t *testing.T
 	if gate.Delivery != "disabled/unmanaged" {
 		t.Fatalf("disabled delivery over a prior receipt did not report the promised disposition: %q", gate.Delivery)
 	}
-	if gate.Context.Denial == nil {
-		t.Fatalf("disabled delivery hid why the prior receipt does not govern: %#v", gate.Context)
+	// Wave 5 Slice 2 (design decision 4): the switch is consulted before any
+	// authority read, so the prior receipt is never even discovered while
+	// disabled -- no discovery-kind detail leaks.
+	if gate.Context.Denial != nil {
+		t.Fatalf("disabled delivery over a prior receipt leaked discovery-kind detail: %#v", gate.Context.Denial)
 	}
 
 	// Reporting moved nothing: the remote is untouched and no branch appeared.
@@ -818,10 +1837,12 @@ func TestOrganicKillSwitchReportsUnmanagedDeliveryOverWorkspaceReceipt(t *testin
 	if gate.Delivery != "disabled/unmanaged" {
 		t.Fatalf("disabled delivery over a workspace receipt did not report the promised disposition: %q", gate.Delivery)
 	}
-	// The healthy receipt's real relation to the candidate stays discoverable:
-	// the delivery shape moved past it, and the store was never corrupted.
-	if gate.Context.Denial == nil || gate.Context.Denial.Code != "delivery-shape-mismatch" {
-		t.Fatalf("disabled delivery hid why the workspace receipt does not govern: %#v", gate.Context.Denial)
+	// Wave 5 Slice 2 (design decision 4): the switch is consulted before any
+	// authority read, so the healthy receipt is never even discovered while
+	// disabled -- no discovery-kind detail (not even "delivery-shape-mismatch")
+	// leaks.
+	if gate.Context.Denial != nil {
+		t.Fatalf("disabled delivery over a workspace receipt leaked discovery-kind detail: %#v", gate.Context.Denial)
 	}
 
 	// Reporting moved nothing: the remote is untouched and no branch appeared.
@@ -876,21 +1897,22 @@ func TestOrganicKillSwitchReEnableLandsOnTheFreshFullReview(t *testing.T) {
 		harness.git("commit", "-q", "-m", "docs: unmanaged delivery "+unit)
 	}
 
-	// The disabled window records the change as unmanaged even though the
-	// stale baseline receipt is still in history: declining to manage is not a
-	// blocker demanding a review the switch refuses to run.
+	// The disabled window proceeds unmanaged even though the stale baseline
+	// receipt is still in history: corrective verify cycle CRITICAL-1 makes
+	// this structural absence (sdd-status's own reviewGate, distinct from the
+	// pre-commit delivery gate checked above, which correctly keeps its own
+	// "disabled/unmanaged" disposition) -- not a populated disposition.
+	// Declining to manage is not a blocker demanding a review the switch
+	// refuses to run.
 	disabled := harness.sddStatus(change)
 	if disabled.Dependencies.Archive == "blocked" {
 		t.Fatalf("disabled archive over a stale receipt = blocked; reasons = %v", disabled.BlockedReasons)
 	}
-	if disabled.ReviewGate == nil || disabled.ReviewGate.Delivery != "disabled/unmanaged" {
-		t.Fatalf("disabled window did not record the unmanaged disposition: %#v", disabled.ReviewGate)
-	}
-	if disabled.ReviewGate.Result == organicGateAllow {
-		t.Fatalf("disabled window fabricated an approval: %#v", disabled.ReviewGate)
+	if disabled.ReviewGate != nil {
+		t.Fatalf("disabled window produced a review gate instead of structural absence: %#v", disabled.ReviewGate)
 	}
 
-	if mode := harness.enableReview(); mode.Status.Effective != "on" {
+	if mode := harness.enableReview(); mode.Status.Effective != organicModeOn {
 		t.Fatalf("re-enable produced no typed outcome: %#v", mode)
 	}
 
@@ -904,37 +1926,38 @@ func TestOrganicKillSwitchReEnableLandsOnTheFreshFullReview(t *testing.T) {
 	}
 	tokens := organicNamedContinuation(t, blocked.ReviewGate.Reason)
 
-	// Run exactly what it names. The tree is clean, so the start freezes an
-	// empty candidate and its hint names the --base-ref rerun.
-	emptyStart := harness.runNamedReviewStart(tokens)
-	if emptyStart.ChangedFiles != 0 {
-		t.Fatalf("clean-tree start froze %d files, fixture is wrong", emptyStart.ChangedFiles)
+	// Run exactly what it names. The tree is clean, so the universal
+	// empty-candidate guard (issue #2586) refuses before any authority is
+	// created, and its refusal names the --base-ref rerun. The zero-byte
+	// receipt this journey used to fabricate here can no longer exist on any
+	// route: the not-coverage defense moved from the archive stop to the
+	// start itself.
+	if len(tokens) < 2 || tokens[0] != "review" || tokens[1] != "start" {
+		t.Fatalf("named continuation is %v, want gentle-ai review start", tokens)
 	}
-	if !strings.Contains(emptyStart.Hint, "--base-ref") {
-		t.Fatalf("empty start hint does not name the committed-work rerun: %q", emptyStart.Hint)
+	_, emptyStderr, emptyErr := harness.gentleAllowFailure(tokens...)
+	if emptyErr == nil {
+		t.Fatal("a clean-tree start froze an empty candidate instead of refusing")
 	}
-	if finalized := harness.finalize(emptyStart.LineageID); finalized.State != organicStateApproved {
-		t.Fatalf("empty-candidate finalize = %#v, want approved", finalized)
+	if !strings.Contains(emptyStderr, "no pending changes") || !strings.Contains(emptyStderr, "--base-ref") {
+		t.Fatalf("empty-candidate refusal does not name the committed-work rerun: %q", emptyStderr)
 	}
 
-	// The approved zero-byte receipt is not coverage: the stop stays blocked
-	// and keeps naming the fresh review with its base-ref selector.
+	// The refused start recorded nothing: the stop stays blocked and keeps
+	// naming the fresh review with its base-ref selector.
 	stillBlocked := harness.sddStatus(change)
 	if stillBlocked.Dependencies.Archive != "blocked" || stillBlocked.ReviewGate == nil ||
 		stillBlocked.ReviewGate.Result == organicGateAllow {
-		t.Fatalf("a review of zero bytes was recorded as coverage: %#v", stillBlocked)
+		t.Fatalf("a refused empty start unblocked the archive stop: %#v", stillBlocked)
 	}
+	// The stop keeps naming the fresh full review; the --base-ref rerun for
+	// committed work now travels in the refusal's own hint (asserted above),
+	// because the zero-byte receipt that used to teach the stop that detail
+	// can no longer exist. The operator supplies the one placeholder value —
+	// the boundary to re-govern from — and the fresh full review freezes the
+	// delivered range.
 	tokens = organicNamedContinuation(t, stillBlocked.ReviewGate.Reason)
-	if !strings.Contains(stillBlocked.ReviewGate.Reason, "--base-ref") {
-		t.Fatalf("empty-receipt stop does not name the base-ref rerun: %q", stillBlocked.ReviewGate.Reason)
-	}
-
-	// The operator supplies the one placeholder value — the boundary to
-	// re-govern from — and the fresh full review freezes the delivered range.
-	if tokens[len(tokens)-1] != "--base-ref" {
-		t.Fatalf("empty-receipt continuation = %v, want it to end at the operator's --base-ref value", tokens)
-	}
-	freshStart := harness.runNamedReviewStart(tokens, baselineCommit)
+	freshStart := harness.runNamedReviewStart(tokens, "--base-ref", baselineCommit)
 	if freshStart.ChangedFiles == 0 {
 		t.Fatalf("the fresh full review froze no content: %#v", freshStart)
 	}
@@ -979,6 +2002,17 @@ func TestOrganicKillSwitchReEnableLandsOnTheFreshFullReview(t *testing.T) {
 // expiry-stable terminal state. The authorization that permitted the review is
 // withdrawn afterwards, and the terminal receipt still validates, replays
 // byte-identically, and produces no additional effect.
+// TestOrganicTerminalAuthoritySurvivesWithdrawalAndReplaysWithoutEffect is
+// Wave 5 Slice 2's most consequential black-box behavior reversal (design
+// decision 4; rdd-receipt-only-gates/spec.md's "Kill switch off
+// short-circuits before authority discovery" scenario, a firm requirement,
+// not a tagged pending assumption): the kill switch is now consulted before
+// ANY receipt or authority read, so even the terminal receipt this journey
+// just earned is never consulted while disabled -- the gate reports the
+// generic disabled/unmanaged shape instead of replaying the same allow. The
+// name and behavior this test asserts changed accordingly: the terminal
+// AUTHORITY survives withdrawal unmutated (proven by re-enabling and
+// replaying below), but it no longer GOVERNS DELIVERY while withdrawn.
 func TestOrganicTerminalAuthoritySurvivesWithdrawalAndReplaysWithoutEffect(t *testing.T) {
 	t.Parallel()
 	deadline := time.Now().Add(organicWithdrawalDeadline)
@@ -1009,9 +2043,18 @@ func TestOrganicTerminalAuthoritySurvivesWithdrawalAndReplaysWithoutEffect(t *te
 		t.Fatal("a new review started after the authorization was withdrawn")
 	}
 
-	replayedGate := harness.gentle("review", "validate", "--cwd", harness.repo.worktree, "--gate", "post-apply")
-	if !bytes.Equal(replayedGate, firstGate) {
-		t.Fatalf("the terminal gate result changed after withdrawal:\nfirst:\n%s\nreplay:\n%s", firstGate, replayedGate)
+	// While withdrawn: the terminal receipt just earned is never consulted --
+	// the gate reports the generic disabled/unmanaged shape, not a replay of
+	// the pre-withdrawal allow.
+	withdrawnGate := harness.gentle("review", "validate", "--cwd", harness.repo.worktree, "--gate", "post-apply")
+	if bytes.Equal(withdrawnGate, firstGate) {
+		t.Fatal("the terminal gate result did not change after withdrawal -- the receipt was consulted while disabled")
+	}
+	if !bytes.Contains(withdrawnGate, []byte(`"disabled/unmanaged"`)) {
+		t.Fatalf("withdrawn gate did not report disabled/unmanaged: %s", withdrawnGate)
+	}
+	if bytes.Contains(withdrawnGate, []byte(`"allowed":true`)) {
+		t.Fatalf("withdrawn gate fabricated an approval: %s", withdrawnGate)
 	}
 	replayedFinalize := harness.gentle("review", "finalize", "--cwd", harness.repo.worktree, "--lineage", lineage)
 	if !bytes.Equal(replayedFinalize, firstFinalize) {
@@ -1028,6 +2071,17 @@ func TestOrganicTerminalAuthoritySurvivesWithdrawalAndReplaysWithoutEffect(t *te
 		t.Fatalf("replay moved the remote: %s != %s", remote, harness.repo.baseRevision)
 	}
 	harness.assertOnlyMainRef()
+
+	// Re-enabling rediscovers the SAME unmutated receipt, and it governs
+	// again exactly as before withdrawal -- proving the switch never touched
+	// the authority itself, only whether it is consulted.
+	if mode := harness.enableReview(); mode.Status.Effective != organicModeOn {
+		t.Fatalf("re-enabling did not take effect: %#v", mode)
+	}
+	reEnabledGate := harness.gentle("review", "validate", "--cwd", harness.repo.worktree, "--gate", "post-apply")
+	if !bytes.Equal(reEnabledGate, firstGate) {
+		t.Fatalf("the terminal gate result changed across a withdraw/re-enable cycle:\nbefore:\n%s\nafter:\n%s", firstGate, reEnabledGate)
+	}
 
 	if time.Now().After(deadline) {
 		t.Fatalf("the withdrawal journey exceeded its %s CI budget", organicWithdrawalDeadline)
@@ -1050,9 +2104,33 @@ type organicHarness struct {
 	home string
 }
 
+// newOrganicHarness builds the shared fixture every review-lifecycle journey
+// runs against: a seeded repository, an isolated HOME, and an explicit global
+// opt-in into receipt-driven development.
+//
+// The opt-in is part of the fixture rather than of each journey because review
+// is off unless somebody turns it on. A fresh HOME therefore reproduces a fresh
+// install, where every `review start` is refused before it can reach the
+// behaviour under test. Performing the opt-in the way an operator would --
+// through the real command, against this run's own HOME -- keeps the journeys
+// about the lifecycle instead of about the default, and leaves the kill-switch
+// journeys with a real `on` to switch off.
 func newOrganicHarness(t *testing.T) *organicHarness {
 	t.Helper()
-	return &organicHarness{t: t, repo: initOrganicRepository(t), home: t.TempDir()}
+	harness := &organicHarness{t: t, repo: initOrganicRepository(t), home: t.TempDir()}
+	harness.enableReviewGlobally()
+	return harness
+}
+
+// newOrganicHarnessForWorktree wraps an already-initialized worktree in the
+// same fixture. Journeys that need a repository shape initOrganicRepository
+// cannot produce (an unborn HEAD, for instance) build the worktree themselves,
+// but they still need the isolated HOME and the same global opt-in.
+func newOrganicHarnessForWorktree(t *testing.T, worktree string) *organicHarness {
+	t.Helper()
+	harness := &organicHarness{t: t, repo: organicRepository{worktree: worktree}, home: t.TempDir()}
+	harness.enableReviewGlobally()
+	return harness
 }
 
 // environment isolates the run from the developer's own global review mode. A
@@ -1083,6 +2161,11 @@ func organicEnvironment(home string) []string {
 	}
 	if value := os.Getenv("TMPDIR"); value != "" {
 		environment = append(environment, "TMPDIR="+value)
+	}
+	for _, name := range []string{"OPENCODE_DISABLE_PROJECT_CONFIG", "OPENCODE_DISABLE_EXTERNAL_SKILLS"} {
+		if value := os.Getenv(name); value != "" {
+			environment = append(environment, name+"="+value)
+		}
 	}
 	return environment
 }
@@ -1170,7 +2253,7 @@ func (harness *organicHarness) captureReviewerResult(lineage string, started org
 	lens := started.SelectedLenses[order]
 	binding := []string{
 		"review", "capture-result", "--cwd", harness.repo.worktree, "--lineage", lineage,
-		"--target", started.TargetIdentity, "--lens", lens, "--order", strconv.Itoa(order),
+		"--target", started.targetIdentity(), "--lens", lens, "--order", strconv.Itoa(order),
 	}
 	var preflight organicCapturePreflight
 	if err := json.Unmarshal(harness.gentle(append(binding, "--preflight")...), &preflight); err != nil {
@@ -1259,9 +2342,30 @@ func (harness *organicHarness) disableReview() organicModeResult {
 	return mode
 }
 
-// enableReview flips the clone-local kill switch back on: the other half of
-// the disable journeys, and the point where issue #1877's re-enable sequence
-// begins.
+// enableReviewGlobally records the user-scoped `on` this fixture's isolated
+// HOME needs before any review may start.
+//
+// Only the global scope can assert `on`. A clone-local enable merely clears
+// this clone's own `off` opinion, so it can never stand in for this call: with
+// no global opinion recorded, clearing the clone override just falls back to
+// the default, which keeps review off.
+func (harness *organicHarness) enableReviewGlobally() organicModeResult {
+	harness.t.Helper()
+	payload := harness.gentle("review", "mode", "enable", "--cwd", harness.repo.worktree, "--scope", "global", "--json")
+	var mode organicModeResult
+	if err := json.Unmarshal(payload, &mode); err != nil {
+		harness.t.Fatalf("decode review mode: %v\n%s", err, payload)
+	}
+	if mode.Status.Effective != organicModeOn {
+		harness.t.Fatalf("global opt-in left review off: %#v", mode)
+	}
+	return mode
+}
+
+// enableReview clears this clone's `off` opinion: the other half of the disable
+// journeys, and the point where issue #1877's re-enable sequence begins. It
+// restores the fixture's global `on` rather than asserting one of its own,
+// because a repository-scoped source may only ever disable.
 func (harness *organicHarness) enableReview() organicModeResult {
 	harness.t.Helper()
 	payload := harness.gentle("review", "mode", "enable", "--cwd", harness.repo.worktree, "--scope", "clone", "--json")
@@ -1384,7 +2488,7 @@ func (harness *organicHarness) seedOrganicSDDChange(change string) {
 // records. Their count is how a rejected operation proves it wrote nothing.
 func (harness *organicHarness) reviewModeGenerations() []string {
 	harness.t.Helper()
-	root := filepath.Join(harness.commonDir(), "gentle-ai", "review-transactions", "rar-authority", "v1", "rdd-mode")
+	root := filepath.Join(harness.commonDir(), "gentle-ai", "review-mode", "rar-authority", "v1", "rdd-mode")
 	entries, err := os.ReadDir(root)
 	if os.IsNotExist(err) {
 		return nil
@@ -1524,6 +2628,10 @@ func (harness *organicHarness) runActor(role, path, body, message, marker string
 	}
 }
 
+// writeFiles writes candidate files and declares them. Since #2394 a new file
+// only enters the review candidate once the user put it in the index, so a
+// journey that means to have its files reviewed has to say so the same way a
+// real user does.
 func (harness *organicHarness) writeFiles(files map[string]string) {
 	harness.t.Helper()
 	for relative, body := range files {
@@ -1534,6 +2642,7 @@ func (harness *organicHarness) writeFiles(files map[string]string) {
 		if err := os.WriteFile(target, []byte(body), 0o644); err != nil {
 			harness.t.Fatal(err)
 		}
+		harness.git("add", "--", relative)
 	}
 }
 
@@ -1545,6 +2654,15 @@ func (harness *organicHarness) writeJSON(name string, value any) string {
 	}
 	// Review inputs live outside the repository so they never become part of the
 	// candidate they describe.
+	path := filepath.Join(harness.t.TempDir(), name)
+	if err := os.WriteFile(path, payload, 0o600); err != nil {
+		harness.t.Fatal(err)
+	}
+	return path
+}
+
+func (harness *organicHarness) writeRawReviewerResult(name string, payload []byte) string {
+	harness.t.Helper()
 	path := filepath.Join(harness.t.TempDir(), name)
 	if err := os.WriteFile(path, payload, 0o600); err != nil {
 		harness.t.Fatal(err)
@@ -1660,9 +2778,25 @@ type organicStartResult struct {
 	ChangedLines     int      `json:"changed_lines"`
 	CorrectionBudget int      `json:"correction_budget"`
 	TargetIdentity   string   `json:"target_identity"`
+
+	Repository *organicStartRepositoryContext `json:"repository_context,omitempty"`
 	// Hint is the informational recovery pointer an empty-candidate start
 	// carries; the re-enable journey follows it verbatim.
 	Hint string `json:"hint"`
+}
+
+type organicStartRepositoryContext struct {
+	TargetIdentity string `json:"target_identity"`
+}
+
+func (result organicStartResult) targetIdentity() string {
+	if result.TargetIdentity != "" {
+		return result.TargetIdentity
+	}
+	if result.Repository != nil {
+		return result.Repository.TargetIdentity
+	}
+	return ""
 }
 
 type organicFinalizeResult struct {
@@ -1740,9 +2874,47 @@ type organicValidationCheck struct {
 }
 
 type organicValidationResult struct {
-	OriginalCriteria     organicValidationCheck `json:"original_criteria"`
-	CorrectionRegression organicValidationCheck `json:"correction_regression"`
-	FollowUps            []any                  `json:"follow_ups"`
+	TargetedValidationRequestHash string                 `json:"targeted_validation_request_hash,omitempty"`
+	CorrectionTargetIdentity      string                 `json:"correction_target_identity,omitempty"`
+	OriginalCriteria              organicValidationCheck `json:"original_criteria"`
+	CorrectionRegression          organicValidationCheck `json:"correction_regression"`
+	FollowUps                     []any                  `json:"follow_ups"`
+}
+
+type organicCorrectionStatus struct {
+	Authority struct {
+		Revision string `json:"revision"`
+	} `json:"authority"`
+	NextTransition *struct {
+		Kind       string `json:"kind"`
+		ReasonCode string `json:"reason_code"`
+		Collect    *struct {
+			Inputs []struct {
+				CaptureOperation string `json:"capture_operation"`
+				Arguments        []struct {
+					Name  string `json:"name"`
+					Value string `json:"value"`
+				} `json:"arguments"`
+			} `json:"inputs"`
+		} `json:"collect"`
+	} `json:"next_transition"`
+	ValidationRequest *struct {
+		RequestHash              string `json:"request_hash"`
+		CorrectionTargetIdentity string `json:"correction_target_identity"`
+	} `json:"validation_request"`
+}
+
+func harnessCorrectionStatus(t *testing.T, harness *organicHarness, lineage string) organicCorrectionStatus {
+	t.Helper()
+	payload := harness.gentle(
+		"review", "status", "--cwd", harness.repo.worktree, "--lineage", lineage,
+		"--contract", "gentle-ai.review-integration/v1", "--next-transition",
+	)
+	var status organicCorrectionStatus
+	if err := json.Unmarshal(payload, &status); err != nil {
+		t.Fatalf("decode correction status: %v\n%s", err, payload)
+	}
+	return status
 }
 
 // ---------------------------------------------------------------------------
@@ -2065,6 +3237,169 @@ func TestRealAgentOrganicJourneys(t *testing.T) {
 	}
 }
 
+func TestRealAgentInstalledSDDApplyExecutorDoesNotDelegate(t *testing.T) {
+	if os.Getenv(realAgentE2EEnvironment) != "1" {
+		t.Skip("set GENTLE_AI_REAL_AGENT_E2E=1 to run the pinned real-agent journeys")
+	}
+	requireOrganicExecutableVersion(t, "opencode", pinnedOpenCodeVersion)
+
+	configRoot := prepareOpenCodeConfig(t)
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("XDG_CONFIG_HOME", configRoot)
+
+	const (
+		executorPrompt               = "Execute the assigned SDD apply phase without delegation."
+		executorCompletionPrefix     = "SDD_APPLY_EXECUTOR_COMPLETED:"
+		orchestratorCompletionMarker = "SDD_APPLY_ORCHESTRATOR_COMPLETED"
+	)
+	executorNonce := fmt.Sprintf("sdd-apply-executor-nonce-%d", time.Now().UnixNano())
+	fixture := newOpenCodeFixtureServer(t, []openCodeTurn{
+		{tool: "task", arguments: map[string]any{
+			"description":   "Run the installed SDD apply executor",
+			"prompt":        executorPrompt,
+			"subagent_type": "sdd-apply",
+		}},
+	}, executorPrompt)
+	defer fixture.Close()
+	fixture.requireInstalledSDDApplyExecutor = true
+	fixture.executorNonce = executorNonce
+	fixture.executorCompletionPrefix = executorCompletionPrefix
+	fixture.completion = orchestratorCompletionMarker
+	fixture.actorCommand = "echo " + executorNonce
+
+	settingsPath := filepath.Join(configRoot, "opencode", "opencode.json")
+	if err := os.WriteFile(settingsPath, []byte(organicOpenCodeConfig(t, fixture.URL)), 0o600); err != nil {
+		t.Fatalf("write OpenCode fixture config: %v", err)
+	}
+	if _, err := sdd.Inject(home, opencode.NewAdapter(), model.SDDModeMulti); err != nil {
+		t.Fatalf("install SDD OpenCode assets: %v", err)
+	}
+
+	workdir := t.TempDir()
+	environment := append(os.Environ(),
+		"OPENCODE_CONFIG_DIR="+filepath.Join(configRoot, "opencode"),
+		"OPENCODE_TEST_HOME="+filepath.Join(home, "opencode"),
+		"OPENCODE_AUTH_CONTENT={}",
+		"OPENCODE_DISABLE_PROJECT_CONFIG=1",
+		"OPENCODE_DISABLE_AUTOUPDATE=1",
+		"OPENCODE_DISABLE_AUTOCOMPACT=1",
+		"OPENCODE_DISABLE_CLAUDE_CODE=1",
+		"OPENCODE_DISABLE_DEFAULT_PLUGINS=1",
+		"OPENCODE_DISABLE_EXTERNAL_SKILLS=1",
+		"OPENCODE_DISABLE_LSP_DOWNLOAD=1",
+		"OPENCODE_DISABLE_MODELS_FETCH=1",
+		"OPENCODE_EXPERIMENTAL_DISABLE_FILEWATCHER=1",
+		"OPENCODE_FAST_BOOT=1",
+		"OPENCODE_PURE=1",
+	)
+	ctx, cancel := context.WithTimeout(context.Background(), organicAgentTimeout)
+	defer cancel()
+	command := organicCommandContext(ctx, "opencode", "run", "--pure",
+		"--format", "json", "--agent", "gentle-orchestrator", "--model", "fixture/fixture",
+		"--dir", workdir, "Delegate the assigned phase to the installed sdd-apply executor.",
+	)
+	command.Dir = workdir
+	command.Env = environment
+	var stdout, stderr bytes.Buffer
+	command.Stdout = &stdout
+	command.Stderr = &stderr
+	if err := command.Run(); err != nil {
+		t.Fatalf("run installed sdd-apply executor: %v\nstdout:\n%s\nstderr:\n%s", err, stdout.String(), stderr.String())
+	}
+	fixture.assertComplete(t, true)
+	fixture.assertInstalledSDDApplyExecutorProof(t)
+	if !strings.Contains(stdout.String(), orchestratorCompletionMarker) {
+		t.Fatalf("orchestrator did not complete after the executor result round trip:\n%s", stdout.String())
+	}
+}
+
+func TestInstalledSDDApplyExecutorProofRejectsOrchestratorSpoof(t *testing.T) {
+	const (
+		nonce            = "sdd-apply-executor-nonce-spoof-control"
+		executorComplete = "SDD_APPLY_EXECUTOR_COMPLETED:" + nonce
+	)
+	fixture := &openCodeFixtureServer{
+		requireInstalledSDDApplyExecutor: true,
+		executorNonce:                    nonce,
+		executorCompletionPrefix:         "SDD_APPLY_EXECUTOR_COMPLETED:",
+		executorSubagentResult:           executorComplete,
+	}
+	recorder := httptest.NewRecorder()
+	input := openAIRequest{Messages: []openAIMessage{{Role: "tool", Content: executorComplete}}}
+
+	if fixture.acceptInstalledSDDApplyExecutorRoundTrip(recorder, input) {
+		t.Fatal("an orchestrator-spoofed executor completion was accepted without an executor bash result")
+	}
+	if recorder.Code != http.StatusInternalServerError {
+		t.Fatalf("spoof response status = %d, want %d", recorder.Code, http.StatusInternalServerError)
+	}
+	if !strings.Contains(fixture.failure, "without executor bash result") {
+		t.Fatalf("spoof refusal = %q, want missing executor bash result", fixture.failure)
+	}
+}
+
+func TestInstalledSDDApplyExecutorRoundTripRejectsMissingCredentials(t *testing.T) {
+	tests := []struct {
+		name   string
+		nonce  string
+		prefix string
+	}{
+		{name: "empty nonce", prefix: "SDD_APPLY_EXECUTOR_COMPLETED:"},
+		{name: "empty completion prefix", nonce: "sdd-apply-executor-nonce-missing-prefix"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			const executorResult = "SDD_APPLY_EXECUTOR_COMPLETED:fixture-result"
+			fixture := &openCodeFixtureServer{
+				executorNonce:            tt.nonce,
+				executorCompletionPrefix: tt.prefix,
+				executorBashResult:       tt.nonce,
+				executorSubagentResult:   executorResult,
+			}
+			recorder := httptest.NewRecorder()
+			input := openAIRequest{Messages: []openAIMessage{{Role: "tool", Content: executorResult}}}
+
+			if fixture.acceptInstalledSDDApplyExecutorRoundTrip(recorder, input) {
+				t.Fatal("round trip accepted missing executor proof credentials")
+			}
+			if recorder.Code != http.StatusInternalServerError {
+				t.Fatalf("response status = %d, want %d", recorder.Code, http.StatusInternalServerError)
+			}
+			if !strings.Contains(fixture.failure, "missing nonce or completion marker") {
+				t.Fatalf("refusal = %q, want missing credentials", fixture.failure)
+			}
+		})
+	}
+}
+
+func TestInstalledSDDApplyExecutorRoundTripRejectsUnrelatedBashOutput(t *testing.T) {
+	const (
+		nonce            = "sdd-apply-executor-nonce-unrelated-output"
+		executorComplete = "SDD_APPLY_EXECUTOR_COMPLETED:" + nonce
+	)
+	fixture := &openCodeFixtureServer{
+		executorNonce:            nonce,
+		executorCompletionPrefix: "SDD_APPLY_EXECUTOR_COMPLETED:",
+		executorBashResult:       "completed a different command successfully",
+		executorSubagentResult:   executorComplete,
+	}
+	recorder := httptest.NewRecorder()
+	input := openAIRequest{Messages: []openAIMessage{{Role: "tool", Content: executorComplete}}}
+
+	if fixture.acceptInstalledSDDApplyExecutorRoundTrip(recorder, input) {
+		t.Fatal("round trip accepted non-empty bash output without the executor nonce")
+	}
+	if recorder.Code != http.StatusInternalServerError {
+		t.Fatalf("response status = %d, want %d", recorder.Code, http.StatusInternalServerError)
+	}
+	if !strings.Contains(fixture.failure, "without executor bash result") {
+		t.Fatalf("refusal = %q, want nonce-bound executor bash result", fixture.failure)
+	}
+}
+
 // organicActorToolCommand runs the compiled actor process from the agent's own
 // bash tool, so the implementation step is a real child process of a real agent.
 func organicActorToolCommand(t *testing.T) string {
@@ -2124,13 +3459,22 @@ type openCodeTurn struct {
 
 type openCodeFixtureServer struct {
 	*httptest.Server
-	mu             sync.Mutex
-	script         []openCodeTurn
-	actorPrompt    string
-	actorCommand   string
-	mainCalls      int
-	subagentStarts int
-	failure        string
+	mu                               sync.Mutex
+	script                           []openCodeTurn
+	actorPrompt                      string
+	actorCommand                     string
+	completion                       string
+	subagentCompletion               string
+	requireInstalledSDDApplyExecutor bool
+	sawInstalledSDDApplyExecutor     bool
+	executorNonce                    string
+	executorCompletionPrefix         string
+	executorBashResult               string
+	executorSubagentResult           string
+	executorRoundTripResult          string
+	mainCalls                        int
+	subagentStarts                   int
+	failure                          string
 }
 
 func newOpenCodeFixtureServer(t *testing.T, script []openCodeTurn, actorPrompt string) *openCodeFixtureServer {
@@ -2171,12 +3515,27 @@ func (fixture *openCodeFixtureServer) serveHTTP(writer http.ResponseWriter, requ
 		return
 	}
 	if fixture.isSubagent(input) {
+		if fixture.requireInstalledSDDApplyExecutor && !fixture.acceptInstalledSDDApplyExecutor(writer, input) {
+			return
+		}
 		fixture.mu.Lock()
 		fixture.subagentStarts++
 		fixture.mu.Unlock()
 		last := input.Messages[len(input.Messages)-1]
 		if last.Role == "tool" {
-			fixture.writeText(writer, organicDelegatedActorMarker, "stop")
+			if fixture.requireInstalledSDDApplyExecutor && !fixture.captureInstalledSDDApplyExecutorBashResult(writer, messageText(last.Content)) {
+				return
+			}
+			completion := fixture.subagentCompletion
+			if fixture.requireInstalledSDDApplyExecutor {
+				fixture.mu.Lock()
+				completion = fixture.executorSubagentResult
+				fixture.mu.Unlock()
+			}
+			if completion == "" {
+				completion = organicDelegatedActorMarker
+			}
+			fixture.writeText(writer, completion, "stop")
 			return
 		}
 		fixture.writeTool(writer, "delegated-actor", "bash", map[string]any{"command": fixture.actorCommand})
@@ -2188,11 +3547,154 @@ func (fixture *openCodeFixtureServer) serveHTTP(writer http.ResponseWriter, requ
 	call := fixture.mainCalls
 	fixture.mu.Unlock()
 	if call > len(fixture.script) {
-		fixture.writeText(writer, "Organic journey complete.", "stop")
+		if fixture.requireInstalledSDDApplyExecutor && !fixture.acceptInstalledSDDApplyExecutorRoundTrip(writer, input) {
+			return
+		}
+		completion := fixture.completion
+		if completion == "" {
+			completion = "Organic journey complete."
+		}
+		fixture.writeText(writer, completion, "stop")
 		return
 	}
 	turn := fixture.script[call-1]
 	fixture.writeTool(writer, fmt.Sprintf("turn-%d", call), turn.tool, turn.arguments)
+}
+
+func (fixture *openCodeFixtureServer) acceptInstalledSDDApplyExecutor(writer http.ResponseWriter, input openAIRequest) bool {
+	var transcript strings.Builder
+	for _, message := range input.Messages {
+		transcript.WriteString(messageText(message.Content))
+	}
+	content := transcript.String()
+	// The proof asserts the role contract the executor actually received, not
+	// one wording of it. Ordering between two blocks is no longer the property
+	// under test: a single block whose every imperative follows its own
+	// condition is, and the executor branch must come first because these
+	// skills are delegate_only and the sub-agent is the intended reader.
+	role := strings.Index(content, "## Execution Role")
+	if role < 0 {
+		fixture.fail(writer, "installed sdd-apply executor did not load its Execution Role block")
+		return false
+	}
+	executor := strings.Index(content, "If you are the `sdd-apply` sub-agent")
+	orchestrator := strings.Index(content, "If you loaded this skill through the `skill()` tool")
+	if executor < 0 || orchestrator < 0 || executor > orchestrator {
+		fixture.fail(writer, "installed sdd-apply executor role block does not state the executor branch before the orchestrator branch")
+		return false
+	}
+	if !strings.Contains(content, "continue with the phase work below. Do not delegate. Do not call the Skill tool.") {
+		fixture.fail(writer, "installed sdd-apply executor is missing its non-delegating continuation instruction")
+		return false
+	}
+	for _, retraction := range []string{"does NOT apply to you", "the gate above", "the gate below"} {
+		if strings.Contains(content, retraction) {
+			fixture.fail(writer, "installed sdd-apply executor received a retraction phrase %q that undoes an earlier imperative", retraction)
+			return false
+		}
+	}
+	for _, rawTool := range input.Tools {
+		var tool struct {
+			Function struct {
+				Name string `json:"name"`
+			} `json:"function"`
+		}
+		if err := json.Unmarshal(rawTool, &tool); err != nil {
+			fixture.fail(writer, "decode installed sdd-apply tool definition: %v", err)
+			return false
+		}
+		if tool.Function.Name == "task" {
+			fixture.fail(writer, "installed sdd-apply executor was offered the task delegation tool")
+			return false
+		}
+	}
+	fixture.mu.Lock()
+	fixture.sawInstalledSDDApplyExecutor = true
+	fixture.mu.Unlock()
+	return true
+}
+
+func (fixture *openCodeFixtureServer) captureInstalledSDDApplyExecutorBashResult(writer http.ResponseWriter, result string) bool {
+	fixture.mu.Lock()
+	nonce := fixture.executorNonce
+	prefix := fixture.executorCompletionPrefix
+	fixture.mu.Unlock()
+	if nonce == "" || prefix == "" {
+		fixture.fail(writer, "installed sdd-apply executor proof is missing its nonce or completion marker")
+		return false
+	}
+	if !strings.Contains(result, nonce) {
+		fixture.fail(writer, "installed sdd-apply executor bash result does not contain its nonce")
+		return false
+	}
+	fixture.mu.Lock()
+	fixture.executorBashResult = result
+	fixture.executorSubagentResult = prefix + nonce
+	fixture.mu.Unlock()
+	return true
+}
+
+func (fixture *openCodeFixtureServer) acceptInstalledSDDApplyExecutorRoundTrip(writer http.ResponseWriter, input openAIRequest) bool {
+	fixture.mu.Lock()
+	nonce := fixture.executorNonce
+	prefix := fixture.executorCompletionPrefix
+	bashResult := fixture.executorBashResult
+	executorResult := fixture.executorSubagentResult
+	fixture.mu.Unlock()
+	if nonce == "" || prefix == "" {
+		fixture.fail(writer, "installed sdd-apply executor proof is missing nonce or completion marker")
+		return false
+	}
+	if !strings.Contains(bashResult, nonce) {
+		fixture.fail(writer, "orchestrator cannot complete the executor proof without executor bash result")
+		return false
+	}
+	if executorResult == "" {
+		fixture.fail(writer, "installed sdd-apply executor did not return a nonce-bound subagent result")
+		return false
+	}
+	for index := len(input.Messages) - 1; index >= 0; index-- {
+		message := input.Messages[index]
+		if message.Role != "tool" {
+			continue
+		}
+		result := messageText(message.Content)
+		if strings.Contains(result, executorResult) && strings.Contains(result, nonce) {
+			fixture.mu.Lock()
+			fixture.executorRoundTripResult = result
+			fixture.mu.Unlock()
+			return true
+		}
+	}
+	fixture.fail(writer, "orchestrator did not receive the nonce-bound executor subagent result")
+	return false
+}
+
+func (fixture *openCodeFixtureServer) assertInstalledSDDApplyExecutorProof(t *testing.T) {
+	t.Helper()
+	fixture.mu.Lock()
+	defer fixture.mu.Unlock()
+	nonce := fixture.executorNonce
+	prefix := fixture.executorCompletionPrefix
+	if nonce == "" || prefix == "" {
+		t.Fatal("installed sdd-apply executor proof is missing nonce or completion marker")
+	}
+	executorResult := prefix + nonce
+	if fixture.completion == executorResult {
+		t.Fatal("orchestrator and executor completion markers must be distinct")
+	}
+	if !strings.Contains(fixture.actorCommand, nonce) {
+		t.Fatal("the installed sdd-apply executor did not receive its nonce-bearing bash command")
+	}
+	if !strings.Contains(fixture.executorBashResult, nonce) {
+		t.Fatal("the installed sdd-apply executor did not return its bash-produced nonce")
+	}
+	if fixture.executorSubagentResult != executorResult {
+		t.Fatalf("executor subagent result = %q, want %q", fixture.executorSubagentResult, executorResult)
+	}
+	if !strings.Contains(fixture.executorRoundTripResult, executorResult) {
+		t.Fatal("orchestrator did not receive the executor result through its task round trip")
+	}
 }
 
 // isSubagent recognises the delegated worker session. OpenCode gives the
@@ -2285,6 +3787,9 @@ func (fixture *openCodeFixtureServer) assertComplete(t *testing.T, wantSubagent 
 	}
 	if hadSubagent := fixture.subagentStarts > 0; hadSubagent != wantSubagent {
 		t.Fatalf("real sub-agent used = %t, want %t", hadSubagent, wantSubagent)
+	}
+	if fixture.requireInstalledSDDApplyExecutor && !fixture.sawInstalledSDDApplyExecutor {
+		t.Fatal("the installed sdd-apply executor never loaded its runtime prompt")
 	}
 }
 

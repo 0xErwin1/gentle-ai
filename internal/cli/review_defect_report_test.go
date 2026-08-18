@@ -13,7 +13,7 @@ import (
 // and the stop-code row's terminal precondition.
 func TestReviewDefectReportRendersTemplateShapedFields(t *testing.T) {
 	report := newReviewDefectReport(reviewDefectReportInput{
-		Operation:            "review capture-evidence --lineage --target --expected-revision --input",
+		Operation:            "review capture-evidence --lineage --target --expected-revision --outcome --input",
 		ReasonCode:           "captured_final_evidence_conflict",
 		ErrorMessage:         "captured final evidence already exists with different bytes",
 		TerminalPrecondition: "final verification evidence was already captured for this validating target with different bytes",
@@ -38,7 +38,7 @@ func TestReviewDefectReportRendersTemplateShapedFields(t *testing.T) {
 		"captured final evidence already exists with different bytes",
 		"final verification evidence was already captured for this validating target with different bytes",
 		"1.2.3", "deadbeef", "linux/amd64",
-		"review capture-evidence --lineage --target --expected-revision --input",
+		"review capture-evidence --lineage --target --expected-revision --outcome --input",
 		"state: validating",
 		"target: sha256:" + strings.Repeat("a", 64),
 	} {

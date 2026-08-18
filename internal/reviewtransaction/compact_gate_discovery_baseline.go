@@ -14,8 +14,8 @@ import "context"
 //   - buildCompactLifecycleSnapshot always forces IntendedUntracked to empty
 //     for GatePreCommit's staged projection (compact_gate.go:531-533), so a
 //     leaf's own IntendedUntracked never changes its resolved live snapshot;
-//   - validateCompactUntrackedScope always short-circuits to nil for a
-//     staged projection, so the untracked-scope check can never turn this
+//   - validateCompactReceiptMirrorScope always short-circuits to nil for a
+//     staged projection, so the receipt-mirror check can never turn this
 //     into a scope-changed result;
 //   - lifecycleTargetForGate always resolves GatePostApply/GatePreCommit to
 //     TargetCurrentChanges regardless of the leaf's OWN CurrentSnapshot.Kind
@@ -69,5 +69,5 @@ func CompactLeafProvablyUnrelatedToPreCommitBaseline(state CompactState, baselin
 	if current.CandidateTree == baseline.HeadTree || current.CandidateTree == baseline.CandidateTree {
 		return false
 	}
-	return classifyCompactPathSetRelation(state.GenesisPaths, baseline.Paths) == compactPathsDisjoint
+	return classifyCompactPathSetRelation(state.CorrectionScopePaths(), baseline.Paths) == compactPathsDisjoint
 }
