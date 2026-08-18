@@ -39,6 +39,11 @@ type Resource struct {
 	// is leaving undone instead of reporting a complete installation.
 	Agent    model.AgentID `json:"agent,omitempty"`
 	Commands [][]string    `json:"commands,omitempty"`
+
+	// Tool names the community tool whose own CLI performs the action. Like
+	// Agent, it is what a consumer reports and reconciles by, so it is a typed
+	// id rather than a path it would have to parse back.
+	Tool model.CommunityToolID `json:"tool,omitempty"`
 }
 
 type Manifest struct {
@@ -56,13 +61,14 @@ const (
 )
 
 type Operation struct {
-	Kind      OperationKind     `json:"kind"`
-	Path      string            `json:"path"`
-	Selector  string            `json:"selector"`
-	Code      string            `json:"code,omitempty"`
-	Reason    string            `json:"reason,omitempty"`
-	Component model.ComponentID `json:"component,omitempty"`
-	Agent     model.AgentID     `json:"agent,omitempty"`
+	Kind      OperationKind         `json:"kind"`
+	Path      string                `json:"path"`
+	Selector  string                `json:"selector"`
+	Code      string                `json:"code,omitempty"`
+	Reason    string                `json:"reason,omitempty"`
+	Component model.ComponentID     `json:"component,omitempty"`
+	Agent     model.AgentID         `json:"agent,omitempty"`
+	Tool      model.CommunityToolID `json:"tool,omitempty"`
 }
 
 type ReconcilePlan struct {
@@ -179,7 +185,7 @@ func resourceKey(resource Resource) ResourceKey {
 }
 
 func operation(kind OperationKind, resource Resource, code, reason string) Operation {
-	return Operation{Kind: kind, Path: resource.Path, Selector: resource.Selector, Code: code, Reason: reason, Component: resource.Component, Agent: resource.Agent}
+	return Operation{Kind: kind, Path: resource.Path, Selector: resource.Selector, Code: code, Reason: reason, Component: resource.Component, Agent: resource.Agent, Tool: resource.Tool}
 }
 
 func operationRank(kind OperationKind) int {
@@ -200,6 +206,19 @@ func PendingProvisioning(plan ReconcilePlan) []model.ComponentID {
 	for _, operation := range plan.Operations {
 		if operation.Selector == ProvisionSelector && operation.Kind == Create && operation.Component != "" {
 			pending = append(pending, operation.Component)
+		}
+	}
+
+	return pending
+}
+
+// PendingToolProvisioning lists the community tools whose own CLI still has to
+// wire them into the declared adapters.
+func PendingToolProvisioning(plan ReconcilePlan) []model.CommunityToolID {
+	pending := make([]model.CommunityToolID, 0)
+	for _, operation := range plan.Operations {
+		if operation.Selector == ProvisionSelector && operation.Kind == Create && operation.Tool != "" {
+			pending = append(pending, operation.Tool)
 		}
 	}
 
