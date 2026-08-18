@@ -10,6 +10,7 @@ import (
 	"sort"
 
 	"github.com/gentleman-programming/gentle-ai/v2/internal/agents"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/components/communitytool"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/components/engram"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/components/gga"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/components/mcp"
@@ -342,6 +343,33 @@ func (stager configurationStager) ProvisionedResources(state configdomain.Desire
 	}
 
 	resources = append(resources, agentProvisioning(selection.Agents)...)
+	resources = append(resources, communityToolProvisioning(selection)...)
+
+	return resources
+}
+
+// communityToolProvisioning carries the commands that point a declared tool at
+// the declared adapters. Installing the tool is left out on purpose: which
+// package manager to reach for is a property of the machine, and a consumer
+// that gets its binaries from elsewhere -- a Nix installation does -- would be
+// told to fetch a second copy of something it already has.
+func communityToolProvisioning(selection model.Selection) []render.Resource {
+	resources := make([]render.Resource, 0, len(selection.CommunityTools))
+
+	for _, tool := range selection.CommunityTools {
+		commands := communitytool.WiringCommandsFor(tool, selection.Agents)
+		if len(commands) == 0 {
+			continue
+		}
+
+		resources = append(resources, render.Resource{
+			Path:     string(tool),
+			Selector: render.ProvisionSelector,
+			Digest:   render.ProvisionPresent,
+			Tool:     tool,
+			Commands: commands,
+		})
+	}
 
 	return resources
 }
