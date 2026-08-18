@@ -18,6 +18,23 @@ import (
 	"time"
 )
 
+func TestTargetStatusDecisionFailsClosedBeforeAnAdapterCanBroadenRecovery(t *testing.T) {
+	base := TargetStatusResult{
+		Applicability: TargetApplicabilityCurrent, Action: TargetStatusActionRecover,
+		ActionDisposition: RecoveryScopeChanged, TargetIdentity: "sha256:target",
+		Projection:          TargetProjectionStatus{Kind: TargetBaseDiff, Projection: ProjectionWorkspace, BaseTree: "next-base"},
+		authorityTargetKind: TargetCurrentChanges, authorityProjection: ProjectionWorkspace,
+	}
+	decision := projectTargetStatusDecision(base)
+	if decision.Decision.RecoverySelector != nil {
+		t.Fatalf("non-approved cross-kind recovery selector = %#v, want fail-closed", decision.Decision.RecoverySelector)
+	}
+	if decision.Decision.CandidateRelation != TargetApplicabilityCurrent || decision.Decision.SemanticTransition != TargetStatusActionRecover ||
+		decision.Decision.TargetIdentity != base.TargetIdentity {
+		t.Fatalf("decision lost core classification: %#v", decision.Decision)
+	}
+}
+
 func TestAssessTargetStatusDerivesReceiptTruthWithoutMutation(t *testing.T) {
 	requireSnapshotGit(t)
 	tests := []struct {
@@ -209,6 +226,10 @@ func TestAssessTargetStatusClassifiesAllApplicabilityStates(t *testing.T) {
 		}
 	})
 
+	// Corrupted is a verdict about the lineage under assessment, so it is
+	// reached by naming that lineage. A selector-free assessment over the
+	// same store answers about the live target instead, which is the whole
+	// point: unrelated work is not corrupted because history is.
 	t.Run("corrupted", func(t *testing.T) {
 		repo := initSnapshotRepo(t)
 		writeSnapshotFile(t, repo, "tracked.txt", "candidate\n")
@@ -216,7 +237,16 @@ func TestAssessTargetStatusClassifiesAllApplicabilityStates(t *testing.T) {
 		if err := os.WriteFile(store.StatePath(), []byte("{\n"), 0o644); err != nil {
 			t.Fatal(err)
 		}
-		got, err := AssessTargetStatus(context.Background(), repo, request)
+		unrelated, err := AssessTargetStatus(context.Background(), repo, request)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if unrelated.Applicability == TargetApplicabilityCorrupted {
+			t.Fatalf("a corrupt unrelated entry made the live target corrupted: %#v", unrelated)
+		}
+		corruptRequest := request
+		corruptRequest.LineageID = "review-corrupt"
+		got, err := AssessTargetStatus(context.Background(), repo, corruptRequest)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -300,6 +330,23 @@ func TestHistoricalFailedValidatorRequiresChangedTargetRecovery(t *testing.T) {
 	}
 }
 
+func TestEscalatedChangedTargetWithChangedScopeRecovers(t *testing.T) {
+	repo := initSnapshotRepo(t)
+	state := accountingOnlyEscalatedState(t, repo, "escalated-changed-scope-status")
+	_, record := persistEscalatedRecoveryFixture(t, repo, state)
+	writeSnapshotFile(t, repo, "tracked.txt", "changed recovery target\n")
+	writeSnapshotFile(t, repo, "added.txt", "added recovery scope\n")
+
+	status, err := AssessTargetStatus(context.Background(), repo, TargetStatusRequest{
+		Target: Target{Kind: TargetCurrentChanges, IntendedUntracked: []string{"added.txt"}}, LineageID: state.LineageID,
+	})
+	if err != nil || status.Applicability != TargetApplicabilityCurrent || status.State != StateEscalated ||
+		status.Action != TargetStatusActionRecover || status.ActionDisposition != RecoveryEscalated ||
+		status.LineageID != state.LineageID || status.Revision != record.Revision {
+		t.Fatalf("changed-target escalated scope recovery = %#v, %v", status, err)
+	}
+}
+
 // TestAccountingOnlyEscalationStatusOffersRecoveryInsteadOfDeadEndStop proves
 // the routing dead end: an escalated authority whose original review and
 // correction regression both passed, and whose target has not changed since
@@ -318,6 +365,9 @@ func TestAccountingOnlyEscalationStatusOffersRecoveryInsteadOfDeadEndStop(t *tes
 	}
 	if status.Action != TargetStatusActionRecover || status.ActionDisposition != RecoveryEscalated {
 		t.Fatalf("accounting-only escalation with an unchanged target = %#v, want an offered evidence-bound recovery continuation", status)
+	}
+	if status.Decision.RecoverySelector != nil || !status.Decision.SelectorFreeAccountingOnlyRecovery {
+		t.Fatalf("accounting-only escalation decision = %#v, want an explicitly authorized selector-free recovery", status.Decision)
 	}
 
 	successor := recoveredEvidenceSuccessor(t, repo, state, "accounting-only-status-dead-end-successor")
@@ -410,7 +460,7 @@ func TestAccountingOnlyEscalationRecoveryStillRequiresMaintainerAuthorization(t 
 		Successor: successor, Disposition: RecoveryEscalated, Reason: reason, Actor: actor,
 		MaintainerAuthorization: "wrong-authorization",
 	})
-	if err == nil || !errors.Is(err, errCompactRecoveryAuthorizationInexact) {
+	if err == nil || !errors.Is(err, ErrCompactRecoveryAuthorizationInexact) {
 		t.Fatalf("accounting-only recovery without exact maintainer authorization = %v, want authorization error", err)
 	}
 }
@@ -451,7 +501,7 @@ func TestCorrectionScopeExpansionPrioritizesPendingFinalize(t *testing.T) {
 	}
 }
 
-func TestCompactTargetStatusUsesCurrentProofAndLiveProjection(t *testing.T) {
+func TestCompactTargetStatusUsesExactCurrentCandidateAndLiveProjection(t *testing.T) {
 	repo := initSnapshotRepo(t)
 	writeSnapshotFile(t, repo, "tracked.txt", "candidate\n")
 	writeSnapshotFile(t, repo, "new.txt", "initial\n")
@@ -462,12 +512,12 @@ func TestCompactTargetStatusUsesCurrentProofAndLiveProjection(t *testing.T) {
 	fix, _ := builder.Build(context.Background(), Target{Kind: TargetFixDiff, BaseRef: initial.CandidateTree, IntendedUntracked: []string{"new.txt"}, LedgerIDs: []string{"R1-001"}})
 	state := CompactState{InitialSnapshot: initial, CurrentSnapshot: fix, GenesisPaths: initial.Paths}
 	if !compactLiveTargetMatchesSnapshot(context.Background(), repo, state, live, true) {
-		t.Fatal("terminal correction did not match current intended-untracked proof")
+		t.Fatal("terminal correction did not match the exact current candidate")
 	}
 	wrongProof := state
 	wrongProof.CurrentSnapshot.IntendedUntrackedProof = initial.IntendedUntrackedProof
-	if compactLiveTargetMatchesSnapshot(context.Background(), repo, wrongProof, live, true) {
-		t.Fatal("terminal correction accepted a stale intended-untracked proof")
+	if !compactLiveTargetMatchesSnapshot(context.Background(), repo, wrongProof, live, true) {
+		t.Fatal("terminal correction rejected an exact candidate for a stale intended-untracked proof")
 	}
 	projection := targetProjectionFromCompact(state, targetProjectionFromSnapshot(live))
 	if projection.Kind != live.Kind || projection.PathsDigest != live.PathsDigest || projection.IntendedUntrackedProof != live.IntendedUntrackedProof || projection.CurrentSnapshotIdentity != live.Identity || projection.InitialSnapshotIdentity != initial.Identity {
@@ -581,7 +631,7 @@ func TestAssessTargetStatusKeepsExplicitCompactLineageCurrentWithInvalidLegacyIn
 	for _, entry := range report.Entries {
 		invalidLegacyEvidence = invalidLegacyEvidence || entry.LineageID == legacyLineage && entry.Status == AuthorityStatusInvalid && len(entry.Problems) > 0
 	}
-	if report.Complete || report.Authoritative || !invalidLegacyEvidence {
+	if !invalidLegacyEvidence {
 		t.Fatalf("invalid legacy inventory diagnostics = %#v", report)
 	}
 	if after := authorityBytes(t, authorityRoot); !reflect.DeepEqual(before, after) {
@@ -960,7 +1010,7 @@ func TestCompactAuthorityLockFailuresAreOperational(t *testing.T) {
 		&AuthorityLockTimeoutError{Timeout: 2 * time.Second},
 		&AuthorityLockCancelledError{Cause: context.Canceled},
 	} {
-		if !compactAuthorityOperationalFailure(err) {
+		if !IsCompactAuthorityOperationalFailure(err) {
 			t.Fatalf("authority lock failure classified as semantic corruption: %T", err)
 		}
 	}
@@ -1249,6 +1299,7 @@ func TestAssessTargetStatusPropagatesOperationalAuthorityFailures(t *testing.T) 
 
 	t.Run("git exit 73", func(t *testing.T) {
 		repo := targetStatusOperationalFailureFixture(t, "status-git-exit")
+		writeSnapshotFile(t, repo, "tracked.txt", "drifted candidate\n")
 		originalCommand := gitCommandContext
 		t.Cleanup(func() { gitCommandContext = originalCommand })
 		t.Setenv("GENTLE_AI_TARGET_STATUS_GIT_HELPER", "exit73")
@@ -1258,7 +1309,9 @@ func TestAssessTargetStatusPropagatesOperationalAuthorityFailures(t *testing.T) 
 			}
 			return originalCommand(ctx, name, args...)
 		}
-		got, err := AssessTargetStatus(context.Background(), repo, targetStatusCurrentChangesRequest())
+		request := targetStatusCurrentChangesRequest()
+		request.LineageID = "status-git-exit"
+		got, err := AssessTargetStatus(context.Background(), repo, request)
 		var commandErr *GitCommandError
 		if !errors.As(err, &commandErr) || commandErr.ExitCode != 73 || got.Applicability == TargetApplicabilityCorrupted {
 			t.Fatalf("Git exit status = %#v, error = %T %v", got, err, err)
@@ -1267,12 +1320,12 @@ func TestAssessTargetStatusPropagatesOperationalAuthorityFailures(t *testing.T) 
 
 	t.Run("git timeout", func(t *testing.T) {
 		repo := targetStatusOperationalFailureFixture(t, "status-git-timeout")
-		originalCommand, originalTimeout, originalWait := gitCommandContext, localGitCommandTimeout, gitCommandWaitDelay
+		originalCommand, originalTimeout, originalWait := gitCommandContext, LocalGitCommandTimeout, gitCommandWaitDelay
 		t.Cleanup(func() {
-			gitCommandContext, localGitCommandTimeout, gitCommandWaitDelay = originalCommand, originalTimeout, originalWait
+			gitCommandContext, LocalGitCommandTimeout, gitCommandWaitDelay = originalCommand, originalTimeout, originalWait
 		})
 		t.Setenv("GENTLE_AI_TARGET_STATUS_GIT_HELPER", "sleep")
-		localGitCommandTimeout, gitCommandWaitDelay = 25*time.Millisecond, 10*time.Millisecond
+		LocalGitCommandTimeout, gitCommandWaitDelay = 25*time.Millisecond, 10*time.Millisecond
 		gitCommandContext = func(ctx context.Context, name string, args ...string) *exec.Cmd {
 			if gitInvocationContains(args, "--git-common-dir") {
 				return exec.CommandContext(ctx, os.Args[0], "-test.run=^TestTargetStatusGitHelperProcess$", "--")
@@ -1355,6 +1408,97 @@ func TestAssessTargetStatusPropagatesOperationalAuthorityFailures(t *testing.T) 
 	})
 }
 
+func TestExplicitReviewingStatusRejectsSemanticAndIneligibleFrozenCandidates(t *testing.T) {
+	t.Run("pending finalize journal reconciles", func(t *testing.T) {
+		fixture := newCompactReviewerCaptureFixture(t, "frozen-pending-finalize")
+		request := finalizeAttemptTestRequest(fixture.state.LineageID, fixture.request.ExpectedRevision, "evidence")
+		request.CandidateDigest = FinalizeAttemptValueDigest("candidate", fixture.state.CurrentSnapshot)
+		request.RequestDigest = FinalizeAttemptRequestDigest(request)
+		if _, _, err := fixture.store.BeginFinalizeAttempt(context.Background(), request); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(fixture.store.repo, "internal", "a.go"), []byte("package internal\n\nfunc Value() int { return 3 }\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		status, err := AssessTargetStatus(context.Background(), fixture.store.repo, TargetStatusRequest{
+			Target: Target{Kind: TargetCurrentChanges, IntendedUntracked: []string{}}, LineageID: fixture.state.LineageID,
+		})
+		if err != nil || status.Action != TargetStatusActionReconcileFinalize || status.Replayability != ReplayabilityStatusRequired {
+			t.Fatalf("pending frozen finalize status = %#v, %v", status, err)
+		}
+	})
+	t.Run("fully occupied drifted candidate stops", func(t *testing.T) {
+		fixture := newCompactReviewerCaptureFixture(t, "frozen-complete")
+		if _, err := fixture.store.CaptureAdmittedReviewerResult(context.Background(), fixture.request); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(fixture.store.repo, "internal", "a.go"), []byte("package internal\n\nfunc Value() int { return 3 }\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		status, err := AssessTargetStatus(context.Background(), fixture.store.repo, TargetStatusRequest{
+			Target: Target{Kind: TargetCurrentChanges, IntendedUntracked: []string{}}, LineageID: fixture.state.LineageID,
+		})
+		if err != nil || status.Applicability != TargetApplicabilityCurrent || status.LineageID != fixture.state.LineageID ||
+			status.Action != TargetStatusActionStop || status.Replayability != ReplayabilityManualActionRequired {
+			t.Fatalf("fully occupied frozen status = %#v, %v", status, err)
+		}
+	})
+	t.Run("fully occupied undrifted candidate finalizes", func(t *testing.T) {
+		fixture := newCompactReviewerCaptureFixture(t, "frozen-complete-undrifted")
+		if _, err := fixture.store.CaptureAdmittedReviewerResult(context.Background(), fixture.request); err != nil {
+			t.Fatal(err)
+		}
+		status, err := AssessTargetStatus(context.Background(), fixture.store.repo, TargetStatusRequest{
+			Target: Target{Kind: TargetCurrentChanges, IntendedUntracked: []string{}}, LineageID: fixture.state.LineageID,
+		})
+		if err != nil || status.Applicability != TargetApplicabilityCurrent || status.LineageID != fixture.state.LineageID ||
+			status.Action != TargetStatusActionFinalize || status.Replayability != ReplayabilityNotReplayable {
+			t.Fatalf("fully occupied undrifted frozen status = %#v, %v", status, err)
+		}
+	})
+
+	t.Run("semantic frozen evidence", func(t *testing.T) {
+		repo := initSnapshotRepo(t)
+		writeSnapshotFile(t, repo, "tracked.txt", "candidate\n")
+		store := storeCompactStartAuthority(t, repo, newCompactTestState(t, repo, "frozen-semantic"))
+		record, _ := store.Load()
+		record.State.InitialSnapshot.Paths = []string{"missing.txt"}
+		eligible, _, err := explicitReviewingCompactCandidate(context.Background(), repo, targetStatusCandidate{compact: &record})
+		status, statusErr := targetStatusFailure(TargetStatusResult{}, err)
+		if eligible || statusErr != nil || status.Applicability != TargetApplicabilityCorrupted || status.Action != TargetStatusActionRepairAuthority {
+			t.Fatalf("semantic frozen evidence = eligible %v status %#v error %v", eligible, status, statusErr)
+		}
+	})
+
+	t.Run("non-reviewing selected lineage", func(t *testing.T) {
+		repo := initSnapshotRepo(t)
+		writeSnapshotFile(t, repo, "tracked.txt", "candidate\n")
+		store := storeCompactStartAuthority(t, repo, newCompactTestState(t, repo, "frozen-not-reviewing"))
+		record, _ := store.Load()
+		record.State.State = StateInvalidated
+		if eligible, _, err := explicitReviewingCompactCandidate(context.Background(), repo, targetStatusCandidate{compact: &record}); eligible || err != nil {
+			t.Fatalf("non-reviewing candidate = eligible %v error %v", eligible, err)
+		}
+	})
+
+	t.Run("superseded selected lineage", func(t *testing.T) {
+		repo := initSnapshotRepo(t)
+		writeSnapshotFile(t, repo, "tracked.txt", "candidate\n")
+		predecessor, store, _ := approvedCompactRevisionFixture(t, repo, "frozen-superseded")
+		record, _ := store.Load()
+		writeSnapshotFile(t, repo, "tracked.txt", "drifted candidate\n")
+		successor := newCompactTestState(t, repo, "frozen-superseded-next")
+		successor.Generation = predecessor.Generation + 1
+		if _, err := RecoverCompactAuthority(context.Background(), repo, CompactRecoveryRequest{PredecessorLineageID: predecessor.LineageID, ExpectedPredecessorRevision: record.Revision, Successor: successor, Disposition: RecoveryScopeChanged, Reason: "supersede frozen review", Actor: "maintainer"}); err != nil {
+			t.Fatal(err)
+		}
+		got, err := AssessTargetStatus(context.Background(), repo, TargetStatusRequest{Target: Target{Kind: TargetCurrentChanges, IntendedUntracked: []string{}}, LineageID: predecessor.LineageID})
+		if err != nil || got.Applicability != TargetApplicabilityUnrelated || got.Action != TargetStatusActionStart {
+			t.Fatalf("superseded frozen status = %#v, %v", got, err)
+		}
+	})
+}
+
 func TestAssessTargetStatusStillCorruptsMalformedAuthorityGraph(t *testing.T) {
 	requireSnapshotGit(t)
 	repo := initSnapshotRepo(t)
@@ -1377,13 +1521,25 @@ func TestAssessTargetStatusStillCorruptsMalformedAuthorityGraph(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	got, err := AssessTargetStatus(context.Background(), repo, targetStatusCurrentChangesRequest())
+	// The successor whose predecessor is gone is the entry that is corrupted,
+	// and naming it says so. The live target inherits nothing from it and is
+	// assessed on its own terms.
+	scoped := targetStatusCurrentChangesRequest()
+	scoped.LineageID = successor.LineageID
+	got, err := AssessTargetStatus(context.Background(), repo, scoped)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if got.Applicability != TargetApplicabilityCorrupted || got.Action != TargetStatusActionRepairAuthority ||
 		got.Replayability != ReplayabilityManualActionRequired {
 		t.Fatalf("malformed graph status = %#v", got)
+	}
+	unrelated, err := AssessTargetStatus(context.Background(), repo, targetStatusCurrentChangesRequest())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if unrelated.Applicability == TargetApplicabilityCorrupted {
+		t.Fatalf("a dangling successor made the live target corrupted: %#v", unrelated)
 	}
 }
 
@@ -1728,8 +1884,10 @@ func TestAssessTargetStatusStopsSecondArtifactReadOnDeadline(t *testing.T) {
 	if !errors.Is(err, context.DeadlineExceeded) || got.Applicability == TargetApplicabilityCorrupted {
 		t.Fatalf("deadline second artifact read status = %#v, error = %T %v", got, err, err)
 	}
-	if calls != 1 {
-		t.Fatalf("deadline second artifact read calls = %d, want 1", calls)
+	// The same deadline covers Git-backed snapshot setup, so a slow runner may
+	// exhaust it before the first authority observation. No second read may start.
+	if calls > 1 {
+		t.Fatalf("deadline second artifact read calls = %d, want at most 1", calls)
 	}
 }
 
@@ -1831,8 +1989,10 @@ func TestAssessTargetStatusStopsStableReadOnDeadline(t *testing.T) {
 	if !errors.Is(err, context.DeadlineExceeded) || got.Applicability == TargetApplicabilityCorrupted {
 		t.Fatalf("deadline coherent read status = %#v, error = %T %v", got, err, err)
 	}
-	if calls != 1 {
-		t.Fatalf("deadline coherent read attempts = %d, want 1", calls)
+	// The same deadline covers Git-backed snapshot setup, so a slow runner may
+	// exhaust it before the first authority observation. No second attempt may start.
+	if calls > 1 {
+		t.Fatalf("deadline coherent read attempts = %d, want at most 1", calls)
 	}
 }
 

@@ -4,20 +4,90 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/gentleman-programming/gentle-ai/v2/internal/agents"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/claude"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/codex"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/backup"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/components/communitytool"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/components/engram"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
+	opencodeactivation "github.com/gentleman-programming/gentle-ai/v2/internal/opencode"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/state"
 )
 
 type stubSnapshotter struct{}
+
+func TestBuildPlanRemovesOnlyOwnedOpenCodeLaunchers(t *testing.T) {
+	homeDir := t.TempDir()
+	svc, err := NewService(homeDir, t.TempDir(), "dev")
+	if err != nil {
+		t.Fatal(err)
+	}
+	paths := opencodeactivation.LauncherPaths(homeDir, runtime.GOOS)
+	ownedPath := paths[0]
+	userPath := filepath.Join(opencodeactivation.BinDir(homeDir), "user-opencode-launcher")
+	for index, path := range []string{ownedPath, userPath} {
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		content := []byte("user launcher")
+		if index == 0 {
+			content = []byte("#!/bin/sh\n# " + opencodeactivation.OwnershipMarker + "\n")
+		}
+		if err := os.WriteFile(path, content, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	plan, err := svc.buildPlan([]model.AgentID{model.AgentOpenCode}, allManagedComponents)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := svc.executePlan(plan, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(ownedPath); !os.IsNotExist(err) {
+		t.Fatalf("owned launcher stat error = %v, want absent", err)
+	}
+	if data, err := os.ReadFile(userPath); err != nil || string(data) != "user launcher" {
+		t.Fatalf("user launcher = %q, error = %v; want preserved", data, err)
+	}
+	if !slices.Contains(result.RemovedFiles, ownedPath) {
+		t.Fatalf("removed files = %v, want %q", result.RemovedFiles, ownedPath)
+	}
+}
+
+func TestUninstallOpenCodeClearsBackgroundIntent(t *testing.T) {
+	homeDir := t.TempDir()
+	if err := state.Write(homeDir, state.InstallState{
+		InstalledAgents:  []string{"opencode"},
+		BackgroundIntent: model.OpenCodeBackgroundOn,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	svc, err := NewService(homeDir, t.TempDir(), "dev")
+	if err != nil {
+		t.Fatal(err)
+	}
+	svc.snapshotter = stubSnapshotter{}
+	if _, err := svc.PartialUninstall([]model.AgentID{model.AgentOpenCode}, allManagedComponents); err != nil {
+		t.Fatal(err)
+	}
+	got, err := state.Read(homeDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.BackgroundIntent != "" || len(got.InstalledAgents) != 0 {
+		t.Fatalf("state after uninstall = %#v, want no OpenCode intent or installed agent", got)
+	}
+}
 
 func TestBuildPlanSnapshotsPiManifestAndOwnedOverlay(t *testing.T) {
 	homeDir := t.TempDir()
@@ -231,7 +301,7 @@ func TestPartialUninstallVisualPolishSelectionRemovesThemeLogoGroup(t *testing.T
 	if err := os.MkdirAll(filepath.Dir(settingsPath), 0o755); err != nil {
 		t.Fatalf("MkdirAll(opencode settings dir) error = %v", err)
 	}
-	if err := os.WriteFile(settingsPath, []byte(`{"theme":"gentleman-kanagawa","keep":true}`), 0o644); err != nil {
+	if err := os.WriteFile(settingsPath, []byte(`{"theme":"gentleman","keep":true}`), 0o644); err != nil {
 		t.Fatalf("WriteFile(opencode settings) error = %v", err)
 	}
 
@@ -247,7 +317,7 @@ func TestPartialUninstallVisualPolishSelectionRemovesThemeLogoGroup(t *testing.T
 	if err := os.MkdirAll(filepath.Dir(claudeThemePath), 0o755); err != nil {
 		t.Fatalf("MkdirAll(claude theme dir) error = %v", err)
 	}
-	if err := os.WriteFile(claudeThemePath, []byte(`{"name":"Gentleman"}`), 0o644); err != nil {
+	if err := os.WriteFile(claudeThemePath, []byte(`{"name":"gentleman"}`), 0o644); err != nil {
 		t.Fatalf("WriteFile(claude theme) error = %v", err)
 	}
 
@@ -402,6 +472,109 @@ func TestComponentOperationsContext7ClaudeRemovesSettingsAndManagedLegacyFile(t 
 	}
 	if _, ok := mcpServers["engram"]; !ok {
 		t.Fatalf("settings lost unrelated mcpServers.engram: %#v", settings)
+	}
+}
+
+func TestComponentOperationsClaudeNeverDeleteUserRegistry(t *testing.T) {
+	homeDir := t.TempDir()
+	workspaceDir := t.TempDir()
+
+	svc, err := NewService(homeDir, workspaceDir, "dev")
+	if err != nil {
+		t.Fatalf("NewService() error = %v", err)
+	}
+	adapter, ok := svc.registry.Get(model.AgentClaudeCode)
+	if !ok {
+		t.Fatal("Claude adapter not found in registry")
+	}
+
+	// The registry holds ONLY the managed server, so removing it empties the
+	// file; ~/.claude.json must survive because Claude Code owns it.
+	registryPath := claude.UserConfigPath(homeDir)
+	seed := []byte(`{"mcpServers":{"context7":{"command":"npx"}}}`)
+	if err := os.WriteFile(registryPath, seed, 0o600); err != nil {
+		t.Fatalf("WriteFile(registry) error = %v", err)
+	}
+
+	ops, _, err := svc.componentOperations(adapter, model.ComponentContext7)
+	if err != nil {
+		t.Fatalf("componentOperations(context7) error = %v", err)
+	}
+	for _, op := range ops {
+		if _, _, err := op.apply(op.path); err != nil {
+			t.Fatalf("operation %v on %q error = %v", op.typeID, op.path, err)
+		}
+	}
+
+	info, err := os.Stat(registryPath)
+	if err != nil {
+		t.Fatalf("~/.claude.json must survive removing the last managed server: %v", err)
+	}
+	registry := readJSONFileForTest(t, registryPath)
+	if servers, ok := registry["mcpServers"].(map[string]any); ok {
+		if _, still := servers["context7"]; still {
+			t.Fatalf("registry still contains mcpServers.context7: %#v", registry)
+		}
+	}
+	if runtime.GOOS != "windows" && info.Mode().Perm() != 0o600 {
+		t.Fatalf("registry mode widened to %v, want 0600", info.Mode().Perm())
+	}
+}
+
+func TestComponentOperationsEngramClaudePreservesRegistryAndRemovesManagedLegacy(t *testing.T) {
+	homeDir := t.TempDir()
+	svc, err := NewService(homeDir, t.TempDir(), "dev")
+	if err != nil {
+		t.Fatalf("NewService() error = %v", err)
+	}
+	adapter, ok := svc.registry.Get(model.AgentClaudeCode)
+	if !ok {
+		t.Fatal("Claude adapter not found in registry")
+	}
+
+	registryPath := claude.UserConfigPath(homeDir)
+	registry := []byte(`{"oauthAccount":{"emailAddress":"user@example.com"},"mcpServers":{"codegraph":{"command":"codegraph"},"engram":{"command":"/usr/local/bin/engram","args":["mcp","--tools=agent"]}}}`)
+	if err := os.WriteFile(registryPath, registry, 0o600); err != nil {
+		t.Fatalf("WriteFile(user registry) error = %v", err)
+	}
+	legacyPath := adapter.MCPConfigPath(homeDir, "engram")
+	if err := os.MkdirAll(filepath.Dir(legacyPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll(legacy dir) error = %v", err)
+	}
+	if err := os.WriteFile(legacyPath, []byte(`{"command":"/usr/local/bin/engram","args":["mcp","--tools=agent"]}`), 0o644); err != nil {
+		t.Fatalf("WriteFile(legacy config) error = %v", err)
+	}
+
+	ops, targets, err := svc.componentOperations(adapter, model.ComponentEngram)
+	if err != nil {
+		t.Fatalf("componentOperations(engram) error = %v", err)
+	}
+	for _, want := range []string{registryPath, legacyPath} {
+		if !slices.Contains(targets, want) {
+			t.Fatalf("uninstall targets missing %q: %v", want, targets)
+		}
+	}
+	for _, op := range ops {
+		if _, _, err := op.apply(op.path); err != nil {
+			t.Fatalf("operation %v on %q error = %v", op.typeID, op.path, err)
+		}
+	}
+
+	remaining := readJSONFileForTest(t, registryPath)
+	servers, _ := remaining["mcpServers"].(map[string]any)
+	if _, exists := servers["engram"]; exists {
+		t.Fatalf("user registry still contains mcpServers.engram: %#v", remaining)
+	}
+	if got := remaining["oauthAccount"].(map[string]any)["emailAddress"]; got != "user@example.com" {
+		t.Fatalf("OAuth data changed during uninstall: %#v", remaining)
+	}
+	if _, statErr := os.Stat(legacyPath); !os.IsNotExist(statErr) {
+		t.Fatalf("managed legacy config must be removed; stat error = %v", statErr)
+	}
+	if info, statErr := os.Stat(registryPath); statErr != nil {
+		t.Fatalf("Stat(user registry) error = %v", statErr)
+	} else if runtime.GOOS != "windows" && info.Mode().Perm() != 0o600 {
+		t.Fatalf("user registry mode = %o; want 0600", info.Mode().Perm())
 	}
 }
 

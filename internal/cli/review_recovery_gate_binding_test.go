@@ -21,6 +21,10 @@ import (
 // chain instead of denying with candidate-or-paths-mismatch or the empty
 // one-commit topology context.
 func TestValidateBindsScopeChangedRecoveryChainAtPublicationGates(t *testing.T) {
+	// Not parallel: opting in writes the user's global mode through t.Setenv,
+	// which Go forbids in a test that also calls t.Parallel.
+	reviewEnabledHome(t)
+
 	repo := initReviewCLIRepo(t)
 	branch := strings.TrimSpace(runReviewCLIGit(t, repo, "symbolic-ref", "--short", "HEAD"))
 	remote := filepath.Join(t.TempDir(), "remote.git")
@@ -103,6 +107,7 @@ func TestValidateBindsScopeChangedRecoveryChainAtPublicationGates(t *testing.T) 
 // predecessor's segment is already on the remote, so the composed chain base
 // can never be the live publication base.
 func TestValidateAllowsTheNamedRecoveryAfterThePredecessorDeliveryWasPushed(t *testing.T) {
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	branch := strings.TrimSpace(runReviewCLIGit(t, repo, "symbolic-ref", "--short", "HEAD"))
 	remote := filepath.Join(t.TempDir(), "remote.git")
@@ -121,7 +126,7 @@ func TestValidateAllowsTheNamedRecoveryAfterThePredecessorDeliveryWasPushed(t *t
 	runReviewCLIGit(t, repo, "push", "-q", "origin", branch)
 
 	if err := RunReviewMode([]string{"disable", "--cwd", repo, "--scope", "clone"}, &bytes.Buffer{}); err != nil {
-		t.Fatalf("disable review-driven development: %v", err)
+		t.Fatalf("disable receipt-driven development: %v", err)
 	}
 	if err := os.WriteFile(filepath.Join(repo, "docs", "unreviewed.md"), []byte("unreviewed\n"), 0o644); err != nil {
 		t.Fatal(err)
@@ -129,7 +134,7 @@ func TestValidateAllowsTheNamedRecoveryAfterThePredecessorDeliveryWasPushed(t *t
 	runReviewCLIGit(t, repo, "add", "-A")
 	runReviewCLIGit(t, repo, "commit", "-qm", "unreviewed change")
 	if err := RunReviewMode([]string{"enable", "--cwd", repo, "--scope", "clone"}, &bytes.Buffer{}); err != nil {
-		t.Fatalf("re-enable review-driven development: %v", err)
+		t.Fatalf("re-enable receipt-driven development: %v", err)
 	}
 
 	scope := reviewPrePushScopeChangeDenial(t, repo, branch)
@@ -212,6 +217,7 @@ func reviewPrePushScopeChangeDenial(t *testing.T, repo, branch string) ReviewInt
 // context of an underivable pre-push delivery: the receipt digests must be
 // reported instead of an all-blank context (issue #1422 / #1248).
 func TestValidatePrePushDeriveFailureReportsReceiptDigests(t *testing.T) {
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	branch := strings.TrimSpace(runReviewCLIGit(t, repo, "symbolic-ref", "--short", "HEAD"))
 	remote := filepath.Join(t.TempDir(), "remote.git")
@@ -259,6 +265,7 @@ func TestValidatePrePushDeriveFailureReportsReceiptDigests(t *testing.T) {
 // operation input set. The gate-conditional refinement belongs in the human
 // message, exactly like the committed base-diff selectors already there.
 func TestScopeChangedDenialRequiresOnlyWhatTheRecoveryActuallyDemands(t *testing.T) {
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	branch := strings.TrimSpace(runReviewCLIGit(t, repo, "symbolic-ref", "--short", "HEAD"))
 	remote := filepath.Join(t.TempDir(), "remote.git")

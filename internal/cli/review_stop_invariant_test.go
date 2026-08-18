@@ -48,6 +48,11 @@ const reviewStopReasonDocsTerminalPrefix = "Terminal"
 // removed from this table entirely, not marked with either disposition — see
 // the organic-dx Phase 3 investigation note on escalated_recovery_requires_changed_target.
 var reviewStopInvariantClassification = map[string]reviewStopDisposition{
+	"captured_verification_evidence_invalid": {
+		Terminal:      true,
+		Justification: "immutable captured verification metadata or bytes failed integrity validation; a maintainer must inspect the authority artifacts before they can be trusted",
+		ToolFault:     reviewStopToolFault(false),
+	},
 	"captured_artifacts_unverifiable": {
 		Terminal:      true,
 		Justification: "inspection failure of an already-captured artifact, not a routable state; requires a maintainer to inspect the review authority store directly",
@@ -69,6 +74,20 @@ var reviewStopInvariantClassification = map[string]reviewStopDisposition{
 	"corrected_candidate_unavailable": {
 		Terminal:      false,
 		Justification: "caller-continuable: change the candidate content so it differs from the frozen original, then re-run `review status --next-transition` (or `review finalize`) — a concrete, flag-driven command, not a maintainer-only action; the docs row does not open with \"Terminal\", so pinning this terminal would contradict it (discoverability sweep finding beyond the three the audit named explicitly)",
+	},
+	"empty_base_diff_bootstrap_required": {
+		Terminal:      true,
+		Justification: "the caller already selected an exact committed base but it produces no paths, so only the externally authorized empty-root bootstrap or another history shape can establish a reviewable delta",
+		ToolFault:     reviewStopToolFault(false),
+	},
+	"lens_context_budget_exceeded": {
+		Terminal:      true,
+		Justification: "the frozen reviewer evidence cannot fit without truncation, so no in-lineage reviewer action exists; a smaller candidate starts a new review",
+		ToolFault:     reviewStopToolFault(false),
+	},
+	"correction_repository_verification_failed": {
+		Terminal:      false,
+		Justification: "caller-continuable: the failed candidate evidence remains immutable while the same open correction may be adjusted; changing the candidate yields a new identity and a new evidence slot without consuming the correction attempt",
 	},
 	"corrupted_or_unverifiable_authority": {
 		Terminal:      true,
@@ -108,17 +127,9 @@ var reviewStopInvariantClassification = map[string]reviewStopDisposition{
 		Terminal:      false,
 		Justification: "caller-continuable: re-run `review finalize --lineage <id>` with the exact original content-bound payload — a concrete, flag-driven command; design.md previously misclassified this as terminal (Phase 3 task 3.10 contradiction fix)",
 	},
-	"pre_pr_selector_unrepresentable": {
-		Terminal:      false,
-		Justification: "caller-continuable: pass a symbolic ref name for --base-ref instead of a raw commit SHA — a concrete, flag-driven fix; no in-process routing substitutes a different gate, because the caller explicitly chose the pre-pr gate and silently validating against a different gate would answer a different question than the one asked",
-	},
 	"recovery_scope_unchanged": {
 		Terminal:      false,
 		Justification: "caller-continuable: change the candidate so its target identity differs from the current authority's, then retry the same selector-scoped review.recover — a concrete, flag-driven command; design.md previously misclassified this as terminal (Phase 3 task 3.10 contradiction fix)",
-	},
-	"recovery_target_unrepresentable": {
-		Terminal:      false,
-		Justification: "caller-continuable: use one of the three representable recovery selector shapes — a concrete, flag-driven fix; design.md previously misclassified this as terminal (Phase 3 task 3.10 contradiction fix)",
 	},
 	"staged_workspace_overlay_recovery_unavailable": {
 		Terminal:      true,
@@ -133,6 +144,14 @@ var reviewStopInvariantClassification = map[string]reviewStopDisposition{
 		// User-decision: a legitimate, by-design business-rule terminal (one
 		// correction attempt is the designed limit), not a code defect.
 		ToolFault: reviewStopToolFault(false),
+	},
+	"rdd_disabled": {
+		Terminal:      false,
+		Justification: "caller-continuable: receipt-driven development is disabled; run `gentle-ai review mode enable` to turn it back on, then re-run the exact `review status --next-transition --contract <contract> <selector-args>` command that produced this stop — a concrete, flag-driven continuation; the same typed error the start gate already names",
+	},
+	"staged_delivery_candidate_required": {
+		Terminal:      false,
+		Justification: "caller-continuable: stage every reviewed path to restore the exact pre-commit candidate, then re-run explicit-lineage STATUS with `--projection staged`; the documented command is concrete and the index change neither mutates nor extends approval",
 	},
 }
 
@@ -181,6 +200,8 @@ func reviewStopToolFault(value bool) *bool { return &value }
 // entirely) or by adding a classified, docs-agreeing entry here — never by
 // exempting it from this test.
 func TestReviewStopInvariantReasonCodesAreClassified(t *testing.T) {
+	t.Parallel()
+
 	source, err := os.ReadFile("review_next_transition.go")
 	if err != nil {
 		t.Fatal(err)
@@ -224,6 +245,8 @@ func TestReviewStopInvariantReasonCodesAreClassified(t *testing.T) {
 // a code marked Terminal here whose docs row is not "Terminal"-prefixed, or a
 // code marked caller-continuable here whose docs row IS "Terminal"-prefixed.
 func TestReviewStopInvariantTerminalClassificationAgreesWithDocs(t *testing.T) {
+	t.Parallel()
+
 	docs, err := os.ReadFile("../../docs/review-integration.md")
 	if err != nil {
 		t.Fatal(err)
@@ -257,7 +280,58 @@ func TestReviewStopInvariantTerminalClassificationAgreesWithDocs(t *testing.T) {
 // every terminal-proof entry (Terminal: true) must classify ToolFault one
 // way or the other, and the question must not apply to any caller-continuable
 // entry (Terminal: false), where ToolFault must stay nil.
+// TestReviewStopInvariantTerminalClassificationAgreesWithShippedContract is
+// #2492's actual fix. The docs table was always cross-checked; the SHIPPED
+// table — internal/assets/skills/_shared/review-ledger-contract.md, the one
+// the orchestrator contract tells consumers to read — was not, and its rows
+// carried no terminality signal at all. Eleven rows drifted before anyone
+// noticed, because the guard was pointed at the copy rather than the contract.
+//
+// Same three properties the docs check enforces, now against the contract:
+// every classified code has exactly one shipped row, every shipped row is a
+// classified code, and a row opens with the literal "Terminal — " marker iff
+// the classification says no in-lineage continuation exists. Terminal rows
+// may still name their unblocking precondition or the clone-scoped delivery
+// exit; the marker states review-terminality, not helplessness.
+func TestReviewStopInvariantTerminalClassificationAgreesWithShippedContract(t *testing.T) {
+	contract, err := os.ReadFile("../../internal/assets/skills/_shared/review-ledger-contract.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows := map[string]string{}
+	for _, match := range reviewStopReasonDocsRowTextRegexp.FindAllStringSubmatch(string(contract), -1) {
+		if _, dup := rows[match[1]]; dup {
+			t.Errorf("shipped contract carries two rows for %q", match[1])
+		}
+		rows[match[1]] = match[2]
+	}
+	if len(rows) == 0 {
+		t.Fatal("found no stop-reason rows in the shipped review-ledger contract; the table shape moved")
+	}
+	for code := range rows {
+		if _, ok := reviewStopInvariantClassification[code]; !ok {
+			t.Errorf("shipped contract row %q is not a classified emittable code; a row nothing emits misroutes consumers", code)
+		}
+	}
+	for code, disposition := range reviewStopInvariantClassification {
+		text, ok := rows[code]
+		if !ok {
+			t.Errorf("classified code %q has no row in the shipped contract; a consumer receiving this stop cannot route it", code)
+			continue
+		}
+		marked := strings.HasPrefix(text, reviewStopReasonDocsTerminalPrefix)
+		if disposition.Terminal && !marked {
+			t.Errorf("code %q is classified terminal but its shipped row carries no %q marker: %q", code, reviewStopReasonDocsTerminalPrefix, text[:min(80, len(text))])
+		}
+		if !disposition.Terminal && marked {
+			t.Errorf("code %q is caller-continuable but its shipped row opens with %q: %q", code, reviewStopReasonDocsTerminalPrefix, text[:min(80, len(text))])
+		}
+	}
+}
+
 func TestReviewStopInvariantToolFaultColumnIsWellFormed(t *testing.T) {
+	t.Parallel()
+
 	for code, disposition := range reviewStopInvariantClassification {
 		if disposition.Terminal && disposition.ToolFault == nil {
 			t.Errorf("reason code %q is terminal but has no ToolFault classification (task 5.1 requires every terminal-proof row to get one of the two values)", code)

@@ -49,6 +49,7 @@ func contaminatedReviewerPayloadForTest(t *testing.T, repo string, record review
 //  2. an authorization that does not name an admitted slot can never sweep it,
 //     even when the request names it.
 func TestReviewReopenResultsAdmittedSlotQuarantineRequiresNamedAuthorization(t *testing.T) {
+	reviewEnabledHome(t)
 	repo, started, store, initial := newArtifactReview(t, true)
 	for order, lens := range initial.State.SelectedLenses {
 		input := filepath.Join(t.TempDir(), fmt.Sprintf("result-%d.json", order))
@@ -144,6 +145,10 @@ func TestReviewReopenResultsAdmittedSlotQuarantineRequiresNamedAuthorization(t *
 // route, recapture, and finalize to an approved terminal state over the exact
 // same candidate identity, with the overridden bytes preserved.
 func TestReviewReopenResultsRecoversContaminatedAdmittedReviewFromCorrectionRequired(t *testing.T) {
+	// Not parallel: opting in writes the user's global mode through t.Setenv,
+	// which Go forbids in a test that also calls t.Parallel.
+	reviewEnabledHome(t)
+
 	repo, started, store, initial := newArtifactReview(t, true)
 	if len(initial.State.SelectedLenses) != 4 {
 		t.Fatalf("selected lenses = %v, want 4R", initial.State.SelectedLenses)
@@ -200,6 +205,12 @@ func TestReviewReopenResultsRecoversContaminatedAdmittedReviewFromCorrectionRequ
 	// Follow the product's messages. The collect transition asks for a
 	// correction forecast; after the forecast, the stop reason must present
 	// both truths, and the second one must name the reopen route runnably.
+	for _, contract := range []string{ReviewIntegrationContractV1, ReviewIntegrationContractV2} {
+		status := legacyCompatibleFrozenStatusForTest(t, repo, contract)
+		if status.NextTransition == nil {
+			t.Fatalf("%s status omitted next transition", contract)
+		}
+	}
 	transition := nextTransitionForTest(t, repo)
 	if transition == nil || transition.Kind != reviewNextTransitionCollect || transition.ReasonCode != "correction_plan_required" {
 		t.Fatalf("first transition = %#v, want correction_plan_required collect", transition)
@@ -213,10 +224,11 @@ func TestReviewReopenResultsRecoversContaminatedAdmittedReviewFromCorrectionRequ
 	if transition == nil || transition.Kind != reviewNextTransitionStop || transition.ReasonCode != "corrected_candidate_unavailable" {
 		t.Fatalf("post-forecast transition = %#v, want corrected_candidate_unavailable stop", transition)
 	}
-	statement, ok := reviewStopReasonStatement("corrected_candidate_unavailable")
+	emission, ok := reviewNarrationRegistry["stop:corrected_candidate_unavailable"]
 	if !ok {
 		t.Fatal("corrected_candidate_unavailable has no narration statement")
 	}
+	statement := emission.Statement
 	if !strings.Contains(statement, "Change the candidate content") {
 		t.Fatalf("narration lost the real-findings truth: %q", statement)
 	}
@@ -261,11 +273,18 @@ func TestReviewReopenResultsRecoversContaminatedAdmittedReviewFromCorrectionRequ
 		reopened.State.InitialSnapshot.Identity != identityBefore ||
 		!reflect.DeepEqual(reopened.State.SelectedLenses, blocked.State.SelectedLenses) ||
 		reopened.State.CorrectionBudget != blocked.State.CorrectionBudget ||
+		reopened.State.CorrectionBudgetPolicy != reviewtransaction.CorrectionBudgetPolicyFloorTwo ||
 		len(reopened.State.ResultReopens) != 1 {
 		t.Fatalf("reopen changed frozen inputs: %#v", reopened.State)
 	}
 	if !reflect.DeepEqual(reopened.State.ResultReopens[0].AuthorizedLenses, []string{"review-readability", "review-reliability"}) {
 		t.Fatalf("audit does not record the maintainer-named lenses: %#v", reopened.State.ResultReopens[0])
+	}
+	for _, contract := range []string{ReviewIntegrationContractV1, ReviewIntegrationContractV2} {
+		status := legacyCompatibleFrozenStatusForTest(t, repo, contract)
+		if status.NextTransition == nil {
+			t.Fatalf("%s status omitted next transition after reopen", contract)
+		}
 	}
 
 	// Recapture the two reopened lenses with results derived from the real
@@ -345,4 +364,26 @@ func nextTransitionForTest(t *testing.T, repo string) *ReviewNextTransition {
 	var status ReviewTargetStatusResult
 	decodeStrictReviewJSON(t, output.Bytes(), &status)
 	return status.NextTransition
+}
+
+func legacyCompatibleFrozenStatusForTest(t *testing.T, repo, contract string) ReviewTargetStatusResult {
+	t.Helper()
+	args := []string{"status", "--cwd", repo, "--contract", contract}
+	if contract == ReviewIntegrationContractV2 {
+		args = append(args, "--agent", "claude-code")
+	}
+	args = append(args, "--next-transition")
+	var output bytes.Buffer
+	if err := RunReview(args, &output); err != nil {
+		t.Fatalf("review status %s --next-transition: %v\n%s", contract, err, output.String())
+	}
+	var status ReviewTargetStatusResult
+	decodeStrictReviewJSON(t, output.Bytes(), &status)
+	if status.Frozen == nil || status.Frozen.CorrectionBudget != 1 {
+		t.Fatalf("%s wire budget = %#v, want legacy budget 1", contract, status.Frozen)
+	}
+	if bytes.Contains(output.Bytes(), []byte("correction_budget_policy")) {
+		t.Fatalf("%s status leaked internal correction budget policy: %s", contract, output.String())
+	}
+	return status
 }

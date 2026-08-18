@@ -1,10 +1,13 @@
 package reviewtransaction
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -29,7 +32,11 @@ func TestRDDConsentLatchIsAbsentUntilRecordedAndThenIdempotent(t *testing.T) {
 	if asked, err := RDDConsentAsked(ctx, repo); err != nil || !asked {
 		t.Fatalf("latched consent = %v, %v", asked, err)
 	}
-	status, err := ResolveRDDMode(ctx, repo, RDDGlobalMode{})
+	// Resolved against an explicit opt-in, because this asserts the latch left
+	// the override head alone -- not what an unconfigured clone resolves to.
+	// Receipt-driven development is off by default, so passing no opinion here
+	// would make the check pass for the wrong reason.
+	status, err := ResolveRDDMode(ctx, repo, RDDGlobalMode{Value: string(RDDModeOn)})
 	if err != nil {
 		t.Fatalf("ResolveRDDMode after latching: %v", err)
 	}
@@ -46,7 +53,7 @@ func TestResolveRDDModeLetsAnyOffWin(t *testing.T) {
 		effective  RDDMode
 		source     RDDModeSource
 	}{
-		{name: "unconfigured stays enabled", global: "", cloneLocal: RDDModeUnset, effective: RDDModeOn, source: RDDModeSourceDefault},
+		{name: "unconfigured stays off", global: "", cloneLocal: RDDModeUnset, effective: RDDModeOff, source: RDDModeSourceDefault},
 		{name: "global off with no override", global: "off", cloneLocal: RDDModeUnset, effective: RDDModeOff, source: RDDModeSourceGlobal},
 		{name: "global on with clone off", global: "on", cloneLocal: RDDModeOff, effective: RDDModeOff, source: RDDModeSourceCloneLocal},
 		{name: "global off with cleared override", global: "off", cloneLocal: RDDModeUnset, effective: RDDModeOff, source: RDDModeSourceGlobal},
@@ -73,6 +80,60 @@ func TestResolveRDDModeLetsAnyOffWin(t *testing.T) {
 	}
 }
 
+// TestResolveRDDModeStaysOffUntilExplicitlyEnabled pins the product default:
+// receipt-driven development is opt-in. A fresh install where no source
+// expressed an opinion must resolve to off, and it must say the default is why,
+// so nothing about the resolution looks like a choice somebody made. The other
+// two cases are the reason that flip is safe to ship: an explicit global "on"
+// survives an upgrade untouched, and a clone-local "off" still beats it.
+func TestResolveRDDModeStaysOffUntilExplicitlyEnabled(t *testing.T) {
+	t.Run("nobody chose anything so reviews stay off", func(t *testing.T) {
+		repo := initSnapshotRepo(t)
+		status, err := ResolveRDDMode(context.Background(), repo, RDDGlobalMode{})
+		if err != nil {
+			t.Fatalf("ResolveRDDMode error = %v", err)
+		}
+		if status.Effective != RDDModeOff || status.Source != RDDModeSourceDefault {
+			t.Fatalf("unconfigured effective/source = %q/%q, want %q/%q", status.Effective, status.Source, RDDModeOff, RDDModeSourceDefault)
+		}
+		if status.Enabled() {
+			t.Fatalf("an unconfigured clone reported reviews enabled: %#v", status)
+		}
+		if status.Global != RDDModeUnset || status.CloneLocal != RDDModeUnset {
+			t.Fatalf("the default must not invent an opinion for either source: %#v", status)
+		}
+	})
+
+	t.Run("an explicit global enable survives the new default", func(t *testing.T) {
+		repo := initSnapshotRepo(t)
+		status, err := ResolveRDDMode(context.Background(), repo, RDDGlobalMode{Value: string(RDDModeOn)})
+		if err != nil {
+			t.Fatalf("ResolveRDDMode error = %v", err)
+		}
+		if status.Effective != RDDModeOn || status.Source != RDDModeSourceGlobal {
+			t.Fatalf("explicit global on = %q/%q, want %q/%q", status.Effective, status.Source, RDDModeOn, RDDModeSourceGlobal)
+		}
+		if !status.Enabled() {
+			t.Fatalf("a user who deliberately enabled reviews lost them: %#v", status)
+		}
+	})
+
+	t.Run("a clone-local off still beats an explicit global on", func(t *testing.T) {
+		repo := initSnapshotRepo(t)
+		global := RDDGlobalMode{Value: string(RDDModeOn)}
+		if _, err := SetCloneLocalRDDMode(context.Background(), repo, RDDModeOff, "", global); err != nil {
+			t.Fatalf("SetCloneLocalRDDMode(off) error = %v", err)
+		}
+		status, err := ResolveRDDMode(context.Background(), repo, global)
+		if err != nil {
+			t.Fatalf("ResolveRDDMode error = %v", err)
+		}
+		if status.Effective != RDDModeOff || status.Source != RDDModeSourceCloneLocal {
+			t.Fatalf("clone-local off = %q/%q, want %q/%q", status.Effective, status.Source, RDDModeOff, RDDModeSourceCloneLocal)
+		}
+	})
+}
+
 func TestCloneLocalRDDOverrideCannotForceOn(t *testing.T) {
 	repo := initSnapshotRepo(t)
 	if _, err := SetCloneLocalRDDMode(context.Background(), repo, RDDModeOn, "", RDDGlobalMode{Value: "off"}); !errors.Is(err, ErrRDDModeRepositoryForcedOn) {
@@ -96,7 +157,7 @@ func TestCloneLocalRDDOverrideStaysInsideItsClone(t *testing.T) {
 		t.Fatalf("SetCloneLocalRDDMode(off) error = %v", err)
 	}
 
-	overridePath := filepath.Join(repo, ".git", "gentle-ai", "review-transactions", "rar-authority", "v1", "rdd-mode")
+	overridePath := filepath.Join(repo, ".git", "gentle-ai", "review-mode", "rar-authority", "v1", "rdd-mode")
 	if _, err := os.Stat(overridePath); err != nil {
 		t.Fatalf("clone-local override is not stored under the Git common directory: %v", err)
 	}
@@ -118,7 +179,7 @@ func TestResolveRDDModeNeverCreatesState(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ResolveRDDMode error = %v", err)
 	}
-	if status.Effective != RDDModeOn || status.Source != RDDModeSourceDefault {
+	if status.Effective != RDDModeOff || status.Source != RDDModeSourceDefault {
 		t.Fatalf("unconfigured status = %#v", status)
 	}
 	if _, err := os.Lstat(filepath.Join(repo, ".git", "gentle-ai")); !errors.Is(err, os.ErrNotExist) {
@@ -144,6 +205,9 @@ func TestDisabledRDDRejectsStartsAndFreezesActiveAuthority(t *testing.T) {
 	}
 	if _, err := AuthorizeRDDOperation(context.Background(), repo, global, RDDOperationRead); err != nil {
 		t.Fatalf("disabled mode broke read-only authority: %v", err)
+	}
+	if _, err := AuthorizeRDDOperation(context.Background(), repo, global, RDDOperationAbandon); err != nil {
+		t.Fatalf("disabled mode rejected sanctioned abandonment: %v", err)
 	}
 	if err := receipt.Validate(); err != nil {
 		t.Fatalf("disabled mode broke receipt validation: %v", err)
@@ -315,6 +379,141 @@ func TestCloneLocalRDDOverrideRejectsStaleExpectedRevision(t *testing.T) {
 	}
 }
 
+func TestCloneLocalRDDModeEnableRejectsGlobalOffWithoutChangingExplicitOff(t *testing.T) {
+	repo := initSnapshotRepo(t)
+	ctx := context.Background()
+	disabled, err := SetCloneLocalRDDMode(ctx, repo, RDDModeOff, "", RDDGlobalMode{Value: "on"})
+	if err != nil {
+		t.Fatalf("SetCloneLocalRDDMode(off) error = %v", err)
+	}
+	record, err := CloneLocalRDDModeRecordPath(ctx, repo)
+	if err != nil {
+		t.Fatalf("CloneLocalRDDModeRecordPath error = %v", err)
+	}
+	before, err := os.ReadFile(record)
+	if err != nil {
+		t.Fatalf("read explicit-off record: %v", err)
+	}
+
+	status, err := SetCloneLocalRDDMode(ctx, repo, RDDModeUnset, disabled.Revision, RDDGlobalMode{Value: "off"})
+	var rejected *RDDDisabledError
+	if !errors.As(err, &rejected) || !errors.Is(err, ErrRDDDisabled) || rejected.Source != RDDModeSourceGlobal {
+		t.Fatalf("clear explicit-off override error = %v, want global typed disabled error", err)
+	}
+	if !strings.Contains(err.Error(), "gentle-ai review mode enable --scope=global") {
+		t.Fatalf("clear explicit-off override error does not name the global continuation: %v", err)
+	}
+	if status.CloneLocal != RDDModeOff || status.Revision != disabled.Revision || status.Effective != RDDModeOff {
+		t.Fatalf("rejected clear changed the clone-local status: %#v", status)
+	}
+	recordAfter, err := CloneLocalRDDModeRecordPath(ctx, repo)
+	if err != nil {
+		t.Fatalf("CloneLocalRDDModeRecordPath after rejected clear error = %v", err)
+	}
+	after, err := os.ReadFile(recordAfter)
+	if err != nil {
+		t.Fatalf("read explicit-off record after rejected clear: %v", err)
+	}
+	if recordAfter != record || !bytes.Equal(after, before) {
+		t.Fatalf("rejected clear published a new generation")
+	}
+}
+
+func TestCloneLocalRDDModeEnableValidatesStaleRevisionBeforeGlobalOffRefusal(t *testing.T) {
+	repo := initSnapshotRepo(t)
+	ctx := context.Background()
+	disabled, err := SetCloneLocalRDDMode(ctx, repo, RDDModeOff, "", RDDGlobalMode{Value: "on"})
+	if err != nil {
+		t.Fatalf("SetCloneLocalRDDMode(off) error = %v", err)
+	}
+	record, err := CloneLocalRDDModeRecordPath(ctx, repo)
+	if err != nil {
+		t.Fatalf("CloneLocalRDDModeRecordPath error = %v", err)
+	}
+	before, err := os.ReadFile(record)
+	if err != nil {
+		t.Fatalf("read explicit-off record: %v", err)
+	}
+	dir, err := cloneLocalRDDModeRoot(ctx, repo, false)
+	if err != nil {
+		t.Fatalf("cloneLocalRDDModeRoot error = %v", err)
+	}
+	generation, err := cloneLocalRDDOverrideHeadGeneration(dir)
+	if err != nil {
+		t.Fatalf("cloneLocalRDDOverrideHeadGeneration error = %v", err)
+	}
+	assertUnchanged := func() {
+		t.Helper()
+		recordAfter, pathErr := CloneLocalRDDModeRecordPath(ctx, repo)
+		if pathErr != nil {
+			t.Fatalf("CloneLocalRDDModeRecordPath after refusal error = %v", pathErr)
+		}
+		after, readErr := os.ReadFile(recordAfter)
+		if readErr != nil {
+			t.Fatalf("read explicit-off record after refusal: %v", readErr)
+		}
+		generationAfter, generationErr := cloneLocalRDDOverrideHeadGeneration(dir)
+		if generationErr != nil {
+			t.Fatalf("cloneLocalRDDOverrideHeadGeneration after refusal error = %v", generationErr)
+		}
+		if recordAfter != record || !bytes.Equal(after, before) || generationAfter != generation {
+			t.Fatalf("refusal published a new generation: record %q, generation %d", recordAfter, generationAfter)
+		}
+	}
+
+	_, err = SetCloneLocalRDDMode(ctx, repo, RDDModeUnset, "stale-revision", RDDGlobalMode{Value: "off"})
+	if !errors.Is(err, ErrRDDModeRevisionMismatch) {
+		t.Fatalf("stale clear error = %v, want ErrRDDModeRevisionMismatch", err)
+	}
+	if errors.Is(err, ErrRDDDisabled) {
+		t.Fatalf("stale clear error = %v, must not report ErrRDDDisabled", err)
+	}
+	assertUnchanged()
+
+	_, err = SetCloneLocalRDDMode(ctx, repo, RDDModeUnset, disabled.Revision, RDDGlobalMode{Value: "off"})
+	var rejected *RDDDisabledError
+	if !errors.As(err, &rejected) || !errors.Is(err, ErrRDDDisabled) || rejected.Source != RDDModeSourceGlobal {
+		t.Fatalf("current clear error = %v, want global typed disabled error", err)
+	}
+	assertUnchanged()
+}
+
+func TestCloneLocalRDDModeTransitionsPublishExactlyOneGeneration(t *testing.T) {
+	repo := initSnapshotRepo(t)
+	ctx := context.Background()
+	global := RDDGlobalMode{Value: "on"}
+
+	disabled, err := SetCloneLocalRDDMode(ctx, repo, RDDModeOff, "", global)
+	if err != nil {
+		t.Fatalf("SetCloneLocalRDDMode(off) error = %v", err)
+	}
+	dir, err := cloneLocalRDDModeRoot(ctx, repo, false)
+	if err != nil {
+		t.Fatalf("cloneLocalRDDModeRoot error = %v", err)
+	}
+	if generation, err := cloneLocalRDDOverrideHeadGeneration(dir); err != nil || generation != 1 {
+		t.Fatalf("off transition generation = %d, %v, want 1", generation, err)
+	}
+
+	inherited, err := SetCloneLocalRDDMode(ctx, repo, RDDModeUnset, disabled.Revision, global)
+	if err != nil {
+		t.Fatalf("SetCloneLocalRDDMode(inherit) error = %v", err)
+	}
+	if inherited.Source != RDDModeSourceGlobal || inherited.CloneLocal != RDDModeUnset {
+		t.Fatalf("off-to-inherit status = %#v", inherited)
+	}
+	if generation, err := cloneLocalRDDOverrideHeadGeneration(dir); err != nil || generation != 2 {
+		t.Fatalf("off-to-inherit generation = %d, %v, want 2", generation, err)
+	}
+
+	if _, err := SetCloneLocalRDDMode(ctx, repo, RDDModeOff, inherited.Revision, global); err != nil {
+		t.Fatalf("SetCloneLocalRDDMode(off after inherit) error = %v", err)
+	}
+	if generation, err := cloneLocalRDDOverrideHeadGeneration(dir); err != nil || generation != 3 {
+		t.Fatalf("inherit-to-off generation = %d, %v, want 3", generation, err)
+	}
+}
+
 func TestCloneLocalRDDOverrideConcurrentWritersKeepOneWinner(t *testing.T) {
 	repo := initSnapshotRepo(t)
 	global := RDDGlobalMode{Value: "on"}
@@ -369,7 +568,7 @@ func TestUnknownRDDModeFailsClosedAsDisabled(t *testing.T) {
 	if _, err := SetCloneLocalRDDMode(context.Background(), repo, RDDModeOff, "", RDDGlobalMode{Value: "on"}); err != nil {
 		t.Fatalf("SetCloneLocalRDDMode(off) error = %v", err)
 	}
-	corrupt := filepath.Join(repo, ".git", "gentle-ai", "review-transactions", "rar-authority", "v1", "rdd-mode", "gen-0000000001.json")
+	corrupt := filepath.Join(repo, ".git", "gentle-ai", "review-mode", "rar-authority", "v1", "rdd-mode", "gen-0000000001.json")
 	if err := os.WriteFile(corrupt, []byte("{not json}\n"), 0o600); err != nil {
 		t.Fatalf("corrupt override: %v", err)
 	}
@@ -379,6 +578,36 @@ func TestUnknownRDDModeFailsClosedAsDisabled(t *testing.T) {
 	}
 	if status.Effective != RDDModeOff || status.Enabled() {
 		t.Fatalf("corrupt override did not fail closed: %#v", status)
+	}
+}
+
+func TestResolveRDDModeUnsafePrivatePathIsNotACorruptHead(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX permissions are covered by the Windows ACL test")
+	}
+	repo := initSnapshotRepo(t)
+	if _, err := SetCloneLocalRDDMode(context.Background(), repo, RDDModeOff, "", RDDGlobalMode{}); err != nil {
+		t.Fatalf("disable clone-local mode: %v", err)
+	}
+	modeRecord := filepath.Join(repo, ".git", "gentle-ai", "review-mode", "rar-authority", "v1", "rdd-mode", "gen-0000000001.json")
+	if err := os.Chmod(modeRecord, 0o644); err != nil {
+		t.Fatalf("make private RAR file unsafe: %v", err)
+	}
+	defer os.Chmod(modeRecord, 0o600)
+
+	status, err := ResolveRDDMode(context.Background(), repo, RDDGlobalMode{})
+	if err == nil {
+		t.Fatal("unsafe private RAR path resolved without an error")
+	}
+	if errors.Is(err, ErrRDDModeCorrupt) {
+		t.Fatalf("unsafe private RAR path entered corrupt-head recovery: %v", err)
+	}
+	var unsafePath *UnsafeRARPathError
+	if !errors.As(err, &unsafePath) || unsafePath.Path != modeRecord || unsafePath.Directory {
+		t.Fatalf("unsafe private RAR path lost its typed cause: %#v", err)
+	}
+	if status.Enabled() {
+		t.Fatalf("unsafe private RAR path did not fail closed: %#v", status)
 	}
 }
 

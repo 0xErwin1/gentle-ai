@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -14,6 +15,7 @@ import (
 )
 
 func TestNegotiatedReviewFinalizeRejectsStaleLiveTargetWithoutMutation(t *testing.T) {
+	reviewEnabledHome(t)
 	tests := []struct {
 		name     string
 		explicit bool
@@ -52,6 +54,7 @@ func TestNegotiatedReviewFinalizeRejectsStaleLiveTargetWithoutMutation(t *testin
 }
 
 func TestNegotiatedReviewFinalizeRejectsStaleZeroTransitionWithoutMutation(t *testing.T) {
+	reviewEnabledHome(t)
 	for _, explicit := range []bool{true, false} {
 		name := "implicit sole lineage"
 		if explicit {
@@ -81,6 +84,10 @@ func TestNegotiatedReviewFinalizeRejectsStaleZeroTransitionWithoutMutation(t *te
 }
 
 func TestReviewFinalizeAcceptsExactLiveTargetSemantics(t *testing.T) {
+	// Not parallel: opting in writes the user's global mode through t.Setenv,
+	// which Go forbids in a test that also calls t.Parallel.
+	reviewEnabledHome(t)
+
 	tests := []struct {
 		name    string
 		prepare func(*testing.T, string) ([]string, func())
@@ -137,6 +144,7 @@ func TestReviewFinalizeAcceptsExactLiveTargetSemantics(t *testing.T) {
 }
 
 func TestReviewFinalizeCrowdedStoreSelectsOnlyFullLiveSnapshotMatch(t *testing.T) {
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	writeReviewStartCandidate(t, repo, "tracked.txt", "target\n", 0o644)
 	writeReviewStartCandidate(t, repo, "scope.txt", "scope\n", 0o644)
@@ -157,8 +165,10 @@ func TestReviewFinalizeCrowdedStoreSelectsOnlyFullLiveSnapshotMatch(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
+	// #2394: both snapshots declare no untracked scope, so their untracked
+	// proofs are equal by construction and can no longer distinguish them.
 	if live.CandidateTree != staleRecord.State.CurrentSnapshot.CandidateTree || live.BaseTree == staleRecord.State.CurrentSnapshot.BaseTree ||
-		reflect.DeepEqual(live.Paths, staleRecord.State.CurrentSnapshot.Paths) || live.IntendedUntrackedProof == staleRecord.State.CurrentSnapshot.IntendedUntrackedProof {
+		reflect.DeepEqual(live.Paths, staleRecord.State.CurrentSnapshot.Paths) {
 		t.Fatalf("fixture does not share only CandidateTree: stale=%#v live=%#v", staleRecord.State.CurrentSnapshot, live)
 	}
 	assertFinalizeLiveTargetDenied(t, repo, staleRecord.State.LineageID, staleResults)
@@ -201,6 +211,7 @@ func TestReviewFinalizeCrowdedStoreSelectsOnlyFullLiveSnapshotMatch(t *testing.T
 }
 
 func TestReviewFinalizeConvergesCommittedPendingJournalAfterWorktreeDrift(t *testing.T) {
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	writeReviewStartCandidate(t, repo, "tracked.txt", "candidate\n", 0o644)
 	started, store, resultArgs := startFinalizeLiveTarget(t, repo, "finalize-pending-drift")
@@ -236,6 +247,10 @@ func TestReviewFinalizeConvergesCommittedPendingJournalAfterWorktreeDrift(t *tes
 }
 
 func TestReviewFinalizeBindsCorrectedRetrySuccessorToLiveFixDiff(t *testing.T) {
+	// Not parallel: opting in writes the user's global mode through t.Setenv,
+	// which Go forbids in a test that also calls t.Parallel.
+	reviewEnabledHome(t)
+
 	for _, drift := range []bool{false, true} {
 		name := "exact"
 		if drift {
@@ -292,14 +307,54 @@ func TestReviewFinalizeBindsCorrectedRetrySuccessorToLiveFixDiff(t *testing.T) {
 
 func startFinalizeLiveTarget(t *testing.T, repo, lineage string, extra ...string) (ReviewFacadeStartResult, reviewtransaction.CompactStore, []string) {
 	t.Helper()
-	args := []string{"--cwd", repo, "--lineage", lineage}
-	args = append(args, extra...)
-	var output bytes.Buffer
-	if err := RunReviewFacadeStart(args, &output); err != nil {
-		t.Fatal(err)
+	isBaseDiff := false
+	for _, item := range extra {
+		if item == "--base-ref" || item == "--workspace-overlay" ||
+			strings.HasPrefix(item, "--base-ref=") || strings.HasPrefix(item, "--workspace-overlay=") {
+			isBaseDiff = true
+			break
+		}
 	}
+	var output bytes.Buffer
 	var started ReviewFacadeStartResult
-	decodeStrictReviewJSON(t, output.Bytes(), &started)
+	if isBaseDiff {
+		// A base-diff/workspace-overlay candidate large enough to select a
+		// lens now refuses a direct start up front (issue #2447); this
+		// helper is SETUP for the finalize behavior under test, so it starts
+		// through the negotiated contract instead. boundNegotiatedStartArgs
+		// derives its own --committed-only from --base-ref, so drop any copy
+		// already present to avoid a duplicate flag.
+		filtered := make([]string, 0, len(extra))
+		for _, item := range extra {
+			if item == "--committed-only" || strings.HasPrefix(item, "--committed-only=") {
+				continue
+			}
+			filtered = append(filtered, item)
+		}
+		startArgs := boundNegotiatedStartArgs(t, append([]string{
+			"start", "--contract", ReviewIntegrationContractV1, "--cwd", repo, "--lineage", lineage,
+		}, filtered...))
+		if err := RunReview(startArgs, &output); err != nil {
+			t.Fatal(err)
+		}
+	} else {
+		args := []string{"--cwd", repo, "--lineage", lineage}
+		args = append(args, extra...)
+		if err := RunReviewFacadeStart(args, &output); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if isBaseDiff {
+		// The negotiated envelope carries additional fields (schema, contract,
+		// repository_context, ...) that ReviewFacadeStartResult does not
+		// declare, so a strict decode here would fault on plumbing, not on
+		// anything this helper's callers actually assert.
+		if err := json.Unmarshal(output.Bytes(), &started); err != nil {
+			t.Fatal(err)
+		}
+	} else {
+		decodeStrictReviewJSON(t, output.Bytes(), &started)
+	}
 	store, err := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, started.LineageID)
 	if err != nil {
 		t.Fatal(err)
@@ -336,6 +391,7 @@ func assertFinalizeLiveTargetDenied(t *testing.T, repo, lineage string, resultAr
 }
 
 func TestNegotiatedReviewFinalizeRejectsReviewerPreflightWithoutAuthorityMutation(t *testing.T) {
+	reviewEnabledHome(t)
 	tests := []struct {
 		name    string
 		payload string
@@ -406,6 +462,7 @@ func TestNegotiatedReviewFinalizeRejectsReviewerPreflightWithoutAuthorityMutatio
 }
 
 func TestNegotiatedReviewFinalizeRetriesSameLineageAfterReviewerSchemaRejection(t *testing.T) {
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("candidate\n"), 0o644); err != nil {
 		t.Fatal(err)
@@ -484,6 +541,7 @@ func TestNegotiatedReviewFinalizeRetriesSameLineageAfterReviewerSchemaRejection(
 }
 
 func TestNegotiatedReviewFinalizeRequiresExplicitLineageWhenAuthorityIsAmbiguous(t *testing.T) {
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("candidate\n"), 0o644); err != nil {
 		t.Fatal(err)

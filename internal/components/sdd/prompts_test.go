@@ -12,6 +12,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v2/internal/assets"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/components/communitytool"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/opencode"
 )
 
 // TestSharedPromptDir verifies the expected directory path is returned.
@@ -141,18 +142,11 @@ func sddJudgmentDaySubAgentsForCodeGraphTest() []string {
 }
 
 func sddReviewSubAgentsForCodeGraphTest() []string {
-	return []string{
-		"review-risk",
-		"review-readability",
-		"review-reliability",
-		"review-resilience",
-		"review-refuter",
-	}
+	return opencode.ReviewPhases()
 }
 
 func sddShellDisabledSubAgentsForCodeGraphTest() []string {
-	agents := []string{"jd-judge-a", "jd-judge-b"}
-	return append(agents, sddReviewSubAgentsForCodeGraphTest()...)
+	return []string{"jd-judge-a", "jd-judge-b", "review-refuter"}
 }
 
 func assertOpenCodeSubAgentReadOnlyTools(t *testing.T, agentsMap map[string]any, agentName string) {
@@ -547,7 +541,7 @@ func TestInjectOpenCodeSingleModeSubagentPromptsRespectBashCapabilityWhenCodeGra
 	}
 
 	agentsMap := readOpenCodeAgents(t, filepath.Join(home, ".config", "opencode", "opencode.json"))
-	bashCapableAgents := append(SharedPromptPhases(), "jd-fix-agent")
+	bashCapableAgents := append(SharedPromptPhases(), "jd-fix-agent", opencode.ReviewValidatorAgent)
 	for _, agentName := range bashCapableAgents {
 		prompt := agentPrompt(t, agentsMap, agentName)
 		if !strings.Contains(prompt, "<!-- gentle-ai:codegraph-guidance -->") || !strings.Contains(prompt, "gentle-ai codegraph init --cwd <project-root>") {
@@ -635,7 +629,7 @@ func TestInjectNativeSDDSubagentsIncludeCodeGraphGuidanceWhenEnabled(t *testing.
 					t.Fatalf("%s guidance count = %d, want 1", fileName, count)
 				}
 
-				source := renderBoundedReviewAsset(adapter.EmbeddedSubAgentsDir() + "/" + fileName)
+				source := renderBoundedReviewAsset(adapter.Agent(), adapter.EmbeddedSubAgentsDir()+"/"+fileName)
 				if tc.toolGrant != "" {
 					sourceTools := nativeToolsLineForCodeGraphTest(t, source)
 					wantTools := sourceTools + ", " + tc.toolGrant
