@@ -195,6 +195,13 @@ func RunConfig(args []string, stdout io.Writer) error {
 			len(pending), *configPath,
 		)
 	}
+	if pending := render.PendingToolProvisioning(plan); len(pending) > 0 {
+		result["pendingToolProvisioning"] = pending
+		result["pendingToolProvisioningReason"] = fmt.Sprintf(
+			"%d declared community tool(s) wire themselves in through their own CLI and were not wired here; the manifest carries the exact commands, or run gentle-ai install --config %s",
+			len(pending), *configPath,
+		)
+	}
 	if pending := render.PendingAgentProvisioning(plan); len(pending) > 0 {
 		result["pendingAgentProvisioning"] = pending
 		result["pendingAgentProvisioningReason"] = fmt.Sprintf(
