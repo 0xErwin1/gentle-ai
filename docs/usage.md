@@ -32,6 +32,16 @@ The uninstall flow is also available from the TUI menu. It lets you:
 
 Before any managed file is modified, `gentle-ai` creates a backup snapshot so the configuration can be restored later if needed.
 
+### Disable TUI spinner animation
+
+Set `GENTLE_AI_NO_ANIMATION=1` to keep TUI spinner frames static:
+
+```bash
+GENTLE_AI_NO_ANIMATION=1 gentle-ai
+```
+
+This disables only spinner animation; install, update, sync, and uninstall operations continue normally. Unset the variable, or use any value other than `1`, to keep the default animation behavior.
+
 ---
 
 ## CLI Commands
