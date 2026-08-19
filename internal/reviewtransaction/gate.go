@@ -618,6 +618,7 @@ type GateTargetResolutionError struct {
 
 func (err *GateTargetResolutionError) Error() string {
 	if err == nil || err.Err == nil {
+		// refusal:by-design world-action: this sentence renders only for a degenerately constructed error with no cause, which no operator command can reach; the exit is a code fix at the construction site.
 		return "review gate target resolution failed"
 	}
 	return err.Err.Error()
@@ -887,6 +888,7 @@ type GateDeliveryBaseResolutionError struct {
 
 func (err *GateDeliveryBaseResolutionError) Error() string {
 	if err == nil || err.Err == nil {
+		// refusal:by-design world-action: this sentence renders only for a degenerately constructed error with no cause, which no operator command can reach; the exit is a code fix at the construction site.
 		return "reviewed delivery base could not be resolved in the publication range"
 	}
 	return err.Err.Error()
