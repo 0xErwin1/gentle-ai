@@ -62,7 +62,7 @@ Use this skill when drafting, creating, commenting on, triaging, or approving a 
    gh issue comment "$NUMBER" --repo "$TARGET" --body-file "$BODY_FILE"
    ```
 
-7. Capture the returned target-host issue or comment identity and read it back from that host. For issues, use `gh issue view "$NUMBER" --repo "$TARGET" --json number,url,title,body,labels`; for comments, use `gh api --hostname "$HOST" "repos/$REPO/issues/comments/$COMMENT_ID"`. Compare issue titles exactly and compare bodies after only CRLF-to-LF and trailing-final-newline normalization.
+7. Capture the returned target-host issue or comment identity and read it back from that host. For issues, use `gh issue view "$NUMBER" --repo "$TARGET" --json number,url,title,body,labels`; for comments, use `gh api --hostname "$HOST" "repos/$REPO/issues/comments/$COMMENT_ID"` and require the returned comment's `issue_url` to identify issue `$NUMBER` in `$REPO` on `$HOST`; an absent or mismatched parent identity is `unknown`. Compare issue titles exactly and compare bodies after only CRLF-to-LF and trailing-final-newline normalization.
 8. Report exactly one result:
    - `confirmed`: a stable identity was returned and target-host read-back matches; report only labels present in read-back.
    - `no_write`: an authoritative rejection proves no issue or comment could have been created.
