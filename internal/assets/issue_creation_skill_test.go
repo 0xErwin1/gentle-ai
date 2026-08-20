@@ -55,7 +55,7 @@ func TestIssueCreationSkillPublicationContract(t *testing.T) {
 		}
 	}
 
-	createCommand := `gh issue create --repo "$TARGET" --title "$TITLE" --body-file "$BODY_FILE"`
+	createCommand := `gh issue create --repo "$TARGET" --title "$TITLE" --body-file "$BODY_FILE" --label "$PERMITTED_LABEL"`
 	commentCommand := `gh issue comment "$NUMBER" --repo "$TARGET" --body-file "$BODY_FILE"`
 	normalized := strings.ReplaceAll(content, "\r\n", "\n")
 	if strings.Count(normalized, "\n   "+createCommand+"\n") != 1 {
