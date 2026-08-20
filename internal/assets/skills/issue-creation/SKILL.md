@@ -55,10 +55,10 @@ Use this skill when drafting, creating, commenting on, triaging, or approving a 
    Preserve labels, emojis, option text, and values. Enforce every `validations.required` field, required dropdown selection, and individually required checkbox option. Require explicit user affirmation for first-person checkbox text. For `textarea.attributes.render`, fence the answer with the declared language and a fence long enough for its content. Render an unanswered optional control as `_No response_`; stop on malformed, unsupported, missing, or ambiguous required input.
 4. Review the exact target, title, selected form, materialized body or comment, and permitted discovered form labels. Pass each label as a separate repeated `--label <label>` option; omit the option when no label applies. For a comment, confirm the duplicate decision and intended in-place request.
 5. Create an owner-only temporary directory and `BODY_FILE` (`0700`/`0600`, or strict Windows ACL equivalents), and install cleanup before writing content. Clean up on every stop, signal, failure, `confirmed`, `no_write`, and `unknown` path.
-6. Immediately before mutation, perform one practical privacy scan of the title and body for actual local paths, usernames, hostnames, credentials or secrets, private project names, and private network addresses. Replace findings with `<project-name>`, `<user>`, `<hostname>`, or `<token>` as applicable while preserving intentionally public identifiers and useful reproduction structure. Then make only the applicable GitHub CLI attempt:
+6. Immediately before mutation, perform one practical privacy scan of the title and body for actual local paths, usernames, hostnames, credentials or secrets, private project names, and private network addresses. Replace findings with `<project-name>`, `<user>`, `<hostname>`, or `<token>` as applicable while preserving intentionally public identifiers and useful reproduction structure. For issue creation, repeat the final `--label "$PERMITTED_LABEL"` segment once per permitted label and omit it when none apply. Then make only the applicable GitHub CLI attempt:
 
    ```bash
-   gh issue create --repo "$TARGET" --title "$TITLE" --body-file "$BODY_FILE"
+   gh issue create --repo "$TARGET" --title "$TITLE" --body-file "$BODY_FILE" --label "$PERMITTED_LABEL"
    gh issue comment "$NUMBER" --repo "$TARGET" --body-file "$BODY_FILE"
    ```
 
