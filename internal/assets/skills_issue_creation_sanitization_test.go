@@ -24,9 +24,15 @@ func TestIssueCreationSkillHasSanitizationRule(t *testing.T) {
 	}
 
 	privacyIndex := strings.Index(content, "Immediately before mutation")
-	createIndex := strings.Index(content, "gh issue create")
-	if privacyIndex == -1 || createIndex == -1 || privacyIndex > createIndex {
-		t.Errorf("issue-creation skill must place its privacy scan immediately before publication")
+	publicationCommands := []string{
+		`gh issue create --repo "$TARGET" --title "$TITLE" --body-file "$BODY_FILE" --label "$PERMITTED_LABEL"`,
+		`gh issue comment "$NUMBER" --repo "$TARGET" --body-file "$BODY_FILE"`,
+	}
+	for _, command := range publicationCommands {
+		commandIndex := strings.Index(content, command)
+		if privacyIndex == -1 || commandIndex == -1 || privacyIndex > commandIndex {
+			t.Errorf("issue-creation skill must place its privacy scan before publication command %q", command)
+		}
 	}
 
 	if !strings.Contains(content, `version: "1.3"`) {

@@ -23,6 +23,9 @@ func TestIssueCreationSkillPublicationContract(t *testing.T) {
 		{"bounded outcomes", []string{"confirmed | no_write | unknown", "one create or comment attempt with no blind retry", "stop all mutations and retries"}},
 		{"target-host verification", []string{"target-host read-back", "CRLF-to-LF", "trailing-final-newline normalization"}},
 		{"label policy", []string{"labels declared by the selected form", "permitted for the actor", "Never add `status:approved`"}},
+		{"comment parent identity", []string{"returned comment's `issue_url`", "issue `$NUMBER` in `$REPO` on `$HOST`", "absent or mismatched parent identity is `unknown`", "Clean up and stop all mutations and retries"}},
+		{"zero-label omission", []string{"omit the option when no label applies"}},
+		{"multi-label repetition", []string{"each label as a separate repeated `--label <label>` option", "repeat the final `--label \"$PERMITTED_LABEL\"` segment once per permitted label"}},
 	}
 
 	for _, contract := range contracts {
@@ -65,10 +68,16 @@ func TestIssueCreationSkillPublicationContract(t *testing.T) {
 		t.Errorf("issue-creation skill must contain one common comment command")
 	}
 
-	targetIndex := strings.Index(content, "[HOST/]OWNER/REPO")
-	discoveryIndex := strings.Index(content, "When discovery is needed")
-	createIndex := strings.Index(content, createCommand)
+	executionStart := strings.Index(normalized, "## Execution Steps\n")
+	executionEnd := strings.Index(normalized, "## Output Contract\n")
+	if executionStart == -1 || executionEnd == -1 || executionStart >= executionEnd {
+		t.Fatal("issue-creation skill must contain a concrete Execution Steps section before its Output Contract")
+	}
+	executionSteps := normalized[executionStart:executionEnd]
+	targetIndex := strings.Index(executionSteps, "derive and verify `HOST`, `REPO=OWNER/REPO`, and `TARGET=$HOST/$REPO`")
+	discoveryIndex := strings.Index(executionSteps, "Authenticate to `HOST`; discover only missing")
+	createIndex := strings.Index(executionSteps, createCommand)
 	if targetIndex == -1 || discoveryIndex == -1 || createIndex == -1 || targetIndex > discoveryIndex || discoveryIndex > createIndex {
-		t.Errorf("issue-creation skill must resolve the exact target before discovery and publication")
+		t.Errorf("issue-creation skill Execution Steps must resolve the exact target before discovery and publication")
 	}
 }
