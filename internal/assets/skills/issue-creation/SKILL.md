@@ -1,79 +1,97 @@
 ---
 name: issue-creation
-description: "Create and triage GitHub issues from repository evidence. Trigger: issue creation, bug reports, feature requests, or issue approval."
+description: "Trigger: issue creation, bug reports, feature requests, or issue approval. Create and triage GitHub issues from repository evidence."
 license: Apache-2.0
 metadata:
   author: gentleman-programming
-  version: "1.2"
+  version: "1.3"
 ---
 
 # Issue Creation
 
-## When To Use
+## Activation Contract
 
-Use this skill when creating, drafting, triaging, or approving an issue in the current GitHub repository.
+Load this skill when creating, drafting, triaging, commenting on, or approving a GitHub issue.
 
-## Core Rule
+## Hard Rules
 
-Discover the repository's actual contribution workflow before proposing or publishing an issue. Templates, labels, approval gates, and Discussions support are repository policy, not universal GitHub behavior.
+- Resolve the exact target as `[HOST/]OWNER/REPO` before reading target policy or mutating GitHub. Never assume the current repository.
+- Repository YAML Issue Forms are the single semantic authority. Never use a browser publication route, Markdown template, blank body, hosted publisher, daemon, queue, database, or Go publisher as another authority or fallback.
+- Materialize one reviewed form body, then use it unchanged through either the GitHub CLI or direct authenticated REST. Each transport must perform its own target-aware discovery, mutation, and read-back; do not mix transports within an attempt.
+- Never invent evidence, required answers, attestations, labels, approval, or repository policy. Fail closed and name the exact missing fact.
+- Never ask anyone to paste a token into chat, expose credentials in argv/logs, or put credentials in a body or payload file.
+- Every create/comment attempt ends exactly `confirmed`, `no_write`, or `unknown`. An `unknown` result prohibits every later GitHub create, comment, edit, label, or retry, including through the other transport.
 
-## Safe Discovery
+## Decision Gates
 
-Run read-only checks first:
+| Decision | Action |
+| --- | --- |
+| Explicit safe transport choice | Honor it when fully authenticated for the exact target. |
+| No transport choice | Prefer a fully authenticated CLI; otherwise use fully authenticated REST. |
+| REST requested or `gh` unavailable | Use REST if its independent credentials and complete path pass discovery. |
+| Prior transport proved `no_write` | The other transport may be selected once if it is independently authenticated and complete. |
+| Previous result is `unknown` | Stop all GitHub mutation; never retry or switch transport. |
+| No unambiguous matching YAML form | Follow discovered contact/Discussions policy or stop with the exact missing fact. |
+| Equivalent conforming issue exists | Comment there instead of creating a duplicate. |
+| Concrete issue exists but does not conform | Ask its author to edit it in place; never rewrite or approve it automatically. |
+
+## Execution Steps
+
+1. Resolve `HOST`, `REPO=OWNER/REPO`, and `TARGET=$HOST/$REPO` from an explicit target or one unambiguous authenticated git remote. For `OWNER/REPO`, resolve the host from authenticated configuration or the remote; ask if ambiguous. Verify all three values before policy reads.
+2. Select one complete transport. Run all discovery below through that transport before any mutation:
 
 ```bash
-gh auth status
-REPO="$(gh repo view --json nameWithOwner -q .nameWithOwner)"
-REPO_URL="$(gh repo view --json url -q .url)"
-HOST="${REPO_URL#*://}"
-HOST="${HOST%%/*}"
-gh repo view --json nameWithOwner,url,hasDiscussionsEnabled,hasIssuesEnabled,isBlankIssuesEnabled
-git ls-files CONTRIBUTING.md CONTRIBUTING.* .github/CONTRIBUTING.md .github/ISSUE_TEMPLATE
+gh auth status --hostname "$HOST"
+gh repo view "$TARGET" --json nameWithOwner,url,defaultBranchRef,hasDiscussionsEnabled,hasIssuesEnabled
+gh api --hostname "$HOST" "repos/$REPO/git/trees/$DEFAULT_BRANCH?recursive=1"
+gh api --hostname "$HOST" "repos/$REPO/contents/.github/ISSUE_TEMPLATE?ref=$DEFAULT_BRANCH"
 gh api --hostname "$HOST" --paginate "repos/$REPO/labels?per_page=100" --jq '.[].name'
 ```
 
-Also inspect:
+   The CLI path uses `gh api --hostname "$HOST"` to read default-branch `CONTRIBUTING*`, `README*`, `.github/ISSUE_TEMPLATE/config.yml`, and every YAML form found by the tree response. Immediately before a possible create, search open and closed issues exactly once:
 
-- repository instructions such as `CONTRIBUTING.md` and `README.md`;
-- files under `.github/ISSUE_TEMPLATE`;
-- `.github/ISSUE_TEMPLATE/config.yml` when present;
-- issue forms, required fields, and labels declared by each template;
-- existing open and closed issues for duplicates and established wording.
+   ```bash
+   gh issue list --repo "$TARGET" --state all --search "$QUERY" --limit 1000
+   ```
 
-Stop and ask for repository context if authentication, repository resolution, verification that REPO and HOST are non-empty, required metadata is unavailable, hasIssuesEnabled is false, or policy discovery fails. Never continue from failed discovery into issue publication.
+   Treat a saturated or incomplete result as failed discovery; narrow read-only search or stop, but never create speculatively.
+3. The REST path must not invoke `gh`. Derive `API_BASE` from target-host configuration: use `https://api.github.com` only for `github.com`, and the discovered GHES API URL or `https://$HOST/api/v3` otherwise. Authenticate from a preconfigured credential helper, netrc, or approved secret environment through an HTTP client that keeps the secret out of argv and logs. Disable tracing. Use paginated target-host operations equivalent to the CLI path:
 
-A no-template fallback is allowed only when isBlankIssuesEnabled is explicitly true. Otherwise follow discovered contact links or stop and ask; never publish.
+   - `GET /user` and `GET /repos/$REPO` for actor, authentication, issues availability, default branch, and Discussions;
+   - `GET /repos/$REPO/git/trees/$DEFAULT_BRANCH?recursive=1` plus `GET /repos/$REPO/contents/{path}?ref=$DEFAULT_BRANCH` for contribution policy, forms, and config;
+   - `GET /repos/$REPO/labels?per_page=100` for all existing labels;
+   - one `GET /search/issues?q=repo:$REPO+is:issue+$QUERY` covering open and closed duplicates.
 
-After discovery and review, build optional label arguments using only labels that exist and repository policy permits the actor to apply:
+4. Stop before publication if authentication, exact target, metadata, default-branch policy/forms/config, duplicate completeness, or required permissions are unknown, or if issues are disabled.
+
+## Form Materialization
+
+Choose the YAML form whose declared purpose matches the report. Treat `markdown` blocks only as guidance; never emit them. Traverse supported controls in declared order:
+
+- Emit each visible `label`, unchanged with emojis, as `### {label}`.
+- Preserve supplied `input` and `textarea` values verbatim beneath the heading.
+- Emit selected `dropdown` option text in declared option order; enforce required selection and allowed options.
+- Emit every `checkboxes` option as `- [x] {text}` or `- [ ] {text}`, preserving text and selection. Require every mandatory option.
+- For `textarea.render`, place the value in a correctly sized fenced code block using the declared language.
+
+Enforce every required field and option. First-person attestations require explicit user affirmation; never infer affirmation from evidence. Unsupported control types, malformed schemas, unsafe fence ambiguity, or ambiguous answers fail closed with the exact missing fact. Do not parse a Markdown template or invent a no-template body.
+
+## Duplicate And Approval Gate
+
+Search once as specified above before creating. Comment on an equivalent conforming tracker. For a concrete nonconforming tracker, prepare a request for its author to edit in place; publishing that request is a comment attempt under the same privacy and outcome contract. Publish only after the target, title, selected form, materialized body, labels, and repository approval gate have been reviewed and authorized.
+
+Apply only labels configured by the selected form that exist and the actor may apply:
 
 ```bash
 LABEL_ARGS=()
-# Repeat for each reviewed, permitted discovered label.
 LABEL_ARGS+=(--label "$LABEL")
 ```
 
-An empty array applies no label; do not invent labels.
-
-## Workflow
-
-1. Describe the problem or request in one sentence and derive a short search query.
-2. Search open and closed issues:
-
-   ```bash
-   gh issue list --repo "$HOST/$REPO" --state all --search "$QUERY" --limit 1000
-   ```
-
-   If 1000 results are returned or completeness remains uncertain, narrow the search, use read-only API discovery, or stop and ask before publishing.
-
-3. If an issue already covers the same behavior, comment there instead of creating a duplicate.
-4. Choose a repository-provided template only when its purpose matches the report.
-5. Fill every required template field from known evidence. Ask for missing facts rather than inventing them.
-6. Apply labels only when they exist and repository guidance establishes who should apply them.
-7. Publish only after the title, body, target repository, and selected template or fallback have been reviewed, and the pre-submission privacy review below has passed.
+An empty array applies no label. The REST payload may contain only the same validated labels.
 
 ## Pre-submission Privacy Review
 
-Pre-submission privacy review is mandatory. Scan every issue body immediately before `gh issue create`. The scan replaces — never deletes — environment-specific data with explicit placeholders so the reproduction still teaches:
+Pre-submission privacy review is mandatory. Scan every title, issue/comment body, and final REST payload immediately before the first mutation. The scan replaces — never deletes — environment-specific data with explicit placeholders so the reproduction still teaches:
 
 | Category | Replace with | Example (before → after) |
 |----------|---------------|---------------------------|
@@ -88,53 +106,34 @@ Do NOT redact intentionally public identifiers: tool names (`gentle-ai`, `engram
 
 **Rule of thumb:** if the reader can run the reproduction step after you replace every identifier with its placeholder, the sanitization is correct. If a step becomes impossible (because the placeholder consumed a needed value), that step needs the value — and you should mark it `<value-required>` and explain in the body what the user should fill in.
 
-## Template Paths
+## Private Files And Publication
 
-Do not guess a template filename. If multiple templates could apply and repository guidance does not distinguish them, stop and ask which one to use.
+Before writing content, create an owner-only temporary directory and owner-only `BODY_FILE`, REST `PAYLOAD_FILE`, and any separate auth config (`0700`/`0600` or strict Windows ACL equivalents). Install trap/finally cleanup before populating them; cleanup on success, failure, signal, `confirmed`, `no_write`, and `unknown`. Never log, print, trace, or pass body/payload contents in argv. Re-run the privacy scan after the final content change and immediately before the first mutation.
 
-- .yml and .yaml files are GitHub Issue Forms. Do not parse or render their schema. Open the web issue chooser and stop for human completion:
-
-  ```bash
-  gh issue create --repo "$HOST/$REPO" --web "${LABEL_ARGS[@]}"
-  ```
-
-- .md files are Markdown templates. Read the matching template, complete it from known evidence into a reviewed BODY_FILE, then publish it:
-
-  ```bash
-  gh issue create --repo "$HOST/$REPO" --title "$TITLE" --body-file "$BODY_FILE" "${LABEL_ARGS[@]}"
-  ```
-
-## No-Template Fallback
-
-When the repository permits issue creation, provides no matching template, and isBlankIssuesEnabled is explicitly true, prepare a structured body with these sections:
-
-- problem or requested outcome;
-- reproduction or motivating example;
-- expected behavior;
-- actual behavior or current limitation;
-- environment and relevant evidence;
-- alternatives or workarounds, when applicable.
-
-Publish the reviewed fallback explicitly:
+CLI publication must use files:
 
 ```bash
-gh issue create --repo "$HOST/$REPO" --title "$TITLE" --body "$BODY" "${LABEL_ARGS[@]}"
+gh issue create --repo "$TARGET" --title "$TITLE" --body-file "$BODY_FILE" "${LABEL_ARGS[@]}"
+gh issue comment "$NUMBER" --repo "$TARGET" --body-file "$BODY_FILE"
 ```
 
-If blank issues are not explicitly enabled, follow discovered contact links or stop and ask. Never publish a no-template fallback.
+REST publication sends the private JSON payload to `POST /repos/$REPO/issues` or `POST /repos/$REPO/issues/$NUMBER/comments`; never interpolate its body into argv. Capture the returned issue number/URL or comment ID/URL, then read it back from the target host. The CLI uses `gh issue view "$NUMBER" --repo "$TARGET" --json number,url,title,body,labels` or target-host `gh api` for a comment; REST uses `GET /repos/$REPO/issues/$NUMBER` or `GET /repos/$REPO/issues/comments/$COMMENT_ID`.
+
+Classify each attempt exactly once:
+
+- `confirmed`: a stable target-host identity was returned and read-back matches the expected title/body or comment body. Report only labels present in read-back; GitHub may drop unauthorized labels.
+- `no_write`: an authoritative authenticated response proves rejection before acceptance and proves no issue/comment may have been created.
+- `unknown`: timeout, network/5xx ambiguity, lost response, missing identity, failed/unavailable read-back, or content mismatch leaves mutation uncertain.
+
+After `unknown`, clean up and stop all GitHub mutation. Never create, comment, edit, label, blindly reconcile, retry, or switch transport. Only authoritative `no_write` permits one attempt through the other fully authenticated transport.
 
 ## Labels And Approval
 
-Treat labels and approval gates as conditional:
-
-- use only labels returned by repository discovery;
-- follow contribution guidance for who may apply each label;
-- wait when repository policy requires maintainer approval before implementation;
-- do not invent a status or priority taxonomy when none is documented.
+Treat labels and approval gates as conditional. Wait when repository policy requires maintainer approval, and do not invent status or priority taxonomy. Read-back is authoritative for applied labels; no asynchronous external-label workflow belongs in this flow.
 
 ## Questions And Discussions
 
-Use Discussions only when `hasDiscussionsEnabled` is true and repository guidance routes the question there. Otherwise follow documented support/contact links or ask the user where the question belongs. Never link to another repository's Discussions page.
+Use Discussions only when target metadata enables it and target policy routes the question there. Otherwise report the documented support/contact route or ask where it belongs. Never open a publication page or use another repository's Discussions.
 
 ## Triage Decision
 
@@ -147,3 +146,7 @@ Before approving or closing an issue, verify:
 - labels and status changes follow the current repository's policy.
 
 If any point is uncertain, keep the issue in the repository's review state and request the smallest missing evidence.
+
+## Output Contract
+
+Return the exact target and transport, selected YAML form, duplicate decision, stable issue/comment identity when confirmed, read-back labels, and one terminal result: `confirmed`, `no_write`, or `unknown`. Name missing facts and state that no mutation occurred when stopping before an attempt. Never claim publication or labels without authoritative target-host read-back.

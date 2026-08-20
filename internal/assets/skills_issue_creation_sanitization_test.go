@@ -33,9 +33,9 @@ func TestIssueCreationSkillHasSanitizationRule(t *testing.T) {
 		}
 	}
 
-	// Version guard: the frontmatter must declare at least 1.2 — the
-	// repository-discovery rewrite already used 1.1 without this rule.
-	if !strings.Contains(content, `version: "1.2"`) {
-		t.Errorf("issue-creation SKILL.md version must be at least 1.2 to mark the sanitization rule; check the frontmatter metadata.version field")
+	// Version guard: 1.3 adds non-browser YAML-form publication while
+	// preserving the sanitization contract introduced in 1.2.
+	if !strings.Contains(content, `version: "1.3"`) {
+		t.Errorf("issue-creation SKILL.md version must be at least 1.3 and preserve the sanitization rule; check the frontmatter metadata.version field")
 	}
 }
