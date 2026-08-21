@@ -105,6 +105,7 @@ type Selection struct {
 	ClaudeModelAssignments      map[string]model.ClaudeModelAlias `json:"claudeModelAssignments,omitempty"`
 	KiroModelAssignments        map[string]model.KiroModelAlias   `json:"kiroModelAssignments,omitempty"`
 	PiModelAssignments          map[string]model.PiAgentRouting   `json:"piModelAssignments,omitempty"`
+	PiModelFamily               model.AgentID                     `json:"piModelFamily,omitempty"`
 	CodexModelAssignments       map[string]model.CodexEffort      `json:"codexModelAssignments,omitempty"`
 	CodexCarrilModelAssignments map[string]string                 `json:"codexCarrilModelAssignments,omitempty"`
 	CodexPhaseModelAssignments  map[string]string                 `json:"codexPhaseModelAssignments,omitempty"`
@@ -259,6 +260,7 @@ func Project(state DesiredState) model.Selection {
 		ClaudeModelAssignments:      copyMap(state.Selection.ClaudeModelAssignments),
 		KiroModelAssignments:        copyMap(state.Selection.KiroModelAssignments),
 		PiModelAssignments:          copyMap(state.Selection.PiModelAssignments),
+		PiModelFamily:               state.Selection.PiModelFamily,
 		CodexModelAssignments:       copyMap(state.Selection.CodexModelAssignments),
 		CodexCarrilModelAssignments: copyMap(state.Selection.CodexCarrilModelAssignments),
 		CodexPhaseModelAssignments:  copyMap(state.Selection.CodexPhaseModelAssignments),
@@ -296,6 +298,11 @@ func withModelPresets(selection model.Selection) model.Selection {
 			// other providers replace the whole table instead, so one explicit
 			// assignment silently drops the rest of their profile.
 			routing := model.PiModelPresetAssignments(preset)
+			// Naming the provider Pi runs on turns the profile from reasoning
+			// levels into models as well, taken from that provider's own table.
+			for agent, entry := range model.PiModelsForFamily(selection.PiModelFamily, preset) {
+				routing[agent] = entry
+			}
 			for agent, entry := range selection.PiModelAssignments {
 				routing[agent] = entry
 			}
@@ -346,6 +353,7 @@ func FromSelection(selection model.Selection) DesiredState {
 		ClaudeModelAssignments:      copyMap(selection.ClaudeModelAssignments),
 		KiroModelAssignments:        copyMap(selection.KiroModelAssignments),
 		PiModelAssignments:          copyMap(selection.PiModelAssignments),
+		PiModelFamily:               selection.PiModelFamily,
 		CodexModelAssignments:       copyMap(selection.CodexModelAssignments),
 		CodexCarrilModelAssignments: copyMap(selection.CodexCarrilModelAssignments),
 		CodexPhaseModelAssignments:  copyMap(selection.CodexPhaseModelAssignments),
@@ -389,6 +397,7 @@ func NormalizeSelection(selection model.Selection) (model.Selection, []Diagnosti
 	selection.ClaudeModelAssignments = projected.ClaudeModelAssignments
 	selection.KiroModelAssignments = projected.KiroModelAssignments
 	selection.PiModelAssignments = projected.PiModelAssignments
+	selection.PiModelFamily = projected.PiModelFamily
 	selection.CodexModelAssignments = projected.CodexModelAssignments
 	selection.CodexCarrilModelAssignments = projected.CodexCarrilModelAssignments
 	selection.CodexPhaseModelAssignments = projected.CodexPhaseModelAssignments

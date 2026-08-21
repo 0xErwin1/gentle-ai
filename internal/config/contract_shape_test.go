@@ -166,6 +166,8 @@ func fullyPopulatedDocument() Document {
 
 			ClaudeModelAssignments:      map[string]model.ClaudeModelAlias{"sdd-apply": model.ClaudeModelOpus},
 			KiroModelAssignments:        map[string]model.KiroModelAlias{"sdd-apply": model.KiroModelDeepSeek},
+			PiModelAssignments:          map[string]model.PiAgentRouting{"sdd-apply": {Model: "openai-codex/gpt-5.6-sol", Thinking: model.PiThinkingHigh}},
+			PiModelFamily:               model.AgentCodex,
 			CodexModelAssignments:       map[string]model.CodexEffort{"sdd-apply": model.CodexEffortHigh},
 			CodexCarrilModelAssignments: map[string]string{"sdd-mid": "gpt-5.6-luna"},
 			CodexPhaseModelAssignments:  map[string]string{"sdd-apply": "gpt-5.6-sol"},
