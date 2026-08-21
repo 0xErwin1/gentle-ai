@@ -17,17 +17,17 @@ func TestIssueCreationSkillPublicationContract(t *testing.T) {
 		{"exact target", []string{"[HOST/]OWNER/REPO", "Never assume the current repository", "TARGET=$HOST/$REPO"}},
 		{"single format authority", []string{"YAML Issue Forms are the single format authority", "omit `markdown` guidance"}},
 		{"current duplicate search", []string{"open-and-closed duplicate search", "Reuse that result while it remains current", "--state all"}},
-		{"duplicate handling", []string{"Comment there instead", "repair it in place", "never auto-rewrite or approve"}},
+		{"evidence-based duplicate handling", []string{"read from the target host", "Compare each candidate's body controls and required answers with the selected YAML form", "Unavailable body, target mismatch, incomplete data, or ambiguous classification is `unknown`", "Comment there instead", "repair it in place", "never auto-rewrite or approve"}},
 		{"semantic form translation", []string{"declared order", "`input` / `textarea`", "`dropdown`", "`checkboxes`", "`validations.required`", "first-person", "textarea.attributes.render"}},
-		{"private body and read-back lifecycle", []string{"private temporary files outside repositories", "Do not print either file's contents", "owner-only temporary directory", "BODY_FILE` plus `READBACK_FILE", "`0700`/`0600`, or strict Windows ACL equivalents", "Clean up both files on every"}},
+		{"private discovery, body, and read-back lifecycle", []string{"private temporary files outside repositories", "Do not print the contents of any protected file", "owner-only temporary directory", "`DISCOVERY_FILE`, `BODY_FILE`, plus `READBACK_FILE`", "`0700`/`0600`, or strict Windows ACL equivalents", "Clean up all three files on every"}},
 		{"file-backed CLI publication", []string{"gh issue create", "--body-file \"$BODY_FILE\"", "gh issue comment"}},
 		{"private body-bearing read-back", []string{"read it back from that host into `READBACK_FILE`", "Redirect stdout from both body-bearing read-back commands", "Validate and compare only from `READBACK_FILE`"}},
 		{"bounded outcomes", []string{"confirmed | no_write | unknown", "one create or comment attempt with no blind retry", "stop all mutations and retries"}},
 		{"target-host verification", []string{"target-host read-back", "CRLF-to-LF", "trailing-final-newline normalization"}},
 		{"label policy", []string{"labels declared by the selected form", "permitted for the actor", "Never add `status:approved`"}},
 		{"comment parent identity", []string{"returned comment's `issue_url`", "issue `$NUMBER` in `$REPO` on `$HOST`", "absent or mismatched parent identity is `unknown`", "Clean up and stop all mutations and retries"}},
-		{"zero-label omission", []string{"omit the option when no label applies"}},
-		{"multi-label repetition", []string{"each label as a separate repeated `--label <label>` option", "repeat the final `--label \"$PERMITTED_LABEL\"` segment once per permitted label"}},
+		{"candidate target identity", []string{"returned candidate number and URL in `DISCOVERY_FILE`", "`$CANDIDATE_NUMBER` in `$REPO` on `$HOST` before classification", "a mismatch is `unknown`"}},
+		{"canonical version", []string{"version: \"1.3\""}},
 	}
 
 	for _, contract := range contracts {
@@ -60,8 +60,6 @@ func TestIssueCreationSkillPublicationContract(t *testing.T) {
 		}
 	}
 
-	createCommand := `gh issue create --repo "$TARGET" --title "$TITLE" --body-file "$BODY_FILE" --label "$PERMITTED_LABEL"`
-	commentCommand := `gh issue comment "$NUMBER" --repo "$TARGET" --body-file "$BODY_FILE"`
 	normalized := strings.ReplaceAll(content, "\r\n", "\n")
 	executionStart := strings.Index(normalized, "## Execution Steps\n")
 	executionEnd := strings.Index(normalized, "## Output Contract\n")
@@ -69,23 +67,27 @@ func TestIssueCreationSkillPublicationContract(t *testing.T) {
 		t.Fatal("issue-creation skill must contain a concrete Execution Steps section before its Output Contract")
 	}
 	executionSteps := normalized[executionStart:executionEnd]
-	for _, publication := range []struct {
-		name    string
-		pattern *regexp.Regexp
-	}{
-		{"create", regexp.MustCompile(`\bgh issue create\b`)},
-		{"comment", regexp.MustCompile(`\bgh issue comment\b`)},
-	} {
-		if count := len(publication.pattern.FindAllStringIndex(executionSteps, -1)); count != 1 {
-			t.Errorf("issue-creation skill Execution Steps must contain exactly one %s publication command, found %d", publication.name, count)
-		}
+	commands := fencedBashCommands(t, executionSteps)
+	expectedCommands := []string{
+		`gh issue list --repo "$TARGET" --state all --search "$QUERY" --limit 1000`,
+		`gh issue view "$CANDIDATE_NUMBER" --repo "$TARGET" --json number,url,title,body >"$DISCOVERY_FILE"`,
+		`gh issue create --repo "$TARGET" --title "$TITLE" --body-file "$BODY_FILE" --label "$PERMITTED_LABEL"`,
+		`gh issue comment "$NUMBER" --repo "$TARGET" --body-file "$BODY_FILE"`,
+		`gh issue view "$NUMBER" --repo "$TARGET" --json number,url,title,body,labels >"$READBACK_FILE"`,
+		`gh api --hostname "$HOST" "repos/$REPO/issues/comments/$COMMENT_ID" >"$READBACK_FILE"`,
 	}
-	if !strings.Contains(executionSteps, createCommand) || !strings.Contains(executionSteps, commentCommand) {
-		t.Error("issue-creation skill Execution Steps must retain the common file-backed publication commands")
+	if strings.Join(commands, "\n") != strings.Join(expectedCommands, "\n") {
+		t.Errorf("issue-creation skill fenced Bash commands changed:\n got: %q\nwant: %q", commands, expectedCommands)
 	}
 
+	createCommand := expectedCommands[2]
+	commentCommand := expectedCommands[3]
 	targetIndex := strings.Index(executionSteps, "derive and verify `HOST`, `REPO=OWNER/REPO`, and `TARGET=$HOST/$REPO`")
 	discoveryIndex := strings.Index(executionSteps, "Authenticate to `HOST`; discover only missing")
+	selectedFormIndex := strings.Index(executionSteps, "Select the one YAML form whose declared purpose matches")
+	duplicateSearchIndex := strings.Index(executionSteps, expectedCommands[0])
+	classificationIndex := strings.Index(executionSteps, "Compare each candidate's body controls and required answers with the selected YAML form")
+	materializationIndex := strings.Index(executionSteps, "Only when classification selects the new-issue path, process reviewed answers and materialize the body")
 	for _, publication := range []struct {
 		name  string
 		index int
@@ -93,17 +95,31 @@ func TestIssueCreationSkillPublicationContract(t *testing.T) {
 		{"create", strings.Index(executionSteps, createCommand)},
 		{"comment", strings.Index(executionSteps, commentCommand)},
 	} {
-		if targetIndex == -1 || discoveryIndex == -1 || publication.index == -1 || targetIndex > discoveryIndex || discoveryIndex > publication.index {
-			t.Errorf("issue-creation skill Execution Steps must order target, discovery, then %s publication", publication.name)
+		if targetIndex == -1 || discoveryIndex == -1 || selectedFormIndex == -1 || duplicateSearchIndex == -1 || classificationIndex == -1 || materializationIndex == -1 || publication.index == -1 || targetIndex > discoveryIndex || discoveryIndex > selectedFormIndex || selectedFormIndex > duplicateSearchIndex || duplicateSearchIndex > classificationIndex || classificationIndex > materializationIndex || materializationIndex > publication.index {
+			t.Errorf("issue-creation skill Execution Steps must order target, discovery, selected form, duplicate search and classification, new-issue materialization, then %s publication", publication.name)
 		}
 	}
 
-	for _, readBackCommand := range []string{
-		`gh issue view "$NUMBER" --repo "$TARGET" --json number,url,title,body,labels >"$READBACK_FILE"`,
-		`gh api --hostname "$HOST" "repos/$REPO/issues/comments/$COMMENT_ID" >"$READBACK_FILE"`,
-	} {
-		if !strings.Contains(executionSteps, readBackCommand) {
-			t.Errorf("issue-creation skill must redirect body-bearing read-back stdout to private READBACK_FILE: %q", readBackCommand)
+	labelContract := `   | Permitted labels | Command suffix |
+   | --- | --- |
+   | Zero | Append no ` + "`--label`" + ` tokens. |
+   | Each permitted label | Append exactly one separate ` + "`--label \"$PERMITTED_LABEL\"`" + ` pair. |`
+	if count := strings.Count(executionSteps, labelContract); count != 1 {
+		t.Errorf("issue-creation skill must contain exactly one scoped zero- and multi-label expansion contract, found %d", count)
+	}
+}
+
+func fencedBashCommands(t *testing.T, executionSteps string) []string {
+	t.Helper()
+	fences := regexp.MustCompile("(?ms)^[ \\t]*```bash\\n(.*?)^[ \\t]*```[ \\t]*$").FindAllStringSubmatch(executionSteps, -1)
+	var commands []string
+	for _, fence := range fences {
+		for _, line := range strings.Split(fence[1], "\n") {
+			line = strings.TrimSpace(line)
+			if strings.HasPrefix(line, "gh ") {
+				commands = append(commands, line)
+			}
 		}
 	}
+	return commands
 }
