@@ -13,7 +13,7 @@ RDD is opt-in. Until a user enables it with `gentle-ai review mode enable --scop
 1. Preflight only the current worktree with selectorless negotiated STATUS.
 2. Execute its exact START, then retain the returned lineage, revision, and target tokens.
 3. Use those exact tokens for every STATUS, capture, and FINALIZE call until native approval burns the transaction.
-4. Ask the human whether to commit. Push and PR remain separate decisions.
+4. Follow ordinary repository policy for commit, push, PR, release, and archive.
 
 ```bash
 gentle-ai review status \
@@ -29,11 +29,11 @@ A session in repository A may review a nested target in unrelated repository B o
 
 | Rule | Contract |
 | --- | --- |
-| Lifecycle root | After B is selected, the host keeps canonical B from STATUS through consent, collection, correction, validation, FINALIZE, burn, and the commit question. A is never a fallback. |
+| Lifecycle root | After B is selected, the host keeps canonical B from STATUS through consent, collection, correction, validation, FINALIZE, and burn. A is never a fallback. |
 | Commands | Run provider-issued tokens unchanged. If a command omits `--cwd`, run it with process cwd B. |
 | Opaque capture | `repository_context` can materialize or capture from another process cwd, but remains B-bound. |
 | Isolation | Equal lineage text in A and B names independent transactions. Approval burns B only; A remains untouched. |
-| Delivery | The post-approval question names B. A chosen commit runs in B only; approval never pushes. |
+| Delivery | Ordinary repository policy and any explicit delivery authorization name B. Approval never authorizes delivery. |
 
 This lifecycle is available only to Claude Code, Codex, OpenCode, and Pi. Unsupported runtimes fail before repository or authority mutation.
 
@@ -65,7 +65,7 @@ A forecast is descriptive, not a route. Relay every forecast step and horizon lo
 
 Native Go owns frozen lenses, provider context and admission, refutation, one bounded correction, repository evidence, and targeted validation. On success it reads back terminal approval, then burns the exact lineage and its artifacts before returning `approved`.
 
-No terminal receipt, tombstone, witness, mirror, or delivery authority survives the burn. Other lineages and worktrees are unaffected. If FINALIZE or the burn is ambiguous or fails, do not claim approval and do not ask the commit question. Query exact-lineage STATUS only while the authority remains, then follow its returned action.
+No terminal receipt, tombstone, witness, mirror, or delivery authority survives the burn. Other lineages and worktrees are unaffected. After any non-clean FINALIZE outcome—including malformed or empty output, transport failure, post-mutation ambiguity, or an authority that may already be terminally committed—do not replay FINALIZE directly. Retain the exact lineage, revision, and target binding, query bound STATUS once, and follow only that returned action.
 
 ## Reviewer transport
 
@@ -92,12 +92,7 @@ Medium and high-risk START may return the typed `gentle-ai.review-integration.co
 
 They never allow, approve, block, commit, push, or open a pull request. Delivery follows ordinary repository policy.
 
-Immediately after `approved` returns from the terminal burn, and before a further edit or START, present one native single-select question and stop. For a selected repository B, name B and run a chosen commit in B only:
-
-- **Commit approved changes (Recommended)** — explicit authorization to create a conventional commit based on the approved work. Do not push. Advancing `HEAD` means the next default START reviews only later changes.
-- **Continue uncommitted** — leave the workspace as-is. The next default START freezes the entire outstanding delta again, including the approved bytes.
-
-Push and PR are separate explicit decisions. Approval does not authorize either.
+Terminal review state is informational and never authorizes a commit. Commit, push, PR, release, and archive follow ordinary repository policy and require their own explicit authorization. For a selected repository B, any authorized delivery action runs in B only.
 
 ## Compatibility
 
@@ -143,5 +138,5 @@ The published v1 directory contains 24 strict JSON Schemas and 27 deterministic 
 - [ ] START's lineage, revision, and target tokens were retained and replayed unchanged.
 - [ ] Reviewers and validators used only provider-issued immutable context.
 - [ ] `approved` was reported only after native burn completed.
-- [ ] The native commit question was presented before another edit or START.
-- [ ] Commit, push, and PR each have explicit human authorization.
+- [ ] Commit, push, PR, release, and archive followed ordinary repository policy.
+- [ ] Each delivery action has explicit authorization.

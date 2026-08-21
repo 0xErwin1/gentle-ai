@@ -196,7 +196,7 @@ func assertCurrentOpenCodeOrchestratorContract(t *testing.T, label string, conte
 		"START freezes one compact atomic transaction",
 		"Only candidate-caused severe findings block",
 		"burns that exact authority and its artifacts",
-		"Commit approved changes (Recommended)",
+		"Clean FINALIZE success stops with no terminal STATUS.",
 	})
 	if profileName == "" {
 		assertTextContainsClauses(t, label+" model assignment contract", content, []string{

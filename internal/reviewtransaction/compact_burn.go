@@ -261,7 +261,7 @@ func RecoverDeletingCompactBurnWithoutAuthority(ctx context.Context, repo, linea
 		}
 	}
 	if err := burnExactLineage(ctx, repo, lineageID, expectedRevision, func(string) error {
-		return errors.New("deleting compact burn staging disappeared before recovery")
+		return errors.New("deleting compact burn staging disappeared before recovery") // refusal:by-design world-action: disappeared staged authority bytes cannot be safely reconstructed; maintainers must inspect and repair the authority store
 	}); err != nil {
 		return false, err
 	}

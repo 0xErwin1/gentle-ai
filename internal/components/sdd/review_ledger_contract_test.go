@@ -43,6 +43,57 @@ func TestBoundedReviewContractLeavesAtomicLifecycleToNativeGo(t *testing.T) {
 	}
 }
 
+func TestRenderedReviewRuntimesRequireOneBoundStatusBeforeAmbiguousFinalizeReplay(t *testing.T) {
+	for _, runtime := range []struct {
+		name  string
+		agent model.AgentID
+		path  string
+	}{
+		{name: "claude", agent: model.AgentClaudeCode, path: "claude/sdd-orchestrator.md"},
+		{name: "codex", agent: model.AgentCodex, path: "codex/sdd-orchestrator.md"},
+		{name: "opencode", agent: model.AgentOpenCode, path: "opencode/sdd-orchestrator.md"},
+	} {
+		t.Run(runtime.name, func(t *testing.T) {
+			rendered := renderBoundedReviewAsset(runtime.agent, runtime.path)
+			for _, clause := range []string{
+				"Clean FINALIZE success stops with no terminal STATUS.",
+				"After any non-clean FINALIZE result, malformed or no output, transport loss, or post-mutation processing failure, issue exactly one retained target-bound read-only STATUS before replay.",
+			} {
+				if !strings.Contains(rendered, clause) {
+					t.Fatalf("%s rendered contract is missing %q", runtime.name, clause)
+				}
+			}
+			if strings.Contains(rendered, "only while that authority still exists") {
+				t.Fatalf("%s rendered contract still narrows ambiguous FINALIZE recovery to a surviving authority", runtime.name)
+			}
+		})
+	}
+}
+
+func TestReviewerTransportAdaptersNeverInvokeLifecycleFinalize(t *testing.T) {
+	for _, transport := range []struct {
+		name string
+		path string
+	}{
+		{name: "claude", path: "../../reviewerprovider/claude_adapter.go"},
+		{name: "codex", path: "../../reviewerprovider/codex_adapter.go"},
+		{name: "opencode", path: "../../assets/opencode/plugins/opencode-review-transport.ts"},
+	} {
+		t.Run(transport.name, func(t *testing.T) {
+			content, err := os.ReadFile(transport.path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			lowered := strings.ToLower(string(content))
+			for _, forbidden := range []string{"review finalize", "review.finalize"} {
+				if strings.Contains(lowered, forbidden) {
+					t.Fatalf("%s transport invokes lifecycle FINALIZE through %q", transport.name, forbidden)
+				}
+			}
+		})
+	}
+}
+
 func TestDedicatedReviewAndJudgmentAssetsRenderRoleContracts(t *testing.T) {
 	assetsByFamily := map[string][]string{
 		"claude": {
@@ -404,7 +455,9 @@ func TestKilocodeReviewSettingsMatchCurrentMainBaseline(t *testing.T) {
 	// Deliberate, not drift.
 	// #3417 restores the shared static Native Checking Contract, which Kilo
 	// renders through the OpenCode orchestrator asset. The hash is rederived.
-	const want = "e1e704420967b23e07e180dccd390f994d1019baa0cccc920a0c8efdd41e34fc"
+	// #3417 also classifies OpenCode background launch acknowledgements as
+	// nonterminal, preventing false task-result failures and session latches.
+	const want = "8b4e161971530355248addfc62fb101d1ea71a5ba4e293b427e85c87a2c535c7"
 	if got != want {
 		t.Fatalf("Kilocode settings SHA-256 = %s, want current-main baseline %s", got, want)
 	}
@@ -621,8 +674,11 @@ func TestOpenCodeRenderedReviewProtocolCost(t *testing.T) {
 		// #3417 groups the atomic stop inventory behind exact D/S continuations.
 		// The standard surface remains below its unchanged 15,866-character
 		// renderer budget, and every rendered runtime has one STATUS binding.
-		{name: "standard", agents: []string{"review-reliability"}, beforeChars: 42_301, wantChars: 15_796, maxCharacters: 15_866},
-		{name: "full-4R", agents: []string{"review-risk", "review-resilience", "review-readability", "review-reliability"}, beforeChars: 106_998, wantChars: 28_141, maxCharacters: 30_063},
+		// #3417 replaces the terminal commit question with non-deciding delivery
+		// guidance and adds the one-status ambiguous-FINALIZE reconciliation rule.
+		// The rendered byte pins are regenerated from those shared source bytes.
+		{name: "standard", agents: []string{"review-reliability"}, beforeChars: 42_301, wantChars: 15_304, maxCharacters: 15_866},
+		{name: "full-4R", agents: []string{"review-risk", "review-resilience", "review-readability", "review-reliability"}, beforeChars: 106_998, wantChars: 27_649, maxCharacters: 30_063},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

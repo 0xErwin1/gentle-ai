@@ -19,7 +19,7 @@ review mode disable` returns to that state. Enabling RDD revalidates the current
 candidate instead of resuming stale obligations.
 
 ```text
-selectorless STATUS -> exact START -> bound collection/finalize -> approved + burn -> commit question
+selectorless STATUS -> exact START -> bound collection/finalize -> approved + burn -> ordinary repository policy
 ```
 
 ### Preflight and START
@@ -32,9 +32,9 @@ This prevents a historical authority, a sibling worktree, or a stale lifecycle r
 
 ### Cross-repository root continuity
 
-A session rooted in repository A can review an explicitly user-authorized nested target in unrelated repository B. Go resolves the requested path to B's canonical worktree root; adapters remain opaque and never parse authorization or roots. Once B is selected, the host retains B through STATUS, consent, collection, correction, validation, FINALIZE, burn, and the commit question. Provider-issued tokens remain exact; an invocation without `--cwd` runs with process cwd B.
+A session rooted in repository A can review an explicitly user-authorized nested target in unrelated repository B. Go resolves the requested path to B's canonical worktree root; adapters remain opaque and never parse authorization or roots. Once B is selected, the host retains B through STATUS, consent, collection, correction, validation, FINALIZE, and burn. Provider-issued tokens remain exact; an invocation without `--cwd` runs with process cwd B.
 
-Opaque `repository_context` can materialize or capture from process cwd A, but remains bound to B. Identical lineage text in A and B names independent authority: approval burns B only and leaves A unchanged. The commit question names B, and any selected commit runs in B only without pushing.
+Opaque `repository_context` can materialize or capture from process cwd A, but remains bound to B. Identical lineage text in A and B names independent authority: approval burns B only and leaves A unchanged. Ordinary repository policy owns delivery, and any explicitly authorized delivery action runs in B only.
 
 Only Claude Code, Codex, OpenCode, and Pi receive this lifecycle. Unsupported runtimes fail before repository or authority mutation.
 
@@ -44,7 +44,7 @@ Reviewers receive provider-issued immutable context, not live workspace state. A
 
 Successful FINALIZE reads terminal state back and burns the exact authority and its artifacts before it returns `approved`. No terminal receipt, tombstone, witness, mirror, or delivery authority remains. Unrelated transactions remain untouched.
 
-An ambiguous FINALIZE or burn is not approval. The parent queries exact-lineage STATUS only if that authority still exists, then follows the returned action. It never falls back to ambient recovery or invents another lineage.
+Any non-clean FINALIZE or burn outcome is not approval. This includes malformed or empty output, transport failure, post-mutation ambiguity, and the case where terminal authority may already be committed. The parent retains the exact lineage, revision, and target, queries bound STATUS once before any replay, then follows only the returned action. It never falls back to ambient recovery or invents another lineage.
 
 ## Informational gates
 
@@ -57,14 +57,9 @@ An ambiguous FINALIZE or burn is not approval. The parent queries exact-lineage 
 
 Ordinary repository policy remains the delivery mechanism.
 
-## The post-approval boundary
+## Delivery boundary
 
-Immediately after terminal approval and burn, before another edit or START, the parent presents one native single-select question and stops. When B was selected from A, the question names B and any selected commit runs in B only:
-
-1. **Commit approved changes (Recommended)** — explicit permission to create a conventional commit for the approved work. It does not push. The next default START compares later changes against the new `HEAD`.
-2. **Continue uncommitted** — retain the workspace. The next default START reviews the full outstanding delta again, including the already approved bytes.
-
-Push and pull requests always require their own explicit human decision. Approval is evidence about the completed review transaction, not delivery authority.
+Review completion is evidence about the completed transaction, not delivery authority. Commit, push, PR, release, and archive remain governed by ordinary repository policy and their own explicit authorization. When B was selected from A, any authorized delivery action runs in B only.
 
 ## Runtime boundary
 

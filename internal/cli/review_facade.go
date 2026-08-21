@@ -377,6 +377,7 @@ type ReviewFacadeReceiptPublicationError struct {
 	MutationOutcome string `json:"mutation_outcome"`
 	Replayability   string `json:"replayability"`
 	LineageID       string `json:"lineage_id"`
+	TargetIdentity  string `json:"target_identity"`
 	RequestDigest   string `json:"request_digest"`
 	Cause           error  `json:"-"`
 	// DefectReportClause is the Tier C companion (organic-dx tasks.md 5.6),
@@ -2592,7 +2593,7 @@ func runReviewFacadeFinalize(ctx context.Context, args []string, stdout io.Write
 			if terminalPending != nil {
 				requestDigest = terminalPending.Request.RequestDigest
 			}
-			return newFacadeReceiptPublicationError(ctx, root, state.LineageID, requestDigest, err)
+			return newFacadeReceiptPublicationError(ctx, root, state.LineageID, state.CurrentSnapshot.Identity, requestDigest, err)
 		}
 		if terminalReceiptExists {
 			if terminalPending == nil {
@@ -2860,7 +2861,7 @@ func runReviewFacadeFinalize(ctx context.Context, args []string, stdout io.Write
 		if returnErr == nil && !attemptCompleted {
 			completionErr := store.CompleteFinalizeAttempt(requestDigest)
 			if completionErr != nil && facadeTerminalState(state.State) {
-				returnErr = newFacadeReceiptPublicationError(ctx, root, state.LineageID, requestDigest, completionErr)
+				returnErr = newFacadeReceiptPublicationError(ctx, root, state.LineageID, state.CurrentSnapshot.Identity, requestDigest, completionErr)
 			} else {
 				returnErr = completionErr
 			}
@@ -2904,7 +2905,7 @@ func runReviewFacadeFinalize(ctx context.Context, args []string, stdout io.Write
 				return err
 			}
 			if err := store.CompleteFinalizeAttempt(requestDigest); err != nil {
-				return newFacadeReceiptPublicationError(ctx, root, state.LineageID, requestDigest, err)
+				return newFacadeReceiptPublicationError(ctx, root, state.LineageID, state.CurrentSnapshot.Identity, requestDigest, err)
 			}
 			attemptCompleted = true
 			if err := reviewtransaction.BurnApprovedCompactAuthority(ctx, root, state.LineageID, record.Revision); err != nil {
@@ -2922,21 +2923,21 @@ func runReviewFacadeFinalize(ctx context.Context, args []string, stdout io.Write
 		}
 	}
 	if err := writeCompactFacadeReceipt(ctx, store, receipt); err != nil {
-		return newFacadeReceiptPublicationError(ctx, root, state.LineageID, requestDigest, err)
+		return newFacadeReceiptPublicationError(ctx, root, state.LineageID, state.CurrentSnapshot.Identity, requestDigest, err)
 	}
 	published, err := inspectCompactFacadeReceipt(store.ReceiptPath(), receipt)
 	if err != nil {
-		return newFacadeReceiptPublicationError(ctx, root, state.LineageID, requestDigest, err)
+		return newFacadeReceiptPublicationError(ctx, root, state.LineageID, state.CurrentSnapshot.Identity, requestDigest, err)
 	}
 	if !published {
-		return newFacadeReceiptPublicationError(ctx, root, state.LineageID, requestDigest, errors.New("receipt writer did not materialize the derived receipt"))
+		return newFacadeReceiptPublicationError(ctx, root, state.LineageID, state.CurrentSnapshot.Identity, requestDigest, errors.New("receipt writer did not materialize the derived receipt"))
 	}
 	if err := store.MarkFinalizeAttemptReceiptPublished(requestDigest); err != nil {
 		return err
 	}
 	if state.State == reviewtransaction.StateApproved {
 		if err := store.CompleteFinalizeAttempt(requestDigest); err != nil {
-			return newFacadeReceiptPublicationError(ctx, root, state.LineageID, requestDigest, err)
+			return newFacadeReceiptPublicationError(ctx, root, state.LineageID, state.CurrentSnapshot.Identity, requestDigest, err)
 		}
 		attemptCompleted = true
 		if err := reviewtransaction.BurnApprovedCompactAuthority(ctx, root, state.LineageID, record.Revision); err != nil {
@@ -3263,7 +3264,7 @@ func inspectCompactFacadeReceipt(path string, expected reviewtransaction.Compact
 	return true, nil
 }
 
-func newFacadeReceiptPublicationError(ctx context.Context, root, lineage, requestDigest string, cause error) error {
+func newFacadeReceiptPublicationError(ctx context.Context, root, lineage, targetIdentity, requestDigest string, cause error) error {
 	replayability := string(reviewtransaction.ReplayabilityExactReplaySafe)
 	clause := ""
 	var conflict *reviewtransaction.ImmutablePublicationConflictError
@@ -3284,7 +3285,7 @@ func newFacadeReceiptPublicationError(ctx context.Context, root, lineage, reques
 	}
 	return &ReviewFacadeReceiptPublicationError{
 		MutationOutcome: "committed", Replayability: replayability,
-		LineageID: lineage, RequestDigest: requestDigest, Cause: cause, DefectReportClause: clause,
+		LineageID: lineage, TargetIdentity: targetIdentity, RequestDigest: requestDigest, Cause: cause, DefectReportClause: clause,
 	}
 }
 
