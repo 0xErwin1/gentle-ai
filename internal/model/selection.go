@@ -14,6 +14,7 @@ type Selection struct {
 	ClaudePhaseAssignments           map[string]ClaudePhaseAssignment // key = phase name; value = Claude model+effort
 	KiroModelAssignments             map[string]KiroModelAlias        // key = phase name; value = Kiro-native model alias
 	AntigravityModelAssignments      map[string]AntigravityModelTier  // key = native agent role; value = agy model tier
+	PiModelAssignments               map[string]PiAgentRouting        // key = Pi agent name; value = model and/or reasoning level
 	CodexModelAssignments            map[string]CodexEffort           // key = phase name; value = low|medium|high|xhigh|max|ultra
 	CodexOrchestratorAssignment      *CodexOrchestratorAssignment     // non-nil = apply curated top-level Codex model/effort
 	ClearCodexOrchestratorAssignment bool                             // true = clear persisted curated assignment while preserving config.toml
