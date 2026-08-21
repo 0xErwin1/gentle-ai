@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"regexp"
 	"slices"
 	"sort"
 	"strings"
@@ -103,6 +104,7 @@ type Selection struct {
 	ModelAssignments            map[string]ModelAssignment        `json:"modelAssignments,omitempty"`
 	ClaudeModelAssignments      map[string]model.ClaudeModelAlias `json:"claudeModelAssignments,omitempty"`
 	KiroModelAssignments        map[string]model.KiroModelAlias   `json:"kiroModelAssignments,omitempty"`
+	PiModelAssignments          map[string]model.PiAgentRouting   `json:"piModelAssignments,omitempty"`
 	CodexModelAssignments       map[string]model.CodexEffort      `json:"codexModelAssignments,omitempty"`
 	CodexCarrilModelAssignments map[string]string                 `json:"codexCarrilModelAssignments,omitempty"`
 	CodexPhaseModelAssignments  map[string]string                 `json:"codexPhaseModelAssignments,omitempty"`
@@ -256,6 +258,7 @@ func Project(state DesiredState) model.Selection {
 		ModelAssignments:            assignmentsToModel(state.Selection.ModelAssignments),
 		ClaudeModelAssignments:      copyMap(state.Selection.ClaudeModelAssignments),
 		KiroModelAssignments:        copyMap(state.Selection.KiroModelAssignments),
+		PiModelAssignments:          copyMap(state.Selection.PiModelAssignments),
 		CodexModelAssignments:       copyMap(state.Selection.CodexModelAssignments),
 		CodexCarrilModelAssignments: copyMap(state.Selection.CodexCarrilModelAssignments),
 		CodexPhaseModelAssignments:  copyMap(state.Selection.CodexPhaseModelAssignments),
@@ -286,6 +289,17 @@ func withModelPresets(selection model.Selection) model.Selection {
 			if len(selection.ClaudeModelAssignments) == 0 {
 				selection.ClaudeModelAssignments = model.ClaudeModelPresetAssignments(preset)
 			}
+
+		case model.AgentPi:
+			// The profile is a floor, not a ceiling: it fills the agents the
+			// document left alone and never displaces one it assigned. The
+			// other providers replace the whole table instead, so one explicit
+			// assignment silently drops the rest of their profile.
+			routing := model.PiModelPresetAssignments(preset)
+			for agent, entry := range selection.PiModelAssignments {
+				routing[agent] = entry
+			}
+			selection.PiModelAssignments = routing
 
 		case model.AgentKiroIDE:
 			if len(selection.KiroModelAssignments) == 0 {
@@ -331,6 +345,7 @@ func FromSelection(selection model.Selection) DesiredState {
 		ModelAssignments:            assignmentsFromModel(selection.ModelAssignments),
 		ClaudeModelAssignments:      copyMap(selection.ClaudeModelAssignments),
 		KiroModelAssignments:        copyMap(selection.KiroModelAssignments),
+		PiModelAssignments:          copyMap(selection.PiModelAssignments),
 		CodexModelAssignments:       copyMap(selection.CodexModelAssignments),
 		CodexCarrilModelAssignments: copyMap(selection.CodexCarrilModelAssignments),
 		CodexPhaseModelAssignments:  copyMap(selection.CodexPhaseModelAssignments),
@@ -373,6 +388,7 @@ func NormalizeSelection(selection model.Selection) (model.Selection, []Diagnosti
 	selection.ModelAssignments = projected.ModelAssignments
 	selection.ClaudeModelAssignments = projected.ClaudeModelAssignments
 	selection.KiroModelAssignments = projected.KiroModelAssignments
+	selection.PiModelAssignments = projected.PiModelAssignments
 	selection.CodexModelAssignments = projected.CodexModelAssignments
 	selection.CodexCarrilModelAssignments = projected.CodexCarrilModelAssignments
 	selection.CodexPhaseModelAssignments = projected.CodexPhaseModelAssignments
@@ -464,6 +480,7 @@ func normalizeSelection(selection Selection, diagnostics *[]Diagnostic) Selectio
 	}
 
 	validateModelPresets(selection, diagnostics)
+	validatePiModelAssignments(selection, diagnostics)
 
 	for _, agent := range selection.Agents {
 		if !catalog.IsSupportedAgent(agent) {
@@ -523,6 +540,10 @@ var modelPresetNames = map[model.AgentID][]string{
 		string(model.CodexPresetLowCost), string(model.CodexPresetRecommended),
 		string(model.CodexPresetPowerful),
 	},
+	model.AgentPi: {
+		string(model.PiPresetLowCost), string(model.PiPresetRecommended),
+		string(model.PiPresetPowerful),
+	},
 }
 
 func validateModelPresets(selection Selection, diagnostics *[]Diagnostic) {
@@ -543,6 +564,39 @@ func validateModelPresets(selection Selection, diagnostics *[]Diagnostic) {
 		preset := selection.ModelPresets[provider]
 		if !slices.Contains(known, preset) {
 			*diagnostics = append(*diagnostics, diagnostic("config.model-preset.unsupported", path, fmt.Sprintf("unsupported %s model profile %q; use %s", provider, preset, strings.Join(known, ", "))))
+		}
+	}
+}
+
+// safePiModelID mirrors the pattern gentle-pi validates a model id against. It
+// is duplicated rather than imported because it is gentle-pi's rule, not this
+// contract's: what matters is refusing here what would be dropped there.
+var safePiModelID = regexp.MustCompile(`^[A-Za-z0-9._~:@/+%-]+$`)
+
+// validatePiModelAssignments refuses a routing gentle-pi would silently drop.
+// It reads the file, discards every entry it cannot parse, and reports nothing,
+// so a typo leaves an agent on the default model with no sign that a choice was
+// ever made.
+func validatePiModelAssignments(selection Selection, diagnostics *[]Diagnostic) {
+	agents := make([]string, 0, len(selection.PiModelAssignments))
+	for agent := range selection.PiModelAssignments {
+		agents = append(agents, agent)
+	}
+	sort.Strings(agents)
+
+	for _, agent := range agents {
+		routing := selection.PiModelAssignments[agent]
+		path := "$.selection.piModelAssignments." + agent
+
+		if routing.Model == "" && routing.Thinking == "" {
+			*diagnostics = append(*diagnostics, diagnostic("config.pi-model.empty", path, "a Pi routing assigns a model, a reasoning level, or both"))
+			continue
+		}
+		if routing.Model != "" && !safePiModelID.MatchString(routing.Model) {
+			*diagnostics = append(*diagnostics, diagnostic("config.pi-model.unsupported", path, fmt.Sprintf("unsupported Pi model id %q; gentle-pi accepts letters, digits and ._~:@/+%%-", routing.Model)))
+		}
+		if routing.Thinking != "" && !routing.Thinking.Valid() {
+			*diagnostics = append(*diagnostics, diagnostic("config.pi-model.thinking-unsupported", path, fmt.Sprintf("unsupported Pi reasoning level %q; use off, minimal, low, medium, high, xhigh, or max", routing.Thinking)))
 		}
 	}
 }
