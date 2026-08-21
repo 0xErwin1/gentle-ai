@@ -98,6 +98,10 @@ func (stager configurationStager) Stage(state configdomain.DesiredState, stageRo
 		return err
 	}
 
+	if err := stagePiModelRouting(stageRoot, selection, adapters); err != nil {
+		return err
+	}
+
 	return stager.rebaseStagedPaths(stageRoot)
 }
 
@@ -303,6 +307,39 @@ func stagePiBackgroundPolicy(stageRoot string, selection model.Selection, adapte
 	path := piBackgroundPolicyPath(stageRoot)
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return fmt.Errorf("create Pi background policy directory: %w", err)
+	}
+
+	return os.WriteFile(path, append(content, '\n'), 0o644)
+}
+
+// stagePiModelRouting writes the routing gentle-pi reads. Like the persona and
+// the background policy it is a small file Gentle AI owns inside Pi's own
+// directory, which is why it sits outside the component loop: routing is not
+// one of Gentle AI's components, and gentle-pi owns the ones that would
+// otherwise have carried it.
+func stagePiModelRouting(stageRoot string, selection model.Selection, adapters []agents.Adapter) error {
+	if len(selection.PiModelAssignments) == 0 {
+		return nil
+	}
+
+	declared := false
+	for _, adapter := range adapters {
+		if adapter.Agent() == model.AgentPi {
+			declared = true
+		}
+	}
+	if !declared {
+		return nil
+	}
+
+	content, err := json.MarshalIndent(selection.PiModelAssignments, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshal Pi model routing: %w", err)
+	}
+
+	path := filepath.Join(stageRoot, ".pi", "gentle-ai", "models.json")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return fmt.Errorf("create Pi model routing directory: %w", err)
 	}
 
 	return os.WriteFile(path, append(content, '\n'), 0o644)
