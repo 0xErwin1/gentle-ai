@@ -1211,6 +1211,7 @@ func (m Model) handleStepProgress(msg StepProgressMsg) (tea.Model, tea.Cmd) {
 		m.Progress.Items = append(m.Progress.Items, ProgressItem{
 			Label:  msg.StepID,
 			Status: ProgressStatusPending,
+			Nested: true,
 		})
 		idx = len(m.Progress.Items) - 1
 	}
@@ -1267,10 +1268,9 @@ func (m Model) handlePipelineDone(msg PipelineDoneMsg) (tea.Model, tea.Cmd) {
 	m.Progress = ProgressFromExecution(msg.Result)
 	m.Progress.Logs = append([]string(nil), liveProgress.Logs...)
 	for _, item := range liveProgress.Items {
-		// Nested command progress IDs contain the parent step ID plus a
-		// command-specific suffix. Preserve those live-only items, while leaving
-		// the initial fallback labels to the authoritative execution result.
-		if strings.Count(item.Label, ":") < 2 || m.findProgressItem(item.Label) >= 0 {
+		// Preserve only adapter-created nested items that are not part of the
+		// authoritative execution result.
+		if !item.Nested || m.findProgressItem(item.Label) >= 0 {
 			continue
 		}
 		m.Progress.Items = append(m.Progress.Items, item)
@@ -2720,7 +2720,7 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 		m.Err = nil
 		m.setScreen(ScreenReview)
 	case ScreenInstalling:
-		if m.Progress.Done() {
+		if m.Progress.Done() && !m.pipelineRunning {
 			m.setScreen(ScreenComplete)
 			return m, nil
 		}

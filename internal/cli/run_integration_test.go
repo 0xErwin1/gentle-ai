@@ -262,7 +262,7 @@ func TestPiAgentInstallProgressUsesAdapterCommandNames(t *testing.T) {
 		"pi install npm:gentle-pi",
 		"pi install npm:gentle-engram",
 		"pi install npm:pi-mcp-adapter",
-		"npm exec --yes --package gentle-engram@latest -- pi-engram init",
+		engramInitCommandForTest,
 		"pi install npm:pi-subagents-j0k3r",
 		"pi install npm:@juicesharp/rpiv-ask-user-question",
 		"pi install npm:pi-web-access",
