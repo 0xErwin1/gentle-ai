@@ -1032,10 +1032,21 @@ func TestPipelineDoneMsgMarksCompletion(t *testing.T) {
 func TestPipelineDoneMsgPreservesNestedPackageProgress(t *testing.T) {
 	m := NewModel(system.DetectionResult{}, "dev")
 	m.Screen = ScreenInstalling
-	m.Progress = NewProgressState([]string{"agent:pi", "agent:pi:pi install npm:gentle-pi"})
-	m.Progress.Mark(0, string(pipeline.StepStatusSucceeded))
-	m.Progress.Mark(1, string(pipeline.StepStatusSucceeded))
-	m.Progress.AppendLog("done: agent:pi:pi install npm:gentle-pi")
+	m.pipelineRunning = true
+	m.installRunID = 7
+	m.progressRun = newInstallProgressRun()
+	m.Progress = NewProgressState([]string{"agent:pi", "fallback:with:colon"})
+
+	const packageStep = "agent:pi:pi install npm:gentle-pi"
+	for _, msg := range []StepProgressMsg{
+		{RunID: 7, StepID: packageStep, Status: pipeline.StepStatusRunning},
+		{RunID: 7, StepID: packageStep, Status: pipeline.StepStatusSucceeded},
+		{RunID: 7, StepID: "agent:pi", Status: pipeline.StepStatusRunning},
+		{RunID: 7, StepID: "agent:pi", Status: pipeline.StepStatusSucceeded},
+	} {
+		updated, _ := m.Update(msg)
+		m = updated.(Model)
+	}
 
 	result := pipeline.ExecutionResult{
 		Apply: pipeline.StageResult{
@@ -1043,16 +1054,26 @@ func TestPipelineDoneMsgPreservesNestedPackageProgress(t *testing.T) {
 			Steps:   []pipeline.StepResult{{StepID: "agent:pi", Status: pipeline.StepStatusSucceeded}},
 		},
 	}
-	updated, _ := m.Update(PipelineDoneMsg{Result: result})
+	updated, _ := m.Update(PipelineDoneMsg{RunID: 7, Result: result})
 	state := updated.(Model)
 
-	if state.findProgressItem("agent:pi:pi install npm:gentle-pi") < 0 {
+	if state.pipelineRunning {
+		t.Fatal("matching PipelineDoneMsg did not finish the active pipeline")
+	}
+	nestedIndex := state.findProgressItem(packageStep)
+	if nestedIndex < 0 {
 		t.Fatalf("nested package item was dropped: %v", state.Progress.Items)
+	}
+	if !state.Progress.Items[nestedIndex].Nested {
+		t.Fatalf("nested package item = %+v, want explicit nested metadata", state.Progress.Items[nestedIndex])
+	}
+	if state.findProgressItem("fallback:with:colon") >= 0 {
+		t.Fatalf("unmarked colon-containing item was preserved: %v", state.Progress.Items)
 	}
 	if !state.Progress.Done() {
 		t.Fatalf("progress = %+v, want done", state.Progress)
 	}
-	if len(state.Progress.Logs) != 2 || state.Progress.Logs[0] != "done: agent:pi:pi install npm:gentle-pi" {
+	if len(state.Progress.Logs) < 2 || state.Progress.Logs[1] != "done: "+packageStep {
 		t.Fatalf("logs = %v, want nested package log preserved", state.Progress.Logs)
 	}
 }
@@ -1133,6 +1154,49 @@ func TestEscBlockedWhilePipelineRunning(t *testing.T) {
 
 	if state.Screen != ScreenInstalling {
 		t.Fatalf("screen = %v, want ScreenInstalling (esc should be blocked)", state.Screen)
+	}
+}
+
+func TestEnterAtFullProgressWaitsForPipelineDone(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenInstalling
+	m.pipelineRunning = true
+	m.installRunID = 11
+	m.progressRun = newInstallProgressRun()
+	m.Progress = NewProgressState([]string{"only-step"})
+	m.Progress.Mark(0, string(pipeline.StepStatusSucceeded))
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	state := updated.(Model)
+	if state.Screen != ScreenInstalling {
+		t.Fatalf("screen = %v, want ScreenInstalling while pipeline is active", state.Screen)
+	}
+
+	result := pipeline.ExecutionResult{
+		Apply: pipeline.StageResult{
+			Success: true,
+			Steps:   []pipeline.StepResult{{StepID: "only-step", Status: pipeline.StepStatusSucceeded}},
+		},
+	}
+	state.progressRun.complete(result)
+	doneValue := state.nextProgressCommand()()
+	doneMsg, ok := doneValue.(PipelineDoneMsg)
+	if !ok {
+		t.Fatalf("progress command returned %T, want PipelineDoneMsg", doneValue)
+	}
+	updated, _ = state.Update(doneMsg)
+	state = updated.(Model)
+	if state.pipelineRunning {
+		t.Fatal("matching PipelineDoneMsg left pipelineRunning set")
+	}
+	if state.Screen != ScreenInstalling {
+		t.Fatalf("screen after PipelineDoneMsg = %v, want ScreenInstalling until Enter", state.Screen)
+	}
+
+	updated, _ = state.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	state = updated.(Model)
+	if state.Screen != ScreenComplete {
+		t.Fatalf("screen after completed pipeline Enter = %v, want ScreenComplete", state.Screen)
 	}
 }
 
