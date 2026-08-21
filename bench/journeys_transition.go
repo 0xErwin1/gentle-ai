@@ -135,12 +135,11 @@ func transitionJourneys() []Journey {
 			Review: reviewOptedIn,
 			Title:  "Turn review back ON in the middle of a change that started without it",
 			Source: "the mirror of tr03; the switch is documented as reversible",
-			// tr03 proves work survives the switch going off. Nothing proved
-			// the other direction, and it is the riskier one: turning review ON
-			// mid-change means delivery starts demanding a receipt for work
-			// that has none yet. If that wedges, a user who enables review to
-			// be careful is punished for it, which is the opposite of what the
-			// switch is for.
+			// tr03 proves work survives the switch going off. This is the other
+			// direction: turning review on mid-change may surface review context,
+			// but it must not make SDD delivery demand a receipt or wedge work
+			// that started without one. A user who enables review to be careful
+			// must still keep moving under ordinary repository policy.
 			Steps: []Step{
 				{Name: "fixture: repository with a committed OpenSpec change", Fixture: sddRuntimeRepo},
 				{Name: "turn review off before starting", Requires: modeCapability,

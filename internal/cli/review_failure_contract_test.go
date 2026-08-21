@@ -197,7 +197,7 @@ func TestNegotiatedReviewFailuresPreserveRequestedLineage(t *testing.T) {
 		// Publication conflicts deliberately generate a tool-fault report. Keep
 		// that write inside this temporary repository's common directory, never
 		// the real worktree selected by ".".
-		newFacadeReceiptPublicationError(context.Background(), repo, lineage, "", &reviewtransaction.ImmutablePublicationConflictError{Cause: errors.New("conflict")}),
+		newFacadeReceiptPublicationError(context.Background(), repo, lineage, "", "", &reviewtransaction.ImmutablePublicationConflictError{Cause: errors.New("conflict")}),
 	)
 	if receiptConflict.Code != "receipt_publication_conflict" || receiptConflict.MutationOutcome != ReviewMutationCommitted ||
 		receiptConflict.Replayability != reviewtransaction.ReplayabilityManualActionRequired || receiptConflict.RetrySafe ||
@@ -1012,7 +1012,7 @@ func TestNegotiatedLegacyReadOnlyFailurePreservesTypedCauseAcrossMutationRoutes(
 	}
 }
 
-func TestNegotiatedReceiptPublicationFailureIsSanitizedAndExactlyReplayable(t *testing.T) {
+func TestNegotiatedReceiptPublicationFailureRequiresBoundStatusBeforeReplay(t *testing.T) {
 	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	writeNegotiatedOperationChange(t, repo, "thin")
@@ -1044,11 +1044,25 @@ func TestNegotiatedReceiptPublicationFailureIsSanitizedAndExactlyReplayable(t *t
 		t.Fatal("receipt publication interruption succeeded")
 	}
 	failure := decodeReviewIntegrationFailure(t, output.Bytes())
+	var failureWire struct {
+		TargetIdentity string `json:"target_identity"`
+	}
+	if err := json.Unmarshal(output.Bytes(), &failureWire); err != nil {
+		t.Fatal(err)
+	}
 	if failure.Code != "receipt_publication_pending" || failure.MutationOutcome != ReviewMutationCommitted ||
-		failure.Replayability != reviewtransaction.ReplayabilityExactReplaySafe || failure.RetrySafe ||
-		failure.LineageID != started.LineageID || !strings.HasPrefix(failure.RequestDigest, "sha256:") ||
-		failure.NextAction != "review.finalize" {
-		t.Fatalf("receipt failure = %#v", failure)
+		failure.Replayability != reviewtransaction.ReplayabilityStatusRequired || failure.RetrySafe ||
+		failure.LineageID != started.LineageID || failure.TargetIdentity != failureWire.TargetIdentity ||
+		!strings.HasPrefix(failure.RequestDigest, "sha256:") || failure.NextAction != "review.status" ||
+		!validReviewCapabilitySHA256(failureWire.TargetIdentity) {
+		t.Fatalf("receipt failure = %#v, wire binding = %#v", failure, failureWire)
+	}
+	failureSchema := compileWholePublishedReviewSchema(t, "v1", "failure.schema.json")
+	validatePublishedReviewSchema(t, failureSchema, output.Bytes())
+	withoutTarget := failure
+	withoutTarget.TargetIdentity = ""
+	if err := withoutTarget.Validate(); err == nil {
+		t.Fatal("receipt publication reconciliation accepted an unbound target")
 	}
 	if strings.Contains(output.String(), secret) || strings.Contains(err.Error(), secret) ||
 		strings.Contains(output.String(), "/tmp/") || strings.Contains(output.String(), "token=secret") {
@@ -1068,9 +1082,26 @@ func TestNegotiatedReceiptPublicationFailureIsSanitizedAndExactlyReplayable(t *t
 
 	output.Reset()
 	if err := RunReview([]string{
+		"status", "--contract", ReviewIntegrationContractV1, "--cwd", repo, "--lineage", started.LineageID, "--next-transition",
+	}, &output); err != nil {
+		t.Fatalf("target-bound STATUS after ambiguous FINALIZE: %v\n%s", err, output.String())
+	}
+	var status ReviewTargetStatusResult
+	decodeStrictReviewJSON(t, output.Bytes(), &status)
+	if status.TargetIdentity != failureWire.TargetIdentity || status.NextTransition == nil ||
+		status.NextTransition.Kind != reviewNextTransitionStop ||
+		status.NextTransition.ReasonCode != "original_finalize_request_required" {
+		t.Fatalf("STATUS after ambiguous FINALIZE = %#v, want the same target and native-controlled original-request replay", status)
+	}
+	if afterStatus := readReviewOperationFile(t, store.StatePath()); !bytes.Equal(afterStatus, pendingAuthority) {
+		t.Fatalf("STATUS mutated pending authority: before=%s after=%s", pendingAuthority, afterStatus)
+	}
+
+	output.Reset()
+	if err := RunReview([]string{
 		"finalize", "--contract", ReviewIntegrationContractV1, "--cwd", repo, "--lineage", started.LineageID,
 	}, &output); err != nil {
-		t.Fatalf("exact negotiated receipt replay: %v\n%s", err, output.String())
+		t.Fatalf("exact negotiated receipt replay after STATUS: %v\n%s", err, output.String())
 	}
 	finalized := assertApprovedBurnedCompactNegotiatedFinalize(t, output.Bytes())
 	if finalized.LineageID != started.LineageID || finalized.StoreRevision != pending.Revision {

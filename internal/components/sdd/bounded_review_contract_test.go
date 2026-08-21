@@ -43,9 +43,9 @@ func boundedReviewRequiredClausesFor(agent model.AgentID) []string {
 		"burns that exact authority and its artifacts",
 		"enabled gates return `invalidated/unmanaged`",
 		"disabled gates return `disabled/unmanaged`",
-		"Commit approved changes (Recommended)",
-		"Continue uncommitted",
-		"Push and PR are separate explicit decisions",
+		"Clean FINALIZE success stops with no terminal STATUS.",
+		"After any non-clean FINALIZE result, malformed or no output, transport loss, or post-mutation processing failure, issue exactly one retained target-bound read-only STATUS before replay.",
+		"Commit, push, PR, and release remain separate human decisions under ordinary repository policy.",
 		"### Cross-repository lifecycle root",
 		"explicit user authorization",
 		"canonical B worktree root",
@@ -55,12 +55,12 @@ func boundedReviewRequiredClausesFor(agent model.AgentID) []string {
 		"Opaque `repository_context` can capture or materialize from any process cwd",
 		"Go owns repository binding; adapters never parse authorization or roots",
 		"Approval burns B only; A remains untouched",
-		"commit question names B and commits in B only",
+		"review lifecycle stops",
 		"Unsupported runtimes remain unavailable",
 	}
 }
 
-func TestReviewLifecycleContractRequiresAtomicBurnAndCommitDecision(t *testing.T) {
+func TestReviewLifecycleContractRequiresAtomicBurnAndNonDecidingDelivery(t *testing.T) {
 	content := boundedReviewContract()
 	for _, want := range []string{
 		"Selectorless STATUS only preflights the current worktree candidate",
@@ -68,9 +68,9 @@ func TestReviewLifecycleContractRequiresAtomicBurnAndCommitDecision(t *testing.T
 		"burns that exact authority and its artifacts",
 		"enabled gates return `invalidated/unmanaged`",
 		"disabled gates return `disabled/unmanaged`",
-		"Commit approved changes (Recommended)",
-		"Continue uncommitted",
-		"Push and PR are separate explicit decisions",
+		"Clean FINALIZE success stops with no terminal STATUS.",
+		"After any non-clean FINALIZE result, malformed or no output, transport loss, or post-mutation processing failure, issue exactly one retained target-bound read-only STATUS before replay.",
+		"Commit, push, PR, and release remain separate human decisions under ordinary repository policy.",
 	} {
 		if !strings.Contains(content, want) {
 			t.Errorf("atomic lifecycle contract missing %q", want)
@@ -91,7 +91,7 @@ func TestReviewLifecycleContractRequiresAtomicBurnAndCommitDecision(t *testing.T
 func TestBoundedReviewStopInventoryIsCompleteWithoutRepeatingStatus(t *testing.T) {
 	content := boundedReviewContract()
 	const start = "### Continue after a stop reason code"
-	const end = "## Delivery is human-owned"
+	const end = "## Delivery follows ordinary repository policy"
 	startIndex := strings.Index(content, start)
 	endIndex := strings.Index(content, end)
 	if startIndex < 0 || endIndex < startIndex {
@@ -258,7 +258,7 @@ func TestSharedReviewLifecycleRendersOnlyForAdvertisedRuntimes(t *testing.T) {
 				for _, forbidden := range []string{
 					"Native Compact Review Orchestration",
 					"Selectorless STATUS only preflights the current worktree candidate",
-					"Commit approved changes (Recommended)",
+					"Clean FINALIZE success stops with no terminal STATUS.",
 					"### Cross-repository lifecycle root",
 				} {
 					if strings.Contains(content, forbidden) {
@@ -441,7 +441,7 @@ func TestBoundedReviewContractMakesCompatibilityGatesNonDeciding(t *testing.T) {
 		"Shipped `review validate` and gate commands are compatibility/informational only",
 		"enabled gates return `invalidated/unmanaged`",
 		"disabled gates return `disabled/unmanaged`",
-		"They never allow, approve, block, commit, push, or open a PR",
+		"They never allow, approve, block, commit, push, open a PR, or govern release",
 	} {
 		if !strings.Contains(content, clause) {
 			t.Errorf("contract missing non-deciding gate clause %q", clause)
@@ -461,7 +461,7 @@ func TestAuthorityFirstTerminalProcedureIsStructuredAndAtomic(t *testing.T) {
 		{order: 2, operation: "exact returned START", result: "one compact lineage/worktree/target binding; retain lineage, revision, and target"},
 		{order: 3, operation: "exact-lineage STATUS, collect, and FINALIZE", result: "only returned transaction actions; no ambient resume, reuse, or delivery gate"},
 		{order: 4, operation: "successful FINALIZE", result: "native readback, exact authority/artifact burn, then `approved`"},
-		{order: 5, operation: "native single-select question", result: "stop for the human's explicit commit authorization or uncommitted continuation"},
+		{order: 5, operation: "terminal lifecycle stop", result: "ordinary repository policy owns any later delivery decision"},
 	}
 	if len(rows) != len(want) {
 		t.Fatalf("authority-first rows = %d, want %d", len(rows), len(want))
@@ -486,7 +486,7 @@ func TestAuthorityFirstLifecycleRendersForAdvertisedRuntimes(t *testing.T) {
 			if strings.Count(content, procedure) != 1 {
 				t.Fatal("rendered orchestrator does not contain exactly one canonical terminal procedure")
 			}
-			for _, want := range []string{"Selectorless STATUS only preflights the current worktree candidate", "Route only from that transaction's returned `next_transition`", "Forecast is informational; route only from `next_transition`", "Commit approved changes (Recommended)"} {
+			for _, want := range []string{"Selectorless STATUS only preflights the current worktree candidate", "Route only from that transaction's returned `next_transition`", "Forecast is informational; route only from `next_transition`", "Clean FINALIZE success stops with no terminal STATUS."} {
 				if !strings.Contains(content, want) {
 					t.Errorf("rendered orchestrator missing forecast contract %q", want)
 				}

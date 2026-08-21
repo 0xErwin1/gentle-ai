@@ -152,7 +152,7 @@ The parent orchestrator coordinates one native transaction; reviewers, refuters,
 
 4. **Terminate atomically.** Native Go owns frozen lenses, provider context and admission, refutation, one bounded correction, repository evidence, and targeted validation. It reads back successful approval, then burns that exact authority and its artifacts before returning `approved`. No terminal receipt, tombstone, witness, mirror, or delivery authority survives. Unrelated transactions survive unchanged.
 
-If FINALIZE or the burn is ambiguous or fails, do not claim approval and do not ask the commit question. Query exact-lineage native STATUS only while that authority still exists, then follow the returned action. Never retry by inventing a new binding.
+Clean FINALIZE success stops with no terminal STATUS. After any non-clean FINALIZE result, malformed or no output, transport loss, or post-mutation processing failure, issue exactly one retained target-bound read-only STATUS before replay. STATUS is read-only; FINALIZE alone owns mutation and burn. If that STATUS returns `original_finalize_request_required`, replay only the exact original FINALIZE request it identifies. Never blindly replay or invent a new binding.
 
 When v2 returns `forecast`, relay it losslessly in the user's language: preserve every step's order and fields (`step`, `kind`, `reason_code`, `description`) and the horizon. Forecast is informational; route only from `next_transition`.
 
@@ -160,11 +160,10 @@ When v2 returns `forecast`, relay it losslessly in the user's language: preserve
 
 A session in repository A may review an explicitly selected nested target in unrelated repository B only after explicit user authorization. Native Go resolves the requested path to the canonical B worktree root; adapters never parse authorization or roots.
 
-- After B is selected, retain canonical B as the lifecycle working root from selectorless STATUS through consent, collection, correction, validation, FINALIZE, burn, and the post-approval question. Do not fall back to A.
+- After B is selected, retain canonical B as the lifecycle working root from selectorless STATUS through consent, collection, correction, validation, FINALIZE, and burn. Do not fall back to A.
 - Run provider-issued command tokens exactly. Never append, remove, or rebuild provider-issued command tokens. When a command omits `--cwd`, run it with process cwd B.
 - Opaque `repository_context` can capture or materialize from any process cwd, but the host still retains B for lifecycle continuity. Go owns repository binding; adapters never parse authorization or roots.
 - The same lineage text in A and B is independent. Approval burns B only; A remains untouched.
-- The commit question names B and commits in B only if the human chooses it. Do not push.
 
 This lifecycle is rendered for exactly Claude Code, Codex, OpenCode, and Pi. Unsupported runtimes remain unavailable before repository or authority mutation.
 
@@ -195,7 +194,7 @@ Reviewers inspect only the provider-bound immutable trees. Never hand candidate 
 | 02 | exact returned START | one compact lineage/worktree/target binding; retain lineage, revision, and target |
 | 03 | exact-lineage STATUS, collect, and FINALIZE | only returned transaction actions; no ambient resume, reuse, or delivery gate |
 | 04 | successful FINALIZE | native readback, exact authority/artifact burn, then `approved` |
-| 05 | native single-select question | stop for the human's explicit commit authorization or uncommitted continuation |
+| 05 | terminal lifecycle stop | ordinary repository policy owns any later delivery decision |
 
 <!-- authority-first-terminal-procedure:end -->
 
@@ -218,16 +217,11 @@ A `stop` ends its transition, never approves delivery. Complete atomic inventory
 | `recovery_scope_unchanged` | Change B target identity, then retry the exact returned `gentle-ai review recover`. |
 | `rdd_disabled` | Enable `gentle-ai review mode enable --scope clone --cwd <B>`, then `S`. |
 
-## Delivery is human-owned
+## Delivery follows ordinary repository policy
 
-Shipped `review validate` and gate commands are compatibility/informational only. They never discover authority or decide delivery: enabled gates return `invalidated/unmanaged`; disabled gates return `disabled/unmanaged`. They never allow, approve, block, commit, push, or open a PR.
+Shipped `review validate` and gate commands are compatibility/informational only. They never discover authority or decide delivery: enabled gates return `invalidated/unmanaged`; disabled gates return `disabled/unmanaged`. They never allow, approve, block, commit, push, open a PR, or govern release.
 
-Immediately after terminal `approved` burn, and before another edit or START, use the native question UI for one single-select question and STOP for the answer. When the review selected repository B from session A, name B in the question and run any chosen commit in B only:
-
-- **Commit approved changes (Recommended)** — explicit authorization to create a conventional commit based on the approved work. Commit advances `HEAD`, so the next default START reviews only later changes. Do not push.
-- **Continue uncommitted** — keep the workspace unchanged. The next START freezes the full outstanding delta again, including the approved bytes.
-
-Push and PR are separate explicit decisions. Approval never authorizes delivery. If approved bytes are committed, the next default review starts from the new `HEAD`; otherwise it freezes the entire outstanding worktree delta.
+After terminal `approved` burn, the review lifecycle stops. Commit, push, PR, and release remain separate human decisions under ordinary repository policy. A review outcome is informational and never authorizes delivery, including when the selected repository is B.
 
 Historical compatibility commands may read older artifacts manually, but they are never the ordinary lifecycle and never restore delivery authority.
 

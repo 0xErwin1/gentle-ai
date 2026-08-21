@@ -289,13 +289,15 @@ func TestExactApprovedCompactBurnIgnoresMalformedForeignStage(t *testing.T) {
 		t.Fatalf("exact FINALIZE changed foreign staging: %q, %v", got, err)
 	}
 	var selectorless bytes.Buffer
-	err := RunReview([]string{"status", "--contract", ReviewIntegrationContractV2, "--next-transition", "--cwd", fixture.repo}, &selectorless)
-	if err == nil {
-		var result ReviewTargetStatusResult
-		decodeStrictReviewJSON(t, selectorless.Bytes(), &result)
-		if result.Applicability != reviewtransaction.TargetApplicabilityCorrupted || result.NextTransition == nil || result.NextTransition.Kind != reviewNextTransitionStop {
-			t.Fatalf("selectorless STATUS accepted malformed foreign staging: %#v", result)
-		}
+	if err := RunReview([]string{"status", "--contract", ReviewIntegrationContractV2, "--next-transition", "--cwd", fixture.repo}, &selectorless); err != nil {
+		t.Fatalf("selectorless STATUS was blocked by foreign staging: %v", err)
+	}
+	var result ReviewTargetStatusResult
+	decodeStrictReviewJSON(t, selectorless.Bytes(), &result)
+	if result.Applicability != reviewtransaction.TargetApplicabilityUnrelated || result.NextTransition == nil ||
+		result.NextTransition.Kind != reviewNextTransitionExecute || result.NextTransition.Execute == nil ||
+		result.NextTransition.Execute.Operation != "review.start" {
+		t.Fatalf("selectorless STATUS did not ignore malformed foreign staging: %#v", result)
 	}
 }
 func TestApprovedCompactBurnStatusFailsClosedForUnsafeStaging(t *testing.T) {

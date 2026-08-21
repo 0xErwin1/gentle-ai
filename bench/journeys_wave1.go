@@ -1091,7 +1091,8 @@ func requireDiscoveredArchivePremise(_ *Sandbox, observation Observation) error 
 // Absence" requirement): the disabled branch previously required a populated
 // "disabled/unmanaged" disposition; it now requires reviewGate's structural
 // ABSENCE instead -- no field, no ceremony, archive unfailable on review
-// grounds. The enabled branch is untouched.
+// grounds. With reviews enabled, a discovered scope change remains visible but
+// is equally informational: archive stays ready under ordinary policy.
 func requireDiscoveredArchiveStatus(disabled bool) func(*Sandbox, Observation) error {
 	return sddStatusAssertion("discovered scope-changed archive authority", func(status sddStatusV1) error {
 		if disabled {
@@ -1109,8 +1110,8 @@ func requireDiscoveredArchiveStatus(disabled bool) func(*Sandbox, Observation) e
 		if !strings.Contains(status.ReviewGate.Reason, "review scope changed") {
 			return fmt.Errorf("reviewGate.reason = %q, want the changed candidate reason", status.ReviewGate.Reason)
 		}
-		if status.ReviewGate.Delivery != "" || status.Dependencies.Archive != "blocked" || status.NextRecommended != "resolve-review" {
-			return fmt.Errorf("enabled gate=%+v archive=%q next=%q, want scope-changed blocked/resolve-review",
+		if status.ReviewGate.Delivery != "" || status.Dependencies.Archive != "ready" || status.NextRecommended != "archive" {
+			return fmt.Errorf("enabled gate=%+v archive=%q next=%q, want informational scope-changed ready/archive",
 				status.ReviewGate, status.Dependencies.Archive, status.NextRecommended)
 		}
 		return nil
