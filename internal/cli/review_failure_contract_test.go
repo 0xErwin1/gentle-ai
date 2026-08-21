@@ -190,16 +190,14 @@ func TestNegotiatedReviewFailuresPreserveRequestedLineage(t *testing.T) {
 	if err := bindingFailure.Validate(); err != nil {
 		t.Fatal(err)
 	}
+	repo := initReviewCLIRepo(t)
 	receiptConflict := newReviewIntegrationFailure(
 		ReviewIntegrationOperationFinalize,
 		[]string{"--lineage", lineage},
-		// review_facade.go:1516,1685,1734,1738,1741 (organic-dx Phase 5 task
-		// 5.5): newFacadeReceiptPublicationError now threads ctx/root to
-		// generate a tool-fault defect report on a genuine conflict; "." is
-		// not a real repository, so report generation fails closed to an
-		// empty clause here, which is exactly what this test already
-		// asserts nothing about (it never pinned the exact .Error() text).
-		newFacadeReceiptPublicationError(context.Background(), ".", lineage, "", &reviewtransaction.ImmutablePublicationConflictError{Cause: errors.New("conflict")}),
+		// Publication conflicts deliberately generate a tool-fault report. Keep
+		// that write inside this temporary repository's common directory, never
+		// the real worktree selected by ".".
+		newFacadeReceiptPublicationError(context.Background(), repo, lineage, "", &reviewtransaction.ImmutablePublicationConflictError{Cause: errors.New("conflict")}),
 	)
 	if receiptConflict.Code != "receipt_publication_conflict" || receiptConflict.MutationOutcome != ReviewMutationCommitted ||
 		receiptConflict.Replayability != reviewtransaction.ReplayabilityManualActionRequired || receiptConflict.RetrySafe ||
@@ -208,6 +206,21 @@ func TestNegotiatedReviewFailuresPreserveRequestedLineage(t *testing.T) {
 	}
 	if err := receiptConflict.Validate(); err != nil {
 		t.Fatal(err)
+	}
+	reportDir := reviewDefectReportDir(t, repo)
+	entries, err := os.ReadDir(reportDir)
+	if err != nil {
+		t.Fatalf("read temporary-repository defect reports: %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("temporary-repository defect reports = %v, want exactly one", entries)
+	}
+	report, err := os.ReadFile(filepath.Join(reportDir, entries[0].Name()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(report), "receipt_publication_conflict") || !strings.Contains(string(report), reviewDefectReportIssuesURL) {
+		t.Fatalf("temporary-repository defect report lacks reason code or issue URL: %s", report)
 	}
 
 	_, negotiated, routed := reviewIntegrationFailureRoute([]string{
@@ -999,40 +1012,6 @@ func TestNegotiatedLegacyReadOnlyFailurePreservesTypedCauseAcrossMutationRoutes(
 	}
 }
 
-func TestNegotiatedGateDenialUsesFailureEnvelopeWithoutAuthorityDrift(t *testing.T) {
-	reviewEnabledHome(t)
-	repo := initReviewCLIRepo(t)
-	writeNegotiatedOperationChange(t, repo, "thin")
-	lineage := "review-failure-gate"
-	_, store := finalizeNegotiatedOperationFixture(t, repo, lineage, true)
-	var err error
-	beforeAuthority := readReviewOperationFile(t, store.StatePath())
-	beforeReceipt := readReviewOperationFile(t, store.ReceiptPath())
-	if err := os.WriteFile(filepath.Join(repo, "openspec", "changes", "thin", "proposal.md"), []byte("# Drifted proposal\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	var output bytes.Buffer
-	err = RunReview([]string{
-		"validate", "--contract", ReviewIntegrationContractV1, "--cwd", repo, "--lineage", lineage,
-		"--gate", string(reviewtransaction.GatePostApply),
-	}, &output)
-	if err == nil {
-		t.Fatal("drifted target passed negotiated validation")
-	}
-	failure := decodeReviewIntegrationFailure(t, output.Bytes())
-	if failure.Code != "gate_scope_changed" || failure.MutationOutcome != ReviewMutationNotStarted ||
-		failure.RetrySafe || failure.Replayability != reviewtransaction.ReplayabilityManualActionRequired ||
-		failure.NextAction != "explicit-maintainer-action" {
-		t.Fatalf("gate failure = %#v", failure)
-	}
-	assertScopeChangeRecovery(t, failure, lineage, "openspec/changes/thin/proposal.md")
-	if !bytes.Equal(beforeAuthority, readReviewOperationFile(t, store.StatePath())) ||
-		!bytes.Equal(beforeReceipt, readReviewOperationFile(t, store.ReceiptPath())) {
-		t.Fatal("negotiated gate denial changed authority or receipt bytes")
-	}
-}
-
 func TestNegotiatedReceiptPublicationFailureIsSanitizedAndExactlyReplayable(t *testing.T) {
 	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
@@ -1080,6 +1059,9 @@ func TestNegotiatedReceiptPublicationFailureIsSanitizedAndExactlyReplayable(t *t
 		t.Fatal(err)
 	}
 	pendingAuthority := readReviewOperationFile(t, store.StatePath())
+	if pending.State.State != reviewtransaction.StateApproved || len(pendingAuthority) == 0 {
+		t.Fatalf("failed publication did not preserve the approved authority for exact replay: %#v", pending)
+	}
 	if _, err := os.Stat(store.ReceiptPath()); !os.IsNotExist(err) {
 		t.Fatalf("failed publication materialized receipt: %v", err)
 	}
@@ -1090,16 +1072,11 @@ func TestNegotiatedReceiptPublicationFailureIsSanitizedAndExactlyReplayable(t *t
 	}, &output); err != nil {
 		t.Fatalf("exact negotiated receipt replay: %v\n%s", err, output.String())
 	}
-	after, err := store.Load()
-	if err != nil {
-		t.Fatal(err)
+	finalized := assertApprovedBurnedCompactNegotiatedFinalize(t, output.Bytes())
+	if finalized.LineageID != started.LineageID || finalized.StoreRevision != pending.Revision {
+		t.Fatalf("exact receipt replay terminal result = %#v, want lineage %q revision %q", finalized, started.LineageID, pending.Revision)
 	}
-	if after.Revision != pending.Revision || !bytes.Equal(pendingAuthority, readReviewOperationFile(t, store.StatePath())) {
-		t.Fatal("exact receipt replay changed authority identity or bytes")
-	}
-	if _, err := os.Stat(store.ReceiptPath()); err != nil {
-		t.Fatalf("exact receipt replay did not publish receipt: %v", err)
-	}
+	assertApprovedCompactAuthorityBurned(t, store, started.LineageID)
 }
 
 func TestReviewIntegrationFailureSchemaAndFixtureAreStrict(t *testing.T) {

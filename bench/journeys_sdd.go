@@ -812,25 +812,6 @@ func sddDenyPostApply(sandbox *Sandbox) error {
 	return nil
 }
 
-// sddInstallDiscoveryDriftFixture selects the build-tagged package-internal
-// seam that mutates this sandbox receipt between discovery's immutable reads.
-func sddInstallDiscoveryDriftFixture(sandbox *Sandbox) error {
-	receipt, err := sddReceiptPath(sandbox)
-	if err != nil {
-		return err
-	}
-	if _, err := os.Stat(receipt); err != nil {
-		return fmt.Errorf("fixture expected receipt before discovery drift: %w", err)
-	}
-	content, err := os.ReadFile(receipt)
-	if err != nil {
-		return fmt.Errorf("fixture reads receipt before discovery drift: %w", err)
-	}
-	sandbox.BenchReceiptMutationPath = receipt
-	sandbox.Scratch[sourceCoupledReceiptContentKey] = string(content)
-	return nil
-}
-
 // sddVerifyReport is the fenced envelope a completed independent verification
 // writes. Its exact shape matters: a report the product cannot parse routes as
 // "verification is missing", which is a different journey.
@@ -1632,6 +1613,32 @@ func sddApprovedAuthoritySteps(fixture func(*Sandbox) error) []Step {
 			Args: selectedReviewArgs("review", "finalize", "--captured-evidence=true")},
 		{Name: "prove selected authority approval", Composite: sddProveSelectedApproval},
 	}
+}
+
+// sddBurnedAuthoritySteps is the #3417 counterpart for the three SDD journeys
+// that used to depend on a durable approved lineage. It keeps their real review
+// exercise but proves the terminal transaction is gone before SDD continues under
+// ordinary policy.
+func sddBurnedAuthoritySteps(fixture func(*Sandbox) error) []Step {
+	return []Step{
+		{Name: "fixture: exact active-lineage compact transaction", Fixture: fixture},
+		{Name: "capture every selected lens for the exact active lineage", Requires: captureResultCapability, Composite: sddCaptureSelectedAuthorityLenses},
+		{Name: "finalize exact active-lineage reviewer results", Requires: selectedFinalizeResultsCapability,
+			Args: selectedReviewArgs("review", "finalize", "--captured-results=true")},
+		{Name: "capture final evidence for the exact active lineage", Requires: captureEvidenceCapability, Composite: sddCaptureSelectedAuthorityEvidence},
+		{Name: "#3417 final evidence burns the exact active-lineage transaction", Requires: selectedFinalizeEvidenceCapability,
+			Args: selectedReviewArgs("review", "finalize", "--captured-evidence=true"), After: func(sandbox *Sandbox, observation Observation) error {
+				return requireBurnedApproval(sandbox.Lineage)(sandbox, observation)
+			}},
+		{Name: "prove the terminal burn leaves no durable authority or receipt", Composite: sddProveSelectedBurned},
+	}
+}
+
+func sddProveSelectedBurned(r *journeyRun) error {
+	if r.sandbox.Lineage == "" {
+		return errors.New("#3417 SDD fixture has no exact lineage to prove burned")
+	}
+	return requireAtomicLineageBurned(r, r.sandbox.Lineage)
 }
 
 // ---------------------------------------------------------------------------

@@ -676,6 +676,26 @@ func newReviewIntegrationFailure(operation string, args []string, runErr error) 
 		failure.Cause = ""
 		return failure
 	}
+	// Exact atomic START binding conflicts are detected before the guarded write.
+	// They must never be reported as an unknown mutation or sent through ambient
+	// recovery discovery: callers can correct the request without replaying one.
+	var atomicStartConflict *reviewtransaction.CompactAtomicStartConflictError
+	if errors.As(runErr, &atomicStartConflict) {
+		failure.Phase = "pre_native"
+		failure.Code = "atomic_start_conflict"
+		failure.Message = "The exact START binding conflicts with the active authority at this lineage; no authority was changed."
+		failure.MutationOutcome = ReviewMutationNotStarted
+		failure.AuthorityApplicability = "current_target"
+		failure.RetrySafe = true
+		failure.Replayability = reviewtransaction.ReplayabilityNotReplayable
+		failure.RequiredInputs = []string{}
+		failure.NextAction = "correct_request"
+		if validReviewIntegrationLineage(atomicStartConflict.LineageID) {
+			failure.LineageID = atomicStartConflict.LineageID
+		}
+		failure.Cause = reviewIntegrationFailureCause(atomicStartConflict)
+		return failure
+	}
 	var startContext *reviewStartContextError
 	if errors.As(runErr, &startContext) {
 		failure.Code = "candidate_context_unavailable"

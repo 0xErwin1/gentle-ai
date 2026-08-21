@@ -418,7 +418,7 @@ func TestRunArgsDispatchesNativeReviewOperationsBeforePlatformValidation(t *test
 		{command: "review-resume", want: "review-resume requires --cwd and --lineage"},
 		{command: "review-bundle-export", want: "review-bundle-export requires --cwd, --lineage, and --out"},
 		{command: "review-bundle-import", want: "review-bundle-import requires --cwd and --bundle"},
-		{command: "review-validate", want: "review-validate requires --cwd and --receipt"},
+		{command: "review-validate", want: "review-validate requires --cwd"},
 	} {
 		t.Run(test.command, func(t *testing.T) {
 			var output bytes.Buffer

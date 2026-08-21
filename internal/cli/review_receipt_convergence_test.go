@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"os"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -54,7 +53,9 @@ func contendedReceiptWriter(t *testing.T, lockPath string, release time.Duration
 func TestFinalizeConvergesWhenReceiptPublicationMeetsBrieflyHeldLock(t *testing.T) {
 	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
-	lineage := startLowRiskFacadeReview(t, repo)
+	// Receipt publication pending/replay is compact-v2 behavior. Construct the
+	// historical compact authority directly; negotiated START now creates v3.
+	lineage := startFacadeReview(t, repo).LineageID
 	contendedReceiptWriter(t, compactAuthorityLockPath(t, repo, lineage), 150*time.Millisecond)
 
 	var output bytes.Buffer
@@ -63,13 +64,15 @@ func TestFinalizeConvergesWhenReceiptPublicationMeetsBrieflyHeldLock(t *testing.
 	}, &output); err != nil {
 		t.Fatalf("FINALIZE did not converge past a briefly-held authority lock at receipt publication: %v\n%s", err, output.String())
 	}
+	finalized := assertApprovedBurnedCompactNegotiatedFinalize(t, output.Bytes())
+	if finalized.LineageID != lineage {
+		t.Fatalf("converged FINALIZE lineage = %q, want %q", finalized.LineageID, lineage)
+	}
 	store, err := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, lineage)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := os.Stat(store.ReceiptPath()); err != nil {
-		t.Fatalf("converged FINALIZE left no terminal receipt: %v", err)
-	}
+	assertApprovedCompactAuthorityBurned(t, store, lineage)
 }
 
 // TestFinalizeReceiptPublicationExhaustionKeepsPendingReplay is the guard on
@@ -83,7 +86,9 @@ func TestFinalizeConvergesWhenReceiptPublicationMeetsBrieflyHeldLock(t *testing.
 func TestFinalizeReceiptPublicationExhaustionKeepsPendingReplay(t *testing.T) {
 	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
-	lineage := startLowRiskFacadeReview(t, repo)
+	// Receipt publication pending/replay is compact-v2 behavior. Construct the
+	// historical compact authority directly; negotiated START now creates v3.
+	lineage := startFacadeReview(t, repo).LineageID
 	lockPath := compactAuthorityLockPath(t, repo, lineage)
 	// The lock is taken only at the receipt writer and held past any bounded
 	// wait, so the operation provably reaches the publication step and the
@@ -140,11 +145,13 @@ func TestFinalizeReceiptPublicationExhaustionKeepsPendingReplay(t *testing.T) {
 	}, &converged); err != nil {
 		t.Fatalf("exact lineage-only replay after the obstruction cleared: %v\n%s", err, converged.String())
 	}
+	finalized := assertApprovedBurnedCompactNegotiatedFinalize(t, converged.Bytes())
+	if finalized.LineageID != lineage {
+		t.Fatalf("replay after obstruction lineage = %q, want %q", finalized.LineageID, lineage)
+	}
 	store, err := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, lineage)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := os.Stat(store.ReceiptPath()); err != nil {
-		t.Fatalf("replay after obstruction left no terminal receipt: %v", err)
-	}
+	assertApprovedCompactAuthorityBurned(t, store, lineage)
 }

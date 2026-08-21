@@ -18,6 +18,7 @@ func init() {
 		Name:     sddTaskResultAxis,
 		Title:    "OpenCode SDD task-result transport failures",
 		BlackBox: false,
+		Review:   reviewUntouched,
 		Properties: []string{
 			"Runs the installed OpenCode plugin through Node with a provider-shaped empty task_result; it does not drive the gentle-ai CLI alone.",
 			"Requires GENTLE_AI_BENCH_SDD_PLUGIN and a Node runtime that executes .mts files with built-in TypeScript type stripping; skips honestly when the plugin or runtime capability is unavailable.",
