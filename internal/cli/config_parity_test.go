@@ -72,6 +72,8 @@ var selectionParity = map[string]parityDisposition{
 	"ClaudeModelAssignments":      represented("ClaudeModelAssignments"),
 	"ClaudePhaseAssignments":      represented("ClaudePhaseAssignments"),
 	"KiroModelAssignments":        represented("KiroModelAssignments"),
+	"PiModelAssignments":          represented("PiModelAssignments"),
+	"PiModelFamily":               represented("PiModelFamily"),
 	"CodexModelAssignments":       represented("CodexModelAssignments"),
 	"CodexOrchestratorAssignment": represented("CodexOrchestrator"),
 	"CodexCarrilModelAssignments": represented("CodexCarrilModelAssignments"),
