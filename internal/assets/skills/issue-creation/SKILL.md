@@ -21,7 +21,7 @@ Use this skill when drafting, creating, commenting on, triaging, or approving a 
 - Complete one open-and-closed duplicate search before a write. Reuse that result while it remains current.
 - Never invent required facts, selections, first-person affirmations, labels, approval, or policy. Ask for the smallest missing fact.
 - Use only labels declared by the selected form, discovered to exist, and permitted for the actor. Never add `status:approved`.
-- Keep the final issue or comment body and all body-bearing read-back data in private temporary files outside repositories. Do not print either file's contents.
+- Keep the final issue or comment body and all body-bearing candidate and read-back data in private temporary files outside repositories. Do not print the contents of any protected file.
 - Make one create or comment attempt with no blind retry. Classify it exactly `confirmed | no_write | unknown`; `unknown` stops every later mutation and retry.
 
 ## Decision Gates
@@ -30,21 +30,37 @@ Use this skill when drafting, creating, commenting on, triaging, or approving a 
 | --- | --- | --- |
 | Fast path | The current session has the exact target and form, reviewed answers and title, current labels and policy, and a completed classifiable duplicate search | Reuse them and enter the common publication flow. |
 | Minimal discovery | Any required fact is missing, stale, ambiguous, or belongs to another target | Resolve the target first, then fetch only the missing facts and stop if any remain unknown. |
-| Conforming equivalent | An existing issue covers the same behavior and follows the selected form | Comment there instead of creating a duplicate. |
-| Nonconforming concrete issue | An existing issue covers the behavior but lacks required form information | Request that its author repair it in place; never auto-rewrite or approve it. |
+| Conforming equivalent | A relevant candidate, read from the target host, covers the same behavior and its body satisfies the selected form's controls and required answers | Comment there instead of creating a duplicate. |
+| Nonconforming concrete issue | A relevant candidate, read from the target host, covers the behavior but its body lacks required form information | Request that its author repair it in place; never auto-rewrite or approve it. |
 | Question or triage | Policy routes questions to enabled Discussions, contact links, or review gates | Follow that route; otherwise request the smallest missing decision. |
 
 ## Execution Steps
 
 1. Choose the fast path or minimal discovery. When discovery is needed, derive and verify `HOST`, `REPO=OWNER/REPO`, and `TARGET=$HOST/$REPO` from an explicit target or one unambiguous authenticated remote before target reads. Authenticate to `HOST`; discover only missing repository policy, default-branch Issue Forms/config, issue availability, Discussions routing, and labels. Failed or ambiguous discovery stops publication.
-2. Complete one duplicate search covering open and closed issues, unless a matching current-session result is still valid:
+2. Select the one YAML form whose declared purpose matches. Before duplicate classification, establish its controls and required-answer structure in declared order; omit `markdown` guidance and do not collect or materialize new-issue answers yet:
+
+   | Control | Candidate comparison structure |
+   | --- | --- |
+   | `input` / `textarea` | Visible label and `validations.required` status |
+   | `dropdown` | Visible label, declared options, required selection, and declared order |
+   | `checkboxes` | Visible label, each option, and individually required status |
+
+   Preserve labels, emojis, option text, and values. Stop on malformed, unsupported, missing, or ambiguous required structure.
+3. Create an owner-only temporary directory and `DISCOVERY_FILE`, `BODY_FILE`, plus `READBACK_FILE` in it (`0700`/`0600`, or strict Windows ACL equivalents), and install cleanup before writing body-bearing data. Clean up all three files on every stop, signal, failure, `confirmed`, `no_write`, and `unknown` path.
+4. Complete one duplicate search covering open and closed issues, unless a matching current-session result is still valid:
 
    ```bash
    gh issue list --repo "$TARGET" --state all --search "$QUERY" --limit 1000
    ```
 
-   Treat saturated or otherwise incomplete results as unknown discovery; narrow read-only search or stop without writing.
-3. Select the one YAML form whose declared purpose matches. Process controls in declared order and omit `markdown` guidance:
+   Treat saturated or otherwise incomplete results as unknown discovery; narrow read-only search or stop without writing. Read only each relevant candidate that can affect the duplicate decision from the exact target host. Capture its number, URL, title, and body in `DISCOVERY_FILE`; do not print that body-bearing data:
+
+   ```bash
+   gh issue view "$CANDIDATE_NUMBER" --repo "$TARGET" --json number,url,title,body >"$DISCOVERY_FILE"
+   ```
+
+   Require the returned candidate number and URL in `DISCOVERY_FILE` to identify `$CANDIDATE_NUMBER` in `$REPO` on `$HOST` before classification; a mismatch is `unknown`. Compare each candidate's body controls and required answers with the selected YAML form before classifying it conforming or needing repair. Unavailable body, target mismatch, incomplete data, or ambiguous classification is `unknown` and stops without writing. Reuse valid current-session candidate results; keep the read set proportional.
+5. Follow the evidence-based duplicate decision. For a conforming equivalent, prepare the comment; for a nonconforming concrete issue, prepare only the in-place repair request. Only when classification selects the new-issue path, process reviewed answers and materialize the body:
 
    | Control | Materialized body |
    | --- | --- |
@@ -52,17 +68,22 @@ Use this skill when drafting, creating, commenting on, triaging, or approving a 
    | `dropdown` | `### <visible label>` followed by exact selected option text in declared order |
    | `checkboxes` | `### <visible label>` followed by each option as `- [x] <exact text>` or `- [ ] <exact text>` |
 
-   Preserve labels, emojis, option text, and values. Enforce every `validations.required` field, required dropdown selection, and individually required checkbox option. Require explicit user affirmation for first-person checkbox text. For `textarea.attributes.render`, fence the answer with the declared language and a fence long enough for its content. Render an unanswered optional control as `_No response_`; stop on malformed, unsupported, missing, or ambiguous required input.
-4. Review the exact target, title, selected form, materialized body or comment, and permitted discovered form labels. Pass each label as a separate repeated `--label <label>` option; omit the option when no label applies. For a comment, confirm the duplicate decision and intended in-place request.
-5. Create an owner-only temporary directory and `BODY_FILE` plus `READBACK_FILE` in it (`0700`/`0600`, or strict Windows ACL equivalents), and install cleanup before writing content. Clean up both files on every stop, signal, failure, `confirmed`, `no_write`, and `unknown` path.
-6. Immediately before mutation, perform one practical privacy scan of the title and body for actual local paths, usernames, hostnames, credentials or secrets, private project names, and private network addresses. Replace findings with `<project-name>`, `<user>`, `<hostname>`, or `<token>` as applicable while preserving intentionally public identifiers and useful reproduction structure. For issue creation, repeat the final `--label "$PERMITTED_LABEL"` segment once per permitted label and omit it when none apply. Then make only the applicable GitHub CLI attempt:
+   Enforce every `validations.required` field, required dropdown selection, and individually required checkbox option. Require explicit user affirmation for first-person checkbox text. For `textarea.attributes.render`, fence the answer with the declared language and a fence long enough for its content. Render an unanswered optional control as `_No response_`; stop on malformed, unsupported, missing, or ambiguous required input. Review the exact target, title, selected form, materialized body or comment, and permitted discovered form labels.
+6. Apply this label expansion contract to the single canonical create command:
+
+   | Permitted labels | Command suffix |
+   | --- | --- |
+   | Zero | Append no `--label` tokens. |
+   | Each permitted label | Append exactly one separate `--label "$PERMITTED_LABEL"` pair. |
+
+7. Immediately before mutation, perform one practical privacy scan of the title and body for actual local paths, usernames, hostnames, credentials or secrets, private project names, and private network addresses. Replace findings with `<project-name>`, `<user>`, `<hostname>`, or `<token>` as applicable while preserving intentionally public identifiers and useful reproduction structure. Make only the applicable GitHub CLI attempt:
 
    ```bash
    gh issue create --repo "$TARGET" --title "$TITLE" --body-file "$BODY_FILE" --label "$PERMITTED_LABEL"
    gh issue comment "$NUMBER" --repo "$TARGET" --body-file "$BODY_FILE"
    ```
 
-7. Capture the returned target-host issue or comment identity and read it back from that host into `READBACK_FILE`. Redirect stdout from both body-bearing read-back commands:
+8. Capture the returned target-host issue or comment identity and read it back from that host into `READBACK_FILE`. Redirect stdout from both body-bearing read-back commands:
 
    ```bash
    gh issue view "$NUMBER" --repo "$TARGET" --json number,url,title,body,labels >"$READBACK_FILE"
@@ -70,7 +91,7 @@ Use this skill when drafting, creating, commenting on, triaging, or approving a 
    ```
 
    For comments, require the returned comment's `issue_url` data in `READBACK_FILE` to identify issue `$NUMBER` in `$REPO` on `$HOST`; absent or mismatched parent identity is `unknown`. Validate and compare only from `READBACK_FILE`: compare issue titles exactly and bodies after only CRLF-to-LF and trailing-final-newline normalization.
-8. Report exactly one result:
+9. Report exactly one result:
    - `confirmed`: a stable identity was returned and target-host read-back matches; report only labels present in read-back.
    - `no_write`: an authoritative rejection proves no issue or comment could have been created.
    - `unknown`: timeout, lost response, network/5xx ambiguity, missing identity, unavailable read-back, or mismatch leaves the write uncertain. Clean up and stop all mutations and retries.
