@@ -106,3 +106,38 @@ func TestConfigRefusesAnInvalidPiRouting(t *testing.T) {
 		}
 	}
 }
+
+// Pi has no model catalogue of its own: it runs on whatever provider the
+// operator pointed it at. Naming that provider is what lets a Pi profile carry
+// models at all, and the table it borrows is the one Gentle AI already tunes
+// for that provider rather than a copy in the operator's configuration.
+func TestRenderBorrowsModelsForPiFromAnotherProvider(t *testing.T) {
+	routing := renderPiModels(t, `{"agents":["pi"],"modelPresets":{"pi":"recommended"},"piModelFamily":"codex"}`)
+
+	// Codex's Recommended carriles: Sol reasons, Terra writes, Luna transcribes.
+	for agent, want := range map[string]string{
+		"sdd-design":   "openai-codex/gpt-5.6-sol",
+		"sdd-apply":    "openai-codex/gpt-5.6-terra",
+		"sdd-archive":  "openai-codex/gpt-5.6-luna",
+		"sdd-proposal": "openai-codex/gpt-5.6-sol",
+	} {
+		if got := routing[agent].Model; got != want {
+			t.Errorf("%s model = %q, want %q", agent, got, want)
+		}
+		if routing[agent].Thinking == "" {
+			t.Errorf("%s lost its reasoning level", agent)
+		}
+	}
+}
+
+// Borrowing is still a profile, so an assignment the document made itself wins.
+func TestRenderLetsAnAssignmentOverrideTheBorrowedModel(t *testing.T) {
+	routing := renderPiModels(t, `{"agents":["pi"],"modelPresets":{"pi":"recommended"},"piModelFamily":"codex","piModelAssignments":{"sdd-apply":{"model":"moonshotai/kimi-k3"}}}`)
+
+	if got := routing["sdd-apply"].Model; got != "moonshotai/kimi-k3" {
+		t.Errorf("sdd-apply model = %q, want the declared one", got)
+	}
+	if got := routing["sdd-design"].Model; got != "openai-codex/gpt-5.6-sol" {
+		t.Errorf("overriding one agent changed another: %q", got)
+	}
+}
