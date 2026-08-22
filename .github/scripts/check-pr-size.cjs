@@ -58,7 +58,7 @@ function detectDuplicateKeys(raw) {
           let j = i + 1;
           while (j < raw.length && /\s/.test(raw[j])) j++;
           if (raw[j] === ':') {
-            const key = raw.slice(keyStart, i);
+            const key = JSON.parse(raw.slice(keyStart - 1, i + 1));
             if (seen.has(key)) throw new Error(`Policy contains duplicate key: ${key}`);
             seen.add(key);
           }
