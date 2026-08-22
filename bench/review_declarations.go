@@ -27,6 +27,7 @@ var coreJourneyReviewModes = map[string]ReviewPrecondition{
 	"j11-unborn-head":                                                           reviewOptedIn,
 	"j110-untracked-terminal-burn-and-unmanaged-staged-validation":              reviewOptedIn,
 	"j111-approved-transaction-burns-and-shipped-gates-are-unmanaged":           reviewOptedIn,
+	"j112-sdd-attempt-settle-survives-review-mode-transition":                   reviewUntouched,
 	"j12-rejected-capture-then-recapture":                                       reviewOptedIn,
 	"j13-next-transition-runs-verbatim":                                         reviewOptedIn,
 	"j14-abandon-needs-a-hand-built-token":                                      reviewOptedIn,

@@ -710,6 +710,7 @@ func Journeys() []Journey {
 	journeys = append(journeys, capturedProviderValidatorJourneys()...)
 	journeys = append(journeys, sddSharedScaffoldingJourneys()...)
 	journeys = append(journeys, sddPostReviewVerifyReportJourneys()...)
+	journeys = append(journeys, issue3564Journeys()...)
 	journeys = append(journeys, handoffJourneys()...)
 	journeys = removeRetiredAtomicJourneys(journeys)
 	return declareCoreJourneyReviewModes(journeys)
