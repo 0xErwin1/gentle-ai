@@ -41,6 +41,38 @@ function validatePolicy(policy) {
   return policy;
 }
 
+function detectDuplicateKeys(raw) {
+  let depth = 0, inString = false, escape = false, keyStart = -1;
+  const seen = new Set();
+  for (let i = 0; i < raw.length; i++) {
+    const char = raw[i];
+    if (escape) { escape = false; continue; }
+    if (char === '\\') { escape = true; continue; }
+    if (char === '"') {
+      if (!inString) {
+        inString = true;
+        keyStart = i + 1;
+      } else {
+        inString = false;
+        if (depth === 1) {
+          let j = i + 1;
+          while (j < raw.length && /\s/.test(raw[j])) j++;
+          if (raw[j] === ':') {
+            const key = raw.slice(keyStart, i);
+            if (seen.has(key)) throw new Error(`Policy contains duplicate key: ${key}`);
+            seen.add(key);
+          }
+        }
+      }
+      continue;
+    }
+    if (!inString) {
+      if (char === '{' || char === '[') depth++;
+      else if (char === '}' || char === ']') depth--;
+    }
+  }
+}
+
 function parsePolicy(raw) {
   let policy;
   try {
@@ -48,6 +80,7 @@ function parsePolicy(raw) {
   } catch (error) {
     throw new Error(`Policy contains malformed JSON: ${error.message}`);
   }
+  detectDuplicateKeys(raw);
   return validatePolicy(policy);
 }
 
@@ -92,8 +125,18 @@ function qualifiedAtActivation(pullRequests) {
   if (!Array.isArray(pullRequests)) throw new Error('activationPullRequests must be an array');
   const qualified = new Set();
   for (const pr of pullRequests) {
-    if (!pr || !Number.isSafeInteger(pr.number) || pr.number <= 0 || pr.state !== 'open' || !Array.isArray(pr.labels)) continue;
-    if (pr.labels.some((label) => (typeof label === 'string' ? label : label?.name) === 'size:exception')) qualified.add(pr.number);
+    if (!pr || typeof pr !== 'object') throw new Error('Activation pull request record must be an object');
+    if (pr.state === 'open') {
+      if (!Number.isSafeInteger(pr.number) || pr.number <= 0) {
+        throw new Error(`Invalid open PR record number in activation pull requests: ${JSON.stringify(pr.number)}`);
+      }
+      if (!Array.isArray(pr.labels)) {
+        throw new Error(`Invalid open PR record labels in activation pull requests for PR #${pr.number}`);
+      }
+      if (pr.labels.some((label) => (typeof label === 'string' ? label : label?.name) === 'size:exception')) {
+        qualified.add(pr.number);
+      }
+    }
   }
   return qualified;
 }
@@ -107,16 +150,20 @@ function closedOrMergedIds(pullRequests) {
   return closed;
 }
 
-function validatePolicyTransition(previous, next, { activationPullRequests = [], closedOrMergedPullRequests = [] } = {}) {
+function validatePolicyTransition(previous, next, options = {}) {
   validatePolicy(previous);
   validatePolicy(next);
+  const closedOrMergedPullRequests = options.closedOrMergedPullRequests || [];
   const closed = closedOrMergedIds(closedOrMergedPullRequests);
   if (previous.activation_snapshot === null) {
     if (next.activation_snapshot === null) {
       if (!sameIds(previous.grandfathered_prs, next.grandfathered_prs)) throw new Error('Dormant policy cannot add grandfathered PRs');
       return { valid: true };
     }
-    const eligible = qualifiedAtActivation(activationPullRequests);
+    if (!options || !Array.isArray(options.activationPullRequests)) {
+      throw new Error('Activation pull requests must be explicitly provided');
+    }
+    const eligible = qualifiedAtActivation(options.activationPullRequests);
     if (next.enforcement !== 'enforcing' || !sameIds(next.activation_snapshot, next.grandfathered_prs)) {
       throw new Error('Activation snapshot must exactly establish the enforcing grandfather list');
     }
