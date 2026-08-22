@@ -57,11 +57,13 @@ test('policy is strict, versioned, dormant, and has an empty snapshot', () => {
   assert.throws(() => loadPolicy(''), /unreadable or invalid/);
 });
 
-test('policy rejects duplicate top-level keys in raw JSON', () => {
+test('policy rejects duplicate top-level keys in raw JSON, including unicode escapes', () => {
   for (const key of ['version', 'enforcement', 'limit', 'activation_snapshot', 'grandfathered_prs']) {
     const raw = `{"version":1,"enforcement":"dormant","limit":400,"activation_snapshot":null,"grandfathered_prs":[],"${key}":"duplicate"}`;
     assert.throws(() => parsePolicy(raw), /Policy contains duplicate key/);
   }
+  const escaped = '{"version":1,"enforcement":"dormant","enforc\\u0065ment":"enforcing","limit":400,"activation_snapshot":null,"grandfathered_prs":[]}';
+  assert.throws(() => parsePolicy(escaped), /Policy contains duplicate key/);
 });
 
 test('policy rejects duplicate and invalid grandfather IDs', () => {
