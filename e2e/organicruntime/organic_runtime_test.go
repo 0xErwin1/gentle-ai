@@ -849,6 +849,291 @@ exec "$GENTLE_AI_RUNTIME_TRACE_BINARY" -ff -o "$GENTLE_AI_RUNTIME_TRACE_LOG" -e 
 	}
 }
 
+// TestOpenCodeRuntimeRunsFourBoundReviewersConcurrently exercises the real
+// OpenCode scheduler through the current Go-owned transport. The one driver
+// response emits every fresh high-risk collect input as a foreground task, and
+// the reviewer requests wait at a barrier. A sequential scheduler cannot reach
+// the barrier, and completion order is intentionally decoupled from STATUS's
+// provider-order artifact list.
+func TestOpenCodeRuntimeRunsFourBoundReviewersConcurrently(t *testing.T) {
+	if testing.Short() || strings.TrimSpace(os.Getenv("GENTLE_AI_OPENCODE_RUNTIME_E2E")) != "1" {
+		t.Skip("set GENTLE_AI_OPENCODE_RUNTIME_E2E=1 to verify grouped foreground OpenCode 4R scheduling")
+	}
+	binary, err := exec.LookPath("opencode")
+	if err != nil {
+		t.Fatal(err)
+	}
+	version, err := exec.Command(binary, "--version").Output()
+	if err != nil || strings.TrimSpace(string(version)) != pinnedOpenCodeVersion {
+		t.Fatalf("OpenCode version = %q, want %q (error %v)", strings.TrimSpace(string(version)), pinnedOpenCodeVersion, err)
+	}
+
+	harness := newOrganicHarness(t)
+	harness.writeFiles(map[string]string{"internal/auth/session.go": "package auth\n\nfunc Session() bool { return true }\n"})
+	const lineage = "opencode-four-r-foreground-group"
+	initial := organicProviderStatus(t, harness, lineage, "opencode")
+	if initial.NextTransition == nil || initial.NextTransition.Execute == nil {
+		t.Fatalf("OpenCode 4R START transition = %#v", initial.NextTransition)
+	}
+	start := initial.NextTransition.Execute
+	stdout, stderr, err := harness.gentleAllowFailure(
+		"review", "start", "--cwd", harness.repo.worktree,
+		"--contract", "gentle-ai.review-integration/v2", "--target", start.argument("target"), "--projection", start.argument("projection"),
+		"--lineage", lineage, "--agent", "opencode", "--consent", "granted",
+	)
+	if err != nil {
+		t.Fatalf("OpenCode 4R START: %v\nstdout:\n%s\nstderr:\n%s", err, stdout, stderr)
+	}
+	var started organicStartResult
+	if err := json.Unmarshal([]byte(stdout), &started); err != nil {
+		t.Fatalf("decode OpenCode 4R START: %v\n%s", err, stdout)
+	}
+	wantLenses := []string{"review-risk", "review-resilience", "review-readability", "review-reliability"}
+	if started.RiskLevel != organicRiskHigh || len(started.SelectedLenses) != len(wantLenses) {
+		t.Fatalf("OpenCode 4R selection = risk %q lenses %v, want high %v", started.RiskLevel, started.SelectedLenses, wantLenses)
+	}
+	for index, lens := range wantLenses {
+		if started.SelectedLenses[index] != lens {
+			t.Fatalf("OpenCode 4R selected lens[%d] = %q, want %q", index, started.SelectedLenses[index], lens)
+		}
+	}
+	bindings := organicProviderBindings(t, organicProviderStatus(t, harness, lineage, "opencode"))
+	if len(bindings) != len(wantLenses) {
+		t.Fatalf("OpenCode 4R collect bindings = %d, want %d", len(bindings), len(wantLenses))
+	}
+
+	taskArguments := make([]map[string]string, 0, len(bindings))
+	results := make(map[string]string, len(bindings))
+	for index, binding := range bindings {
+		if binding["lens"] != wantLenses[index] || binding["order"] != strconv.Itoa(index) {
+			t.Fatalf("OpenCode 4R binding[%d] = %#v, want %s at order %d", index, binding, wantLenses[index], index)
+		}
+		order, err := strconv.Atoi(binding["order"])
+		if err != nil {
+			t.Fatal(err)
+		}
+		payload, err := json.Marshal(map[string]any{
+			"lineage": binding["lineage"], "target": binding["target"], "lens": binding["lens"], "order": order,
+			"revision": binding["expected-revision"], "repository_context": binding["repository-context"], "subject_hash": binding["subject-hash"],
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		result, err := json.Marshal(map[string]any{
+			"subject_hash": binding["subject-hash"], "inspection": map[string]any{"status": "completed", "paths": []string{"internal/auth/session.go"}},
+			"lens": binding["lens"], "findings": []any{}, "evidence": []string{"loopback inspected the frozen candidate"},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		taskArguments = append(taskArguments, map[string]string{
+			"description": "run the Go-bound reviewer", "subagent_type": binding["lens"],
+			"prompt": "GENTLE_AI_REVIEW_BINDING " + string(payload),
+		})
+		results[binding["lens"]] = string(result)
+	}
+
+	var lock sync.Mutex
+	arrivals := make(map[string]int, len(wantLenses))
+	releases := make(map[string]chan struct{}, len(wantLenses))
+	for _, lens := range wantLenses {
+		releases[lens] = make(chan struct{})
+	}
+	allArrived := make(chan struct{})
+	arrived, inFlight, maxInFlight, settled := 0, 0, 0, 0
+	var titleAnswered, tasksIssued bool
+	var handlerFailure string
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.Method == http.MethodGet && request.URL.Path == "/" {
+			writer.WriteHeader(http.StatusNoContent)
+			return
+		}
+		if request.Method != http.MethodPost || request.URL.Path != "/v1/chat/completions" {
+			lock.Lock()
+			handlerFailure = fmt.Sprintf("OpenCode request = %s %s, want GET / or POST /v1/chat/completions", request.Method, request.URL.Path)
+			lock.Unlock()
+			writer.WriteHeader(http.StatusNotFound)
+			return
+		}
+		payload, err := io.ReadAll(request.Body)
+		if err != nil {
+			lock.Lock()
+			handlerFailure = fmt.Sprintf("read OpenCode 4R request: %v", err)
+			lock.Unlock()
+			writer.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		if bytes.Contains(payload, []byte("GENTLE_AI_OPENCODE_FOUR_R_REVIEWER")) {
+			lens := ""
+			for _, candidate := range wantLenses {
+				if bytes.Contains(payload, []byte(candidate)) {
+					lens = candidate
+					break
+				}
+			}
+			if lens == "" {
+				lock.Lock()
+				handlerFailure = "OpenCode 4R reviewer request omitted its bound lens"
+				lock.Unlock()
+				writer.WriteHeader(http.StatusBadRequest)
+				return
+			}
+			lock.Lock()
+			arrivals[lens]++
+			arrived++
+			inFlight++
+			if inFlight > maxInFlight {
+				maxInFlight = inFlight
+			}
+			if arrived == len(wantLenses) {
+				close(allArrived)
+			}
+			wait := releases[lens]
+			lock.Unlock()
+			select {
+			case <-wait:
+			case <-request.Context().Done():
+				writer.WriteHeader(http.StatusGatewayTimeout)
+				return
+			}
+			lock.Lock()
+			inFlight--
+			settled++
+			lock.Unlock()
+			writeOpenCodeChatText(writer, results[lens])
+			return
+		}
+
+		lock.Lock()
+		defer lock.Unlock()
+		if !titleAnswered {
+			titleAnswered = true
+			writeOpenCodeChatText(writer, "review transport")
+			return
+		}
+		if !tasksIssued {
+			for _, arguments := range taskArguments {
+				if _, hasBackground := arguments["background"]; hasBackground {
+					handlerFailure = "OpenCode 4R task unexpectedly sets background"
+					writer.WriteHeader(http.StatusBadRequest)
+					return
+				}
+			}
+			tasksIssued = true
+			writeOpenCodeChatTasks(writer, taskArguments)
+			return
+		}
+		if settled != len(wantLenses) || inFlight != 0 {
+			handlerFailure = "OpenCode advanced the review driver before the foreground reviewer group settled"
+			writer.WriteHeader(http.StatusConflict)
+			return
+		}
+		writeOpenCodeChatText(writer, "review task group complete")
+	}))
+	defer server.Close()
+
+	configDirectory := t.TempDir()
+	pluginDirectory := filepath.Join(configDirectory, "plugins")
+	if err := os.MkdirAll(pluginDirectory, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	pluginSource, err := assets.Read("opencode/plugins/opencode-review-transport.ts")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(pluginDirectory, "opencode-review-transport.ts"), []byte(pluginSource), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	reviewers := make(map[string]any, len(wantLenses))
+	for _, lens := range wantLenses {
+		reviewers[lens] = map[string]any{
+			"mode": "subagent", "hidden": true, "description": "test reviewer", "prompt": "GENTLE_AI_OPENCODE_FOUR_R_REVIEWER " + lens,
+			"tools": map[string]bool{"read": false, "write": false, "edit": false, "bash": false, "task": false},
+		}
+	}
+	config, err := json.Marshal(map[string]any{
+		"autoupdate": false, "share": "disabled", "snapshot": false, "model": "loopback/loopback", "small_model": "loopback/loopback",
+		"provider": map[string]any{"loopback": map[string]any{
+			"npm": "@ai-sdk/openai-compatible", "name": "Gentle AI 4R loopback",
+			"options": map[string]any{"baseURL": server.URL + "/v1", "apiKey": "loopback-key"},
+			"models":  map[string]any{"loopback": map[string]any{"name": "Loopback", "limit": map[string]int{"context": 32000, "output": 2048}}},
+		}},
+		"agent": reviewers,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), organicAgentTimeout)
+	defer cancel()
+	command := exec.CommandContext(ctx, binary, "run", "--format", "json", "--dir", harness.repo.worktree, "--model", "loopback/loopback", "start the grouped Go-bound reviewer tasks")
+	command.Dir = harness.repo.worktree
+	command.Env = append(harness.environment(),
+		"OPENCODE_CONFIG_DIR="+configDirectory,
+		"OPENCODE_CONFIG_CONTENT="+string(config),
+		"PATH="+filepath.Dir(organicBinary)+string(os.PathListSeparator)+os.Getenv("PATH"),
+	)
+	type runResult struct {
+		output []byte
+		err    error
+	}
+	run := make(chan runResult, 1)
+	go func() {
+		output, err := command.CombinedOutput()
+		run <- runResult{output: output, err: err}
+	}()
+
+	select {
+	case <-allArrived:
+	case result := <-run:
+		t.Fatalf("OpenCode ended before every foreground reviewer reached the barrier: %v\n%s", result.err, result.output)
+	case <-time.After(30 * time.Second):
+		t.Fatal("OpenCode did not schedule all four foreground reviewer requests")
+	}
+	lock.Lock()
+	if maxInFlight != len(wantLenses) {
+		lock.Unlock()
+		t.Fatalf("maximum simultaneous OpenCode 4R reviewer requests = %d, want %d; arrivals=%v", maxInFlight, len(wantLenses), arrivals)
+	}
+	for _, lens := range wantLenses {
+		if arrivals[lens] != 1 {
+			lock.Unlock()
+			t.Fatalf("OpenCode 4R arrivals for %s = %d, want exactly one; arrivals=%v", lens, arrivals[lens], arrivals)
+		}
+	}
+	for _, lens := range wantLenses {
+		close(releases[lens])
+	}
+	lock.Unlock()
+
+	result := <-run
+	lock.Lock()
+	failed, issued, completed := handlerFailure, tasksIssued, settled
+	lock.Unlock()
+	if failed != "" || result.err != nil {
+		t.Fatalf("grouped OpenCode 4R runtime failure=%q err=%v\n%s", failed, result.err, result.output)
+	}
+	if !issued || completed != len(wantLenses) {
+		t.Fatalf("grouped OpenCode 4R task state issued=%t completed=%d, want true/%d\n%s", issued, completed, len(wantLenses), result.output)
+	}
+	status := organicProviderStatus(t, harness, lineage, "opencode")
+	if status.NextTransition == nil || status.NextTransition.Execute == nil || status.NextTransition.Execute.Operation != "review.finalize" {
+		t.Fatalf("STATUS after grouped OpenCode 4R captures = %#v, want review.finalize", status.NextTransition)
+	}
+	if got := status.NextTransition.Execute.Artifacts; len(got) != len(wantLenses) {
+		t.Fatalf("STATUS captured artifacts = %#v, want %d canonical artifacts", got, len(wantLenses))
+	} else {
+		for index, lens := range wantLenses {
+			artifact := got[index]
+			if artifact.Lens != lens || artifact.SelectedOrder != index || artifact.AdmissionDecision != "completed" {
+				t.Fatalf("STATUS captured artifact[%d] = %#v, want completed %s at canonical order %d", index, artifact, lens, index)
+			}
+		}
+	}
+	if finalized := harness.finalize(lineage, "--captured-results=true"); finalized.State != organicStateValidating {
+		t.Fatalf("grouped OpenCode 4R capture did not enter validation: %#v", finalized)
+	}
+}
+
 func writeOpenCodeChatTask(writer http.ResponseWriter, arguments map[string]string) {
 	encodedArguments, _ := json.Marshal(arguments)
 	writeOpenCodeChatChunk(writer, map[string]any{
@@ -859,6 +1144,24 @@ func writeOpenCodeChatTask(writer http.ResponseWriter, arguments map[string]stri
 	writeOpenCodeChatChunk(writer, map[string]any{"tool_calls": []map[string]any{{
 		"index": 0, "function": map[string]string{"arguments": string(encodedArguments)},
 	}}}, nil)
+	writeOpenCodeChatChunk(writer, map[string]any{}, "tool_calls")
+	_, _ = fmt.Fprint(writer, "data: [DONE]\n\n")
+}
+
+func writeOpenCodeChatTasks(writer http.ResponseWriter, arguments []map[string]string) {
+	toolCalls := make([]map[string]any, 0, len(arguments))
+	argumentDeltas := make([]map[string]any, 0, len(arguments))
+	for index, argument := range arguments {
+		encoded, _ := json.Marshal(argument)
+		toolCalls = append(toolCalls, map[string]any{
+			"index": index, "id": fmt.Sprintf("call_review_%d", index), "type": "function", "function": map[string]string{"name": "task", "arguments": ""},
+		})
+		argumentDeltas = append(argumentDeltas, map[string]any{
+			"index": index, "function": map[string]string{"arguments": string(encoded)},
+		})
+	}
+	writeOpenCodeChatChunk(writer, map[string]any{"role": "assistant", "tool_calls": toolCalls}, nil)
+	writeOpenCodeChatChunk(writer, map[string]any{"tool_calls": argumentDeltas}, nil)
 	writeOpenCodeChatChunk(writer, map[string]any{}, "tool_calls")
 	_, _ = fmt.Fprint(writer, "data: [DONE]\n\n")
 }
@@ -974,7 +1277,9 @@ type organicProviderTransition struct {
 }
 
 type organicProviderExecute struct {
+	Operation string                    `json:"operation"`
 	Arguments []organicProviderArgument `json:"arguments"`
+	Artifacts []organicProviderArtifact `json:"artifacts"`
 }
 
 type organicProviderCollect struct {
@@ -983,6 +1288,12 @@ type organicProviderCollect struct {
 
 type organicProviderCollectInput struct {
 	Arguments []organicProviderArgument `json:"arguments"`
+}
+
+type organicProviderArtifact struct {
+	Lens              string `json:"lens"`
+	SelectedOrder     int    `json:"selected_order"`
+	AdmissionDecision string `json:"admission_decision"`
 }
 
 type organicProviderArgument struct {
@@ -1011,19 +1322,32 @@ func organicProviderStatus(t *testing.T, harness *organicHarness, lineage, agent
 
 func organicProviderBinding(t *testing.T, status organicProviderStatusResult) map[string]string {
 	t.Helper()
-	if status.NextTransition == nil || status.NextTransition.Collect == nil || len(status.NextTransition.Collect.Inputs) != 1 {
+	bindings := organicProviderBindings(t, status)
+	if len(bindings) != 1 {
+		t.Fatalf("provider collect bindings = %d, want one: %#v", len(bindings), status.NextTransition)
+	}
+	return bindings[0]
+}
+
+func organicProviderBindings(t *testing.T, status organicProviderStatusResult) []map[string]string {
+	t.Helper()
+	if status.NextTransition == nil || status.NextTransition.Collect == nil || len(status.NextTransition.Collect.Inputs) == 0 {
 		t.Fatalf("provider collect transition = %#v", status.NextTransition)
 	}
-	binding := map[string]string{}
-	for _, argument := range status.NextTransition.Collect.Inputs[0].Arguments {
-		binding[argument.Name] = argument.Value
-	}
-	for _, name := range []string{"lineage", "expected-revision", "target", "repository-context", "lens", "order", "subject-hash"} {
-		if binding[name] == "" {
-			t.Fatalf("provider collect binding missing %q: %#v", name, status.NextTransition)
+	bindings := make([]map[string]string, len(status.NextTransition.Collect.Inputs))
+	for index, input := range status.NextTransition.Collect.Inputs {
+		binding := make(map[string]string, len(input.Arguments))
+		for _, argument := range input.Arguments {
+			binding[argument.Name] = argument.Value
 		}
+		for _, name := range []string{"lineage", "expected-revision", "target", "repository-context", "lens", "order", "subject-hash"} {
+			if binding[name] == "" {
+				t.Fatalf("provider collect binding[%d] missing %q: %#v", index, name, status.NextTransition)
+			}
+		}
+		bindings[index] = binding
 	}
-	return binding
+	return bindings
 }
 
 func TestOrganicProviderCaptureFakeWindowsDispatch(t *testing.T) {
