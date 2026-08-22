@@ -53,10 +53,14 @@ func reviewerRoleFor(lens string) (reviewerRole, bool) {
 }
 
 const (
-	authorityFirstProcedurePlaceholder = "{{GENTLE_AI_AUTHORITY_FIRST_TERMINAL_PROCEDURE}}"
-	authorityFirstProcedureStart       = "<!-- authority-first-terminal-procedure:start -->"
-	authorityFirstProcedureEnd         = "<!-- authority-first-terminal-procedure:end -->"
-	runtimeAgentIDPlaceholder          = "{{GENTLE_AI_RUNTIME_AGENT_ID}}"
+	authorityFirstProcedurePlaceholder      = "{{GENTLE_AI_AUTHORITY_FIRST_TERMINAL_PROCEDURE}}"
+	authorityFirstProcedureStart            = "<!-- authority-first-terminal-procedure:start -->"
+	authorityFirstProcedureEnd              = "<!-- authority-first-terminal-procedure:end -->"
+	runtimeAgentIDPlaceholder               = "{{GENTLE_AI_RUNTIME_AGENT_ID}}"
+	researchLifecyclePlaceholder            = "{{GENTLE_AI_RESEARCH_LIFECYCLE}}"
+	openCodeConcurrentReviewerGroupContract = "### OpenCode Concurrent Reviewer Group (MANDATORY)\n\n" +
+		"When one fresh `collect.inputs` set contains multiple distinct independent `review.capture-result` reviewer slots, emit one grouped OpenCode `task` tool-call response with one foreground task per input in provider order. For canonical 4R, preserve `review-risk`, `review-resilience`, `review-readability`, `review-reliability` order.\n\n" +
+		"Each task uses only its own exact input, exact lens as `subagent_type`, and exact binding prompt prefix. Do not set a `background` flag. Do not wait between launches; wait for every foreground task result before STATUS, retry, or finalize. Let the OpenCode plugin/native Go capture completions and preserve provider order and canonical finalization order rather than completion order. After the group settles, query negotiated STATUS again and retry only slots freshly reoffered with the exact same binding."
 )
 
 func boundedReviewContract() string {
@@ -65,6 +69,25 @@ func boundedReviewContract() string {
 
 func renderSDDOrchestratorAsset(agent model.AgentID, options ...OrchestratorRenderOptions) string {
 	return composeOrchestratorPrompt(agent, options...)
+}
+
+func boundedReviewContractFor(agent model.AgentID) string {
+	contract := boundedReviewContract()
+	if agent != model.AgentOpenCode {
+		return contract
+	}
+	return contract + "\n\n" + openCodeConcurrentReviewerGroupContract
+}
+
+func researchLifecycleContract() string {
+	source := assets.MustRead("skills/_shared/research-lifecycle.md")
+	start := strings.Index(source, "<!-- research-lifecycle-gate:start -->")
+	end := strings.Index(source, "<!-- research-lifecycle-gate:end -->")
+	if start < 0 || end < start {
+		return ""
+	}
+	start += len("<!-- research-lifecycle-gate:start -->")
+	return strings.TrimSpace(source[start:end])
 }
 
 // renderBoundedReviewAsset resolves one embedded asset into the exact bytes a
@@ -93,9 +116,10 @@ func renderBoundedReviewAssetBodyFromContent(agent model.AgentID, path, content 
 	if rendersReviewLifecycle(agent) {
 		content = strings.ReplaceAll(content, authorityFirstProcedurePlaceholder, authorityFirstTerminalProcedure())
 	}
+	content = strings.ReplaceAll(content, researchLifecyclePlaceholder, researchLifecycleContract())
 	if strings.HasSuffix(path, "/sdd-orchestrator.md") {
 		if rendersReviewLifecycle(agent) {
-			return replaceBoundedReviewSection(content, "#### Review Execution Contract", "Cost and Context Balance")
+			return replaceBoundedReviewSection(content, "#### Review Execution Contract", "Cost and Context Balance", boundedReviewContractFor(agent))
 		}
 		return removeBoundedReviewSection(content, "#### Review Execution Contract", "Cost and Context Balance")
 	}
