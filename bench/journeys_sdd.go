@@ -1654,7 +1654,7 @@ var sddAttemptFinishCapability = &Capability{
 }
 var sddAttemptRemediationCapability = &Capability{
 	Verb:  []string{"sdd-attempt", "finish"},
-	Probe: []string{"sdd-attempt", "finish", "--expected-binding-revision=probe", "--successor-lineage=probe", "--remediates-evidence-revision=probe"},
+	Probe: []string{"sdd-attempt", "finish", "--remediates-evidence-revision=probe"},
 }
 var sddAttemptResetCapability = &Capability{
 	Verb:  []string{"sdd-attempt", "reset"},
