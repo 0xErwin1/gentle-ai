@@ -49,18 +49,19 @@ Run this phase when the orchestrator/user asks to initialize SDD in a project. Y
 | `mode=hybrid` | Do both Engram and openspec persistence. |
 | `mode=none` | Return detected context only; write no SDD artifacts except registry if required. |
 | strict TDD marker/config found | Use that value. |
-| no marker/config but test runner exists | Default `strict_tdd: true`. |
-| no test runner | Set `strict_tdd: false` and explain unavailable. |
+| no marker/config and every discovered in-scope project has a usable test command | Default `strict_tdd: true`. |
+| no marker/config and any discovered in-scope project lacks a usable test command | Set `strict_tdd: false` and explain the unavailable project(s). |
 
 ## Execution Steps
 
-1. Inspect project files (`package.json`, `go.mod`, `pyproject.toml`, CI, lint/test config) and summarize stack/conventions.
-2. Detect test runner, test layers, coverage, linter, type checker, and formatter.
-3. Resolve Strict TDD from agent marker, `openspec/config.yaml`, detected runner fallback, or no-runner fallback.
-4. Initialize persistence for the resolved mode.
-5. Build `.atl/skill-registry.md` using the skill-registry scan rules.
-6. Persist testing capabilities and project context.
-7. Return the structured initialization envelope.
+1. Identify the authoritative workspace root. Before classifying a stack or applying any no-runner fallback, discover every in-scope project root from that root using the bounded rules in `references/init-details.md`.
+2. Inspect each discovered project for `package.json`, `go.mod`, `pyproject.toml`, `Cargo.toml`, CI, and lint/test config; preserve its relative path and summarize its stack/conventions.
+3. Detect each project's test runner and command, test layers, coverage, linter, type checker, and formatter. Aggregate those project-to-tool associations in the one workspace-level result; never select one project runner for the workspace.
+4. Resolve Strict TDD from an agent marker or `openspec/config.yaml`. Without an explicit value, do so only after every discovered project has been evaluated: enable it only when every in-scope project has a usable test command; otherwise use the no-runner fallback and name the project(s).
+5. Initialize persistence for the resolved mode.
+6. Build `.atl/skill-registry.md` using the skill-registry scan rules.
+7. Persist testing capabilities and project context.
+8. Return the structured initialization envelope.
 
 ## Output Contract
 

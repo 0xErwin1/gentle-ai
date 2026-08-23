@@ -386,6 +386,38 @@ func TestAllEmbeddedAssetsAreReadable(t *testing.T) {
 	}
 }
 
+func TestSDDInitRequiresBoundedWorkspaceProjectDiscovery(t *testing.T) {
+	skill := MustRead("skills/sdd-init/SKILL.md")
+	for _, required := range []string{
+		"authoritative workspace root",
+		"Before classifying a stack or applying any no-runner fallback",
+		"Aggregate those project-to-tool associations in the one workspace-level result",
+		"every in-scope project has a usable test command",
+	} {
+		if !strings.Contains(skill, required) {
+			t.Fatalf("sdd-init skill missing workspace discovery contract %q", required)
+		}
+	}
+
+	details := MustRead("skills/sdd-init/references/init-details.md")
+	for _, required := range []string{
+		"explicit workspace membership",
+		"at most two directory levels",
+		"`A/pyproject.toml` and `B/Cargo.toml`",
+		"nested-repository boundaries",
+		"`.git`, `node_modules`, `vendor`, `dist`, `build`, `out`, `target`, `.cache`, `__pycache__`, `.venv`, `venv`",
+		"a table or `projects:` list",
+	} {
+		if !strings.Contains(details, required) {
+			t.Fatalf("sdd-init details missing bounded discovery contract %q", required)
+		}
+	}
+
+	if discovery, fallback := strings.Index(details, "## Workspace Project Discovery"), strings.Index(details, "only then apply the no-runner fallback"); discovery < 0 || fallback < discovery {
+		t.Fatal("sdd-init details must complete workspace discovery before the no-runner fallback")
+	}
+}
+
 func TestSDDVerificationAndArchiveContractsIgnoreReviewContext(t *testing.T) {
 	statusContract := MustRead("skills/_shared/sdd-status-contract.md")
 	for _, want := range []string{
