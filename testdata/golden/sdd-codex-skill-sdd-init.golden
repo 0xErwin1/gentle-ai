@@ -48,16 +48,18 @@ Run this phase when the orchestrator/user asks to initialize SDD in a project. Y
 | `mode=openspec` | Create/update openspec bootstrap files only. |
 | `mode=hybrid` | Do both Engram and openspec persistence. |
 | `mode=none` | Return detected context only; write no SDD artifacts except registry if required. |
-| strict TDD marker/config found | Use that value. |
-| no marker/config and every discovered in-scope project has a usable test command | Default `strict_tdd: true`. |
-| no marker/config and any discovered in-scope project lacks a usable test command | Set `strict_tdd: false` and explain the unavailable project(s). |
+| explicit `strict_tdd: false` marker/config | Preserve `strict_tdd: false`. |
+| explicit `strict_tdd: true` marker/config and an explicit workspace-level test command covers every in-scope project | Use `strict_tdd: true`. |
+| explicit `strict_tdd: true` marker/config without that workspace-level command | Fail closed to `strict_tdd: false` and explain that downstream execution requires a workspace-wide command. |
+| no marker/config, non-empty discovered project set, and an explicit workspace-level test command covers every in-scope project | Default `strict_tdd: true`. |
+| zero projects, missing project command, or only independent project commands | Set `strict_tdd: false`; preserve all discovered commands and explain the no-runner or workspace-wide-command fallback. |
 
 ## Execution Steps
 
 1. Identify the authoritative workspace root. Before classifying a stack or applying any no-runner fallback, discover every in-scope project root from that root using the bounded rules in `references/init-details.md`.
 2. Inspect each discovered project for `package.json`, `go.mod`, `pyproject.toml`, `Cargo.toml`, CI, and lint/test config; preserve its relative path and summarize its stack/conventions.
 3. Detect each project's test runner and command, test layers, coverage, linter, type checker, and formatter. Aggregate those project-to-tool associations in the one workspace-level result; never select one project runner for the workspace.
-4. Resolve Strict TDD from an agent marker or `openspec/config.yaml`. Without an explicit value, do so only after every discovered project has been evaluated: enable it only when every in-scope project has a usable test command; otherwise use the no-runner fallback and name the project(s).
+4. Resolve Strict TDD from an agent marker or `openspec/config.yaml` only after every discovered project has been evaluated. Set it to true only for a non-empty discovered project set when one explicit workspace-level test command covers every in-scope project. Independent project commands do not satisfy that requirement; preserve them and use the false fallback unless an existing workspace command covers them all.
 5. Initialize persistence for the resolved mode.
 6. Build `.atl/skill-registry.md` using the skill-registry scan rules.
 7. Persist testing capabilities and project context.
