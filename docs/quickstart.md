@@ -94,7 +94,7 @@ $env:GENTLE_AI_CHANNEL="beta"; go install github.com/gentleman-programming/gentl
 gentle-ai version
 ```
 
-To upgrade managed tool dependencies on the beta channel later:
+To update a beta installation later, preserve the beta channel:
 
 ```bash
 # macOS / Linux
@@ -104,7 +104,19 @@ GENTLE_AI_CHANNEL=beta gentle-ai upgrade
 $env:GENTLE_AI_CHANNEL="beta"; gentle-ai upgrade
 ```
 
-> **Go module proxy cache**: `proxy.golang.org` can lag behind new commits on `main` for up to several hours. If `go install ...@main` exits without updating to the newest commit, bypass the cache with `GOPROXY=direct` (PowerShell: `$env:GOPROXY="direct"; go install github.com/gentleman-programming/gentle-ai/v2/cmd/gentle-ai@main`).
+`gentle-ai upgrade` advances the `gentle-ai` binary from `main` and refreshes managed tools on macOS, Linux, and Windows with Go on `PATH`.
+
+If you re-run an installer, pass beta explicitly because both installers default to stable:
+
+```bash
+# macOS / Linux
+curl -fsSL https://raw.githubusercontent.com/Gentleman-Programming/gentle-ai/main/scripts/install.sh | bash -s -- --channel beta
+
+# Windows (PowerShell)
+$env:GENTLE_AI_CHANNEL="beta"; irm https://raw.githubusercontent.com/Gentleman-Programming/gentle-ai/main/scripts/install.ps1 | iex
+```
+
+> **Go module proxy cache**: `proxy.golang.org` can lag behind new commits on `main` for up to several hours. If manual `go install ...@main` does not update to the newest commit, bypass the cache with `GOPROXY=direct go install github.com/gentleman-programming/gentle-ai/v2/cmd/gentle-ai@main` (PowerShell: `$env:GOPROXY="direct"; go install github.com/gentleman-programming/gentle-ai/v2/cmd/gentle-ai@main`).
 
 The managed install scripts select the latest version for their chosen channel and do not accept arbitrary release pins. Use `go install` with an exact tag when you need a reproducible prerelease or stable version.
 
