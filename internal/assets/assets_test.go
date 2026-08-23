@@ -389,6 +389,56 @@ func TestAllEmbeddedAssetsAreReadable(t *testing.T) {
 	}
 }
 
+func TestSDDInitRequiresBoundedWorkspaceProjectDiscovery(t *testing.T) {
+	skill := MustRead("skills/sdd-init/SKILL.md")
+	for _, required := range []string{
+		"authoritative workspace root",
+		"Before classifying a stack or applying any no-runner fallback",
+		"Aggregate those project-to-tool associations in the one workspace-level result",
+		"non-empty discovered project set",
+		"explicit workspace-level test command",
+		"covers every in-scope project",
+		"zero projects are discovered or no explicit workspace-level test command covers every in-scope project",
+		"including missing or independent commands; those local facts do not override a workspace-level command that covers every in-scope project",
+	} {
+		if !strings.Contains(skill, required) {
+			t.Fatalf("sdd-init skill missing workspace discovery contract %q", required)
+		}
+	}
+
+	details := MustRead("skills/sdd-init/references/init-details.md")
+	for _, required := range []string{
+		"explicit workspace membership",
+		"at most two directory levels",
+		"`A/pyproject.toml` and `B/Cargo.toml`",
+		"nested-repository boundaries",
+		"`.git`, `node_modules`, `vendor`, `dist`, `build`, `out`, `target`, `.cache`, `__pycache__`, `.venv`, `venv`",
+		"`projects:` list",
+		"discovered project set is non-empty",
+		"explicit workspace-level test command",
+		"covers every in-scope project",
+		"Do not synthesize or concatenate independent project commands",
+		"zero projects are discovered or no explicit workspace-level command covers every in-scope project",
+		"including missing or independent commands; those local facts do not override a workspace-level command that covers every in-scope project",
+	} {
+		if !strings.Contains(details, required) {
+			t.Fatalf("sdd-init details missing bounded discovery contract %q", required)
+		}
+	}
+
+	if discovery, fallback := strings.Index(details, "## Workspace Project Discovery"), strings.Index(details, "only then apply the no-runner fallback"); discovery < 0 || fallback < discovery {
+		t.Fatal("sdd-init details must complete workspace discovery before the no-runner fallback")
+	}
+	if workspaceDiscovery, strictTDDResolution := strings.Index(skill, "1. Identify the authoritative workspace root."), strings.Index(skill, "4. Resolve Strict TDD from an agent marker or `openspec/config.yaml`"); workspaceDiscovery < 0 || strictTDDResolution < 0 || workspaceDiscovery >= strictTDDResolution {
+		t.Fatal("sdd-init skill must place workspace discovery step 1 before Strict TDD resolution step 4")
+	}
+	for _, content := range []string{skill, details} {
+		if strings.Contains(content, "a project has no test command") {
+			t.Fatal("sdd-init fallback must not treat a missing project-local command as an independent Strict TDD disablement reason")
+		}
+	}
+}
+
 func TestSDDVerificationAndArchiveContractsIgnoreReviewContext(t *testing.T) {
 	statusContract := MustRead("skills/_shared/sdd-status-contract.md")
 	for _, want := range []string{
