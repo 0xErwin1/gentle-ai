@@ -392,7 +392,10 @@ func TestSDDInitRequiresBoundedWorkspaceProjectDiscovery(t *testing.T) {
 		"authoritative workspace root",
 		"Before classifying a stack or applying any no-runner fallback",
 		"Aggregate those project-to-tool associations in the one workspace-level result",
-		"every in-scope project has a usable test command",
+		"non-empty discovered project set",
+		"explicit workspace-level test command",
+		"covers every in-scope project",
+		"independent project commands",
 	} {
 		if !strings.Contains(skill, required) {
 			t.Fatalf("sdd-init skill missing workspace discovery contract %q", required)
@@ -406,7 +409,11 @@ func TestSDDInitRequiresBoundedWorkspaceProjectDiscovery(t *testing.T) {
 		"`A/pyproject.toml` and `B/Cargo.toml`",
 		"nested-repository boundaries",
 		"`.git`, `node_modules`, `vendor`, `dist`, `build`, `out`, `target`, `.cache`, `__pycache__`, `.venv`, `venv`",
-		"a table or `projects:` list",
+		"`projects:` list",
+		"discovered project set is non-empty",
+		"explicit workspace-level test command",
+		"covers every in-scope project",
+		"Do not synthesize or concatenate independent project commands",
 	} {
 		if !strings.Contains(details, required) {
 			t.Fatalf("sdd-init details missing bounded discovery contract %q", required)
@@ -415,6 +422,9 @@ func TestSDDInitRequiresBoundedWorkspaceProjectDiscovery(t *testing.T) {
 
 	if discovery, fallback := strings.Index(details, "## Workspace Project Discovery"), strings.Index(details, "only then apply the no-runner fallback"); discovery < 0 || fallback < discovery {
 		t.Fatal("sdd-init details must complete workspace discovery before the no-runner fallback")
+	}
+	if discovery, fallback := strings.Index(skill, "authoritative workspace root"), strings.Index(skill, "no-runner fallback"); discovery < 0 || fallback < discovery {
+		t.Fatal("sdd-init skill must complete workspace discovery before the no-runner fallback")
 	}
 }
 

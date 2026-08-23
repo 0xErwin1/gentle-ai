@@ -16,9 +16,14 @@ Start at the authoritative workspace root. Complete this discovery before stack 
 3. Never descend into VCS, dependency, generated/build, cache, virtual-environment, or nested-repository boundaries. At minimum exclude `.git`, `node_modules`, `vendor`, `dist`, `build`, `out`, `target`, `.cache`, `__pycache__`, `.venv`, `venv`, and directories that contain their own `.git` file or directory.
 4. Treat a directory with a supported project marker as one project root. For every discovered project, retain its workspace-relative path, stack, test command, test layers, coverage command, and quality-tool commands. Do not collapse multiple commands into a chosen workspace runner.
 
-Use one workspace-level project-context and testing-capabilities result. In the result and in `openspec/config.yaml` when it is written, represent projects as a table or `projects:` list with one entry per relative path; keep each project's commands in that entry. Existing consumers may only render the aggregate result, so do not imply that they can execute a single combined command.
+Use one workspace-level project-context and testing-capabilities result. In the result, represent projects as a table with one entry per relative path and keep each project's commands in that entry. In `openspec/config.yaml` when it is written, use a `projects:` list with the same entries and commands. Existing consumers may only render the aggregate result, so do not imply that they can execute a single combined command.
 
-Resolve Strict TDD after the complete project list is evaluated: an explicit marker or config wins. Otherwise enable it only when every discovered in-scope project has a usable test command. If any in-scope project has none, disable it and name those paths; only then apply the no-runner fallback.
+Resolve Strict TDD after the complete project list is evaluated; only then apply the no-runner fallback. An explicit workspace-level test command is an existing command or target defined by the workspace or explicit config that runs the complete in-scope set from the authoritative workspace root. Do not synthesize or concatenate independent project commands.
+
+- Preserve explicit `strict_tdd: false`.
+- Use explicit `strict_tdd: true` only when an explicit workspace-level test command covers every in-scope project; otherwise fail closed to false and explain that downstream execution requires a workspace-wide command.
+- Without an explicit value, default to true only when the discovered project set is non-empty and one explicit workspace-level test command covers every in-scope project.
+- When no projects are discovered, a project has no test command, or projects have only independent project commands, use `strict_tdd: false`. Preserve and report every project command; explain the no-runner or workspace-wide-command fallback.
 
 ## Skill Registry Scan Rules
 
