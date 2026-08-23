@@ -71,7 +71,10 @@ func TestGentleAIWindowsUpgradeFailsClosedToSourceInstall(t *testing.T) {
 }
 
 func TestWindowsBetaGentleAIUpgradeUsesShippedRegistryGoTarget(t *testing.T) {
-	const mainSHA = "abc1234"
+	const (
+		mainSHA = "abc1234"
+		module  = "github.com/gentleman-programming/gentle-ai/v2"
+	)
 
 	var tool update.ToolInfo
 	for _, candidate := range update.Tools {
@@ -115,7 +118,6 @@ func TestWindowsBetaGentleAIUpgradeUsesShippedRegistryGoTarget(t *testing.T) {
 	if gotName != "go" || len(gotArgs) != 2 || gotArgs[0] != "install" || gotArgs[1] != wantTarget {
 		t.Fatalf("go command = %q %v, want go install %s", gotName, gotArgs, wantTarget)
 	}
-	module := gentleAIModulePath(tool)
 	for _, want := range []string{
 		"GONOSUMDB=" + module,
 		"GOPRIVATE=" + module,
