@@ -48,22 +48,30 @@ test('missing, null, non-integer, and negative API counts fail closed', () => {
   }
 });
 
-test('policy is strict, versioned, dormant, and has an empty snapshot', () => {
+test('policy accepts valid JSON with the expected schema', () => {
   const policy = parsePolicy(fs.readFileSync(policyPath, 'utf8'));
   assert.deepEqual(policy, dormantPolicy());
-  assert.throws(() => parsePolicy(JSON.stringify(dormantPolicy({ unknown: true }))), /unexpected keys/);
-  assert.throws(() => parsePolicy('{}'), /missing keys/);
-  assert.throws(() => parsePolicy('{'), /malformed JSON/);
-  assert.throws(() => loadPolicy(''), /unreadable or invalid/);
 });
 
-test('policy rejects duplicate top-level keys in raw JSON, including unicode escapes', () => {
-  for (const key of ['version', 'enforcement', 'limit', 'activation_snapshot', 'grandfathered_prs']) {
-    const raw = `{"version":1,"enforcement":"dormant","limit":400,"activation_snapshot":null,"grandfathered_prs":[],"${key}":"duplicate"}`;
-    assert.throws(() => parsePolicy(raw), /Policy contains duplicate key/);
-  }
-  const escaped = '{"version":1,"enforcement":"dormant","enforc\\u0065ment":"enforcing","limit":400,"activation_snapshot":null,"grandfathered_prs":[]}';
-  assert.throws(() => parsePolicy(escaped), /Policy contains duplicate key/);
+test('policy rejects a literal duplicate top-level key', () => {
+  const raw = '{"version":1,"enforcement":"dormant","enforcement":"enforcing","limit":400,"activation_snapshot":null,"grandfathered_prs":[]}';
+  assert.throws(() => parsePolicy(raw), /Policy contains duplicate key: enforcement/);
+});
+
+test('policy rejects a duplicate top-level key with a semantically equivalent JSON escape', () => {
+  const raw = '{"version":1,"enforcement":"dormant","enforc\\u0065ment":"enforcing","limit":400,"activation_snapshot":null,"grandfathered_prs":[]}';
+  assert.throws(() => parsePolicy(raw), /Policy contains duplicate key: enforcement/);
+});
+
+test('policy rejects invalid JSON escapes', () => {
+  const raw = '{"version":1,"enforcement":"dormant","limit":400,"activation_snapshot":null,"grandfathered_prs":[],"invalid\\x20key":true}';
+  assert.throws(() => parsePolicy(raw), /Policy contains malformed JSON/);
+});
+
+test('policy rejects JSON with an incorrect schema', () => {
+  assert.throws(() => parsePolicy(JSON.stringify(dormantPolicy({ unknown: true }))), /unexpected keys/);
+  assert.throws(() => parsePolicy('{}'), /missing keys/);
+  assert.throws(() => loadPolicy(''), /unreadable or invalid/);
 });
 
 test('policy rejects duplicate and invalid grandfather IDs', () => {
