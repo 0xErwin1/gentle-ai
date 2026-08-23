@@ -41,6 +41,25 @@ type LMStudioDiscoveryMsg struct {
 	Err     error
 }
 
+// RuntimeCatalogDiscoveryMsg is delivered after OpenCode resolves project models.
+type RuntimeCatalogDiscoveryMsg struct {
+	RequestID  uint64
+	ProjectDir string
+	Providers  map[string]opencode.Provider
+	Err        error
+}
+
+type RuntimeCatalogStatus int
+
+const (
+	RuntimeCatalogLoading RuntimeCatalogStatus = iota
+	RuntimeCatalogReady
+	RuntimeCatalogEmpty
+	RuntimeCatalogFailed
+)
+
+type RuntimeCatalogDiscoverer func(context.Context, string) (map[string]opencode.Provider, error)
+
 // ProviderEntry holds a provider ID, display name, and model count for the provider list.
 type ProviderEntry struct {
 	ID         string
@@ -70,10 +89,13 @@ type ModelPickerRow struct {
 // ModelPickerState holds the available providers and models for the picker screen,
 // plus navigation state for the two-step sub-selection modes.
 type ModelPickerState struct {
-	Providers     map[string]opencode.Provider
-	AvailableIDs  []string                    // provider IDs with tool_call-capable models
-	SDDModels     map[string][]opencode.Model // provider ID -> SDD-capable models
-	ConfigWarning string
+	Providers         map[string]opencode.Provider
+	AvailableIDs      []string                    // provider IDs with tool_call-capable models
+	SDDModels         map[string][]opencode.Model // provider ID -> SDD-capable models
+	ConfigWarning     string
+	CatalogStatus     RuntimeCatalogStatus
+	CatalogRequestID  uint64
+	CatalogProjectDir string
 
 	Mode             ModelPickerMode
 	SelectedPhaseIdx int    // which phase row was selected (0 = "Set all")
@@ -120,6 +142,22 @@ type ModelPickerState struct {
 	lmStudioConfig    opencode.ConfigProvider
 	lmStudioCatalog   opencode.Provider
 	customProviderIDs []string
+	catalogDiscover   RuntimeCatalogDiscoverer
+}
+
+// NewRuntimeModelPickerState initializes the picker without private model/auth caches.
+func NewRuntimeModelPickerState(settingsPath string) ModelPickerState {
+	return NewRuntimeModelPickerStateWithDiscoverer(settingsPath, opencode.DiscoverCatalog)
+}
+
+func NewRuntimeModelPickerStateWithDiscoverer(settingsPath string, discover RuntimeCatalogDiscoverer) ModelPickerState {
+	state := ModelPickerState{Providers: map[string]opencode.Provider{}, SDDModels: map[string][]opencode.Model{}, CatalogStatus: RuntimeCatalogLoading, Mode: ModePhaseList, catalogDiscover: discover}
+	if agents, err := sdd.DiscoverCustomAgents(settingsPath); err != nil {
+		state.ConfigWarning = fmt.Sprintf("Could not discover custom agents from opencode.json: %v", err)
+	} else {
+		state.CustomAgents = agents
+	}
+	return state
 }
 
 // NewModelPickerState initializes the picker state from cache and settings.
@@ -178,6 +216,19 @@ func NewModelPickerState(cachePath string, settingsPath string) ModelPickerState
 	return state
 }
 
+func (state *ModelPickerState) StartRuntimeCatalogDiscovery(requestID uint64, projectDir string) tea.Cmd {
+	state.CatalogRequestID = requestID
+	state.CatalogProjectDir = projectDir
+	discover := state.catalogDiscover
+	if discover == nil {
+		discover = opencode.DiscoverCatalog
+	}
+	return func() tea.Msg {
+		providers, err := discover(context.Background(), projectDir)
+		return RuntimeCatalogDiscoveryMsg{RequestID: requestID, ProjectDir: projectDir, Providers: providers, Err: err}
+	}
+}
+
 func (state ModelPickerState) DiscoverLMStudioCmd() tea.Cmd {
 	baseURL := state.lmStudioURL
 	return func() tea.Msg {
@@ -189,6 +240,22 @@ func (state ModelPickerState) DiscoverLMStudioCmd() tea.Cmd {
 }
 
 func (state ModelPickerState) Update(msg tea.Msg) ModelPickerState {
+	if discovery, ok := msg.(RuntimeCatalogDiscoveryMsg); ok {
+		if discovery.RequestID != state.CatalogRequestID || discovery.ProjectDir != state.CatalogProjectDir {
+			return state
+		}
+		if discovery.Err != nil {
+			state.CatalogStatus = RuntimeCatalogFailed
+			return state
+		}
+		state.Providers = discovery.Providers
+		state.refreshRuntimeModels()
+		state.CatalogStatus = RuntimeCatalogReady
+		if len(state.AvailableIDs) == 0 {
+			state.CatalogStatus = RuntimeCatalogEmpty
+		}
+		return state
+	}
 	discovery, ok := msg.(LMStudioDiscoveryMsg)
 	if !ok {
 		return state
@@ -201,7 +268,6 @@ func (state ModelPickerState) Update(msg tea.Msg) ModelPickerState {
 		state.ConfigWarning = appendLMStudioToolCallWarning(state.ConfigWarning, state.Providers["lmstudio"], len(state.lmStudioConfig.Models))
 		return state
 	}
-
 	provider := state.lmStudioCatalog
 	provider.ID = "lmstudio"
 	if provider.Name == "" {
@@ -226,12 +292,25 @@ func (state ModelPickerState) Update(msg tea.Msg) ModelPickerState {
 		}
 		provider.Models[id] = metadata
 	}
-
 	state.Providers["lmstudio"] = provider
 	state.customProviderIDs = append(state.customProviderIDs, "lmstudio")
 	state.refreshAvailableModels()
 	state.ConfigWarning = appendLMStudioToolCallWarning(state.ConfigWarning, provider, len(discovery.Models))
 	return state
+}
+
+func (state *ModelPickerState) refreshRuntimeModels() {
+	state.AvailableIDs = state.AvailableIDs[:0]
+	state.SDDModels = make(map[string][]opencode.Model, len(state.Providers))
+	for id, provider := range state.Providers {
+		models := opencode.FilterModelsForSDD(provider)
+		if len(models) == 0 {
+			continue
+		}
+		state.AvailableIDs = append(state.AvailableIDs, id)
+		state.SDDModels[id] = models
+	}
+	sort.Strings(state.AvailableIDs)
 }
 
 func (state *ModelPickerState) refreshAvailableModels() {
@@ -911,9 +990,19 @@ func renderPhaseList(
 	}
 
 	if len(state.AvailableIDs) == 0 {
-		b.WriteString(styles.WarningStyle.Render("OpenCode has not been run yet — model cache not found."))
+		message := "OpenCode reported no tool-capable models for this project."
+		subtext := "Configure a tool-capable model in OpenCode, then return to this picker."
+		switch state.CatalogStatus {
+		case RuntimeCatalogLoading:
+			message = "Discovering models from OpenCode..."
+			subtext = "You can continue with default assignments while discovery runs."
+		case RuntimeCatalogFailed:
+			message = "Could not discover models from OpenCode."
+			subtext = "Verify OpenCode is installed and can run in this project, then return to this picker."
+		}
+		b.WriteString(styles.WarningStyle.Render(message))
 		b.WriteString("\n")
-		b.WriteString(styles.SubtextStyle.Render("Run 'opencode' once, then re-run 'gentle-ai sync' to assign models."))
+		b.WriteString(styles.SubtextStyle.Render(subtext))
 		b.WriteString("\n")
 		b.WriteString(styles.SubtextStyle.Render("Using default model assignments for now."))
 		b.WriteString("\n\n")
