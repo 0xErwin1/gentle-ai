@@ -170,16 +170,24 @@ func DetectProfiles(settingsPath string) ([]model.Profile, error) {
 		return []model.Profile{}, nil
 	}
 
-	// Scan for sdd-orchestrator-{name} keys (exclude bare sdd-orchestrator).
-	const orchPrefix = "sdd-orchestrator-"
+	// Scan every canonical profile key, not just the orchestrator. A prior sync
+	// can leave an orphaned phase entry behind; it remains managed and must be
+	// refreshed (including removal of deprecated tools) on the next sync.
+	prefixes := []string{"sdd-orchestrator-"}
+	for _, phase := range ProfileAssignmentPhaseOrder() {
+		prefixes = append(prefixes, phase+"-")
+	}
 	profileNames := make([]string, 0)
 	seen := make(map[string]bool)
 	for key := range agentMap {
-		if !strings.HasPrefix(key, orchPrefix) {
-			continue
+		profileName := ""
+		for _, prefix := range prefixes {
+			if strings.HasPrefix(key, prefix) {
+				profileName = strings.TrimPrefix(key, prefix)
+				break
+			}
 		}
-		profileName := key[len(orchPrefix):]
-		if profileName == "" || seen[profileName] {
+		if profileName == "" || seen[profileName] || ValidateProfileName(profileName) != nil {
 			continue
 		}
 		seen[profileName] = true
@@ -299,16 +307,6 @@ func GenerateProfileOverlay(profile model.Profile, homeDir, settingsPath string,
 				"__replace__": taskPerms,
 			},
 		},
-		"tools": map[string]any{
-			"__replace__": map[string]any{
-				"read":     true,
-				"write":    true,
-				"edit":     true,
-				"bash":     true,
-				"question": true,
-				"task":     true,
-			},
-		},
 	}
 	orchAssignment := profile.OrchestratorModel
 	if orchAssignment.ProviderID == "" || orchAssignment.ModelID == "" {
@@ -357,12 +355,6 @@ func GenerateProfileOverlay(profile model.Profile, homeDir, settingsPath string,
 			"hidden":      true,
 			"description": phaseDescriptions[phase],
 			"prompt":      prompt,
-			"tools": map[string]any{
-				"read":  true,
-				"write": true,
-				"edit":  true,
-				"bash":  true,
-			},
 		}
 		// Issue #557: consult fallback when the profile did not set the phase,
 		// so generated *-{name} agents stay consistent with what the user sees
@@ -507,10 +499,6 @@ func jdProfileAgentEntry(jd string) map[string]any {
 			"hidden":      true,
 			"description": "Adversarial code reviewer — blind judge A for judgment-day protocol",
 			"prompt":      "You are a judgment-day adversarial reviewer. Execute the review instructions provided in the task prompt exactly. Do NOT delegate further. Do NOT modify any code — your job is ONLY to find problems.",
-			"tools": map[string]any{
-				"read": true,
-				"bash": true,
-			},
 		}
 	case "jd-judge-b":
 		return map[string]any{
@@ -518,10 +506,6 @@ func jdProfileAgentEntry(jd string) map[string]any {
 			"hidden":      true,
 			"description": "Adversarial code reviewer — blind judge B for judgment-day protocol",
 			"prompt":      "You are a judgment-day adversarial reviewer. Execute the review instructions provided in the task prompt exactly. Do NOT delegate further. Do NOT modify any code — your job is ONLY to find problems.",
-			"tools": map[string]any{
-				"read": true,
-				"bash": true,
-			},
 		}
 	case "jd-fix-agent":
 		return map[string]any{
@@ -529,12 +513,6 @@ func jdProfileAgentEntry(jd string) map[string]any {
 			"hidden":      true,
 			"description": "Surgical fix agent for judgment-day protocol",
 			"prompt":      "You are a judgment-day surgical fix agent. Execute the fix instructions provided in the task prompt exactly. Do NOT delegate further. Fix ONLY the confirmed issues listed — do NOT refactor beyond what is strictly needed.",
-			"tools": map[string]any{
-				"read":  true,
-				"write": true,
-				"edit":  true,
-				"bash":  true,
-			},
 		}
 	default:
 		return map[string]any{
@@ -542,10 +520,6 @@ func jdProfileAgentEntry(jd string) map[string]any {
 			"hidden":      true,
 			"description": jd,
 			"prompt":      "Execute the task prompt exactly. Do NOT delegate further.",
-			"tools": map[string]any{
-				"read": true,
-				"bash": true,
-			},
 		}
 	}
 }
