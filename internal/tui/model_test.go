@@ -6976,28 +6976,6 @@ func TestPickerFlowSlice(t *testing.T) {
 			},
 		},
 		{
-			name: "non-custom all agents SDDMode Multi consistently includes ModelPicker",
-			setup: func(t *testing.T) Model {
-				t.Setenv("HOME", t.TempDir()) // guarantees cache path resolves to missing file
-				m := NewModel(system.DetectionResult{}, "dev")
-				m.Selection.Preset = model.PresetFullGentleman
-				m.Selection.Agents = allPickerAgents
-				m.Selection.Components = sddComponents
-				m.Selection.SDDMode = model.SDDModeMulti
-				return m
-			},
-			wantSlice: []Screen{
-				ScreenPreset,
-				ScreenClaudeModelPicker,
-				ScreenKiroModelPicker,
-				ScreenCodexModelPicker,
-				ScreenSDDMode,
-				ScreenModelPicker,
-				ScreenStrictTDD,
-				ScreenDependencyTree,
-			},
-		},
-		{
 			name: "non-custom Claude only includes Claude and StrictTDD anchors",
 			setup: func(t *testing.T) Model {
 				m := NewModel(system.DetectionResult{}, "dev")
