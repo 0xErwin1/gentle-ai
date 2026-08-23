@@ -94,10 +94,6 @@ func sanitizeAdvisoryURL(raw string) string {
 	return parsed.String()
 }
 
-// osStatModelCache is a package-level variable so tests can override it to
-// simulate a missing or present OpenCode model cache file.
-var osStatModelCache = os.Stat
-var modelPickerCachePath = opencode.DefaultCachePath
 var modelPickerSettingsPath = opencode.DefaultSettingsPath
 var modelPickerWorkingDir = os.Getwd
 var modelPickerCatalogDiscoverer = screens.RuntimeCatalogDiscoverer(opencode.DiscoverCatalog)
@@ -1035,7 +1031,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.AdvisoryScroll = 0
 		return m, nil
 	case screens.RuntimeCatalogDiscoveryMsg:
-		if m.Screen != ScreenModelPicker || msg.RequestID != m.runtimeCatalogDiscoveryRequest || msg.ProjectDir != m.ModelPicker.CatalogProjectDir {
+		if !m.activePicker() || msg.RequestID != m.runtimeCatalogDiscoveryRequest || msg.ProjectDir != m.ModelPicker.CatalogProjectDir {
 			return m, nil
 		}
 		m.ModelPicker = m.ModelPicker.Update(msg)
@@ -4736,11 +4732,16 @@ func (m *Model) initializeModelPicker() tea.Cmd {
 	m.ModelPicker = screens.NewRuntimeModelPickerStateWithDiscoverer(modelPickerSettingsPath(), modelPickerCatalogDiscoverer)
 	projectDir, err := modelPickerWorkingDir()
 	if err != nil {
+		m.ModelPicker.CatalogRequestID = requestID
 		return func() tea.Msg {
 			return screens.RuntimeCatalogDiscoveryMsg{RequestID: requestID, Err: errors.New("working directory unavailable")}
 		}
 	}
 	return m.ModelPicker.StartRuntimeCatalogDiscovery(requestID, projectDir)
+}
+
+func (m Model) activePicker() bool {
+	return m.Screen == ScreenModelPicker || (m.Screen == ScreenProfileCreate && m.ProfileCreateStep == 1)
 }
 
 func componentsForPreset(preset model.PresetID, persona model.PersonaID) []model.ComponentID {

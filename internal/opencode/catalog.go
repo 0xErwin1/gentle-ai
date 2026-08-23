@@ -23,7 +23,6 @@ type Command struct {
 	Args        []string
 	Dir         string
 	OutputLimit int
-	Env         []string
 }
 
 type CommandOutput struct{ Stdout, Stderr []byte }
@@ -142,9 +141,6 @@ func runCatalogCommand(ctx context.Context, command Command) (CommandOutput, err
 	defer cancel()
 	cmd := exec.CommandContext(ctx, command.Path, command.Args...)
 	cmd.Dir = command.Dir
-	if command.Env != nil {
-		cmd.Env = command.Env
-	}
 	stdout, stderr := &limitedBuffer{limit: command.OutputLimit, cancel: cancel}, &limitedBuffer{limit: command.OutputLimit, cancel: cancel}
 	cmd.Stdout, cmd.Stderr = stdout, stderr
 	err := cmd.Run()
