@@ -851,8 +851,8 @@ exec "$GENTLE_AI_RUNTIME_TRACE_BINARY" -ff -o "$GENTLE_AI_RUNTIME_TRACE_LOG" -e 
 	}
 	t.Logf("OpenCode egress proof: %d external attempts denied by the loopback proxy; strace observed %d Internet-socket connects, all loopback: %v", proxy.deniedRequests(), len(connections), connections)
 	status := organicProviderStatus(t, harness, lineage, "opencode")
-	if status.NextTransition == nil || status.NextTransition.Kind != "stop" || status.NextTransition.ReasonCode != "manual_intervention_required" {
-		t.Fatalf("OpenCode capture did not close its last lens route: %#v", status.NextTransition)
+	if status.NextTransition == nil || status.NextTransition.Kind != "execute" || status.NextTransition.ReasonCode != "fresh_target_ready" {
+		t.Fatalf("OpenCode terminal capture did not continue with an executable fresh target: %#v", status.NextTransition)
 	}
 }
 
