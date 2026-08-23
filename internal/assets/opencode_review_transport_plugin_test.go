@@ -51,6 +51,73 @@ console.log(JSON.stringify({ prompt: before.args.prompt, output: after.output })
 	}
 }
 
+func TestOpenCodeReviewTransportPluginKeysGroupedReviewersBySubagentType(t *testing.T) {
+	source, err := Read("opencode/plugins/opencode-review-transport.ts")
+	if err != nil {
+		t.Fatal(err)
+	}
+	const harness = `import plugin from "./plugin.mts"
+const hooks = await plugin({ directory: process.cwd(), worktree: process.cwd() })
+const lenses = ["review-risk", "review-resilience", "review-readability", "review-reliability"]
+const tasks = lenses.map((subagent_type) => ({ args: { subagent_type, prompt: "Go must receive this original host prompt" } }))
+await Promise.all(tasks.map((task) => hooks["tool.execute.before"]({ tool: "task", sessionID: "session", callID: "grouped-call" }, task)))
+const taskOutputs = tasks.map(() => ({ output: "untrusted reviewer output", metadata: {} }))
+const completions = await Promise.allSettled(tasks.map((task, index) => hooks["tool.execute.after"](
+  { tool: "task", sessionID: "session", callID: "grouped-call", args: { subagent_type: task.args.subagent_type } },
+  taskOutputs[index],
+)))
+for (const [index, completion] of completions.entries()) {
+  if (completion.status !== "fulfilled") throw new Error("grouped reviewer " + lenses[index] + " did not complete: " + completion.reason)
+}
+console.log(JSON.stringify({ prompts: tasks.map((task) => task.args.prompt), outputs: taskOutputs.map((task) => task.output) }))
+`
+	output, log := runOpenCodeTransportPluginHarness(t, map[string]string{"plugin.mts": string(source)}, harness, posixRelayFixture)
+	var result struct {
+		Prompts []string `json:"prompts"`
+		Outputs []string `json:"outputs"`
+	}
+	if err := json.Unmarshal([]byte(output), &result); err != nil {
+		t.Fatalf("decode grouped relay harness output %q: %v", output, err)
+	}
+	if len(result.Prompts) != 4 || len(result.Outputs) != 4 {
+		t.Fatalf("grouped reviewer results = %#v, want four prompts and outputs", result)
+	}
+	for index, prompt := range result.Prompts {
+		if prompt != "Go-materialized immutable prompt" {
+			t.Fatalf("grouped reviewer prompt[%d] = %q, want Go materialization", index, prompt)
+		}
+	}
+	for index, output := range result.Outputs {
+		if output != "captured" {
+			t.Fatalf("grouped reviewer output[%d] = %q, want captured", index, output)
+		}
+	}
+	if got := strings.Count(log, `"operation":"start"`); got != 4 {
+		t.Fatalf("grouped reviewer relay starts = %d, want 4; log=%q", got, log)
+	}
+	if got := strings.Count(log, `"operation":"complete"`); got != 4 {
+		t.Fatalf("grouped reviewer relay completions = %d, want 4; log=%q", got, log)
+	}
+}
+
+func TestOpenCodeReviewTransportPluginUsesActiveHostWithoutVersionOrEnvironmentGates(t *testing.T) {
+	source, err := Read("opencode/plugins/opencode-review-transport.ts")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, forbidden := range []string{
+		`spawn("opencode"`, `spawn('opencode'`, `exec("opencode"`, `exec('opencode'`,
+		"OPENCODE_DISABLE_", "--version",
+	} {
+		if strings.Contains(source, forbidden) {
+			t.Fatalf("OpenCode transport plugin must use the active host process, found forbidden %q", forbidden)
+		}
+	}
+	if !strings.Contains(source, `spawn(TRANSPORT.Command, ["review", "opencode-transport"]`) {
+		t.Fatal("OpenCode transport plugin must spawn only the shared Go transport")
+	}
+}
+
 func TestOpenCodeReviewTransportPluginRefusesDeferredCompletionWhoseOwnerIsGone(t *testing.T) {
 	source, err := Read("opencode/plugins/opencode-review-transport.ts")
 	if err != nil {

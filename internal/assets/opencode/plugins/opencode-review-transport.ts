@@ -52,8 +52,11 @@ function reviewRelayRegistry(): Map<string, RelayRegistration> {
   return runtime[RELAY_REGISTRY_KEY]
 }
 
-function taskKey(sessionID: string, callID: string): string {
-  return `${sessionID}:${callID}`
+function taskKey(sessionID: string, callID: string, subagentType: string): string {
+  // Older OpenCode releases can reuse a call ID across a grouped foreground
+  // Task response. The agent type is part of the host Task identity, so retain
+  // it in the relay key rather than treating different 4R lenses as duplicates.
+  return `${sessionID}:${callID}:${subagentType}`
 }
 
 // A refused relay must fail the Task loudly and never launch an unbound
@@ -205,7 +208,7 @@ const OpenCodeReviewTransportPlugin: Plugin = async ({ directory, worktree }) =>
     "tool.execute.before": async (input, output) => {
       if (input.tool !== "task" || typeof output.args?.subagent_type !== "string" || !REVIEW_AGENTS.has(output.args.subagent_type)) return
       if (typeof output.args.prompt !== "string") throw new Error("review task prompt is unavailable for Go relay materialization")
-      const key = taskKey(input.sessionID, input.callID)
+      const key = taskKey(input.sessionID, input.callID, output.args.subagent_type)
       const existing = relays.get(key)
       if (existing) {
         // Another instance already owns this task's relay: defer completion
@@ -229,7 +232,7 @@ const OpenCodeReviewTransportPlugin: Plugin = async ({ directory, worktree }) =>
     },
     "tool.execute.after": async (input, output) => {
       if (input.tool !== "task" || typeof input.args?.subagent_type !== "string" || !REVIEW_AGENTS.has(input.args.subagent_type)) return
-      const key = taskKey(input.sessionID, input.callID)
+      const key = taskKey(input.sessionID, input.callID, input.args.subagent_type)
       const refusal = refused.get(key)
       if (refusal !== undefined) {
         refused.delete(key)
