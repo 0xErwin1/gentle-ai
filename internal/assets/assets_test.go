@@ -2439,13 +2439,15 @@ func TestSDDArchiveMoveTransactionPreservesFilesystemOnCollisions(t *testing.T) 
 			if err != nil {
 				t.Fatalf("archive transaction failed: %v\n%s", err, output)
 			}
-			assertArchivePathAbsent(t, source)
+			if _, err := os.Lstat(source); !os.IsNotExist(err) {
+				t.Fatalf("%s remains after archive move: %v", source, err)
+			}
 			assertFileContents(t, filepath.Join(destination, "tasks.md"), "archive task bytes\n")
 			assertFileContents(t, sentinel, "repository sentinel\n")
 
 			if tracked {
 				assertGitCommandFails(t, root, "ls-files", "--error-unmatch", "openspec/changes/change/tasks.md")
-				assertGitCommandSucceeds(t, root, "ls-files", "--error-unmatch", "openspec/changes/archive/2030-01-02-change/tasks.md")
+				runGit(t, root, "ls-files", "--error-unmatch", "openspec/changes/archive/2030-01-02-change/tasks.md")
 				staged := runGit(t, root, "diff", "--cached", "--name-status")
 				if !strings.Contains(staged, "R100") {
 					t.Fatalf("tracked archive move did not stage a rename:\n%s", staged)
@@ -2502,10 +2504,11 @@ func TestSDDArchiveHistoricalRecoveryRefusesDanglingActiveSourceSymlink(t *testi
 		t.Skipf("dangling symlink fixture is unavailable: %v", err)
 	}
 
-	recovery := strings.ReplaceAll(historicalArchiveRecovery(), "{change-name}", "change")
+	recovery := strings.ReplaceAll(archiveFencedShellBlock("### Historical Malformed Nesting Recovery (Manual Only)"), "{change-name}", "change")
 	recovery = strings.ReplaceAll(recovery, "YYYY-MM-DD-change", "2030-01-02-change")
 	command := exec.Command(shell, "-c", recovery)
 	command.Dir = root
+	command.Env = isolatedGitEnvironment()
 	output, err := command.CombinedOutput()
 	if err == nil || !strings.Contains(string(output), "active source must be absent") {
 		t.Fatalf("historical recovery did not fail closed for a dangling active-source symlink: %v\n%s", err, output)
@@ -2575,21 +2578,14 @@ func setupArchiveFixture(t *testing.T, tracked bool) (root, source, destination,
 
 func runArchiveMoveTransaction(shell, root string) (string, error) {
 	const changeName = "change"
-	transaction := archiveMoveTransaction()
+	transaction := archiveFencedShellBlock("### Step 3: Move to Archive")
 	transaction = strings.ReplaceAll(transaction, "{change-name}", changeName)
 	transaction = strings.ReplaceAll(transaction, "YYYY-MM-DD-"+changeName, "2030-01-02-"+changeName)
 	command := exec.Command(shell, "-c", transaction)
 	command.Dir = root
+	command.Env = isolatedGitEnvironment()
 	output, err := command.CombinedOutput()
 	return string(output), err
-}
-
-func archiveMoveTransaction() string {
-	return archiveFencedShellBlock("### Step 3: Move to Archive")
-}
-
-func historicalArchiveRecovery() string {
-	return archiveFencedShellBlock("### Historical Malformed Nesting Recovery (Manual Only)")
 }
 
 func archiveFencedShellBlock(heading string) string {
@@ -2598,7 +2594,11 @@ func archiveFencedShellBlock(heading string) string {
 	if start < 0 {
 		panic("sdd-archive shell section is missing")
 	}
-	start += strings.Index(skill[start:], "```bash\n") + len("```bash\n")
+	opening := strings.Index(skill[start:], "```bash\n")
+	if opening < 0 {
+		panic("sdd-archive shell section is missing its opening fence")
+	}
+	start += opening + len("```bash\n")
 	end := strings.Index(skill[start:], "\n```")
 	if end < 0 {
 		panic("sdd-archive shell block is missing its closing fence")
@@ -2672,13 +2672,6 @@ func assertArchiveCollision(t *testing.T, root, destination, collision string) {
 	}
 }
 
-func assertArchivePathAbsent(t *testing.T, path string) {
-	t.Helper()
-	if _, err := os.Lstat(path); !os.IsNotExist(err) {
-		t.Fatalf("%s remains after archive move: %v", path, err)
-	}
-}
-
 func assertFileContents(t *testing.T, path, want string) {
 	t.Helper()
 	got, err := os.ReadFile(path)
@@ -2694,6 +2687,7 @@ func runGit(t *testing.T, root string, args ...string) string {
 	t.Helper()
 	command := exec.Command("git", args...)
 	command.Dir = root
+	command.Env = isolatedGitEnvironment()
 	output, err := command.CombinedOutput()
 	if err != nil {
 		t.Fatalf("git %s failed: %v\n%s", strings.Join(args, " "), err, output)
@@ -2701,17 +2695,23 @@ func runGit(t *testing.T, root string, args ...string) string {
 	return string(output)
 }
 
-func assertGitCommandSucceeds(t *testing.T, root string, args ...string) {
-	t.Helper()
-	runGit(t, root, args...)
-}
-
 func assertGitCommandFails(t *testing.T, root string, args ...string) {
 	t.Helper()
 	command := exec.Command("git", args...)
 	command.Dir = root
+	command.Env = isolatedGitEnvironment()
 	output, err := command.CombinedOutput()
 	if err == nil {
 		t.Fatalf("git %s unexpectedly succeeded:\n%s", strings.Join(args, " "), output)
 	}
+}
+
+func isolatedGitEnvironment() []string {
+	env := os.Environ()
+	for i := len(env) - 1; i >= 0; i-- {
+		if strings.HasPrefix(strings.ToUpper(env[i]), "GIT_") {
+			env = append(env[:i], env[i+1:]...)
+		}
+	}
+	return append(env, "GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL="+os.DevNull, "GIT_CONFIG_SYSTEM="+os.DevNull, "GIT_CONFIG_COUNT=0")
 }
