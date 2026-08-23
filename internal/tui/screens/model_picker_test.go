@@ -1628,6 +1628,38 @@ func TestNewModelPickerState_DiscoversCustomAgents(t *testing.T) {
 	}
 }
 
+func TestRuntimeCatalogDiscoveryUpdatesPickerWithoutPrivateFixtures(t *testing.T) {
+	state := NewRuntimeModelPickerState(filepath.Join(t.TempDir(), "missing-opencode.json"))
+	if !strings.Contains(RenderModelPicker(nil, state, 0), "Discovering models from OpenCode") {
+		t.Fatal("picker did not show loading state")
+	}
+	var cwd string
+	state.catalogDiscover = func(_ context.Context, dir string) (map[string]opencode.Provider, error) {
+		cwd = dir
+		return map[string]opencode.Provider{
+			"custom": {ID: "custom", Name: "Custom", Models: map[string]opencode.Model{
+				"qwen/qwen3": {ID: "qwen/qwen3", Name: "Qwen 3", ToolCall: true, Reasoning: true, Variants: []string{"high"}},
+			}},
+			"no-tools": {ID: "no-tools", Models: map[string]opencode.Model{"plain": {ID: "plain"}}},
+		}, nil
+	}
+	state = state.Update(state.StartRuntimeCatalogDiscovery(1, "active-project")().(RuntimeCatalogDiscoveryMsg))
+	if cwd != "active-project" || len(state.AvailableIDs) != 1 || state.AvailableIDs[0] != "custom" || state.SDDModels["custom"][0].ID != "qwen/qwen3" {
+		t.Fatalf("runtime picker cwd=%q models=%+v / %+v", cwd, state.AvailableIDs, state.SDDModels)
+	}
+	if strings.Contains(RenderModelPicker(nil, state, 0), "model cache") {
+		t.Fatal("runtime picker referenced a private cache")
+	}
+	state = state.Update(RuntimeCatalogDiscoveryMsg{RequestID: 1, ProjectDir: "active-project", Providers: map[string]opencode.Provider{}})
+	if !strings.Contains(RenderModelPicker(nil, state, 0), "reported no tool-capable models") {
+		t.Fatal("picker did not distinguish an empty catalog")
+	}
+	state = state.Update(RuntimeCatalogDiscoveryMsg{RequestID: 1, ProjectDir: "active-project", Err: errors.New("unavailable")})
+	if !strings.Contains(RenderModelPicker(nil, state, 0), "Could not discover models from OpenCode") {
+		t.Fatal("picker did not show discovery fallback")
+	}
+}
+
 func TestApplyAssignment_SetAllCustomAgents(t *testing.T) {
 	state := ModelPickerState{
 		CustomAgents:     []string{"custom-1", "custom-2"},

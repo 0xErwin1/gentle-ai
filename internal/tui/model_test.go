@@ -7622,6 +7622,81 @@ func TestApplyPickerEntry(t *testing.T) {
 	}
 }
 
+func TestModelUpdateAppliesRuntimeCatalogDiscovery(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenModelPicker
+	m.ModelPicker = screens.NewRuntimeModelPickerState(filepath.Join(t.TempDir(), "missing-opencode.json"))
+	m.runtimeCatalogDiscoveryRequest = 1
+	m.ModelPicker.StartRuntimeCatalogDiscovery(1, "project")
+	updated, _ := m.Update(screens.RuntimeCatalogDiscoveryMsg{RequestID: 1, ProjectDir: "project", Providers: map[string]opencode.Provider{
+		"custom": {ID: "custom", Models: map[string]opencode.Model{"model": {ID: "model", ToolCall: true}}},
+	}})
+	state := updated.(Model)
+	if len(state.ModelPicker.AvailableIDs) != 1 || state.ModelPicker.AvailableIDs[0] != "custom" {
+		t.Fatalf("runtime catalog was not applied: %v", state.ModelPicker.AvailableIDs)
+	}
+	state.ModelPicker = screens.NewRuntimeModelPickerState(filepath.Join(t.TempDir(), "missing-opencode.json"))
+	state.ModelPicker.StartRuntimeCatalogDiscovery(1, "project")
+	updated, _ = state.Update(screens.RuntimeCatalogDiscoveryMsg{RequestID: 1, ProjectDir: "project", Err: errors.New("unavailable")})
+	state = updated.(Model)
+	if !strings.Contains(screens.RenderModelPicker(nil, state.ModelPicker, 0), "Could not discover models from OpenCode") {
+		t.Fatal("runtime discovery failure did not preserve the default-assignment fallback")
+	}
+}
+
+func TestRuntimeCatalogDiscoveryIgnoresStaleProjectResults(t *testing.T) {
+	originalDiscover := modelPickerCatalogDiscoverer
+	originalDir := modelPickerWorkingDir
+	originalCachePath := modelPickerCachePath
+	originalSettingsPath := modelPickerSettingsPath
+	t.Cleanup(func() {
+		modelPickerCatalogDiscoverer = originalDiscover
+		modelPickerWorkingDir = originalDir
+		modelPickerCachePath = originalCachePath
+		modelPickerSettingsPath = originalSettingsPath
+	})
+	settingsPath := filepath.Join(t.TempDir(), "opencode.json")
+	if err := os.WriteFile(settingsPath, []byte(`{"provider":{"poison":{"models":{"private":{"tool_call":true}}}}}`), 0o600); err != nil {
+		t.Fatalf("write poisoned settings: %v", err)
+	}
+	dirs := []string{"project-a", "project-b"}
+	modelPickerWorkingDir = func() (string, error) {
+		dir := dirs[0]
+		dirs = dirs[1:]
+		return dir, nil
+	}
+	modelPickerCachePath = func() string {
+		t.Fatal("runtime picker read the private model cache")
+		return ""
+	}
+	modelPickerSettingsPath = func() string { return settingsPath }
+	modelPickerCatalogDiscoverer = func(_ context.Context, dir string) (map[string]opencode.Provider, error) {
+		return map[string]opencode.Provider{dir: {ID: dir, Models: map[string]opencode.Model{"runtime": {ID: "runtime", ToolCall: true}}}}, nil
+	}
+
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenModelPicker
+	commandA := m.initializeModelPicker()
+	m.Screen = ScreenWelcome
+	commandB := m.initializeModelPicker()
+	m.Screen = ScreenModelPicker
+	updated, _ := m.Update(commandB().(screens.RuntimeCatalogDiscoveryMsg))
+	m = updated.(Model)
+	updated, _ = m.Update(commandA().(screens.RuntimeCatalogDiscoveryMsg))
+	m = updated.(Model)
+	if len(m.ModelPicker.AvailableIDs) != 1 || m.ModelPicker.AvailableIDs[0] != "project-b" {
+		t.Fatalf("stale result replaced active catalog: %v", m.ModelPicker.AvailableIDs)
+	}
+	if _, ok := m.ModelPicker.Providers["poison"]; ok {
+		t.Fatal("runtime picker used the private configured provider")
+	}
+	m.Screen = ScreenWelcome
+	updated, _ = m.Update(commandB().(screens.RuntimeCatalogDiscoveryMsg))
+	if got := updated.(Model).ModelPicker.AvailableIDs; len(got) != 1 || got[0] != "project-b" {
+		t.Fatalf("result applied after leaving picker: %v", got)
+	}
+}
+
 // ─── Unit 4: TestPickerBackRowRegression ─────────────────────────────────────
 //
 // These tests are the RED gate for Unit 5 (forward call-site rewrites) and
