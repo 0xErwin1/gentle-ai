@@ -7,6 +7,19 @@
 - Coverage: `vitest --coverage`, `jest --coverage`, `c8`, `pytest-cov`, `go test -cover`, `coverlet`.
 - Quality: linter, type checker, formatter commands.
 
+## Workspace Project Discovery
+
+Start at the authoritative workspace root. Complete this discovery before stack or test-runner classification and before applying the no-runner fallback.
+
+1. Read explicit workspace membership first when the workspace config declares it (for example package-manager workspaces or Cargo workspace members). Inspect each declared member that resolves inside the workspace root.
+2. If there is no explicit membership, inspect candidate project roots at the workspace root and at most two directory levels below it. This bounded fallback covers direct children such as `A/pyproject.toml` and `B/Cargo.toml`; do not recursively crawl beyond that depth.
+3. Never descend into VCS, dependency, generated/build, cache, virtual-environment, or nested-repository boundaries. At minimum exclude `.git`, `node_modules`, `vendor`, `dist`, `build`, `out`, `target`, `.cache`, `__pycache__`, `.venv`, `venv`, and directories that contain their own `.git` file or directory.
+4. Treat a directory with a supported project marker as one project root. For every discovered project, retain its workspace-relative path, stack, test command, test layers, coverage command, and quality-tool commands. Do not collapse multiple commands into a chosen workspace runner.
+
+Use one workspace-level project-context and testing-capabilities result. In the result and in `openspec/config.yaml` when it is written, represent projects as a table or `projects:` list with one entry per relative path; keep each project's commands in that entry. Existing consumers may only render the aggregate result, so do not imply that they can execute a single combined command.
+
+Resolve Strict TDD after the complete project list is evaluated: an explicit marker or config wins. Otherwise enable it only when every discovered in-scope project has a usable test command. If any in-scope project has none, disable it and name those paths; only then apply the no-runner fallback.
+
 ## Skill Registry Scan Rules
 
 - Scan user skills: `~/.pi/agent/skills/`, `~/.config/agents/skills/`, `~/.agents/skills/`, `~/.kimi/skills/`, `~/.config/opencode/skills/`, `~/.config/kilo/skills/`, `~/.claude/skills/`, `~/.gemini/skills/`, `~/.gemini/antigravity/skills/`, `~/.cursor/skills/`, `~/.copilot/skills/`, `~/.codex/skills/`, `~/.codeium/windsurf/skills/`, `~/.qwen/skills/`, `~/.kiro/skills/`, and `~/.openclaw/skills/`.
@@ -66,31 +79,33 @@ openspec/
 **Strict TDD Mode**: {enabled/disabled}
 **Detected**: {date}
 
-### Test Runner
+### Projects
 
-- Command: `{command}`
-- Framework: {name}
+| Relative path | Stack | Test command | Framework |
+| ------------- | ----- | ------------ | --------- |
+| `{path}` | {stack} | `{command or —}` | {name or —} |
 
 ### Test Layers
 
-| Layer       | Available | Tool        |
-| ----------- | --------- | ----------- |
-| Unit        | ✅ / ❌   | {tool or —} |
-| Integration | ✅ / ❌   | {tool or —} |
-| E2E         | ✅ / ❌   | {tool or —} |
+| Relative path | Layer       | Available | Tool        |
+| ------------- | ----------- | --------- | ----------- |
+| `{path}` | Unit        | ✅ / ❌   | {tool or —} |
+| `{path}` | Integration | ✅ / ❌   | {tool or —} |
+| `{path}` | E2E         | ✅ / ❌   | {tool or —} |
 
 ### Coverage
 
-- Available: ✅ / ❌
-- Command: `{command or —}`
+| Relative path | Available | Command |
+| ------------- | --------- | ------- |
+| `{path}` | ✅ / ❌ | `{command or —}` |
 
 ### Quality Tools
 
-| Tool         | Available | Command        |
-| ------------ | --------- | -------------- |
-| Linter       | ✅ / ❌   | {command or —} |
-| Type checker | ✅ / ❌   | {command or —} |
-| Formatter    | ✅ / ❌   | {command or —} |
+| Relative path | Tool         | Available | Command        |
+| ------------- | ------------ | --------- | -------------- |
+| `{path}` | Linter       | ✅ / ❌   | {command or —} |
+| `{path}` | Type checker | ✅ / ❌   | {command or —} |
+| `{path}` | Formatter    | ✅ / ❌   | {command or —} |
 ```
 
 ## Output Templates
