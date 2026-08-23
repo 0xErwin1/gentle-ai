@@ -2653,13 +2653,13 @@ func assertArchiveCollision(t *testing.T, root, destination, collision string) {
 		}
 		assertFileContents(t, destination, "file sentinel\n")
 	case "live symlink":
-		if info.Mode()&os.ModeSymlink == 0 {
-			t.Fatalf("collision destination is %v, want live symlink", info.Mode())
+		if target, err := os.Readlink(destination); info.Mode()&os.ModeSymlink == 0 || err != nil || target != filepath.Join(root, "live-symlink-target") {
+			t.Fatalf("collision destination is %v, want live symlink to %q: target %q, error %v", info.Mode(), filepath.Join(root, "live-symlink-target"), target, err)
 		}
 		assertFileContents(t, filepath.Join(root, "live-symlink-target"), "live symlink sentinel\n")
 	case "dangling symlink":
-		if info.Mode()&os.ModeSymlink == 0 {
-			t.Fatalf("collision destination is %v, want dangling symlink", info.Mode())
+		if target, err := os.Readlink(destination); info.Mode()&os.ModeSymlink == 0 || err != nil || target != filepath.Join(root, "missing-symlink-target") {
+			t.Fatalf("collision destination is %v, want dangling symlink to %q: target %q, error %v", info.Mode(), filepath.Join(root, "missing-symlink-target"), target, err)
 		}
 		if _, err := os.Stat(destination); !os.IsNotExist(err) {
 			t.Fatalf("dangling symlink target is unexpectedly available: %v", err)
