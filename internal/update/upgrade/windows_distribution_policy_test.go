@@ -94,13 +94,15 @@ func TestWindowsBetaGentleAIUpgradeUsesShippedRegistryGoTarget(t *testing.T) {
 	t.Cleanup(func() { execCommand = originalExec })
 	var gotName string
 	var gotArgs []string
+	var gotCmd *exec.Cmd
 	execCommand = func(name string, args ...string) *exec.Cmd {
 		if name == "go" && len(args) == 2 && args[0] == "env" {
 			return mockCmd("echo", gobin)
 		}
 		gotName = name
 		gotArgs = args
-		return mockCmd("true")
+		gotCmd = mockCmd("true")
+		return gotCmd
 	}
 
 	r := update.UpdateResult{Tool: tool, LatestVersion: "main@" + mainSHA, Status: update.UpdateAvailable}
@@ -112,5 +114,15 @@ func TestWindowsBetaGentleAIUpgradeUsesShippedRegistryGoTarget(t *testing.T) {
 	wantTarget := tool.GoImportPath + "@main"
 	if gotName != "go" || len(gotArgs) != 2 || gotArgs[0] != "install" || gotArgs[1] != wantTarget {
 		t.Fatalf("go command = %q %v, want go install %s", gotName, gotArgs, wantTarget)
+	}
+	module := gentleAIModulePath(tool)
+	for _, want := range []string{
+		"GONOSUMDB=" + module,
+		"GOPRIVATE=" + module,
+		"GONOPROXY=" + module,
+	} {
+		if gotCmd == nil || !envContains(gotCmd.Env, want) {
+			t.Fatalf("go install env missing %q in %v", want, gotCmd.Env)
+		}
 	}
 }
