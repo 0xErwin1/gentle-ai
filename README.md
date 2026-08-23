@@ -130,10 +130,12 @@ Run `gentle-ai doctor` at any time for a read-only health check of your ecosyste
 **Homebrew (macOS / Linux)**
 
 ```bash
-brew tap Gentleman-Programming/homebrew-tap
-brew trust --formula gentleman-programming/tap/gentle-ai  # one-time, for Homebrew tap trust
+brew tap gentleman-programming/tap
+brew trust --formula gentleman-programming/tap/gentle-ai  # one-time, if Homebrew requires trust
 brew install gentle-ai
 ```
+
+To install several tools from this tap, you can instead run `brew trust gentleman-programming/tap`. This broader option trusts all current and future formulas, casks, and external commands published in the tap.
 
 **Go install: stable channel (any platform with Go 1.25.10+)**
 
