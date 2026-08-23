@@ -23,7 +23,7 @@ Resolve Strict TDD after the complete project list is evaluated; only then apply
 - Preserve explicit `strict_tdd: false`.
 - Use explicit `strict_tdd: true` only when an explicit workspace-level test command covers every in-scope project; otherwise fail closed to false and explain that downstream execution requires a workspace-wide command.
 - Without an explicit value, default to true only when the discovered project set is non-empty and one explicit workspace-level test command covers every in-scope project.
-- When no projects are discovered, a project has no test command, or projects have only independent project commands, use `strict_tdd: false`. Preserve and report every project command; explain the no-runner or workspace-wide-command fallback.
+- When zero projects are discovered or no explicit workspace-level command covers every in-scope project, use `strict_tdd: false`. Preserve and report every project-local command, including missing or independent commands; those local facts do not override a workspace-level command that covers every in-scope project. Explain the no-runner or workspace-wide-command fallback.
 
 ## Skill Registry Scan Rules
 
