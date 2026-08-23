@@ -6,7 +6,8 @@
 
 - Homebrew installed and available in PATH.
 - `git` available.
-- If Homebrew requires tap trust, run `brew trust --formula gentleman-programming/tap/gentle-ai` once.
+- If Homebrew requires trust, run `brew trust --formula gentleman-programming/tap/gentle-ai` once for Gentle AI only.
+  - To install several tools from this tap, use `brew trust gentleman-programming/tap` instead. It trusts all current and future formulas, casks, and external commands published in the tap.
 
 ### Ubuntu/Debian (and derivatives like Linux Mint, Pop!\_OS)
 
