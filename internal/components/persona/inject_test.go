@@ -594,6 +594,9 @@ func TestInjectOpenCodeGentlemanDoesNotCreateSDDConductor(t *testing.T) {
 	if !strings.Contains(text, `"gentleman"`) {
 		t.Fatal("persona injection should still create the gentleman persona agent")
 	}
+	if strings.Contains(text, `"tools"`) {
+		t.Fatal("persona injection must not emit deprecated gentleman tools")
+	}
 }
 
 func TestInjectOpenCodePreservesUserContentInsteadOfOverwriting(t *testing.T) {
@@ -1193,6 +1196,12 @@ func TestInjectClaudeIsIdempotent(t *testing.T) {
 
 func TestInjectOpenCodeIsIdempotent(t *testing.T) {
 	home := t.TempDir()
+	if err := os.MkdirAll(filepath.Dir(opencodeAdapter().SettingsPath(home)), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(opencodeAdapter().SettingsPath(home), []byte(`{"theme":"dark","agent":{"gentleman":{"tools":{"write":true}},"user":{"tools":{"read":true}}}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
 
 	first, err := Inject(home, opencodeAdapter(), model.PersonaGentleman)
 	if err != nil {
@@ -1200,6 +1209,18 @@ func TestInjectOpenCodeIsIdempotent(t *testing.T) {
 	}
 	if !first.Changed {
 		t.Fatalf("Inject() first changed = false")
+	}
+	settings, err := os.ReadFile(opencodeAdapter().SettingsPath(home))
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := map[string]any{}
+	if err := json.Unmarshal(settings, &root); err != nil {
+		t.Fatal(err)
+	}
+	agents := root["agent"].(map[string]any)
+	if _, exists := agents["gentleman"].(map[string]any)["tools"]; exists || root["theme"] != "dark" || agents["user"].(map[string]any)["tools"].(map[string]any)["read"] != true {
+		t.Fatalf("stale managed tools cleanup changed user settings: %#v", root)
 	}
 
 	second, err := Inject(home, opencodeAdapter(), model.PersonaGentleman)

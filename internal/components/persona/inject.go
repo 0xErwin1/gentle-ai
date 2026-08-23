@@ -71,7 +71,8 @@ func outputStyleOverlayJSON(name string) []byte {
 // openCodeAgentOverlayJSON defines the Tab-switchable persona agent for OpenCode.
 // SDD is installed separately by the SDD component as "gentle-orchestrator";
 // persona injection must not create legacy SDD conductor keys.
-var openCodeAgentOverlayJSON = []byte("{\n  \"agent\": {\n    \"gentleman\": {\n      \"mode\": \"primary\",\n      \"description\": \"Senior Architect mentor - helpful first, challenging when it matters\",\n      \"prompt\": \"{file:./AGENTS.md}\",\n      \"tools\": {\n        \"write\": true,\n        \"edit\": true\n      }\n    }\n  }\n}\n")
+var openCodeAgentOverlayJSON = []byte("{\n  \"agent\": {\n    \"gentleman\": {\n      \"mode\": \"primary\",\n      \"description\": \"Senior Architect mentor - helpful first, challenging when it matters\",\n      \"prompt\": \"{file:./AGENTS.md}\"\n    }\n  }\n}\n")
+var kilocodeAgentOverlayJSON = []byte("{\n  \"agent\": {\n    \"gentleman\": {\n      \"mode\": \"primary\",\n      \"description\": \"Senior Architect mentor - helpful first, challenging when it matters\",\n      \"prompt\": \"{file:./AGENTS.md}\",\n      \"tools\": {\n        \"write\": true,\n        \"edit\": true\n      }\n    }\n  }\n}\n")
 
 // Inject performs a full persona injection: the marker-bound markdown block,
 // the OpenCode/Kilocode `gentleman` agent definition in settings JSON, AND
@@ -357,7 +358,11 @@ func injectInternal(homeDir string, adapter agents.Adapter, persona model.Person
 		if settingsPath != "" {
 			if isGentlemanConversationPersona(persona) {
 				if !syncManaged {
-					agentResult, err := mergeJSONFile(settingsPath, openCodeAgentOverlayJSON)
+					overlay, managedAgentNames := openCodeAgentOverlayJSON, []string{"gentleman"}
+					if adapter.Agent() == model.AgentKilocode {
+						overlay, managedAgentNames = kilocodeAgentOverlayJSON, nil
+					}
+					agentResult, err := mergeJSONFile(settingsPath, overlay, managedAgentNames...)
 					if err != nil {
 						return InjectionResult{}, err
 					}
@@ -562,10 +567,16 @@ func gentlemanPersonaContent(agent model.AgentID) string {
 	}
 }
 
-func mergeJSONFile(path string, overlay []byte) (filemerge.WriteResult, error) {
+func mergeJSONFile(path string, overlay []byte, managedAgentNames ...string) (filemerge.WriteResult, error) {
 	baseJSON, err := osReadFile(path)
 	if err != nil {
 		return filemerge.WriteResult{}, err
+	}
+	if len(managedAgentNames) > 0 {
+		baseJSON, err = filemerge.RemoveJSONAgentTools(baseJSON, managedAgentNames...)
+		if err != nil {
+			return filemerge.WriteResult{}, err
+		}
 	}
 
 	merged, err := filemerge.MergeJSONObjects(baseJSON, overlay)

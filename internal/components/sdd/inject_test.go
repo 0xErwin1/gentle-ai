@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strconv"
 	"strings"
 	"testing"
@@ -2232,15 +2233,8 @@ func TestInjectOpenCodeMultiMode(t *testing.T) {
 	if !ok {
 		t.Fatalf("gentle-orchestrator has unexpected type: %T", orchestratorRaw)
 	}
-	toolsRaw, ok := orchestratorAgent["tools"].(map[string]any)
-	if !ok {
-		t.Fatalf("gentle-orchestrator tools has unexpected type: %T", orchestratorAgent["tools"])
-	}
-	for _, toolName := range []string{"task"} {
-		value, ok := toolsRaw[toolName].(bool)
-		if !ok || !value {
-			t.Fatalf("gentle-orchestrator missing multi-mode tool %q", toolName)
-		}
+	if _, exists := orchestratorAgent["tools"]; exists {
+		t.Fatalf("gentle-orchestrator emits deprecated tools: %#v", orchestratorAgent)
 	}
 
 	// Verify representative sub-agents are present.
@@ -2362,15 +2356,8 @@ func TestInjectOpenCodeMultiModeRemovesLegacyDelegateTools(t *testing.T) {
 	}
 	agentMap := root["agent"].(map[string]any)
 	orchestrator := agentMap["gentle-orchestrator"].(map[string]any)
-	tools := orchestrator["tools"].(map[string]any)
-
-	for _, legacyTool := range []string{"delegate", "delegation_read", "delegation_list"} {
-		if _, exists := tools[legacyTool]; exists {
-			t.Fatalf("legacy OpenCode tool %q survived sync: %#v", legacyTool, tools)
-		}
-	}
-	if task, _ := tools["task"].(bool); !task {
-		t.Fatalf("native task tool missing after sync: %#v", tools)
+	if _, exists := orchestrator["tools"]; exists {
+		t.Fatalf("managed OpenCode tools survived sync: %#v", orchestrator)
 	}
 }
 
@@ -2416,15 +2403,8 @@ func TestInjectOpenCodeSingleModeRemovesLegacyDelegateTools(t *testing.T) {
 	}
 	agentMap := root["agent"].(map[string]any)
 	orchestrator := agentMap["gentle-orchestrator"].(map[string]any)
-	tools := orchestrator["tools"].(map[string]any)
-
-	for _, legacyTool := range []string{"delegate", "delegation_read", "delegation_list"} {
-		if _, exists := tools[legacyTool]; exists {
-			t.Fatalf("legacy OpenCode tool %q survived sync: %#v", legacyTool, tools)
-		}
-	}
-	if task, _ := tools["task"].(bool); !task {
-		t.Fatalf("native task tool missing after sync: %#v", tools)
+	if _, exists := orchestrator["tools"]; exists {
+		t.Fatalf("managed OpenCode tools survived sync: %#v", orchestrator)
 	}
 }
 
@@ -2661,8 +2641,7 @@ func TestInjectOpenCodeEmptySDDModeDefaultsSingle(t *testing.T) {
 			t.Fatalf("gentle-orchestrator permission.task[%s] = %v, want allow", builtIn, got)
 		}
 	}
-	refuterTools := agentMap["review-refuter"].(map[string]any)["tools"].(map[string]any)
-	assertOpenCodeRefuterToolsReadOnly(t, "rendered single-mode OpenCode config", refuterTools)
+	assertOpenCodeSubAgentReadOnlyTools(t, agentMap, "review-refuter")
 }
 
 func TestInjectOpenCodeNativeFallbackAgentsPromptsAlignedWithGentlePi(t *testing.T) {
@@ -2726,32 +2705,14 @@ func TestInjectOpenCodeNativeFallbackAgentsPromptsAlignedWithGentlePi(t *testing
 						t.Fatalf("explore fallback agent advertises an unavailable web-search tool: %s", description)
 					}
 				}
-				tools, ok := agent["tools"].(map[string]any)
-				if !ok {
-					t.Fatalf("agent %q tools have type %T, want object", fallbackAgent, agent["tools"])
+				if _, exists := agent["tools"]; exists {
+					t.Fatalf("agent %q emits deprecated tools: %#v", fallbackAgent, agent)
 				}
-				wantTools := map[string]bool{
-					"read":  true,
-					"write": fallbackAgent == "general",
-					"edit":  fallbackAgent == "general",
-					"bash":  fallbackAgent == "general",
-					"task":  false,
+				if fallbackAgent == "general" && agent["permission"].(map[string]any)["task"] != "deny" {
+					t.Fatalf("general task permission = %#v, want deny", agent["permission"])
 				}
 				if fallbackAgent == "explore" {
-					wantTools["codegraph_codegraph_explore"] = true
-				}
-				for tool, want := range wantTools {
-					got, exists := tools[tool].(bool)
-					if !exists || got != want {
-						t.Errorf("agent %q tool %q = %v, want %t", fallbackAgent, tool, tools[tool], want)
-					}
-				}
-				if fallbackAgent == "explore" {
-					for _, forbidden := range []string{"codegraph_*", "apply_patch"} {
-						if _, exists := tools[forbidden]; exists {
-							t.Errorf("explore tools unexpectedly configure %q", forbidden)
-						}
-					}
+					assertOpenCodeSubAgentReadOnlyTools(t, agentMap, fallbackAgent)
 				}
 			}
 		})
@@ -2774,13 +2735,69 @@ func TestInjectOpenCodePreservesExploreCodeGraphDenyAndCustomTool(t *testing.T) 
 	}
 
 	explore := readOpenCodeAgents(t, settingsPath)["explore"].(map[string]any)
-	tools := explore["tools"].(map[string]any)
-	if tools["codegraph_codegraph_explore"] != true || tools["custom_readonly"] != true {
-		t.Fatalf("explore tools lost managed or custom key: %#v", tools)
+	if _, exists := explore["tools"]; exists {
+		t.Fatalf("managed explore tools survived sync: %#v", explore)
 	}
 	// OpenCode 1.18.18 normalizes agent tools before agent permission.
 	if got := explore["permission"].(map[string]any)["codegraph_codegraph_explore"]; got != "deny" {
 		t.Fatalf("agent CodeGraph permission = %v, want deny", got)
+	}
+}
+
+func TestInjectOpenCodeRemovesOnlyManagedLegacyTools(t *testing.T) {
+	mockNoPackageManager(t)
+	home := t.TempDir()
+	path := opencodeAdapter().SettingsPath(home)
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	const seed = "// JSONC input\n{\"permission\":{\"read\":{\"*\":\"allow\",\"**/.env\":\"deny\"}},\"agent\":{\"user-owned\":{\"tools\":{\"read\":true,\"custom\":true}},\"gentle-orchestrator\":{\"tools\":{\"read\":true}},\"sdd-apply-fast\":{\"tools\":{\"read\":true}}}}"
+	if err := os.WriteFile(path, []byte(seed), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	opts := InjectOptions{Profiles: []model.Profile{{Name: "fast"}}}
+	if first, err := Inject(home, opencodeAdapter(), model.SDDModeMulti, opts); err != nil || !first.Changed {
+		t.Fatalf("initial JSONC sync = %#v, %v", first, err)
+	}
+	first, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := map[string]any{}
+	if err := json.Unmarshal(first, &root); err != nil {
+		t.Fatal(err)
+	}
+	agents := root["agent"].(map[string]any)
+	if !reflect.DeepEqual(root["permission"], map[string]any{"read": map[string]any{"*": "allow", "**/.env": "deny"}}) || !reflect.DeepEqual(agents["user-owned"].(map[string]any)["tools"], map[string]any{"read": true, "custom": true}) {
+		t.Fatalf("global policy or user-owned tools changed: %#v", root)
+	}
+	for name, raw := range agents {
+		if name == "user-owned" {
+			continue
+		}
+		if _, exists := raw.(map[string]any)["tools"]; exists {
+			t.Errorf("managed agent %q retained tools: %#v", name, raw)
+		}
+	}
+	if second, err := Inject(home, opencodeAdapter(), model.SDDModeMulti, opts); err != nil || second.Changed {
+		t.Fatalf("repeated JSONC sync = %#v, %v", second, err)
+	}
+}
+
+func TestInjectKilocodeNamedProfileRetainsToolsSchema(t *testing.T) {
+	home := t.TempDir()
+	if _, err := Inject(home, kilocodeAdapter(), model.SDDModeMulti, InjectOptions{Profiles: []model.Profile{{Name: "fast"}}}); err != nil {
+		t.Fatal(err)
+	}
+	agents := readOpenCodeAgents(t, kilocodeAdapter().SettingsPath(home))
+	orchestrator := agents["sdd-orchestrator-fast"].(map[string]any)
+	wantOrchestratorTools := map[string]any{"read": true, "write": true, "edit": true, "bash": true, "question": true, "task": true}
+	if !reflect.DeepEqual(orchestrator["tools"], wantOrchestratorTools) || orchestrator["permission"].(map[string]any)["read"] != nil || orchestrator["permission"].(map[string]any)["write"] != nil || orchestrator["permission"].(map[string]any)["edit"] != nil || orchestrator["permission"].(map[string]any)["bash"] != nil {
+		t.Fatalf("Kilocode profile = %#v", orchestrator)
+	}
+	phase := agents["sdd-apply-fast"].(map[string]any)
+	if !reflect.DeepEqual(phase["tools"], map[string]any{"read": true, "write": true, "edit": true, "bash": true}) || phase["permission"] != nil {
+		t.Fatalf("Kilocode profile phase = %#v", phase)
 	}
 }
 

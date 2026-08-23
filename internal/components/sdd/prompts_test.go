@@ -155,20 +155,16 @@ func assertOpenCodeSubAgentReadOnlyTools(t *testing.T, agentsMap map[string]any,
 	if !ok {
 		t.Fatalf("agent %q missing or not an object", agentName)
 	}
-	tools, ok := agent["tools"].(map[string]any)
+	permission, ok := agent["permission"].(map[string]any)
 	if !ok {
-		t.Fatalf("agent %q tools have type %T, want object", agentName, agent["tools"])
+		t.Fatalf("agent %q permission has type %T, want object", agentName, agent["permission"])
 	}
-	for tool, want := range map[string]bool{
-		"read":  true,
-		"write": false,
-		"edit":  false,
-		"bash":  false,
-		"task":  false,
-	} {
-		got, ok := tools[tool].(bool)
-		if !ok || got != want {
-			t.Fatalf("agent %q tool %q = %v, want %t", agentName, tool, tools[tool], want)
+	if _, exists := agent["tools"]; exists {
+		t.Fatalf("agent %q emits deprecated tools: %#v", agentName, agent)
+	}
+	for _, name := range []string{"write", "edit", "bash", "task"} {
+		if permission[name] != "deny" {
+			t.Fatalf("agent %q permission %q = %#v, want deny", agentName, name, permission[name])
 		}
 	}
 }
