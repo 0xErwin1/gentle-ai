@@ -2427,7 +2427,7 @@ func TestSDDArchiveStoreSpecificFilesystemContract(t *testing.T) {
 
 func TestSDDArchiveMoveTransactionPreservesFilesystemOnCollisions(t *testing.T) {
 	shell := requireArchiveShell(t)
-
+	t.Setenv("BASH_ENV", "repository-sentinel.txt")
 	for _, tracked := range []bool{true, false} {
 		sourceMode := "untracked"
 		if tracked {
@@ -2443,8 +2443,7 @@ func TestSDDArchiveMoveTransactionPreservesFilesystemOnCollisions(t *testing.T) 
 				t.Fatalf("%s remains after archive move: %v", source, err)
 			}
 			assertFileContents(t, filepath.Join(destination, "tasks.md"), "archive task bytes\n")
-			assertFileContents(t, sentinel, "repository sentinel\n")
-
+			assertFileContents(t, sentinel, "exit 99\nrepository sentinel\n")
 			if tracked {
 				assertGitCommandFails(t, root, "ls-files", "--error-unmatch", "openspec/changes/change/tasks.md")
 				runGit(t, root, "ls-files", "--error-unmatch", "openspec/changes/archive/2030-01-02-change/tasks.md")
@@ -2459,13 +2458,11 @@ func TestSDDArchiveMoveTransactionPreservesFilesystemOnCollisions(t *testing.T) 
 				}
 			}
 		})
-
 		for _, collision := range []string{"directory", "regular file", "live symlink", "dangling symlink"} {
 			t.Run(sourceMode+" source preserves "+collision+" collision", func(t *testing.T) {
 				root, source, destination, sentinel := setupArchiveFixture(t, tracked)
 				createArchiveCollision(t, root, destination, collision)
 				beforeStatus := runGit(t, root, "status", "--porcelain")
-
 				output, err := runArchiveMoveTransaction(shell, root)
 				if err == nil {
 					t.Fatalf("archive transaction unexpectedly succeeded for %s collision:\n%s", collision, output)
@@ -2480,7 +2477,7 @@ func TestSDDArchiveMoveTransactionPreservesFilesystemOnCollisions(t *testing.T) 
 				}
 				assertFileContents(t, filepath.Join(source, "tasks.md"), "archive task bytes\n")
 				assertArchiveCollision(t, root, destination, collision)
-				assertFileContents(t, sentinel, "repository sentinel\n")
+				assertFileContents(t, sentinel, "exit 99\nrepository sentinel\n")
 				if afterStatus := runGit(t, root, "status", "--porcelain"); afterStatus != beforeStatus {
 					t.Fatalf("collision changed Git state:\nbefore:\n%safter:\n%s", beforeStatus, afterStatus)
 				}
@@ -2488,10 +2485,13 @@ func TestSDDArchiveMoveTransactionPreservesFilesystemOnCollisions(t *testing.T) 
 		}
 	}
 }
-
 func TestSDDArchiveHistoricalRecoveryRefusesDanglingActiveSourceSymlink(t *testing.T) {
 	shell := requireArchiveShell(t)
 	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "repository-sentinel.txt"), []byte("exit 99\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("BASH_ENV", "repository-sentinel.txt")
 	activeSource := filepath.Join(root, "openspec", "changes", "change")
 	nestedSource := filepath.Join(root, "openspec", "changes", "archive", "2030-01-02-change", "change")
 	if err := os.MkdirAll(nestedSource, 0o700); err != nil {
@@ -2503,12 +2503,11 @@ func TestSDDArchiveHistoricalRecoveryRefusesDanglingActiveSourceSymlink(t *testi
 	if err := os.Symlink(filepath.Join(root, "missing-active-source"), activeSource); err != nil {
 		t.Skipf("dangling symlink fixture is unavailable: %v", err)
 	}
-
 	recovery := strings.ReplaceAll(archiveFencedShellBlock("### Historical Malformed Nesting Recovery (Manual Only)"), "{change-name}", "change")
 	recovery = strings.ReplaceAll(recovery, "YYYY-MM-DD-change", "2030-01-02-change")
 	command := exec.Command(shell, "-c", recovery)
 	command.Dir = root
-	command.Env = isolatedGitEnvironment()
+	command.Env = withoutBashEnv(isolatedGitEnvironment())
 	output, err := command.CombinedOutput()
 	if err == nil || !strings.Contains(string(output), "active source must be absent") {
 		t.Fatalf("historical recovery did not fail closed for a dangling active-source symlink: %v\n%s", err, output)
@@ -2528,10 +2527,7 @@ func requireArchiveShell(t *testing.T) string {
 	if err != nil {
 		t.Skipf("archive shell integration requires git: %v", err)
 	}
-
-	// On Windows, PATH can resolve bash to the WSL launcher even when Git for
-	// Windows provides the POSIX shell that runs the documented transaction.
-	// Prefer Git's sibling bash, then verify that each candidate can execute.
+	// Prefer Git's POSIX shell over a possible WSL launcher and verify candidates.
 	candidates := []string{filepath.Join(filepath.Dir(gitPath), "..", "bin", "bash.exe")}
 	if bashPath, err := exec.LookPath("bash"); err == nil {
 		candidates = append(candidates, bashPath)
@@ -2547,12 +2543,11 @@ func requireArchiveShell(t *testing.T) string {
 	t.Skip("archive shell integration requires a usable POSIX shell")
 	return ""
 }
-
 func setupArchiveFixture(t *testing.T, tracked bool) (root, source, destination, sentinel string) {
 	t.Helper()
 	root = t.TempDir()
 	sentinel = filepath.Join(root, "repository-sentinel.txt")
-	if err := os.WriteFile(sentinel, []byte("repository sentinel\n"), 0o600); err != nil {
+	if err := os.WriteFile(sentinel, []byte("exit 99\nrepository sentinel\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	source = filepath.Join(root, "openspec", "changes", "change")
@@ -2583,7 +2578,7 @@ func runArchiveMoveTransaction(shell, root string) (string, error) {
 	transaction = strings.ReplaceAll(transaction, "YYYY-MM-DD-"+changeName, "2030-01-02-"+changeName)
 	command := exec.Command(shell, "-c", transaction)
 	command.Dir = root
-	command.Env = isolatedGitEnvironment()
+	command.Env = withoutBashEnv(isolatedGitEnvironment())
 	output, err := command.CombinedOutput()
 	return string(output), err
 }
@@ -2681,6 +2676,15 @@ func assertFileContents(t *testing.T, path, want string) {
 	if string(got) != want {
 		t.Fatalf("%s = %q, want %q", path, got, want)
 	}
+}
+
+func withoutBashEnv(env []string) []string {
+	for i := len(env) - 1; i >= 0; i-- {
+		if strings.HasPrefix(strings.ToUpper(env[i]), "BASH_ENV=") {
+			env = append(env[:i], env[i+1:]...)
+		}
+	}
+	return env
 }
 
 func runGit(t *testing.T, root string, args ...string) string {
