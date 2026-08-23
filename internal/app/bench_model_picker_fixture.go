@@ -30,10 +30,11 @@ func runBenchModelPickerCommand(args []string, stdout io.Writer) (bool, error) {
 		return true, fmt.Errorf("resolve benchmark home: %w", err)
 	}
 	settingsPath := filepath.Join(home, ".config", "opencode", "opencode.json")
-	picker := screens.NewRuntimeModelPickerState(settingsPath)
+	picker := screens.NewRuntimeModelPickerStateWithDiscoverer(settingsPath, nil)
 	// The fixture supplies the already-effective runtime catalog without a private
 	// OpenCode cache, auth file, or process invocation.
-	picker = picker.Update(screens.RuntimeCatalogDiscoveryMsg{Providers: map[string]opencode.Provider{
+	picker.StartRuntimeCatalogDiscovery(1, "bench-fixture")
+	picker = picker.Update(screens.RuntimeCatalogDiscoveryMsg{RequestID: 1, ProjectDir: "bench-fixture", Providers: map[string]opencode.Provider{
 		"bench-provider": {ID: "bench-provider", Name: "Bench Provider", Models: map[string]opencode.Model{
 			"bench-model": {ID: "bench-model", Name: "Bench Model", ToolCall: true},
 		}},
