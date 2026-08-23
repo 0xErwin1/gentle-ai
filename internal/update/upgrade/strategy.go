@@ -545,8 +545,13 @@ func goInstallUpgrade(ctx context.Context, r update.UpdateResult, profile system
 		}
 	}
 
-	// Pin to the exact release version.
+	// Pin release installs to their exact version. Beta checks advertise
+	// main@<sha>, which Go installs by resolving the main branch, not by
+	// prepending a v to that display value.
 	target := fmt.Sprintf("%s@v%s", tool.GoImportPath, latestVersion)
+	if isBetaGentleAIUpgrade(r) {
+		target = tool.GoImportPath + "@main"
+	}
 	cmd := execCommand("go", "install", target)
 	cmd.Stdin = nil
 	if out, err := cmd.CombinedOutput(); err != nil {

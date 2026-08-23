@@ -164,7 +164,7 @@ curl -fsSL https://raw.githubusercontent.com/Gentleman-Programming/gentle-ai/mai
 $env:GENTLE_AI_CHANNEL="beta"; go install github.com/gentleman-programming/gentle-ai/v2/cmd/gentle-ai@main
 ```
 
-To upgrade managed tool dependencies on the beta channel later:
+To update a beta installation later, preserve the beta channel:
 
 ```bash
 # macOS / Linux
@@ -175,7 +175,17 @@ $env:GENTLE_AI_CHANNEL="beta"; gentle-ai upgrade
 ```
 
 > [!NOTE]
-> **Beta channel binary updates & Go proxy caching**: `gentle-ai upgrade` refreshes managed auxiliary tools (Engram, plugins, etc.). To advance the `gentle-ai` binary itself on the development/beta channel, re-run `go install ...@main` or the installer script. Because the Go module proxy (`proxy.golang.org`) may cache `@main` commits for up to a few hours, bypass proxy caching with `GOPROXY=direct` (PowerShell: `$env:GOPROXY="direct"; go install github.com/gentleman-programming/gentle-ai/v2/cmd/gentle-ai@main`) if `go install` does not pick up recent commits.
+> **Beta upgrades & Go proxy caching**: On macOS, Linux, and Windows with Go on `PATH`, `gentle-ai upgrade` advances the `gentle-ai` binary from `main` and refreshes managed tools (Engram, plugins, etc.). If you re-run an installer instead, pass beta explicitly because both installers default to stable:
+>
+> ```bash
+> # macOS / Linux
+> curl -fsSL https://raw.githubusercontent.com/Gentleman-Programming/gentle-ai/main/scripts/install.sh | bash -s -- --channel beta
+>
+> # Windows (PowerShell)
+> $env:GENTLE_AI_CHANNEL="beta"; irm https://raw.githubusercontent.com/Gentleman-Programming/gentle-ai/main/scripts/install.ps1 | iex
+> ```
+>
+> If a manual `go install ...@main` does not pick up recent commits because `proxy.golang.org` is stale, bypass it with `GOPROXY=direct go install github.com/gentleman-programming/gentle-ai/v2/cmd/gentle-ai@main` (PowerShell: `$env:GOPROXY="direct"; go install github.com/gentleman-programming/gentle-ai/v2/cmd/gentle-ai@main`).
 
 ### RDD version policy
 
