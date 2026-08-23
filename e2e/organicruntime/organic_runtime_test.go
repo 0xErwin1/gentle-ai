@@ -714,24 +714,53 @@ func TestOpenCodeRuntimeIsPinnedForTheLiveProviderTransport(t *testing.T) {
 			return
 		}
 
-		lock.Lock()
-		defer lock.Unlock()
+		reviewBinding, bound, bindingErr := organicOpenCodeReviewBindingFromProvider(payload)
 		if strings.Contains(string(payload), poison) {
+			lock.Lock()
 			handlerFailure = "OpenCode passed the poisoned host Task prompt to the reviewer"
+			lock.Unlock()
 			writer.WriteHeader(http.StatusBadRequest)
 			return
 		}
 		if bytes.Contains(payload, []byte(reviewerSystemMarker)) {
-			if !bytes.Contains(payload, []byte("GENTLE_AI_REVIEW_CONTEXT_END")) {
-				handlerFailure = "OpenCode reviewer request omitted the Go-materialized canonical prompt"
+			lock.Lock()
+			handlerFailure = "OpenCode passed the configured reviewer system prompt to the provider"
+			lock.Unlock()
+			writer.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		if bindingErr != nil {
+			lock.Lock()
+			handlerFailure = fmt.Sprintf("OpenCode reviewer binding is invalid: %v", bindingErr)
+			lock.Unlock()
+			writer.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		if bound {
+			if err := reviewBinding.matches(binding); err != nil {
+				lock.Lock()
+				handlerFailure = fmt.Sprintf("OpenCode reviewer binding does not match the Go collect input: %v", err)
+				lock.Unlock()
 				writer.WriteHeader(http.StatusBadRequest)
 				return
 			}
+			if !strings.Contains(reviewBinding.message, "GENTLE_AI_REVIEW_CONTEXT_END") {
+				lock.Lock()
+				handlerFailure = "OpenCode reviewer request omitted the Go-materialized canonical prompt"
+				lock.Unlock()
+				writer.WriteHeader(http.StatusBadRequest)
+				return
+			}
+			lock.Lock()
 			canonicalPromptSeen = true
 			providerRequests++
+			lock.Unlock()
 			writeOpenCodeChatText(writer, string(reviewerRaw))
 			return
 		}
+
+		lock.Lock()
+		defer lock.Unlock()
 		if !titleAnswered {
 			titleAnswered = true
 			writeOpenCodeChatText(writer, "review transport")
@@ -742,6 +771,11 @@ func TestOpenCodeRuntimeIsPinnedForTheLiveProviderTransport(t *testing.T) {
 			writeOpenCodeChatTask(writer, map[string]string{
 				"description": "run the Go-bound reviewer", "subagent_type": "review-reliability", "prompt": hostPrompt,
 			})
+			return
+		}
+		if !canonicalPromptSeen {
+			handlerFailure = "OpenCode reviewer request omitted its Go-materialized binding"
+			writer.WriteHeader(http.StatusBadRequest)
 			return
 		}
 		writeOpenCodeChatText(writer, "review task complete")
@@ -911,6 +945,7 @@ func TestOpenCodeRuntimeRunsFourBoundReviewersConcurrently(t *testing.T) {
 
 	taskArguments := make([]map[string]string, 0, len(bindings))
 	results := make(map[string]string, len(bindings))
+	expectedBindings := make(map[string]map[string]string, len(bindings))
 	for index, binding := range bindings {
 		if binding["lens"] != wantLenses[index] || binding["order"] != strconv.Itoa(index) {
 			t.Fatalf("OpenCode 4R binding[%d] = %#v, want %s at order %d", index, binding, wantLenses[index], index)
@@ -938,6 +973,7 @@ func TestOpenCodeRuntimeRunsFourBoundReviewersConcurrently(t *testing.T) {
 			"prompt": "GENTLE_AI_REVIEW_BINDING " + string(payload),
 		})
 		results[binding["lens"]] = string(result)
+		expectedBindings[binding["lens"]] = binding
 	}
 
 	var lock sync.Mutex
@@ -970,21 +1006,38 @@ func TestOpenCodeRuntimeRunsFourBoundReviewersConcurrently(t *testing.T) {
 			writer.WriteHeader(http.StatusBadRequest)
 			return
 		}
+		reviewBinding, bound, bindingErr := organicOpenCodeReviewBindingFromProvider(payload)
 		if bytes.Contains(payload, []byte("GENTLE_AI_OPENCODE_FOUR_R_REVIEWER")) {
-			lens := ""
-			for _, candidate := range wantLenses {
-				if bytes.Contains(payload, []byte(candidate)) {
-					lens = candidate
-					break
-				}
-			}
-			if lens == "" {
+			lock.Lock()
+			handlerFailure = "OpenCode passed the configured 4R reviewer system prompt to the provider"
+			lock.Unlock()
+			writer.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		if bindingErr != nil {
+			lock.Lock()
+			handlerFailure = fmt.Sprintf("OpenCode 4R reviewer binding is invalid: %v", bindingErr)
+			lock.Unlock()
+			writer.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		if bound {
+			expected, ok := expectedBindings[reviewBinding.lens]
+			if !ok {
 				lock.Lock()
-				handlerFailure = "OpenCode 4R reviewer request omitted its bound lens"
+				handlerFailure = fmt.Sprintf("OpenCode 4R reviewer binding has an unknown lens %q", reviewBinding.lens)
 				lock.Unlock()
 				writer.WriteHeader(http.StatusBadRequest)
 				return
 			}
+			if err := reviewBinding.matches(expected); err != nil {
+				lock.Lock()
+				handlerFailure = fmt.Sprintf("OpenCode 4R reviewer binding does not match the Go collect input: %v", err)
+				lock.Unlock()
+				writer.WriteHeader(http.StatusBadRequest)
+				return
+			}
+			lens := reviewBinding.lens
 			lock.Lock()
 			arrivals[lens]++
 			arrived++
@@ -1031,7 +1084,7 @@ func TestOpenCodeRuntimeRunsFourBoundReviewersConcurrently(t *testing.T) {
 			return
 		}
 		if settled != len(wantLenses) || inFlight != 0 {
-			handlerFailure = "OpenCode advanced the review driver before the foreground reviewer group settled"
+			handlerFailure = "OpenCode sent an unbound request before the foreground reviewer group settled; a reviewer binding is missing"
 			writer.WriteHeader(http.StatusConflict)
 			return
 		}
@@ -1173,6 +1226,151 @@ func writeOpenCodeChatChunk(writer http.ResponseWriter, delta map[string]any, fi
 		"choices": []map[string]any{{"index": 0, "delta": delta, "finish_reason": finishReason}},
 	})
 	_, _ = fmt.Fprintf(writer, "data: %s\n\n", encoded)
+}
+
+const organicReviewBindingPrefix = "GENTLE_AI_REVIEW_BINDING "
+
+type organicOpenCodeReviewBinding struct {
+	lineage           string
+	target            string
+	lens              string
+	order             int
+	revision          string
+	repositoryContext string
+	subjectHash       string
+	message           string
+}
+
+// organicOpenCodeReviewBindingFromProvider reads only OpenAI message content
+// strings. It deliberately does not inspect arbitrary serialized request bytes:
+// ambient system text can mention every lens without identifying the child that
+// OpenCode actually started.
+func organicOpenCodeReviewBindingFromProvider(payload []byte) (organicOpenCodeReviewBinding, bool, error) {
+	var request struct {
+		Messages []struct {
+			Content json.RawMessage `json:"content"`
+		} `json:"messages"`
+	}
+	if err := json.Unmarshal(payload, &request); err != nil {
+		return organicOpenCodeReviewBinding{}, false, fmt.Errorf("decode OpenCode provider request: %w", err)
+	}
+	bindings := make([]organicOpenCodeReviewBinding, 0, 1)
+	for _, providerMessage := range request.Messages {
+		var message string
+		if err := json.Unmarshal(providerMessage.Content, &message); err != nil {
+			continue
+		}
+		for _, line := range strings.Split(message, "\n") {
+			if !strings.HasPrefix(line, organicReviewBindingPrefix) {
+				continue
+			}
+			var decoded struct {
+				Lineage           string `json:"lineage"`
+				Target            string `json:"target"`
+				Lens              string `json:"lens"`
+				Order             int    `json:"order"`
+				Revision          string `json:"revision"`
+				RepositoryContext string `json:"repository_context"`
+				SubjectHash       string `json:"subject_hash"`
+			}
+			if err := json.Unmarshal([]byte(strings.TrimPrefix(line, organicReviewBindingPrefix)), &decoded); err != nil {
+				return organicOpenCodeReviewBinding{}, false, fmt.Errorf("decode Go-materialized review binding: %w", err)
+			}
+			binding := organicOpenCodeReviewBinding{
+				lineage: decoded.Lineage, target: decoded.Target, lens: decoded.Lens, order: decoded.Order,
+				revision: decoded.Revision, repositoryContext: decoded.RepositoryContext, subjectHash: decoded.SubjectHash, message: message,
+			}
+			if binding.lens == "" || binding.order < 0 || binding.subjectHash == "" {
+				return organicOpenCodeReviewBinding{}, false, errors.New("Go-materialized review binding omits a valid lens, order, or subject hash")
+			}
+			bindings = append(bindings, binding)
+		}
+	}
+	switch len(bindings) {
+	case 0:
+		return organicOpenCodeReviewBinding{}, false, nil
+	case 1:
+		return bindings[0], true, nil
+	default:
+		return organicOpenCodeReviewBinding{}, false, fmt.Errorf("provider request contains %d Go-materialized review bindings", len(bindings))
+	}
+}
+
+func (binding organicOpenCodeReviewBinding) matches(expected map[string]string) error {
+	for _, field := range []struct {
+		name string
+		got  string
+		want string
+	}{
+		{name: "lineage", got: binding.lineage, want: expected["lineage"]},
+		{name: "target", got: binding.target, want: expected["target"]},
+		{name: "lens", got: binding.lens, want: expected["lens"]},
+		{name: "order", got: strconv.Itoa(binding.order), want: expected["order"]},
+		{name: "revision", got: binding.revision, want: expected["expected-revision"]},
+		{name: "repository_context", got: binding.repositoryContext, want: expected["repository-context"]},
+		{name: "subject_hash", got: binding.subjectHash, want: expected["subject-hash"]},
+	} {
+		if field.got != field.want {
+			return fmt.Errorf("%s = %q, want %q", field.name, field.got, field.want)
+		}
+	}
+	return nil
+}
+
+func TestOrganicOpenCodeReviewBindingFromProvider(t *testing.T) {
+	const ambient = "review-risk review-resilience review-readability review-reliability"
+	binding := map[string]any{
+		"lineage": "lineage", "target": "target", "lens": "review-reliability", "order": 3,
+		"revision": "revision", "repository_context": "context", "subject_hash": "subject",
+	}
+	encoded, err := json.Marshal(binding)
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload := func(messages ...string) []byte {
+		t.Helper()
+		request, err := json.Marshal(map[string]any{"messages": func() []map[string]string {
+			values := make([]map[string]string, 0, len(messages))
+			for _, message := range messages {
+				values = append(values, map[string]string{"content": message})
+			}
+			return values
+		}()})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return request
+	}
+	for _, test := range []struct {
+		name      string
+		messages  []string
+		wantFound bool
+		wantError string
+	}{
+		{name: "ambient lenses are not a binding", messages: []string{ambient}},
+		{name: "one Go materialized binding", messages: []string{ambient, organicReviewBindingPrefix + string(encoded)}, wantFound: true},
+		{name: "ambiguous bindings", messages: []string{organicReviewBindingPrefix + string(encoded), organicReviewBindingPrefix + string(encoded)}, wantError: "contains 2"},
+		{name: "malformed binding", messages: []string{organicReviewBindingPrefix + "not-json"}, wantError: "decode Go-materialized review binding"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			got, found, err := organicOpenCodeReviewBindingFromProvider(payload(test.messages...))
+			if test.wantError != "" {
+				if err == nil || !strings.Contains(err.Error(), test.wantError) {
+					t.Fatalf("binding error = %v, want %q", err, test.wantError)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if found != test.wantFound {
+				t.Fatalf("binding found = %t, want %t", found, test.wantFound)
+			}
+			if found && (got.lens != "review-reliability" || got.order != 3 || got.subjectHash != "subject") {
+				t.Fatalf("binding = %#v, want the exact Go materialized lens, order, and subject", got)
+			}
+		})
+	}
 }
 
 func TestNativeProviderCaptureResultCLIUsesCompiledAdapters(t *testing.T) {
