@@ -690,6 +690,7 @@ func Journeys() []Journey {
 	journeys = append(journeys, lensContextBudgetJourneys()...)
 	journeys = append(journeys, localGateBaseAdvanceJourneys()...)
 	journeys = append(journeys, intendedUntrackedJourneys()...)
+	journeys = append(journeys, selectedUntrackedSDDJourneys()...)
 	journeys = append(journeys, captureResultDryRunJourneys()...)
 	journeys = append(journeys, issue2031Journeys()...)
 	journeys = append(journeys, findingIDPrefixJourneys()...)
