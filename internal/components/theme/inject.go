@@ -100,26 +100,6 @@ func Inject(homeDir string, adapter agents.Adapter) (InjectionResult, error) {
 	return InjectionResult{Changed: writeResult.Changed, Files: []string{settingsPath}}, nil
 }
 
-func InjectClaudeTheme(homeDir string, adapter agents.Adapter) (InjectionResult, error) {
-	if adapter.Agent() != model.AgentClaudeCode {
-		return InjectionResult{}, nil
-	}
-
-	themePath := filepath.Join(homeDir, ".claude", "themes", "gentleman.json")
-	content, err := json.MarshalIndent(gentlemanClaudeTheme, "", "  ")
-	if err != nil {
-		return InjectionResult{}, err
-	}
-	content = append(content, '\n')
-
-	writeResult, err := filemerge.WriteFileAtomic(themePath, content, 0o644)
-	if err != nil {
-		return InjectionResult{}, err
-	}
-
-	return InjectionResult{Changed: writeResult.Changed, Files: []string{themePath}}, nil
-}
-
 // InjectVisualThemes writes the managed visual theme assets without selecting one
 // in an agent's active settings.
 func InjectVisualThemes(homeDir string, adapter agents.Adapter) (InjectionResult, error) {
