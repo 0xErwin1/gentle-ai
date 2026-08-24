@@ -510,12 +510,12 @@ func Resolve(options ResolveOptions) (Status, error) {
 	status.RemediationState = remediationState
 	status.RuntimeStatus = runtimeStatus
 	status.runtimeAttemptTokens = runtimeAttemptTokens
-	applyReviewOfferRouting(context.Background(), &status, workspaceRoot, reviewDisabled)
 	if runtimeStatusErr != nil {
 		applyNativeRuntimeErrorRouting(&status, runtimeStatusErr)
 	} else {
 		applyNativeRuntimeRouting(&status)
 	}
+	applyReviewOfferRouting(context.Background(), &status, workspaceRoot, reviewDisabled)
 	status.BlockedReasons = blockedReasons.finalize(status.NextRecommended, status.BlockedReasons)
 	if runtimeRemediationComplete && status.Dependencies.Verify == DependencyReady && status.Dependencies.Archive == DependencyBlocked && status.NextRecommended == string(PhaseVerify) {
 		status.verifyRefreshReason = runtimeRemediationVerifyRefreshInstruction
@@ -762,12 +762,12 @@ func resolveEngramStatus(workspaceRoot string, requestedChange string, includeIn
 	status.RemediationState = remediationState
 	status.RuntimeStatus = runtimeStatus
 	status.runtimeAttemptTokens = runtimeAttemptTokens
-	applyReviewOfferRouting(context.Background(), &status, workspaceRoot, reviewDisabled)
 	if runtimeStatusErr != nil {
 		applyNativeRuntimeErrorRouting(&status, runtimeStatusErr)
 	} else {
 		applyNativeRuntimeRouting(&status)
 	}
+	applyReviewOfferRouting(context.Background(), &status, workspaceRoot, reviewDisabled)
 	status.BlockedReasons = blockedReasons.finalize(status.NextRecommended, status.BlockedReasons)
 	if runtimeRemediationComplete && status.Dependencies.Verify == DependencyReady && status.Dependencies.Archive == DependencyBlocked && status.NextRecommended == string(PhaseVerify) {
 		status.verifyRefreshReason = runtimeRemediationVerifyRefreshInstruction
