@@ -19,7 +19,7 @@ func TestOfferReviewAfterVerifyDisabledKillSwitchReturnsUnavailableBeforeRepoRea
 		t.Fatal(err)
 	}
 
-	offer, err := OfferReviewAfterVerify(context.Background(), "/does/not/exist/at/all", OfferRequest{LineageID: "unwired-offer-lineage"})
+	offer, err := OfferReviewAfterVerify(context.Background(), "/does/not/exist/at/all")
 	if err != nil {
 		t.Fatalf("OfferReviewAfterVerify(kill switch off) = err %v, want nil (a repository read would have failed on this nonexistent path)", err)
 	}
@@ -34,7 +34,7 @@ func TestOfferReviewAfterVerifyDisabledKillSwitchReturnsUnavailableBeforeRepoRea
 func TestOfferReviewAfterVerifyContextCanceledRefusesFirst(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if _, err := OfferReviewAfterVerify(ctx, "/does/not/exist/at/all", OfferRequest{}); err == nil {
+	if _, err := OfferReviewAfterVerify(ctx, "/does/not/exist/at/all"); err == nil {
 		t.Fatal("OfferReviewAfterVerify(canceled context) = nil error, want the context error")
 	}
 }
@@ -44,7 +44,7 @@ func TestOfferReviewAfterVerifyContextCanceledRefusesFirst(t *testing.T) {
 // review workflow can offer a review without reading repository authority.
 func TestOfferReviewAfterVerifyEnabledModeWithNoReceiptIsAvailable(t *testing.T) {
 	enableGlobalRDDModeForOfferTest(t)
-	offer, err := OfferReviewAfterVerify(context.Background(), "/does/not/exist/at/all", OfferRequest{LineageID: "unwired-offer-lineage"})
+	offer, err := OfferReviewAfterVerify(context.Background(), "/does/not/exist/at/all")
 	if err != nil {
 		t.Fatalf("OfferReviewAfterVerify(enabled mode) = err %v, want nil", err)
 	}
@@ -59,7 +59,7 @@ func TestOfferReviewAfterVerifyUnsetModeOffersNothing(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home)
-	offer, err := OfferReviewAfterVerify(context.Background(), "/does/not/exist/at/all", OfferRequest{LineageID: "unwired-offer-lineage"})
+	offer, err := OfferReviewAfterVerify(context.Background(), "/does/not/exist/at/all")
 	if err != nil {
 		t.Fatalf("OfferReviewAfterVerify(unset mode) = err %v, want nil", err)
 	}

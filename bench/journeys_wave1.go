@@ -1077,10 +1077,7 @@ func rememberArchiveAuthority(sandbox *Sandbox, observation Observation) error {
 }
 
 func requireDiscoveredArchivePremise(_ *Sandbox, observation Observation) error {
-	return sddStatusAssertion("discovered receipt premise", func(status sddStatusV1) error {
-		if status.ReviewGate == nil || status.ReviewGate.Result != "allow" || status.ReviewGate.Delivery != "" {
-			return fmt.Errorf("reviewGate = %+v, want discovered allow without a delivery override", status.ReviewGate)
-		}
+	return sddStatusAssertion("archive premise", func(status sddStatusV2) error {
 		if status.Dependencies.Archive != "ready" || status.NextRecommended != "archive" || len(status.BlockedReasons) != 0 {
 			return fmt.Errorf("archive=%q next=%q blocked=%v, want ready/archive with no blockers",
 				status.Dependencies.Archive, status.NextRecommended, status.BlockedReasons)
@@ -1093,30 +1090,12 @@ func requireDiscoveredArchivePremise(_ *Sandbox, observation Observation) error 
 // discovered archive authority whose current candidate changed. Corrective verify cycle
 // CRITICAL-1 (rdd-post-verify-review-offer's "Kill-Switch-Off Is Structural
 // Absence" requirement): the disabled branch previously required a populated
-// "disabled/unmanaged" disposition; it now requires reviewGate's structural
-// ABSENCE instead -- no field, no ceremony, archive unfailable on review
-// grounds. With reviews enabled, a discovered scope change remains visible but
-// is equally informational: archive stays ready under ordinary policy.
-func requireDiscoveredArchiveStatus(disabled bool) func(*Sandbox, Observation) error {
-	return sddStatusAssertion("discovered scope-changed archive authority", func(status sddStatusV1) error {
-		if disabled {
-			if status.ReviewGate != nil {
-				return fmt.Errorf("disabled reviewGate = %+v, want structural absence", status.ReviewGate)
-			}
-			if status.Dependencies.Archive != "ready" || status.NextRecommended != "archive" {
-				return fmt.Errorf("disabled archive=%q next=%q, want ready/archive", status.Dependencies.Archive, status.NextRecommended)
-			}
-			return nil
-		}
-		if status.ReviewGate == nil || status.ReviewGate.Result != "scope-changed" {
-			return fmt.Errorf("reviewGate = %+v, want scope-changed", status.ReviewGate)
-		}
-		if !strings.Contains(status.ReviewGate.Reason, "review scope changed") {
-			return fmt.Errorf("reviewGate.reason = %q, want the changed candidate reason", status.ReviewGate.Reason)
-		}
-		if status.ReviewGate.Delivery != "" || status.Dependencies.Archive != "ready" || status.NextRecommended != "archive" {
-			return fmt.Errorf("enabled gate=%+v archive=%q next=%q, want informational scope-changed ready/archive",
-				status.ReviewGate, status.Dependencies.Archive, status.NextRecommended)
+// "disabled/unmanaged" disposition; v2 removes status review authority
+// entirely, so archive remains ready under ordinary policy in either mode.
+func requireDiscoveredArchiveStatus(_ bool) func(*Sandbox, Observation) error {
+	return sddStatusAssertion("archive remains ready", func(status sddStatusV2) error {
+		if status.Dependencies.Archive != "ready" || status.NextRecommended != "archive" {
+			return fmt.Errorf("archive=%q next=%q, want ready/archive", status.Dependencies.Archive, status.NextRecommended)
 		}
 		return nil
 	})
@@ -1140,10 +1119,7 @@ func writeExplicitInvalidArchiveReceipt(sandbox *Sandbox) error {
 // ratified requirement, which is unconditional -- while off, the explicit
 // receipt is never even read, so its invalidity has no bearing.
 func requireDisabledExplicitInvalidReceiptIsIgnored(_ *Sandbox, observation Observation) error {
-	return sddStatusAssertion("disabled explicit invalid archive authority is never read", func(status sddStatusV1) error {
-		if status.ReviewGate != nil {
-			return fmt.Errorf("reviewGate = %+v, want structural absence while the kill switch is off", status.ReviewGate)
-		}
+	return sddStatusAssertion("disabled archive ignores retired review files", func(status sddStatusV2) error {
 		if status.Dependencies.Archive != "ready" || status.NextRecommended != "archive" {
 			return fmt.Errorf("disabled explicit-invalid-receipt archive=%q next=%q, want ready/archive",
 				status.Dependencies.Archive, status.NextRecommended)
@@ -1153,13 +1129,10 @@ func requireDisabledExplicitInvalidReceiptIsIgnored(_ *Sandbox, observation Obse
 }
 
 // requireDisabledUnmanagedArchiveStatus asserts the kill-switch-off shape at
-// sdd-status. Corrective verify cycle CRITICAL-1: reviewGate is now
-// structurally absent, not a populated non-authorizing disposition.
+// sdd-status: the optional offer is structurally absent and archive remains
+// governed only by tasks and independent verification.
 func requireDisabledUnmanagedArchiveStatus(name string) func(*Sandbox, Observation) error {
-	return sddStatusAssertion(name, func(status sddStatusV1) error {
-		if status.ReviewGate != nil {
-			return fmt.Errorf("reviewGate = %+v, want structural absence while the kill switch is off", status.ReviewGate)
-		}
+	return sddStatusAssertion(name, func(status sddStatusV2) error {
 		if status.Dependencies.Archive != "ready" || status.NextRecommended != "archive" || len(status.BlockedReasons) != 0 {
 			return fmt.Errorf("archive=%q next=%q blocked=%v, want ready/archive with no blockers",
 				status.Dependencies.Archive, status.NextRecommended, status.BlockedReasons)
