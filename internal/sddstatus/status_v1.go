@@ -3,93 +3,58 @@ package sddstatus
 import (
 	"encoding/json"
 	"fmt"
-
-	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
 )
 
-const StatusContractV1 = "gentle-ai.sdd-status/v1"
+const StatusContractV2 = "gentle-ai.sdd-status/v2"
 
-// StatusV1Projection is the frozen wire shape consumed by legacy Gentle Pi
-// clients. Status remains the internal aggregate and may grow independently.
-type StatusV1Projection struct {
-	SchemaName        string                         `json:"schemaName"`
-	SchemaVersion     int                            `json:"schemaVersion"`
-	ChangeName        *string                        `json:"changeName"`
-	ArtifactStore     ArtifactStore                  `json:"artifactStore"`
-	PlanningHome      planningHomeV1                 `json:"planningHome"`
-	ChangeRoot        *string                        `json:"changeRoot"`
-	ArtifactPaths     artifactPathsV1                `json:"artifactPaths"`
-	ContextFiles      artifactPathsV1                `json:"contextFiles"`
-	Artifacts         map[string]ArtifactState       `json:"artifacts"`
-	TaskProgress      taskProgressV1                 `json:"taskProgress"`
-	Dependencies      dependenciesV1                 `json:"dependencies"`
-	ApplyState        ApplyState                     `json:"applyState"`
-	ActionContext     actionContextV1                `json:"actionContext"`
-	Relationships     relationshipsV1                `json:"relationships"`
-	RemediationState  remediationStateV1             `json:"remediationState"`
-	ReviewGate        *reviewGateStateV1             `json:"reviewGate,omitempty"`
-	ReviewTransaction *reviewtransaction.Transaction `json:"reviewTransaction,omitempty"`
-	// ReviewOffer and ReVerify project Status.ReviewOffer/Status.ReVerify
-	// (design.md decision 3's amendment and the targeted re-verify call-site
-	// amendment) onto the wire. Corrective verify cycle CRITICAL-2: before
-	// this fix StatusV1Projection had no field for either, so every CLI path
-	// (RunSDDStatus, RunSDDContinue, RenderMarkdown, RenderDispatcherMarkdown
-	// all project through ProjectStatusV1) silently dropped both blocks —
-	// Wave 4's two headline deliverables were computed but unreachable. Both
-	// are `omitempty` pointers reusing the exact internal block types
-	// unchanged (ReviewOfferBlock, ReVerifyBlock carry no internal-only
-	// fields, the same reuse pattern ReviewTransaction above already
-	// establishes), so a Status with both nil — every legacy shape
-	// TestProjectStatusV1FreezesExactLegacyShape and
-	// TestStatusRenderersEmbedOnlyStatusV1Projection already exercise —
-	// produces byte-identical output to before this fix. The frozen legacy
-	// shape moves forward to include these two keys only when the internal
-	// Status actually populates them (verify passed and the kill switch is
-	// on), which is new observable behavior by design, not a compatibility
-	// break: no field is renamed, removed, or reordered.
-	ReviewOffer *ReviewOfferBlock `json:"reviewOffer,omitempty"`
-	ReVerify    *ReVerifyBlock    `json:"reVerify,omitempty"`
-	// Consent projects Status.Consent (#2563, S4b of #2540) onto the wire
-	// under the same ratified omitempty-pointer discipline as ReviewOffer and
-	// ReVerify above: the SDD edit-authority consent envelope is only useful
-	// if the orchestrator consuming `sdd-status --json` can relay it, and a
-	// nil Consent — every status that is not blocked(edit_authority_missing),
-	// which is every legacy shape the freeze tests exercise — produces
-	// byte-identical output to before this field existed.
+// StatusV2Projection is the complete public SDD status document. It projects
+// only SDD planning, task, verification, action, and relationship truth; native
+// runtime bookkeeping remains internal to Resolve.
+type StatusV2Projection struct {
+	SchemaName        string                       `json:"schemaName"`
+	SchemaVersion     int                          `json:"schemaVersion"`
+	ChangeName        *string                      `json:"changeName"`
+	ArtifactStore     ArtifactStore                `json:"artifactStore"`
+	PlanningHome      planningHomeV2               `json:"planningHome"`
+	ChangeRoot        *string                      `json:"changeRoot"`
+	ArtifactPaths     artifactPathsV2              `json:"artifactPaths"`
+	ContextFiles      artifactPathsV2              `json:"contextFiles"`
+	Artifacts         map[string]ArtifactState     `json:"artifacts"`
+	TaskProgress      taskProgressV2               `json:"taskProgress"`
+	Dependencies      dependenciesV2               `json:"dependencies"`
+	ApplyState        ApplyState                   `json:"applyState"`
+	ActionContext     actionContextV2              `json:"actionContext"`
+	Relationships     relationshipsV2              `json:"relationships"`
+	RemediationState  remediationStateV2           `json:"remediationState"`
+	ReviewOffer       *ReviewOfferBlock            `json:"reviewOffer,omitempty"`
 	Consent           *SDDIntegrationConsentResult `json:"consent,omitempty"`
-	PhaseInstructions *phaseInstructionsV1         `json:"phaseInstructions,omitempty"`
+	PhaseInstructions *phaseInstructionsV2         `json:"phaseInstructions,omitempty"`
 	NextRecommended   string                       `json:"nextRecommended"`
 	BlockedReasons    []string                     `json:"blockedReasons"`
 }
 
-type planningHomeV1 struct {
+type planningHomeV2 struct {
 	Mode ActionMode `json:"mode"`
 	Path string     `json:"path"`
 }
 
-type artifactPathsV1 struct {
+type artifactPathsV2 struct {
 	Proposal      []string `json:"proposal"`
 	Specs         []string `json:"specs"`
 	Design        []string `json:"design"`
 	Tasks         []string `json:"tasks"`
 	ApplyProgress []string `json:"applyProgress"`
 	VerifyReport  []string `json:"verifyReport"`
-	ReviewPolicy  []string `json:"reviewPolicy"`
-	ReviewLedger  []string `json:"reviewLedger"`
-	ReviewReceipt []string `json:"reviewReceipt"`
-	ReviewBundle  []string `json:"reviewBundle"`
-	ReviewContext []string `json:"reviewContext"`
-	ReviewState   []string `json:"reviewState"`
 }
 
-type taskProgressV1 struct {
+type taskProgressV2 struct {
 	Total       int  `json:"total"`
 	Completed   int  `json:"completed"`
 	Pending     int  `json:"pending"`
 	AllComplete bool `json:"allComplete"`
 }
 
-type dependenciesV1 struct {
+type dependenciesV2 struct {
 	Proposal DependencyState `json:"proposal"`
 	Specs    DependencyState `json:"specs"`
 	Design   DependencyState `json:"design"`
@@ -99,13 +64,13 @@ type dependenciesV1 struct {
 	Archive  DependencyState `json:"archive"`
 }
 
-type actionContextV1 struct {
+type actionContextV2 struct {
 	Mode             ActionMode `json:"mode"`
 	WorkspaceRoot    string     `json:"workspaceRoot"`
 	AllowedEditRoots []string   `json:"allowedEditRoots"`
 }
 
-type relationshipsV1 struct {
+type relationshipsV2 struct {
 	DependsOn               []string `json:"dependsOn"`
 	Supersedes              []string `json:"supersedes"`
 	Amends                  []string `json:"amends"`
@@ -113,180 +78,145 @@ type relationshipsV1 struct {
 	SameDomainActiveChanges []string `json:"sameDomainActiveChanges"`
 }
 
-type remediationStateV1 struct {
+type remediationStateV2 struct {
 	Required               bool   `json:"required"`
 	Complete               bool   `json:"complete"`
 	FailedEvidenceRevision string `json:"failedEvidenceRevision"`
-	LineageID              string `json:"lineageId"`
-	Generation             int    `json:"generation"`
-	FixBatch               int    `json:"fixBatch"`
 	Reason                 string `json:"reason"`
 }
 
-// reviewGateStateV1 grows one omitempty field over the frozen v1 shape.
-// Delivery is empty on every path that could already produce a review gate, so
-// the bytes a legacy Gentle Pi client receives for those paths are unchanged;
-// it appears only for the disabled/unmanaged disposition, which no legacy path
-// could reach.
-type reviewGateStateV1 struct {
-	Result   reviewtransaction.GateResult  `json:"result"`
-	Reason   string                        `json:"reason"`
-	Delivery reviewtransaction.RDDDelivery `json:"delivery,omitempty"`
-}
-
-type phaseInstructionsV1 struct {
+type phaseInstructionsV2 struct {
 	Apply     []string `json:"apply"`
 	Verify    []string `json:"verify"`
 	Remediate []string `json:"remediate"`
 	Archive   []string `json:"archive"`
 }
 
-// ProjectStatusV1 rejects values that the exact legacy decoder cannot
-// understand instead of leaking internal-only fields or action tokens.
-func ProjectStatusV1(status Status) (StatusV1Projection, error) {
+// ProjectStatusV2 rejects unsupported internal values rather than exposing
+// internal runtime state or silently broadening the public document.
+func ProjectStatusV2(status Status) (StatusV2Projection, error) {
 	if status.SchemaName != SchemaName || status.SchemaVersion != SchemaVersion {
-		return StatusV1Projection{}, fmt.Errorf("unsupported SDD status identity %q@%d", status.SchemaName, status.SchemaVersion)
+		return StatusV2Projection{}, fmt.Errorf("unsupported SDD status identity %q@%d", status.SchemaName, status.SchemaVersion)
 	}
-	if !legacyArtifactStore(status.ArtifactStore) {
-		return StatusV1Projection{}, fmt.Errorf("unsupported SDD v1 artifact store %q", status.ArtifactStore)
+	if !statusV2ArtifactStore(status.ArtifactStore) {
+		return StatusV2Projection{}, fmt.Errorf("unsupported SDD v2 artifact store %q", status.ArtifactStore) // refusal:by-design operator-knowledge: ProjectStatusV2 receives an internal aggregate, so the producer must use a supported store.
 	}
-	if !legacyApplyState(status.ApplyState) {
-		return StatusV1Projection{}, fmt.Errorf("unsupported SDD v1 apply state %q", status.ApplyState)
+	if !statusV2ApplyState(status.ApplyState) {
+		return StatusV2Projection{}, fmt.Errorf("unsupported SDD v2 apply state %q", status.ApplyState) // refusal:by-design operator-knowledge: ProjectStatusV2 receives an internal aggregate, so the producer must use a supported apply state.
 	}
-	if !legacyNextRecommended(status.NextRecommended) {
-		return StatusV1Projection{}, fmt.Errorf("unsupported SDD v1 next action %q", status.NextRecommended)
+	if !statusV2NextRecommended(status.NextRecommended) {
+		return StatusV2Projection{}, fmt.Errorf("unsupported SDD v2 next action %q", status.NextRecommended) // refusal:by-design operator-knowledge: ProjectStatusV2 receives an internal aggregate, so the producer must use a supported route token.
 	}
 
-	artifacts, err := projectArtifactsV1(status.ArtifactStore, status.Artifacts)
+	artifacts, err := projectArtifactsV2(status.ArtifactStore, status.Artifacts)
 	if err != nil {
-		return StatusV1Projection{}, err
+		return StatusV2Projection{}, err
 	}
 
-	projected := StatusV1Projection{
+	projected := StatusV2Projection{
 		SchemaName:    status.SchemaName,
 		SchemaVersion: status.SchemaVersion,
 		ChangeName:    status.ChangeName,
 		ArtifactStore: status.ArtifactStore,
-		PlanningHome:  projectPlanningHomeV1(status.PlanningHome),
+		PlanningHome:  projectPlanningHomeV2(status.PlanningHome),
 		ChangeRoot:    status.ChangeRoot,
-		ArtifactPaths: projectArtifactPathsV1(status.ArtifactPaths),
-		ContextFiles:  projectArtifactPathsV1(status.ContextFiles),
+		ArtifactPaths: projectArtifactPathsV2(status.ArtifactPaths),
+		ContextFiles:  projectArtifactPathsV2(status.ContextFiles),
 		Artifacts:     artifacts,
-		TaskProgress:  projectTaskProgressV1(status.TaskProgress),
-		Dependencies:  projectDependenciesV1(status.Dependencies),
+		TaskProgress:  projectTaskProgressV2(status.TaskProgress),
+		Dependencies:  projectDependenciesV2(status.Dependencies),
 		ApplyState:    status.ApplyState,
-		ActionContext: projectActionContextV1(status.ActionContext),
-		Relationships: projectRelationshipsV1(status.Relationships),
-		RemediationState: remediationStateV1{
+		ActionContext: projectActionContextV2(status.ActionContext),
+		Relationships: projectRelationshipsV2(status.Relationships),
+		RemediationState: remediationStateV2{
 			Required:               status.RemediationState.Required,
 			Complete:               status.RemediationState.Complete,
 			FailedEvidenceRevision: status.RemediationState.FailedEvidenceRevision,
-			LineageID:              status.RemediationState.LineageID,
-			Generation:             status.RemediationState.Generation,
-			FixBatch:               status.RemediationState.FixBatch,
 			Reason:                 status.RemediationState.Reason,
 		},
-		ReviewTransaction: status.ReviewTransaction,
-		NextRecommended:   status.NextRecommended,
-		BlockedReasons:    status.BlockedReasons,
+		ReviewOffer:     status.ReviewOffer,
+		Consent:         status.Consent,
+		NextRecommended: status.NextRecommended,
+		BlockedReasons:  status.BlockedReasons,
 	}
-	if status.ReviewGate != nil {
-		projected.ReviewGate = &reviewGateStateV1{
-			Result:   status.ReviewGate.Result,
-			Reason:   status.ReviewGate.Reason,
-			Delivery: status.ReviewGate.Delivery,
-		}
-	}
-	projected.ReviewOffer = status.ReviewOffer
-	projected.ReVerify = status.ReVerify
-	projected.Consent = status.Consent
 	if status.PhaseInstructions != nil {
-		projected.PhaseInstructions = &phaseInstructionsV1{
-			Apply:     status.PhaseInstructions.Apply,
-			Verify:    status.PhaseInstructions.Verify,
-			Remediate: status.PhaseInstructions.Remediate,
-			Archive:   status.PhaseInstructions.Archive,
+		projected.PhaseInstructions = &phaseInstructionsV2{
+			Apply: status.PhaseInstructions.Apply, Verify: status.PhaseInstructions.Verify,
+			Remediate: status.PhaseInstructions.Remediate, Archive: status.PhaseInstructions.Archive,
 		}
 	}
 	return projected, nil
 }
 
-func marshalStatusV1Indent(status Status) ([]byte, error) {
-	projected, err := ProjectStatusV1(status)
+func marshalStatusV2Indent(status Status) ([]byte, error) {
+	projected, err := ProjectStatusV2(status)
 	if err != nil {
 		return nil, err
 	}
 	return json.MarshalIndent(projected, "", "  ")
 }
 
-func projectArtifactsV1(store ArtifactStore, source map[string]ArtifactState) (map[string]ArtifactState, error) {
+func projectArtifactsV2(store ArtifactStore, source map[string]ArtifactState) (map[string]ArtifactState, error) {
 	keys := artifactStateKeys(store)
 	projected := make(map[string]ArtifactState, len(keys))
 	for _, key := range keys {
 		state, ok := source[key]
-		if !ok || !legacyArtifactState(state) {
-			return nil, fmt.Errorf("unsupported SDD v1 artifact %q state %q", key, state)
+		if !ok || !statusV2ArtifactState(state) {
+			return nil, fmt.Errorf("unsupported SDD v2 artifact %q state %q", key, state) // refusal:by-design operator-knowledge: ProjectStatusV2 receives an internal aggregate, so the producer must use a supported artifact state.
 		}
 		projected[key] = state
 	}
 	return projected, nil
 }
 
-func projectPlanningHomeV1(value PlanningHome) planningHomeV1 {
-	return planningHomeV1{Mode: value.Mode, Path: value.Path}
+func projectPlanningHomeV2(value PlanningHome) planningHomeV2 {
+	return planningHomeV2{Mode: value.Mode, Path: value.Path}
 }
 
-func projectArtifactPathsV1(value ArtifactPaths) artifactPathsV1 {
-	return artifactPathsV1{
+func projectArtifactPathsV2(value ArtifactPaths) artifactPathsV2 {
+	return artifactPathsV2{
 		Proposal: value.Proposal, Specs: value.Specs, Design: value.Design, Tasks: value.Tasks,
-		ApplyProgress: value.ApplyProgress, VerifyReport: value.VerifyReport, ReviewPolicy: value.ReviewPolicy,
-		ReviewLedger: value.ReviewLedger, ReviewReceipt: value.ReviewReceipt, ReviewBundle: value.ReviewBundle,
-		ReviewContext: value.ReviewContext, ReviewState: value.ReviewState,
+		ApplyProgress: value.ApplyProgress, VerifyReport: value.VerifyReport,
 	}
 }
 
-func projectTaskProgressV1(value TaskProgress) taskProgressV1 {
-	return taskProgressV1{
-		Total: value.Total, Completed: value.Completed, Pending: value.Pending, AllComplete: value.AllComplete,
-	}
+func projectTaskProgressV2(value TaskProgress) taskProgressV2 {
+	return taskProgressV2{Total: value.Total, Completed: value.Completed, Pending: value.Pending, AllComplete: value.AllComplete}
 }
 
-func projectDependenciesV1(value Dependencies) dependenciesV1 {
-	return dependenciesV1{
+func projectDependenciesV2(value Dependencies) dependenciesV2 {
+	return dependenciesV2{
 		Proposal: value.Proposal, Specs: value.Specs, Design: value.Design, Tasks: value.Tasks,
 		Apply: value.Apply, Verify: value.Verify, Archive: value.Archive,
 	}
 }
 
-func projectActionContextV1(value ActionContext) actionContextV1 {
-	return actionContextV1{
-		Mode: value.Mode, WorkspaceRoot: value.WorkspaceRoot, AllowedEditRoots: value.AllowedEditRoots,
-	}
+func projectActionContextV2(value ActionContext) actionContextV2 {
+	return actionContextV2{Mode: value.Mode, WorkspaceRoot: value.WorkspaceRoot, AllowedEditRoots: value.AllowedEditRoots}
 }
 
-func projectRelationshipsV1(value Relationships) relationshipsV1 {
-	return relationshipsV1{
+func projectRelationshipsV2(value Relationships) relationshipsV2 {
+	return relationshipsV2{
 		DependsOn: value.DependsOn, Supersedes: value.Supersedes, Amends: value.Amends,
 		ConflictsWith: value.ConflictsWith, SameDomainActiveChanges: value.SameDomainActiveChanges,
 	}
 }
 
-func legacyArtifactStore(value ArtifactStore) bool {
+func statusV2ArtifactStore(value ArtifactStore) bool {
 	return value == ArtifactStoreOpenSpec || value == ArtifactStoreEngram || value == ArtifactStoreNone
 }
 
-func legacyArtifactState(value ArtifactState) bool {
+func statusV2ArtifactState(value ArtifactState) bool {
 	return value == ArtifactMissing || value == ArtifactPartial || value == ArtifactDone
 }
 
-func legacyApplyState(value ApplyState) bool {
+func statusV2ApplyState(value ApplyState) bool {
 	return value == ApplyBlocked || value == ApplyReady || value == ApplyAllDone
 }
 
-func legacyNextRecommended(value string) bool {
+func statusV2NextRecommended(value string) bool {
 	switch value {
-	case "apply", "verify", "remediate", "archive", "review", "resolve-review",
-		"resolve-blockers", "sdd-new", "select-change", "propose", "spec", "design", "tasks":
+	case "apply", "verify", "remediate", "archive", "resolve-blockers", "sdd-new", "select-change", "propose", "spec", "design", "tasks":
 		return true
 	default:
 		return false
