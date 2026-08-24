@@ -275,12 +275,9 @@ func (store RuntimeStore) Settle(ctx context.Context, request CompactSettleReque
 		if loadErr != nil {
 			return compactBlockedByUnreadableAuthority(loadErr), nil
 		}
-		finish, historical, ok := compactSettleReplayRequest(replay, record, request)
+		finish, ok := compactSettleReplayRequest(replay, record, request)
 		if !ok {
 			return compactBlocked(CompactBlockInvalidContinuation, ""), nil
-		}
-		if historical {
-			return store.compactSettleResult()
 		}
 		if _, err := store.Finish(ctx, finish); err != nil {
 			return store.compactMutationFailure(err, true, BeginAttemptRequest{}), nil
@@ -384,9 +381,9 @@ func compactAcquireMatches(record runtimeRecord, request BeginAttemptRequest) bo
 		slices.Equal(request.IntendedUntracked, intendedUntracked)
 }
 
-func compactSettleReplayRequest(replay runtimeReplay, record runtimeRecord, request CompactSettleRequest) (FinishAttemptRequest, bool, bool) {
-	if record.Finish == nil || (record.Operation != runtimeOperationFinish && record.Operation != runtimeOperationFinishRemediation) {
-		return FinishAttemptRequest{}, false, false
+func compactSettleReplayRequest(replay runtimeReplay, record runtimeRecord, request CompactSettleRequest) (FinishAttemptRequest, bool) {
+	if record.Finish == nil || record.Operation != runtimeOperationFinish {
+		return FinishAttemptRequest{}, false
 	}
 	event := record.Finish
 	matches := request.Token == replay.AttemptTokens[event.Ordinal] && request.RequestID == record.RequestID &&
@@ -394,18 +391,12 @@ func compactSettleReplayRequest(replay runtimeReplay, record runtimeRecord, requ
 		request.Diagnosis == event.Diagnosis && request.HarnessDisposition == event.HarnessDisposition &&
 		request.CleanupEvidence == event.CleanupEvidence && request.ProcessEvidence == event.ProcessEvidence &&
 		request.RemediatesEvidenceRevision == event.RemediatesEvidenceRevision
-	if record.Operation == runtimeOperationFinishRemediation {
-		// A historical record is already immutable and decodable. Its review
-		// metadata stays forensic only: replay returns its settlement projection
-		// without reintroducing that metadata into current attempt authority.
-		return FinishAttemptRequest{}, true, matches
-	}
 	return FinishAttemptRequest{
 		ExpectedRevision: record.PreviousRevision, RequestID: record.RequestID, Outcome: event.Outcome,
 		EvidenceRevision: event.EvidenceRevision, Diagnosis: event.Diagnosis,
 		HarnessDisposition: event.HarnessDisposition, CleanupEvidence: event.CleanupEvidence,
 		ProcessEvidence: event.ProcessEvidence, RemediatesEvidenceRevision: event.RemediatesEvidenceRevision,
-	}, false, matches
+	}, matches
 }
 
 // compactAcquireResult reconciles a committed begin whose publication the

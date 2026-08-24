@@ -38,7 +38,6 @@ const (
 	RuntimeActionComplete                    = "complete"
 	runtimeOperationBegin                    = "attempt/begin"
 	runtimeOperationFinish                   = "attempt/finish"
-	runtimeOperationFinishRemediation        = "attempt/finish-remediation"
 	runtimeOperationReset                    = "objective/reset"
 	runtimeOperationRescope                  = "objective/rescope"
 	runtimeOperationRepairConsecutiveRescope = "objective/repair-consecutive-rescope"
@@ -376,23 +375,6 @@ type FinishAttemptRequest struct {
 	RemediatesEvidenceRevision string             `json:"remediates_evidence_revision,omitempty"`
 }
 
-// legacyFinishAttemptRequest reproduces the pre-decoupling request digest only
-// while decoding historical finish-remediation records. New finish requests do
-// not carry review binding or successor lineage data.
-type legacyFinishAttemptRequest struct {
-	ExpectedRevision           string             `json:"expected_revision"`
-	RequestID                  string             `json:"request_id"`
-	Outcome                    AttemptOutcome     `json:"outcome"`
-	EvidenceRevision           string             `json:"evidence_revision"`
-	Diagnosis                  string             `json:"diagnosis"`
-	HarnessDisposition         HarnessDisposition `json:"harness_disposition"`
-	CleanupEvidence            string             `json:"cleanup_evidence"`
-	ProcessEvidence            string             `json:"process_evidence"`
-	ExpectedBindingRevision    string             `json:"expected_binding_revision,omitempty"`
-	SuccessorLineageID         string             `json:"successor_lineage_id,omitempty"`
-	RemediatesEvidenceRevision string             `json:"remediates_evidence_revision,omitempty"`
-}
-
 type HandoffAttemptRequest struct {
 	ExpectedRevision    string `json:"expected_revision"`
 	RequestID           string `json:"request_id"`
@@ -651,9 +633,8 @@ type runtimeLegacyBindingImport struct {
 }
 
 type runtimeRequestReceipt struct {
-	Digest                        string
-	Revision                      string
-	RemediationPredecessorLineage string
+	Digest   string
+	Revision string
 }
 
 type runtimeReplay struct {
@@ -1658,7 +1639,6 @@ func applyRuntimeRecord(store RuntimeStore, replay *runtimeReplay, revision stri
 	if err := validateRuntimeRecordShape(record); err != nil {
 		return err
 	}
-	remediationPredecessorLineage := ""
 	switch record.Operation {
 	case runtimeOperationBegin:
 		if err := applyRuntimeBeginEvent(replay, revision, record); err != nil {
@@ -1677,34 +1657,6 @@ func applyRuntimeRecord(store RuntimeStore, replay *runtimeReplay, revision stri
 	case runtimeOperationHandoff:
 		if err := applyRuntimeHandoffEvent(replay, record.Handoff); err != nil {
 			return err
-		}
-
-	case runtimeOperationFinishRemediation:
-		currentBinding := replay.Status.Binding
-		if currentBinding == nil && record.Binding.LegacyImport != nil {
-			legacy := record.Binding.LegacyImport.Binding
-			currentBinding = &legacy
-		}
-		if currentBinding == nil || currentBinding.Revision != record.Binding.ExpectedRevision {
-			return errors.New("atomic remediation binding does not match replay state")
-		}
-		remediationPredecessorLineage = currentBinding.Lineage
-		if replay.Status.EvidenceRevision != "" && replay.Status.EvidenceRevision != record.Finish.RemediatesEvidenceRevision {
-			return errors.New("atomic remediation failed evidence does not match replay state")
-		}
-		if record.Binding.Current.Lineage == currentBinding.Lineage &&
-			record.Finish.EvidenceRevision == record.Finish.RemediatesEvidenceRevision {
-			// A same-lineage record is a legal approved self-successor only when
-			// its corrected evidence differs from the failed evidence it repairs.
-			return errors.New("atomic remediation binding does not select a distinct successor or corrected self-successor")
-		}
-		if err := applyRuntimeFinishEvent(replay, record.Finish, false); err != nil {
-			return err
-		}
-		if !record.Finish.ChangedLineBudgetExceeded {
-			if err := applyRuntimeBindingEvent(replay, record.Binding); err != nil {
-				return err
-			}
 		}
 
 	case runtimeOperationReset:
@@ -1749,10 +1701,7 @@ func applyRuntimeRecord(store RuntimeStore, replay *runtimeReplay, revision stri
 		return errors.New("unsupported SDD runtime record operation")
 	}
 	replay.Status.Revision = revision
-	replay.Requests[record.RequestID] = runtimeRequestReceipt{
-		Digest: record.RequestDigest, Revision: revision,
-		RemediationPredecessorLineage: remediationPredecessorLineage,
-	}
+	replay.Requests[record.RequestID] = runtimeRequestReceipt{Digest: record.RequestDigest, Revision: revision}
 	return nil
 }
 
@@ -2250,46 +2199,6 @@ func validateRuntimeRecordShape(record runtimeRecord) error {
 		request := HandoffAttemptRequest{ExpectedRevision: event.ExpectedRevision, RequestID: record.RequestID, DestinationWorktree: event.DestinationWorktree}
 		if runtimeValueHash("gentle-ai.sdd-runtime-handoff-request/v1", request) != record.RequestDigest {
 			return errors.New("SDD runtime handoff request digest does not match record") // refusal:by-design world-action: a forged immutable record requires restoring the authority store
-		}
-	case runtimeOperationFinishRemediation:
-		if record.Finish == nil || record.Binding == nil || record.Begin != nil || record.Reset != nil || record.Rescope != nil || record.Advance != nil || record.Handoff != nil || record.Receipt != nil || record.Grant != nil {
-			return errors.New("invalid atomic SDD runtime remediation record shape")
-		}
-		finish, binding := record.Finish, record.Binding
-		if finish.Ordinal < 1 || finish.Outcome != AttemptPassed || finish.ChangedLines < 0 ||
-			finish.ChangedLines > maximumRuntimeChangedLines || !runtimeRevisionPattern.MatchString(finish.EvidenceRevision) ||
-			!runtimeRevisionPattern.MatchString(finish.RemediatesEvidenceRevision) ||
-			!runtimeRevisionPattern.MatchString(finish.FinishCandidateIdentity) || !runtimeGitTreePattern.MatchString(finish.FinishCandidateTree) ||
-			(finish.AttestedVerifyReportDigest != "" && !runtimeRevisionPattern.MatchString(finish.AttestedVerifyReportDigest)) ||
-			validateRuntimeText(finish.Diagnosis, 500) != nil || !validHarnessDisposition(finish.HarnessDisposition) ||
-			validateRuntimeText(finish.CleanupEvidence, 500) != nil || validateRuntimeText(finish.ProcessEvidence, 500) != nil {
-			return errors.New("invalid atomic SDD runtime remediation finish event")
-		}
-		if !runtimeRevisionPattern.MatchString(binding.ExpectedRevision) {
-			return errors.New("invalid atomic SDD runtime remediation binding event")
-		}
-		if _, err := validatePreparedRuntimeBinding(binding.Current, record.Change, binding.Current.Lineage); err != nil {
-			return fmt.Errorf("invalid atomic SDD runtime remediation successor: %w", err)
-		}
-		if binding.LegacyImport != nil {
-			legacy, err := validatePreparedRuntimeBinding(binding.LegacyImport.Binding, record.Change, binding.LegacyImport.Binding.Lineage)
-			if err != nil {
-				return fmt.Errorf("invalid atomic remediation legacy binding import: %w", err)
-			}
-			payload, _ := bindingBytes(legacy)
-			if binding.LegacyImport.SourceDigest != bindingHash(payload) || binding.ExpectedRevision != legacy.Revision {
-				return errors.New("atomic remediation legacy binding import does not match its source or expected revision")
-			}
-		}
-		request := legacyFinishAttemptRequest{
-			ExpectedRevision: record.PreviousRevision, RequestID: record.RequestID, Outcome: finish.Outcome,
-			EvidenceRevision: finish.EvidenceRevision, Diagnosis: finish.Diagnosis, HarnessDisposition: finish.HarnessDisposition,
-			CleanupEvidence: finish.CleanupEvidence, ProcessEvidence: finish.ProcessEvidence,
-			ExpectedBindingRevision: binding.ExpectedRevision, SuccessorLineageID: binding.Current.Lineage,
-			RemediatesEvidenceRevision: finish.RemediatesEvidenceRevision,
-		}
-		if runtimeValueHash("gentle-ai.sdd-runtime-finish-request/v1", request) != record.RequestDigest {
-			return errors.New("atomic SDD runtime remediation request digest does not match record")
 		}
 	case runtimeOperationReset:
 		if record.Reset == nil || record.Begin != nil || record.Finish != nil || record.Rescope != nil || record.Advance != nil || record.Handoff != nil || record.Binding != nil || record.Receipt != nil || record.Grant != nil {
