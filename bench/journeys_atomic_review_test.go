@@ -23,15 +23,6 @@ func TestCorpusRejectsRetiredOrdinaryPathReviewJourneys(t *testing.T) {
 	}
 }
 
-// isJ47DisabledModeV2ArchiveRouting isolates #3564's one narrow exception to
-// the retired-receipt/deprecated-lifecycle ratchets. j47 seeds discovered
-// authority only to prove disabled-mode V2's structural absence of ReviewOffer
-// and ordinary archive routing; it does not ratify durable receipt or deciding
-// gate behavior.
-func isJ47DisabledModeV2ArchiveRouting(journey Journey) bool {
-	return journey.ID == "j47-disabled-mode-archives-discovered-scope-changed-authority"
-}
-
 func TestCorpusDoesNotReintroduceRetiredReceiptAndGatePins(t *testing.T) {
 	retiredPins := []string{
 		"receipt survives",
@@ -51,9 +42,6 @@ func TestCorpusDoesNotReintroduceRetiredReceiptAndGatePins(t *testing.T) {
 			// only retained historical parser/refusal compatibility fixtures.
 			continue
 		}
-		if isJ47DisabledModeV2ArchiveRouting(journey) {
-			continue
-		}
 		declaration := strings.ToLower(journey.Title)
 		for _, step := range journey.Steps {
 			declaration += " " + strings.ToLower(step.Name)
@@ -68,9 +56,6 @@ func TestCorpusDoesNotReintroduceRetiredReceiptAndGatePins(t *testing.T) {
 
 func TestActiveJourneyAndAxisDeclarationsExcludeRetiredLifecyclePins(t *testing.T) {
 	for _, journey := range allDeclaredJourneys() {
-		if isJ47DisabledModeV2ArchiveRouting(journey) {
-			continue
-		}
 		for _, step := range journey.Steps {
 			if step.Requires == nil {
 				continue
