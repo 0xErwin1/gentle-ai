@@ -1,5 +1,5 @@
-// Package reviewtransaction provides the mode-only post-verification offer
-// consumed by SDD status.
+// Package reviewtransaction manages native review transaction state and exposes
+// the mode-only post-verification offer consumed by SDD status.
 package reviewtransaction
 
 import (

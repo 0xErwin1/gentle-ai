@@ -512,6 +512,33 @@ func TestSDDVerificationAndArchiveContractsIgnoreReviewContext(t *testing.T) {
 	}
 }
 
+func TestSDDVerifyAndArchiveCommandsRouteOnlyFromRefreshedStatus(t *testing.T) {
+	const verifyRoute = "After verify returns, rerun native SDD status and route only from its refreshed `nextRecommended`."
+	for _, path := range []string{
+		"claude/commands/sdd-verify.md",
+		"opencode/commands/sdd-verify.md",
+	} {
+		t.Run(path, func(t *testing.T) {
+			if content := MustRead(path); !strings.Contains(content, verifyRoute) {
+				t.Fatalf("%s must route post-verify work only from refreshed status", path)
+			}
+		})
+	}
+
+	const archiveRoute = "Archive only when refreshed native SDD status reports `dependencies.archive: ready` and `nextRecommended: archive`."
+	for _, path := range []string{
+		"claude/commands/sdd-archive.md",
+		"opencode/commands/sdd-archive.md",
+		"skills/sdd-archive/SKILL.md",
+	} {
+		t.Run(path, func(t *testing.T) {
+			if content := MustRead(path); !strings.Contains(content, archiveRoute) {
+				t.Fatalf("%s must require refreshed archive readiness and route", path)
+			}
+		})
+	}
+}
+
 func TestSDDVerifyAdmissionPrecedesPersistence(t *testing.T) {
 	for _, path := range []string{"skills/sdd-verify/SKILL.md", "skills/sdd-verify/references/report-format.md", "skills/_shared/sdd-phase-common.md", "skills/_shared/persistence-contract.md"} {
 		content := MustRead(path)

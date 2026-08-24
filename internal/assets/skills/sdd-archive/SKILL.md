@@ -72,7 +72,7 @@ This hierarchy governs how the archive REPORTS facts. CRITICAL issues in `verify
 
 ### Archive Readiness
 
-Before any task reconciliation, spec sync, or archive move, require structured status. A post-verify `reviewOffer` is an invitation only and is never read as archive state.
+Before any task reconciliation, spec sync, or archive move, require structured status. Archive only when refreshed native SDD status reports `dependencies.archive: ready` and `nextRecommended: archive`. A post-verify `reviewOffer` is an invitation only and is never read as archive state.
 
 The Task Completion Gate and strict independent verification decide whether archive can proceed; ordinary repository policy decides delivery.
 

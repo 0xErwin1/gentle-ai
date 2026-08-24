@@ -56,7 +56,7 @@ func resolveBoundedRemediation(required bool, verify verifyResultEvaluation, app
 		FailedEvidenceRevision: verify.EvidenceRevision,
 		Reason:                 fmt.Sprintf("verify evidence requires independent SDD remediation for %s: %s", verify.EvidenceRevision, verify.Reason),
 	}
-	evaluation := parseRemediationResult(applyProgress, verify.EvidenceRevision, RemediationBinding{})
+	evaluation := parseRemediationResult(applyProgress, verify.EvidenceRevision)
 	state.Complete = evaluation.Complete
 	state.Required = !evaluation.Complete
 	if state.Complete {

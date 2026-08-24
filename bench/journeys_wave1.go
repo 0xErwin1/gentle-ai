@@ -1065,69 +1065,6 @@ func requireFreshNegotiatedStart(_ *Sandbox, observation Observation) error {
 	return nil
 }
 
-func rememberArchiveAuthority(sandbox *Sandbox, observation Observation) error {
-	if err := rememberLineage(sandbox, observation); err != nil {
-		return err
-	}
-	if sandbox.Lineage == "" || sandbox.Revision == "" {
-		return errors.New("approved archive authority published no lineage or revision")
-	}
-	sandbox.Scratch["archive-authority-revision"] = sandbox.Revision
-	return nil
-}
-
-func requireDiscoveredArchivePremise(_ *Sandbox, observation Observation) error {
-	return sddStatusAssertion("archive premise", func(status sddStatusV2) error {
-		if status.Dependencies.Archive != "ready" || status.NextRecommended != "archive" || len(status.BlockedReasons) != 0 {
-			return fmt.Errorf("archive=%q next=%q blocked=%v, want ready/archive with no blockers",
-				status.Dependencies.Archive, status.NextRecommended, status.BlockedReasons)
-		}
-		return nil
-	})(nil, observation)
-}
-
-// requireDiscoveredArchiveStatus asserts the enabled or disabled shape of a
-// discovered archive authority whose current candidate changed. Corrective verify cycle
-// CRITICAL-1 (rdd-post-verify-review-offer's "Kill-Switch-Off Is Structural
-// Absence" requirement): the disabled branch previously required a populated
-// "disabled/unmanaged" disposition; v2 removes status review authority
-// entirely, so archive remains ready under ordinary policy in either mode.
-func requireDiscoveredArchiveStatus(_ bool) func(*Sandbox, Observation) error {
-	return sddStatusAssertion("archive remains ready", func(status sddStatusV2) error {
-		if status.Dependencies.Archive != "ready" || status.NextRecommended != "archive" {
-			return fmt.Errorf("archive=%q next=%q, want ready/archive", status.Dependencies.Archive, status.NextRecommended)
-		}
-		return nil
-	})
-}
-
-func introduceArchiveCandidateDrift(sandbox *Sandbox) error {
-	return sandbox.write(filepath.Join(sandbox.Repo, "docs", "archive-authority.md"), "# archive-authority\n\nchanged after review.\n")
-}
-
-func writeExplicitInvalidArchiveReceipt(sandbox *Sandbox) error {
-	return sandbox.write(filepath.Join(sddChangeRoot(sandbox), "reviews", "receipt.json"), "{\n")
-}
-
-// requireDisabledExplicitInvalidReceiptIsIgnored asserts the corrective
-// verify cycle's CRITICAL-1 line: the ratified "zero review code MUST
-// execute on any SDD path" requirement carries no carve-out for an explicit
-// review artifact either. Superseded expectation (documented, not silently
-// dropped): this journey previously required an explicit invalid receipt to
-// still fail closed while disabled ("declining is not the same as blessing
-// content it never validated"); that narrower contract predates this wave's
-// ratified requirement, which is unconditional -- while off, the explicit
-// receipt is never even read, so its invalidity has no bearing.
-func requireDisabledExplicitInvalidReceiptIsIgnored(_ *Sandbox, observation Observation) error {
-	return sddStatusAssertion("disabled archive ignores retired review files", func(status sddStatusV2) error {
-		if status.Dependencies.Archive != "ready" || status.NextRecommended != "archive" {
-			return fmt.Errorf("disabled explicit-invalid-receipt archive=%q next=%q, want ready/archive",
-				status.Dependencies.Archive, status.NextRecommended)
-		}
-		return nil
-	})(nil, observation)
-}
-
 // requireDisabledUnmanagedArchiveStatus asserts the kill-switch-off shape at
 // sdd-status: the optional offer is structurally absent and archive remains
 // governed only by tasks and independent verification.
@@ -1137,24 +1074,76 @@ func requireDisabledUnmanagedArchiveStatus(name string) func(*Sandbox, Observati
 			return fmt.Errorf("archive=%q next=%q blocked=%v, want ready/archive with no blockers",
 				status.Dependencies.Archive, status.NextRecommended, status.BlockedReasons)
 		}
+		if status.ReviewOffer != nil {
+			return fmt.Errorf("disabled status reviewOffer=%+v, want structural absence", status.ReviewOffer)
+		}
 		return nil
 	})
 }
 
-func proveArchiveAuthorityUnchanged(sandbox *Sandbox) error {
-	head, err := proveAuthorities(sandbox)
+// snapshotJ47StatusInput records the repository state that the public status
+// read must preserve. The completed SDD fixture commits its own artifacts, so a
+// changed head or worktree here would be a side effect of status itself.
+func snapshotJ47StatusInput(sandbox *Sandbox) error {
+	head, err := gitOut(sandbox, sandbox.Repo, "rev-parse", "HEAD")
 	if err != nil {
-		return err
+		return fmt.Errorf("read status input head: %w", err)
 	}
-	for _, entry := range head.Entries {
-		if entry.LineageID == sandbox.Lineage {
-			if entry.State != "approved" || entry.Revision != sandbox.Scratch["archive-authority-revision"] {
-				return fmt.Errorf("archive authority changed to state=%q revision=%q", entry.State, entry.Revision)
-			}
-			return nil
+	worktree, err := gitOut(sandbox, sandbox.Repo, "status", "--porcelain=v1")
+	if err != nil {
+		return fmt.Errorf("read status input worktree: %w", err)
+	}
+	sandbox.Scratch["j47-status-head"] = head
+	sandbox.Scratch["j47-status-worktree"] = worktree
+	return nil
+}
+
+// requireJ47DisabledV2ArchiveStatus pins #3564's public V2 projection: completed
+// SDD work proceeds to archive under the clone-local disabled mode without any
+// retired review data, and status does not alter its input repository.
+func requireJ47DisabledV2ArchiveStatus(sandbox *Sandbox, observation Observation) error {
+	if observation.ExitCode != 0 {
+		return fmt.Errorf("disabled V2 sdd-status exited %d: %s", observation.ExitCode, firstLine(observation.Stderr))
+	}
+
+	var document map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(strings.TrimSpace(observation.Stdout)), &document); err != nil {
+		return fmt.Errorf("parse disabled V2 sdd-status: %w (stderr: %s)", err, firstLine(observation.Stderr))
+	}
+	var schemaVersion int
+	if raw, ok := document["schemaVersion"]; !ok || json.Unmarshal(raw, &schemaVersion) != nil || schemaVersion != 2 {
+		return fmt.Errorf("schemaVersion = %s, want 2", document["schemaVersion"])
+	}
+	for _, retired := range []string{"reviewOffer", "reviewGate", "reviewTransaction", "runtimeStatus", "reVerify", "receipt", "lineage"} {
+		if _, present := document[retired]; present {
+			return fmt.Errorf("disabled V2 sdd-status exposed retired key %q", retired)
 		}
 	}
-	return fmt.Errorf("archive authority %q disappeared", sandbox.Lineage)
+
+	var status sddStatusV2
+	if err := json.Unmarshal([]byte(strings.TrimSpace(observation.Stdout)), &status); err != nil {
+		return fmt.Errorf("decode disabled V2 status: %w", err)
+	}
+	if !status.TaskProgress.AllComplete || status.TaskProgress.Total == 0 || status.Dependencies.Verify != "all_done" ||
+		status.Dependencies.Archive != "ready" || status.NextRecommended != "archive" || len(status.BlockedReasons) != 0 {
+		return fmt.Errorf("disabled V2 status = tasks %d/%d complete=%v verify=%q archive=%q next=%q blocked=%v, want completed/all_done/ready/archive/no blockers",
+			status.TaskProgress.Completed, status.TaskProgress.Total, status.TaskProgress.AllComplete,
+			status.Dependencies.Verify, status.Dependencies.Archive, status.NextRecommended, status.BlockedReasons)
+	}
+
+	head, err := gitOut(sandbox, sandbox.Repo, "rev-parse", "HEAD")
+	if err != nil {
+		return fmt.Errorf("read status output head: %w", err)
+	}
+	worktree, err := gitOut(sandbox, sandbox.Repo, "status", "--porcelain=v1")
+	if err != nil {
+		return fmt.Errorf("read status output worktree: %w", err)
+	}
+	if head != sandbox.Scratch["j47-status-head"] || worktree != sandbox.Scratch["j47-status-worktree"] {
+		return fmt.Errorf("disabled V2 sdd-status mutated its repository input: head %q/%q worktree %q/%q",
+			sandbox.Scratch["j47-status-head"], head, sandbox.Scratch["j47-status-worktree"], worktree)
+	}
+	return nil
 }
 
 func prepareDeclinedCandidate(sandbox *Sandbox) error {
@@ -1351,30 +1340,16 @@ func waveOneJourneys() []Journey {
 		},
 		{
 			ID:     "j47-disabled-mode-archives-discovered-scope-changed-authority",
-			Review: reviewOptedIn,
-			Title:  "Discovered scope-changed archive authority: disabled mode steps aside without weakening explicit authority",
-			Source: "issue #2128",
+			Review: reviewUntouched,
+			Title:  "Disabled clone mode: explicit-CWD SDD status v2 reports archive readiness",
+			Source: "issue #3564 V2: completed SDD tasks and verification route directly to archive",
 			Steps: []Step{
-				{Name: "fixture: archive-ready SDD change", Fixture: sddPlanningArtifacts(sddVerifyReport)},
-				{Name: "fixture: stage the reviewed candidate", Fixture: stageProse("", "archive-authority")},
-				{Name: "review start", Requires: startCapability, Args: productArgs("review", "start")},
-				{Name: "review finalize", Requires: finalizeCapability, Args: productArgs("review", "finalize"), After: rememberArchiveAuthority},
-				{Name: "discovered receipt allows before candidate drift", Requires: sddStatusCapability,
-					Args: productArgs("sdd-status", sddChange, "--json"), After: requireDiscoveredArchivePremise},
-				{Name: "fixture: change a reviewed candidate path", Fixture: introduceArchiveCandidateDrift},
-				{Name: "enabled discovered receipt blocks", Requires: sddStatusCapability,
-					Args: productArgs("sdd-status", sddChange, "--json"), After: requireDiscoveredArchiveStatus(false)},
-				{Name: "mode disable", Requires: modeCapability, Args: productArgs("review", "mode", "disable", "--json")},
-				{Name: "disabled discovered receipt closes unmanaged", Requires: sddStatusCapability,
-					Args: productArgs("sdd-status", sddChange, "--json"), After: requireDiscoveredArchiveStatus(true)},
-				{Name: "mode enable", Requires: modeCapability, Args: productArgs("review", "mode", "enable", "--json")},
-				{Name: "re-enabled discovered receipt blocks again", Requires: sddStatusCapability,
-					Args: productArgs("sdd-status", sddChange, "--json"), After: requireDiscoveredArchiveStatus(false)},
-				{Name: "fixture: write an explicit invalid receipt", Fixture: writeExplicitInvalidArchiveReceipt},
-				{Name: "mode disable with explicit receipt", Requires: modeCapability, Args: productArgs("review", "mode", "disable", "--json")},
-				{Name: "disabled explicit invalid receipt is never read", Requires: sddStatusCapability,
-					Args: productArgs("sdd-status", sddChange, "--json"), After: requireDisabledExplicitInvalidReceiptIsIgnored},
-				{Name: "authority remained approved at its original revision", Fixture: proveArchiveAuthorityUnchanged},
+				{Name: "fixture: completed SDD change with passing verification", Fixture: sddPlanningArtifacts(sddVerifyReport)},
+				{Name: "disable review mode for the clone", Requires: modeCapability,
+					Args: productArgs("review", "mode", "disable", "--scope", "clone", "--json")},
+				{Name: "fixture: capture status input state", Fixture: snapshotJ47StatusInput},
+				{Name: "explicit-CWD disabled V2 status is archive-ready and read-only", Requires: sddStatusCapability,
+					Args: productArgs("sdd-status", sddChange, "--contract", "gentle-ai.sdd-status/v2", "--json"), After: requireJ47DisabledV2ArchiveStatus},
 			},
 		},
 		{
