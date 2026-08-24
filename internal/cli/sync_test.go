@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/gentleman-programming/gentle-ai/v2/internal/agents"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/claude"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/codex"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/assets"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/backup"
@@ -21,6 +22,8 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v2/internal/components/communitytool"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/components/engram"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/components/filemerge"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/components/persona"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/components/sdd"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/pipeline"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/planner"
@@ -928,7 +931,15 @@ func TestComponentSyncStepRunsGGAInjectWithoutBinaryInstall(t *testing.T) {
 }
 
 func TestRunSyncRefreshesPersistedVisualComponents(t *testing.T) {
-	home := t.TempDir()
+	workspace, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatalf("EvalSymlinks(workspace) error = %v", err)
+	}
+	t.Chdir(workspace)
+	home, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatalf("EvalSymlinks(home) error = %v", err)
+	}
 	if err := state.Write(home, state.InstallState{
 		InstalledAgents:     []string{"claude-code", "opencode"},
 		SelectionConfigured: true,
@@ -955,6 +966,9 @@ func TestRunSyncRefreshesPersistedVisualComponents(t *testing.T) {
 	// a first sync of a purely visual selection still delivers it (issue #1794).
 	wantFiles := []string{
 		filepath.Join(home, ".claude", "themes", "gentleman.json"),
+		filepath.Join(home, ".claude", "themes", "gentleman-cute.json"),
+		filepath.Join(home, ".config", "opencode", "themes", "gentleman.json"),
+		filepath.Join(home, ".config", "opencode", "themes", "gentleman-cute.json"),
 		filepath.Join(home, ".config", "opencode", "tui-plugins", "gentle-logo.tsx"),
 		filepath.Join(home, ".config", "opencode", "tui.json"),
 		filepath.Join(home, ".claude", "CLAUDE.md"),
@@ -1000,8 +1014,8 @@ func TestRunSyncRefreshesInstalledOpenCodeReviewPluginWithoutSDDComponent(t *tes
 
 	pluginsDir := filepath.Join(home, ".config", "opencode", "plugins")
 	stalePlugins := map[string]string{
-		"review-result-artifacts.ts": filepath.Join(pluginsDir, "review-result-artifacts.ts"),
-		"model-variants.ts":          filepath.Join(pluginsDir, "model-variants.ts"),
+		"opencode-review-transport.ts": filepath.Join(pluginsDir, "opencode-review-transport.ts"),
+		"model-variants.ts":            filepath.Join(pluginsDir, "model-variants.ts"),
 	}
 	for name, path := range stalePlugins {
 		mustWriteFile(t, path, []byte("// stale v2.1.7 managed plugin "+name))
@@ -1114,7 +1128,7 @@ func TestRunSyncDoesNotCreateOpenCodeReviewPluginWhenNeverInstalled(t *testing.T
 		t.Fatalf("RunSync() error = %v", err)
 	}
 
-	pluginPath := filepath.Join(home, ".config", "opencode", "plugins", "review-result-artifacts.ts")
+	pluginPath := filepath.Join(home, ".config", "opencode", "plugins", "opencode-review-transport.ts")
 	if _, err := os.Stat(pluginPath); !os.IsNotExist(err) {
 		t.Errorf("sync must not install %q for users who never had it; stat err = %v", pluginPath, err)
 	}
@@ -1135,8 +1149,8 @@ func TestSyncBackupTargetsIncludeManagedOpenCodePluginsWithoutSDD(t *testing.T) 
 		t.Fatalf("syncBackupTargets() error = %v", err)
 	}
 
-	for _, configDir := range []string{"opencode", "kilo"} {
-		for _, plugin := range []string{"model-variants.ts", "review-result-artifacts.ts", "skill-registry.ts"} {
+	for configDir, agent := range map[string]model.AgentID{"opencode": model.AgentOpenCode, "kilo": model.AgentKilocode} {
+		for _, plugin := range sdd.OpenCodePluginLifecycleNames(agent) {
 			want := filepath.Join(home, ".config", configDir, "plugins", plugin)
 			if !containsPath(targets, want) {
 				t.Errorf("syncBackupTargets missing managed plugin path %q\ntargets = %v", want, targets)
@@ -1252,6 +1266,38 @@ func TestRunSyncRollbackRestoresClaudeEngramMigrationSource(t *testing.T) {
 	}
 	if len(backups) != 1 {
 		t.Fatalf("persistent backup count = %d, want 1 after duplicate transaction", len(backups))
+	}
+}
+
+func TestSyncRollbackRestoresLegacyOpenCodePluginAndRemovesReplacement(t *testing.T) {
+	home := t.TempDir()
+	pluginsDir := filepath.Join(home, ".config", "opencode", "plugins")
+	legacyPath := filepath.Join(pluginsDir, sdd.LegacyOpenCodeReviewPluginName)
+	legacyBytes := []byte("legacy review plugin\n")
+	mustWriteFile(t, legacyPath, legacyBytes)
+
+	selection := model.Selection{
+		Agents:     []model.AgentID{model.AgentOpenCode},
+		Components: []model.ComponentID{model.ComponentSDD},
+	}
+	runtime, err := newSyncRuntime(home, selection)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan := runtime.stagePlan()
+	plan.Apply = append(plan.Apply, failingSyncStep{})
+	result := pipeline.NewOrchestrator(pipeline.DefaultRollbackPolicy()).Execute(plan)
+	if result.Err == nil || !result.Rollback.Success {
+		t.Fatalf("sync rollback = %#v", result)
+	}
+	got, err := os.ReadFile(legacyPath)
+	if err != nil || !bytes.Equal(got, legacyBytes) {
+		t.Fatalf("legacy plugin after rollback = %q, %v", got, err)
+	}
+	for _, plugin := range []string{"opencode-review-transport.ts", "sdd-task-result-artifacts.ts"} {
+		if _, statErr := os.Stat(filepath.Join(pluginsDir, plugin)); !os.IsNotExist(statErr) {
+			t.Fatalf("rollback retained replacement plugin %q: %v", plugin, statErr)
+		}
 	}
 }
 
@@ -1983,12 +2029,22 @@ func TestRunSyncMigratesLegacyManagedPiCodeGraphSelection(t *testing.T) {
 	}
 }
 
+// TestRunSyncReportsLegacySelectionMigrationPersistenceFailure verifies that
+// failed legacy migration persistence restores both managed assets and state.
 func TestRunSyncReportsLegacySelectionMigrationPersistenceFailure(t *testing.T) {
 	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
 	original := state.InstallState{InstalledAgents: []string{"opencode"}, Persona: "neutral"}
 	if err := state.Write(home, original); err != nil {
 		t.Fatal(err)
 	}
+	originalState, readErr := os.ReadFile(state.Path(home))
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	opencodeConfig := filepath.Join(home, ".config", "opencode", "opencode.json")
+	piMCP := filepath.Join(home, ".pi", "agent", "mcp.json")
 	statePath := state.Path(home)
 	stateTarget := filepath.Join(home, ".gentle-ai", "persisted-state.json")
 	if err := os.Rename(statePath, stateTarget); err != nil {
@@ -2000,10 +2056,15 @@ func TestRunSyncReportsLegacySelectionMigrationPersistenceFailure(t *testing.T) 
 	writeManagedPiCodeGraphManifest(t, home)
 
 	previousRefresh := refreshPiCodeGraphIfConfigured
+	previousLookPath := cmdLookPath
 	refreshPiCodeGraphIfConfigured = func(string, string) (communitytool.PiCodeGraphResult, bool, error) {
 		return communitytool.PiCodeGraphResult{}, true, nil
 	}
-	t.Cleanup(func() { refreshPiCodeGraphIfConfigured = previousRefresh })
+	cmdLookPath = func(string) (string, error) { return "", os.ErrNotExist }
+	t.Cleanup(func() {
+		refreshPiCodeGraphIfConfigured = previousRefresh
+		cmdLookPath = previousLookPath
+	})
 
 	result, err := RunSyncWithSelection(home, model.Selection{Agents: []model.AgentID{model.AgentOpenCode}, Persona: model.PersonaNeutral})
 	if err == nil || !strings.Contains(err.Error(), "persist managed asset provenance") {
@@ -2018,6 +2079,18 @@ func TestRunSyncReportsLegacySelectionMigrationPersistenceFailure(t *testing.T) 
 	}
 	if persisted.CommunityToolsConfigured || persisted.CommunityTools != nil || !reflect.DeepEqual(persisted.InstalledAgents, original.InstalledAgents) {
 		t.Fatalf("state changed after failed persistence: %#v", persisted)
+	}
+	finalState, readErr := os.ReadFile(stateTarget)
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if string(finalState) != string(originalState) {
+		t.Fatalf("state bytes after failed migration changed:\n got %s\nwant %s", finalState, originalState)
+	}
+	for _, path := range []string{opencodeConfig, piMCP} {
+		if _, assetErr := os.ReadFile(path); !os.IsNotExist(assetErr) {
+			t.Fatalf("asset %q after failed migration read error = %v, want absent", path, assetErr)
+		}
 	}
 }
 
@@ -2062,6 +2135,11 @@ func TestRunSyncAppliesManagedFilesystemChanges(t *testing.T) {
 	if err := os.WriteFile(legacyPluginPath, []byte("legacy background agents plugin"), 0o644); err != nil {
 		t.Fatalf("WriteFile(background-agents.ts) error = %v", err)
 	}
+	settingsPath := filepath.Join(home, ".config", "opencode", "opencode.json")
+	seed := `{"theme":"user-theme","agent":{"user-helper":{"mode":"subagent","description":"preserve me"}}}`
+	if err := os.WriteFile(settingsPath, []byte(seed), 0o644); err != nil {
+		t.Fatalf("WriteFile(opencode.json) error = %v", err)
+	}
 
 	restoreHome := osUserHomeDir
 	restoreBackupHome := backup.UserHomeDirFn
@@ -2089,9 +2167,35 @@ func TestRunSyncAppliesManagedFilesystemChanges(t *testing.T) {
 	}
 
 	// SDD assets should exist.
-	settingsPath := filepath.Join(home, ".config", "opencode", "opencode.json")
 	if _, err := os.Stat(settingsPath); err != nil {
 		t.Errorf("expected SDD inject to create %q: %v", settingsPath, err)
+	}
+	content, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatalf("ReadFile(opencode.json) error = %v", err)
+	}
+	var root map[string]any
+	if err := json.Unmarshal(content, &root); err != nil {
+		t.Fatalf("Unmarshal(opencode.json) error = %v", err)
+	}
+	if root["theme"] != "user-theme" {
+		t.Fatalf("sync discarded unrelated theme: %#v", root["theme"])
+	}
+	agentsMap := root["agent"].(map[string]any)
+	if helper, ok := agentsMap["user-helper"].(map[string]any); !ok || helper["description"] != "preserve me" {
+		t.Fatalf("sync discarded unrelated user agent: %#v", agentsMap["user-helper"])
+	}
+	if _, ok := agentsMap["review-validator"].(map[string]any); !ok {
+		t.Fatalf("sync did not add review-validator: %#v", agentsMap)
+	}
+	orchestrator := agentsMap["gentle-orchestrator"].(map[string]any)
+	permission := orchestrator["permission"].(map[string]any)
+	allowlist := permission["task"].(map[string]any)
+	if replacement, ok := allowlist["__replace__"].(map[string]any); ok {
+		allowlist = replacement
+	}
+	if allowlist["review-validator"] != "allow" {
+		t.Fatalf("sync did not authorize gentle-orchestrator -> review-validator: %#v", allowlist)
 	}
 	if _, err := os.Stat(legacyPluginPath); !os.IsNotExist(err) {
 		t.Errorf("expected sync to remove legacy OpenCode plugin %q; stat err = %v", legacyPluginPath, err)
@@ -3008,16 +3112,19 @@ func TestRunSyncWithSelection_WritesExpectedFiles(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read synced OpenCode apply command: %v", err)
 	}
+	orchestrator := settings.Agent["gentle-orchestrator"].Prompt
+	postApply := string(applyPayload)
+	canonicalStatus := "gentle-ai review status --cwd <repo> --contract gentle-ai.review-integration/v2 --agent " + string(model.AgentOpenCode) + " --next-transition"
+
+	// Only the parent orchestrator owns canonical STATUS negotiation. It must
+	// declare OpenCode's own identity, never Claude Code's.
+	if !strings.Contains(orchestrator, canonicalStatus) {
+		t.Error("synced OpenCode orchestrator does not use canonical STATUS routing under its own runtime identity")
+	}
 	for name, content := range map[string]string{
-		"orchestrator": settings.Agent["gentle-orchestrator"].Prompt,
-		"post-apply":   string(applyPayload),
+		"orchestrator": orchestrator,
+		"post-apply":   postApply,
 	} {
-		// The identity must be OpenCode's own: these are the exact bytes an
-		// OpenCode user installs, and telling them to declare claude-code is
-		// what let a false identity through the transport gate (issue #2440).
-		if !strings.Contains(content, "gentle-ai review status --cwd <repo> --contract gentle-ai.review-integration/v2 --agent "+string(model.AgentOpenCode)+" --next-transition") {
-			t.Errorf("synced OpenCode %s controller does not use negotiated STATUS routing under its own runtime identity", name)
-		}
 		if strings.Contains(content, "--agent "+string(model.AgentClaudeCode)) {
 			t.Errorf("synced OpenCode %s controller tells an OpenCode user to declare Claude Code's identity", name)
 		}
@@ -3030,6 +3137,20 @@ func TestRunSyncWithSelection_WritesExpectedFiles(t *testing.T) {
 				t.Errorf("synced OpenCode %s controller restored direct START route %q", name, stale)
 			}
 		}
+	}
+
+	// post-apply leaves review to the parent after independent verification. It
+	// must not negotiate canonical STATUS or retain review authority itself.
+	for _, required := range []string{
+		"fresh `reviewOffer` block",
+		"SDD does not retain, read, or persist review lineage, receipt, binding, successor, gate, transaction, or prior authority",
+	} {
+		if !strings.Contains(postApply, required) {
+			t.Errorf("synced OpenCode post-apply controller is missing parent-owned routing clause %q", required)
+		}
+	}
+	if strings.Contains(postApply, canonicalStatus) {
+		t.Error("synced OpenCode post-apply controller repeats canonical STATUS instead of consuming parent routing")
 	}
 }
 
@@ -3897,6 +4018,13 @@ func TestSyncPersonaPathsDeclareManagedClaudeOutputStyle(t *testing.T) {
 			unwanted:   filepath.Join(home, ".claude", "output-styles", "gentleman.md"),
 			wantConfig: filepath.Join(home, ".claude", "settings.json"),
 		},
+		{
+			name:       "legacy neutral alias",
+			persona:    model.PersonaGentlemanNeutralArtifacts,
+			wantStyle:  filepath.Join(home, ".claude", "output-styles", "neutral.md"),
+			unwanted:   filepath.Join(home, ".claude", "output-styles", "gentleman.md"),
+			wantConfig: filepath.Join(home, ".claude", "settings.json"),
+		},
 	}
 
 	for _, tt := range tests {
@@ -3942,6 +4070,42 @@ func TestSyncBackupTargetsCaptureBothManagedOutputStyles(t *testing.T) {
 		if !containsPath(targets, neutral) {
 			t.Errorf("syncBackupTargets(%q) missing neutral.md; got %v", persona, targets)
 		}
+	}
+}
+
+func TestPersonaSyncOutputStyleSwitchIsIdempotent(t *testing.T) {
+	home := t.TempDir()
+	selection := model.Selection{
+		Agents:     []model.AgentID{model.AgentClaudeCode},
+		Components: []model.ComponentID{model.ComponentPersona},
+		Persona:    model.PersonaGentlemanNeutralArtifacts,
+	}
+	gentleman := filepath.Join(home, ".claude", "output-styles", "gentleman.md")
+
+	if _, err := persona.Inject(home, claude.NewAdapter(), model.PersonaGentleman); err != nil {
+		t.Fatalf("Inject(gentleman) error = %v", err)
+	}
+	if _, err := os.Stat(gentleman); err != nil {
+		t.Fatalf("precondition: gentleman output style missing: %v", err)
+	}
+
+	first, err := RunSyncWithSelection(home, selection)
+	if err != nil {
+		t.Fatalf("first RunSyncWithSelection() error = %v", err)
+	}
+	if first.FilesChanged == 0 || first.NoOp {
+		t.Fatalf("first sync files changed = %d, no-op = %t; want output-style switch", first.FilesChanged, first.NoOp)
+	}
+	if _, err := os.Stat(gentleman); !os.IsNotExist(err) {
+		t.Fatalf("first sync left retired gentleman output style: %v", err)
+	}
+
+	second, err := RunSyncWithSelection(home, selection)
+	if err != nil {
+		t.Fatalf("second RunSyncWithSelection() error = %v", err)
+	}
+	if second.FilesChanged != 0 || !second.NoOp {
+		t.Fatalf("second sync files changed = %d, no-op = %t; want idempotent no-op", second.FilesChanged, second.NoOp)
 	}
 }
 
@@ -4932,8 +5096,17 @@ func TestRunSyncPreservesCompletePersistedState(t *testing.T) {
 	if err != nil {
 		t.Fatalf("state.Read after sync: %v", err)
 	}
-	if !reflect.DeepEqual(after, before) {
-		t.Fatalf("CLI sync changed persisted state:\nafter:  %#v\nbefore: %#v", after, before)
+	// #2685: sync deliberately stamps the binary version that performed it, so
+	// doctor can surface managed assets older than the running binary. It is
+	// the one field sync is ALLOWED to write here; everything else must
+	// survive byte-identical, which is this guard's whole point.
+	if after.InstalledBinaryVersion != AppVersion {
+		t.Fatalf("sync did not stamp the binary version: %q, want %q", after.InstalledBinaryVersion, AppVersion)
+	}
+	expected := before
+	expected.InstalledBinaryVersion = AppVersion
+	if !reflect.DeepEqual(after, expected) {
+		t.Fatalf("CLI sync changed persisted state beyond the version stamp:\nafter:  %#v\nbefore: %#v", after, expected)
 	}
 }
 

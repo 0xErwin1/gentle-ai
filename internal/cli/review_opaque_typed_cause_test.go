@@ -43,6 +43,7 @@ const gitObjectPermissionStderr = "fatal: cannot access the object database: Per
 // refusal, an absent authority record and an unparsable one all converge here.
 // Four genuinely different roots, one string.
 func TestOpaqueRepositoryContextResolutionNamesDistinctCauses(t *testing.T) {
+	reviewEnabledHome(t)
 	cases := []struct {
 		name    string
 		arrange func(t *testing.T, repo, lineage string)
@@ -106,10 +107,18 @@ func TestOpaqueRepositoryContextResolutionNamesDistinctCauses(t *testing.T) {
 // point reported as #2411: everything past admission answered with one
 // repository_context_capture_failed sentence, which is why a preflight that
 // cannot reach any of these paths appeared to "pass" while capture "failed".
+//
+// The property is that the causes are DISTINGUISHABLE, not that they share a
+// code. An occupied slot now carries its own, because #2411's rc.6 occurrence
+// showed the shared code's action ("retry the same exact binding") is the one
+// thing that cannot work while the slot is occupied. So the code is asserted
+// per case; a cause that stops being distinguishable still fails here.
 func TestOpaqueRepositoryContextCaptureNamesDistinctCauses(t *testing.T) {
+	reviewEnabledHome(t)
 	cases := []struct {
 		name    string
 		arrange func(t *testing.T, repo, lineage string, binding []string)
+		code    string
 		want    string
 	}{
 		{
@@ -120,7 +129,8 @@ func TestOpaqueRepositoryContextCaptureNamesDistinctCauses(t *testing.T) {
 					t.Fatalf("first capture failed: %v", err)
 				}
 			},
-			want: "different canonical bytes",
+			code: reviewerResultSlotOccupiedCode,
+			want: reviewNextTransitionRefreshCommandV21,
 		},
 		{
 			name: "results-directory-unusable",
@@ -130,6 +140,7 @@ func TestOpaqueRepositoryContextCaptureNamesDistinctCauses(t *testing.T) {
 					t.Fatal(err)
 				}
 			},
+			code: "repository_context_capture_failed",
 			want: opaqueNativeCause("not a directory", "unsafe RAR authority path"),
 		},
 	}
@@ -146,7 +157,7 @@ func TestOpaqueRepositoryContextCaptureNamesDistinctCauses(t *testing.T) {
 				t.Fatal("capture succeeded despite an unusable authority store")
 			}
 			message := err.Error()
-			assertOpaqueFailureNamesCause(t, message, "repository_context_capture_failed", tt.want, repo)
+			assertOpaqueFailureNamesCause(t, message, tt.code, tt.want, repo)
 			messages[tt.name] = message
 		})
 	}
@@ -158,6 +169,7 @@ func TestOpaqueRepositoryContextCaptureNamesDistinctCauses(t *testing.T) {
 // gone and the rest of the cause intact. Forwarding an unscrubbed cause and
 // forwarding nothing are both failures.
 func TestOpaqueRepositoryContextCauseIsScrubbed(t *testing.T) {
+	reviewEnabledHome(t)
 	lineage := "opaque-scrub-cause"
 	args, _, repo := startedOpaqueCaptureBinding(t, lineage)
 	if err := os.Remove(reviewCLICompactStatePath(repo, lineage)); err != nil {
@@ -262,6 +274,7 @@ func admissibleOpaqueReviewerResult(t *testing.T, binding []string, evidence str
 // reporter whose lens results were all stranded as incidents (#2446) had no way
 // to say why.
 func TestOpaqueRepositoryContextPreserveNamesDistinctCauses(t *testing.T) {
+	reviewEnabledHome(t)
 	cases := []struct {
 		name    string
 		arrange func(t *testing.T, repo, lineage string)

@@ -6,7 +6,8 @@
 
 - Homebrew installed and available in PATH.
 - `git` available.
-- If Homebrew requires tap trust, run `brew trust --formula gentleman-programming/tap/gentle-ai` once.
+- If Homebrew requires trust, run `brew trust --formula gentleman-programming/tap/gentle-ai` once for Gentle AI only.
+  - To install several tools from this tap, use `brew trust gentleman-programming/tap` instead. It trusts all current and future formulas, casks, and external commands published in the tap.
 
 ### Ubuntu/Debian (and derivatives like Linux Mint, Pop!\_OS)
 
@@ -32,6 +33,7 @@
 
 ### All platforms
 
+- Git 2.38+.
 - Go 1.25.10+ (for building from source).
 - Node.js 18+ and npm: `gentle-ai install` checks these as required prerequisites on every platform and prints a warning with a distro-specific install hint (see above) if either is missing — regardless of which agents/components you select. It does not install them for you, and it does not install agent runtimes either: if a selected agent isn't detected, `gentle-ai install` refuses and prints the exact `npm install -g` (or equivalent) command for you to run yourself. Node.js/npm are strictly required if you select the CodeGraph community tool, which gentle-ai does install via `npm install -g`.
 - Pi installed and available as `pi` on `PATH` if you select the Pi agent.
@@ -84,9 +86,38 @@ gentle-ai version
 Only use `main` when testing changes that are not part of a release yet:
 
 ```bash
+# macOS / Linux
 go install github.com/gentleman-programming/gentle-ai/v2/cmd/gentle-ai@main
 gentle-ai version
+
+# Windows (PowerShell)
+$env:GENTLE_AI_CHANNEL="beta"; go install github.com/gentleman-programming/gentle-ai/v2/cmd/gentle-ai@main
+gentle-ai version
 ```
+
+To update a beta installation later, preserve the beta channel:
+
+```bash
+# macOS / Linux
+GENTLE_AI_CHANNEL=beta gentle-ai upgrade
+
+# Windows (PowerShell)
+$env:GENTLE_AI_CHANNEL="beta"; gentle-ai upgrade
+```
+
+`gentle-ai upgrade` advances the `gentle-ai` binary from `main` and refreshes managed tools on macOS, Linux, and Windows with Go on `PATH`.
+
+If you re-run an installer, pass beta explicitly because both installers default to stable:
+
+```bash
+# macOS / Linux
+curl -fsSL https://raw.githubusercontent.com/Gentleman-Programming/gentle-ai/main/scripts/install.sh | bash -s -- --channel beta
+
+# Windows (PowerShell)
+$env:GENTLE_AI_CHANNEL="beta"; irm https://raw.githubusercontent.com/Gentleman-Programming/gentle-ai/main/scripts/install.ps1 | iex
+```
+
+> **Go module proxy cache**: `proxy.golang.org` can lag behind new commits on `main` for up to several hours. If manual `go install ...@main` does not update to the newest commit, bypass the cache with `GOPROXY=direct go install github.com/gentleman-programming/gentle-ai/v2/cmd/gentle-ai@main` (PowerShell: `$env:GOPROXY="direct"; go install github.com/gentleman-programming/gentle-ai/v2/cmd/gentle-ai@main`).
 
 The managed install scripts select the latest version for their chosen channel and do not accept arbitrary release pins. Use `go install` with an exact tag when you need a reproducible prerelease or stable version.
 

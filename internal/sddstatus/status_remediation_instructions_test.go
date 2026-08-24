@@ -1,3 +1,5 @@
+//go:build legacy_compact_receipt
+
 package sddstatus
 
 import (
@@ -149,7 +151,7 @@ func TestStatusRendersFreshVerificationRouteWhenNothingRemediable(t *testing.T) 
 	failedEvidence := runtimeTestHash('a')
 	if _, err := store.Finish(context.Background(), FinishAttemptRequest{
 		ExpectedRevision: begun.Revision, RequestID: change + "-finish-interrupted", Outcome: AttemptInterrupted,
-		EvidenceRevision: failedEvidence, Diagnosis: "transport ended before verification settled",
+		Diagnosis:          "transport ended before verification settled",
 		HarnessDisposition: HarnessInvalidated, CleanupEvidence: "stalled process group cleanup completed",
 		ProcessEvidence: "stalled process scan found no surviving descendants",
 	}); err != nil {

@@ -71,7 +71,8 @@ func preserveEnvelopelessIncident(t *testing.T, repo string, started ReviewFacad
 // and the same lineage/lens must then accept a corrected well-formed capture,
 // because a slot whose admission was REJECTED was never consumed.
 func TestReviewCaptureResultRecapturesSameLensAfterRejectedAdmission(t *testing.T) {
-	repo, started, store, record := newArtifactReview(t, false)
+	reviewEnabledHome(t)
+	repo, started, store, record := newArtifactReview(t, true)
 	err := failEnvelopelessCapture(t, repo, started, record)
 	// Discoverability contract: the admission-incomplete rejection must name
 	// the continuation — re-run the lens and capture again with the required
@@ -130,14 +131,14 @@ func TestReviewCaptureResultRecapturesSameLensAfterRejectedAdmission(t *testing.
 		t.Fatal("second different capture after a successful admission was accepted; single assignment was weakened")
 	}
 
-	// The recaptured lineage completes normally.
-	if err := RunReviewFacadeFinalize([]string{"--cwd", repo, "--lineage", started.LineageID, "--result-artifact", strings.TrimSpace(captured.String())}, io.Discard); err != nil {
-		t.Fatalf("finalize after same-lineage recapture failed: %v", err)
+	if artifact.Path == "" {
+		t.Fatalf("same-lineage recapture produced no nonterminal artifact: %#v", artifact)
 	}
 }
 
 func TestReviewCaptureResultRecapturesSameLensAfterPreInspectionAccessFailure(t *testing.T) {
-	repo, started, store, record := newArtifactReview(t, false)
+	reviewEnabledHome(t)
+	repo, started, store, record := newArtifactReview(t, true)
 	statusArgs := []string{
 		"status", "--contract", ReviewIntegrationContractV2, "--next-transition",
 		"--cwd", repo, "--lineage", started.LineageID,
@@ -156,7 +157,7 @@ func TestReviewCaptureResultRecapturesSameLensAfterPreInspectionAccessFailure(t 
 	firstStatus := readStatus()
 	if firstStatus.NextTransition == nil || firstStatus.NextTransition.Kind != reviewNextTransitionCollect ||
 		firstStatus.NextTransition.ReasonCode != "reviewer_results_required" || firstStatus.NextTransition.Collect == nil ||
-		len(firstStatus.NextTransition.Collect.Inputs) != 1 {
+		len(firstStatus.NextTransition.Collect.Inputs) == 0 {
 		t.Fatalf("initial reviewer transition = %#v", firstStatus.NextTransition)
 	}
 	offered := firstStatus.NextTransition.Collect.Inputs[0]
@@ -216,7 +217,7 @@ func TestReviewCaptureResultRecapturesSameLensAfterPreInspectionAccessFailure(t 
 
 	reofferedStatus := readStatus()
 	if reofferedStatus.NextTransition == nil || reofferedStatus.NextTransition.Collect == nil ||
-		len(reofferedStatus.NextTransition.Collect.Inputs) != 1 ||
+		len(reofferedStatus.NextTransition.Collect.Inputs) == 0 ||
 		!reflect.DeepEqual(reofferedStatus.NextTransition.Collect.Inputs[0], offered) {
 		t.Fatalf("fresh STATUS did not reoffer the exact reviewer slot: %#v", reofferedStatus.NextTransition)
 	}
@@ -235,11 +236,8 @@ func TestReviewCaptureResultRecapturesSameLensAfterPreInspectionAccessFailure(t 
 	if artifact.AdmissionDecision != reviewtransaction.ArtifactAdmissionCompleted {
 		t.Fatalf("corrected capture admission = %q", artifact.AdmissionDecision)
 	}
-	if err := RunReviewFacadeFinalize([]string{
-		"--cwd", repo, "--lineage", started.LineageID,
-		"--result-artifact", strings.TrimSpace(captured.String()),
-	}, io.Discard); err != nil {
-		t.Fatalf("finalize after STATUS-mediated recapture: %v", err)
+	if artifact.Path == "" {
+		t.Fatalf("STATUS-mediated recapture produced no nonterminal artifact: %#v", artifact)
 	}
 }
 
@@ -250,6 +248,7 @@ func TestReviewCaptureResultRecapturesSameLensAfterPreInspectionAccessFailure(t 
 // beside the authority root (incidents/<lineage>), not inside the store entry,
 // and it survives the quarantine as audit history.
 func TestReviewAbandonAfterRejectedAdmissionIncidentArtifact(t *testing.T) {
+	reviewEnabledHome(t)
 	repo, started, _, record := newArtifactReview(t, false)
 	failEnvelopelessCapture(t, repo, started, record)
 	incident := preserveEnvelopelessIncident(t, repo, started, record)

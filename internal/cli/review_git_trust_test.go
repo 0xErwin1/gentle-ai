@@ -64,6 +64,7 @@ func installFailingGitShim(t *testing.T, stderr string) {
 // instead of being collapsed into "refresh the exact native next_transition",
 // which cannot change a running process's Git trust context.
 func TestOpaqueRepositoryContextSurfacesGitTrustRefusal(t *testing.T) {
+	reviewEnabledHome(t)
 	for _, operation := range []struct {
 		name string
 		run  func(t *testing.T, args []string, input string) error
@@ -107,6 +108,7 @@ func TestOpaqueRepositoryContextSurfacesGitTrustRefusal(t *testing.T) {
 // half of the contract: an ordinary repository-context failure, including
 // another git failure that also exits 128, must keep its existing generic code.
 func TestUnrelatedRepositoryContextFailureIsNotLabelledUntrusted(t *testing.T) {
+	reviewEnabledHome(t)
 	args, _, repo := startedOpaqueCaptureBinding(t, "git-trust-unrelated")
 	installFailingGitShim(t, gitMissingRepositoryStderr)
 
@@ -127,16 +129,15 @@ func TestUnrelatedRepositoryContextFailureIsNotLabelledUntrusted(t *testing.T) {
 }
 
 // startedOpaqueCaptureBinding starts one negotiated review and returns the
-// opaque repository-context binding arguments for its single selected lens,
+// opaque repository-context binding arguments for its first selected lens,
 // a reviewer-result input path, and the repository root.
 func startedOpaqueCaptureBinding(t *testing.T, lineage string) ([]string, string, string) {
 	t.Helper()
-	t.Setenv("HOME", t.TempDir())
-	t.Setenv("USERPROFILE", os.Getenv("HOME"))
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
-	writeReviewStartCandidate(t, repo, "candidate.go", "package candidate\n\nfunc trust() {}\n", 0o644)
+	writeReviewStartCandidate(t, repo, "internal/auth/session.go", "package auth\n\nfunc Trust() {}\n", 0o644)
 	started := runNegotiatedReviewStart(t, repo, lineage)
-	if started.RepositoryContext == nil || len(started.SelectedLenses) != 1 {
+	if started.RepositoryContext == nil || len(started.SelectedLenses) == 0 {
 		t.Fatalf("START result = %#v", started)
 	}
 	input := filepath.Join(t.TempDir(), "reviewer.json")
