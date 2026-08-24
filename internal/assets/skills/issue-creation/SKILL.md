@@ -42,10 +42,10 @@ Use this skill when drafting, creating, commenting on, triaging, or approving a 
    | Control | Candidate comparison structure |
    | --- | --- |
    | `input` / `textarea` | Visible label and `validations.required` status |
-   | `dropdown` | Visible label, declared options, required selection, and declared order |
+   | `dropdown` | Visible label, `attributes.multiple` selection mode, declared options, required selection, and declared order |
    | `checkboxes` | Visible label, each option, and individually required status |
 
-   Preserve labels, emojis, option text, and values. Stop on malformed, unsupported, missing, or ambiguous required structure.
+   Treat `dropdown.attributes.multiple: true` as multi-select; otherwise treat it as single-select. Preserve labels, emojis, option text, and values. Stop on malformed, unsupported, missing, or ambiguous required structure.
 3. Create an owner-only temporary directory and `DISCOVERY_FILE`, `BODY_FILE`, plus `READBACK_FILE` in it (`0700`/`0600`, or strict Windows ACL equivalents), and install cleanup before writing body-bearing data. Clean up all three files on every stop, signal, failure, `confirmed`, `no_write`, and `unknown` path.
 4. Complete one duplicate search covering open and closed issues, unless a matching current-session result is still valid:
 
@@ -65,10 +65,10 @@ Use this skill when drafting, creating, commenting on, triaging, or approving a 
    | Control | Materialized body |
    | --- | --- |
    | `input` / `textarea` | `### <visible label>` followed by the reviewed answer |
-   | `dropdown` | `### <visible label>` followed by exact selected option text in declared order |
+   | `dropdown` | `### <visible label>` followed by its exact selected option text; for multi-select, every exact selected option text in declared options order |
    | `checkboxes` | `### <visible label>` followed by each option as `- [x] <exact text>` or `- [ ] <exact text>` |
 
-   Enforce every `validations.required` field, required dropdown selection, and individually required checkbox option. Require explicit user affirmation for first-person checkbox text. For `textarea.attributes.render`, fence the answer with the declared language and a fence long enough for its content. Render an unanswered optional control as `_No response_`; stop on malformed, unsupported, missing, or ambiguous required input. Review the exact target, title, selected form, materialized body or comment, and permitted discovered form labels.
+   Require every dropdown selection to exactly match a declared option. A required dropdown must have at least one valid selection. For multi-select, preserve every valid reviewed selection in declared options order; for single-select, preserve its one selected option. Enforce every `validations.required` field and individually required checkbox option. Require explicit user affirmation for first-person checkbox text. For `textarea.attributes.render`, fence the answer with the declared language and a fence long enough for its content. Render an unanswered optional control as `_No response_`; stop on malformed, unsupported, missing, or ambiguous required input. Review the exact target, title, selected form, materialized body or comment, and permitted discovered form labels.
 6. Apply this label expansion contract to the single canonical create command:
 
    | Permitted labels | Command suffix |
