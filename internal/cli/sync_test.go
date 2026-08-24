@@ -931,7 +931,15 @@ func TestComponentSyncStepRunsGGAInjectWithoutBinaryInstall(t *testing.T) {
 }
 
 func TestRunSyncRefreshesPersistedVisualComponents(t *testing.T) {
-	home := t.TempDir()
+	workspace, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatalf("EvalSymlinks(workspace) error = %v", err)
+	}
+	t.Chdir(workspace)
+	home, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatalf("EvalSymlinks(home) error = %v", err)
+	}
 	if err := state.Write(home, state.InstallState{
 		InstalledAgents:     []string{"claude-code", "opencode"},
 		SelectionConfigured: true,
@@ -958,6 +966,9 @@ func TestRunSyncRefreshesPersistedVisualComponents(t *testing.T) {
 	// a first sync of a purely visual selection still delivers it (issue #1794).
 	wantFiles := []string{
 		filepath.Join(home, ".claude", "themes", "gentleman.json"),
+		filepath.Join(home, ".claude", "themes", "gentleman-cute.json"),
+		filepath.Join(home, ".config", "opencode", "themes", "gentleman.json"),
+		filepath.Join(home, ".config", "opencode", "themes", "gentleman-cute.json"),
 		filepath.Join(home, ".config", "opencode", "tui-plugins", "gentle-logo.tsx"),
 		filepath.Join(home, ".config", "opencode", "tui.json"),
 		filepath.Join(home, ".claude", "CLAUDE.md"),
@@ -3101,16 +3112,19 @@ func TestRunSyncWithSelection_WritesExpectedFiles(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read synced OpenCode apply command: %v", err)
 	}
+	orchestrator := settings.Agent["gentle-orchestrator"].Prompt
+	postApply := string(applyPayload)
+	canonicalStatus := "gentle-ai review status --cwd <repo> --contract gentle-ai.review-integration/v2 --agent " + string(model.AgentOpenCode) + " --next-transition"
+
+	// Only the parent orchestrator owns canonical STATUS negotiation. It must
+	// declare OpenCode's own identity, never Claude Code's.
+	if !strings.Contains(orchestrator, canonicalStatus) {
+		t.Error("synced OpenCode orchestrator does not use canonical STATUS routing under its own runtime identity")
+	}
 	for name, content := range map[string]string{
-		"orchestrator": settings.Agent["gentle-orchestrator"].Prompt,
-		"post-apply":   string(applyPayload),
+		"orchestrator": orchestrator,
+		"post-apply":   postApply,
 	} {
-		// The identity must be OpenCode's own: these are the exact bytes an
-		// OpenCode user installs, and telling them to declare claude-code is
-		// what let a false identity through the transport gate (issue #2440).
-		if !strings.Contains(content, "gentle-ai review status --cwd <repo> --contract gentle-ai.review-integration/v2 --agent "+string(model.AgentOpenCode)+" --next-transition") {
-			t.Errorf("synced OpenCode %s controller does not use negotiated STATUS routing under its own runtime identity", name)
-		}
 		if strings.Contains(content, "--agent "+string(model.AgentClaudeCode)) {
 			t.Errorf("synced OpenCode %s controller tells an OpenCode user to declare Claude Code's identity", name)
 		}
@@ -3123,6 +3137,20 @@ func TestRunSyncWithSelection_WritesExpectedFiles(t *testing.T) {
 				t.Errorf("synced OpenCode %s controller restored direct START route %q", name, stale)
 			}
 		}
+	}
+
+	// post-apply leaves review to the parent after independent verification. It
+	// must not negotiate canonical STATUS or retain review authority itself.
+	for _, required := range []string{
+		"fresh `reviewOffer` block",
+		"SDD does not retain, read, or persist review lineage, receipt, binding, successor, gate, transaction, or prior authority",
+	} {
+		if !strings.Contains(postApply, required) {
+			t.Errorf("synced OpenCode post-apply controller is missing parent-owned routing clause %q", required)
+		}
+	}
+	if strings.Contains(postApply, canonicalStatus) {
+		t.Error("synced OpenCode post-apply controller repeats canonical STATUS instead of consuming parent routing")
 	}
 }
 
