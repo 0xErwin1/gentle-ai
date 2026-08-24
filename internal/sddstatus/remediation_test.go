@@ -26,8 +26,12 @@ func TestResolveBoundedRemediationRejectsHistoricalTransactionFields(t *testing.
 		name          string
 		applyProgress string
 	}{
-		{name: "result envelope", applyProgress: remediationResultEvidenceWithHistoricalEnvelopeFields(failedRevision)},
-		{name: "JSON evidence", applyProgress: remediationResultEvidenceWithHistoricalEvidenceFields(failedRevision)},
+		{name: "result envelope lineage_id", applyProgress: remediationResultEvidenceWithHistoricalEnvelopeField(failedRevision, "lineage_id", "historical-lineage")},
+		{name: "result envelope generation", applyProgress: remediationResultEvidenceWithHistoricalEnvelopeField(failedRevision, "generation", "2")},
+		{name: "result envelope fix_batch", applyProgress: remediationResultEvidenceWithHistoricalEnvelopeField(failedRevision, "fix_batch", "1")},
+		{name: "JSON evidence lineage_id", applyProgress: remediationResultEvidenceWithHistoricalEvidenceField(failedRevision, "lineage_id", "historical-lineage")},
+		{name: "JSON evidence generation", applyProgress: remediationResultEvidenceWithHistoricalEvidenceField(failedRevision, "generation", 2)},
+		{name: "JSON evidence fix_batch", applyProgress: remediationResultEvidenceWithHistoricalEvidenceField(failedRevision, "fix_batch", 1)},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			remediation := resolveBoundedRemediation(true, verifyResultEvaluation{
@@ -35,7 +39,7 @@ func TestResolveBoundedRemediationRejectsHistoricalTransactionFields(t *testing.
 				Reason:           "verification failed",
 			}, test.applyProgress)
 			if remediation.Complete || !remediation.Required || remediation.Reason == "" {
-				t.Fatalf("historical transaction fields completed authority-free remediation: %#v", remediation)
+				t.Fatalf("historical transaction field completed authority-free remediation: %#v", remediation)
 			}
 		})
 	}
@@ -138,17 +142,14 @@ func remediationResultEvidence(revision string) string {
 	return remediationEnvelope(revision) + "\n```json\n" + string(raw) + "\n```"
 }
 
-func remediationResultEvidenceWithHistoricalEnvelopeFields(revision string) string {
-	return strings.Replace(remediationResultEvidence(revision), "focused_tests: passed", "lineage_id: historical-lineage\ngeneration: 2\nfix_batch: 1\nfocused_tests: passed", 1)
+func remediationResultEvidenceWithHistoricalEnvelopeField(revision, field, value string) string {
+	return strings.Replace(remediationResultEvidence(revision), "focused_tests: passed", field+": "+value+"\nfocused_tests: passed", 1)
 }
 
-func remediationResultEvidenceWithHistoricalEvidenceFields(revision string) string {
+func remediationResultEvidenceWithHistoricalEvidenceField(revision, field string, value any) string {
 	payload := map[string]any{
 		"schema":                   "gentle-ai.remediation-evidence/v1",
 		"failed_evidence_revision": revision,
-		"lineage_id":               "historical-lineage",
-		"generation":               2,
-		"fix_batch":                1,
 		"commands":                 []map[string]any{{"command": "go test ./internal/example", "exit_code": 0, "result": "1 test passed"}},
 		"runtime_harness": map[string]any{
 			"status": "not_applicable", "command": "", "result": "",
@@ -159,6 +160,7 @@ func remediationResultEvidenceWithHistoricalEvidenceFields(revision string) stri
 			"evidence": "Revert those files without changing unrelated status behavior.",
 		},
 	}
+	payload[field] = value
 	raw, _ := json.Marshal(payload)
 	return remediationEnvelope(revision) + "\n```json\n" + string(raw) + "\n```"
 }
