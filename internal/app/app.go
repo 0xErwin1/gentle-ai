@@ -18,6 +18,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/pipeline"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/planner"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/skillregistry"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/state"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/system"
@@ -60,7 +61,13 @@ func Run() error {
 	return RunArgs(os.Args[1:], os.Stdout)
 }
 
+const nonInteractiveTUIError = "gentle-ai requires both stdin and stdout to be terminals (TTYs); use --version, gentle-ai update, or --help for non-interactive use"
+
 func RunArgs(args []string, stdout io.Writer) error {
+	if len(args) == 0 && (!isattyFn(os.Stdin.Fd()) || !isattyFn(os.Stdout.Fd())) {
+		return errors.New(nonInteractiveTUIError)
+	}
+
 	// Propagate the build-time version to the CLI and upgrade layers so backup
 	// manifests record which version of gentle-ai created them.
 	cli.AppVersion = Version
@@ -120,10 +127,15 @@ func RunArgs(args []string, stdout io.Writer) error {
 		case "review-bundle-import":
 			return cli.RunReviewBundleImport(args[1:], stdout)
 		case "review-validate":
-			return cli.RunReviewValidate(args[1:], stdout)
+			return cli.RunReviewValidateNonDeciding(args[1:], stdout)
 		case "install":
 			if hasHelpFlag(args[1:]) {
 				cli.PrintInstallHelp(stdout)
+				return nil
+			}
+		case "sync":
+			if hasHelpFlag(args[1:]) {
+				cli.PrintSyncHelp(stdout)
 				return nil
 			}
 		}
@@ -209,10 +221,16 @@ func RunArgs(args []string, stdout io.Writer) error {
 					_, _ = fmt.Fprintf(stdout, "Warning: failed to clear PendingSync flag: %v\n", writeErr)
 				}
 			}
+			// TUI self-update path: the previous launch completed a gentle-ai
+			// self-upgrade under the old binary and set PendingSync=true. We are
+			// now running under the new binary; print the doctor advisory so the
+			// user can verify ecosystem health against the post-upgrade state.
+			// Print regardless of sync outcome — the advisory is informational.
+			printPostUpgradeDoctorAdvisory(stdout)
 		}
 
 		m := tui.NewModel(result, Version, installedState)
-		m.ExecuteFn = tuiExecute
+		m.ExecuteFn = tuiExecuteWithBackground
 		m.RestoreFn = tuiRestore
 		m.DeleteBackupFn = func(manifest backup.Manifest) error {
 			return backup.DeleteBackup(manifest)
@@ -235,6 +253,13 @@ func RunArgs(args []string, stdout io.Writer) error {
 		// nil; assigning it explicitly here keeps the production wiring
 		// visible at the same seam as the other injected functions.
 		m.OpenCodePluginUninstallFn = opencodeplugin.Uninstall
+		// The review store is clone-scoped, so the TUI acts on the repository
+		// the user launched it from. Both closures resolve the working
+		// directory at call time rather than at wiring time, so a survey and
+		// the reset it authorized can never disagree about which clone they
+		// mean.
+		m.ReviewStoreResetSurveyFn = tuiReviewStoreSurvey
+		m.ReviewStoreResetFn = tuiReviewStoreReset
 		finalModel, err := runTUI(m, tea.WithAltScreen())
 		if err != nil {
 			return err
@@ -370,6 +395,16 @@ func runSkillRegistryRefresh(args []string, stdout io.Writer) error {
 	cwd, home, err := resolveSkillRegistryDirs(cwd)
 	if err != nil {
 		return err
+	}
+	// Startup hooks run refresh from whatever directory the host resolved; a
+	// brand-new non-project directory can resolve to "/", $HOME, or a
+	// markerless folder. Never initialize there: skip silently under --quiet
+	// (a startup hook must not scream) and with a one-line notice otherwise.
+	if reason := skillregistry.RefreshSkip(cwd, home); reason != skillregistry.SkipNone {
+		if !quiet {
+			_, _ = fmt.Fprintf(stdout, "Skill registry refresh skipped (%s): %s is not a project root; run it from a project directory (one containing .git or .atl), or create the project first.\n", reason, cwd)
+		}
+		return nil
 	}
 	if ensureGitignore {
 		if err := skillregistry.EnsureATLIgnored(cwd); err != nil {
@@ -511,7 +546,14 @@ func runUpgrade(ctx context.Context, args upgradeArgs, detection system.Detectio
 	}
 	if !dryRun {
 		if latestVersion, ok := gentleAIUpgradeSucceeded(report); ok {
-			return restartAfterGentleAIUpgrade(latestVersion, stdout)
+			if err := restartAfterGentleAIUpgrade(latestVersion, stdout); err != nil {
+				return err
+			}
+			// CLI upgrade path: print the doctor advisory so the user can verify
+			// ecosystem health against the post-upgrade state. Informational only;
+			// does not run any checks or change exit status.
+			printPostUpgradeDoctorAdvisory(stdout)
+			return nil
 		}
 	}
 	return nil
@@ -527,16 +569,22 @@ func updateCheckError(results []update.UpdateResult) error {
 }
 
 // tuiExecute creates a real install runtime and runs the pipeline with progress reporting.
-func tuiExecute(
+var appUserHomeDir = os.UserHomeDir
+
+func tuiExecuteWithBackground(
 	selection model.Selection,
 	resolved planner.ResolvedPlan,
 	detection system.DetectionResult,
+	background model.OpenCodeBackgroundIntent,
+	backgroundPersist model.OpenCodeBackgroundIntent,
+	piBackground model.PiBackgroundIntent,
+	piBackgroundPersist model.PiBackgroundIntent,
 	onProgress pipeline.ProgressFunc,
 ) pipeline.ExecutionResult {
 	restoreCommandOutput := cli.SetCommandOutputStreaming(false)
 	defer restoreCommandOutput()
 
-	homeDir, err := os.UserHomeDir()
+	homeDir, err := appUserHomeDir()
 	if err != nil {
 		return pipeline.ExecutionResult{Err: fmt.Errorf("resolve user home directory: %w", err)}
 	}
@@ -544,7 +592,7 @@ func tuiExecute(
 	profile := cli.ResolveInstallProfile(detection)
 	resolved.PlatformDecision = planner.PlatformDecisionFromProfile(profile)
 
-	execResult := cli.ExecuteTUIInstall(homeDir, selection, resolved, profile, onProgress)
+	execResult, orchestrator := cli.ExecuteTUIInstallWithBackgroundAndOrchestrator(homeDir, selection, resolved, profile, background, piBackground, onProgress)
 	if execResult.Err == nil {
 		// Persist the user's agent selection and model assignments so that future
 		// `sync` runs target only the installed agents and preserve model choices.
@@ -553,23 +601,46 @@ func tuiExecute(
 			agentIDs = append(agentIDs, string(a))
 		}
 		claudePhaseState := claudePhaseAssignmentsToState(selection.ClaudePhaseAssignments)
-		installState := state.InstallState{
-			InstalledAgents:             agentIDs,
-			CommunityTools:              appCommunityToolIDsToStrings(selection.CommunityTools),
-			CommunityToolsConfigured:    true,
-			ClaudeModelAssignments:      claudeLegacyAssignmentsForState(selection.ClaudeModelAssignments, claudePhaseState),
-			ClaudePhaseAssignments:      claudePhaseState,
-			KiroModelAssignments:        kiroAliasesToStrings(selection.KiroModelAssignments),
-			CodexModelAssignments:       codexEffortsToStrings(selection.CodexModelAssignments),
-			CodexOrchestratorAssignment: codexOrchestratorToState(selection.CodexOrchestratorAssignment),
-			CodexCarrilModelAssignments: selection.CodexCarrilModelAssignments,
-			CodexPhaseModelAssignments:  selection.CodexPhaseModelAssignments,
-			ModelAssignments:            modelAssignmentsToState(selection.ModelAssignments),
-			Persona:                     string(selection.Persona),
+		installState, readErr := state.Read(homeDir)
+		if errors.Is(readErr, os.ErrNotExist) {
+			installState = state.InstallState{}
+		} else if readErr != nil {
+			execResult.Err = fmt.Errorf("read persisted install state: %w", readErr)
+			if orchestrator != nil {
+				rollback := orchestrator.Rollback(execResult)
+				if rollback.Err != nil {
+					execResult.Err = errors.Join(execResult.Err, rollback.Err)
+				}
+			}
+			return execResult
 		}
+		installState.InstalledAgents = agentIDs
+		installState.CommunityTools = appCommunityToolIDsToStrings(selection.CommunityTools)
+		installState.CommunityToolsConfigured = true
+		installState.ClaudeModelAssignments = claudeLegacyAssignmentsForState(selection.ClaudeModelAssignments, claudePhaseState)
+		installState.ClaudePhaseAssignments = claudePhaseState
+		installState.KiroModelAssignments = kiroAliasesToStrings(selection.KiroModelAssignments)
+		installState.CodexModelAssignments = codexEffortsToStrings(selection.CodexModelAssignments)
+		installState.CodexOrchestratorAssignment = codexOrchestratorToState(selection.CodexOrchestratorAssignment)
+		installState.CodexCarrilModelAssignments = selection.CodexCarrilModelAssignments
+		installState.CodexPhaseModelAssignments = selection.CodexPhaseModelAssignments
+		installState.ModelAssignments = modelAssignmentsToState(selection.ModelAssignments)
+		installState.Persona = string(selection.Persona)
 		installState.SetSelection(selection)
-		if writeErr := state.Write(homeDir, installState); writeErr != nil {
+		if backgroundPersist != "" {
+			installState.BackgroundIntent = backgroundPersist
+		}
+		if piBackgroundPersist != "" {
+			installState.PiBackgroundIntent = piBackgroundPersist
+		}
+		if writeErr := state.WriteReconciled(homeDir, installState); writeErr != nil {
 			execResult.Err = fmt.Errorf("persist install state: %w", writeErr)
+			if orchestrator != nil {
+				rollback := orchestrator.Rollback(execResult)
+				if rollback.Err != nil {
+					execResult.Err = errors.Join(execResult.Err, rollback.Err)
+				}
+			}
 		}
 	}
 
@@ -1052,4 +1123,29 @@ func codexOrchestratorFromState(a *state.CodexOrchestratorAssignmentState) *mode
 		return nil
 	}
 	return &model.CodexOrchestratorAssignment{Model: a.Model, Effort: model.CodexEffort(a.Effort)}
+}
+
+// tuiReviewStoreSurvey reports what a review store reset would remove for the
+// clone the TUI was launched from. It is read-only.
+func tuiReviewStoreSurvey() (reviewtransaction.StoreResetReport, error) {
+	cwd, err := os.Getwd()
+	if err != nil {
+		return reviewtransaction.StoreResetReport{}, err
+	}
+	return reviewtransaction.SurveyReviewStore(context.Background(), cwd, reviewtransaction.StoreResetRequest{})
+}
+
+// tuiReviewStoreReset applies the reset for that same clone.
+//
+// It never sets IncludeInFlight, and never sets IncludeAdapterReviews either.
+// The TUI has no keystroke that destroys a review somebody is in the middle of,
+// nor one that destroys a store this command cannot classify: the confirmation
+// screen refuses outright and prints the CLI invocation that overrides it, so
+// every override stays an act the user has to type out.
+func tuiReviewStoreReset() (reviewtransaction.StoreResetReport, error) {
+	cwd, err := os.Getwd()
+	if err != nil {
+		return reviewtransaction.StoreResetReport{}, err
+	}
+	return reviewtransaction.ResetReviewStore(context.Background(), cwd, reviewtransaction.StoreResetRequest{})
 }

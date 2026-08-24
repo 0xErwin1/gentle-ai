@@ -480,6 +480,7 @@ func SDDPhases() []string {
 	return []string{
 		"sdd-init",
 		"sdd-explore",
+		"sdd-research",
 		"sdd-propose",
 		"sdd-spec",
 		"sdd-design",
@@ -503,7 +504,10 @@ func JDPhases() []string {
 	}
 }
 
-const ReviewRefuterAgent = "review-refuter"
+const (
+	ReviewRefuterAgent   = "review-refuter"
+	ReviewValidatorAgent = "review-validator"
+)
 
 // ReviewLensPhases returns the ordered native bounded-review lens agents.
 func ReviewLensPhases() []string {
@@ -518,7 +522,7 @@ func ReviewLensPhases() []string {
 // ReviewPhases returns every agent invoked by the native review lifecycle.
 func ReviewPhases() []string {
 	phases := ReviewLensPhases()
-	return append(phases, ReviewRefuterAgent)
+	return append(phases, ReviewRefuterAgent, ReviewValidatorAgent)
 }
 
 // ConfigurableAgentPhases returns all agent names that support per-agent

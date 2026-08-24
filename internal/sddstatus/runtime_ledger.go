@@ -49,6 +49,8 @@ const (
 	maximumRuntimeGrantRoots                 = 32
 	maximumRuntimeIntendedUntracked          = 32
 	runtimeLockAcquireAttempts               = 3
+	finalVerifyWorkUnit                      = "verify"
+	finalVerifyAttestationWorkUnit           = "verify-attestation"
 
 	// runtimeLedgerStatusPointer suffixes every ledger refusal an ordinary
 	// caller can hit (budget exhausted, active attempt, no active attempt,
@@ -154,21 +156,6 @@ func (err *RuntimeRevisionConflictError) Error() string {
 
 func (err *RuntimeRevisionConflictError) Unwrap() error { return ErrRuntimeRevisionConflict }
 
-// BindingRevisionConflictError reports a deterministic binding-only CAS
-// denial. Binding revisions deliberately use a separate namespace from the
-// runtime ledger HEAD so callers cannot accidentally submit an authority or
-// ledger revision as the expected binding token.
-type BindingRevisionConflictError struct {
-	Expected string
-	Current  string
-}
-
-func (err *BindingRevisionConflictError) Error() string {
-	return fmt.Sprintf("%v: expected %q, current %q; retry with --expected-binding-revision %q", ErrBindingRevisionConflict, err.Expected, err.Current, err.Current)
-}
-
-func (err *BindingRevisionConflictError) Unwrap() error { return ErrBindingRevisionConflict }
-
 // RuntimePublicationError reports that HEAD was atomically replaced but its
 // directory durability could not be confirmed. The exact request is safe to
 // replay; replay reopens the immutable chain and repeats directory fsync.
@@ -228,6 +215,7 @@ type RuntimeAttempt struct {
 	Handoff                    *RuntimeHandoff    `json:"handoff,omitempty"`
 	FinishCandidateIdentity    string             `json:"finish_candidate_identity,omitempty"`
 	FinishCandidateTree        string             `json:"finish_candidate_tree,omitempty"`
+	AttestedVerifyReportDigest string             `json:"attested_verify_report_digest,omitempty"`
 	Outcome                    AttemptOutcome     `json:"outcome"`
 	ChangedLines               int                `json:"changed_lines"`
 	EvidenceRevision           string             `json:"evidence_revision,omitempty"`
@@ -337,10 +325,6 @@ type RuntimeStatus struct {
 	GrantedRoots    []string       `json:"granted_roots,omitempty"`
 	BindingRevision string         `json:"binding_revision"`
 	Binding         *ReviewBinding `json:"binding,omitempty"`
-	// Receipt is Wave 4 S5's terminal pointer (design.md decision 1),
-	// recorded additively alongside Binding/BindingRevision — see
-	// runtime_receipt.go.
-	Receipt *reviewtransaction.SDDReceiptRef `json:"receipt,omitempty"`
 	// BlockedReason and BlockedExit carry the verdict acquire would reach for
 	// the caller's own request, so the read-only surface stops answering a
 	// narrower question than the one consumers were asking it (#2114). Only
@@ -381,6 +365,21 @@ type legacyBeginAttemptRequest struct {
 }
 
 type FinishAttemptRequest struct {
+	ExpectedRevision           string             `json:"expected_revision"`
+	RequestID                  string             `json:"request_id"`
+	Outcome                    AttemptOutcome     `json:"outcome"`
+	EvidenceRevision           string             `json:"evidence_revision"`
+	Diagnosis                  string             `json:"diagnosis"`
+	HarnessDisposition         HarnessDisposition `json:"harness_disposition"`
+	CleanupEvidence            string             `json:"cleanup_evidence"`
+	ProcessEvidence            string             `json:"process_evidence"`
+	RemediatesEvidenceRevision string             `json:"remediates_evidence_revision,omitempty"`
+}
+
+// legacyFinishAttemptRequest reproduces the pre-decoupling request digest only
+// while decoding historical finish-remediation records. New finish requests do
+// not carry review binding or successor lineage data.
+type legacyFinishAttemptRequest struct {
 	ExpectedRevision           string             `json:"expected_revision"`
 	RequestID                  string             `json:"request_id"`
 	Outcome                    AttemptOutcome     `json:"outcome"`
@@ -468,21 +467,9 @@ type RuntimeStore struct {
 	Repo      string
 	Workspace string
 	Change    string
-	// ReviewDisabled records that the user's receipt-driven-development kill
-	// switch is off for this clone. While it is set, the runtime ledger imposes
-	// no review obligation of its own: a switched-off system has no
-	// implications, so closing an attempt never demands an approved recovery
-	// successor the operator could not obtain anyway (review/start is refused
-	// while the switch is off).
-	//
-	// It removes only the IMPLICIT demand. An explicit remediation request is a
-	// deliberate review operation and is still validated in full, and nothing
-	// here approves, advances, or invents review authority.
-	//
-	// The zero value enforces, so any caller that does not resolve the switch
-	// keeps today's behavior. The switch itself is read in the CLI layer, which
-	// owns the single source of truth for both of its sources; an unreadable
-	// switch is not a disabled switch and resolves to false.
+	// ReviewDisabled remains an in-memory test input so mode-transition tests
+	// can prove it cannot affect SDD attempt admission or settlement. Runtime
+	// attempt operations do not read or persist it.
 	ReviewDisabled bool
 	commonDir      string
 	// instance is the change-instance identity this store session serves
@@ -532,7 +519,7 @@ type runtimeRecord struct {
 	Advance          *runtimeAdvanceEvent `json:"advance,omitempty"`
 	Handoff          *RuntimeHandoff      `json:"handoff,omitempty"`
 	Binding          *runtimeBindingEvent `json:"binding,omitempty"`
-	Receipt          *runtimeReceiptEvent `json:"receipt,omitempty"`
+	Receipt          json.RawMessage      `json:"receipt,omitempty"`
 	Grant            *runtimeGrantEvent   `json:"grant,omitempty"`
 }
 
@@ -640,6 +627,7 @@ type runtimeFinishEvent struct {
 	Ordinal                    int                `json:"ordinal"`
 	FinishCandidateIdentity    string             `json:"finish_candidate_identity"`
 	FinishCandidateTree        string             `json:"finish_candidate_tree"`
+	AttestedVerifyReportDigest string             `json:"attested_verify_report_digest,omitempty"`
 	Outcome                    AttemptOutcome     `json:"outcome"`
 	ChangedLines               int                `json:"changed_lines"`
 	EvidenceRevision           string             `json:"evidence_revision"`
@@ -823,6 +811,13 @@ func (store RuntimeStore) Finish(ctx context.Context, request FinishAttemptReque
 		if active == nil {
 			return runtimeRecord{}, ErrRuntimeNoActiveAttempt
 		}
+		// A canonical evidence revision is accepted through normalization so an
+		// exact retry can reach mutate's request receipt and replay a legacy
+		// interrupted record. New interrupted requests are rejected below, after
+		// that idempotency check.
+		if request.Outcome == AttemptInterrupted && request.EvidenceRevision != "" {
+			return runtimeRecord{}, errors.New("interrupted attempts must omit evidence_revision; rerun `gentle-ai sdd-attempt finish` or `gentle-ai sdd-attempt settle` with --outcome interrupted and without --evidence-revision")
+		}
 		// Check the effective binding before candidate capture or line charging.
 		if active.EffectiveWorktree != "" && active.EffectiveWorktree != store.Workspace {
 			return runtimeRecord{}, store.runtimeEffectiveWorktreeMismatchRefusal(*active)
@@ -830,64 +825,26 @@ func (store RuntimeStore) Finish(ctx context.Context, request FinishAttemptReque
 		if active.EffectiveWorktree == "" && active.BeginWorktree != "" && active.BeginWorktree != store.Workspace {
 			return runtimeRecord{}, store.runtimeWorktreeMismatchRefusal(active.Ordinal, active.BeginWorktree)
 		}
-		remediation := finishRequestsRemediation(request)
-		unmanagedRemediation := finishRequestsUnmanagedRemediation(request)
-		currentBinding := status.Binding
-		var legacyBinding *ReviewBinding
-		var legacyDigest string
-		if request.Outcome == AttemptPassed && currentBinding == nil && (!store.ReviewDisabled || remediation) {
-			legacyBinding, legacyDigest, err = store.readLegacyBinding()
-			if err != nil {
-				return runtimeRecord{}, fmt.Errorf("read legacy SDD review binding for remediation: %w", err)
-			}
-			currentBinding = legacyBinding
-		}
-		if remediation {
-			if currentBinding == nil {
-				return runtimeRecord{}, errors.New("atomic SDD remediation successor requires a populated native binding")
-			}
-			if currentBinding.Revision != request.ExpectedBindingRevision {
-				return runtimeRecord{}, &BindingRevisionConflictError{Expected: request.ExpectedBindingRevision, Current: currentBinding.Revision}
-			}
-			if status.EvidenceRevision != "" && status.EvidenceRevision != request.RemediatesEvidenceRevision {
-				return runtimeRecord{}, fmt.Errorf("failed evidence revision %q does not match native runtime evidence %q", request.RemediatesEvidenceRevision, status.EvidenceRevision)
-			}
-		}
-		// #1974 slice 2: the unmanaged-remediation binding derives from the
-		// immutable attempt chain, never from status.EvidenceRevision -- the
-		// live pointer Reset, Rescope, and Advance wipe. An audited reset or an
-		// honest interrupted settlement between the failure and its correction
-		// is an audit record, not a semantic successor, so neither severs the
-		// binding; the first passed settlement after the failure does.
+		// Failed-evidence remediation is an SDD-only invariant. The immutable
+		// attempt chain owns both the exact failed evidence and the one passing
+		// correction that may discharge it; reset, review mode, bindings, receipts,
+		// and successor lineages cannot change that accounting.
+		evidenceRemediation := request.RemediatesEvidenceRevision != ""
 		chainFailedAttempt, chainHasFailedEvidence := runtimeChainFailedAttempt(status.Attempts)
 		chainFailedEvidence := chainFailedAttempt.EvidenceRevision
-		if unmanagedRemediation {
-			if !store.ReviewDisabled {
-				// No by-design marker: this names a runnable continuation inline.
-				return runtimeRecord{}, errors.New("unmanaged remediation requires disabled delivery; enable it or run `gentle-ai review mode disable --scope clone --cwd <repo>` for this repository only")
-			}
-			// A binding that predates the switch does NOT block this. The
-			// contract on ReviewDisabled says that while review is off it "does
-			// not exist, so it must have no implications", and a leftover
-			// binding is an implication: it made the switch inert only for
-			// changes that had never used review, so turning it off after the
-			// fact bought nothing. The binding stays recorded and re-enabling
-			// re-validates from the current state.
+		if evidenceRemediation {
 			if !chainHasFailedEvidence {
-				// #2881: the caller named a real failure, and their own earlier
-				// slice already repaired it. Blaming their input sent the
-				// reporter looking for authority to guess at; the state is what
-				// changed, and the exit is to stop claiming a remediation.
 				if discharged, ordinal, ok := runtimeDischargedFailure(status.Attempts, request.RemediatesEvidenceRevision); ok {
 					return runtimeRecord{}, runtimeDischargedFailureRefusal(discharged, ordinal)
 				}
-				// No by-design marker: this names a runnable continuation inline.
 				return runtimeRecord{}, errors.New("this correction names failed verification " + request.RemediatesEvidenceRevision + ", but the attempt chain records no failed verification at all; run `gentle-ai sdd-attempt status --cwd <repo> --change <change>` to read the chain, then settle without --remediates-evidence-revision if nothing is being repaired")
 			}
 			if chainFailedEvidence != request.RemediatesEvidenceRevision {
-				// No by-design marker: this names a runnable continuation inline.
 				return runtimeRecord{}, errors.New("this correction names failed verification " + request.RemediatesEvidenceRevision + ", but the chain's unremediated failure is " + chainFailedEvidence + "; settle with --remediates-evidence-revision \"" + chainFailedEvidence + "\", or without the flag if this work unit repairs nothing")
 			}
+		}
+		if request.Outcome == AttemptPassed && chainHasFailedEvidence && !evidenceRemediation {
+			return runtimeRecord{}, fmt.Errorf("passing correction for failed verification %q requires --remediates-evidence-revision %q; rerun `gentle-ai sdd-attempt settle` with that flag", chainFailedEvidence, chainFailedEvidence)
 		}
 		// Issue #2394: the runtime candidate is the same declared candidate
 		// review freezes -- tracked changes plus whatever the user put in the
@@ -904,98 +861,109 @@ func (store RuntimeStore) Finish(ctx context.Context, request FinishAttemptReque
 		if err != nil {
 			return runtimeRecord{}, fmt.Errorf("measure native SDD runtime line charge: %w", err)
 		}
-		// Review acts AFTER implementation and verification, on the finished
-		// result. This package already implements that twice: applyReviewOfferRouting
-		// fires only once verify has passed, and resolveNextRecommended never
-		// routes to review before verify.
-		//
-		// A third rule used to disagree with both. A passing IMPLEMENTATION
-		// attempt was refused whenever the review binding covered the
-		// pre-attempt bytes — which it always does, because changing the
-		// candidate is what an attempt is for. That is review deciding whether
-		// implementation may finish, before any verification has run, and it is
-		// #1993: a maintainer-authorized correction passed every gate and could
-		// not be closed, while the only named exit required a review the review
-		// side was structurally unable to produce.
-		//
-		// Nothing is given up. The delivery gates (post-apply, pre-commit,
-		// pre-push, pre-pr, release) re-derive their verdict from the candidate
-		// actually being delivered, so an unreviewed candidate is still refused
-		// there. The binding and receipt stay recorded on the ledger as
-		// metadata: review stops deciding, it does not stop being tracked.
-		if store.ReviewDisabled && currentBinding == nil && request.Outcome == AttemptPassed && chainHasFailedEvidence && !unmanagedRemediation {
-			return runtimeRecord{}, fmt.Errorf("disabled failed verification requires --remediates-evidence-revision %q on the correction settle; rerun `gentle-ai sdd-attempt settle` with that flag", chainFailedEvidence)
-		}
-		if unmanagedRemediation {
+		// The changed-candidate and fresh-evidence demands exist to stop an
+		// unreviewed no-op from DISCHARGING a failure, so they bind only the
+		// passing outcome. A truthful failed or interrupted settlement (#3422)
+		// discharges nothing: it may leave the candidate unchanged (the blocker
+		// can be environmental) and its evidence is the correction's own new
+		// failure, not proof the named failure was repaired.
+		if evidenceRemediation && request.Outcome == AttemptPassed {
 			evidenceOnly := runtimeEvidenceOnlyRetryAuthorized(status.LastReset, status.LastRescope, chainFailedAttempt, snapshot.CandidateTree)
-			if !evidenceOnly && (snapshot.Identity == active.BeginCandidateIdentity || snapshot.CandidateTree == active.BeginCandidateTree) {
-				// refusal:by-design operator-knowledge: a remediation claim must name a candidate changed by the active correction attempt, or an audited reset or rescope authorizing this exact unchanged candidate.
-				return runtimeRecord{}, errors.New("unmanaged remediation requires a changed correction candidate")
+			// #3073: "changed" is judged against the failed evidence's candidate
+			// snapshot, not the attempt's begin snapshot. A correction applied
+			// between the audited reset and the acquire lives inside the begin
+			// snapshot already, so the begin-relative comparison refused a
+			// candidate that genuinely no longer matches the state that failed.
+			// Records committed under this predicate require a reader deciding
+			// the same predicate (applyRuntimeFinishEvent): replay compatibility
+			// is forward-only, the store's standard schema-evolution discipline.
+			if !evidenceOnly && runtimeRemediationCandidateUnchanged(chainFailedAttempt, *active, snapshot.Identity, snapshot.CandidateTree) {
+				// refusal:by-design operator-knowledge: a remediation claim must name a candidate changed relative to the state that failed verification, or an audited reset or rescope authorizing this exact unchanged candidate.
+				return runtimeRecord{}, errors.New("failed-evidence remediation requires a changed correction candidate")
 			}
 			if request.EvidenceRevision == request.RemediatesEvidenceRevision {
 				// refusal:by-design operator-knowledge: the correction's verification evidence must be fresh and distinct from the failed evidence it repairs.
-				return runtimeRecord{}, errors.New("unmanaged remediation requires fresh corrected evidence")
+				return runtimeRecord{}, errors.New("failed-evidence remediation requires fresh corrected evidence")
 			}
 		}
+		attestedVerifyReport := store.captureFinalVerifyReport(ctx, *active, request, snapshot.CandidateTree)
 		event := &runtimeFinishEvent{
 			Ordinal: active.Ordinal, FinishCandidateIdentity: snapshot.Identity, FinishCandidateTree: snapshot.CandidateTree,
-			Outcome: request.Outcome, ChangedLines: changedLines, EvidenceRevision: request.EvidenceRevision,
+			AttestedVerifyReportDigest: attestedVerifyReport,
+			Outcome:                    request.Outcome, ChangedLines: changedLines, EvidenceRevision: request.EvidenceRevision,
 			Diagnosis: request.Diagnosis, HarnessDisposition: request.HarnessDisposition,
 			CleanupEvidence: request.CleanupEvidence, ProcessEvidence: request.ProcessEvidence,
 			RemediatesEvidenceRevision: request.RemediatesEvidenceRevision,
 			ChangedLineBudgetExceeded:  status.CumulativeChangedLines+changedLines > status.Objective.MaxChangedLines,
 		}
-		if remediation {
-			prepared, prepareErr := prepareApprovedRuntimeSuccessorBinding(ctx, store.Repo, store.Workspace, store.Change, request.SuccessorLineageID)
-			if prepareErr != nil {
-				return runtimeRecord{}, prepareErr
-			}
-			// An approved self-successor is the same lineage whose corrected,
-			// re-approved authority repairs the failed evidence. It never
-			// requires invalidating healthy approved authority or minting a
-			// distinct recovery lineage for an unchanged scope.
-			selfSuccessor := prepared.Lineage == currentBinding.Lineage
-			if selfSuccessor && request.EvidenceRevision == request.RemediatesEvidenceRevision {
-				return runtimeRecord{}, errors.New("approved SDD self-remediation requires distinct corrected evidence")
-			}
-			validateSuccessor := validateRuntimeRemediationSuccessor
-			if selfSuccessor {
-				validateSuccessor = validateRuntimeRemediationSelfSuccessor
-			}
-			if relationErr := validateSuccessor(ctx, store.Repo, *currentBinding, prepared); relationErr != nil {
-				return runtimeRecord{}, relationErr
-			}
-			runtimeRemediationFinalAuthorizationHook()
-			finalPrepared, finalPrepareErr := prepareApprovedRuntimeSuccessorBinding(ctx, store.Repo, store.Workspace, store.Change, request.SuccessorLineageID)
-			if finalPrepareErr != nil {
-				return runtimeRecord{}, fmt.Errorf("approved SDD remediation successor changed before native commit: %w", finalPrepareErr)
-			}
-			if finalPrepared.Revision != prepared.Revision {
-				return runtimeRecord{}, errors.New("approved SDD remediation successor changed before native commit")
-			}
-			if relationErr := validateSuccessor(ctx, store.Repo, *currentBinding, finalPrepared); relationErr != nil {
-				return runtimeRecord{}, relationErr
-			}
-			if finalPrepared.GateContext.CandidateTree != snapshot.CandidateTree {
-				return runtimeRecord{}, runtimeChargedCandidateRefusal(
-					finalPrepared.GateContext.CandidateTree, snapshot.CandidateTree, finalPrepared.Lineage)
-			}
-			prepared = finalPrepared
-			bindingEvent := &runtimeBindingEvent{ExpectedRevision: request.ExpectedBindingRevision, Current: prepared}
-			if legacyBinding != nil {
-				finalLegacy, finalDigest, finalErr := store.readLegacyBinding()
-				if finalErr != nil || finalLegacy == nil || finalDigest != legacyDigest {
-					return runtimeRecord{}, errors.New("legacy SDD review binding changed before atomic remediation import")
-				}
-				bindingEvent.LegacyImport = &runtimeLegacyBindingImport{SourceDigest: legacyDigest, Binding: *legacyBinding}
-			}
-			return runtimeRecord{
-				Operation: runtimeOperationFinishRemediation, Finish: event,
-				Binding: bindingEvent,
-			}, nil
-		}
 		return runtimeRecord{Operation: runtimeOperationFinish, Finish: event}, nil
 	})
+}
+
+// captureFinalVerifyReport derives the final verification attestation from the
+// candidate tree being settled. It deliberately never accepts a caller digest:
+// the native finish record binds the exact report bytes it read itself.
+// Attestation derivation never aborts a passing settlement: an underivable
+// attestation degrades like the missing-blob branch below (empty attestation,
+// archive stays fail-closed), so the derivation cannot fail and returns only
+// the attested digest. Only writing the ledger itself remains fatal.
+func (store RuntimeStore) captureFinalVerifyReport(ctx context.Context, active RuntimeAttempt, request FinishAttemptRequest, candidateTree string) string {
+	if request.Outcome != AttemptPassed || !isFinalVerifyWorkUnit(active.WorkUnit) {
+		return ""
+	}
+	openSpecRoot := filepath.Join(store.Workspace, "openspec")
+	if _, err := os.Stat(openSpecRoot); os.IsNotExist(err) {
+		// Runtime attempts are also used outside OpenSpec. Without an active
+		// OpenSpec root there is no canonical verify-report to attest.
+		return ""
+	} else if err != nil {
+		return ""
+	}
+	changeRoot, err := resolveBindingChangeRoot(ctx, store.Repo, store.Workspace, store.Change)
+	if err != nil {
+		return ""
+	}
+	// The canonical report path is anchored at the planning workspace (--cwd),
+	// never at the Git repository root: a workspace that is a subdirectory of
+	// its repository still owns exactly one canonical active-change report. The
+	// settled candidate tree is built at the repository root, so the blob read
+	// addresses that same report through its repository-relative path.
+	logicalPath, err := canonicalVerifyReportPaths(store.Repo, store.Workspace, changeRoot, store.Change)
+	if err != nil {
+		return ""
+	}
+	artifactPaths, err := resolveArtifactPaths(changeRoot)
+	if err != nil {
+		return ""
+	}
+	specCounts, err := readSpecCounts(artifactPaths.Specs)
+	if err != nil {
+		return ""
+	}
+	payload, err := reviewtransaction.ReadTreeBlob(ctx, store.Repo, candidateTree, logicalPath, MaxVerifyReportBytes)
+	if errors.Is(err, reviewtransaction.ErrTreeArtifactMissing) {
+		// A report outside the settled candidate is not final verification
+		// evidence. Preserve the generic runtime settlement, but it carries no
+		// archive-status exception and therefore remains fail-closed later.
+		return ""
+	}
+	if err != nil {
+		return ""
+	}
+	admission := ValidateVerifyReportAdmission(string(payload), specCounts)
+	if !admission.Valid || admission.Verdict != "pass" || admission.EvidenceRevision != request.EvidenceRevision {
+		return ""
+	}
+	return verifyReportDigest(payload)
+}
+
+func verifyReportDigest(payload []byte) string {
+	sum := sha256.Sum256(payload)
+	return "sha256:" + hex.EncodeToString(sum[:])
+}
+
+func isFinalVerifyWorkUnit(workUnit string) bool {
+	return workUnit == finalVerifyWorkUnit || workUnit == finalVerifyAttestationWorkUnit
 }
 
 func (store RuntimeStore) Handoff(ctx context.Context, request HandoffAttemptRequest) (RuntimeStatus, error) {
@@ -1514,119 +1482,6 @@ func (store RuntimeStore) RepairConsecutiveRescope(ctx context.Context, request 
 	return store.commitRecordLocked(record)
 }
 
-// bindPreparedReview imports a legacy binding at most once and replaces the
-// effective binding in the same immutable runtime chain. The callback is run
-// while the runtime lock is held so the approved authority is revalidated
-// immediately before the single HEAD compare-and-swap.
-func (store RuntimeStore) bindPreparedReview(
-	ctx context.Context,
-	request BindReviewRequest,
-	prepare func() (ReviewBinding, error),
-) (RuntimeStatus, error) {
-	request, err := normalizeBindReviewRequest(request)
-	if err != nil {
-		return RuntimeStatus{}, err
-	}
-	requestDigest := runtimeValueHash("gentle-ai.sdd-runtime-bind-request/v1", request)
-	if err := ctx.Err(); err != nil {
-		return RuntimeStatus{}, err
-	}
-	if err := store.ensureDirectories(); err != nil {
-		return RuntimeStatus{}, err
-	}
-	lock, err := store.acquireLock()
-	if err != nil {
-		return RuntimeStatus{}, err
-	}
-	defer lock.Release()
-
-	replay, err := store.load()
-	if err != nil {
-		return RuntimeStatus{}, err
-	}
-	if receipt, ok := replay.Requests[request.RequestID]; ok {
-		if receipt.Digest != requestDigest {
-			return RuntimeStatus{}, ErrRuntimeRequestConflict
-		}
-		if err := store.syncReplay(); err != nil {
-			return RuntimeStatus{}, &RuntimePublicationError{Revision: receipt.Revision, Committed: true, Cause: err}
-		}
-		return replay.Status, nil
-	}
-
-	var legacy *ReviewBinding
-	var legacyDigest string
-	if replay.Status.Binding == nil {
-		legacy, legacyDigest, err = store.readLegacyBinding()
-		if err != nil {
-			return RuntimeStatus{}, fmt.Errorf("read legacy SDD review binding: %w", err)
-		}
-	}
-
-	prepared, err := prepare()
-	if err != nil {
-		return RuntimeStatus{}, err
-	}
-	prepared, err = validatePreparedRuntimeBinding(prepared, store.Change, request.LineageID)
-	if err != nil {
-		return RuntimeStatus{}, err
-	}
-	if replay.Status.Binding == nil {
-		finalLegacy, finalDigest, finalErr := store.readLegacyBinding()
-		if finalErr != nil {
-			return RuntimeStatus{}, fmt.Errorf("reopen legacy SDD review binding: %w", finalErr)
-		}
-		if (legacy == nil) != (finalLegacy == nil) || legacyDigest != finalDigest {
-			return RuntimeStatus{}, errors.New("legacy SDD review binding changed before native import")
-		}
-	}
-
-	// A populated native binding is authoritative. Identical-candidate retries
-	// are no-ops even when the caller repeats the original expected revision;
-	// this preserves the existing idempotent bind contract without another
-	// mutable request journal.
-	if replay.Status.Binding != nil {
-		if replay.Status.Binding.Revision == prepared.Revision {
-			if err := store.syncReplay(); err != nil {
-				return RuntimeStatus{}, &RuntimePublicationError{Revision: replay.Status.Revision, Committed: true, Cause: err}
-			}
-			return replay.Status, nil
-		}
-		if request.ExpectedBindingRevision != "" && !runtimeRevisionPattern.MatchString(request.ExpectedBindingRevision) {
-			return RuntimeStatus{}, &BindingRevisionConflictError{Expected: request.ExpectedBindingRevision, Current: replay.Status.BindingRevision}
-		}
-		if replay.Status.BindingRevision != request.ExpectedBindingRevision {
-			return RuntimeStatus{}, &BindingRevisionConflictError{Expected: request.ExpectedBindingRevision, Current: replay.Status.BindingRevision}
-		}
-	} else {
-		current := ""
-		if legacy != nil {
-			current = legacy.Revision
-		}
-		if request.ExpectedBindingRevision != "" && !runtimeRevisionPattern.MatchString(request.ExpectedBindingRevision) {
-			return RuntimeStatus{}, &BindingRevisionConflictError{Expected: request.ExpectedBindingRevision, Current: current}
-		}
-		if current != request.ExpectedBindingRevision {
-			return RuntimeStatus{}, &BindingRevisionConflictError{Expected: request.ExpectedBindingRevision, Current: current}
-		}
-	}
-
-	event := &runtimeBindingEvent{ExpectedRevision: request.ExpectedBindingRevision, Current: prepared}
-	if replay.Status.Binding == nil {
-		if legacy != nil {
-			event.LegacyImport = &runtimeLegacyBindingImport{SourceDigest: legacyDigest, Binding: *legacy}
-		}
-	}
-	record := runtimeRecord{
-		Schema: runtimeRecordSchema, Change: store.Change, PreviousRevision: replay.Status.Revision,
-		Operation: runtimeOperationBind, RequestID: request.RequestID, RequestDigest: requestDigest, Binding: event,
-	}
-	if err := validateRuntimeRecordShape(record); err != nil {
-		return RuntimeStatus{}, err
-	}
-	return store.commitRecordLocked(record)
-}
-
 func (store RuntimeStore) mutate(
 	ctx context.Context,
 	expected, requestID, requestDigest string,
@@ -1886,10 +1741,6 @@ func applyRuntimeRecord(store RuntimeStore, replay *runtimeReplay, revision stri
 
 	case runtimeOperationBind:
 		if err := applyRuntimeBindingEvent(replay, record.Binding); err != nil {
-			return err
-		}
-	case runtimeOperationReceipt:
-		if err := applyRuntimeReceiptEvent(replay, record.Receipt); err != nil {
 			return err
 		}
 	case runtimeOperationGrant:
@@ -2172,6 +2023,10 @@ func applyRuntimeFinishEvent(replay *runtimeReplay, event *runtimeFinishEvent, u
 	if event.ChangedLineBudgetExceeded != budgetExceeded {
 		return errors.New("finish record changed-line budget decision does not match replay state")
 	}
+	if event.AttestedVerifyReportDigest != "" &&
+		(event.Outcome != AttemptPassed || !isFinalVerifyWorkUnit(active.WorkUnit) || !runtimeRevisionPattern.MatchString(event.AttestedVerifyReportDigest)) {
+		return errors.New("finish record verify-report attestation is invalid") // refusal:by-design world-action: a malformed immutable attestation record requires restoring provider-owned authority
+	}
 	if unmanagedRemediation {
 		// Lockstep twin of the write-time guard in Finish: the binding derives
 		// from the immutable chain, so replayed corrections recorded across an
@@ -2182,17 +2037,24 @@ func applyRuntimeFinishEvent(replay *runtimeReplay, event *runtimeFinishEvent, u
 		// failing objective against these exact bytes authorizes one evidence-only
 		// retry, so a replayed correction may leave the candidate unchanged.
 		evidenceOnly := runtimeEvidenceOnlyRetryAuthorized(replay.Status.LastReset, replay.Status.LastRescope, chainFailedAttempt, event.FinishCandidateTree)
-		unchangedCandidate := event.FinishCandidateIdentity == active.BeginCandidateIdentity ||
-			event.FinishCandidateTree == active.BeginCandidateTree
+		// #3073 lockstep twin: replay decides the exact write-guard predicate;
+		// the helper falls back to the begin comparison only for a legacy
+		// failed record that carries no finish snapshot.
+		unchangedCandidate := runtimeRemediationCandidateUnchanged(chainFailedAttempt, *active, event.FinishCandidateIdentity, event.FinishCandidateTree)
 		// A binding is deliberately NOT checked here. The write path stopped
 		// treating a leftover binding as a blocker (the kill switch must have
 		// no implications while it is off), and this replay mirror has to agree
 		// with it or a legitimately committed record makes the whole chain
 		// unreplayable.
-		if event.Outcome != AttemptPassed ||
-			!chainHasFailedEvidence || chainFailedAttempt.EvidenceRevision != event.RemediatesEvidenceRevision ||
-			(unchangedCandidate && !evidenceOnly) ||
-			event.EvidenceRevision == event.RemediatesEvidenceRevision {
+		// The binding must hold for every outcome; the changed-candidate and
+		// fresh-evidence demands bind only the passing outcome, exactly as the
+		// write-time guard in Finish decides (#3422). A truthful failed or
+		// interrupted settlement discharges nothing, so it neither needs a
+		// changed candidate nor fresh corrected evidence.
+		bindingBroken := !chainHasFailedEvidence || chainFailedAttempt.EvidenceRevision != event.RemediatesEvidenceRevision
+		passedDemandsBroken := event.Outcome == AttemptPassed &&
+			((unchangedCandidate && !evidenceOnly) || event.EvidenceRevision == event.RemediatesEvidenceRevision)
+		if bindingBroken || passedDemandsBroken {
 			// refusal:by-design world-action: a replayed event that breaks immutable evidence/candidate binding can only be repaired by restoring the authority.
 			return errors.New("unmanaged remediation finish does not bind the final failed-evidence correction")
 		}
@@ -2200,6 +2062,7 @@ func applyRuntimeFinishEvent(replay *runtimeReplay, event *runtimeFinishEvent, u
 	attempt := &replay.Status.Attempts[len(replay.Status.Attempts)-1]
 	attempt.FinishCandidateIdentity = event.FinishCandidateIdentity
 	attempt.FinishCandidateTree = event.FinishCandidateTree
+	attempt.AttestedVerifyReportDigest = event.AttestedVerifyReportDigest
 	attempt.Outcome = event.Outcome
 	attempt.ChangedLines = event.ChangedLines
 	attempt.EvidenceRevision = event.EvidenceRevision
@@ -2352,11 +2215,14 @@ func validateRuntimeRecordShape(record runtimeRecord) error {
 		}
 		event := record.Finish
 		if event.Ordinal < 1 || !validTerminalAttemptOutcome(event.Outcome) || event.ChangedLines < 0 ||
-			event.ChangedLines > maximumRuntimeChangedLines || !runtimeRevisionPattern.MatchString(event.EvidenceRevision) ||
+			event.ChangedLines > maximumRuntimeChangedLines ||
+			((event.Outcome == AttemptInterrupted && event.EvidenceRevision != "" && !runtimeRevisionPattern.MatchString(event.EvidenceRevision)) ||
+				(event.Outcome != AttemptInterrupted && !runtimeRevisionPattern.MatchString(event.EvidenceRevision))) ||
 			!runtimeRevisionPattern.MatchString(event.FinishCandidateIdentity) || !runtimeGitTreePattern.MatchString(event.FinishCandidateTree) ||
 			validateRuntimeText(event.Diagnosis, 500) != nil || !validHarnessDisposition(event.HarnessDisposition) ||
 			validateRuntimeText(event.CleanupEvidence, 500) != nil || validateRuntimeText(event.ProcessEvidence, 500) != nil ||
-			(event.RemediatesEvidenceRevision != "" && (!runtimeRevisionPattern.MatchString(event.RemediatesEvidenceRevision) || event.Outcome != AttemptPassed)) {
+			(event.RemediatesEvidenceRevision != "" && !runtimeRevisionPattern.MatchString(event.RemediatesEvidenceRevision)) ||
+			(event.AttestedVerifyReportDigest != "" && (!runtimeRevisionPattern.MatchString(event.AttestedVerifyReportDigest) || event.Outcome != AttemptPassed)) {
 			return errors.New("invalid SDD runtime finish event")
 		}
 		request := FinishAttemptRequest{
@@ -2394,6 +2260,7 @@ func validateRuntimeRecordShape(record runtimeRecord) error {
 			finish.ChangedLines > maximumRuntimeChangedLines || !runtimeRevisionPattern.MatchString(finish.EvidenceRevision) ||
 			!runtimeRevisionPattern.MatchString(finish.RemediatesEvidenceRevision) ||
 			!runtimeRevisionPattern.MatchString(finish.FinishCandidateIdentity) || !runtimeGitTreePattern.MatchString(finish.FinishCandidateTree) ||
+			(finish.AttestedVerifyReportDigest != "" && !runtimeRevisionPattern.MatchString(finish.AttestedVerifyReportDigest)) ||
 			validateRuntimeText(finish.Diagnosis, 500) != nil || !validHarnessDisposition(finish.HarnessDisposition) ||
 			validateRuntimeText(finish.CleanupEvidence, 500) != nil || validateRuntimeText(finish.ProcessEvidence, 500) != nil {
 			return errors.New("invalid atomic SDD runtime remediation finish event")
@@ -2414,7 +2281,7 @@ func validateRuntimeRecordShape(record runtimeRecord) error {
 				return errors.New("atomic remediation legacy binding import does not match its source or expected revision")
 			}
 		}
-		request := FinishAttemptRequest{
+		request := legacyFinishAttemptRequest{
 			ExpectedRevision: record.PreviousRevision, RequestID: record.RequestID, Outcome: finish.Outcome,
 			EvidenceRevision: finish.EvidenceRevision, Diagnosis: finish.Diagnosis, HarnessDisposition: finish.HarnessDisposition,
 			CleanupEvidence: finish.CleanupEvidence, ProcessEvidence: finish.ProcessEvidence,
@@ -2510,34 +2377,6 @@ func validateRuntimeRecordShape(record runtimeRecord) error {
 		}
 		if runtimeValueHash("gentle-ai.sdd-runtime-bind-request/v1", request) != record.RequestDigest {
 			return errors.New("SDD runtime binding request digest does not match record")
-		}
-	case runtimeOperationReceipt:
-		if record.Receipt == nil || record.Begin != nil || record.Finish != nil || record.Reset != nil || record.Rescope != nil || record.Advance != nil || record.Handoff != nil || record.Binding != nil || record.Grant != nil {
-			return errors.New("invalid SDD runtime receipt record shape") // refusal:by-design world-action: this shape is constructed by the authority itself, so a violation is a mutated record and the exit is restoring the store
-		}
-		event := record.Receipt
-		if event.ExpectedRevision != "" && !runtimeRevisionPattern.MatchString(event.ExpectedRevision) {
-			return errors.New("invalid expected SDD runtime receipt revision") // refusal:by-design world-action: this field is written only by commitRecordLocked itself, so a violation is a mutated record and the exit is restoring the store
-		}
-		if event.Current.Lineage != record.Change && event.Current.Lineage == "" {
-			return errors.New("invalid current SDD runtime receipt lineage") // refusal:by-design world-action: the lineage is frozen at request normalization, so a violation is a mutated record and the exit is restoring the store
-		}
-		if !validReviewBindingLineage(event.Current.Lineage) || !reviewBindingHash.MatchString(event.Current.ReceiptHash) {
-			return errors.New("invalid current SDD runtime receipt") // refusal:by-design world-action: the receipt shape is validated before every commit, so a violation is a mutated record and the exit is restoring the store
-		}
-		if event.LegacyImport != nil {
-			if !validReviewBindingLineage(event.LegacyImport.Receipt.Lineage) || !reviewBindingHash.MatchString(event.LegacyImport.Receipt.ReceiptHash) {
-				return errors.New("invalid imported legacy SDD runtime receipt") // refusal:by-design world-action: the legacy import is projected once at commit time, so a violation is a mutated record and the exit is restoring the store
-			}
-			if event.LegacyImport.SourceDigest == "" || event.ExpectedRevision != receiptRefDigest(event.LegacyImport.Receipt) {
-				return errors.New("legacy SDD runtime receipt import does not match its source or expected revision") // refusal:by-design world-action: the import binding is derived from the legacy artifact at commit time, so a mismatch is a mutated record and the exit is restoring the store
-			}
-		}
-		request := RecordReceiptRequest{
-			ExpectedReceiptRevision: event.ExpectedRevision, RequestID: record.RequestID, Lineage: event.Current.Lineage,
-		}
-		if runtimeValueHash("gentle-ai.sdd-runtime-receipt-request/v1", request) != record.RequestDigest {
-			return errors.New("SDD runtime receipt request digest does not match record") // refusal:by-design world-action: the digest is computed from the same request at write time, so a mismatch is a mutated record and the exit is restoring the store
 		}
 	case runtimeOperationGrant:
 		if record.Grant == nil || record.Begin != nil || record.Finish != nil || record.Reset != nil || record.Rescope != nil || record.Advance != nil || record.Handoff != nil || record.Binding != nil || record.Receipt != nil {
@@ -2663,7 +2502,10 @@ func normalizeFinishAttemptRequest(request FinishAttemptRequest) (FinishAttemptR
 	if !validTerminalAttemptOutcome(request.Outcome) {
 		return FinishAttemptRequest{}, errors.New("outcome must be failed, interrupted, or passed")
 	}
-	if !runtimeRevisionPattern.MatchString(request.EvidenceRevision) {
+	if request.Outcome == AttemptInterrupted && request.EvidenceRevision != "" && !runtimeRevisionPattern.MatchString(request.EvidenceRevision) {
+		return FinishAttemptRequest{}, errors.New("interrupted evidence_revision must be empty or a canonical legacy sha256 revision; rerun `gentle-ai sdd-attempt finish` or `gentle-ai sdd-attempt settle` with --outcome interrupted and without --evidence-revision")
+	}
+	if request.Outcome != AttemptInterrupted && !runtimeRevisionPattern.MatchString(request.EvidenceRevision) {
 		return FinishAttemptRequest{}, fmt.Errorf(
 			"evidence_revision must be sha256:<64-lowercase-hex> (%s); rerun `gentle-ai sdd-attempt finish` or `gentle-ai sdd-attempt settle` with --evidence-revision sha256:<64-lowercase-hex>",
 			runtimeRevisionShapeObservation(request.EvidenceRevision),
@@ -2681,42 +2523,15 @@ func normalizeFinishAttemptRequest(request FinishAttemptRequest) (FinishAttemptR
 	if err := validateRuntimeText(request.ProcessEvidence, 500); err != nil {
 		return FinishAttemptRequest{}, fmt.Errorf("invalid process_evidence: %w", err)
 	}
-	managedRemediationFields := 0
-	for _, value := range []string{request.ExpectedBindingRevision, request.SuccessorLineageID} {
-		if value != "" {
-			managedRemediationFields++
-		}
-	}
-	if managedRemediationFields != 0 && (managedRemediationFields != 2 || request.RemediatesEvidenceRevision == "") {
-		return FinishAttemptRequest{}, errors.New("remediation successor requires expected_binding_revision, successor_lineage_id, and remediates_evidence_revision together")
-	}
-	if managedRemediationFields == 2 {
-		if request.Outcome != AttemptPassed {
-			return FinishAttemptRequest{}, errors.New("an atomic remediation successor is valid only for a passed attempt")
-		}
-		if !runtimeRevisionPattern.MatchString(request.ExpectedBindingRevision) {
-			return FinishAttemptRequest{}, fmt.Errorf(
-				"expected_binding_revision must be sha256:<64-lowercase-hex> for atomic remediation (%s); rerun `gentle-ai sdd-attempt finish` with --expected-binding-revision sha256:<64-lowercase-hex> --successor-lineage <lineage> --remediates-evidence-revision sha256:<64-lowercase-hex>",
-				runtimeRevisionShapeObservation(request.ExpectedBindingRevision),
-			)
-		}
-		if !validReviewBindingLineage(request.SuccessorLineageID) {
-			return FinishAttemptRequest{}, errors.New("successor_lineage_id must be a canonical lowercase lineage")
-		}
+	if request.RemediatesEvidenceRevision != "" {
+		// Every outcome is a truthful settlement of a declared correction
+		// (#3422): passed discharges the failure it names, failed records the
+		// correction's own new failure as the chain's bindable head, and
+		// interrupted discharges nothing. Only the binding shape is validated
+		// here; outcome-specific demands live in Finish and its replay twin.
 		if !runtimeRevisionPattern.MatchString(request.RemediatesEvidenceRevision) {
 			return FinishAttemptRequest{}, fmt.Errorf(
-				"remediates_evidence_revision must be sha256:<64-lowercase-hex> (%s); rerun `gentle-ai sdd-attempt finish` with --expected-binding-revision sha256:<64-lowercase-hex> --successor-lineage <lineage> --remediates-evidence-revision sha256:<64-lowercase-hex>",
-				runtimeRevisionShapeObservation(request.RemediatesEvidenceRevision),
-			)
-		}
-	} else if request.RemediatesEvidenceRevision != "" {
-		if request.Outcome != AttemptPassed {
-			// refusal:by-design operator-knowledge: the caller alone knows whether its correction passed and must supply that outcome truthfully.
-			return FinishAttemptRequest{}, errors.New("unmanaged remediation is valid only for a passed attempt")
-		}
-		if !runtimeRevisionPattern.MatchString(request.RemediatesEvidenceRevision) {
-			return FinishAttemptRequest{}, fmt.Errorf(
-				"remediates_evidence_revision must be sha256:<64-lowercase-hex> for unmanaged remediation (%s); rerun `gentle-ai sdd-attempt finish` with --remediates-evidence-revision sha256:<64-lowercase-hex>",
+				"remediates_evidence_revision must be sha256:<64-lowercase-hex> (%s); rerun `gentle-ai sdd-attempt finish` with --remediates-evidence-revision sha256:<64-lowercase-hex>",
 				runtimeRevisionShapeObservation(request.RemediatesEvidenceRevision),
 			)
 		}
@@ -2740,14 +2555,6 @@ func normalizeHandoffAttemptRequest(request HandoffAttemptRequest) (HandoffAttem
 	}
 	request.DestinationWorktree = destination
 	return request, nil
-}
-
-func finishRequestsRemediation(request FinishAttemptRequest) bool {
-	return request.ExpectedBindingRevision != "" || request.SuccessorLineageID != ""
-}
-
-func finishRequestsUnmanagedRemediation(request FinishAttemptRequest) bool {
-	return request.ExpectedBindingRevision == "" && request.SuccessorLineageID == "" && request.RemediatesEvidenceRevision != ""
 }
 
 func normalizeResetObjectiveRequest(request ResetObjectiveRequest) (ResetObjectiveRequest, error) {
@@ -2869,22 +2676,6 @@ func normalizeRescopeObjectiveRequest(request RescopeObjectiveRequest) (RescopeO
 	return request, nil
 }
 
-func normalizeBindReviewRequest(request BindReviewRequest) (BindReviewRequest, error) {
-	// Expected revision syntax is checked only after candidate preparation so
-	// an identical-candidate retry remains idempotent even when an old caller
-	// repeats a malformed token. A non-idempotent request can never publish it.
-	if len(request.ExpectedBindingRevision) > 128 || strings.ContainsAny(request.ExpectedBindingRevision, "\r\n\x00") {
-		return BindReviewRequest{}, errors.New("expected binding revision is not a bounded single-line value")
-	}
-	if !runtimeRequestIDPattern.MatchString(request.RequestID) {
-		return BindReviewRequest{}, errors.New("request_id must be a canonical lowercase identifier")
-	}
-	if !validReviewBindingLineage(request.LineageID) {
-		return BindReviewRequest{}, errors.New("lineage_id must be a canonical lowercase lineage")
-	}
-	return request, nil
-}
-
 func validatePreparedRuntimeBinding(binding ReviewBinding, change, lineage string) (ReviewBinding, error) {
 	payload, err := bindingBytes(binding)
 	if err != nil {
@@ -2898,28 +2689,6 @@ func validatePreparedRuntimeBinding(binding ReviewBinding, change, lineage strin
 		return ReviewBinding{}, errors.New("prepared SDD review binding does not match selected change and lineage")
 	}
 	return parsed, nil
-}
-
-// readLegacyBinding is the only compatibility read of mutable binding.json.
-// Callers invoke it only while the native runtime binding is absent; replay of
-// a native import never consults the legacy artifact again.
-func (store RuntimeStore) readLegacyBinding() (*ReviewBinding, string, error) {
-	path := filepath.Join(store.commonDir, "gentle-ai", "sdd-review-bindings", "v1", store.Change, "binding.json")
-	payload, err := readBoundedRuntimeFile(path)
-	if os.IsNotExist(err) {
-		return nil, "", nil
-	}
-	if err != nil {
-		return nil, "", err
-	}
-	binding, err := parseBinding(payload)
-	if err != nil {
-		return nil, "", err
-	}
-	if binding.Change != store.Change {
-		return nil, "", errors.New("legacy SDD review binding change does not match store")
-	}
-	return &binding, bindingHash(payload), nil
 }
 
 func validateRuntimeText(value string, maximum int) error {
@@ -3134,6 +2903,25 @@ func runtimeEvidenceOnlyRetryAuthorized(reset *RuntimeReset, rescope *RuntimeRes
 	return rescope != nil && rescope.Actor != "" && rescope.Reason != "" &&
 		rescope.PreviousObjectiveID == failed.ObjectiveID && rescope.PreviousGeneration == failed.ObjectiveGeneration &&
 		rescope.RescopeCandidateTree == candidateTree
+}
+
+// runtimeRemediationCandidateUnchanged judges whether a settling unmanaged
+// remediation still presents the state that FAILED (#3073). The laundering
+// baseline is the remediated failed evidence's candidate snapshot — the exact
+// bytes the failure was recorded over — not the correction attempt's begin
+// snapshot: a correction applied between the audited reset and the acquire is
+// already inside the begin snapshot, so judging against begin refused a
+// genuinely changed candidate, while a revert to the failed bytes after
+// acquire counted as "changed" against begin despite re-presenting exactly
+// what failed. Failed attempts recorded before the finish candidate snapshot
+// existed carry no baseline of their own, so those legacy records fall back
+// to the pre-#3073 begin-relative comparison.
+func runtimeRemediationCandidateUnchanged(failed, active RuntimeAttempt, identity, tree string) bool {
+	baselineIdentity, baselineTree := failed.FinishCandidateIdentity, failed.FinishCandidateTree
+	if baselineIdentity == "" && baselineTree == "" {
+		baselineIdentity, baselineTree = active.BeginCandidateIdentity, active.BeginCandidateTree
+	}
+	return identity == baselineIdentity || tree == baselineTree
 }
 
 func runtimeObjectiveID(change, workUnit, evidenceGoal, candidateIdentity string, generation int) string {

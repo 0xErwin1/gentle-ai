@@ -27,6 +27,12 @@ type InjectionResult struct {
 
 type InjectOptions struct {
 	OpenCodeModelAssignments map[string]model.ModelAssignment
+	// IncludeOpenCodeBackgroundPolicy includes the resolved OpenCode-only
+	// background-task policy in rendered prompts. The zero value is false. The
+	// caller MUST set this only after a later intent/capability resolution step;
+	// this field does not resolve runtime capability or enable background work.
+	IncludeOpenCodeBackgroundPolicy bool
+
 	// ClaudeModelAssignments is the legacy model-only Claude assignment map.
 	// Prefer ClaudePhaseAssignments for new callers that need per-phase effort.
 	ClaudeModelAssignments      map[string]model.ClaudeModelAlias
@@ -67,6 +73,12 @@ type InjectOptions struct {
 	// inject into SDD phase sub-agent prompts. Empty means disabled; normal SDD
 	// installs must leave it empty unless the Community Tool path enabled CodeGraph.
 	CodeGraphGuidanceMarkdown string
+}
+
+func (opts InjectOptions) orchestratorPolicyRenderOptions() OrchestratorRenderOptions {
+	return OrchestratorRenderOptions{
+		IncludeOpenCodeBackgroundPolicy: opts.IncludeOpenCodeBackgroundPolicy,
+	}
 }
 
 // workflowInjector is an optional adapter capability: if an adapter
@@ -216,7 +228,7 @@ func overlayAssetPath(sddMode model.SDDModeID) string {
 }
 
 var compatibilitySDDSkillIDs = []model.SkillID{
-	"sdd-init", "sdd-explore", "sdd-propose", "sdd-spec",
+	"sdd-init", "sdd-explore", "sdd-research", "sdd-propose", "sdd-spec",
 	"sdd-design", "sdd-tasks", "sdd-apply", "sdd-verify", "sdd-archive",
 	"sdd-onboard", "judgment-day",
 }
@@ -323,7 +335,7 @@ func Inject(homeDir string, adapter agents.Adapter, sddMode model.SDDModeID, opt
 	if adapter.Agent() != model.AgentOpenCode && adapter.Agent() != model.AgentKilocode {
 		switch adapter.SystemPromptStrategy() {
 		case model.StrategyMarkdownSections:
-			result, err := injectMarkdownSections(homeDir, adapter, opts.ClaudeModelAssignments, opts.ClaudePhaseAssignments)
+			result, err := injectMarkdownSections(homeDir, adapter, opts.ClaudeModelAssignments, opts.ClaudePhaseAssignments, opts.orchestratorPolicyRenderOptions())
 			if err != nil {
 				return InjectionResult{}, err
 			}
@@ -354,7 +366,7 @@ func Inject(homeDir string, adapter agents.Adapter, sddMode model.SDDModeID, opt
 			// Write the SDD orchestrator as a standalone Jinja include module.
 			// The static KIMI.md template references it via {% include "sdd-orchestrator.md" %}.
 			configDir := adapter.GlobalConfigDir(homeDir)
-			content := renderSDDOrchestratorAsset(adapter.Agent())
+			content := renderSDDOrchestratorAsset(adapter.Agent(), opts.orchestratorPolicyRenderOptions())
 			modulePath := filepath.Join(configDir, "sdd-orchestrator.md")
 			writeResult, err := filemerge.WriteFileAtomic(modulePath, []byte(content), 0o644)
 			if err != nil {
@@ -488,7 +500,7 @@ func Inject(homeDir string, adapter agents.Adapter, sddMode model.SDDModeID, opt
 				changed = changed || promptsChanged
 			}
 
-			overlayBytes, err = inlineOpenCodeSDDPrompts(overlayBytes, homeDir, settingsPath, adapter.Agent(), opts.PreserveOpenCodeOrchestratorPrompt, opts.CodeGraphGuidanceMarkdown)
+			overlayBytes, err = inlineOpenCodeSDDPrompts(overlayBytes, homeDir, settingsPath, adapter.Agent(), opts.PreserveOpenCodeOrchestratorPrompt, opts.orchestratorPolicyRenderOptions(), opts.CodeGraphGuidanceMarkdown)
 			if err != nil {
 				return InjectionResult{}, fmt.Errorf("inline OpenCode SDD prompts: %w", err)
 			}
@@ -551,7 +563,7 @@ func Inject(homeDir string, adapter agents.Adapter, sddMode model.SDDModeID, opt
 					return InjectionResult{}, fmt.Errorf("clean stale profile JD agents %q: %w", profile.Name, cleanupErr)
 				}
 				changed = changed || cleanupResult.Changed
-				profileOverlay, profileErr := GenerateProfileOverlay(profile, homeDir, settingsPath, opts.OpenCodeModelAssignments, opts.CodeGraphGuidanceMarkdown)
+				profileOverlay, profileErr := GenerateProfileOverlay(profile, homeDir, settingsPath, opts.OpenCodeModelAssignments, opts.CodeGraphGuidanceMarkdown, opts.orchestratorPolicyRenderOptions())
 				if profileErr != nil {
 					return InjectionResult{}, fmt.Errorf("generate profile overlay %q: %w", profile.Name, profileErr)
 				}
@@ -797,7 +809,7 @@ func Inject(homeDir string, adapter agents.Adapter, sddMode model.SDDModeID, opt
 	if adapter.SupportsSkills() {
 		skillDir := adapter.SkillsDir(homeDir)
 		if skillDir != "" {
-			for _, skill := range []string{"sdd-init", "sdd-apply", "sdd-verify"} {
+			for _, skill := range []string{"sdd-init", "sdd-research", "sdd-apply", "sdd-verify"} {
 				path := filepath.Join(skillDir, skill, "SKILL.md")
 				info, err := os.Stat(path)
 				if err != nil {
@@ -820,7 +832,7 @@ func validateOpenClawWorkspacePath(workspaceDir string, adapter agents.Adapter) 
 	return nil
 }
 
-func inlineOpenCodeSDDPrompts(overlayBytes []byte, homeDir, settingsPath string, agent model.AgentID, preserveExistingOrchestratorPrompt bool, codeGraphGuidance string) ([]byte, error) {
+func inlineOpenCodeSDDPrompts(overlayBytes []byte, homeDir, settingsPath string, agent model.AgentID, preserveExistingOrchestratorPrompt bool, renderOptions OrchestratorRenderOptions, codeGraphGuidance string) ([]byte, error) {
 	var overlay map[string]any
 	if err := json.Unmarshal(overlayBytes, &overlay); err != nil {
 		return nil, fmt.Errorf("unmarshal OpenCode SDD overlay: %w", err)
@@ -864,12 +876,17 @@ func inlineOpenCodeSDDPrompts(overlayBytes []byte, homeDir, settingsPath string,
 			}
 		}
 		if existingPrompt != "" {
-			orchestratorMap["prompt"] = renderPreservedOpenCodeOrchestratorPrompt(existingPrompt, agent)
+			if strings.Contains(existingPrompt, openCodeBackgroundPolicyMarker) || strings.Contains(existingPrompt, openCodeBackgroundPolicyEnd) {
+				if err := validateOpenCodeBackgroundPolicy(existingPrompt, false); err != nil {
+					return nil, fmt.Errorf("validate preserved OpenCode background policy: %w", err)
+				}
+			}
+			orchestratorMap["prompt"] = renderPreservedOpenCodeOrchestratorPrompt(existingPrompt, agent, renderOptions)
 		} else {
-			orchestratorMap["prompt"] = renderSDDOrchestratorAsset(agent)
+			orchestratorMap["prompt"] = renderSDDOrchestratorAsset(agent, renderOptions)
 		}
 	} else {
-		orchestratorMap["prompt"] = renderSDDOrchestratorAsset(agent)
+		orchestratorMap["prompt"] = renderSDDOrchestratorAsset(agent, renderOptions)
 	}
 
 	// Carry the organic routing guidance across the wholesale prompt assignment
@@ -977,15 +994,13 @@ func extractManagedSection(content, sectionID string) string {
 
 // expandOpenCodeBoundedReviewAgents renders the OpenCode-shaped review-lens
 // sub-agents shared by the OpenCode and Kilocode overlays. Both identities
-// get the identical shell-less, read-less shape: the OpenCode plugin
-// (review-result-artifacts.ts) asks `review lens-context` for all immutable
-// candidate evidence through its provider-owned native channel and injects it
-// into each reviewer task's prompt before the reviewer ever launches, so the lens
-// itself needs no bash and no read tool — this provider-injected block is
+// get the identical shell-less, read-less shape. The OpenCode relay replaces
+// each review task prompt with the provider-owned immutable contract before
+// launch, so the lens itself needs no bash and no read tool — that contract is
 // its only byte source. Kilocode is not RDD-eligible and never receives the
-// capturing plugin, so review never starts there; it gets the identical
-// denied shape rather than a permissive one that a fresh Kilocode-specific
-// entry point could someday reach.
+// relay, so review never starts there; it gets the identical denied shape
+// rather than a permissive one that a fresh Kilocode-specific entry point
+// could someday reach.
 func expandOpenCodeBoundedReviewAgents(agentsMap map[string]any) {
 	for _, name := range opencode.ReviewLensPhases() {
 		agent, ok := agentsMap[name].(map[string]any)
@@ -1035,15 +1050,52 @@ func migratePreservedOpenCodeOrchestratorPrompt(prompt string) string {
 	migrated := removeLegacyOpenCodePlainChatPreflightLines(replacer.Replace(prompt))
 	migrated = ensurePreservedOpenCodeOrchestratorPreflight(migrated)
 	migrated = ensurePreservedOpenCodeDelegationHardGates(migrated)
+	migrated = ensurePreservedOpenCodeResearchLifecycle(migrated)
 	return ensurePreservedOpenCodeReviewExecutionContract(migrated)
+}
+
+func ensurePreservedOpenCodeResearchLifecycle(prompt string) string {
+	if strings.Contains(prompt, "<!-- gentle-ai:sdd-research-lifecycle -->") && strings.Contains(prompt, researchLifecycleContract()) {
+		return prompt
+	}
+	lines := strings.Split(prompt, "\n")
+	kept := lines[:0]
+	for _, line := range lines {
+		if strings.Contains(line, "Before the `sdd-propose` phase in interactive mode") || strings.Contains(line, "proposal question round") {
+			continue
+		}
+		kept = append(kept, line)
+	}
+	return filemerge.InjectMarkdownSection(strings.Join(kept, "\n"), "sdd-research-lifecycle", researchLifecycleContract())
 }
 
 func renderPreservedOpenCodeOrchestratorPrompt(
 	prompt string,
 	agent model.AgentID,
+	options ...OrchestratorRenderOptions,
 ) string {
 	migrated := migratePreservedOpenCodeOrchestratorPrompt(prompt)
+	var renderOptions OrchestratorRenderOptions
+	if len(options) > 0 {
+		renderOptions = options[0]
+	}
+	if policy := renderOpenCodeBackgroundPolicy(agent, renderOptions); policy != "" {
+		migrated = appendOpenCodeBackgroundPolicy(migrated, policy)
+	} else if strings.Contains(migrated, openCodeBackgroundPolicyMarker) || strings.Contains(migrated, openCodeBackgroundPolicyEnd) {
+		migrated = stripOpenCodeBackgroundPolicy(migrated)
+	}
 	return strings.ReplaceAll(migrated, runtimeAgentIDPlaceholder, string(agent))
+}
+
+// stripOpenCodeBackgroundPolicy removes only the complete Gentle AI-owned block.
+// Callers validate marker integrity before preserving a prompt from disk.
+func stripOpenCodeBackgroundPolicy(content string) string {
+	start := strings.Index(content, openCodeBackgroundPolicyMarker)
+	end := strings.Index(content, openCodeBackgroundPolicyEnd)
+	if start < 0 || end < start {
+		return content
+	}
+	return content[:start] + content[end+len(openCodeBackgroundPolicyEnd):]
 }
 
 func removeLegacyOpenCodePlainChatPreflightLines(prompt string) string {
@@ -1118,14 +1170,12 @@ func removeLegacyOpenCodePlainChatPreflightLines(prompt string) string {
 }
 
 // nativeReviewAuthorityRule is rule 7 of the managed delegation block. It
-// replaces a rule that pointed at retired work-routing contracts: those commands
-// no longer exist, so a prompt naming them sends the orchestrator after dead
-// authority. What survives is the local review receipt plus the native review
-// status/validate surface, and the ownership boundary the old rule protected --
-// the orchestrator still never selects lenses or authors PASS itself.
-const nativeReviewAuthorityRule = "7. **Authority rule**: read native review state with `gentle-ai review status`" +
-	" and let `gentle-ai review validate --gate <gate>` check the exact owner-issued receipt at every lifecycle gate." +
-	" Never select lenses, synthesize transitions, or infer PASS from prose."
+// replaces a rule that pointed at retired work-routing contracts. The current
+// lifecycle starts only from current-worktree preflight, retains the explicit
+// transaction binding, and leaves delivery to the user rather than a gate.
+const nativeReviewAuthorityRule = "7. **Authority rule**: use selectorless `gentle-ai review status` only to preflight the current worktree" +
+	" and execute its exact START; retain that transaction's lineage, revision, and target for every later lifecycle call." +
+	" Gates are informational only. Never select lenses, synthesize transitions, infer PASS, or authorize delivery from prose."
 
 func ensurePreservedOpenCodeDelegationHardGates(prompt string) string {
 	prompt = removeRetiredWorkRoutingAuthorityRule(prompt)
@@ -1136,15 +1186,15 @@ func ensurePreservedOpenCodeDelegationHardGates(prompt string) string {
 	// plain-text policy beneath it.
 	prompt = strings.NewReplacer(
 		"run a fresh-context review unless the diff is trivial docs/text",
-		"validate the exact owner-issued receipt; never launch prompt-owned review at the gate",
+		nativeReviewAuthorityRule,
 		"stop and run a fresh audit before continuing",
 		"stop with one typed Needs your decision result until native authority validates the immutable candidate",
 		"use fresh context for adversarial review of diffs, conflicts, PR readiness, and incidents",
-		"let native RAR schedule adversarial review; PR readiness and incidents validate the same receipt",
+		nativeReviewAuthorityRule,
 		"run the concrete review lens(es) selected by Review Lens Selection unless the diff is trivial docs/text",
-		"validate the exact owner-issued receipt; never launch prompt-owned review at the gate",
+		nativeReviewAuthorityRule,
 		"run the concrete review lens(es) selected by Review Lens Selection unless the diff is trivial (tier 1)",
-		"validate the exact owner-issued receipt; never launch prompt-owned review at the gate",
+		nativeReviewAuthorityRule,
 	).Replace(prompt)
 
 	delegation := `
@@ -1271,7 +1321,11 @@ func ensurePreservedOpenCodeReviewExecutionContract(prompt string) string {
 	if headingStart := strings.Index(prompt, heading); headingStart >= 0 {
 		headingEnd := len(prompt)
 		remainder := prompt[headingStart+len(heading):]
-		for _, candidate := range []string{"\n#### ", "\n### ", "\n## ", "\n# "} {
+		// The shared review contract has level-three headings of its own, and
+		// the OpenCode-only concurrent-group addendum is another level-three
+		// heading. Neither ends the managed review section; only the next
+		// enclosing section may do that.
+		for _, candidate := range []string{"\n" + nextHeading, "\n#### ", "\n## ", "\n# "} {
 			if relativeEnd := strings.Index(remainder, candidate); relativeEnd >= 0 {
 				candidateEnd := headingStart + len(heading) + relativeEnd + 1
 				if candidateEnd < headingEnd {
@@ -1347,7 +1401,6 @@ Hard gate rules:
 - For a new feature request that says to use SDD, start at preflight -> init guard -> explore/proposal. Never launch ` + "`sdd-apply`" + ` just because the user asked to implement a feature.
 - In ` + "`interactive`" + ` mode, pause after each delegated phase returns, summarize the phase, then ask before launching the next phase via the ` + "`question`" + ` tool, and STOP. Use the ` + "`question`" + ` tool for this between-phase decision: present the proceed/adjust/stop options through a single ` + "`question`" + ` tool call; do NOT render the options as a plain markdown bullet list or plain chat text. Match the user's language and active persona for the question labels; for Spanish neutral fallback frame it as: "¿Quiere ajustar algo o continuamos?". Do not run /sdd-ff phases back-to-back unless execution mode is ` + "`auto`" + `.
 - Interactive approval is phase-scoped. Words like "continue", "dale", or "go on" approve only the immediate next phase, not the rest of the SDD pipeline. Do not treat a generated artifact as approved until the user has had a chance to review or explicitly delegate that review.
-- Before the ` + "`sdd-propose`" + ` phase in interactive mode, offer the user a proposal question round instead of silently deciding whether the proposal is clear enough. Ask 3–5 concrete product questions to improve the PRD/proposal by uncovering business rules, implications, impact, edge cases, product tradeoffs, and decision gaps; then summarize assumptions and ask whether the user wants corrections or a second question round. Do not ask about test commands, PR shape, changed-line budget, or other harness mechanics at proposal time unless the user explicitly asks to discuss delivery.
 <!-- /gentle-ai:sdd-session-preflight-migration -->
 `
 
@@ -1376,8 +1429,6 @@ Hard gate rules:
 		strings.Contains(prompt, "pause after each delegated phase returns") &&
 		strings.Contains(prompt, "ask before launching the next phase via the `question` tool") &&
 		strings.Contains(prompt, "approve only the immediate next phase") &&
-		strings.Contains(prompt, "proposal question round") &&
-		strings.Contains(prompt, "business rules, implications, impact, edge cases") &&
 		!containsOpenCodeOrchestratorLanguageLeak(prompt) {
 		return prompt
 	}
@@ -1661,10 +1712,22 @@ func ManagedOpenCodePluginNames() []string {
 	return managedOpenCodePluginNames(model.AgentOpenCode)
 }
 
+const LegacyOpenCodeReviewPluginName = "review-result-artifacts.ts"
+
+// OpenCodePluginLifecycleNames includes the retired plugin so transactional
+// install and sync snapshot it before replacing it.
+func OpenCodePluginLifecycleNames(agent model.AgentID) []string {
+	names := append([]string(nil), managedOpenCodePluginNames(agent)...)
+	if agent == model.AgentOpenCode || agent == model.AgentKilocode {
+		names = append(names, LegacyOpenCodeReviewPluginName)
+	}
+	return names
+}
+
 func managedOpenCodePluginNames(agent model.AgentID) []string {
 	switch agent {
 	case model.AgentOpenCode:
-		return []string{"model-variants.ts", "review-result-artifacts.ts", "skill-registry.ts"}
+		return []string{"model-variants.ts", "opencode-review-transport.ts", "sdd-task-result-artifacts.ts", "skill-registry.ts"}
 	case model.AgentKilocode:
 		return []string{"model-variants.ts", "skill-registry.ts"}
 	default:
@@ -1691,6 +1754,20 @@ func stripOpenCodeNativeFallbackAgents(overlayBytes []byte) ([]byte, error) {
 	}
 	delete(agents, "general")
 	delete(agents, "explore")
+	// Kilocode does not host the OpenCode provider relay that issues the opaque
+	// validator task, so it must not expose or authorize that OpenCode-only role.
+	delete(agents, opencode.ReviewValidatorAgent)
+	if orchestrator, ok := agents["gentle-orchestrator"].(map[string]any); ok {
+		if permission, ok := orchestrator["permission"].(map[string]any); ok {
+			if task, ok := permission["task"].(map[string]any); ok {
+				if replacement, ok := task["__replace__"].(map[string]any); ok {
+					delete(replacement, opencode.ReviewValidatorAgent)
+				} else {
+					delete(task, opencode.ReviewValidatorAgent)
+				}
+			}
+		}
+	}
 	result, err := json.MarshalIndent(overlay, "", "  ")
 	if err != nil {
 		return nil, fmt.Errorf("marshal overlay: %w", err)
@@ -1709,8 +1786,12 @@ func RefreshInstalledOpenCodePlugins(homeDir string, adapter agents.Adapter) (In
 
 	var files []string
 	var changed bool
-	if adapter.Agent() == model.AgentKilocode {
-		path, removed, err := removeOpenCodeOnlyReviewPlugin(pluginsDir)
+	migrate, err := hasRegularLegacyOpenCodeReviewPlugin(pluginsDir)
+	if err != nil {
+		return InjectionResult{}, err
+	}
+	if migrate {
+		path, removed, err := removeLegacyOpenCodeReviewPlugin(pluginsDir)
 		if err != nil {
 			return InjectionResult{}, err
 		}
@@ -1724,7 +1805,19 @@ func RefreshInstalledOpenCodePlugins(homeDir string, adapter agents.Adapter) (In
 		pluginPath := filepath.Join(pluginsDir, name)
 		info, err := os.Lstat(pluginPath)
 		if err != nil {
+			if os.IsNotExist(err) && !(migrate && adapter.Agent() == model.AgentOpenCode && isOpenCodeReviewMigrationPlugin(name)) {
+				continue
+			}
 			if os.IsNotExist(err) {
+				content := assets.MustRead("opencode/plugins/" + name)
+				writeResult, err := filemerge.WriteFileAtomic(pluginPath, []byte(content), 0o644)
+				if err != nil {
+					return InjectionResult{}, fmt.Errorf("refresh managed OpenCode plugin %s: %w", name, err)
+				}
+				if writeResult.Changed {
+					changed = true
+					files = append(files, pluginPath)
+				}
 				continue
 			}
 			return InjectionResult{}, fmt.Errorf("stat managed OpenCode plugin %s: %w", pluginPath, err)
@@ -1747,20 +1840,39 @@ func RefreshInstalledOpenCodePlugins(homeDir string, adapter agents.Adapter) (In
 	return InjectionResult{Changed: changed, Files: files}, nil
 }
 
-func removeOpenCodeOnlyReviewPlugin(pluginsDir string) (string, bool, error) {
-	path := filepath.Join(pluginsDir, "review-result-artifacts.ts")
+func isOpenCodeReviewMigrationPlugin(name string) bool {
+	return name == "opencode-review-transport.ts" || name == "sdd-task-result-artifacts.ts"
+}
+
+func hasRegularLegacyOpenCodeReviewPlugin(pluginsDir string) (bool, error) {
+	path := filepath.Join(pluginsDir, LegacyOpenCodeReviewPluginName)
+	info, err := os.Lstat(path)
+	if os.IsNotExist(err) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("stat legacy OpenCode review plugin %s: %w", path, err)
+	}
+	if !info.Mode().IsRegular() {
+		return false, fmt.Errorf("legacy OpenCode review plugin %s is not a regular file", path) // refusal:by-design world-action: replace or remove the user-owned non-regular legacy plugin before installing the incompatible Go transport shim
+	}
+	return true, nil
+}
+
+func removeLegacyOpenCodeReviewPlugin(pluginsDir string) (string, bool, error) {
+	path := filepath.Join(pluginsDir, LegacyOpenCodeReviewPluginName)
 	info, err := os.Lstat(path)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return path, false, nil
 		}
-		return path, false, fmt.Errorf("stat OpenCode-only review plugin %s: %w", path, err)
+		return path, false, fmt.Errorf("stat legacy OpenCode review plugin %s: %w", path, err)
 	}
 	if !info.Mode().IsRegular() {
-		return path, false, nil
+		return path, false, fmt.Errorf("legacy OpenCode review plugin %s is not a regular file", path) // refusal:by-design world-action: replace or remove the user-owned non-regular legacy plugin before installing the incompatible Go transport shim
 	}
 	if err := os.Remove(path); err != nil {
-		return path, false, fmt.Errorf("remove OpenCode-only review plugin %s: %w", path, err)
+		return path, false, fmt.Errorf("remove legacy OpenCode review plugin %s: %w", path, err)
 	}
 	return path, true, nil
 }
@@ -1774,6 +1886,9 @@ func installOpenCodePlugins(homeDir string, adapter agents.Adapter) (InjectionRe
 
 	if err := os.MkdirAll(pluginsDir, 0o755); err != nil {
 		return InjectionResult{}, fmt.Errorf("create plugins dir: %w", err)
+	}
+	if _, err := hasRegularLegacyOpenCodeReviewPlugin(pluginsDir); err != nil {
+		return InjectionResult{}, err
 	}
 
 	var files []string
@@ -1791,8 +1906,8 @@ func installOpenCodePlugins(homeDir string, adapter agents.Adapter) (InjectionRe
 		}
 	}
 
-	if adapter.Agent() == model.AgentKilocode {
-		path, removed, err := removeOpenCodeOnlyReviewPlugin(pluginsDir)
+	if adapter.Agent() == model.AgentOpenCode || adapter.Agent() == model.AgentKilocode {
+		path, removed, err := removeLegacyOpenCodeReviewPlugin(pluginsDir)
 		if err != nil {
 			return InjectionResult{}, err
 		}
@@ -2134,37 +2249,6 @@ func hasSDDOrchestrator(content string) bool {
 	return false
 }
 
-// sddOrchestratorAsset returns the embedded asset path for the SDD orchestrator
-// content based on the agent. Agent-specific assets take priority; generic is fallback.
-func sddOrchestratorAsset(agent model.AgentID) string {
-	switch agent {
-	case model.AgentClaudeCode:
-		return "claude/sdd-orchestrator.md"
-	case model.AgentGeminiCLI:
-		return "gemini/sdd-orchestrator.md"
-	case model.AgentCodex:
-		return "codex/sdd-orchestrator.md"
-	case model.AgentAntigravity:
-		return "antigravity/sdd-orchestrator.md"
-	case model.AgentWindsurf:
-		return "windsurf/sdd-orchestrator.md"
-	case model.AgentCursor:
-		return "cursor/sdd-orchestrator.md"
-	case model.AgentKimi:
-		return "kimi/sdd-orchestrator.md"
-	case model.AgentQwenCode:
-		return "qwen/sdd-orchestrator.md"
-	case model.AgentKiroIDE:
-		return "kiro/sdd-orchestrator.md"
-	case model.AgentHermes:
-		return "hermes/sdd-orchestrator.md"
-	case model.AgentOpenCode, model.AgentKilocode:
-		return "opencode/sdd-orchestrator.md"
-	default:
-		return "generic/sdd-orchestrator.md"
-	}
-}
-
 func injectFileAppend(homeDir string, adapter agents.Adapter, opts InjectOptions) (InjectionResult, error) {
 	promptPath := adapter.SystemPromptFile(homeDir)
 
@@ -2182,7 +2266,7 @@ func injectFileAppend(homeDir string, adapter agents.Adapter, opts InjectOptions
 	}
 
 	// Use agent-specific SDD orchestrator content when available; fall back to generic.
-	content := renderSDDOrchestratorAsset(adapter.Agent())
+	content := renderSDDOrchestratorAsset(adapter.Agent(), opts.orchestratorPolicyRenderOptions())
 
 	// Codex-only: substitute {{CODEX_PHASE_EFFORTS}} with a rendered per-phase
 	// effort table. Only fires when the adapter implements codexModelResolver.
@@ -2399,9 +2483,9 @@ func stripBareOrchestratorSection(content string) string {
 	return result
 }
 
-func injectMarkdownSections(homeDir string, adapter agents.Adapter, legacyAssignments map[string]model.ClaudeModelAlias, phaseAssignments map[string]model.ClaudePhaseAssignment) (InjectionResult, error) {
+func injectMarkdownSections(homeDir string, adapter agents.Adapter, legacyAssignments map[string]model.ClaudeModelAlias, phaseAssignments map[string]model.ClaudePhaseAssignment, renderOptions OrchestratorRenderOptions) (InjectionResult, error) {
 	promptPath := adapter.SystemPromptFile(homeDir)
-	content := renderSDDOrchestratorAsset(adapter.Agent())
+	content := renderSDDOrchestratorAsset(adapter.Agent(), renderOptions)
 
 	existing, err := readFileOrEmpty(promptPath)
 	if err != nil {
@@ -2437,7 +2521,7 @@ func writeClaudeLazySDDWorkflow(homeDir string, adapter agents.Adapter, legacyAs
 		return InjectionResult{}, nil
 	}
 
-	content := assets.MustRead("claude/sdd-orchestrator-workflow.md")
+	content := renderBoundedReviewAsset(model.AgentClaudeCode, "claude/sdd-orchestrator-workflow.md")
 	if len(legacyAssignments) > 0 || len(phaseAssignments) > 0 {
 		var err error
 		content, err = injectClaudePhaseAssignments(content, legacyAssignments, phaseAssignments)
@@ -2456,6 +2540,7 @@ func writeClaudeLazySDDWorkflow(homeDir string, adapter agents.Adapter, legacyAs
 
 var claudeModelAssignmentRowOrder = []string{
 	"sdd-explore",
+	"sdd-research",
 	"sdd-propose",
 	"sdd-spec",
 	"sdd-design",
@@ -2473,6 +2558,7 @@ var claudeModelAssignmentRowOrder = []string{
 var claudeModelAssignmentReasons = map[string]string{
 	"orchestrator": "Coordinates, makes decisions",
 	"sdd-explore":  "Reads code, structural - not architectural",
+	"sdd-research": "Collects source-backed evidence",
 	"sdd-propose":  "Architectural decisions",
 	"sdd-spec":     "Structured writing",
 	"sdd-design":   "Architecture decisions",

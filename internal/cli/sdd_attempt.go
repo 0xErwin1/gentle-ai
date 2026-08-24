@@ -53,8 +53,6 @@ func runSDDAttempt(ctx context.Context, args []string, stdout io.Writer) error {
 	harnessDisposition := registerSDDAttemptStringFlag(flags, operation, "harness-disposition")
 	cleanupEvidence := registerSDDAttemptStringFlag(flags, operation, "cleanup-evidence")
 	processEvidence := registerSDDAttemptStringFlag(flags, operation, "process-evidence")
-	expectedBindingRevision := registerSDDAttemptStringFlag(flags, operation, "expected-binding-revision")
-	successorLineage := registerSDDAttemptStringFlag(flags, operation, "successor-lineage")
 	remediatesEvidenceRevision := registerSDDAttemptStringFlag(flags, operation, "remediates-evidence-revision")
 	reason := registerSDDAttemptStringFlag(flags, operation, "reason")
 	actor := registerSDDAttemptStringFlag(flags, operation, "actor")
@@ -82,8 +80,10 @@ func runSDDAttempt(ctx context.Context, args []string, stdout io.Writer) error {
 	*token = strings.TrimSpace(*token)
 	*changeInstance = strings.TrimSpace(*changeInstance)
 	*evidenceRevision = strings.TrimSpace(*evidenceRevision)
-	*expectedBindingRevision = strings.TrimSpace(*expectedBindingRevision)
 	*remediatesEvidenceRevision = strings.TrimSpace(*remediatesEvidenceRevision)
+	if missing := missingSDDAttemptOperationFlags(args[1:], operation, *outcome); len(missing) != 0 {
+		return missingSDDAttemptOperationError(operation, missing)
+	}
 	if strings.TrimSpace(*cwd) == "" {
 		return errors.New("sdd-attempt requires --cwd")
 	}
@@ -91,21 +91,9 @@ func runSDDAttempt(ctx context.Context, args []string, stdout io.Writer) error {
 		return errors.New("sdd-attempt requires --change")
 	}
 
-	reviewDisabled, err := reviewDrivenDevelopmentDisabled(ctx, *cwd)
-	if err != nil {
-		return fmt.Errorf("read review mode: %w", err)
-	}
 	store, err := sddstatus.OpenRuntimeStore(ctx, *cwd, *change)
 	if err != nil {
 		return fmt.Errorf("open native SDD runtime authority: %w", err)
-	}
-	// The kill switch reaches the runtime ledger here, at the one place that
-	// knows how to read both of its sources. With reviews off, closing an
-	// attempt must not demand a review obligation the operator has no way to
-	// satisfy.
-	store.ReviewDisabled = reviewDisabled
-	if missing := missingSDDAttemptOperationFlags(args[1:], operation); len(missing) != 0 {
-		return missingSDDAttemptOperationError(operation, missing)
 	}
 	var intended []string
 	declaredUntracked := reviewIntendedUntrackedDeclared(untrackedScope, intendedUntracked, expectedUntrackedInventory)
@@ -148,17 +136,11 @@ func runSDDAttempt(ctx context.Context, args []string, stdout io.Writer) error {
 			MaxAttempts: *maxAttempts, MaxChangedLines: *maxChangedLines, IntendedUntracked: intended,
 		})
 	case "finish":
-		remediationFlags := presentSDDAttemptFlags(args[1:], "expected-binding-revision", "successor-lineage", "remediates-evidence-revision")
-		unmanagedRemediation := *expectedBindingRevision == "" && *successorLineage == "" && *remediatesEvidenceRevision != ""
-		if remediationFlags != 0 && remediationFlags != 3 && !unmanagedRemediation {
-			return errors.New("remediation successor requires --expected-binding-revision, --successor-lineage, and --remediates-evidence-revision together")
-		}
 		result, err = store.Finish(ctx, sddstatus.FinishAttemptRequest{
 			ExpectedRevision: *expected, RequestID: *requestID, Outcome: sddstatus.AttemptOutcome(*outcome),
 			EvidenceRevision: *evidenceRevision, Diagnosis: *diagnosis,
 			HarnessDisposition: sddstatus.HarnessDisposition(*harnessDisposition),
 			CleanupEvidence:    *cleanupEvidence, ProcessEvidence: *processEvidence,
-			ExpectedBindingRevision: *expectedBindingRevision, SuccessorLineageID: *successorLineage,
 			RemediatesEvidenceRevision: *remediatesEvidenceRevision,
 		})
 	case "handoff":
@@ -195,7 +177,7 @@ func runSDDAttempt(ctx context.Context, args []string, stdout io.Writer) error {
 			EvidenceRevision: *evidenceRevision, Diagnosis: *diagnosis,
 			HarnessDisposition: sddstatus.HarnessDisposition(*harnessDisposition),
 			CleanupEvidence:    *cleanupEvidence, ProcessEvidence: *processEvidence,
-			SuccessorLineageID: *successorLineage, RemediatesEvidenceRevision: *remediatesEvidenceRevision,
+			RemediatesEvidenceRevision: *remediatesEvidenceRevision,
 		})
 	case "grant":
 		// --expected-revision stays optional, unlike begin/finish/reset: the
@@ -284,13 +266,11 @@ var sddAttemptOperationDefinitions = []sddAttemptOperationContract{
 		{name: "expected-revision", required: true, usage: "required; exact sha256:<64 lowercase hex> runtime revision"},
 		{name: "request-id", required: true, usage: "required; lowercase idempotency key, at most 128 bytes"},
 		{name: "outcome", required: true, usage: "required; failed, interrupted, or passed"},
-		{name: "evidence-revision", required: true, usage: "required; sha256:<64 lowercase hex>, never none"},
+		{name: "evidence-revision", required: true, usage: "required for failed/passed; empty or canonical legacy sha256 revision for interrupted"},
 		{name: "diagnosis", required: true, usage: "required; trimmed single-line text, at most 500 bytes"},
 		{name: "harness-disposition", required: true, usage: "required; reused or invalidated"},
 		{name: "cleanup-evidence", required: true, usage: "required; trimmed single-line text, at most 500 bytes"},
 		{name: "process-evidence", required: true, usage: "required; trimmed single-line text, at most 500 bytes"},
-		{name: "expected-binding-revision", usage: "optional; with successor-lineage and remediates-evidence-revision"},
-		{name: "successor-lineage", usage: "optional; lowercase approved lineage, at most 128 bytes"},
 		{name: "remediates-evidence-revision", usage: "optional; repaired sha256:<64 lowercase hex> failed evidence"},
 	}},
 	{name: "handoff", purpose: "Atomically move the active attempt to one linked worktree", flags: []sddAttemptFlagDefinition{
@@ -332,7 +312,7 @@ var sddAttemptOperationDefinitions = []sddAttemptOperationContract{
 		{name: "evidence-goal", required: true, usage: "required; single-line objective, at most 240 bytes"},
 		{name: "max-attempts", kind: sddAttemptIntFlag, usage: "optional; default 2, limit 1..100"},
 		{name: "max-changed-lines", kind: sddAttemptIntFlag, usage: "optional; default 200, limit 1..1000000"},
-		{name: "remediates-evidence-revision", usage: "optional; sha256:<64 lowercase hex> failed evidence for unmanaged remediation"},
+		{name: "remediates-evidence-revision", usage: "optional; sha256:<64 lowercase hex> failed evidence correction"},
 		{name: "untracked-scope", usage: "required when eligible untracked files exist; select or exclude"},
 		{name: "expected-untracked-inventory", usage: "required with untracked-scope; inventory digest"},
 		{name: "intended-untracked", kind: sddAttemptRepeatableStringFlag, usage: "repeatable selected repo-relative untracked path"},
@@ -342,12 +322,11 @@ var sddAttemptOperationDefinitions = []sddAttemptOperationContract{
 		{name: "token", required: true, usage: "required; opaque token returned by acquire"},
 		{name: "request-id", required: true, usage: "required; lowercase idempotency key, at most 128 bytes"},
 		{name: "outcome", required: true, usage: "required; failed, interrupted, or passed"},
-		{name: "evidence-revision", required: true, usage: "required; sha256:<64 lowercase hex>, never none"},
+		{name: "evidence-revision", required: true, usage: "required for failed/passed; omit for interrupted"},
 		{name: "diagnosis", required: true, usage: "required; trimmed single-line text, at most 500 bytes"},
 		{name: "harness-disposition", required: true, usage: "required; reused or invalidated"},
 		{name: "cleanup-evidence", required: true, usage: "required; trimmed single-line text, at most 500 bytes"},
 		{name: "process-evidence", required: true, usage: "required; trimmed single-line text, at most 500 bytes"},
-		{name: "successor-lineage", usage: "optional; lowercase distinct approved lineage, at most 128 bytes"},
 		{name: "remediates-evidence-revision", usage: "optional; repaired sha256:<64 lowercase hex> failed evidence"},
 	}},
 	{name: "grant", purpose: "Record per-change edit authority for roots", flags: []sddAttemptFlagDefinition{
@@ -565,13 +544,22 @@ func registerSDDAttemptSingleValueFlag(flags *flag.FlagSet, operation, name stri
 	}
 }
 
-func missingSDDAttemptOperationFlags(args []string, operation string) []string {
+func missingSDDAttemptOperationFlags(args []string, operation, parsedOutcome string) []string {
 	definition, _ := sddAttemptOperationDefinition(operation)
 	names := make([]string, 0, len(definition.flags))
 	for _, flagDefinition := range definition.flags {
 		if flagDefinition.required {
 			names = append(names, flagDefinition.name)
 		}
+	}
+	if (operation == "finish" || operation == "settle") && parsedOutcome == "interrupted" {
+		filtered := names[:0]
+		for _, name := range names {
+			if name != "evidence-revision" {
+				filtered = append(filtered, name)
+			}
+		}
+		names = filtered
 	}
 	return missingSDDAttemptFlags(args, names...)
 }

@@ -13,6 +13,7 @@
             "explore": "allow",
             "sdd-init": "allow",
             "sdd-explore": "allow",
+            "sdd-research": "allow",
             "sdd-propose": "allow",
             "sdd-spec": "allow",
             "sdd-design": "allow",
@@ -28,7 +29,8 @@
             "review-readability": "allow",
             "review-reliability": "allow",
             "review-resilience": "allow",
-            "review-refuter": "allow"
+            "review-refuter": "allow",
+            "review-validator": "allow"
           }
         }
       },
@@ -66,7 +68,8 @@
         "write": false,
         "edit": false,
         "bash": false,
-        "task": false
+        "task": false,
+        "codegraph_codegraph_explore": true
       }
     },
     "sdd-init": {
@@ -91,6 +94,21 @@
         "write": true,
         "edit": true,
         "bash": true
+      }
+    },
+    "sdd-research": {
+      "mode": "subagent",
+      "hidden": true,
+      "description": "Collect source-backed evidence for selected SDD research",
+      "prompt": "You are the SDD research executor, not the orchestrator. Do NOT delegate or call task. Read ~/.config/opencode/skills/sdd-research/SKILL.md and follow it exactly. Evidence grants: documentation=[]; open-web=[]. Persistence tools are not evidence grants. Unsupported or undeclared classes deny admission and emit no claims. Retain selected intent and persist blocked recovery state without source claims.",
+      "tools": {
+        "read": true,
+        "write": true,
+        "edit": true,
+        "bash": false,
+        "webfetch": false,
+        "websearch": false,
+        "task": false
       }
     },
     "sdd-propose": {
@@ -255,6 +273,13 @@
       "description": "Batched adversarial refuter — evaluates every BLOCKER/CRITICAL candidate through one assigned lens and returns one verdict per finding",
       "prompt": "You are a read-only review refuter. Do NOT delegate and never modify files. Input: the complete merged list of BLOCKER/CRITICAL candidates, with id, location, severity, summary, and evidence per entry, plus exactly one lens: general, correctness, exploitability-impact, or reproducibility. Attempt to refute every candidate through that lens using concrete code evidence; 'seems unlikely' does not refute. Return the assigned lens and a verdicts list with one verdict entry per candidate: finding id, verdict refuted or stands, and evidence. Do not omit candidates or report new findings. Default inconclusive candidates to stands; the orchestrator also treats every malformed or missing per-finding verdict as stands.",
       "tools": { "read": true, "write": false, "edit": false, "bash": false, "task": false }
+    },
+    "review-validator": {
+      "mode": "subagent",
+      "hidden": true,
+      "description": "Targeted read-only validator for provider-issued review checks",
+      "prompt": "You are a targeted validation subagent. Execute only the provider-issued targeted validation in the Go-issued task prompt. Do NOT edit files. Do NOT delegate. That prompt embeds the frozen patch for every corrected path and names the one read-only command you may run to read the immutable trees yourself, `gentle-ai review inspect-candidate --purpose targeted-validation`, with every argument it needs. Use it when you need more than the embedded patches; run nothing else against the repository and never read the live worktree, index, or HEAD. Reporting that the candidate could not be inspected is a last resort, not a first response, and an inconclusive inspection is never a failed check. Return the exact requested JSON and nothing else.",
+      "tools": { "read": true, "write": false, "edit": false, "bash": true, "task": false }
     }
   }
 }

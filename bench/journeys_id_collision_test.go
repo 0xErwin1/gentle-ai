@@ -21,22 +21,24 @@ type journeySource struct {
 // TestJourneySourcesCoverTheWholeCorpus fails until it is registered, so a
 // new file cannot bypass the collision check silently.
 func journeySources() []journeySource {
-	return []journeySource{
+	sources := []journeySource{
 		{"journeys.go", coreJourneys()},
 		{"journeys_edge.go", edgeJourneys()},
 		{"journeys_sdd.go", sddJourneys()},
 		{"journeys_issue_2891.go", issue2891Journeys()},
 		{"journeys_issue2696.go", issue2696Journeys()},
 		{"journeys_sdd_chain.go", sddChainJourneys()},
+		{"journeys_issue3094.go", issue3094Journeys()},
 		{"journeys_handoff.go", handoffJourneys()},
 		{"journeys_sdd_untracked.go", selectedUntrackedSDDJourneys()},
 		{"journeys_capture_evidence_v5.go", captureEvidenceDescriptorJourneys()},
 		{"journeys_scope_changed_fixture.go", scopeChangedFixtureJourneys()},
 		{"journeys_wave1.go", waveOneJourneys()},
 		{"journeys_wave3.go", waveThreeJourneys()},
+		{"journeys_atomic_review.go", atomicReviewJourneys()},
 		{"journeys_wave5.go", waveFiveJourneys()},
-		{"journeys_advisory.go", advisoryJourneys()},
 		{"journeys_zero_delta.go", zeroDeltaJourneys()},
+		{"journeys_lens_context_budget.go", lensContextBudgetJourneys()},
 		{"journeys_local_gate_advance.go", localGateBaseAdvanceJourneys()},
 		{"journeys_intended_untracked.go", intendedUntrackedJourneys()},
 		{"journeys_capture_result_dry_run.go", captureResultDryRunJourneys()},
@@ -53,7 +55,20 @@ func journeySources() []journeySource {
 		{"journeys_managed_assets.go", managedAssetJourneys()},
 		{"journeys_issue2906.go", issue2906Journeys()},
 		{"journeys_issue_2138.go", issue2138Journeys()},
+		{"journeys_issue_3043.go", issue3043Journeys()},
+		{"journeys_repository_context.go", repositoryContextJourneys()},
+		{"journeys_provider_capture.go", providerCaptureRetryJourneys()},
+		{"journeys_captured_provider_validator.go", capturedProviderValidatorJourneys()},
+		{"journeys_sdd_shared_scaffolding.go", sddSharedScaffoldingJourneys()},
+		{"journeys_sdd_post_review_verify_report.go", sddPostReviewVerifyReportJourneys()},
+		{"journeys_issue3564.go", issue3564Journeys()},
+		{"journeys_issue3321.go", issue3321Journeys()},
+		{"journeys_issue3587.go", issue3587Journeys()},
 	}
+	for index := range sources {
+		sources[index].Journeys = removeRetiredAtomicJourneys(sources[index].Journeys)
+	}
+	return sources
 }
 
 // TestJourneyIDsAreUniqueAcrossSourceFiles is the focused duplicate-ID check.

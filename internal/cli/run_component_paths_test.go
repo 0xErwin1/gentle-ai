@@ -71,7 +71,7 @@ func TestComponentPathsSDDMultiIncludesOpenCodePlugins(t *testing.T) {
 
 	paths := componentPaths(home, model.Selection{SDDMode: model.SDDModeMulti}, adapters, model.ComponentSDD)
 
-	for _, plugin := range []string{"background-agents.ts", "model-variants.ts", "review-result-artifacts.ts", "skill-registry.ts"} {
+	for _, plugin := range []string{"background-agents.ts", "model-variants.ts", "opencode-review-transport.ts", "sdd-task-result-artifacts.ts", "skill-registry.ts"} {
 		path := filepath.Join(home, ".config", "opencode", "plugins", plugin)
 		if !containsPath(paths, path) {
 			t.Fatalf("componentPaths(sdd multi) missing OpenCode plugin path %q\npaths=%v", path, paths)
@@ -85,7 +85,7 @@ func TestComponentPathsSDDSingleIncludesOpenCodePlugins(t *testing.T) {
 
 	paths := componentPaths(home, model.Selection{SDDMode: model.SDDModeSingle}, adapters, model.ComponentSDD)
 
-	for _, plugin := range []string{"background-agents.ts", "model-variants.ts", "review-result-artifacts.ts", "skill-registry.ts"} {
+	for _, plugin := range []string{"background-agents.ts", "model-variants.ts", "opencode-review-transport.ts", "sdd-task-result-artifacts.ts", "skill-registry.ts"} {
 		path := filepath.Join(home, ".config", "opencode", "plugins", plugin)
 		if !containsPath(paths, path) {
 			t.Fatalf("componentPaths(sdd single) missing OpenCode plugin path %q\npaths=%v", path, paths)
@@ -106,6 +106,8 @@ func TestComponentPathsWorkspaceScopedOpenCodeSDDUsesWorkspaceManagedPaths(t *te
 		filepath.Join(workspace, ".config", "opencode", "commands", "sdd-init.md"),
 		filepath.Join(workspace, ".config", "opencode", "plugins", "background-agents.ts"),
 		filepath.Join(workspace, ".config", "opencode", "plugins", "model-variants.ts"),
+		filepath.Join(workspace, ".config", "opencode", "plugins", "opencode-review-transport.ts"),
+		filepath.Join(workspace, ".config", "opencode", "plugins", "sdd-task-result-artifacts.ts"),
 		filepath.Join(workspace, ".config", "opencode", "plugins", "skill-registry.ts"),
 		filepath.Join(workspace, ".config", "opencode", "prompts", "sdd", "sdd-apply.md"),
 		filepath.Join(workspace, ".config", "opencode", "skills", "sdd-apply", "SKILL.md"),
@@ -1059,6 +1061,27 @@ func TestBackupTargetsClaudeContext7IncludeCleanupWithoutVerificationRequirement
 				t.Fatalf("backupTargets selected the wrong scope's cleanup path; targets=%v", targets)
 			}
 		})
+	}
+}
+
+func TestComponentPathsVisualThemesMatchSelectedAdapter(t *testing.T) {
+	home := t.TempDir()
+	for _, tt := range []struct {
+		agent model.AgentID
+		want  []string
+	}{
+		{model.AgentClaudeCode, []string{filepath.Join(home, ".claude", "themes", "gentleman.json"), filepath.Join(home, ".claude", "themes", "gentleman-cute.json")}},
+		{model.AgentOpenCode, []string{filepath.Join(home, ".config", "opencode", "themes", "gentleman.json"), filepath.Join(home, ".config", "opencode", "themes", "gentleman-cute.json")}},
+	} {
+		paths := componentPaths(home, model.Selection{}, resolveAdapters([]model.AgentID{tt.agent}), model.ComponentClaudeTheme)
+		if len(paths) != len(tt.want) {
+			t.Fatalf("%q paths = %v, want %v", tt.agent, paths, tt.want)
+		}
+		for i := range tt.want {
+			if paths[i] != tt.want[i] {
+				t.Fatalf("%q paths = %v, want %v", tt.agent, paths, tt.want)
+			}
+		}
 	}
 }
 

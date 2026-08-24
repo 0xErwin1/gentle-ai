@@ -14,6 +14,7 @@ const issue2138OpenCodeSettings = ".config/opencode/opencode.json"
 func issue2138Journeys() []Journey {
 	return []Journey{{
 		ID:     "j2138-opencode-native-fallback-boundary",
+		Review: reviewUntouched,
 		Title:  "Zero-config OpenCode install emits bounded native fallback agents",
 		Source: "https://github.com/Gentleman-Programming/gentle-ai/issues/2138",
 		Steps: []Step{
@@ -87,7 +88,7 @@ func issue2138AssertGeneratedFallbacks(mode string) func(*Sandbox, Observation) 
 		}
 		wantTools := map[string]map[string]bool{
 			"general": {"read": true, "write": true, "edit": true, "bash": true, "task": false},
-			"explore": {"read": true, "write": false, "edit": false, "bash": false, "task": false},
+			"explore": {"read": true, "write": false, "edit": false, "bash": false, "task": false, "codegraph_codegraph_explore": true},
 		}
 		for name, toolsWant := range wantTools {
 			raw, ok := agents[name].(map[string]any)
