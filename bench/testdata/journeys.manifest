@@ -40,6 +40,7 @@ j78-lens-finding-id-prefix-discovery
 j79-consecutive-rescope-refuses-before-publication
 j80-rescope-authorized-evidence-only-retry
 j81-rc1-consecutive-rescope-repair-executes-printed-command
+j84-sdd-attempt-selected-untracked-lifecycle
 j87-unmanaged-remediation-uses-chain-failed-evidence
 j88-unborn-status-collects-untracked-selection
 j89-staged-validation-is-informational-and-unmanaged
