@@ -217,28 +217,7 @@ func TestAgentInstallStepSkipsMissingNonPiRuntime(t *testing.T) {
 }
 
 func TestPiAgentInstallProgressUsesAdapterCommandNames(t *testing.T) {
-	binDir := t.TempDir()
-	fakePi := filepath.Join(binDir, "pi")
-	if err := os.WriteFile(fakePi, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
-		t.Fatalf("WriteFile(fake pi) error = %v", err)
-	}
-	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
-
-	fakeNpm := filepath.Join(binDir, "npm")
-	if err := os.WriteFile(fakeNpm, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
-		t.Fatalf("WriteFile(fake npm) error = %v", err)
-	}
-
-	restorePreflightLookPath := installcmd.OverrideLookPath(func(name string) (string, error) {
-		switch name {
-		case "pi":
-			return fakePi, nil
-		case "npm":
-			return fakeNpm, nil
-		default:
-			return "", exec.ErrNotFound
-		}
-	})
+	restorePreflightLookPath := installcmd.OverrideLookPath(func(name string) (string, error) { return name, nil })
 	t.Cleanup(restorePreflightLookPath)
 
 	restoreCommand := runCommand
@@ -258,17 +237,7 @@ func TestPiAgentInstallProgressUsesAdapterCommandNames(t *testing.T) {
 		t.Fatalf("agentInstallStep.Run() error = %v", err)
 	}
 
-	wantPackages := []string{
-		"pi install npm:gentle-pi",
-		"pi install npm:gentle-engram",
-		"pi install npm:pi-mcp-adapter",
-		engramInitCommandForTest,
-		"pi install npm:pi-subagents-j0k3r",
-		"pi install npm:@juicesharp/rpiv-ask-user-question",
-		"pi install npm:pi-web-access",
-		"pi install npm:@juicesharp/rpiv-todo",
-		"pi install npm:pi-btw",
-	}
+	wantPackages := []string{"pi install npm:gentle-pi", "pi install npm:gentle-engram", "pi install npm:pi-mcp-adapter", engramInitCommandForTest, "pi install npm:pi-subagents-j0k3r", "pi install npm:@juicesharp/rpiv-ask-user-question", "pi install npm:pi-web-access", "pi install npm:@juicesharp/rpiv-todo", "pi install npm:pi-btw"}
 	if len(events) != len(wantPackages)*2 {
 		t.Fatalf("progress events = %d, want %d: %v", len(events), len(wantPackages)*2, events)
 	}
