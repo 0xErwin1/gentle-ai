@@ -99,6 +99,99 @@ func TestInjectCreatesAdapterSettingsWhenMissing(t *testing.T) {
 	}
 }
 
+func TestInjectVisualThemesIsIdempotentForClaude(t *testing.T) {
+	home := t.TempDir()
+
+	first, err := InjectVisualThemes(home, claudeAdapter())
+	if err != nil {
+		t.Fatalf("InjectVisualThemes() first error = %v", err)
+	}
+	if !first.Changed {
+		t.Fatalf("InjectVisualThemes() first changed = false")
+	}
+
+	second, err := InjectVisualThemes(home, claudeAdapter())
+	if err != nil {
+		t.Fatalf("InjectVisualThemes() second error = %v", err)
+	}
+	if second.Changed {
+		t.Fatalf("InjectVisualThemes() second changed = true")
+	}
+
+	path := filepath.Join(home, ".claude", "themes", "gentleman.json")
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("expected Claude theme file %q: %v", path, err)
+	}
+}
+
+func TestInjectVisualThemesSkipsUnsupportedAdapter(t *testing.T) {
+	home := t.TempDir()
+	adapter, _ := agents.NewAdapter(model.AgentGeminiCLI)
+
+	result, err := InjectVisualThemes(home, adapter)
+	if err != nil {
+		t.Fatalf("InjectVisualThemes() error = %v", err)
+	}
+	if result.Changed || len(result.Files) != 0 {
+		t.Fatalf("InjectVisualThemes() = %#v, want no-op for unsupported adapter", result)
+	}
+	if _, err := os.Stat(filepath.Join(home, ".claude", "themes", "gentleman.json")); !os.IsNotExist(err) {
+		t.Fatalf("InjectVisualThemes() should not write Claude files for Gemini; stat error = %v", err)
+	}
+}
+
+func TestInjectVisualThemesPreservesGentlemanClaudeTheme(t *testing.T) {
+	home := t.TempDir()
+
+	result, err := InjectVisualThemes(home, claudeAdapter())
+	if err != nil {
+		t.Fatalf("InjectVisualThemes() error = %v", err)
+	}
+
+	themePath := filepath.Join(home, ".claude", "themes", "gentleman.json")
+	if len(result.Files) != 2 || result.Files[0] != themePath {
+		t.Fatalf("files = %#v, want Gentleman first at %q", result.Files, themePath)
+	}
+
+	data, err := os.ReadFile(themePath)
+	if err != nil {
+		t.Fatalf("ReadFile(theme) error = %v", err)
+	}
+
+	var root struct {
+		Name      string            `json:"name"`
+		Base      string            `json:"base"`
+		Overrides map[string]string `json:"overrides"`
+	}
+	if err := json.Unmarshal(data, &root); err != nil {
+		t.Fatalf("Unmarshal(theme) error = %v", err)
+	}
+
+	if root.Name != "gentleman" || root.Base != "dark" {
+		t.Fatalf("theme identity = %q/%q, want gentleman/dark", root.Name, root.Base)
+	}
+	expected := map[string]string{
+		"diffAdded":                 "#3F4A2D",
+		"diffRemoved":               "#5C3838",
+		"diffAddedWord":             "#76946A",
+		"diffRemovedWord":           "#C34043",
+		"chromeYellow":              "#DCA561",
+		"briefLabelYou":             "#DCA561",
+		"rainbow_yellow":            "#DCA561",
+		"yellow_FOR_SUBAGENTS_ONLY": "#DCA561",
+	}
+	for key, want := range expected {
+		if root.Overrides[key] != want {
+			t.Fatalf("override %s = %q, want %q", key, root.Overrides[key], want)
+		}
+	}
+	for _, forbidden := range []string{"markdown", "syntax", "keyword", "string"} {
+		if _, ok := root.Overrides[forbidden]; ok {
+			t.Fatalf("theme contains forbidden non-Claude theme key %q", forbidden)
+		}
+	}
+}
+
 const (
 	gentlemanClaudeFixture   = `{"name":"gentleman","base":"dark","overrides":{"diffAdded":"#3F4A2D","diffRemoved":"#5C3838","diffAddedWord":"#76946A","diffRemovedWord":"#C34043","chromeYellow":"#DCA561","briefLabelYou":"#DCA561","rainbow_yellow":"#DCA561","yellow_FOR_SUBAGENTS_ONLY":"#DCA561"}}`
 	cuteClaudeFixture        = `{"name":"Gentleman Cute","base":"dark","overrides":{"claude":"#E35FA6","claudeShimmer":"#FF81CC","text":"#F6EFF3","inactive":"#A78E9B","subtle":"#76616B","suggestion":"#FFB1DD","permission":"#E35FA6","promptBorder":"#E35FA6","planMode":"#C49BFF","autoAccept":"#FF81CC","bashBorder":"#E0C27A","remember":"#E0C27A","success":"#D2CBD0","merged":"#D2CBD0","error":"#FF718F","warning":"#F2B86D","diffAdded":"#1A2430","diffRemoved":"#2D151F","diffAddedWord":"#2D4F6A","diffRemovedWord":"#7A2948","userMessageBackground":"#241822","userMessageBackgroundHover":"#342230","selectionBg":"#563040","memoryBackgroundColor":"#1A1218","bashMessageBackgroundColor":"#151316"}}`
@@ -144,22 +237,11 @@ func TestInjectVisualThemesWritesExpectedAssets(t *testing.T) {
 			t.Fatalf("%s bytes mismatch: %v", tt.path, err)
 		}
 	}
-	data, err := os.ReadFile(filepath.Join(home, ".claude", "themes", "gentleman-cute.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	var cute claudeTheme
-	if err := json.Unmarshal(data, &cute); err != nil {
-		t.Fatal(err)
-	}
+	cute := gentlemanCuteClaudeTheme
 	for _, key := range []string{"background", "backgroundFullscreen", "backgroundUser", "backgroundHover", "backgroundSelection", "backgroundMemory", "backgroundBash", "shimmer"} {
 		if _, exists := cute.Overrides[key]; exists {
 			t.Fatalf("Claude Cute contains invalid override %q", key)
 		}
-	}
-	adapter, _ := agents.NewAdapter(model.AgentGeminiCLI)
-	if result, err := InjectVisualThemes(home, adapter); err != nil || result.Changed || len(result.Files) != 0 {
-		t.Fatalf("unsupported injection = %#v, %v", result, err)
 	}
 }
 
