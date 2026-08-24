@@ -96,6 +96,7 @@ var coreJourneyReviewModes = map[string]ReviewPrecondition{
 	"j81-rc1-consecutive-rescope-repair-executes-printed-command":               reviewOptedIn,
 	"j82-reviewed-superset-pre-push-allows-unpublished-subset":                  reviewOptedIn,
 	"j83-pre-pr-moving-advertised-base-binds-merge-base":                        reviewOptedIn,
+	"j84-sdd-attempt-selected-untracked-lifecycle":                              reviewOptedIn,
 	"j85-review-parse-refusals-are-preflight":                                   reviewOptedIn,
 	"j86-approved-base-diff-local-parent-merge-preserves-approved-receipt":      reviewOptedIn,
 	"j87-unmanaged-remediation-uses-chain-failed-evidence":                      reviewUntouched,
