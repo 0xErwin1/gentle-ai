@@ -112,6 +112,7 @@ var coreJourneyReviewModes = map[string]ReviewPrecondition{
 	"j97-pre-push-preserves-ls-remote-failure":                                  reviewOptedIn,
 	"j98-sdd-flat-root-spec-is-discovered":                                      reviewUntouched,
 	"j99-issue-2906-finalize-missing-contract":                                  reviewOptedIn,
+	"j115-recovery-selector-is-collected-before-authorization":                  reviewOptedIn,
 }
 
 func declareCoreJourneyReviewModes(journeys []Journey) []Journey {
