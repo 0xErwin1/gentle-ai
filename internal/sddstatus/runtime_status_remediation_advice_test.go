@@ -1,5 +1,3 @@
-//go:build legacy_compact_receipt
-
 package sddstatus
 
 import (
@@ -8,10 +6,10 @@ import (
 	"testing"
 )
 
-// TestActiveAttemptGuidanceStaysShortWithoutABinding keeps the addition
-// proportional: an unbound attempt owes no review obligation, so naming
-// remediation flags there would advertise a route that does not apply.
-func TestActiveAttemptGuidanceStaysShortWithoutABinding(t *testing.T) {
+// TestActiveAttemptGuidanceStaysShortWithoutRemediationNeed keeps the guidance
+// proportional: a directly continuable attempt must not advertise remediation
+// flags that do not apply.
+func TestActiveAttemptGuidanceStaysShortWithoutRemediationNeed(t *testing.T) {
 	repo := initRuntimeLedgerRepo(t)
 	seedReadyChange(t, repo, "unbound-active", "- [ ] 1.1 Work\n")
 	store := mustRuntimeStore(t, repo, "unbound-active")
@@ -27,7 +25,7 @@ func TestActiveAttemptGuidanceStaysShortWithoutABinding(t *testing.T) {
 	}
 	guidance := activeAttemptGuidance(t, status)
 	if strings.Contains(guidance, "--successor-lineage") {
-		t.Fatalf("unbound active attempt advertised remediation flags it cannot use:\n%s", guidance)
+		t.Fatalf("directly continuable active attempt advertised remediation flags it cannot use:\n%s", guidance)
 	}
 }
 
