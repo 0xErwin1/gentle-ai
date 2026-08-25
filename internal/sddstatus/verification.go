@@ -109,6 +109,11 @@ func parseVerifyResult(text string, expected SpecCounts) verifyResultEvaluation 
 		evaluation.Reason = "independent test and build execution evidence is incomplete; rerun SDD verification"
 		return evaluation
 	}
+	if report.Verdict == "fail" && (report.Requirements.Completed != report.Requirements.Total || report.Scenarios.Completed != report.Scenarios.Total) {
+		evaluation.Incomplete = true
+		evaluation.Reason = "failed verification evidence is incomplete; rerun SDD verification"
+		return evaluation
+	}
 	if report.TestExit != 0 {
 		evaluation.Reason = "test_exit_code must be zero for archive readiness"
 		return evaluation
