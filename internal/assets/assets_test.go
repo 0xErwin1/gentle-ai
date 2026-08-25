@@ -782,10 +782,17 @@ func TestSkillRegistryPluginContract(t *testing.T) {
 		"homedir()",
 		".git",
 		".atl",
-		"console.info",
+		"console.error",
 	} {
 		if !strings.Contains(src, want) {
 			t.Fatalf("skill-registry.ts missing %q", want)
+		}
+	}
+	// stdout belongs to OpenCode commands whose output gentle-ai parses
+	// (`opencode models --verbose`); plugin logging must stay on stderr.
+	for _, forbidden := range []string{"console.info", "console.log"} {
+		if strings.Contains(src, forbidden) {
+			t.Fatalf("skill-registry.ts must not log to stdout via %q", forbidden)
 		}
 	}
 	if strings.Contains(src, "exec(") {

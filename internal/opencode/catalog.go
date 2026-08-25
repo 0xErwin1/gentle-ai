@@ -80,17 +80,24 @@ func catalogCommandError(ctx context.Context, err error) error {
 
 func parseVerboseCatalog(data []byte) (map[string]Provider, error) {
 	providers := map[string]Provider{}
+	sawNoise := false
 	for len(bytes.TrimSpace(data)) > 0 {
 		data = bytes.TrimLeft(data, "\r\n\t ")
-		end := bytes.IndexByte(data, '\n')
-		if end < 0 {
-			return nil, &CatalogError{Kind: CatalogErrorMalformed}
+		line, rest := data, []byte(nil)
+		if end := bytes.IndexByte(data, '\n'); end >= 0 {
+			line, rest = data[:end], data[end+1:]
 		}
-		header := strings.TrimSpace(string(data[:end]))
-		if header == "" || strings.ContainsAny(header, " \t") {
-			return nil, &CatalogError{Kind: CatalogErrorUnsupportedSchema}
+		header := strings.TrimSpace(string(line))
+		if !isCatalogHeader(header) || !startsJSONObject(rest) {
+			// Plugins and hooks (e.g. the managed skill-registry plugin outside
+			// a project root) may log to stdout before or between catalog
+			// records. Skip such lines instead of failing the whole discovery,
+			// but remember them so noise-only output still fails closed.
+			sawNoise = true
+			data = rest
+			continue
 		}
-		data = data[end+1:]
+		data = rest
 		var raw struct {
 			ID           string `json:"id"`
 			Name         string `json:"name"`
@@ -127,13 +134,46 @@ func parseVerboseCatalog(data []byte) (map[string]Provider, error) {
 		for key := range raw.Variants {
 			variants = append(variants, key)
 		}
-		sort.Strings(variants)
+		sortVariants(variants)
 		reasoning := raw.Capabilities.Reasoning != nil && *raw.Capabilities.Reasoning
 		provider.Models[raw.ID] = Model{ID: raw.ID, Name: raw.Name, Family: raw.Family, ToolCall: *raw.Capabilities.ToolCall, Reasoning: reasoning, Limit: raw.Limit, Cost: raw.Cost, Variants: variants}
 		providers[providerID] = provider
 		data = data[consumed:]
 	}
+	if len(providers) == 0 && sawNoise {
+		return nil, &CatalogError{Kind: CatalogErrorUnsupportedSchema}
+	}
 	return providers, nil
+}
+
+// isCatalogHeader reports whether line has the `provider/model` header shape:
+// non-empty, no whitespace, at least one slash, and not the start of a JSON
+// block. Anything else on stdout is log noise, never a catalog record.
+func isCatalogHeader(line string) bool {
+	return line != "" && !strings.ContainsAny(line, " \t") && strings.Contains(line, "/") && line[0] != '{'
+}
+
+// startsJSONObject reports whether the bytes after a candidate header begin a
+// JSON object. A header-shaped log line (a bare path, a URL) is only accepted
+// as a record header when its JSON block actually follows.
+func startsJSONObject(rest []byte) bool {
+	rest = bytes.TrimLeft(rest, "\r\n\t ")
+	return len(rest) > 0 && rest[0] == '{'
+}
+
+// effortRank orders the known reasoning-effort variant names semantically.
+var effortRank = map[string]int{"low": 0, "medium": 1, "high": 2}
+
+// sortVariants emits low/medium/high semantic order when every variant key is
+// a known effort name, falling back to lexical order for anything else.
+func sortVariants(variants []string) {
+	for _, variant := range variants {
+		if _, known := effortRank[variant]; !known {
+			sort.Strings(variants)
+			return
+		}
+	}
+	sort.Slice(variants, func(i, j int) bool { return effortRank[variants[i]] < effortRank[variants[j]] })
 }
 
 func runCatalogCommand(ctx context.Context, command Command) (CommandOutput, error) {
