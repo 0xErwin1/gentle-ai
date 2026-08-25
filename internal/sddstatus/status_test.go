@@ -1,11 +1,8 @@
-//go:build legacy_compact_receipt
-
 package sddstatus
 
 import (
 	"context"
 	"encoding/json"
-	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -585,8 +582,7 @@ func TestResolveApplyVerifyArchiveGates(t *testing.T) {
 			name: "archive ready only when verify report exists and tasks are complete",
 			seed: func(t *testing.T, root string) {
 				changeRoot := seedReadyChange(t, root, "thin", "- [x] 1.1 Work\n")
-				write(t, filepath.Join(changeRoot, "verify-report.md"), boundedVerifyEnvelope(shaID("1"), "pass"))
-				writeApprovedReviewArtifacts(t, changeRoot)
+				write(t, filepath.Join(changeRoot, "verify-report.md"), testVerifyEnvelope("pass", 0, 0, "1/1", "1/1", 0, 0))
 			},
 			wantApply:   ApplyAllDone,
 			wantApplyD:  DependencyAllDone,
@@ -598,7 +594,7 @@ func TestResolveApplyVerifyArchiveGates(t *testing.T) {
 			name: "archive ready for canonical passing verify report",
 			seed: func(t *testing.T, root string) {
 				changeRoot := seedReadyChange(t, root, "thin", "- [x] 1.1 Work\n")
-				write(t, filepath.Join(changeRoot, "verify-report.md"), boundedVerifyEnvelope(shaID("1"), "pass")+"\n"+strings.Join([]string{
+				write(t, filepath.Join(changeRoot, "verify-report.md"), testVerifyEnvelope("pass", 0, 0, "1/1", "1/1", 0, 0)+"\n"+strings.Join([]string{
 					"## Verification Report",
 					"### Build & Tests Execution",
 					"**Tests**: ✅ 12 passed / ❌ 0 failed / ⚠️ 0 skipped",
@@ -610,7 +606,6 @@ func TestResolveApplyVerifyArchiveGates(t *testing.T) {
 					"Verdict: PASS",
 					"",
 				}, "\n"))
-				writeApprovedReviewArtifacts(t, changeRoot)
 			},
 			wantApply:   ApplyAllDone,
 			wantApplyD:  DependencyAllDone,
@@ -622,7 +617,7 @@ func TestResolveApplyVerifyArchiveGates(t *testing.T) {
 			name: "archive ready for canonical pass with warnings verdict",
 			seed: func(t *testing.T, root string) {
 				changeRoot := seedReadyChange(t, root, "thin", "- [x] 1.1 Work\n")
-				write(t, filepath.Join(changeRoot, "verify-report.md"), boundedVerifyEnvelope(shaID("1"), "pass_with_warnings")+"\n"+strings.Join([]string{
+				write(t, filepath.Join(changeRoot, "verify-report.md"), testVerifyEnvelope("pass_with_warnings", 0, 0, "1/1", "1/1", 0, 0)+"\n"+strings.Join([]string{
 					"## Verification Report",
 					"**Tests**: ✅ 12 passed / ❌ 0 failed / ⚠️ 1 skipped",
 					"**CRITICAL**: None",
@@ -631,7 +626,6 @@ func TestResolveApplyVerifyArchiveGates(t *testing.T) {
 					"PASS WITH WARNINGS",
 					"",
 				}, "\n"))
-				writeApprovedReviewArtifacts(t, changeRoot)
 			},
 			wantApply:   ApplyAllDone,
 			wantApplyD:  DependencyAllDone,
@@ -778,8 +772,7 @@ func TestResolveApplyVerifyArchiveGates(t *testing.T) {
 			name: "archive ready when verify report has status pass",
 			seed: func(t *testing.T, root string) {
 				changeRoot := seedReadyChange(t, root, "thin", "- [x] 1.1 Work\n")
-				write(t, filepath.Join(changeRoot, "verify-report.md"), boundedVerifyEnvelope(shaID("1"), "pass")+"\n# Verify\nStatus: PASS\n")
-				writeApprovedReviewArtifacts(t, changeRoot)
+				write(t, filepath.Join(changeRoot, "verify-report.md"), testVerifyEnvelope("pass", 0, 0, "1/1", "1/1", 0, 0)+"\n# Verify\nStatus: PASS\n")
 			},
 			wantApply:   ApplyAllDone,
 			wantApplyD:  DependencyAllDone,
@@ -1116,7 +1109,7 @@ func TestParseCommandArgs(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ParseCommandArgs() error = %v", err)
 	}
-	want := CommandArgs{ChangeName: "add-auth", CWD: "/tmp/repo", JSON: true, IncludeInstructions: true}
+	want := CommandArgs{ChangeName: "add-auth", CWD: "/tmp/repo", JSON: true, IncludeInstructions: true, Contract: "gentle-ai.sdd-status/v2"}
 	if got != want {
 		t.Fatalf("ParseCommandArgs() = %#v, want %#v", got, want)
 	}
@@ -1143,16 +1136,6 @@ func TestParseCommandArgsRejectsInvalidInput(t *testing.T) {
 	}
 }
 
-func seedReadyChange(t *testing.T, root string, name string, tasks string) string {
-	t.Helper()
-	changeRoot := filepath.Join(root, "openspec", "changes", name)
-	write(t, filepath.Join(changeRoot, "proposal.md"), "# Proposal\n")
-	write(t, filepath.Join(changeRoot, "specs", "auth", "spec.md"), "### Requirement: Auth\n#### Scenario: Expected behavior\n")
-	write(t, filepath.Join(changeRoot, "design.md"), "# Design\n")
-	write(t, filepath.Join(changeRoot, "tasks.md"), tasks)
-	return changeRoot
-}
-
 func seedPlanningRoute(t *testing.T, root string, name string, route string) {
 	t.Helper()
 	changeRoot := filepath.Join(root, "openspec", "changes", name)
@@ -1167,49 +1150,6 @@ func seedPlanningRoute(t *testing.T, root string, name string, route string) {
 	}
 	if route == "propose" {
 		write(t, filepath.Join(changeRoot, "tasks.md"), "- [ ] 1.1 Work\n")
-	}
-}
-
-func engramPlanningRoute(name string, route string) []engramObservation {
-	observations := []engramObservation{}
-	if route != "propose" {
-		observations = append(observations, engramObservation{Title: "sdd/" + name + "/proposal", Content: "# Proposal\n", Project: "gentle-ai", Scope: "project"})
-	}
-	if route == "design" || route == "tasks" {
-		observations = append(observations, engramObservation{Title: "sdd/" + name + "/spec", Content: "# Spec\n", Project: "gentle-ai", Scope: "project"})
-	}
-	if route == "tasks" {
-		observations = append(observations, engramObservation{Title: "sdd/" + name + "/design", Content: "# Design\n", Project: "gentle-ai", Scope: "project"})
-	}
-	if route == "propose" {
-		observations = append(observations, engramObservation{Title: "sdd/" + name + "/tasks", Content: "- [ ] 1.1 Work\n", Project: "gentle-ai", Scope: "project"})
-	}
-	return observations
-}
-
-func write(t *testing.T, path string, content string) {
-	t.Helper()
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		t.Fatalf("MkdirAll() error = %v", err)
-	}
-	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
-		t.Fatalf("WriteFile() error = %v", err)
-	}
-}
-
-func stubEngramExport(t *testing.T, observations []engramObservation) func() {
-	t.Helper()
-	original := engramExport
-	engramExport = func(_ string) ([]engramObservation, error) {
-		return observations, nil
-	}
-	return func() { engramExport = original }
-}
-
-func mkdir(t *testing.T, path string) {
-	t.Helper()
-	if err := os.MkdirAll(path, 0o755); err != nil {
-		t.Fatalf("MkdirAll() error = %v", err)
 	}
 }
 
@@ -1229,11 +1169,4 @@ func equalStringPtr(left *string, right *string) bool {
 		return left == right
 	}
 	return *left == *right
-}
-
-func ptrValue(value *string) string {
-	if value == nil {
-		return "<nil>"
-	}
-	return *value
 }
