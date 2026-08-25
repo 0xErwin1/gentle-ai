@@ -16,6 +16,7 @@ func TestCurrentBehaviorCoverageFilesAreUntagged(t *testing.T) {
 	repoRoot := filepath.Clean(filepath.Join(filepath.Dir(testFile), "..", ".."))
 
 	for _, relativePath := range []string{
+		"internal/sddstatus/review_binding_alias_identity_test.go",
 		"internal/sddstatus/status_remediation_instructions_test.go",
 		"internal/sddstatus/status_test.go",
 		"internal/reviewtransaction/reviewer_context_level_test.go",
