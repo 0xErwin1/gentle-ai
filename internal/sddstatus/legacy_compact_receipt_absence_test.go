@@ -27,25 +27,42 @@ func TestLegacyCompactReceiptBuildConstraintIsAbsentRepositoryWide(t *testing.T)
 }
 
 func TestLegacyCompactReceiptScannerDetectsTaggedFile(t *testing.T) {
-	repoRoot := t.TempDir()
-	if err := os.WriteFile(filepath.Join(repoRoot, "go.mod"), []byte("module example.invalid/d6\n\ngo 1.25\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	fixturePath := filepath.Join(repoRoot, "nested", "tagged.go")
-	if err := os.MkdirAll(filepath.Dir(fixturePath), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	source := []byte("//go:build legacy_compact_receipt\n// +build legacy_compact_receipt\n\npackage nested\n")
-	if err := os.WriteFile(fixturePath, source, 0o644); err != nil {
-		t.Fatal(err)
+	tests := []struct {
+		name   string
+		source string
+	}{
+		{
+			name:   "standard-space directives",
+			source: "//go:build legacy_compact_receipt\n// +build legacy_compact_receipt\n\npackage nested\n",
+		},
+		{
+			name:   "tab-separated directives",
+			source: "//go:build\tlegacy_compact_receipt\n// +build\tlegacy_compact_receipt\n\npackage nested\n",
+		},
 	}
 
-	matches, err := legacyCompactReceiptTaggedGoFiles(repoRoot)
-	if err != nil {
-		t.Fatalf("scan synthetic repository: %v", err)
-	}
-	if len(matches) != 1 || matches[0] != "nested/tagged.go" {
-		t.Fatalf("tagged Go files = %v, want [nested/tagged.go]", matches)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			repoRoot := t.TempDir()
+			if err := os.WriteFile(filepath.Join(repoRoot, "go.mod"), []byte("module example.invalid/d6\n\ngo 1.25\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			fixturePath := filepath.Join(repoRoot, "nested", "tagged.go")
+			if err := os.MkdirAll(filepath.Dir(fixturePath), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(fixturePath, []byte(tt.source), 0o644); err != nil {
+				t.Fatal(err)
+			}
+
+			matches, err := legacyCompactReceiptTaggedGoFiles(repoRoot)
+			if err != nil {
+				t.Fatalf("scan synthetic repository: %v", err)
+			}
+			if len(matches) != 1 || matches[0] != "nested/tagged.go" {
+				t.Fatalf("tagged Go files = %v, want [nested/tagged.go]", matches)
+			}
+		})
 	}
 }
 
@@ -122,7 +139,7 @@ func sourceUsesLegacyCompactReceiptTag(source string) (bool, error) {
 		if strings.HasPrefix(trimmed, "package ") {
 			return false, nil
 		}
-		if !strings.HasPrefix(trimmed, "//go:build ") && !strings.HasPrefix(trimmed, "// +build ") {
+		if !constraint.IsGoBuild(trimmed) && !constraint.IsPlusBuild(trimmed) {
 			continue
 		}
 		expression, err := constraint.Parse(trimmed)
