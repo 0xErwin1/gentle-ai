@@ -1,5 +1,3 @@
-//go:build legacy_compact_receipt
-
 package sddstatus
 
 import (
