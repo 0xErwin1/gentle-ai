@@ -99,6 +99,16 @@ var (
 	// laundering; an unguarded widen here would be the same defect wearing a
 	// new operation name.
 	ErrRuntimeRescopeWidened = errors.New("SDD runtime objective rescope may only narrow or hold max_attempts and max_changed_lines, never widen them; " + runtimeLedgerStatusPointer)
+	// ErrRuntimeRescopeExhausted is rescope's second own sentinel (#2804):
+	// rescope carries cumulative_attempts and cumulative_changed_lines
+	// forward unchanged, so a successor whose ceiling the carried charge
+	// already meets has no runnable ordinal. Committing it published a
+	// wedge: status advertised begin while acquire refused
+	// budget-exhausted, reset was refused for zero drift, and a second
+	// rescope could not widen. The successor must stay runnable, which the
+	// predecessor ceiling always still admits (an exhausted predecessor is
+	// decision-required, where rescope is structurally refused).
+	ErrRuntimeRescopeExhausted = errors.New("SDD runtime objective rescope must leave the successor runnable: max_attempts and max_changed_lines must exceed the carried cumulative charges; " + runtimeLedgerStatusPointer)
 	// ErrRuntimeWorktreeMismatch never travels alone either. Every return site
 	// wraps it with runtimeWorktreeMismatchRefusal, which names the exact
 	// --cwd that reproduces the binding Begin actually recorded (#2296 part
@@ -1025,6 +1035,20 @@ func (store RuntimeStore) runtimeRescopeWidenedRefusal(status RuntimeStatus, fla
 		ErrRuntimeRescopeWidened, flag, requested, allowed, remaining, store.Workspace, store.Change)
 }
 
+// runtimeRescopeExhaustedRefusal (#2804) rejects a successor scope whose
+// ceiling the carried cumulative charge already meets, BEFORE mutation.
+// Committed, that successor is a published wedge: status answers begin, the
+// first acquire is refused budget-exhausted, reset is refused for zero
+// drift, and another rescope cannot widen from the newly accepted maximum.
+// The refusal names the exact runnable range instead, which is never empty:
+// rescope is only structurally reachable while the predecessor still has
+// budget left, so `carried < allowed` always holds here.
+func (store RuntimeStore) runtimeRescopeExhaustedRefusal(flag string, requested, carried, allowed int) error {
+	return fmt.Errorf(
+		"%w: received %s %d, and rescope carries the cumulative charges forward unchanged, so this successor would open already exhausted -- its status would advertise begin while every acquire is refused budget-exhausted, and no later rescope could widen it. A runnable successor needs %s greater than the carried %d and at most %d, the current objective's ceiling",
+		ErrRuntimeRescopeExhausted, flag, requested, flag, carried, allowed)
+}
+
 // runtimeObjectiveCompleteRefusal names what a completed objective's begin can
 // actually do. The sentinel said only that the objective is complete and
 // pointed at status, whose next_action is `complete` — true, and useless to a
@@ -1327,6 +1351,16 @@ func (store RuntimeStore) Rescope(ctx context.Context, request RescopeObjectiveR
 				status, "--max-attempts", request.MaxAttempts, objective.MaxAttempts,
 			)
 		}
+		// #2804: the carried charges bind at admission. A ceiling they
+		// already meet would commit a successor with no runnable ordinal.
+		if request.MaxAttempts <= status.CumulativeAttempts {
+			return runtimeRecord{}, store.runtimeRescopeExhaustedRefusal(
+				"--max-attempts", request.MaxAttempts, status.CumulativeAttempts, objective.MaxAttempts)
+		}
+		if request.MaxChangedLines <= status.CumulativeChangedLines {
+			return runtimeRecord{}, store.runtimeRescopeExhaustedRefusal(
+				"--max-changed-lines", request.MaxChangedLines, status.CumulativeChangedLines, objective.MaxChangedLines)
+		}
 		// The zero-drift `drift` snapshot above was captured with
 		// TargetBaseWorkspaceOverlay (same Kind/BaseRef Finish itself used),
 		// so its Identity is only comparable against another
@@ -1557,9 +1591,50 @@ func (store RuntimeStore) load() (runtimeReplay, error) {
 		return runtimeReplay{}, err
 	}
 	if !exists {
-		return store.loadRevision("")
+		head = ""
 	}
-	return store.loadRevision(head)
+	replay, err := store.loadRevision(head)
+	if err != nil {
+		return runtimeReplay{}, err
+	}
+	projectLegacyExhaustedSuccessor(&replay.Status)
+	return replay, nil
+}
+
+// projectLegacyExhaustedSuccessor tells the truth about a successor a
+// pre-#2804 writer published already exhausted: a rescope whose ceilings the
+// carried cumulative charges meet, so no begin can ever be admitted under
+// it. Left as replayed, that state advertised next_action: begin while
+// acquire refused budget-exhausted, reset was refused for zero drift, and a
+// second rescope could not widen -- the published wedge #2804's fresh
+// occurrence reports. The immutable chain is never rewritten (this runs only
+// on the terminal load() projection, never inside per-record replay, so the
+// consecutive-rescope repair keeps validating against the exact historical
+// writer state via loadRevision). It projects what
+// applyRuntimeConsecutiveRescopeRepairEvent already projects for the same
+// shape: an objective with no runnable ordinal is a maintainer decision, and
+// reset -- admitted at decision-required -- opens the fresh budget.
+//
+// The scope is PINNED to that publication wedge rather than asserted in
+// prose: the last transition must be the rescope that opened THIS objective,
+// and the successor must have no attempt of its own yet -- exactly the only
+// state the pre-guard writer could publish exhausted, because a begin under
+// it was always refused. Any other exhausted shape keeps its replayed
+// projection untouched, so an objective legitimately holding unused
+// allowance can never be silently converted into a demanded reset.
+func projectLegacyExhaustedSuccessor(status *RuntimeStatus) {
+	if status.ActiveAttempt != nil || status.Objective == nil || status.Complete || status.DecisionRequired {
+		return
+	}
+	if status.LastRescope == nil || status.LastRescope.ObjectiveID != status.Objective.ID ||
+		runtimeObjectiveHasRecordedAttempt(*status) {
+		return
+	}
+	if status.CumulativeAttempts >= status.Objective.MaxAttempts ||
+		status.CumulativeChangedLines >= status.Objective.MaxChangedLines {
+		status.DecisionRequired = true
+		status.NextAction = RuntimeActionReset
+	}
 }
 
 func (store RuntimeStore) loadRevision(head string) (runtimeReplay, error) {
