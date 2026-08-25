@@ -19,6 +19,7 @@ func TestRetiredLegacyBindingFixturesAreAbsent(t *testing.T) {
 		"internal/sddstatus/legacy_binding_read_test.go",
 		"internal/sddstatus/review_binding_ledger_test.go",
 		"internal/sddstatus/runtime_ledger_interrupted_legacy_test.go",
+		"internal/sddstatus/runtime_ledger_remediation_test.go",
 		"internal/sddstatus/runtime_ledger_self_remediation_test.go",
 		"internal/sddstatus/runtime_review_acts_after_verify_test.go",
 	} {

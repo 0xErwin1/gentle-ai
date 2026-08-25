@@ -1,31 +1,18 @@
-//go:build legacy_compact_receipt
-
 package sddstatus
 
 import (
 	"context"
+	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 )
 
-// The enabled-side counterpart of the test above is gone with its subject:
-// review no longer demands a successor when implementation finishes, because
-// it acts after implementation and verification. Its replacement lives in
-// runtime_review_acts_after_verify_test.go.
-
-func TestRuntimeDisabledUnmanagedRemediationConsumesTheOnlyRemainingAttempt(t *testing.T) {
-	// The subject is what re-enabling does to a disabled/unmanaged
-	// correction, so this fixture needs a user who has receipt-driven
-	// development switched on -- otherwise the "re-enabled" half of the test
-	// never re-enables anything.
-	reviewEnabledHome(t)
+func TestRuntimeReviewDisabledRemediationConsumesTheOnlyRemainingAttempt(t *testing.T) {
 	repo := initRuntimeLedgerRepo(t)
-	changeRoot := seedReadyChange(t, repo, "unmanaged-remediation", "- [x] 1.1 Work\n")
-	store := mustRuntimeStore(t, repo, "unmanaged-remediation")
+	store := mustRuntimeStore(t, repo, "review-disabled-remediation")
 	store.ReviewDisabled = true
 	first, err := store.Begin(context.Background(), BeginAttemptRequest{
-		ExpectedRevision: "", RequestID: "unmanaged-begin-verification", WorkUnit: "verify",
+		ExpectedRevision: "", RequestID: "review-disabled-begin-verification", WorkUnit: "verify",
 		EvidenceGoal: "independent verification", MaxAttempts: 2, MaxChangedLines: 20,
 	})
 	if err != nil {
@@ -33,7 +20,7 @@ func TestRuntimeDisabledUnmanagedRemediationConsumesTheOnlyRemainingAttempt(t *t
 	}
 	failedEvidence := runtimeTestHash('a')
 	failed, err := store.Finish(context.Background(), FinishAttemptRequest{
-		ExpectedRevision: first.Revision, RequestID: "unmanaged-finish-verification", Outcome: AttemptFailed,
+		ExpectedRevision: first.Revision, RequestID: "review-disabled-finish-verification", Outcome: AttemptFailed,
 		EvidenceRevision: failedEvidence, Diagnosis: "independent verification found a correctable defect",
 		HarnessDisposition: HarnessReused, CleanupEvidence: "verification cleanup completed",
 		ProcessEvidence: "verification process scan completed",
@@ -41,77 +28,120 @@ func TestRuntimeDisabledUnmanagedRemediationConsumesTheOnlyRemainingAttempt(t *t
 	if err != nil {
 		t.Fatal(err)
 	}
-	write(t, filepath.Join(changeRoot, "verify-report.md"), boundedVerifyEnvelope(failedEvidence, "fail"))
 	active, err := store.Begin(context.Background(), BeginAttemptRequest{
-		ExpectedRevision: failed.Revision, RequestID: "unmanaged-begin-correction", WorkUnit: "verify",
+		ExpectedRevision: failed.Revision, RequestID: "review-disabled-begin-correction", WorkUnit: "verify",
 		EvidenceGoal: "independent verification", MaxAttempts: 2, MaxChangedLines: 20,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	request := FinishAttemptRequest{
-		ExpectedRevision: active.Revision, RequestID: "unmanaged-finish-correction", Outcome: AttemptPassed,
+		ExpectedRevision: active.Revision, RequestID: "review-disabled-finish-correction", Outcome: AttemptPassed,
 		EvidenceRevision: runtimeTestHash('b'), Diagnosis: "bounded correction passed focused checks",
 		HarnessDisposition: HarnessReused, CleanupEvidence: "correction cleanup completed",
 		ProcessEvidence: "correction process scan completed", RemediatesEvidenceRevision: failedEvidence,
 	}
 	before := countRuntimeRecords(t, store.Dir)
 	if _, err := store.Finish(context.Background(), request); err == nil {
-		t.Fatal("unchanged candidate satisfied unmanaged remediation")
+		t.Fatal("unchanged candidate satisfied review-disabled remediation")
 	}
 	if status, err := store.Status(); err != nil || status.Revision != active.Revision || status.ActiveAttempt == nil || countRuntimeRecords(t, store.Dir) != before {
 		t.Fatalf("unchanged remediation refusal mutated runtime: status=%#v err=%v records=%d", status, err, countRuntimeRecords(t, store.Dir))
 	}
-	appendRuntimeLedgerFile(t, repo, "bounded unmanaged correction\n")
-	withoutBinding := request
-	withoutBinding.RequestID = "unmanaged-finish-unbound"
-	withoutBinding.RemediatesEvidenceRevision = ""
-	if _, err := store.Finish(context.Background(), withoutBinding); err == nil {
+	appendRuntimeLedgerFile(t, repo, "bounded review-disabled correction\n")
+	missingEvidence := request
+	missingEvidence.RequestID = "review-disabled-finish-missing-evidence"
+	missingEvidence.RemediatesEvidenceRevision = ""
+	if _, err := store.Finish(context.Background(), missingEvidence); err == nil {
 		t.Fatal("generic passing finish satisfied disabled remediation")
 	}
 	wrongEvidence := request
-	wrongEvidence.RequestID = "unmanaged-finish-wrong-evidence"
+	wrongEvidence.RequestID = "review-disabled-finish-wrong-evidence"
 	wrongEvidence.RemediatesEvidenceRevision = runtimeTestHash('c')
 	if _, err := store.Finish(context.Background(), wrongEvidence); err == nil {
-		t.Fatal("wrong failed evidence satisfied unmanaged remediation")
+		t.Fatal("wrong failed evidence satisfied review-disabled remediation")
 	}
 	completed, err := store.Finish(context.Background(), request)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !completed.Complete || completed.ActiveAttempt != nil || completed.Binding != nil || len(completed.Attempts) != 2 {
-		t.Fatalf("unmanaged remediation completion = %#v", completed)
+	if !completed.Complete || completed.ActiveAttempt != nil || len(completed.Attempts) != 2 {
+		t.Fatalf("review-disabled remediation completion = %#v", completed)
 	}
 	last := completed.Attempts[len(completed.Attempts)-1]
 	if last.RemediatesEvidenceRevision != failedEvidence || last.FinishCandidateIdentity == last.BeginCandidateIdentity || last.FinishCandidateTree == last.BeginCandidateTree {
-		t.Fatalf("unmanaged remediation did not bind the failed evidence to a changed candidate: %#v", last)
+		t.Fatalf("review-disabled remediation did not link failed evidence to a changed candidate: %#v", last)
 	}
 	if replay, err := store.Finish(context.Background(), request); err != nil || replay.Revision != completed.Revision {
 		t.Fatalf("exact remediation replay = %#v err=%v", replay, err)
 	}
 	result, err := store.Acquire(context.Background(), CompactAcquireRequest{BeginAttemptRequest: BeginAttemptRequest{
-		RequestID: "unmanaged-replay-correction", WorkUnit: "verify", EvidenceGoal: "independent verification", MaxAttempts: 2, MaxChangedLines: 20,
+		RequestID: "review-disabled-replay-correction", WorkUnit: "verify", EvidenceGoal: "independent verification", MaxAttempts: 2, MaxChangedLines: 20,
 	}})
 	if err != nil || result.State != CompactStateComplete {
-		t.Fatalf("second unmanaged correction = %#v err=%v", result, err)
+		t.Fatalf("subsequent correction = %#v err=%v", result, err)
 	}
+}
 
-	// Re-enabling receipt-driven delivery must not turn a valid disabled
-	// correction into archive authority. The fresh PASS is preserved, but the
-	// existing bounded-review route must own archive admission from here.
-	write(t, filepath.Join(changeRoot, "verify-report.md"), boundedVerifyEnvelope(request.EvidenceRevision, "pass"))
-	reenabled, err := Resolve(ResolveOptions{CWD: repo, ChangeName: "unmanaged-remediation"})
+func TestRuntimeReviewDisabledEngramRemediationNeedsNoOpenSpecRoot(t *testing.T) {
+	repo := initRuntimeLedgerRepo(t)
+	if _, err := os.Stat(filepath.Join(repo, "openspec")); !os.IsNotExist(err) {
+		t.Fatalf("pure Engram fixture unexpectedly has an OpenSpec root: %v", err)
+	}
+	store := mustRuntimeStore(t, repo, "engram-remediation")
+	store.ReviewDisabled = true
+	first, err := store.Begin(context.Background(), BeginAttemptRequest{
+		ExpectedRevision: "", RequestID: "engram-begin-failed-verification", WorkUnit: "verify",
+		EvidenceGoal: "independent verification", MaxAttempts: 2, MaxChangedLines: 20,
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if reenabled.Dependencies.Verify != DependencyAllDone || reenabled.Dependencies.Archive != DependencyReady || reenabled.NextRecommended != "archive" {
-		t.Fatalf("re-enabled unmanaged correction routed verify=%q archive=%q next=%q", reenabled.Dependencies.Verify, reenabled.Dependencies.Archive, reenabled.NextRecommended)
+	failedEvidence := runtimeTestHash('d')
+	failed, err := store.Finish(context.Background(), FinishAttemptRequest{
+		ExpectedRevision: first.Revision, RequestID: "engram-finish-failed-verification", Outcome: AttemptFailed,
+		EvidenceRevision: failedEvidence, Diagnosis: "independent verification found a correctable defect",
+		HarnessDisposition: HarnessReused, CleanupEvidence: "verification cleanup completed",
+		ProcessEvidence: "verification process scan completed",
+	})
+	if err != nil {
+		t.Fatal(err)
 	}
-	if reenabled.ReviewGate == nil || !strings.Contains(reenabled.ReviewGate.Reason, "disabled/unmanaged correction") ||
-		strings.Contains(reenabled.ReviewGate.Reason, reviewGateFreshReviewContinuation) {
-		t.Fatalf("re-enabled unmanaged correction context = %#v, want informational ordinary-policy wording", reenabled.ReviewGate)
+	active, err := store.Begin(context.Background(), BeginAttemptRequest{
+		ExpectedRevision: failed.Revision, RequestID: "engram-begin-correction", WorkUnit: "verify",
+		EvidenceGoal: "independent verification", MaxAttempts: 2, MaxChangedLines: 20,
+	})
+	if err != nil {
+		t.Fatal(err)
 	}
-	if reenabled.ReviewOffer == nil || !reenabled.ReviewOffer.Available || !strings.Contains(reenabled.ReviewOffer.Invocation, "review start") {
-		t.Fatalf("re-enabled unmanaged correction omitted the executable review offer: %#v", reenabled.ReviewOffer)
+	appendRuntimeLedgerFile(t, repo, "bounded Engram correction\n")
+	request := FinishAttemptRequest{
+		ExpectedRevision: active.Revision, RequestID: "engram-finish-correction", Outcome: AttemptPassed,
+		EvidenceRevision: runtimeTestHash('e'), Diagnosis: "corrected candidate passed focused checks",
+		HarnessDisposition: HarnessReused, CleanupEvidence: "correction cleanup completed",
+		ProcessEvidence: "correction process scan completed", RemediatesEvidenceRevision: failedEvidence,
+	}
+	completed, err := store.Finish(context.Background(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !completed.Complete || completed.ActiveAttempt != nil || len(completed.Attempts) != 2 {
+		t.Fatalf("pure Engram remediation completion = %#v", completed)
+	}
+	last := completed.Attempts[len(completed.Attempts)-1]
+	if last.RemediatesEvidenceRevision != failedEvidence || last.FinishCandidateTree == completed.Attempts[0].FinishCandidateTree {
+		t.Fatalf("pure Engram remediation did not bind failed evidence to changed candidate: %#v", last)
+	}
+	if _, err := os.Stat(filepath.Join(repo, "openspec")); !os.IsNotExist(err) {
+		t.Fatalf("runtime remediation created or required an OpenSpec root: %v", err)
+	}
+	replayed, err := store.Finish(context.Background(), request)
+	if err != nil || replayed.Revision != completed.Revision {
+		t.Fatalf("exact pure Engram remediation replay = %#v err=%v", replayed, err)
+	}
+	reopened := mustRuntimeStore(t, repo, "engram-remediation")
+	status, err := reopened.Status()
+	if err != nil || status.Revision != completed.Revision || !status.Complete {
+		t.Fatalf("pure Engram remediation chain replay = %#v err=%v", status, err)
 	}
 }
