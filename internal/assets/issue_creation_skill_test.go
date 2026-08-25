@@ -69,9 +69,10 @@ func TestIssueCreationSkillPublicationContract(t *testing.T) {
 	executionSteps := normalized[executionStart:executionEnd]
 	commands := fencedBashCommands(t, executionSteps)
 	expectedCommands := []string{
+		`gh api --hostname "$HOST" --paginate "repos/$REPO/labels?per_page=100" --jq '.[].name'`,
 		`gh issue list --repo "$TARGET" --state all --search "$QUERY" --limit 1000`,
 		`gh issue view "$CANDIDATE_NUMBER" --repo "$TARGET" --json number,url,title,body >"$DISCOVERY_FILE"`,
-		`gh issue create --repo "$TARGET" --title "$TITLE" --body-file "$BODY_FILE" --label "$PERMITTED_LABEL"`,
+		`gh issue create --repo "$TARGET" --title "$TITLE" --body-file "$BODY_FILE"`,
 		`gh issue comment "$NUMBER" --repo "$TARGET" --body-file "$BODY_FILE"`,
 		`gh issue view "$NUMBER" --repo "$TARGET" --json number,url,title,body,labels >"$READBACK_FILE"`,
 		`gh api --hostname "$HOST" "repos/$REPO/issues/comments/$COMMENT_ID" >"$READBACK_FILE"`,
@@ -80,12 +81,12 @@ func TestIssueCreationSkillPublicationContract(t *testing.T) {
 		t.Errorf("issue-creation skill fenced Bash commands changed:\n got: %q\nwant: %q", commands, expectedCommands)
 	}
 
-	createCommand := expectedCommands[2]
-	commentCommand := expectedCommands[3]
+	createCommand := expectedCommands[3]
+	commentCommand := expectedCommands[4]
 	targetIndex := strings.Index(executionSteps, "derive and verify `HOST`, `REPO=OWNER/REPO`, and `TARGET=$HOST/$REPO`")
 	discoveryIndex := strings.Index(executionSteps, "Authenticate to `HOST`; discover only missing")
 	selectedFormIndex := strings.Index(executionSteps, "Select the one YAML form whose declared purpose matches")
-	duplicateSearchIndex := strings.Index(executionSteps, expectedCommands[0])
+	duplicateSearchIndex := strings.Index(executionSteps, expectedCommands[1])
 	classificationIndex := strings.Index(executionSteps, "Compare each candidate's body controls and required answers with the selected YAML form")
 	materializationIndex := strings.Index(executionSteps, "Only when classification selects the new-issue path, process reviewed answers and materialize the body")
 	for _, publication := range []struct {
