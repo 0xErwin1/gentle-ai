@@ -1170,7 +1170,6 @@ internal/reviewtransaction/verification_contract.go	"verification subject requir
 internal/reviewtransaction/verification_convergence.go	"unsupported mutable verification subject kind %q"
 internal/reviewtransaction/verification_convergence.go	"verification resnapshot context is nil"
 internal/reviewtransaction/verification_convergence.go	"verification subject mutated during final verification"
-internal/sddstatus/review_binding.go	"multiple binding values"
 internal/sddstatus/review_binding.go	"planning workspace is outside selected repository"
 internal/sddstatus/review_binding.go	"selected OpenSpec change does not exist"
 internal/sddstatus/review_binding.go	"selected OpenSpec change is ambiguous within repository"
