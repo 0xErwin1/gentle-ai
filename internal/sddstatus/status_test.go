@@ -823,6 +823,121 @@ func TestResolveApplyVerifyArchiveGates(t *testing.T) {
 	}
 }
 
+func TestResolveStaleOrIncompleteVerificationReroutesToFreshVerify(t *testing.T) {
+	const completeSpec = "### Requirement: Auth\n#### Scenario: Expected behavior\n"
+	const staleSpec = completeSpec + "#### Scenario: Added after verification\n"
+	invalidOutputHash := "sha256:" + strings.Repeat("b", 64)
+	tests := []struct {
+		name   string
+		spec   string
+		report string
+	}{
+		{
+			name:   "stale complete pass after a spec scenario is added",
+			spec:   staleSpec,
+			report: testVerifyEnvelope("pass", 0, 0, "1/1", "1/1", 0, 0),
+		},
+		{
+			name:   "current-format incomplete failed evidence",
+			spec:   completeSpec,
+			report: testVerifyEnvelope("fail", 1, 0, "0/1", "0/1", 1, 1),
+		},
+		{
+			name: "malformed failed evidence with an invalid output hash",
+			spec: completeSpec,
+			report: strings.Replace(
+				testVerifyEnvelope("fail", 1, 0, "1/1", "1/1", 1, 1),
+				"test_output_hash: "+invalidOutputHash,
+				"test_output_hash: sha256:invalid",
+				1,
+			),
+		},
+	}
+
+	for _, backend := range []string{"openspec", "engram"} {
+		for _, tt := range tests {
+			t.Run(backend+"/"+tt.name, func(t *testing.T) {
+				root := t.TempDir()
+				var status Status
+				var err error
+				switch backend {
+				case "openspec":
+					changeRoot := seedReadyChange(t, root, "thin", "- [x] 1.1 Done\n")
+					write(t, filepath.Join(changeRoot, "specs", "auth", "spec.md"), completeSpec)
+					write(t, filepath.Join(changeRoot, "specs", "auth", "spec.md"), tt.spec)
+					write(t, filepath.Join(changeRoot, "verify-report.md"), tt.report)
+					status, err = Resolve(ResolveOptions{CWD: root, ChangeName: "thin"})
+				case "engram":
+					mkdir(t, filepath.Join(root, ".engram"))
+					project := strings.ToLower(filepath.Base(root))
+					restore := stubEngramExport(t, []engramObservation{
+						{Title: "sdd/thin/proposal", Content: "# Proposal\n", Project: project, Scope: "project"},
+						{Title: "sdd/thin/spec", Content: tt.spec, Project: project, Scope: "project"},
+						{Title: "sdd/thin/design", Content: "# Design\n", Project: project, Scope: "project"},
+						{Title: "sdd/thin/tasks", Content: "- [x] 1.1 Done\n", Project: project, Scope: "project"},
+						{Title: "sdd/thin/verify-report", Content: tt.report, Project: project, Scope: "project"},
+					})
+					defer restore()
+					status, err = Resolve(ResolveOptions{CWD: root, ChangeName: "thin"})
+				}
+				if err != nil {
+					t.Fatalf("Resolve() error = %v", err)
+				}
+				if status.Dependencies.Verify != DependencyReady || status.Dependencies.Archive != DependencyBlocked || status.NextRecommended != "verify" {
+					t.Fatalf("status = verify %q archive %q next %q, want ready/blocked/verify", status.Dependencies.Verify, status.Dependencies.Archive, status.NextRecommended)
+				}
+				if status.RemediationState != (RemediationState{}) {
+					t.Fatalf("RemediationState = %#v, want empty", status.RemediationState)
+				}
+				if strings.Contains(strings.Join(status.BlockedReasons, "\n"), "missing_review_authority") {
+					t.Fatalf("BlockedReasons = %v, want no legacy missing_review_authority routing", status.BlockedReasons)
+				}
+			})
+		}
+	}
+}
+
+func TestResolveCompleteFailedVerificationStillRequiresRemediation(t *testing.T) {
+	const completeSpec = "### Requirement: Auth\n#### Scenario: Expected behavior\n"
+	completeReport := testVerifyEnvelope("fail", 1, 0, "1/1", "1/1", 1, 1)
+
+	for _, backend := range []string{"openspec", "engram"} {
+		t.Run(backend, func(t *testing.T) {
+			root := t.TempDir()
+			var status Status
+			var err error
+			switch backend {
+			case "openspec":
+				changeRoot := seedReadyChange(t, root, "thin", "- [x] 1.1 Done\n")
+				write(t, filepath.Join(changeRoot, "specs", "auth", "spec.md"), completeSpec)
+				write(t, filepath.Join(changeRoot, "verify-report.md"), completeReport)
+				status, err = Resolve(ResolveOptions{CWD: root, ChangeName: "thin"})
+			case "engram":
+				mkdir(t, filepath.Join(root, ".engram"))
+				project := strings.ToLower(filepath.Base(root))
+				restore := stubEngramExport(t, []engramObservation{
+					{Title: "sdd/thin/proposal", Content: "# Proposal\n", Project: project, Scope: "project"},
+					{Title: "sdd/thin/spec", Content: completeSpec, Project: project, Scope: "project"},
+					{Title: "sdd/thin/design", Content: "# Design\n", Project: project, Scope: "project"},
+					{Title: "sdd/thin/tasks", Content: "- [x] 1.1 Done\n", Project: project, Scope: "project"},
+					{Title: "sdd/thin/verify-report", Content: completeReport, Project: project, Scope: "project"},
+				})
+				defer restore()
+				status, err = Resolve(ResolveOptions{CWD: root, ChangeName: "thin"})
+			}
+			if err != nil {
+				t.Fatalf("Resolve() error = %v", err)
+			}
+			if status.Dependencies.Verify != DependencyBlocked || status.Dependencies.Archive != DependencyBlocked || status.NextRecommended != "remediate" {
+				t.Fatalf("status = verify %q archive %q next %q, want blocked/blocked/remediate", status.Dependencies.Verify, status.Dependencies.Archive, status.NextRecommended)
+			}
+			if !status.RemediationState.Required || status.RemediationState.FailedEvidenceRevision == "" {
+				t.Fatalf("RemediationState = %#v, want required with failed evidence revision", status.RemediationState)
+			}
+		})
+	}
+}
+
 func TestResolveNextRecommendedPlanningRouting(t *testing.T) {
 	tests := []struct {
 		name     string
