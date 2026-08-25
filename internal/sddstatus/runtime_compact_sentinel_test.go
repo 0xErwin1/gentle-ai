@@ -1,5 +1,3 @@
-//go:build legacy_compact_receipt
-
 package sddstatus
 
 import (
@@ -26,14 +24,11 @@ var compactBlockReasonConstRegexp = regexp.MustCompile(`(CompactBlock[A-Za-z]+)\
 
 // TestCompactMutationFailureClassifiesEveryReachableLedgerSentinel is the
 // table-driven sentinel enumeration test required alongside the #2249 fix. It
-// audits every ErrRuntime*/ErrBindingRevisionConflict sentinel declared in the
-// var block at runtime_ledger.go:61-92 against whether Begin or Finish (the
-// only two mutations Acquire/Settle drive through compactMutationFailure) can
-// actually produce it, and fails if a sentinel marked reachable still lands on
-// the opaque CompactBlockAuthorityFailure default. This is a genuine
-// regression guard: deleting the ErrRuntimeRemediationSuccessorRequired or
-// ErrBindingRevisionConflict case from compactMutationFailure's switch makes
-// this test fail, not just the #2249 repro above.
+// audits every current ErrRuntime* sentinel declared in runtime_ledger.go
+// against whether Begin or Finish (the only two mutations Acquire/Settle drive
+// through compactMutationFailure) can actually produce it, and fails if a
+// sentinel marked reachable still lands on the opaque
+// CompactBlockAuthorityFailure default.
 func TestCompactMutationFailureClassifiesEveryReachableLedgerSentinel(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -52,7 +47,6 @@ func TestCompactMutationFailureClassifiesEveryReachableLedgerSentinel(t *testing
 		{name: "ErrRuntimeNoActiveAttempt", err: ErrRuntimeNoActiveAttempt, reachable: true, wantState: CompactStateBlocked, wantReason: CompactBlockInvalidContinuation},
 		{name: "ErrRuntimeWorktreeMismatch", err: ErrRuntimeWorktreeMismatch, reachable: true, wantState: CompactStateBlocked, wantReason: CompactBlockWorktreeMismatch},
 		{name: "ErrRuntimeCandidateUnavailable", err: ErrRuntimeCandidateUnavailable, reachable: true, wantState: CompactStateBlocked, wantReason: CompactBlockCandidateUnavailable},
-		{name: "ErrBindingRevisionConflict", err: ErrBindingRevisionConflict, reachable: true, wantState: CompactStateBlocked, wantReason: CompactBlockInvalidContinuation},
 		// Reset is the only mutation that can produce these two; Begin/Finish
 		// never do, so Acquire/Settle never route them into
 		// compactMutationFailure. They stay intentionally unclassified.
