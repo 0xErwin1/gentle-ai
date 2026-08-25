@@ -24,8 +24,6 @@ type historicalFinishRemediationRequest struct {
 	HarnessDisposition         HarnessDisposition `json:"harness_disposition"`
 	CleanupEvidence            string             `json:"cleanup_evidence"`
 	ProcessEvidence            string             `json:"process_evidence"`
-	ExpectedBindingRevision    string             `json:"expected_binding_revision,omitempty"`
-	SuccessorLineageID         string             `json:"successor_lineage_id,omitempty"`
 	RemediatesEvidenceRevision string             `json:"remediates_evidence_revision,omitempty"`
 }
 
@@ -48,7 +46,7 @@ func TestRuntimeLedgerRejectsHistoricalAtomicRemediationRecord(t *testing.T) {
 			t.Fatalf("ordinary attempt/finish = %#v, err=%v", completed, err)
 		}
 		record, err := store.loadRecord(completed.Revision)
-		if err != nil || record.Operation != runtimeOperationFinish || record.Binding != nil {
+		if err != nil || record.Operation != runtimeOperationFinish {
 			t.Fatalf("ordinary attempt/finish record = %#v, err=%v", record, err)
 		}
 	})
@@ -75,22 +73,8 @@ func historicalAtomicRemediationRecord(t *testing.T) (RuntimeStore, runtimeRecor
 		t.Fatal(err)
 	}
 
-	predecessor := historicalRuntimeBinding(store.Change, "historical-predecessor", 'a', 'b')
-	binding := runtimeRecord{
-		Schema: runtimeRecordSchema, Change: store.Change, Operation: runtimeOperationBind,
-		RequestID: "historical-binding", Binding: &runtimeBindingEvent{Current: predecessor},
-	}
-	binding.RequestDigest = runtimeValueHash("gentle-ai.sdd-runtime-bind-request/v1", BindReviewRequest{
-		RequestID: binding.RequestID, LineageID: predecessor.Lineage,
-	})
-	publishHistoricalRuntimeRecord(t, store, binding)
-	bound, err := store.Status()
-	if err != nil || bound.Binding == nil || bound.Binding.Revision != predecessor.Revision {
-		t.Fatalf("binding/set acceptance control = %#v, err=%v", bound, err)
-	}
-
 	first, err := store.Begin(context.Background(), BeginAttemptRequest{
-		ExpectedRevision: bound.Revision, RequestID: "historical-begin-1", WorkUnit: "verify",
+		RequestID: "historical-begin-1", WorkUnit: "verify",
 		EvidenceGoal: "prove historical atomic remediation acceptance", MaxAttempts: 3, MaxChangedLines: 20,
 	})
 	if err != nil {
@@ -124,7 +108,6 @@ func historicalAtomicRemediationRecord(t *testing.T) (RuntimeStore, runtimeRecor
 	if err != nil {
 		t.Fatal(err)
 	}
-	successor := historicalRuntimeBinding(store.Change, "historical-successor", 'd', 'e')
 	record := runtimeRecord{
 		Schema: runtimeRecordSchema, Change: store.Change, PreviousRevision: active.Revision,
 		Operation: historicalAtomicRemediationOperation, RequestID: "historical-finish-remediation",
@@ -134,28 +117,15 @@ func historicalAtomicRemediationRecord(t *testing.T) (RuntimeStore, runtimeRecor
 			Diagnosis: "historical atomic remediation completed", HarnessDisposition: HarnessReused,
 			CleanupEvidence: "cleanup completed", ProcessEvidence: "no descendants", RemediatesEvidenceRevision: failedEvidence,
 		},
-		Binding: &runtimeBindingEvent{ExpectedRevision: predecessor.Revision, Current: successor},
 	}
 	record.RequestDigest = runtimeValueHash("gentle-ai.sdd-runtime-finish-request/v1", historicalFinishRemediationRequest{
 		ExpectedRevision: record.PreviousRevision, RequestID: record.RequestID, Outcome: record.Finish.Outcome,
 		EvidenceRevision: record.Finish.EvidenceRevision, Diagnosis: record.Finish.Diagnosis,
 		HarnessDisposition: record.Finish.HarnessDisposition, CleanupEvidence: record.Finish.CleanupEvidence,
-		ProcessEvidence: record.Finish.ProcessEvidence, ExpectedBindingRevision: predecessor.Revision,
-		SuccessorLineageID: successor.Lineage, RemediatesEvidenceRevision: record.Finish.RemediatesEvidenceRevision,
+		ProcessEvidence:            record.Finish.ProcessEvidence,
+		RemediatesEvidenceRevision: record.Finish.RemediatesEvidenceRevision,
 	})
 	return store, record
-}
-
-func historicalRuntimeBinding(change, lineage string, authority, receipt byte) ReviewBinding {
-	binding := ReviewBinding{
-		Schema: reviewBindingSchema, Change: change, Lineage: lineage,
-		AuthorityRevision: runtimeTestHash(authority), ReceiptHash: runtimeTestHash(receipt),
-		GateContext: reviewtransaction.GateContext{
-			Gate: reviewtransaction.GatePostApply, LineageID: lineage, StoreRevision: runtimeTestHash(authority),
-		},
-	}
-	binding.Revision = bindingDigest(binding)
-	return binding
 }
 
 func publishHistoricalRuntimeRecord(t *testing.T, store RuntimeStore, record runtimeRecord) string {
