@@ -1,3 +1,5 @@
+//go:build legacy_compact_receipt
+
 package sddstatus
 
 import (
@@ -171,7 +173,7 @@ func publishHistoricalRuntimeRecord(t *testing.T, store RuntimeStore, record run
 	return revision
 }
 
-func TestRuntimeLedgerRejectsMalformedPersistedInterruptedEvidence(t *testing.T) {
+func TestLegacyRuntimeLedgerRejectsMalformedPersistedInterruptedEvidence(t *testing.T) {
 	store := mustRuntimeStore(t, initRuntimeLedgerRepo(t), "malformed-interrupted")
 	started, err := store.Begin(context.Background(), BeginAttemptRequest{
 		RequestID: "malformed-begin", WorkUnit: "runtime evidence", EvidenceGoal: "replay safely",

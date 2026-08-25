@@ -243,8 +243,7 @@ func (store RuntimeStore) Acquire(ctx context.Context, request CompactAcquireReq
 	}
 	// A declared correction must be structurally settleable before it spends an
 	// attempt. Satisfiability is derived only from the immutable failed-evidence
-	// chain, so an audited reset remains a legitimate predecessor and review mode
-	// or binding metadata cannot change admission.
+	// chain, so an audited reset remains a legitimate predecessor.
 	if request.RemediatesEvidenceRevision != "" &&
 		!failedEvidenceRemediationSettleable(replay.Status, request.RemediatesEvidenceRevision) {
 		return compactBlocked(CompactBlockRemediationUnsatisfiable, ""), nil
@@ -458,8 +457,7 @@ func (store RuntimeStore) compactMutationFailure(err error, settle bool, begin B
 	case errors.Is(err, ErrRuntimeAttemptActive):
 		reason = CompactBlockActiveAttempt
 	case errors.Is(err, ErrRuntimeRevisionConflict), errors.Is(err, ErrRuntimeConcurrentUpdate),
-		errors.Is(err, ErrRuntimeRequestConflict), errors.Is(err, ErrRuntimeNoActiveAttempt),
-		errors.Is(err, ErrBindingRevisionConflict):
+		errors.Is(err, ErrRuntimeRequestConflict), errors.Is(err, ErrRuntimeNoActiveAttempt):
 		reason = CompactBlockInvalidContinuation
 	// ErrRuntimeWorktreeMismatch is the sentinel behind
 	// runtimeWorktreeMismatchRefusal (#2296 part 1): Finish is running from a
