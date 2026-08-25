@@ -5,7 +5,6 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 )
@@ -36,20 +35,27 @@ func TestRetiredLegacyBindingFixturesAreAbsent(t *testing.T) {
 func retiredLegacyFixtureRepositoryRoot(t *testing.T) string {
 	t.Helper()
 
-	_, source, _, ok := runtime.Caller(0)
-	if !ok {
-		t.Fatal("resolve repository root from this test source: runtime.Caller failed")
-	}
-
-	repoRoot := filepath.Clean(filepath.Join(filepath.Dir(source), "..", ".."))
-	info, err := os.Stat(repoRoot)
+	dir, err := os.Getwd()
 	if err != nil {
-		t.Fatalf("stat repository root resolved from %q: %v", source, err)
+		t.Fatalf("get test working directory: %v", err)
 	}
-	if !info.IsDir() {
-		t.Fatalf("repository root resolved from %q is not a directory: %q", source, repoRoot)
+	for {
+		info, err := os.Stat(filepath.Join(dir, "go.mod"))
+		switch {
+		case err == nil && !info.IsDir():
+			return dir
+		case err == nil:
+			t.Fatalf("go.mod under %q is not a file", dir)
+		case !errors.Is(err, fs.ErrNotExist):
+			t.Fatalf("stat go.mod under %q: %v", dir, err)
+		}
+
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			t.Fatalf("locate repository root from test working directory: go.mod not found")
+		}
+		dir = parent
 	}
-	return repoRoot
 }
 
 func requireRetiredLegacyFixtureAbsent(t *testing.T, repoRoot, fixture string) {
