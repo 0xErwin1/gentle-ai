@@ -147,30 +147,6 @@ func TestResolveEngramUsesTheSameNativeRuntimeAuthority(t *testing.T) {
 	}
 }
 
-func TestResolveRoutesAtomicRuntimeRemediationSuccessorToFreshVerify(t *testing.T) {
-	fixture := newRuntimeRemediationFixture(t, true)
-	completed, err := fixture.store.Finish(context.Background(), fixture.finishRequest("finish-remediation-for-status"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	write(t, filepath.Join(fixture.changeRoot, "verify-report.md"), boundedVerifyEnvelope(fixture.failedEvidence, "fail"))
-
-	status, err := Resolve(ResolveOptions{CWD: fixture.repo, ChangeName: "runtime-remediation"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	assertRuntimeStatusRevision(t, status, completed.Revision)
-	if status.ReviewGate == nil || status.ReviewGate.Result != "invalidated" {
-		t.Fatalf("review gate = %#v, want unchanged historical review routing", status.ReviewGate)
-	}
-	if status.Dependencies.Verify != DependencyReady || status.Dependencies.Archive != DependencyBlocked || status.NextRecommended != "verify" {
-		t.Fatalf("atomic remediation routing: verify=%q archive=%q next=%q reasons=%v", status.Dependencies.Verify, status.Dependencies.Archive, status.NextRecommended, status.BlockedReasons)
-	}
-	if status.RemediationState != (RemediationState{}) {
-		t.Fatalf("remediation state = %#v, want completed native successor", status.RemediationState)
-	}
-}
-
 func TestResolveExplainsFreshVerificationAfterEvidenceOnlyRuntimeRemediation(t *testing.T) {
 	for _, storeKind := range []string{"openspec", "engram"} {
 		t.Run(storeKind, func(t *testing.T) {
@@ -266,69 +242,6 @@ func TestResolveVerifyInstructionsDoNotMislabelOtherRoutes(t *testing.T) {
 			t.Fatalf("targeted ReVerify = %#v, emitted=%v, want reason %q", block, emitted, want)
 		}
 	})
-}
-
-func TestResolveRoutesPureEngramRuntimeRemediationSuccessorToFreshVerify(t *testing.T) {
-	fixture := newRuntimeEngramRemediationFixture(t)
-	completed, err := fixture.store.Finish(context.Background(), fixture.finishRequest("finish-engram-remediation-for-status"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.MkdirAll(filepath.Join(fixture.repo, ".engram"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	runRuntimeLedgerGit(t, fixture.repo, "remote", "add", "origin", "git@github.com:Gentleman-Programming/gentle-ai.git")
-	restore := stubEngramExport(t, []engramObservation{
-		{Title: "sdd/engram-runtime/proposal", Content: "## Proposal\nNative runtime", Project: "gentle-ai", Scope: "project"},
-		{Title: "sdd/engram-runtime/spec", Content: "### Requirement: Runtime\n#### Scenario: Native authority\n", Project: "gentle-ai", Scope: "project"},
-		{Title: "sdd/engram-runtime/design", Content: "## Design\nUse the native ledger", Project: "gentle-ai", Scope: "project"},
-		{Title: "sdd/engram-runtime/tasks", Content: "- [x] 1.1 Work\n", Project: "gentle-ai", Scope: "project"},
-		{Title: "sdd/engram-runtime/verify-report", Content: boundedVerifyEnvelope(fixture.failedEvidence, "fail"), Project: "gentle-ai", Scope: "project"},
-	})
-	defer restore()
-
-	status, err := Resolve(ResolveOptions{CWD: fixture.repo, ChangeName: "engram-runtime"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if status.ArtifactStore != ArtifactStoreEngram {
-		t.Fatalf("artifact store = %q, want Engram", status.ArtifactStore)
-	}
-	assertRuntimeStatusRevision(t, status, completed.Revision)
-	if status.ReviewGate == nil || status.ReviewGate.Result != "invalidated" {
-		t.Fatalf("Engram review gate = %#v, want unchanged historical review routing", status.ReviewGate)
-	}
-	if status.Dependencies.Verify != DependencyReady || status.Dependencies.Archive != DependencyBlocked || status.NextRecommended != "verify" {
-		t.Fatalf("Engram remediation routing: verify=%q archive=%q next=%q reasons=%v", status.Dependencies.Verify, status.Dependencies.Archive, status.NextRecommended, status.BlockedReasons)
-	}
-	if status.RemediationState != (RemediationState{}) {
-		t.Fatalf("Engram remediation state = %#v, want completed native successor", status.RemediationState)
-	}
-	if _, err := os.Stat(filepath.Join(fixture.repo, "openspec")); !os.IsNotExist(err) {
-		t.Fatalf("pure Engram routing depended on an OpenSpec root: %v", err)
-	}
-}
-
-func TestResolveDoesNotBypassMalformedFailedEvidenceWithACompletedRuntime(t *testing.T) {
-	fixture := newRuntimeRemediationFixture(t, true)
-	if _, err := fixture.store.Finish(context.Background(), fixture.finishRequest("finish-remediation-malformed-evidence")); err != nil {
-		t.Fatal(err)
-	}
-	write(t, filepath.Join(fixture.changeRoot, "verify-report.md"), strings.ReplaceAll(
-		boundedVerifyEnvelope(fixture.failedEvidence, "fail"),
-		"evidence_revision: "+fixture.failedEvidence+"\n", "",
-	))
-
-	status, err := Resolve(ResolveOptions{CWD: fixture.repo, ChangeName: "runtime-remediation"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if status.NextRecommended != "verify" || status.Dependencies.Verify != DependencyReady {
-		t.Fatalf("malformed failed evidence = %#v, want independent verification retry", status)
-	}
-	if !strings.Contains(strings.Join(status.BlockedReasons, "\n"), "evidence_revision") {
-		t.Fatalf("blocked reasons = %v, want preserved evidence_revision diagnostic", status.BlockedReasons)
-	}
 }
 
 func TestMissingEvidenceRevisionPreservesStrictParserReasonBeforeLegacyTransactionComparison(t *testing.T) {

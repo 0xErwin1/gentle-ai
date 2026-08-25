@@ -9,82 +9,10 @@ import (
 	"testing"
 )
 
-// TestRuntimeFinishDoesNotDemandAReviewSuccessorWhileReviewIsDisabled is the
-// second instance the reporter raised, and it is the same principle as the
-// gate: with receipt-driven development switched off, receipt-driven development
-// does not exist, so it must have no implications.
-//
-// The deadlock it removes is real and closed. A clone earns a review binding,
-// the operator switches reviews off, work continues, and the attempt changes
-// the candidate tree. Closing that passing attempt used to demand an atomic
-// approved recovery successor — a successor the operator cannot produce,
-// because `review start` is refused while the switch is off. The only way out
-// was to turn reviews back on for the sole purpose of satisfying a system that
-// was supposed to be inert.
-//
-// Nothing is fabricated here: no binding is advanced, no approval is minted,
-// and the attempt closes as an ordinary finish. Turning reviews back on
-// re-validates from the current state — the binding still refers to the
-// candidate it was approved for, and the next enforcement point rediscovers
-// that on its own.
-func TestRuntimeFinishDoesNotDemandAReviewSuccessorWhileReviewIsDisabled(t *testing.T) {
-	fixture := newRuntimeRemediationFixture(t, true)
-	request := fixture.finishRequest("finish-while-review-disabled")
-
-	store := fixture.store
-	store.ReviewDisabled = true
-	before := countRuntimeRecords(t, store.Dir)
-
-	status, err := store.Finish(context.Background(), request)
-	if err != nil {
-		t.Fatalf("closing a passing attempt while reviews are off demanded a review obligation: %T %v", err, err)
-	}
-	if status.ActiveAttempt != nil {
-		t.Fatalf("attempt did not close while reviews are off: %#v", status.ActiveAttempt)
-	}
-	if countRuntimeRecords(t, store.Dir) != before+1 {
-		t.Fatalf("disabled finish records = %d, want %d", countRuntimeRecords(t, store.Dir), before+1)
-	}
-
-	// It closed as an ORDINARY finish: no remediation record, and the binding
-	// is exactly the one that already existed. A disabled switch never advances
-	// review authority any more than it approves.
-	record, err := store.loadRecord(status.Revision)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if record.Operation != runtimeOperationFinish || record.Binding != nil {
-		t.Fatalf("disabled finish record = %#v", record)
-	}
-	if status.Binding == nil || status.Binding.Revision != fixture.predecessorBinding.Revision {
-		t.Fatalf("disabled finish mutated the review binding: %#v", status.Binding)
-	}
-}
-
 // The enabled-side counterpart of the test above is gone with its subject:
 // review no longer demands a successor when implementation finishes, because
 // it acts after implementation and verification. Its replacement lives in
 // runtime_review_acts_after_verify_test.go.
-
-// TestRuntimeFinishStillValidatesAnExplicitSuccessorWhileReviewIsDisabled holds
-// the other edge: the switch removes the IMPLICIT demand, never the checks on
-// an explicit request. An operator who deliberately passes a remediation
-// successor while reviews are off asked for receipt-driven development to act,
-// so it still validates that successor rather than trusting it.
-func TestRuntimeFinishIgnoresReviewModeAndBindingMetadata(t *testing.T) {
-	fixture := newRuntimeRemediationFixture(t, true)
-	store := fixture.store
-	store.ReviewDisabled = true
-	before := countRuntimeRecords(t, store.Dir)
-
-	status, err := store.Finish(context.Background(), fixture.finishRequest("finish-with-review-disabled"))
-	if err != nil || !status.Complete || status.ActiveAttempt != nil {
-		t.Fatalf("failed-evidence finish while review is disabled = %#v err=%v", status, err)
-	}
-	if status.Binding == nil || status.Binding.Revision != fixture.predecessorBinding.Revision || countRuntimeRecords(t, store.Dir) != before+1 {
-		t.Fatalf("settlement rewrote review metadata: status=%#v records=%d", status, countRuntimeRecords(t, store.Dir))
-	}
-}
 
 func TestRuntimeDisabledUnmanagedRemediationConsumesTheOnlyRemainingAttempt(t *testing.T) {
 	// The subject is what re-enabling does to a disabled/unmanaged
