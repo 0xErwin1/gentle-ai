@@ -198,6 +198,12 @@ func containsString(values []string, target string) bool {
 // TickMsg drives the spinner animation on the installing screen.
 type TickMsg time.Time
 
+const noAnimationEnv = "GENTLE_AI_NO_ANIMATION"
+
+func tuiAnimationsDisabled() bool {
+	return os.Getenv(noAnimationEnv) == "1"
+}
+
 // CodexModelsDiscoveredMsg delivers one Custom picker catalog discovery result.
 type CodexModelsDiscoveredMsg struct {
 	RequestID uint64
@@ -205,6 +211,9 @@ type CodexModelsDiscoveredMsg struct {
 }
 
 func tickCmd() tea.Cmd {
+	if tuiAnimationsDisabled() {
+		return nil
+	}
 	return tea.Tick(100*time.Millisecond, func(t time.Time) tea.Msg {
 		return TickMsg(t)
 	})
@@ -933,6 +942,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.clampAdvisoryScroll()
 		return m, nil
 	case TickMsg:
+		if tuiAnimationsDisabled() {
+			return m, nil
+		}
 		if m.Screen == ScreenInstalling && !m.Progress.Done() {
 			m.SpinnerFrame = (m.SpinnerFrame + 1) % 10
 			return m, tickCmd()
