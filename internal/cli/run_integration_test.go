@@ -1959,9 +1959,9 @@ func TestRunInstallCustomPresetExplicitSkillsFlagPopulatesSelection(t *testing.T
 			skillCount++
 		}
 	}
-	// 12 SDD skills + 2 explicit skills + 1 _shared/SKILL.md = 15.
-	if skillCount != 15 {
-		t.Fatalf("expected 15 skill files (12 SDD + 2 explicit + 1 _shared), got %d", skillCount)
+	// 12 SDD skills + 2 explicit skills = 14. _shared is support-only.
+	if skillCount != 14 {
+		t.Fatalf("expected 14 skill files (12 SDD + 2 explicit), got %d", skillCount)
 	}
 }
 
@@ -2018,9 +2018,9 @@ func TestRunInstallCustomPresetSkillsNoFlagInstallsNothing(t *testing.T) {
 			}
 		}
 	}
-	// Expect 13 files: 11 SDD phases + judgment-day + _shared/SKILL.md.
-	if skillCount != 13 {
-		t.Fatalf("expected 13 SDD skill files installed by the sdd dependency, got %d", skillCount)
+	// Expect 12 files: 11 SDD phases + judgment-day. _shared is support-only.
+	if skillCount != 12 {
+		t.Fatalf("expected 12 SDD skill files installed by the sdd dependency, got %d", skillCount)
 	}
 }
 
