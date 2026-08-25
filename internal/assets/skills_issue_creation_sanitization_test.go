@@ -25,7 +25,7 @@ func TestIssueCreationSkillHasSanitizationRule(t *testing.T) {
 
 	privacyIndex := strings.Index(content, "Immediately before mutation")
 	publicationCommands := []string{
-		`gh issue create --repo "$TARGET" --title "$TITLE" --body-file "$BODY_FILE" --label "$PERMITTED_LABEL"`,
+		`gh issue create --repo "$TARGET" --title "$TITLE" --body-file "$BODY_FILE"`,
 		`gh issue comment "$NUMBER" --repo "$TARGET" --body-file "$BODY_FILE"`,
 	}
 	for _, command := range publicationCommands {

@@ -36,7 +36,13 @@ Use this skill when drafting, creating, commenting on, triaging, or approving a 
 
 ## Execution Steps
 
-1. Choose the fast path or minimal discovery. When discovery is needed, derive and verify `HOST`, `REPO=OWNER/REPO`, and `TARGET=$HOST/$REPO` from an explicit target or one unambiguous authenticated remote before target reads. Authenticate to `HOST`; discover only missing repository policy, default-branch Issue Forms/config, issue availability, Discussions routing, and labels. Failed or ambiguous discovery stops publication.
+1. Choose the fast path or minimal discovery. When discovery is needed, derive and verify `HOST`, `REPO=OWNER/REPO`, and `TARGET=$HOST/$REPO` from an explicit target or one unambiguous authenticated remote before target reads. Authenticate to `HOST`; discover only missing repository policy, default-branch Issue Forms/config, issue availability, Discussions routing, and labels. Enumerate existing labels with one read-only call:
+
+   ```bash
+   gh api --hostname "$HOST" --paginate "repos/$REPO/labels?per_page=100" --jq '.[].name'
+   ```
+
+   Failed or ambiguous discovery stops publication.
 2. Select the one YAML form whose declared purpose matches. Before duplicate classification, establish its controls and required-answer structure in declared order; omit `markdown` guidance and do not collect or materialize new-issue answers yet:
 
    | Control | Candidate comparison structure |
@@ -76,10 +82,10 @@ Use this skill when drafting, creating, commenting on, triaging, or approving a 
    | Zero | Append no `--label` tokens. |
    | Each permitted label | Append exactly one separate `--label "$PERMITTED_LABEL"` pair. |
 
-7. Immediately before mutation, perform one practical privacy scan of the title and body for actual local paths, usernames, hostnames, credentials or secrets, private project names, and private network addresses. Replace findings with `<project-name>`, `<user>`, `<hostname>`, or `<token>` as applicable while preserving intentionally public identifiers and useful reproduction structure. Make only the applicable GitHub CLI attempt:
+7. Immediately before mutation, perform one practical privacy scan of the title and body for actual local paths, usernames, hostnames, credentials or secrets, private project names, and private network addresses. Replace findings with `<project-name>`, `<user>`, `<hostname>`, or `<token>` as applicable while preserving intentionally public identifiers and useful reproduction structure. Make only the applicable GitHub CLI attempt, appending `--label` tokens to the create command exactly as the step 6 label expansion contract directs:
 
    ```bash
-   gh issue create --repo "$TARGET" --title "$TITLE" --body-file "$BODY_FILE" --label "$PERMITTED_LABEL"
+   gh issue create --repo "$TARGET" --title "$TITLE" --body-file "$BODY_FILE"
    gh issue comment "$NUMBER" --repo "$TARGET" --body-file "$BODY_FILE"
    ```
 
