@@ -40,11 +40,50 @@ func TestDiscoverCatalogMapsVerboseOutputAndProjectDirectory(t *testing.T) {
 		t.Fatalf("command = %+v, want opencode models --verbose in project directory", got)
 	}
 	model := providers["custom"].Models["qwen/qwen3"]
-	if !model.ToolCall || !model.Reasoning || model.Limit.Context != 32768 || model.Cost.Output != 0.8 || strings.Join(model.Variants, ",") != "high,low" {
+	if !model.ToolCall || !model.Reasoning || model.Limit.Context != 32768 || model.Cost.Output != 0.8 || strings.Join(model.Variants, ",") != "low,high" {
 		t.Fatalf("runtime model = %+v", model)
 	}
 	if _, ok := providers["other"].Models["plain"]; !ok {
 		t.Fatal("missing second provider model")
+	}
+}
+
+func TestDiscoverCatalogToleratesLogNoiseAroundRecords(t *testing.T) {
+	// gentle-ai's own managed skill-registry plugin logs this exact line to
+	// stdout whenever OpenCode starts outside a project root (#1015 audience).
+	noisy := "[skill-registry] skipping refresh: not a project root: /Users/someone/Desktop\n" +
+		verboseCatalog +
+		"[skill-registry] refresh done\n"
+	providers, err := DiscoverCatalogWithRunner(context.Background(), "project", func(context.Context, Command) (CommandOutput, error) {
+		return CommandOutput{Stdout: []byte(noisy)}, nil
+	})
+	if err != nil {
+		t.Fatalf("DiscoverCatalogWithRunner() error = %v, want tolerated log preamble", err)
+	}
+	if _, ok := providers["custom"].Models["qwen/qwen3"]; !ok {
+		t.Fatal("missing model after log preamble")
+	}
+	if _, ok := providers["other"].Models["plain"]; !ok {
+		t.Fatal("missing trailing model with interleaved log noise")
+	}
+}
+
+func TestDiscoverCatalogOrdersKnownEffortVariantsSemantically(t *testing.T) {
+	out := "custom/model\n" +
+		`{"id":"model","name":"Model","capabilities":{"toolcall":true},"variants":{"medium":{},"high":{},"low":{}}}` + "\n" +
+		"custom/other\n" +
+		`{"id":"other","name":"Other","capabilities":{"toolcall":true},"variants":{"zeta":{},"alpha":{}}}` + "\n"
+	providers, err := DiscoverCatalogWithRunner(context.Background(), "project", func(context.Context, Command) (CommandOutput, error) {
+		return CommandOutput{Stdout: []byte(out)}, nil
+	})
+	if err != nil {
+		t.Fatalf("DiscoverCatalogWithRunner() error = %v", err)
+	}
+	if got := strings.Join(providers["custom"].Models["model"].Variants, ","); got != "low,medium,high" {
+		t.Fatalf("effort variants = %q, want semantic low,medium,high order", got)
+	}
+	if got := strings.Join(providers["custom"].Models["other"].Variants, ","); got != "alpha,zeta" {
+		t.Fatalf("unknown variants = %q, want sorted fallback", got)
 	}
 }
 
@@ -59,6 +98,8 @@ func TestDiscoverCatalogRejectsInvalidOutput(t *testing.T) {
 		{"missing tool capability", "custom/model\n{\"id\":\"model\",\"capabilities\":{}}", CatalogErrorUnsupportedSchema},
 		{"incompatible tool capability", "custom/model\n{\"id\":\"model\",\"capabilities\":{\"toolcall\":\"true\"}}", CatalogErrorUnsupportedSchema},
 		{"provider header mismatch", "custom/other\n{\"id\":\"model\",\"capabilities\":{\"toolcall\":true}}", CatalogErrorUnsupportedSchema},
+		{"log noise only", "[skill-registry] skipping refresh: not a project root: /Users/someone\nsome other log line\n", CatalogErrorUnsupportedSchema},
+		{"human readable model list", "Available models:\n- custom/model\n", CatalogErrorUnsupportedSchema},
 		{"oversized output", strings.Repeat("x", maxCatalogOutput+1), CatalogErrorOutputTooLarge},
 	}
 	for _, tt := range tests {
