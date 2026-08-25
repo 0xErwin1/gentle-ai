@@ -2,6 +2,9 @@ package sddstatus
 
 import (
 	"errors"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -62,8 +65,16 @@ func TestRetiredLegacyBindingConsumersAreAbsent(t *testing.T) {
 			}
 			continue
 		}
-		if strings.Contains(string(contents), "func "+consumer.testName+"(") {
-			t.Errorf("retired legacy binding consumer %s remains in %q", consumer.testName, consumer.fixture)
+		parsed, err := parser.ParseFile(token.NewFileSet(), path, contents, 0)
+		if err != nil {
+			t.Errorf("parse retired legacy binding consumer fixture %q: %v", consumer.fixture, err)
+			continue
+		}
+		for _, declaration := range parsed.Decls {
+			function, ok := declaration.(*ast.FuncDecl)
+			if ok && function.Name.Name == consumer.testName {
+				t.Errorf("retired legacy binding consumer %s remains in %q", consumer.testName, consumer.fixture)
+			}
 		}
 	}
 }
