@@ -20,15 +20,7 @@ import (
 
 const reviewBindingSchema = "gentle-ai.sdd-review-binding/v1"
 
-// A change identity is whatever sdd-status already resolves: an OpenSpec
-// directory name or an Engram change ID such as DEC-EXAMPLE-CHANGE. It stays
-// path-safe by construction, since alphanumeric segments joined by single
-// hyphens or underscores can express neither a separator nor a dot segment.
 var reviewBindingChange = regexp.MustCompile(`^[A-Za-z0-9]+(?:[-_][A-Za-z0-9]+)*$`)
-
-// legacyRuntimeChange is the shape the runtime ledger stored directly at
-// v1/<change> before identities widened. It must never change.
-var legacyRuntimeChange = regexp.MustCompile(`^[a-z0-9]+(?:-[a-z0-9]+)*$`)
 var reviewBindingLineage = regexp.MustCompile(`^[a-z0-9]+(?:-[a-z0-9]+)*$`)
 var reviewBindingHash = regexp.MustCompile(`^sha256:[a-f0-9]{64}$`)
 
@@ -191,24 +183,20 @@ func pathWithinBindingRoot(root, path string) bool {
 func bindingPath(store reviewtransaction.CompactStore, change string) string {
 	return filepath.Join(filepath.Dir(filepath.Dir(filepath.Dir(filepath.Dir(store.Dir)))), "gentle-ai", "sdd-review-bindings", "v1", change, "binding.json")
 }
+
 func bindingHash(payload []byte) string {
 	sum := sha256.Sum256(payload)
 	return "sha256:" + hex.EncodeToString(sum[:])
 }
-func bindingDigest(b ReviewBinding) string {
-	b.Revision = ""
-	payload, _ := json.Marshal(b)
+
+func bindingDigest(binding ReviewBinding) string {
+	binding.Revision = ""
+	payload, _ := json.Marshal(binding)
 	return bindingHash(payload)
 }
 
 func validReviewBindingChange(change string) bool {
 	return len(change) <= 96 && reviewBindingChange.MatchString(change)
-}
-
-// legacyRuntimeChangeDir reports whether a change identity is one the runtime
-// ledger has always stored directly at v1/<change>.
-func legacyRuntimeChangeDir(change string) bool {
-	return len(change) <= 96 && legacyRuntimeChange.MatchString(change)
 }
 
 func validReviewBindingLineage(lineage string) bool {
@@ -240,19 +228,6 @@ func parseBinding(payload []byte) (ReviewBinding, error) {
 	return binding, nil
 }
 
-// reviewBindingViolation names WHICH of the twelve integrity conditions a
-// binding failed, or "" when it satisfies all of them. Root 8 (#2471): these
-// twelve used to answer with one shared `errors.New("invalid binding")`, so a
-// caller holding the error learned only that something was wrong with bytes
-// this package wrote itself.
-//
-// Unlike the reviewer-input surfaces, this validates OUR OWN persisted ledger
-// bytes, so a violation is tamper or corruption rather than user error. That
-// is exactly why naming the condition matters: the reader is an operator
-// diagnosing a damaged store, and "invalid binding" tells them to escalate
-// while "gate context lineage does not match" tells them what broke. The
-// values themselves are never echoed, only the condition that failed, so a
-// damaged binding cannot use this to reflect arbitrary bytes into a message.
 func reviewBindingViolation(payload []byte, binding ReviewBinding) string {
 	canonical, err := bindingBytes(binding)
 	switch {
