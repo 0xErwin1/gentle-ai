@@ -20,6 +20,7 @@ func TestCurrentBehaviorCoverageFilesAreUntagged(t *testing.T) {
 		"internal/sddstatus/runtime_compact_test.go",
 		"internal/sddstatus/runtime_status_remediation_advice_test.go",
 		"internal/sddstatus/runtime_ledger_review_disabled_test.go",
+		"internal/sddstatus/runtime_status_test.go",
 		"internal/sddstatus/review_binding_alias_identity_test.go",
 		"internal/sddstatus/status_remediation_instructions_test.go",
 		"internal/sddstatus/status_test.go",
