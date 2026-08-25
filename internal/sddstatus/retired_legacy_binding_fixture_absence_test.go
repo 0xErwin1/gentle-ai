@@ -16,6 +16,7 @@ func TestRetiredLegacyBindingFixturesAreAbsent(t *testing.T) {
 	repoRoot := retiredLegacyFixtureRepositoryRoot(t)
 
 	for _, fixture := range []string{
+		"e2e/organicruntime/organic_lifecycle_hardening_test.go",
 		"e2e/organicruntime/organic_escalated_continuation_test.go",
 		"e2e/organicruntime/organic_recovery_guard_rails_test.go",
 		"internal/sddstatus/bounded_review_test.go",
