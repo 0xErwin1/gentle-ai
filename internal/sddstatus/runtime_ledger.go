@@ -43,7 +43,6 @@ const (
 	runtimeOperationRepairConsecutiveRescope = "objective/repair-consecutive-rescope"
 	runtimeOperationAdvance                  = "objective/advance"
 	runtimeOperationHandoff                  = "attempt/handoff"
-	runtimeOperationBind                     = "binding/set"
 	runtimeOperationGrant                    = "authority/grant"
 	maximumRuntimeGrantRoots                 = 32
 	maximumRuntimeIntendedUntracked          = 32
@@ -60,13 +59,6 @@ const (
 	// by the CLI for missing required flags (internal/cli/sdd_attempt.go); a
 	// continuation that fails when pasted is worse than none.
 	runtimeLedgerStatusPointer = "run `gentle-ai sdd-attempt status --cwd <repo> --change <change>` — its next_action names the continuation"
-
-	// runtimeReviewIntegrationContract mirrors cli.ReviewIntegrationContractV1,
-	// which owns the value. internal/cli imports this package, so the constant
-	// cannot be imported back; it is duplicated only to keep a refusal from
-	// naming a `review status` invocation the CLI would reject for a missing
-	// contract selector.
-	runtimeReviewIntegrationContract = "gentle-ai.review-integration/v1"
 )
 
 var (
@@ -106,8 +98,7 @@ var (
 	// CumulativeChangedLines==0" fallback specifically as attempt-count
 	// laundering; an unguarded widen here would be the same defect wearing a
 	// new operation name.
-	ErrRuntimeRescopeWidened   = errors.New("SDD runtime objective rescope may only narrow or hold max_attempts and max_changed_lines, never widen them; " + runtimeLedgerStatusPointer)
-	ErrBindingRevisionConflict = errors.New("SDD review binding revision conflict")
+	ErrRuntimeRescopeWidened = errors.New("SDD runtime objective rescope may only narrow or hold max_attempts and max_changed_lines, never widen them; " + runtimeLedgerStatusPointer)
 	// ErrRuntimeWorktreeMismatch never travels alone either. Every return site
 	// wraps it with runtimeWorktreeMismatchRefusal, which names the exact
 	// --cwd that reproduces the binding Begin actually recorded (#2296 part
@@ -132,9 +123,11 @@ var (
 	ErrRuntimeHandoffDestination      = errors.New("SDD runtime handoff destination is not a registered linked worktree of this repository") // refusal:by-design operator-knowledge: the RuntimeStore wrapper names the active attempt's actual status command
 	ErrRuntimeHandoffAlreadyPerformed = errors.New("SDD runtime attempt has already been handed off")                                        // refusal:by-design operator-knowledge: the RuntimeStore wrapper names the active attempt's actual status command
 
-	runtimeRequestIDPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,127}$`)
-	runtimeRevisionPattern  = regexp.MustCompile(`^sha256:[a-f0-9]{64}$`)
-	runtimeGitTreePattern   = regexp.MustCompile(`^[a-f0-9]{40}(?:[a-f0-9]{24})?$`)
+	runtimeRequestIDPattern    = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,127}$`)
+	runtimeRevisionPattern     = regexp.MustCompile(`^sha256:[a-f0-9]{64}$`)
+	runtimeGitTreePattern      = regexp.MustCompile(`^[a-f0-9]{40}(?:[a-f0-9]{24})?$`)
+	runtimeChangePattern       = regexp.MustCompile(`^[A-Za-z0-9]+(?:[-_][A-Za-z0-9]+)*$`)
+	legacyRuntimeChangePattern = regexp.MustCompile(`^[a-z0-9]+(?:-[a-z0-9]+)*$`)
 
 	runtimePublishRecord                     = reviewtransaction.PublishFileNoReplace
 	runtimeReplaceHead                       = reviewtransaction.ReplaceFileAtomic
@@ -321,9 +314,7 @@ type RuntimeStatus struct {
 	// records in chain order. AllowedEditRoots consumption is a later slice.
 	// omitempty is load-bearing: a chain without grant records serializes
 	// byte-identically to every projection before this field existed.
-	GrantedRoots    []string       `json:"granted_roots,omitempty"`
-	BindingRevision string         `json:"binding_revision"`
-	Binding         *ReviewBinding `json:"binding,omitempty"`
+	GrantedRoots []string `json:"granted_roots,omitempty"`
 	// BlockedReason and BlockedExit carry the verdict acquire would reach for
 	// the caller's own request, so the read-only surface stops answering a
 	// narrower question than the one consumers were asking it (#2114). Only
@@ -432,15 +423,6 @@ type GrantRootsRequest struct {
 	ChangeInstance string `json:"change_instance"`
 }
 
-// BindReviewRequest performs a binding-only compare-and-swap. The expected
-// value is the current ReviewBinding.Revision, not the runtime ledger HEAD and
-// not the review authority revision.
-type BindReviewRequest struct {
-	ExpectedBindingRevision string `json:"expected_binding_revision"`
-	RequestID               string `json:"request_id"`
-	LineageID               string `json:"lineage_id"`
-}
-
 // RuntimeStore is one provider-owned immutable chain for one SDD change. Its
 // directory is rooted in the repository Git common-dir, so linked worktrees
 // and later processes observe the same attempt ordinals and line charges.
@@ -500,8 +482,6 @@ type runtimeRecord struct {
 	Repair           *runtimeRepairEvent  `json:"repair,omitempty"`
 	Advance          *runtimeAdvanceEvent `json:"advance,omitempty"`
 	Handoff          *RuntimeHandoff      `json:"handoff,omitempty"`
-	Binding          *runtimeBindingEvent `json:"binding,omitempty"`
-	Receipt          json.RawMessage      `json:"receipt,omitempty"`
 	Grant            *runtimeGrantEvent   `json:"grant,omitempty"`
 }
 
@@ -621,17 +601,6 @@ type runtimeFinishEvent struct {
 	ChangedLineBudgetExceeded  bool               `json:"changed_line_budget_exceeded,omitempty"`
 }
 
-type runtimeBindingEvent struct {
-	ExpectedRevision string                      `json:"expected_revision"`
-	Current          ReviewBinding               `json:"current"`
-	LegacyImport     *runtimeLegacyBindingImport `json:"legacy_import,omitempty"`
-}
-
-type runtimeLegacyBindingImport struct {
-	SourceDigest string        `json:"source_digest"`
-	Binding      ReviewBinding `json:"binding"`
-}
-
 type runtimeRequestReceipt struct {
 	Digest   string
 	Revision string
@@ -648,7 +617,7 @@ type runtimeReplay struct {
 }
 
 func OpenRuntimeStore(ctx context.Context, repo, change string) (RuntimeStore, error) {
-	if !validReviewBindingChange(change) {
+	if !validRuntimeChange(change) {
 		return RuntimeStore{}, fmt.Errorf("invalid SDD change name %q; want letters, digits, and single hyphens or underscores between them, at most 96 characters; run `gentle-ai sdd-status --cwd <repo> --json` to read the resolved changeName", change)
 	}
 	root, err := (reviewtransaction.SnapshotBuilder{Repo: repo}).ResolveRepositoryRoot(ctx)
@@ -670,6 +639,16 @@ func OpenRuntimeStore(ctx context.Context, repo, change string) (RuntimeStore, e
 	commonDir := filepath.Dir(filepath.Dir(filepath.Dir(filepath.Dir(probe.Dir))))
 	dir := runtimeChangeLedgerDir(filepath.Join(commonDir, "gentle-ai", "sdd-runtime"), change)
 	return RuntimeStore{Dir: dir, Repo: root, Workspace: workspace, Change: change, commonDir: commonDir}, nil
+}
+
+func validRuntimeChange(change string) bool {
+	return len(change) <= 96 && runtimeChangePattern.MatchString(change)
+}
+
+// legacyRuntimeChangeDir reports whether a change identity is one the runtime
+// ledger has always stored directly at v1/<change>.
+func legacyRuntimeChangeDir(change string) bool {
+	return len(change) <= 96 && legacyRuntimeChangePattern.MatchString(change)
 }
 
 // encodedRuntimeChangeNamespace holds identities that cannot be a directory
@@ -808,8 +787,8 @@ func (store RuntimeStore) Finish(ctx context.Context, request FinishAttemptReque
 		}
 		// Failed-evidence remediation is an SDD-only invariant. The immutable
 		// attempt chain owns both the exact failed evidence and the one passing
-		// correction that may discharge it; reset, review mode, bindings, receipts,
-		// and successor lineages cannot change that accounting.
+		// correction that may discharge it; reset and successor lineages cannot
+		// change that accounting.
 		evidenceRemediation := request.RemediatesEvidenceRevision != ""
 		chainFailedAttempt, chainHasFailedEvidence := runtimeChainFailedAttempt(status.Attempts)
 		chainFailedEvidence := chainFailedAttempt.EvidenceRevision
@@ -1526,7 +1505,7 @@ func (store RuntimeStore) acquireLock() (*reviewtransaction.AuthorityFileLock, e
 		}
 		if errors.Is(err, reviewtransaction.ErrConcurrentUpdate) {
 			// Wrapped rather than flattened so the contention proof survives
-			// (1861). Both callers of acquireLock -- bindPreparedReview and
+			// (1861). Both callers of acquireLock -- RepairConsecutiveRescope and
 			// mutate -- refuse here strictly before commitRecordLocked, so a
 			// refusal at acquisition wrote nothing, and a caller must be told
 			// that instead of being handed an unknown mutation outcome. The
@@ -1688,11 +1667,6 @@ func applyRuntimeRecord(store RuntimeStore, replay *runtimeReplay, revision stri
 		}
 	case runtimeOperationRepairConsecutiveRescope:
 		if err := applyRuntimeConsecutiveRescopeRepairEvent(store, replay, revision, record); err != nil {
-			return err
-		}
-
-	case runtimeOperationBind:
-		if err := applyRuntimeBindingEvent(replay, record.Binding); err != nil {
 			return err
 		}
 	case runtimeOperationGrant:
@@ -1990,11 +1964,6 @@ func applyRuntimeFinishEvent(replay *runtimeReplay, event *runtimeFinishEvent, u
 		// the helper falls back to the begin comparison only for a legacy
 		// failed record that carries no finish snapshot.
 		unchangedCandidate := runtimeRemediationCandidateUnchanged(chainFailedAttempt, *active, event.FinishCandidateIdentity, event.FinishCandidateTree)
-		// A binding is deliberately NOT checked here. The write path stopped
-		// treating a leftover binding as a blocker (the kill switch must have
-		// no implications while it is off), and this replay mirror has to agree
-		// with it or a legitimately committed record makes the whole chain
-		// unreplayable.
 		// The binding must hold for every outcome; the changed-candidate and
 		// fresh-evidence demands bind only the passing outcome, exactly as the
 		// write-time guard in Finish decides (#3422). A truthful failed or
@@ -2068,25 +2037,6 @@ func applyRuntimeGrantEvent(replay *runtimeReplay, event *runtimeGrantEvent) {
 	}
 }
 
-func applyRuntimeBindingEvent(replay *runtimeReplay, event *runtimeBindingEvent) error {
-	current := ""
-	if replay.Status.Binding != nil {
-		if event.LegacyImport != nil {
-			return errors.New("native binding successor cannot import legacy authority again")
-		}
-		current = replay.Status.BindingRevision
-	} else if event.LegacyImport != nil {
-		current = event.LegacyImport.Binding.Revision
-	}
-	if current != event.ExpectedRevision {
-		return errors.New("binding record expected revision does not equal replay state")
-	}
-	binding := event.Current
-	replay.Status.Binding = &binding
-	replay.Status.BindingRevision = binding.Revision
-	return nil
-}
-
 func validateRuntimeBeginEvent(record runtimeRecord) error {
 	event := record.Begin
 	if !runtimeRevisionPattern.MatchString(event.ObjectiveID) || event.ObjectiveGeneration < 0 || validateRuntimeText(event.WorkUnit, 160) != nil ||
@@ -2128,7 +2078,7 @@ func validateRuntimeBeginEvent(record runtimeRecord) error {
 }
 
 func validateRuntimeRecordShape(record runtimeRecord) error {
-	if record.Schema != runtimeRecordSchema || !validReviewBindingChange(record.Change) ||
+	if record.Schema != runtimeRecordSchema || !validRuntimeChange(record.Change) ||
 		(record.PreviousRevision != "" && !runtimeRevisionPattern.MatchString(record.PreviousRevision)) ||
 		!runtimeRequestIDPattern.MatchString(record.RequestID) || !runtimeRevisionPattern.MatchString(record.RequestDigest) {
 		return errors.New("invalid SDD runtime record identity")
@@ -2138,14 +2088,14 @@ func validateRuntimeRecordShape(record runtimeRecord) error {
 	}
 	switch record.Operation {
 	case runtimeOperationBegin:
-		if record.Begin == nil || record.Finish != nil || record.Reset != nil || record.Rescope != nil || record.Advance != nil || record.Handoff != nil || record.Binding != nil || record.Receipt != nil || record.Grant != nil {
+		if record.Begin == nil || record.Finish != nil || record.Reset != nil || record.Rescope != nil || record.Advance != nil || record.Handoff != nil || record.Grant != nil {
 			return errors.New("invalid SDD runtime begin record shape")
 		}
 		if err := validateRuntimeBeginEvent(record); err != nil {
 			return err
 		}
 	case runtimeOperationAdvance:
-		if record.Begin == nil || record.Advance == nil || record.Finish != nil || record.Reset != nil || record.Rescope != nil || record.Handoff != nil || record.Binding != nil || record.Receipt != nil || record.Grant != nil {
+		if record.Begin == nil || record.Advance == nil || record.Finish != nil || record.Reset != nil || record.Rescope != nil || record.Handoff != nil || record.Grant != nil {
 			return errors.New("invalid SDD runtime objective advance record shape") // refusal:by-design world-action: this shape is constructed by the authority itself, so a violation is a mutated record and the exit is restoring the store
 		}
 		advance := record.Advance
@@ -2159,7 +2109,7 @@ func validateRuntimeRecordShape(record runtimeRecord) error {
 			return err
 		}
 	case runtimeOperationFinish:
-		if record.Finish == nil || record.Begin != nil || record.Reset != nil || record.Rescope != nil || record.Advance != nil || record.Handoff != nil || record.Binding != nil || record.Receipt != nil || record.Grant != nil {
+		if record.Finish == nil || record.Begin != nil || record.Reset != nil || record.Rescope != nil || record.Advance != nil || record.Handoff != nil || record.Grant != nil {
 			return errors.New("invalid SDD runtime finish record shape")
 		}
 		event := record.Finish
@@ -2184,7 +2134,7 @@ func validateRuntimeRecordShape(record runtimeRecord) error {
 			return errors.New("SDD runtime finish request digest does not match record")
 		}
 	case runtimeOperationHandoff:
-		if record.Handoff == nil || record.Begin != nil || record.Finish != nil || record.Reset != nil || record.Rescope != nil || record.Advance != nil || record.Binding != nil || record.Receipt != nil || record.Grant != nil {
+		if record.Handoff == nil || record.Begin != nil || record.Finish != nil || record.Reset != nil || record.Rescope != nil || record.Advance != nil || record.Grant != nil {
 			return errors.New("invalid SDD runtime handoff record shape") // refusal:by-design world-action: a malformed immutable record requires restoring the authority store
 		}
 		event := record.Handoff
@@ -2201,7 +2151,7 @@ func validateRuntimeRecordShape(record runtimeRecord) error {
 			return errors.New("SDD runtime handoff request digest does not match record") // refusal:by-design world-action: a forged immutable record requires restoring the authority store
 		}
 	case runtimeOperationReset:
-		if record.Reset == nil || record.Begin != nil || record.Finish != nil || record.Rescope != nil || record.Advance != nil || record.Handoff != nil || record.Binding != nil || record.Receipt != nil || record.Grant != nil {
+		if record.Reset == nil || record.Begin != nil || record.Finish != nil || record.Rescope != nil || record.Advance != nil || record.Handoff != nil || record.Grant != nil {
 			return errors.New("invalid SDD runtime reset record shape")
 		}
 		event := record.Reset
@@ -2217,7 +2167,7 @@ func validateRuntimeRecordShape(record runtimeRecord) error {
 			return errors.New("SDD runtime reset request digest does not match record")
 		}
 	case runtimeOperationRescope:
-		if record.Rescope == nil || record.Begin != nil || record.Finish != nil || record.Reset != nil || record.Advance != nil || record.Handoff != nil || record.Binding != nil || record.Receipt != nil || record.Grant != nil {
+		if record.Rescope == nil || record.Begin != nil || record.Finish != nil || record.Reset != nil || record.Advance != nil || record.Handoff != nil || record.Grant != nil {
 			return errors.New("invalid SDD runtime rescope record shape") // refusal:by-design world-action: this shape is constructed by the authority itself, so a violation is a mutated record and the exit is restoring the store
 		}
 		event := record.Rescope
@@ -2248,7 +2198,7 @@ func validateRuntimeRecordShape(record runtimeRecord) error {
 			return errors.New("SDD runtime rescope request digest does not match record") // refusal:by-design world-action: the digest is computed from the same request at write time, so a mismatch is a mutated record and the exit is restoring the store
 		}
 	case runtimeOperationRepairConsecutiveRescope:
-		if record.Repair == nil || record.Begin != nil || record.Finish != nil || record.Reset != nil || record.Rescope != nil || record.Advance != nil || record.Handoff != nil || record.Binding != nil || record.Receipt != nil || record.Grant != nil {
+		if record.Repair == nil || record.Begin != nil || record.Finish != nil || record.Reset != nil || record.Rescope != nil || record.Advance != nil || record.Handoff != nil || record.Grant != nil {
 			return errors.New("invalid SDD runtime consecutive-rescope repair record shape") // refusal:by-design world-action: repair has one immutable event and cannot carry a parallel authority mutation
 		}
 		event := record.Repair
@@ -2260,35 +2210,8 @@ func validateRuntimeRecordShape(record runtimeRecord) error {
 		if runtimeValueHash("gentle-ai.sdd-runtime-repair-consecutive-rescope-request/v1", request) != record.RequestDigest {
 			return errors.New("SDD runtime consecutive-rescope repair request digest does not match record") // refusal:by-design world-action: altered repair authority must fail replay rather than be reinterpreted
 		}
-	case runtimeOperationBind:
-		if record.Binding == nil || record.Begin != nil || record.Finish != nil || record.Reset != nil || record.Rescope != nil || record.Advance != nil || record.Handoff != nil || record.Receipt != nil || record.Grant != nil {
-			return errors.New("invalid SDD runtime binding record shape")
-		}
-		event := record.Binding
-		if event.ExpectedRevision != "" && !runtimeRevisionPattern.MatchString(event.ExpectedRevision) {
-			return errors.New("invalid expected SDD review binding revision")
-		}
-		if _, err := validatePreparedRuntimeBinding(event.Current, record.Change, event.Current.Lineage); err != nil {
-			return fmt.Errorf("invalid current SDD review binding: %w", err)
-		}
-		if event.LegacyImport != nil {
-			legacy, err := validatePreparedRuntimeBinding(event.LegacyImport.Binding, record.Change, event.LegacyImport.Binding.Lineage)
-			if err != nil {
-				return fmt.Errorf("invalid imported legacy SDD review binding: %w", err)
-			}
-			payload, _ := bindingBytes(legacy)
-			if event.LegacyImport.SourceDigest != bindingHash(payload) || event.ExpectedRevision != legacy.Revision {
-				return errors.New("legacy SDD review binding import does not match its source or expected revision")
-			}
-		}
-		request := BindReviewRequest{
-			ExpectedBindingRevision: event.ExpectedRevision, RequestID: record.RequestID, LineageID: event.Current.Lineage,
-		}
-		if runtimeValueHash("gentle-ai.sdd-runtime-bind-request/v1", request) != record.RequestDigest {
-			return errors.New("SDD runtime binding request digest does not match record")
-		}
 	case runtimeOperationGrant:
-		if record.Grant == nil || record.Begin != nil || record.Finish != nil || record.Reset != nil || record.Rescope != nil || record.Advance != nil || record.Handoff != nil || record.Binding != nil || record.Receipt != nil {
+		if record.Grant == nil || record.Begin != nil || record.Finish != nil || record.Reset != nil || record.Rescope != nil || record.Advance != nil || record.Handoff != nil {
 			return errors.New("invalid SDD runtime grant record shape") // refusal:by-design world-action: this shape is constructed by the authority itself, so a violation is a mutated record and the exit is restoring the store
 		}
 		event := record.Grant
@@ -2583,21 +2506,6 @@ func normalizeRescopeObjectiveRequest(request RescopeObjectiveRequest) (RescopeO
 		return RescopeObjectiveRequest{}, fmt.Errorf("invalid rescope actor: %w", err)
 	}
 	return request, nil
-}
-
-func validatePreparedRuntimeBinding(binding ReviewBinding, change, lineage string) (ReviewBinding, error) {
-	payload, err := bindingBytes(binding)
-	if err != nil {
-		return ReviewBinding{}, err
-	}
-	parsed, err := parseBinding(payload)
-	if err != nil {
-		return ReviewBinding{}, err
-	}
-	if parsed.Change != change || parsed.Lineage != lineage {
-		return ReviewBinding{}, errors.New("prepared SDD review binding does not match selected change and lineage")
-	}
-	return parsed, nil
 }
 
 func validateRuntimeText(value string, maximum int) error {
