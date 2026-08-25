@@ -16,6 +16,7 @@ func TestRetiredLegacyBindingFixturesAreAbsent(t *testing.T) {
 	repoRoot := retiredLegacyFixtureRepositoryRoot(t)
 
 	for _, fixture := range []string{
+		"internal/sddstatus/bounded_review_test.go",
 		"internal/sddstatus/legacy_binding_read_test.go",
 		"internal/sddstatus/review_binding_ledger_test.go",
 		"internal/sddstatus/runtime_ledger_interrupted_legacy_test.go",
