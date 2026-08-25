@@ -208,14 +208,6 @@ internal/reviewtransaction/verification_contract.go	verificationSVGIsPassive
 internal/reviewtransaction/verification_convergence.go	ResnapshotVerificationSubject
 internal/reviewtransaction/verification_convergence.go	VerificationSubjectMutationError.Error
 internal/reviewtransaction/verification_convergence.go	VerificationSubjectMutationError.Unwrap
-internal/sddstatus/review_binding.go	bindingBytes
-internal/sddstatus/review_binding.go	bindingDigest
-internal/sddstatus/review_binding.go	bindingHash
-internal/sddstatus/review_binding.go	bindingPath
-internal/sddstatus/review_binding.go	parseBinding
-internal/sddstatus/review_binding.go	reviewBindingViolation
-internal/sddstatus/review_binding.go	validReviewBindingChange
-internal/sddstatus/review_binding.go	validReviewBindingLineage
 internal/sddstatus/review_door.go	resetReviewEntryHookCallCountForTest
 internal/sddstatus/review_door.go	reviewEntryHookCallCountForTest
 internal/sddstatus/status.go	RenderNativePhasePrompt
