@@ -578,7 +578,7 @@ func Inject(homeDir string, adapter agents.Adapter, sddMode model.SDDModeID, opt
 				return InjectionResult{}, fmt.Errorf("default OpenCode share mode: %w", err)
 			}
 
-			mergeSettings := mergeJSONFile
+			mergeSettings := mergeOpenCodeCompatibleJSONFile
 			if adapter.Agent() == model.AgentOpenCode {
 				mergeSettings = mergeOpenCodeJSONFile
 			}
@@ -611,6 +611,13 @@ func Inject(homeDir string, adapter agents.Adapter, sddMode model.SDDModeID, opt
 					return InjectionResult{}, fmt.Errorf("clean stale profile JD agents %q: %w", profile.Name, cleanupErr)
 				}
 				changed = changed || cleanupResult.Changed
+				if adapter.Agent() == model.AgentKilocode {
+					cleanupResult, cleanupErr = cleanupKilocodeProfileJDPermissions(settingsPath, profile)
+					if cleanupErr != nil {
+						return InjectionResult{}, fmt.Errorf("clean Kilocode profile JD permissions %q: %w", profile.Name, cleanupErr)
+					}
+					changed = changed || cleanupResult.Changed
+				}
 				profileOverlay, profileErr := GenerateProfileOverlay(profile, homeDir, settingsPath, opts.OpenCodeModelAssignments, opts.CodeGraphGuidanceMarkdown, opts.orchestratorPolicyRenderOptions())
 				if profileErr != nil {
 					return InjectionResult{}, fmt.Errorf("generate profile overlay %q: %w", profile.Name, profileErr)
@@ -1049,9 +1056,9 @@ func extractManagedSection(content, sectionID string) string {
 	return strings.Trim(content[start+len(open):end], "\n")
 }
 
-// expandOpenCodeBoundedReviewAgents renders shared review roles for either
-// provider. OpenCode receives permission denies; Kilocode retains its tools
-// schema through the false branch.
+// restoreKilocodeManagedAgentTools restores the exact Kilocode tools and
+// permission shapes that the shared OpenCode-compatible overlays carried before
+// managed OpenCode tools were removed.
 func restoreKilocodeManagedAgentTools(agentsMap map[string]any) {
 	for name, raw := range agentsMap {
 		agent, ok := raw.(map[string]any)
@@ -1063,15 +1070,27 @@ func restoreKilocodeManagedAgentTools(agentsMap map[string]any) {
 			agent["tools"] = map[string]any{"__replace__": map[string]any{"read": true, "write": true, "edit": true, "bash": true, "question": true, "task": true}}
 		case isKilocodeProfilePhase(name):
 			agent["tools"] = map[string]any{"read": true, "write": true, "edit": true, "bash": true}
-			delete(agent, "permission")
+			if name == "sdd-research" {
+				agent["permission"] = kilocodeResearchPermission()
+			} else {
+				delete(agent, "permission")
+			}
 		case name == "jd-judge-a" || name == "jd-judge-b" || strings.HasPrefix(name, "jd-judge-a-") || strings.HasPrefix(name, "jd-judge-b-"):
-			agent["tools"] = map[string]any{"read": true, "bash": true}
+			if name == "jd-judge-a" || name == "jd-judge-b" {
+				agent["tools"] = map[string]any{"*": false, "read": true, "write": false, "edit": false, "bash": false, "task": false}
+			} else {
+				agent["tools"] = map[string]any{"__replace__": map[string]any{"read": true, "bash": true}}
+			}
 			delete(agent, "permission")
 		case name == "jd-fix-agent" || strings.HasPrefix(name, "jd-fix-agent-"):
 			agent["tools"] = map[string]any{"read": true, "write": true, "edit": true, "bash": true}
 			delete(agent, "permission")
 		}
 	}
+}
+
+func kilocodeResearchPermission() map[string]any {
+	return map[string]any{"bash": "deny", "webfetch": "deny", "websearch": "deny", "task": "deny"}
 }
 
 func restoreKilocodeManagedAgentToolsInOverlay(overlayBytes []byte) ([]byte, error) {
@@ -2079,34 +2098,52 @@ func mergeJSONFile(path string, overlay []byte) (mergeJSONResult, error) {
 	return mergeJSONFileContents(path, baseJSON, overlay)
 }
 
-// mergeOpenCodeJSONFile applies the legacy OpenCode migrations and removes the
-// deprecated agent-local tools map only for Gentle AI's managed agent keys.
-func mergeOpenCodeJSONFile(path string, overlay []byte) (mergeJSONResult, error) {
-	baseJSON, err := os.ReadFile(path)
+// mergeOpenCodeCompatibleJSONFile applies the legacy settings migrations shared
+// by OpenCode and Kilocode while preserving each provider's managed tools.
+func mergeOpenCodeCompatibleJSONFile(path string, overlay []byte) (mergeJSONResult, error) {
+	baseJSON, err := readAndMigrateOpenCodeCompatibleJSON(path)
 	if err != nil {
-		if !os.IsNotExist(err) {
-			return mergeJSONResult{}, fmt.Errorf("read json file %q: %w", path, err)
-		}
-		baseJSON = nil
+		return mergeJSONResult{}, err
 	}
+	return mergeJSONFileContents(path, baseJSON, overlay)
+}
 
-	baseJSON, err = migrateLegacyOpenCodeAgentsKey(baseJSON)
+// mergeOpenCodeJSONFile applies the shared legacy settings migrations and then
+// removes deprecated agent-local tools only for OpenCode managed agent keys.
+func mergeOpenCodeJSONFile(path string, overlay []byte) (mergeJSONResult, error) {
+	baseJSON, err := readAndMigrateOpenCodeCompatibleJSON(path)
 	if err != nil {
-		return mergeJSONResult{}, fmt.Errorf("migrate opencode agents key: %w", err)
-	}
-	baseJSON, err = migrateLegacyOpenCodeSDDOrchestrator(baseJSON)
-	if err != nil {
-		return mergeJSONResult{}, fmt.Errorf("migrate opencode sdd orchestrator agent: %w", err)
-	}
-	baseJSON, err = migrateLegacyOpenCodeCommandPrompt(baseJSON)
-	if err != nil {
-		return mergeJSONResult{}, fmt.Errorf("migrate opencode command prompt field: %w", err)
+		return mergeJSONResult{}, err
 	}
 	baseJSON, err = removeManagedOpenCodeAgentTools(baseJSON, overlay)
 	if err != nil {
 		return mergeJSONResult{}, fmt.Errorf("remove managed OpenCode agent tools: %w", err)
 	}
 	return mergeJSONFileContents(path, baseJSON, overlay)
+}
+
+func readAndMigrateOpenCodeCompatibleJSON(path string) ([]byte, error) {
+	baseJSON, err := os.ReadFile(path)
+	if err != nil {
+		if !os.IsNotExist(err) {
+			return nil, fmt.Errorf("read json file %q: %w", path, err)
+		}
+		baseJSON = nil
+	}
+
+	baseJSON, err = migrateLegacyOpenCodeAgentsKey(baseJSON)
+	if err != nil {
+		return nil, fmt.Errorf("migrate OpenCode-compatible agents key: %w", err)
+	}
+	baseJSON, err = migrateLegacyOpenCodeSDDOrchestrator(baseJSON)
+	if err != nil {
+		return nil, fmt.Errorf("migrate OpenCode-compatible sdd orchestrator agent: %w", err)
+	}
+	baseJSON, err = migrateLegacyOpenCodeCommandPrompt(baseJSON)
+	if err != nil {
+		return nil, fmt.Errorf("migrate OpenCode-compatible command prompt field: %w", err)
+	}
+	return baseJSON, nil
 }
 
 func mergeJSONFileContents(path string, baseJSON, overlay []byte) (mergeJSONResult, error) {

@@ -5415,6 +5415,260 @@ func TestInjectOpenCodeMultiModeInstallsGentleOrchestratorWithModel(t *testing.T
 	}
 }
 
+func TestKilocodeRestoresGlobalManagedToolsToMainPolicy(t *testing.T) {
+	home := t.TempDir()
+	first, err := Inject(home, kilocodeAdapter(), model.SDDModeSingle)
+	if err != nil {
+		t.Fatalf("Inject(kilocode) error = %v", err)
+	}
+	if !first.Changed {
+		t.Fatal("first Kilocode inject did not change settings")
+	}
+
+	settingsPath := kilocodeAdapter().SettingsPath(home)
+	payload, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatalf("ReadFile(kilocode settings) error = %v", err)
+	}
+	root := map[string]any{}
+	if err := json.Unmarshal(payload, &root); err != nil {
+		t.Fatalf("Unmarshal(kilocode settings) error = %v", err)
+	}
+	agentsMap, ok := root["agent"].(map[string]any)
+	if !ok {
+		t.Fatal("Kilocode settings missing agent map")
+	}
+
+	for _, name := range []string{"jd-judge-a", "jd-judge-b"} {
+		agent, ok := agentsMap[name].(map[string]any)
+		if !ok {
+			t.Fatalf("missing %s agent", name)
+		}
+		wantTools := map[string]any{"*": false, "read": true, "write": false, "edit": false, "bash": false, "task": false}
+		if got := agent["tools"]; !reflect.DeepEqual(got, wantTools) {
+			t.Fatalf("%s tools = %#v, want main policy %#v", name, got, wantTools)
+		}
+		if _, exists := agent["permission"]; exists {
+			t.Fatalf("%s retained OpenCode permission = %#v", name, agent["permission"])
+		}
+	}
+
+	research, ok := agentsMap["sdd-research"].(map[string]any)
+	if !ok {
+		t.Fatal("missing sdd-research agent")
+	}
+	if got, want := research["permission"], kilocodeResearchPermission(); !reflect.DeepEqual(got, want) {
+		t.Fatalf("sdd-research permission = %#v, want main policy %#v", got, want)
+	}
+
+	second, err := Inject(home, kilocodeAdapter(), model.SDDModeSingle)
+	if err != nil {
+		t.Fatalf("second Inject(kilocode) error = %v", err)
+	}
+	if second.Changed {
+		t.Fatal("second Kilocode inject changed settings")
+	}
+}
+
+func TestKilocodeSharedLegacyMigrationsPreserveTools(t *testing.T) {
+	home := t.TempDir()
+	settingsPath := kilocodeAdapter().SettingsPath(home)
+	before := []byte(`{
+  "agents": {
+    "sdd-orchestrator": {"prompt": "legacy", "legacyMetadata": "preserve", "tools": {"read": true}},
+    "legacy-agent": {"tools": {"bash": true}}
+  },
+  "agent": {
+    "user-owned": {"tools": {"custom": true}}
+  },
+  "command": {
+		"legacy": {"prompt": "legacy command"}
+  }
+}
+`)
+	if err := os.MkdirAll(filepath.Dir(settingsPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(settingsPath, before, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := Inject(home, kilocodeAdapter(), model.SDDModeSingle)
+	if err != nil {
+		t.Fatalf("Inject(kilocode) error = %v", err)
+	}
+	if !result.Changed {
+		t.Fatal("Kilocode migration did not change legacy settings")
+	}
+
+	payload, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := map[string]any{}
+	if err := json.Unmarshal(payload, &root); err != nil {
+		t.Fatal(err)
+	}
+	if _, exists := root["agents"]; exists {
+		t.Fatal("legacy agents key survived Kilocode migration")
+	}
+	agentsMap := root["agent"].(map[string]any)
+	for name, wantTools := range map[string]map[string]any{
+		"legacy-agent": {"bash": true},
+		"user-owned":   {"custom": true},
+	} {
+		agent, ok := agentsMap[name].(map[string]any)
+		if !ok || !reflect.DeepEqual(agent["tools"], wantTools) {
+			t.Fatalf("%s tools = %#v, want preserved %#v", name, agent["tools"], wantTools)
+		}
+	}
+	if got := agentsMap["gentle-orchestrator"].(map[string]any)["legacyMetadata"]; got != "preserve" {
+		t.Fatalf("legacy sdd-orchestrator metadata = %#v, want migrated value", got)
+	}
+	command := root["command"].(map[string]any)["legacy"].(map[string]any)
+	if got := command["template"]; got != "legacy command" {
+		t.Fatalf("legacy command template = %#v, want migrated prompt", got)
+	}
+	if _, exists := command["prompt"]; exists {
+		t.Fatal("legacy command prompt survived Kilocode migration")
+	}
+
+	second, err := Inject(home, kilocodeAdapter(), model.SDDModeSingle)
+	if err != nil {
+		t.Fatalf("second Inject(kilocode) error = %v", err)
+	}
+	if second.Changed {
+		t.Fatal("second Kilocode migration changed already-migrated settings")
+	}
+}
+
+func TestJudgmentDayProfilePermissionsConvertForKilocode(t *testing.T) {
+	profile := model.Profile{
+		Name: "review",
+		PhaseAssignments: map[string]model.ModelAssignment{
+			"jd-judge-a": {ProviderID: "openai", ModelID: "gpt-4o"},
+			"jd-judge-b": {ProviderID: "openai", ModelID: "gpt-4o"},
+		},
+	}
+	overlay, err := GenerateProfileOverlay(profile, t.TempDir(), filepath.Join(t.TempDir(), "opencode.json"), nil, "")
+	if err != nil {
+		t.Fatalf("GenerateProfileOverlay() error = %v", err)
+	}
+	root := map[string]any{}
+	if err := json.Unmarshal(overlay, &root); err != nil {
+		t.Fatal(err)
+	}
+	agentsMap := root["agent"].(map[string]any)
+	for _, name := range []string{"jd-judge-a-review", "jd-judge-b-review"} {
+		agent := agentsMap[name].(map[string]any)
+		if got, want := agent["permission"], judgmentDayJudgePermission(); !reflect.DeepEqual(got, want) {
+			t.Fatalf("OpenCode %s permission = %#v, want %#v", name, got, want)
+		}
+		if _, exists := agent["tools"]; exists {
+			t.Fatalf("OpenCode %s unexpectedly has tools", name)
+		}
+	}
+
+	restoreKilocodeManagedAgentTools(agentsMap)
+	for _, name := range []string{"jd-judge-a-review", "jd-judge-b-review"} {
+		agent := agentsMap[name].(map[string]any)
+		wantTools := map[string]any{"read": true, "bash": true}
+		tools := agent["tools"].(map[string]any)
+		if got := tools["__replace__"]; !reflect.DeepEqual(got, wantTools) {
+			t.Fatalf("Kilocode %s tools = %#v, want %#v", name, got, wantTools)
+		}
+		if _, exists := agent["permission"]; exists {
+			t.Fatalf("Kilocode %s retained OpenCode permission", name)
+		}
+	}
+	research := agentsMap["sdd-research-review"].(map[string]any)
+	if _, exists := research["permission"]; exists {
+		t.Fatalf("Kilocode named sdd-research retained global permission = %#v", research["permission"])
+	}
+}
+
+func TestInjectKilocodeProfileJudgesReplaceContaminatedToolsAndPermissions(t *testing.T) {
+	home := t.TempDir()
+	profile := model.Profile{
+		Name: "review",
+		PhaseAssignments: map[string]model.ModelAssignment{
+			"jd-judge-a": {ProviderID: "openai", ModelID: "gpt-4o"},
+			"jd-judge-b": {ProviderID: "openai", ModelID: "gpt-4o"},
+		},
+	}
+	settingsPath := kilocodeAdapter().SettingsPath(home)
+	mustWriteSettings := func(content string) {
+		t.Helper()
+		if err := os.MkdirAll(filepath.Dir(settingsPath), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(settingsPath, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	mustWriteSettings(`{
+  "user-setting": {"keep": true},
+  "agent": {
+    "jd-judge-a-review": {
+      "tools": {"read": false, "bash": false, "write": true, "edit": true, "task": true},
+      "permission": {"write": "allow", "edit": "allow"},
+      "user-metadata": "preserve-a"
+    },
+    "jd-judge-b-review": {
+      "tools": {"read": false, "bash": false, "write": true, "edit": true, "task": true},
+      "permission": {"task": "allow"},
+      "user-metadata": "preserve-b"
+    },
+    "user-owned": {"tools": {"write": true}, "permission": {"bash": "allow"}}
+  }
+}
+`)
+
+	first, err := Inject(home, kilocodeAdapter(), model.SDDModeSingle, InjectOptions{Profiles: []model.Profile{profile}})
+	if err != nil {
+		t.Fatalf("Inject(kilocode profile) error = %v", err)
+	}
+	if !first.Changed {
+		t.Fatal("first Kilocode profile inject did not change settings")
+	}
+	payload, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := map[string]any{}
+	if err := json.Unmarshal(payload, &root); err != nil {
+		t.Fatal(err)
+	}
+	if got := root["user-setting"].(map[string]any)["keep"]; got != true {
+		t.Fatalf("user setting changed: %#v", root["user-setting"])
+	}
+	agentsMap := root["agent"].(map[string]any)
+	for name, metadata := range map[string]string{"jd-judge-a-review": "preserve-a", "jd-judge-b-review": "preserve-b"} {
+		agent := agentsMap[name].(map[string]any)
+		wantTools := map[string]any{"read": true, "bash": true}
+		if got := agent["tools"]; !reflect.DeepEqual(got, wantTools) {
+			t.Fatalf("%s tools = %#v, want exact %#v", name, got, wantTools)
+		}
+		if _, exists := agent["permission"]; exists {
+			t.Fatalf("%s retained stale permission: %#v", name, agent["permission"])
+		}
+		if got := agent["user-metadata"]; got != metadata {
+			t.Fatalf("%s user metadata = %#v, want %q", name, got, metadata)
+		}
+	}
+	if got := agentsMap["user-owned"].(map[string]any)["tools"]; !reflect.DeepEqual(got, map[string]any{"write": true}) {
+		t.Fatalf("user-owned tools changed: %#v", got)
+	}
+
+	second, err := Inject(home, kilocodeAdapter(), model.SDDModeSingle, InjectOptions{Profiles: []model.Profile{profile}})
+	if err != nil {
+		t.Fatalf("second Inject(kilocode profile) error = %v", err)
+	}
+	if second.Changed {
+		t.Fatal("second Kilocode profile inject changed already-clean settings")
+	}
+}
+
 // TestMergeJSONFileReturnsMergedBytes verifies that mergeJSONFile returns the
 // merged bytes in-memory, so callers never need to re-read from disk to
 // validate the result (the fix for the Windows/WSL2 post-check bug).

@@ -13,6 +13,7 @@ import (
 	"regexp"
 	"runtime"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/charmbracelet/bubbles/textarea"
@@ -216,8 +217,70 @@ func tickCmd() tea.Cmd {
 	})
 }
 
+// installProgressRun owns one ordered, lossless event stream.
+type installProgressRun struct {
+	mu     sync.Mutex
+	notify chan struct{}
+	events []pipeline.ProgressEvent
+	result pipeline.ExecutionResult
+	done   bool
+}
+
+func newInstallProgressRun() *installProgressRun {
+	return &installProgressRun{notify: make(chan struct{}, 1)}
+}
+
+func (r *installProgressRun) publish(event pipeline.ProgressEvent) {
+	r.mu.Lock()
+	if r.done {
+		r.mu.Unlock()
+		return
+	}
+	r.events = append(r.events, event)
+	r.mu.Unlock()
+
+	select {
+	case r.notify <- struct{}{}:
+	default:
+	}
+}
+
+func (r *installProgressRun) complete(result pipeline.ExecutionResult) {
+	r.mu.Lock()
+	if !r.done {
+		r.result = result
+		r.done = true
+	}
+	r.mu.Unlock()
+
+	select {
+	case r.notify <- struct{}{}:
+	default:
+	}
+}
+
+func (r *installProgressRun) nextMessage(runID uint64) tea.Msg {
+	for {
+		r.mu.Lock()
+		if len(r.events) > 0 {
+			event := r.events[0]
+			r.events = r.events[1:]
+			r.mu.Unlock()
+			return StepProgressMsg{RunID: runID, StepID: event.StepID, Status: event.Status, Err: event.Err}
+		}
+		if r.done {
+			result := r.result
+			r.mu.Unlock()
+			return PipelineDoneMsg{RunID: runID, Result: result}
+		}
+		r.mu.Unlock()
+		<-r.notify
+	}
+}
+
 // StepProgressMsg is sent from the pipeline goroutine when a step changes status.
 type StepProgressMsg struct {
+	RunID  uint64
 	StepID string
 	Status pipeline.StepStatus
 	Err    error
@@ -225,6 +288,7 @@ type StepProgressMsg struct {
 
 // PipelineDoneMsg is sent when the pipeline finishes execution.
 type PipelineDoneMsg struct {
+	RunID  uint64
 	Result pipeline.ExecutionResult
 }
 
@@ -562,6 +626,9 @@ type Model struct {
 
 	// pipelineRunning tracks whether the pipeline goroutine is active.
 	pipelineRunning bool
+
+	installRunID uint64
+	progressRun  *installProgressRun
 
 	// codexModelDiscoveryRequest identifies the Custom picker catalog request that
 	// is allowed to update the current picker state.
@@ -1146,10 +1213,24 @@ func (m Model) handleStepProgress(msg StepProgressMsg) (tea.Model, tea.Cmd) {
 	if m.Screen != ScreenInstalling {
 		return m, nil
 	}
+	if msg.RunID != 0 && (m.progressRun == nil || msg.RunID != m.installRunID || !m.pipelineRunning) {
+		return m, nil
+	}
 
 	idx := m.findProgressItem(msg.StepID)
+	if idx < 0 && msg.StepID != "" {
+		// Agent adapters may expose a command sequence inside one pipeline step.
+		// Keep the pipeline generic by accepting those adapter-provided IDs at the
+		// UI boundary instead of teaching the progress model package names.
+		m.Progress.Items = append(m.Progress.Items, ProgressItem{
+			Label:  msg.StepID,
+			Status: ProgressStatusPending,
+			Nested: true,
+		})
+		idx = len(m.Progress.Items) - 1
+	}
 	if idx < 0 {
-		return m, nil
+		return m, m.nextProgressCommand()
 	}
 
 	switch msg.Status {
@@ -1168,16 +1249,46 @@ func (m Model) handleStepProgress(msg StepProgressMsg) (tea.Model, tea.Cmd) {
 		m.Progress.AppendLog("FAILED: %s — %s", msg.StepID, errMsg)
 	}
 
-	return m, nil
+	return m, m.nextProgressCommand()
+}
+
+func (m Model) nextProgressCommand() tea.Cmd {
+	if m.progressRun == nil {
+		return nil
+	}
+	return progressEventCommand(m.progressRun, m.installRunID)
+}
+
+func progressEventCommand(run *installProgressRun, runID uint64) tea.Cmd {
+	return func() tea.Msg {
+		return run.nextMessage(runID)
+	}
 }
 
 func (m Model) handlePipelineDone(msg PipelineDoneMsg) (tea.Model, tea.Cmd) {
+	if msg.RunID != 0 && (m.progressRun == nil || msg.RunID != m.installRunID || !m.pipelineRunning) {
+		return m, nil
+	}
+
+	liveProgress := m.Progress
 	m.Execution = msg.Result
 	m.pipelineRunning = false
+	m.progressRun = nil
 
 	// Rebuild progress from real step results so failed steps show ✗ instead
-	// of being blindly marked as succeeded.
+	// of being blindly marked as succeeded. Preserve adapter-provided nested
+	// command items and logs so the completed install does not erase the useful
+	// per-package history collected while it was running.
 	m.Progress = ProgressFromExecution(msg.Result)
+	m.Progress.Logs = append([]string(nil), liveProgress.Logs...)
+	for _, item := range liveProgress.Items {
+		// Preserve only adapter-created nested items that are not part of the
+		// authoritative execution result.
+		if !item.Nested || m.findProgressItem(item.Label) >= 0 {
+			continue
+		}
+		m.Progress.Items = append(m.Progress.Items, item)
+	}
 
 	// Surface individual error messages so the user knows WHAT failed.
 	appendStepErrors := func(steps []pipeline.StepResult) {
@@ -2623,7 +2734,7 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 		m.Err = nil
 		m.setScreen(ScreenReview)
 	case ScreenInstalling:
-		if m.Progress.Done() {
+		if m.Progress.Done() && !m.pipelineRunning {
 			m.setScreen(ScreenComplete)
 			return m, nil
 		}
@@ -2826,6 +2937,10 @@ func (m Model) startInstalling() (tea.Model, tea.Cmd) {
 	}
 
 	m.pipelineRunning = true
+	m.installRunID++
+	runID := m.installRunID
+	progressRun := newInstallProgressRun()
+	m.progressRun = progressRun
 
 	// Capture values for the goroutine closure.
 	executeFn := m.ExecuteFn
@@ -2837,18 +2952,18 @@ func (m Model) startInstalling() (tea.Model, tea.Cmd) {
 	piBackground := m.PiBackgroundIntent
 	piBackgroundPersist := m.PiBackgroundPersist
 
-	return m, tea.Batch(tickCmd(), func() tea.Msg {
+	pipelineCommand := func() tea.Msg {
 		onProgress := func(event pipeline.ProgressEvent) {
-			// NOTE: ProgressFunc is called synchronously from the pipeline goroutine.
-			// We cannot use p.Send() here because we don't have a reference to the
-			// tea.Program. Instead, these events are collected in the ExecutionResult
-			// and the PipelineDoneMsg handles the final state. For real-time updates,
-			// we rely on the pipeline calling this synchronously from each step.
+			progressRun.publish(event)
 		}
 
 		result := executeFn(selection, resolved, detection, background, backgroundPersist, piBackground, piBackgroundPersist, onProgress)
-		return PipelineDoneMsg{Result: result}
-	})
+		progressRun.complete(result)
+		return nil
+	}
+
+	// The single progress command drains events before emitting PipelineDoneMsg.
+	return m, tea.Batch(pipelineCommand, tickCmd(), progressEventCommand(progressRun, runID))
 }
 
 // withResetSyncState clears sync-result state so ScreenSync shows the confirmation
