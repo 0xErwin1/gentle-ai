@@ -30,6 +30,7 @@ func journeySources() []journeySource {
 		{"journeys_sdd_chain.go", sddChainJourneys()},
 		{"journeys_issue3094.go", issue3094Journeys()},
 		{"journeys_handoff.go", handoffJourneys()},
+		{"journeys_sdd_untracked.go", selectedUntrackedSDDJourneys()},
 		{"journeys_capture_evidence_v5.go", captureEvidenceDescriptorJourneys()},
 		{"journeys_scope_changed_fixture.go", scopeChangedFixtureJourneys()},
 		{"journeys_wave1.go", waveOneJourneys()},
@@ -62,6 +63,7 @@ func journeySources() []journeySource {
 		{"journeys_sdd_post_review_verify_report.go", sddPostReviewVerifyReportJourneys()},
 		{"journeys_issue3564.go", issue3564Journeys()},
 		{"journeys_issue3321.go", issue3321Journeys()},
+		{"journeys_issue3587.go", issue3587Journeys()},
 	}
 	for index := range sources {
 		sources[index].Journeys = removeRetiredAtomicJourneys(sources[index].Journeys)

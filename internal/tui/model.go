@@ -94,11 +94,9 @@ func sanitizeAdvisoryURL(raw string) string {
 	return parsed.String()
 }
 
-// osStatModelCache is a package-level variable so tests can override it to
-// simulate a missing or present OpenCode model cache file.
-var osStatModelCache = os.Stat
-var modelPickerCachePath = opencode.DefaultCachePath
 var modelPickerSettingsPath = opencode.DefaultSettingsPath
+var modelPickerWorkingDir = os.Getwd
+var modelPickerCatalogDiscoverer = screens.RuntimeCatalogDiscoverer(opencode.DiscoverCatalog)
 var osStatPathFn = os.Stat
 var osGetwdFn = os.Getwd
 var osExecutableFn = os.Executable
@@ -197,6 +195,12 @@ func containsString(values []string, target string) bool {
 // TickMsg drives the spinner animation on the installing screen.
 type TickMsg time.Time
 
+const noAnimationEnv = "GENTLE_AI_NO_ANIMATION"
+
+func tuiAnimationsDisabled() bool {
+	return os.Getenv(noAnimationEnv) == "1"
+}
+
 // CodexModelsDiscoveredMsg delivers one Custom picker catalog discovery result.
 type CodexModelsDiscoveredMsg struct {
 	RequestID uint64
@@ -204,6 +208,9 @@ type CodexModelsDiscoveredMsg struct {
 }
 
 func tickCmd() tea.Cmd {
+	if tuiAnimationsDisabled() {
+		return nil
+	}
 	return tea.Tick(100*time.Millisecond, func(t time.Time) tea.Msg {
 		return TickMsg(t)
 	})
@@ -467,19 +474,20 @@ type Model struct {
 	Version        string
 	SpinnerFrame   int
 
-	Selection         model.Selection
-	Detection         system.DetectionResult
-	DependencyPlan    planner.ResolvedPlan
-	Review            planner.ReviewPayload
-	Progress          ProgressState
-	Execution         pipeline.ExecutionResult
-	Backups           []backup.Manifest
-	ModelPicker       screens.ModelPickerState
-	ClaudeModelPicker screens.ClaudeModelPickerState
-	KiroModelPicker   screens.KiroModelPickerState
-	CodexModelPicker  screens.CodexModelPickerState
-	SkillPicker       []model.SkillID
-	Err               error
+	Selection                      model.Selection
+	Detection                      system.DetectionResult
+	DependencyPlan                 planner.ResolvedPlan
+	Review                         planner.ReviewPayload
+	Progress                       ProgressState
+	Execution                      pipeline.ExecutionResult
+	Backups                        []backup.Manifest
+	ModelPicker                    screens.ModelPickerState
+	runtimeCatalogDiscoveryRequest uint64
+	ClaudeModelPicker              screens.ClaudeModelPickerState
+	KiroModelPicker                screens.KiroModelPickerState
+	CodexModelPicker               screens.CodexModelPickerState
+	SkillPicker                    []model.SkillID
+	Err                            error
 
 	// BackgroundIntent is the effective OpenCode background choice for the
 	// current install. BackgroundPersist is published only after success.
@@ -866,6 +874,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.clampAdvisoryScroll()
 		return m, nil
 	case TickMsg:
+		if tuiAnimationsDisabled() {
+			return m, nil
+		}
 		if m.Screen == ScreenInstalling && !m.Progress.Done() {
 			m.SpinnerFrame = (m.SpinnerFrame + 1) % 10
 			return m, tickCmd()
@@ -1019,7 +1030,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.AdvisoryURL = sanitizeAdvisoryURL(msg.Advisory.URL)
 		m.AdvisoryScroll = 0
 		return m, nil
-	case screens.LMStudioDiscoveryMsg:
+	case screens.RuntimeCatalogDiscoveryMsg:
+		if !m.activePicker() || msg.RequestID != m.runtimeCatalogDiscoveryRequest || msg.ProjectDir != m.ModelPicker.CatalogProjectDir {
+			return m, nil
+		}
 		m.ModelPicker = m.ModelPicker.Update(msg)
 		return m, nil
 	case CodexModelsDiscoveredMsg:
@@ -4713,8 +4727,21 @@ func (m *Model) applyPickerEntry(next Screen) tea.Cmd {
 }
 
 func (m *Model) initializeModelPicker() tea.Cmd {
-	m.ModelPicker = screens.NewModelPickerState(modelPickerCachePath(), modelPickerSettingsPath())
-	return m.ModelPicker.DiscoverLMStudioCmd()
+	m.runtimeCatalogDiscoveryRequest++
+	requestID := m.runtimeCatalogDiscoveryRequest
+	m.ModelPicker = screens.NewRuntimeModelPickerStateWithDiscoverer(modelPickerSettingsPath(), modelPickerCatalogDiscoverer)
+	projectDir, err := modelPickerWorkingDir()
+	if err != nil {
+		m.ModelPicker.CatalogRequestID = requestID
+		return func() tea.Msg {
+			return screens.RuntimeCatalogDiscoveryMsg{RequestID: requestID, Err: errors.New("working directory unavailable")}
+		}
+	}
+	return m.ModelPicker.StartRuntimeCatalogDiscovery(requestID, projectDir)
+}
+
+func (m Model) activePicker() bool {
+	return m.Screen == ScreenModelPicker || (m.Screen == ScreenProfileCreate && m.ProfileCreateStep == 1)
 }
 
 func componentsForPreset(preset model.PresetID, persona model.PersonaID) []model.ComponentID {

@@ -228,12 +228,14 @@ func overlayAssetPath(sddMode model.SDDModeID) string {
 }
 
 var compatibilitySDDSkillIDs = []model.SkillID{
-	"sdd-init", "sdd-explore", "sdd-propose", "sdd-spec",
+	"sdd-init", "sdd-explore", "sdd-research", "sdd-propose", "sdd-spec",
 	"sdd-design", "sdd-tasks", "sdd-apply", "sdd-verify", "sdd-archive",
 	"sdd-onboard", "judgment-day",
 }
 
-// SkillDirectoryPaths returns every file that InjectSkillDirectory may write.
+// SkillDirectoryPaths returns every file that InjectSkillDirectory may write or
+// remove. The legacy marker remains a transaction target so a failed refresh can
+// restore it from the compatibility backup.
 func SkillDirectoryPaths(skillDir, capability string) ([]string, error) {
 	sharedFiles, err := assets.SharedSkillFileNames()
 	if err != nil {
@@ -246,6 +248,7 @@ func SkillDirectoryPaths(skillDir, capability string) ([]string, error) {
 	for _, fileName := range sharedFiles {
 		paths = append(paths, filepath.Join(skillDir, "_shared", fileName))
 	}
+	paths = append(paths, filepath.Join(skillDir, "_shared", "SKILL.md"))
 	if capability == "" {
 		capability = "capable"
 	}
@@ -265,6 +268,16 @@ func InjectSkillDirectory(skillDir, capability string) (InjectionResult, error) 
 
 // InjectSkillDirectoryWithWriter refreshes SDD skills with a caller-selected writer.
 func InjectSkillDirectoryWithWriter(skillDir, capability string, writeFile func(string, []byte, fs.FileMode) (filemerge.WriteResult, error)) (InjectionResult, error) {
+	return injectSkillDirectoryWithWriter(skillDir, capability, writeFile, removeLegacySharedSkillMarker)
+}
+
+// InjectSkillDirectoryWithCompatibilityWriter refreshes SDD skills through a
+// compatibility-root writer that owns both writes and legacy-marker removal.
+func InjectSkillDirectoryWithCompatibilityWriter(skillDir, capability string, writeFile func(string, []byte, fs.FileMode) (filemerge.WriteResult, error), removeLegacyMarker func(string) (bool, error)) (InjectionResult, error) {
+	return injectSkillDirectoryWithWriter(skillDir, capability, writeFile, removeLegacyMarker)
+}
+
+func injectSkillDirectoryWithWriter(skillDir, capability string, writeFile func(string, []byte, fs.FileMode) (filemerge.WriteResult, error), removeLegacyMarker func(string) (bool, error)) (InjectionResult, error) {
 	sharedFiles, err := assets.SharedSkillFileNames()
 	if err != nil {
 		return InjectionResult{}, fmt.Errorf("resolve SDD shared files: %w", err)
@@ -292,6 +305,16 @@ func InjectSkillDirectoryWithWriter(skillDir, capability string, writeFile func(
 		result.Files = append(result.Files, path)
 	}
 
+	legacyMarkerPath := filepath.Join(skillDir, "_shared", "SKILL.md")
+	removedLegacyMarker, err := removeLegacyMarker(legacyMarkerPath)
+	if err != nil {
+		return InjectionResult{}, err
+	}
+	if removedLegacyMarker {
+		result.Changed = true
+		result.Files = append(result.Files, legacyMarkerPath)
+	}
+
 	if capability == "" {
 		capability = "capable"
 	}
@@ -302,6 +325,27 @@ func InjectSkillDirectoryWithWriter(skillDir, capability string, writeFile func(
 	result.Changed = result.Changed || sddResult.Changed
 	result.Files = append(result.Files, sddResult.Files...)
 	return result, nil
+}
+
+// removeLegacySharedSkillMarker removes the obsolete generated file that made
+// the _shared support directory look like an invokable skill. It never touches
+// README.md or shared reference files, and rejects non-regular paths rather than
+// following or removing them.
+func removeLegacySharedSkillMarker(markerPath string) (bool, error) {
+	info, err := os.Lstat(markerPath)
+	if os.IsNotExist(err) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("stat legacy shared skill marker %s: %w", markerPath, err)
+	}
+	if !info.Mode().IsRegular() {
+		return false, fmt.Errorf("legacy shared skill marker %s is not a regular file", markerPath) // refusal:by-design world-action: replace or remove the non-regular legacy marker before refreshing shared SDD assets
+	}
+	if err := os.Remove(markerPath); err != nil {
+		return false, fmt.Errorf("remove legacy shared skill marker %s: %w", markerPath, err)
+	}
+	return true, nil
 }
 
 func Inject(homeDir string, adapter agents.Adapter, sddMode model.SDDModeID, options ...InjectOptions) (InjectionResult, error) {
@@ -819,7 +863,7 @@ func Inject(homeDir string, adapter agents.Adapter, sddMode model.SDDModeID, opt
 	if adapter.SupportsSkills() {
 		skillDir := adapter.SkillsDir(homeDir)
 		if skillDir != "" {
-			for _, skill := range []string{"sdd-init", "sdd-apply", "sdd-verify"} {
+			for _, skill := range []string{"sdd-init", "sdd-research", "sdd-apply", "sdd-verify"} {
 				path := filepath.Join(skillDir, skill, "SKILL.md")
 				info, err := os.Stat(path)
 				if err != nil {
@@ -1066,7 +1110,7 @@ func expandOpenCodeBoundedReviewAgents(agentsMap map[string]any, usePermissions 
 		prompt, _ := openCodeProviderInjectedReviewerPrompt(name)
 		agent["prompt"] = prompt
 		if permissions {
-			agent["permission"] = map[string]any{"read": "deny", "edit": "deny", "write": "deny", "bash": "deny", "task": "deny"}
+			agent["permission"] = map[string]any{"*": "deny"}
 		} else {
 			agent["tools"] = map[string]any{"*": false, "read": false, "write": false, "edit": false, "bash": false, "task": false}
 			agent["permission"] = map[string]any{"edit": "deny", "bash": "deny"}
@@ -1129,7 +1173,23 @@ func migratePreservedOpenCodeOrchestratorPrompt(prompt string) string {
 	migrated := removeLegacyOpenCodePlainChatPreflightLines(replacer.Replace(prompt))
 	migrated = ensurePreservedOpenCodeOrchestratorPreflight(migrated)
 	migrated = ensurePreservedOpenCodeDelegationHardGates(migrated)
+	migrated = ensurePreservedOpenCodeResearchLifecycle(migrated)
 	return ensurePreservedOpenCodeReviewExecutionContract(migrated)
+}
+
+func ensurePreservedOpenCodeResearchLifecycle(prompt string) string {
+	if strings.Contains(prompt, "<!-- gentle-ai:sdd-research-lifecycle -->") && strings.Contains(prompt, researchLifecycleContract()) {
+		return prompt
+	}
+	lines := strings.Split(prompt, "\n")
+	kept := lines[:0]
+	for _, line := range lines {
+		if strings.Contains(line, "Before the `sdd-propose` phase in interactive mode") || strings.Contains(line, "proposal question round") {
+			continue
+		}
+		kept = append(kept, line)
+	}
+	return filemerge.InjectMarkdownSection(strings.Join(kept, "\n"), "sdd-research-lifecycle", researchLifecycleContract())
 }
 
 func renderPreservedOpenCodeOrchestratorPrompt(
@@ -1384,7 +1444,11 @@ func ensurePreservedOpenCodeReviewExecutionContract(prompt string) string {
 	if headingStart := strings.Index(prompt, heading); headingStart >= 0 {
 		headingEnd := len(prompt)
 		remainder := prompt[headingStart+len(heading):]
-		for _, candidate := range []string{"\n#### ", "\n### ", "\n## ", "\n# "} {
+		// The shared review contract has level-three headings of its own, and
+		// the OpenCode-only concurrent-group addendum is another level-three
+		// heading. Neither ends the managed review section; only the next
+		// enclosing section may do that.
+		for _, candidate := range []string{"\n" + nextHeading, "\n#### ", "\n## ", "\n# "} {
 			if relativeEnd := strings.Index(remainder, candidate); relativeEnd >= 0 {
 				candidateEnd := headingStart + len(heading) + relativeEnd + 1
 				if candidateEnd < headingEnd {
@@ -1460,7 +1524,6 @@ Hard gate rules:
 - For a new feature request that says to use SDD, start at preflight -> init guard -> explore/proposal. Never launch ` + "`sdd-apply`" + ` just because the user asked to implement a feature.
 - In ` + "`interactive`" + ` mode, pause after each delegated phase returns, summarize the phase, then ask before launching the next phase via the ` + "`question`" + ` tool, and STOP. Use the ` + "`question`" + ` tool for this between-phase decision: present the proceed/adjust/stop options through a single ` + "`question`" + ` tool call; do NOT render the options as a plain markdown bullet list or plain chat text. Match the user's language and active persona for the question labels; for Spanish neutral fallback frame it as: "¿Quiere ajustar algo o continuamos?". Do not run /sdd-ff phases back-to-back unless execution mode is ` + "`auto`" + `.
 - Interactive approval is phase-scoped. Words like "continue", "dale", or "go on" approve only the immediate next phase, not the rest of the SDD pipeline. Do not treat a generated artifact as approved until the user has had a chance to review or explicitly delegate that review.
-- Before the ` + "`sdd-propose`" + ` phase in interactive mode, offer the user a proposal question round instead of silently deciding whether the proposal is clear enough. Ask 3–5 concrete product questions to improve the PRD/proposal by uncovering business rules, implications, impact, edge cases, product tradeoffs, and decision gaps; then summarize assumptions and ask whether the user wants corrections or a second question round. Do not ask about test commands, PR shape, changed-line budget, or other harness mechanics at proposal time unless the user explicitly asks to discuss delivery.
 <!-- /gentle-ai:sdd-session-preflight-migration -->
 `
 
@@ -1489,8 +1552,6 @@ Hard gate rules:
 		strings.Contains(prompt, "pause after each delegated phase returns") &&
 		strings.Contains(prompt, "ask before launching the next phase via the `question` tool") &&
 		strings.Contains(prompt, "approve only the immediate next phase") &&
-		strings.Contains(prompt, "proposal question round") &&
-		strings.Contains(prompt, "business rules, implications, impact, edge cases") &&
 		!containsOpenCodeOrchestratorLanguageLeak(prompt) {
 		return prompt
 	}
@@ -2617,7 +2678,7 @@ func writeClaudeLazySDDWorkflow(homeDir string, adapter agents.Adapter, legacyAs
 		return InjectionResult{}, nil
 	}
 
-	content := assets.MustRead("claude/sdd-orchestrator-workflow.md")
+	content := renderBoundedReviewAsset(model.AgentClaudeCode, "claude/sdd-orchestrator-workflow.md")
 	if len(legacyAssignments) > 0 || len(phaseAssignments) > 0 {
 		var err error
 		content, err = injectClaudePhaseAssignments(content, legacyAssignments, phaseAssignments)
@@ -2636,6 +2697,7 @@ func writeClaudeLazySDDWorkflow(homeDir string, adapter agents.Adapter, legacyAs
 
 var claudeModelAssignmentRowOrder = []string{
 	"sdd-explore",
+	"sdd-research",
 	"sdd-propose",
 	"sdd-spec",
 	"sdd-design",
@@ -2653,6 +2715,7 @@ var claudeModelAssignmentRowOrder = []string{
 var claudeModelAssignmentReasons = map[string]string{
 	"orchestrator": "Coordinates, makes decisions",
 	"sdd-explore":  "Reads code, structural - not architectural",
+	"sdd-research": "Collects source-backed evidence",
 	"sdd-propose":  "Architectural decisions",
 	"sdd-spec":     "Structured writing",
 	"sdd-design":   "Architecture decisions",

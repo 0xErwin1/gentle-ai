@@ -1959,10 +1959,9 @@ func TestRunInstallCustomPresetExplicitSkillsFlagPopulatesSelection(t *testing.T
 			skillCount++
 		}
 	}
-	// 11 SDD skills (includes sdd-onboard, judgment-day) + 2 explicit skills
-	// (go-testing, branch-pr) + 1 _shared/SKILL.md = 14.
+	// 12 SDD skills + 2 explicit skills = 14. _shared is support-only.
 	if skillCount != 14 {
-		t.Fatalf("expected 14 skill files (11 SDD + 2 explicit + 1 _shared), got %d", skillCount)
+		t.Fatalf("expected 14 skill files (12 SDD + 2 explicit), got %d", skillCount)
 	}
 }
 
@@ -2019,9 +2018,7 @@ func TestRunInstallCustomPresetSkillsNoFlagInstallsNothing(t *testing.T) {
 			}
 		}
 	}
-	// Expect exactly 12 SKILL.md files: 10 SDD phases + judgment-day
-	// (from SDD dependency) + 1 _shared/SKILL.md.
-	// The skills component itself adds 0 (no --skills flag, SkillsForPreset(custom) = nil).
+	// Expect 12 files: 11 SDD phases + judgment-day. _shared is support-only.
 	if skillCount != 12 {
 		t.Fatalf("expected 12 SDD skill files installed by the sdd dependency, got %d", skillCount)
 	}
