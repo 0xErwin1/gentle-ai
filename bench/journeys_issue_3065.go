@@ -177,7 +177,14 @@ func captureIssue3065SuccessorFinding(r *journeyRun) error {
 	if err := json.Unmarshal([]byte(observation.Stdout), &captured); err != nil || captured.State != "correction_required" {
 		return fmt.Errorf("issue #3065 successor capture = %s", observation.Stdout)
 	}
-	return nil
+	status, terminal, err := correctionStatusFromLastEventCapture(r, observation)
+	if err != nil {
+		return err
+	}
+	if !terminal {
+		return fmt.Errorf("issue #3065 successor capture omitted correction status continuation")
+	}
+	return rememberCorrectionStatusContinuation(r, issue3065SuccessorLineage, status)
 }
 
 func captureIssue3065FailedValidationFor(r *journeyRun, lineage string, selectors ...string) error {
