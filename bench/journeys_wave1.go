@@ -522,15 +522,14 @@ func readCorrectionStatusFor(r *journeyRun, lineage string) (waveCorrectionStatu
 
 func readCorrectionStatusForContract(r *journeyRun, lineage, contract string) (waveCorrectionStatus, error) {
 	if lineage != "" {
-		if carried, found, err := takeCorrectionStatusContinuation(r, lineage); err != nil {
+		if payload, found, err := readCorrectionPlanStatusContinuation(r, lineage); err != nil {
 			return waveCorrectionStatus{}, err
 		} else if found {
-			payload, err := json.Marshal(carried)
-			if err != nil {
-				return waveCorrectionStatus{}, err
-			}
 			var status waveCorrectionStatus
-			return status, json.Unmarshal(payload, &status)
+			if err := json.Unmarshal([]byte(payload), &status); err != nil {
+				return waveCorrectionStatus{}, fmt.Errorf("decode carried correction-plan STATUS: %w", err)
+			}
+			return status, nil
 		}
 	}
 	// These journeys create their authority through the manual compatibility

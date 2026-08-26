@@ -146,7 +146,7 @@ func TestReviewProviderArtifactConformanceSchemasArePinned(t *testing.T) {
 	root := filepath.Join("..", "..", "contracts", "review-integration", "v2")
 	want := map[string]string{
 		"schemas/gate-result.schema.json":            "afe5e2a030fae9949305811bcac0a6dbc8b4f28802fa61d1e31e58e895f9fcae",
-		"schemas/last-event-closure.schema.json":     "26509f7dde7593daf5cf1a3602de480ea966799eb90dfd0d9ba73ecc9d2da1a1",
+		"schemas/last-event-closure.schema.json":     "612531204afa5941e4927c38e868c720a4519fe4b9a5a4ffd29f021dc053001d",
 		"schemas/opencode-provider-role.schema.json": "c6b9f216f89c044f8e844b55e7200114850cfbc16642bca0677f30a399d8aa9b",
 	}
 	for name, expected := range want {

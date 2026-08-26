@@ -291,10 +291,11 @@ func (b *battery) committedMediumCandidate(lane, name, path, base, candidate str
 		b.fail(lane, "committed process scratch repository", err.Error())
 		return "", "", false
 	}
-	if err := writeFile(repo, path, base); err == nil {
-		err = commitAll(repo, "feat: committed base")
+	if err := writeFile(repo, path, base); err != nil {
+		b.fail(lane, "committed process base", err.Error())
+		return "", "", false
 	}
-	if err != nil {
+	if err := commitAll(repo, "feat: committed base"); err != nil {
 		b.fail(lane, "committed process base", err.Error())
 		return "", "", false
 	}
@@ -303,10 +304,11 @@ func (b *battery) committedMediumCandidate(lane, name, path, base, candidate str
 		b.fail(lane, "committed process base", fmt.Sprintf("resolve immutable base tree: %v", err))
 		return "", "", false
 	}
-	if err := writeFile(repo, path, candidate); err == nil {
-		err = commitAll(repo, "feat: review candidate")
+	if err := writeFile(repo, path, candidate); err != nil {
+		b.fail(lane, "committed process candidate", err.Error())
+		return "", "", false
 	}
-	if err != nil {
+	if err := commitAll(repo, "feat: review candidate"); err != nil {
 		b.fail(lane, "committed process candidate", err.Error())
 		return "", "", false
 	}
