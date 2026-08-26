@@ -95,6 +95,11 @@
         { "if": { "properties": { "reason_code": { "enum": ["correction_plan_required", "corrected_candidate_unavailable"] } }, "required": ["reason_code"] }, "then": { "required": ["correction_request"] }, "else": { "not": { "required": ["correction_request"] } } }
       ]
     },
+    "transition_argument": { "$ref": "transition-execution.schema.json#/$defs/transition_argument" },
+    "executable_transition_argument": { "$ref": "transition-execution.schema.json#/$defs/executable_transition_argument" },
+    "transition_binding": { "$ref": "transition-execution.schema.json#/$defs/transition_binding" },
+    "transition_execution": { "$ref": "transition-execution.schema.json" },
+    "transition_artifact": { "$ref": "transition-execution.schema.json#/$defs/transition_artifact" },
     "transition_collection": {
       "type": "object", "additionalProperties": false, "required": ["inputs"],
       "properties": { "inputs": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/transition_input" } } }
