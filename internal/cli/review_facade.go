@@ -1395,7 +1395,7 @@ func RunReviewRecover(args []string, stdout io.Writer) error {
 	}
 	if *releaseScope {
 		*authorization = reviewtransaction.ReleaseScopeRecoveryAuthorization
-	} else if !stagedScopeOverlay && *authorization == reviewTransitionRecoveryAuthorization(ReviewTransitionBinding{LineageID: *predecessor, Revision: *expected, TargetIdentity: snapshot.Identity}, *successor, *actor, *reason) {
+	} else if (!stagedScopeOverlay || reviewtransaction.RecoveryDisposition(*disposition) == reviewtransaction.RecoveryEscalated) && *authorization == reviewTransitionRecoveryAuthorization(ReviewTransitionBinding{LineageID: *predecessor, Revision: *expected, TargetIdentity: snapshot.Identity}, *successor, *actor, *reason) {
 		*authorization = reviewTransitionRecoveryAuthorization(ReviewTransitionBinding{LineageID: *predecessor, Revision: *expected, TargetIdentity: snapshot.Identity}, "", *actor, *reason)
 	}
 	reviewRecoverBeforePersist()

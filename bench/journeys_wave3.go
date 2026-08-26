@@ -65,11 +65,12 @@ func readAtomicReviewStatus(r *journeyRun, lineage string) (statusEnvelope, erro
 	return readAtomicReviewStatusAt(r, r.sandbox.Repo, lineage)
 }
 
-func readAtomicReviewStatusAt(r *journeyRun, cwd, lineage string) (statusEnvelope, error) {
+func readAtomicReviewStatusAt(r *journeyRun, cwd, lineage string, selectors ...string) (statusEnvelope, error) {
 	args := []string{"review", "status", "--contract", reviewContractV2, "--next-transition", "--cwd", cwd}
 	if lineage != "" {
 		args = append(args, "--lineage", lineage)
 	}
+	args = append(args, selectors...)
 	observation := r.runAt(cwd, args, false)
 	if observation.ExitCode != 0 {
 		return statusEnvelope{}, fmt.Errorf("atomic STATUS exited %d: %s", observation.ExitCode, firstLine(observation.Stderr))
@@ -424,11 +425,11 @@ func captureExactSelectedReviewerSlots(r *journeyRun, lineageID string, includeC
 // captureCorrectionPlanFor follows the correction-plan input STATUS published
 // after the last severe reviewer capture. The plan is the one public pre-edit
 // event; FINALIZE never participates in a last-event-closure correction.
-func captureCorrectionPlanFor(r *journeyRun, lineageID string, correctionLines int) error {
+func captureCorrectionPlanFor(r *journeyRun, lineageID string, correctionLines int, selectors ...string) error {
 	if correctionLines <= 0 {
 		return fmt.Errorf("correction plan needs a positive line forecast")
 	}
-	status, err := readAtomicReviewStatus(r, lineageID)
+	status, err := readAtomicReviewStatusAt(r, r.sandbox.Repo, lineageID, selectors...)
 	if err != nil {
 		return err
 	}
