@@ -2855,6 +2855,26 @@ func TestInjectOpenCodeReviewLensesDenyAllPermissions(t *testing.T) {
 	}
 }
 
+func TestInjectOpenCodeReviewValidatorHasBoundedInspectionPermissions(t *testing.T) {
+	home := t.TempDir()
+	if _, err := Inject(home, opencodeAdapter(), model.SDDModeMulti); err != nil {
+		t.Fatal(err)
+	}
+
+	validator := readOpenCodeAgents(t, opencodeAdapter().SettingsPath(home))[opencodemodel.ReviewValidatorAgent].(map[string]any)
+	if _, exists := validator["tools"]; exists {
+		t.Fatalf("OpenCode validator retained deprecated tools: %#v", validator["tools"])
+	}
+	wantPermission := map[string]any{"write": "deny", "edit": "deny", "task": "deny", "bash": "allow"}
+	permission, ok := validator["permission"].(map[string]any)
+	if !ok || !reflect.DeepEqual(permission, wantPermission) {
+		t.Fatalf("OpenCode validator permission = %#v, want %#v", validator["permission"], wantPermission)
+	}
+	if _, exists := permission["read"]; exists {
+		t.Fatalf("OpenCode validator overrides global read policy: %#v", permission)
+	}
+}
+
 func TestInjectClaudeIgnoresSDDMode(t *testing.T) {
 	home := t.TempDir()
 

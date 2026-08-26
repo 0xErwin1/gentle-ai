@@ -1143,7 +1143,7 @@ func expandOpenCodeBoundedReviewAgents(agentsMap map[string]any, usePermissions 
 
 	if validator, ok := agentsMap[opencode.ReviewValidatorAgent].(map[string]any); ok {
 		if permissions {
-			validator["permission"] = map[string]any{"write": "deny", "edit": "deny", "task": "deny"}
+			validator["permission"] = map[string]any{"write": "deny", "edit": "deny", "task": "deny", "bash": "allow"}
 		} else {
 			delete(validator, "permission")
 			validator["tools"] = map[string]any{"read": true, "write": false, "edit": false, "bash": true, "task": false}
