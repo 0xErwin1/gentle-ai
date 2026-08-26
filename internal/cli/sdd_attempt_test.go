@@ -270,13 +270,13 @@ func TestRunSDDAttemptHelpContractsCoverEveryOperation(t *testing.T) {
 		contracts []string
 	}{
 		{"status", []string{"cwd", "change", "change-instance", "work-unit", "evidence-goal", "max-attempts", "max-changed-lines"}, []string{"optional", "128 bytes"}},
-		{"begin", []string{"cwd", "change", "expected-revision", "request-id", "work-unit", "evidence-goal", "max-attempts", "max-changed-lines"}, []string{"default 2", "default 200", "1..100", "1..1000000"}},
+		{"begin", []string{"cwd", "change", "expected-revision", "request-id", "work-unit", "evidence-goal", "max-attempts", "max-changed-lines", "untracked-scope", "expected-untracked-inventory", "intended-untracked"}, []string{"default 2", "default 200", "1..100", "1..1000000"}},
 		{"finish", []string{"cwd", "change", "expected-revision", "request-id", "outcome", "evidence-revision", "diagnosis", "harness-disposition", "cleanup-evidence", "process-evidence", "remediates-evidence-revision"}, []string{"failed, interrupted, or passed", "reused or invalidated", "empty or canonical legacy sha256 revision", "500 bytes"}},
 		{"handoff", []string{"cwd", "change", "expected-revision", "request-id", "destination-worktree"}, []string{"registered linked worktree", "Git common directory"}},
 		{"reset", []string{"cwd", "change", "expected-revision", "request-id", "reason", "actor"}, []string{"500 bytes", "128 bytes"}},
 		{"rescope", []string{"cwd", "change", "expected-revision", "request-id", "work-unit", "evidence-goal", "max-attempts", "max-changed-lines", "reason", "actor"}, []string{"explicit limit", "cannot exceed current objective"}},
+		{"acquire", []string{"cwd", "change", "token", "request-id", "work-unit", "evidence-goal", "max-attempts", "max-changed-lines", "remediates-evidence-revision", "untracked-scope", "expected-untracked-inventory", "intended-untracked"}, []string{"default 2", "default 200", "failed evidence correction"}},
 		{"repair", []string{"cwd", "change", "expected-revision", "request-id", "reason", "actor"}, []string{"unreadable sha256", "500 bytes", "128 bytes"}},
-		{"acquire", []string{"cwd", "change", "token", "request-id", "work-unit", "evidence-goal", "max-attempts", "max-changed-lines", "remediates-evidence-revision"}, []string{"default 2", "default 200", "failed evidence correction"}},
 		{"settle", []string{"cwd", "change", "token", "request-id", "outcome", "evidence-revision", "diagnosis", "harness-disposition", "cleanup-evidence", "process-evidence", "remediates-evidence-revision"}, []string{"opaque token returned by acquire", "required for failed/passed; omit for interrupted"}},
 		{"grant", []string{"cwd", "change", "expected-revision", "root", "change-instance", "request-id", "actor", "reason"}, []string{"repeatable", "1..32", "4096 bytes"}},
 	}
@@ -440,21 +440,12 @@ func TestRunSDDAttemptFinishAcceptsApprovedSelfRemediationSuccessor(t *testing.T
 		t.Fatalf("pre-remediation CLI status = %#v", active)
 	}
 
-	// The bounded correction lands during the attempt on the same lineage.
+	// The bounded correction lands during the attempt. SDD completion is
+	// independent from review receipt authority.
 	writeCLIAttemptFile(t, filepath.Join(changeRoot, "tasks.md"), "- [x] 1.1 Done\n# bounded self remediation\n")
-	lineage := "cli-self-lineage"
-	writeCLIApprovedCompactAuthority(t, repo, lineage)
-	binding, err := sddstatus.BindApprovedReview(context.Background(), repo, change, lineage, "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	postBind := runSDDAttemptStatus(t, []string{"status", "--cwd", repo, "--change", change})
-	if postBind.Binding == nil || postBind.Binding.Revision != binding.Revision {
-		t.Fatalf("post-bind CLI status = %#v", postBind)
-	}
 
 	finishArgs := []string{
-		"finish", "--cwd", repo, "--change", change, "--expected-revision", postBind.Revision, "--request-id", "self-finish-2",
+		"finish", "--cwd", repo, "--change", change, "--expected-revision", active.Revision, "--request-id", "self-finish-2",
 		"--outcome", "passed", "--evidence-revision", cliAttemptHash('b'),
 		"--diagnosis", "bounded self remediation passed corrected verification", "--harness-disposition", "reused",
 		"--cleanup-evidence", "self remediation cleanup completed", "--process-evidence", "self remediation process scan found no descendants",
@@ -463,9 +454,6 @@ func TestRunSDDAttemptFinishAcceptsApprovedSelfRemediationSuccessor(t *testing.T
 	completed := runSDDAttemptStatus(t, finishArgs)
 	if !completed.Complete || completed.ActiveAttempt != nil || completed.NextAction != sddstatus.RuntimeActionComplete {
 		t.Fatalf("self-remediation CLI completion = %#v", completed)
-	}
-	if completed.Binding == nil || completed.Binding.Lineage != lineage || completed.Binding.Revision != binding.Revision {
-		t.Fatalf("self-remediation CLI binding = %#v", completed.Binding)
 	}
 	last := completed.Attempts[len(completed.Attempts)-1]
 	if last.Outcome != sddstatus.AttemptPassed || last.RemediatesEvidenceRevision != failedEvidence ||
@@ -531,21 +519,10 @@ func writeCLIApprovedCompactAuthority(t *testing.T, repo, lineage string) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	revision, err = store.Replace(revision, "review/complete-review", state)
-	if err != nil {
+	if err := state.CloseCleanReviewOnLastEvent(); err != nil {
 		t.Fatal(err)
 	}
-	if err := state.CompleteVerification([]byte("cli self remediation verification passed\n"), true); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := store.Replace(revision, "review/complete-verification", state); err != nil {
-		t.Fatal(err)
-	}
-	receipt, err := state.Receipt()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := reviewtransaction.WriteCompactReceiptAtomic(store.ReceiptPath(), receipt); err != nil {
+	if _, err := store.Replace(revision, "review/complete-review", state); err != nil {
 		t.Fatal(err)
 	}
 }
