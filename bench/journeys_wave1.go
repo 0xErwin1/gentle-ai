@@ -479,10 +479,22 @@ func captureCorrectableFindingFor(r *journeyRun, selectors ...string) error {
 		"--expected-revision", envelope.argument("expected-revision"), "--lens", envelope.argument("lens"),
 		"--order", envelope.argument("order"), "--input", path,
 	}, true)
-	if observation.ExitCode != 0 {
-		return fmt.Errorf("capture blocking reviewer result: %s", firstLine(observation.Stderr))
+	if status, terminal, err := correctionStatusFromLastEventCapture(r, observation); err != nil {
+		return err
+	} else if terminal {
+		return rememberCorrectionStatusContinuation(r, status.Authority.LineageID, status)
 	}
-	return captureAllLensesFor(r, selectors...)
+	last, err := captureAllLensesWithLastCaptureFor(r, selectors...)
+	if err != nil {
+		return err
+	}
+	if status, terminal, err := correctionStatusFromLastEventCapture(r, last); err != nil {
+		return err
+	} else if !terminal {
+		return errors.New("last reviewer capture did not open correction-required status continuation")
+	} else {
+		return rememberCorrectionStatusContinuation(r, status.Authority.LineageID, status)
+	}
 }
 
 func writeCorrectedCandidate(sandbox *Sandbox) error {
@@ -509,6 +521,18 @@ func readCorrectionStatusFor(r *journeyRun, lineage string) (waveCorrectionStatu
 }
 
 func readCorrectionStatusForContract(r *journeyRun, lineage, contract string) (waveCorrectionStatus, error) {
+	if lineage != "" {
+		if carried, found, err := takeCorrectionStatusContinuation(r, lineage); err != nil {
+			return waveCorrectionStatus{}, err
+		} else if found {
+			payload, err := json.Marshal(carried)
+			if err != nil {
+				return waveCorrectionStatus{}, err
+			}
+			var status waveCorrectionStatus
+			return status, json.Unmarshal(payload, &status)
+		}
+	}
 	// These journeys create their authority through the manual compatibility
 	// path, so they must not invent a runtime identity for a later STATUS read.
 	arguments := []string{"review", "status", "--contract", contract, "--next-transition"}
