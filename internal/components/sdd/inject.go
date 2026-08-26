@@ -495,7 +495,7 @@ func Inject(homeDir string, adapter agents.Adapter, sddMode model.SDDModeID, opt
 	// Ensure that agent is present even when persona component is not installed.
 	//
 	// mergedSettingsBytes holds the final merged opencode.json bytes produced by
-	// mergeJSONFile. We keep them in memory so the post-check (step 4) can validate
+	// the production merge helper. We keep them in memory so the post-check (step 4) can validate
 	// the merge result without re-reading from disk — on Windows/WSL2, the atomic
 	// rename (temp → target) may not be immediately visible to a subsequent
 	// os.ReadFile call due to VFS/NTFS metadata caching, which caused the spurious
@@ -2085,17 +2085,6 @@ type mergeJSONResult struct {
 	// (temp → target) may not be immediately visible to a subsequent
 	// os.ReadFile call due to VFS/NTFS metadata caching.
 	merged []byte
-}
-
-func mergeJSONFile(path string, overlay []byte) (mergeJSONResult, error) {
-	baseJSON, err := os.ReadFile(path)
-	if err != nil {
-		if !os.IsNotExist(err) {
-			return mergeJSONResult{}, fmt.Errorf("read json file %q: %w", path, err)
-		}
-		baseJSON = nil
-	}
-	return mergeJSONFileContents(path, baseJSON, overlay)
 }
 
 // mergeOpenCodeCompatibleJSONFile applies the legacy settings migrations shared
