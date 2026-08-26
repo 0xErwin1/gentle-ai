@@ -460,7 +460,9 @@ func TestKilocodeReviewSettingsMatchCurrentMainBaseline(t *testing.T) {
 	// sdd-research adds a default-deny collection executor and the confirmed
 	// pre-proposal handoff to the shared OpenCode/Kilocode overlay. The rendered
 	// settings hash is recomputed from the combined source.
-	const want = "8ff029ce9dfe2de5489c83082cfdf79fac3d65b02490f2685c9a931e52c5ff5e"
+	// #3564 replaces the shared SDD status contract with v2, so the embedded
+	// pre-proposal contract now names the sole public status version.
+	const want = "421237bd384a32355c89991675d9251dd0696afe5209e0b57c0e5030661391b1"
 	if got != want {
 		t.Fatalf("Kilocode settings SHA-256 = %s, want current-main baseline %s", got, want)
 	}
@@ -680,8 +682,11 @@ func TestOpenCodeRenderedReviewProtocolCost(t *testing.T) {
 		// #3417 replaces the terminal commit question with non-deciding delivery
 		// guidance and adds the one-status ambiguous-FINALIZE reconciliation rule.
 		// The rendered byte pins are regenerated from those shared source bytes.
-		{name: "standard", agents: []string{"review-reliability"}, beforeChars: 42_301, wantChars: 14_657, maxCharacters: 15_866},
-		{name: "full-4R", agents: []string{"review-risk", "review-resilience", "review-readability", "review-reliability"}, beforeChars: 106_998, wantChars: 27_002, maxCharacters: 30_063},
+		// #3748 adds the public status_continuation execution rule (+339 rendered
+		// characters in each row), so the pins move from 14,657/27,002 to
+		// 14,996/27,341 after deterministic fixture measurement.
+		{name: "standard", agents: []string{"review-reliability"}, beforeChars: 42_301, wantChars: 14_996, maxCharacters: 15_866},
+		{name: "full-4R", agents: []string{"review-risk", "review-resilience", "review-readability", "review-reliability"}, beforeChars: 106_998, wantChars: 27_341, maxCharacters: 30_063},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

@@ -50,14 +50,13 @@ var coreJourneyReviewModes = map[string]ReviewPrecondition{
 	"j29-cherry-pick-in-progress":                                               reviewOptedIn,
 	"j30-kill-switch-flipped-mid-review":                                        reviewOptedIn,
 	"j3043-opencode-managed-background-activation":                              reviewUntouched,
-	"j115-doctor-dangling-managed-config":                                       reviewUntouched,
+	"j117-doctor-dangling-managed-config":                                       reviewUntouched,
 	"j31-nonsense-mode-value":                                                   reviewUntouched,
 	"j32-recovery-of-a-recovery":                                                reviewOptedIn,
 	"j33-escalate-then-recover":                                                 reviewOptedIn,
 	"j34-abandon-then-start-again":                                              reviewOptedIn,
 	"j35-correction-budget-exactly-zero":                                        reviewOptedIn,
 	"j36-contract-right-name-wrong-version":                                     reviewOptedIn,
-	"j37-sdd-bound-passing-attempt-closes-over-a-corrected-candidate":           reviewOptedIn,
 	"j40-sdd-attempt-reset-after-drift":                                         reviewOptedIn,
 	"j41-kill-switch-versus-sdd-pre-verify":                                     reviewUntouched,
 	"j42-kill-switch-versus-sdd-archive":                                        reviewOptedIn,
@@ -97,6 +96,7 @@ var coreJourneyReviewModes = map[string]ReviewPrecondition{
 	"j81-rc1-consecutive-rescope-repair-executes-printed-command":               reviewOptedIn,
 	"j82-reviewed-superset-pre-push-allows-unpublished-subset":                  reviewOptedIn,
 	"j83-pre-pr-moving-advertised-base-binds-merge-base":                        reviewOptedIn,
+	"j84-sdd-attempt-selected-untracked-lifecycle":                              reviewOptedIn,
 	"j85-review-parse-refusals-are-preflight":                                   reviewOptedIn,
 	"j86-approved-base-diff-local-parent-merge-preserves-approved-receipt":      reviewOptedIn,
 	"j87-unmanaged-remediation-uses-chain-failed-evidence":                      reviewUntouched,
@@ -112,6 +112,8 @@ var coreJourneyReviewModes = map[string]ReviewPrecondition{
 	"j97-pre-push-preserves-ls-remote-failure":                                  reviewOptedIn,
 	"j98-sdd-flat-root-spec-is-discovered":                                      reviewUntouched,
 	"j99-issue-2906-finalize-missing-contract":                                  reviewOptedIn,
+	"j115-recovery-selector-is-collected-before-authorization":                  reviewOptedIn,
+	"j116-codex-committed-correction-runs-returned-status-continuation":         reviewOptedIn,
 }
 
 func declareCoreJourneyReviewModes(journeys []Journey) []Journey {
