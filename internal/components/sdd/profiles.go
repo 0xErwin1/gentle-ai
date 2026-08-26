@@ -452,7 +452,7 @@ func cleanupStaleProfileJDAgents(settingsPath string, profile model.Profile) (fi
 
 	root, err := filemerge.UnmarshalJSONObject(data)
 	if err != nil {
-		// Keep this cleanup no stricter than mergeJSONFile/filemerge.MergeJSONObjects:
+		// Keep this cleanup no stricter than filemerge.MergeJSONObjects:
 		// malformed existing OpenCode configs are treated as an empty base during
 		// merge after the backup step, so stale-key cleanup must not block sync first.
 		return filemerge.WriteResult{}, nil

@@ -5167,7 +5167,7 @@ func TestInjectCodexIsIdempotent(t *testing.T) {
 //
 // The root cause was re-reading the file from disk after the atomic rename,
 // which could see stale content on Windows/WSL2. The fix validates against
-// the in-memory merged bytes returned by mergeJSONFile instead.
+// the in-memory merged bytes returned by the production merge helper instead.
 func TestInjectOpenCodeMultiModeWithPreExistingMinimalConfig(t *testing.T) {
 	mockNoPackageManager(t)
 	home := t.TempDir()
@@ -5669,10 +5669,10 @@ func TestInjectKilocodeProfileJudgesReplaceContaminatedToolsAndPermissions(t *te
 	}
 }
 
-// TestMergeJSONFileReturnsMergedBytes verifies that mergeJSONFile returns the
-// merged bytes in-memory, so callers never need to re-read from disk to
-// validate the result (the fix for the Windows/WSL2 post-check bug).
-func TestMergeJSONFileReturnsMergedBytes(t *testing.T) {
+// TestMergeOpenCodeCompatibleJSONFileReturnsMergedBytes verifies that the
+// production merge path returns merged bytes in-memory, so callers never need
+// to re-read from disk to validate the result (the Windows/WSL2 post-check fix).
+func TestMergeOpenCodeCompatibleJSONFileReturnsMergedBytes(t *testing.T) {
 	tmp := t.TempDir()
 	path := filepath.Join(tmp, "test.json")
 
@@ -5683,14 +5683,14 @@ func TestMergeJSONFileReturnsMergedBytes(t *testing.T) {
 
 	overlay := []byte(`{"new_key": "new_value"}`)
 
-	result, err := mergeJSONFile(path, overlay)
+	result, err := mergeOpenCodeCompatibleJSONFile(path, overlay)
 	if err != nil {
-		t.Fatalf("mergeJSONFile() error = %v", err)
+		t.Fatalf("mergeOpenCodeCompatibleJSONFile() error = %v", err)
 	}
 
 	// The returned merged bytes must not be nil.
 	if len(result.merged) == 0 {
-		t.Fatal("mergeJSONFile() returned empty merged bytes — post-check will fail on Windows/WSL2")
+		t.Fatal("mergeOpenCodeCompatibleJSONFile() returned empty merged bytes — post-check will fail on Windows/WSL2")
 	}
 
 	// The merged bytes must contain both the base and overlay content.
