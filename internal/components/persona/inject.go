@@ -1,6 +1,7 @@
 package persona
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -351,8 +352,8 @@ func injectInternal(homeDir string, adapter agents.Adapter, persona model.Person
 	// 2. OpenCode/Kilocode agent definitions — Tab-switchable agents in settings.
 	// Gentleman overlay creation remains install-only because this overlay shares
 	// the "agent" key in opencode.json with SDD's gentle-orchestrator overlay.
-	// Non-gentleman sync may still do a narrow cleanup of only agent.gentleman so
-	// neutral sync does not leave regional persona state behind.
+	// Sync only performs narrow cleanup: OpenCode removes stale gentleman tools,
+	// while non-gentleman personas remove agent.gentleman entirely.
 	if (adapter.Agent() == model.AgentOpenCode || adapter.Agent() == model.AgentKilocode) && persona != model.PersonaCustom {
 		settingsPath := adapter.SettingsPath(homeDir)
 		if settingsPath != "" {
@@ -368,6 +369,16 @@ func injectInternal(homeDir string, adapter agents.Adapter, persona model.Person
 					}
 					changed = changed || agentResult.Changed
 					files = append(files, settingsPath)
+				}
+				if syncManaged && adapter.Agent() == model.AgentOpenCode {
+					cleanupResult, err := removeJSONAgentTools(settingsPath, "gentleman")
+					if err != nil {
+						return InjectionResult{}, fmt.Errorf("clean stale gentleman tools from settings: %w", err)
+					}
+					changed = changed || cleanupResult.Changed
+					if cleanupResult.Changed {
+						files = append(files, settingsPath)
+					}
 				}
 			} else {
 				// Non-gentleman: remove any residual agent.gentleman key left by a
@@ -585,6 +596,24 @@ func mergeJSONFile(path string, overlay []byte, managedAgentNames ...string) (fi
 	}
 
 	return filemerge.WriteFileAtomic(path, merged, 0o644)
+}
+
+func removeJSONAgentTools(path string, names ...string) (filemerge.WriteResult, error) {
+	baseJSON, err := osReadFile(path)
+	if err != nil {
+		return filemerge.WriteResult{}, err
+	}
+	if baseJSON == nil {
+		return filemerge.WriteResult{}, nil
+	}
+	cleaned, err := filemerge.RemoveJSONAgentTools(baseJSON, names...)
+	if err != nil {
+		return filemerge.WriteResult{}, err
+	}
+	if bytes.Equal(cleaned, baseJSON) {
+		return filemerge.WriteResult{}, nil
+	}
+	return filemerge.WriteFileAtomic(path, cleaned, 0o644)
 }
 
 func mergeJSONFileToleratingMalformed(path string, overlay []byte) (filemerge.WriteResult, error) {

@@ -916,6 +916,37 @@ func TestSyncRollbackRestoresOpenCodeSettingsAfterManagedToolsCleanup(t *testing
 	}
 }
 
+func TestSyncPersonaOnlyRollbackRestoresOpenCodeSettingsAfterGentlemanCleanup(t *testing.T) {
+	home := t.TempDir()
+	settingsPath := filepath.Join(home, ".config", "opencode", "opencode.json")
+	before := []byte("// preserve exact JSONC bytes\n{\"agent\":{\"gentleman\":{\"tools\":{\"write\":true},\"description\":\"keep\"},\"user-owned\":{\"tools\":{\"custom\":true}}}}\n")
+	mustWriteFile(t, settingsPath, before)
+
+	selection := model.Selection{
+		Agents:     []model.AgentID{model.AgentOpenCode},
+		Components: []model.ComponentID{model.ComponentPersona, model.ComponentID("later-failure")},
+		Persona:    model.PersonaGentleman,
+	}
+	targets, err := syncBackupTargets(home, "", selection, resolveAdapters(selection.Agents))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !containsPath(targets, settingsPath) {
+		t.Fatalf("sync backup targets omit OpenCode settings mutated by Gentleman cleanup: %v", targets)
+	}
+
+	if _, err := RunSyncWithSelection(home, selection); err == nil {
+		t.Fatal("RunSyncWithSelection() error = nil, want later pipeline failure")
+	}
+	after, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(after, before) {
+		t.Fatalf("persona-only sync rollback settings = %q, want exact before-image %q", after, before)
+	}
+}
+
 func TestComponentSyncStepRunsGGAInjectWithoutBinaryInstall(t *testing.T) {
 	home := t.TempDir()
 	restoreCommand := runCommand
@@ -3996,6 +4027,86 @@ func setSyncTestHome(t *testing.T, home string) {
 	cmdLookPath = func(name string) (string, error) { return "/usr/local/bin/" + name, nil }
 }
 
+func TestSyncBackupManifestIncludesCodexHooksJSON(t *testing.T) {
+	home := t.TempDir()
+	hooksPath := filepath.Join(home, ".codex", "hooks.json")
+	mustWriteFile(t, hooksPath, []byte("{\"hooks\":{\"SessionStart\":[]}}\n"))
+	selection := model.Selection{
+		Agents:     []model.AgentID{model.AgentCodex},
+		Components: []model.ComponentID{model.ComponentSDD},
+	}
+	targets, err := syncBackupTargets(home, "", selection, resolveAdapters(selection.Agents))
+	if err != nil {
+		t.Fatalf("syncBackupTargets() error = %v", err)
+	}
+	if !containsPath(targets, hooksPath) {
+		t.Fatalf("sync backup targets missing %q\ntargets=%v", hooksPath, targets)
+	}
+
+	manifest, err := backup.NewSnapshotter().Create(filepath.Join(home, "snapshot"), targets)
+	if err != nil {
+		t.Fatalf("Snapshotter.Create() error = %v", err)
+	}
+	for _, entry := range manifest.Entries {
+		if entry.OriginalPath == hooksPath {
+			if !entry.Existed {
+				t.Fatalf("hooks.json manifest entry marked absent: %#v", entry)
+			}
+			return
+		}
+	}
+	t.Fatalf("snapshot manifest omitted %q: %#v", hooksPath, manifest.Entries)
+}
+
+func TestSyncCodexGentlemanConvergesWithHooksJSON(t *testing.T) {
+	home := t.TempDir()
+	selection := model.Selection{
+		Agents:     []model.AgentID{model.AgentCodex},
+		Components: []model.ComponentID{model.ComponentPersona, model.ComponentSDD},
+		Persona:    model.PersonaGentleman,
+		SDDMode:    model.SDDModeSingle,
+		CodexCarrilModelAssignments: map[string]string{
+			"sdd-strong": "gpt-5.5",
+			"sdd-mid":    "gpt-5.5",
+			"sdd-cheap":  "gpt-5.4-mini",
+		},
+	}
+	run := func() (int, []string) {
+		rt, err := newSyncRuntime(home, selection)
+		if err != nil {
+			t.Fatalf("newSyncRuntime() error = %v", err)
+		}
+		plan := rt.stagePlan()
+		before, err := snapshotSyncFiles(rt.managedPaths)
+		if err != nil {
+			t.Fatalf("snapshotSyncFiles() error = %v", err)
+		}
+		execution := pipeline.NewOrchestrator(pipeline.DefaultRollbackPolicy()).Execute(plan)
+		if execution.Err != nil {
+			t.Fatalf("sync stage plan error = %v", execution.Err)
+		}
+		changed, err := changedSyncFiles(rt.changedFiles, before)
+		if err != nil {
+			t.Fatalf("changedSyncFiles() error = %v", err)
+		}
+		return len(changed), changed
+	}
+	firstFiles, _ := run()
+	if firstFiles == 0 {
+		t.Fatal("first sync reported no managed changes")
+	}
+	hooksPath := filepath.Join(home, ".codex", "hooks.json")
+	firstHooks := readTextFile(t, hooksPath)
+
+	secondFiles, changed := run()
+	if secondFiles != 0 || len(changed) != 0 {
+		t.Fatalf("second sync changed %d files: %v; want no changes", secondFiles, changed)
+	}
+	if got := readTextFile(t, hooksPath); got != firstHooks {
+		t.Fatalf("hooks.json changed between converged syncs")
+	}
+}
+
 // TestBuildSyncSelectionDoesNotHardcodePersona verifies that BuildSyncSelection
 // leaves Persona empty so RunSync can resolve it from state.
 func TestBuildSyncSelectionDoesNotHardcodePersona(t *testing.T) {
@@ -5422,7 +5533,7 @@ func TestSyncBackupTargetsIncludeRoutingGuidancePathsWithoutAnyComponent(t *test
 func TestSyncBackupTargetsContainNoDuplicatePaths(t *testing.T) {
 	home := t.TempDir()
 	selection := model.Selection{
-		Agents:     []model.AgentID{model.AgentClaudeCode, model.AgentOpenCode, model.AgentKimi},
+		Agents:     []model.AgentID{model.AgentClaudeCode, model.AgentOpenCode, model.AgentKimi, model.AgentCodex},
 		Components: []model.ComponentID{model.ComponentSDD, model.ComponentEngram, model.ComponentPersona},
 		SDDMode:    model.SDDModeSingle,
 	}

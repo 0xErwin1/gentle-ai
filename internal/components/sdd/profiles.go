@@ -493,6 +493,57 @@ func cleanupStaleProfileJDAgents(settingsPath string, profile model.Profile) (fi
 	return filemerge.WriteFileAtomic(settingsPath, out, 0o644)
 }
 
+// cleanupKilocodeProfileJDPermissions removes OpenCode-only permissions from
+// the managed, assigned named Judgment Day judges before the Kilocode overlay
+// is merged. The corresponding tools use __replace__, so the final agent shape
+// cannot retain stale grants from an earlier OpenCode configuration.
+func cleanupKilocodeProfileJDPermissions(settingsPath string, profile model.Profile) (filemerge.WriteResult, error) {
+	if profile.Name == "" || profile.Name == "default" {
+		return filemerge.WriteResult{}, nil
+	}
+
+	data, err := os.ReadFile(settingsPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return filemerge.WriteResult{}, nil
+		}
+		return filemerge.WriteResult{}, fmt.Errorf("read settings %q: %w", settingsPath, err)
+	}
+	root, err := filemerge.UnmarshalJSONObject(data)
+	if err != nil {
+		return filemerge.WriteResult{}, nil
+	}
+	agentMap, ok := root["agent"].(map[string]any)
+	if !ok {
+		return filemerge.WriteResult{}, nil
+	}
+
+	changed := false
+	for _, jd := range []string{"jd-judge-a", "jd-judge-b"} {
+		if !hasProfileAssignment(profile, jd) {
+			continue
+		}
+		agent, ok := agentMap[jd+"-"+profile.Name].(map[string]any)
+		if !ok {
+			continue
+		}
+		if _, exists := agent["permission"]; exists {
+			delete(agent, "permission")
+			changed = true
+		}
+	}
+	if !changed {
+		return filemerge.WriteResult{}, nil
+	}
+
+	root["agent"] = agentMap
+	out, err := json.MarshalIndent(root, "", "  ")
+	if err != nil {
+		return filemerge.WriteResult{}, fmt.Errorf("marshal settings: %w", err)
+	}
+	return filemerge.WriteFileAtomic(settingsPath, append(out, '\n'), 0o644)
+}
+
 func jdProfileAgentEntry(jd string) map[string]any {
 	switch jd {
 	case "jd-judge-a":
@@ -501,6 +552,7 @@ func jdProfileAgentEntry(jd string) map[string]any {
 			"hidden":      true,
 			"description": "Adversarial code reviewer — blind judge A for judgment-day protocol",
 			"prompt":      "You are a judgment-day adversarial reviewer. Execute the review instructions provided in the task prompt exactly. Do NOT delegate further. Do NOT modify any code — your job is ONLY to find problems.",
+			"permission":  judgmentDayJudgePermission(),
 		}
 	case "jd-judge-b":
 		return map[string]any{
@@ -508,6 +560,7 @@ func jdProfileAgentEntry(jd string) map[string]any {
 			"hidden":      true,
 			"description": "Adversarial code reviewer — blind judge B for judgment-day protocol",
 			"prompt":      "You are a judgment-day adversarial reviewer. Execute the review instructions provided in the task prompt exactly. Do NOT delegate further. Do NOT modify any code — your job is ONLY to find problems.",
+			"permission":  judgmentDayJudgePermission(),
 		}
 	case "jd-fix-agent":
 		return map[string]any{
@@ -524,6 +577,10 @@ func jdProfileAgentEntry(jd string) map[string]any {
 			"prompt":      "Execute the task prompt exactly. Do NOT delegate further.",
 		}
 	}
+}
+
+func judgmentDayJudgePermission() map[string]any {
+	return map[string]any{"write": "deny", "edit": "deny", "bash": "deny", "task": "deny"}
 }
 
 // buildProfileOrchestratorPrompt constructs the orchestrator prompt for a named

@@ -50,10 +50,10 @@ var gentlemanClaudeTheme = claudeTheme{
 var gentlemanCuteClaudeTheme = claudeTheme{
 	Name: "Gentleman Cute", Base: "dark",
 	Overrides: palette(
-		"claude", "#E35FA6", "claudeShimmer", "#FF81CC", "text", "#F6EFF3", "inactive", "#A78E9B", "subtle", "#76616B", "suggestion", "#FFB1DD",
-		"permission", "#E35FA6", "promptBorder", "#E35FA6", "planMode", "#C49BFF", "autoAccept", "#FF81CC", "bashBorder", "#E0C27A",
-		"remember", "#E0C27A", "success", "#D2CBD0", "merged", "#D2CBD0", "error", "#FF718F", "warning", "#F2B86D",
-		"diffAdded", "#1A2430", "diffRemoved", "#2D151F", "diffAddedWord", "#2D4F6A", "diffRemovedWord", "#7A2948",
+		"claude", "#F095C8", "claudeShimmer", "#FFB1DD", "text", "#F6EFF3", "inactive", "#A78E9B", "subtle", "#76616B", "suggestion", "#FFB1DD",
+		"permission", "#F095C8", "promptBorder", "#F095C8", "planMode", "#A9C7EE", "autoAccept", "#FF81CC", "bashBorder", "#E0C27A",
+		"remember", "#E0C27A", "success", "#B4E7C7", "merged", "#B4E7C7", "error", "#FF718F", "warning", "#F2B86D",
+		"diffAdded", "#1A2420", "diffRemoved", "#2D151F", "diffAddedWord", "#2D5A45", "diffRemovedWord", "#7A2948",
 		"userMessageBackground", "#241822", "userMessageBackgroundHover", "#342230", "selectionBg", "#563040", "memoryBackgroundColor", "#1A1218", "bashMessageBackgroundColor", "#151316",
 	),
 }
@@ -76,13 +76,13 @@ var gentlemanCuteOpenCodeTheme = openCodeTheme{
 	Schema: openCodeThemeSchema,
 	Theme: palette(
 		"background", "none", "backgroundPanel", "#1A1218", "backgroundElement", "#241822", "text", "#F6EFF3", "textMuted", "#A78E9B",
-		"primary", "#E35FA6", "secondary", "#D7A0B8", "accent", "#E0C27A", "error", "#FF718F", "warning", "#F2B86D", "success", "#D2CBD0", "info", "#D7A0B8",
-		"border", "#342230", "borderActive", "#FF81CC", "borderSubtle", "#241822", "diffAdded", "#A9C7EE", "diffRemoved", "#FF718F", "diffContext", "#A78E9B",
-		"diffHunkHeader", "#D7A0B8", "diffHighlightAdded", "#A9C7EE", "diffHighlightRemoved", "#FF718F", "diffAddedBg", "#151316", "diffRemovedBg", "#261019", "diffContextBg", "#1A1218",
-		"diffLineNumber", "#76616B", "diffAddedLineNumberBg", "#151316", "diffRemovedLineNumberBg", "#261019", "markdownText", "#F6EFF3", "markdownHeading", "#E0C27A",
-		"markdownLink", "#E35FA6", "markdownLinkText", "#E35FA6", "markdownCode", "#E0C27A", "markdownBlockQuote", "#A78E9B", "markdownEmph", "#D7A0B8", "markdownStrong", "#E0C27A",
-		"markdownHorizontalRule", "#A78E9B", "markdownListItem", "#E35FA6", "markdownListEnumeration", "#D7A0B8", "markdownImage", "#E35FA6", "markdownImageText", "#E35FA6", "markdownCodeBlock", "#F6EFF3",
-		"syntaxComment", "#A78E9B", "syntaxKeyword", "#C15995", "syntaxFunction", "#D7A0B8", "syntaxVariable", "#F6EFF3", "syntaxString", "#E0C27A", "syntaxNumber", "#D7A0B8", "syntaxType", "#A9C7EE", "syntaxOperator", "#E35FA6", "syntaxPunctuation", "#A78E9B",
+		"primary", "#F095C8", "secondary", "#D7A0B8", "accent", "#F095C8", "error", "#FF718F", "warning", "#F2B86D", "success", "#B4E7C7", "info", "#D7A0B8",
+		"border", "#342230", "borderActive", "#FFB1DD", "borderSubtle", "#241822", "diffAdded", "#B4E7C7", "diffRemoved", "#FF718F", "diffContext", "#A78E9B",
+		"diffHunkHeader", "#D7A0B8", "diffHighlightAdded", "#B4E7C7", "diffHighlightRemoved", "#FF718F", "diffAddedBg", "#1A2420", "diffRemovedBg", "#261019", "diffContextBg", "#1A1218",
+		"diffLineNumber", "#76616B", "diffAddedLineNumberBg", "#1A2420", "diffRemovedLineNumberBg", "#261019", "markdownText", "#F6EFF3", "markdownHeading", "#E0C27A",
+		"markdownLink", "#F095C8", "markdownLinkText", "#F095C8", "markdownCode", "#E0C27A", "markdownBlockQuote", "#A78E9B", "markdownEmph", "#D7A0B8", "markdownStrong", "#E0C27A",
+		"markdownHorizontalRule", "#A78E9B", "markdownListItem", "#F095C8", "markdownListEnumeration", "#D7A0B8", "markdownImage", "#F095C8", "markdownImageText", "#F095C8", "markdownCodeBlock", "#F6EFF3",
+		"syntaxComment", "#A78E9B", "syntaxKeyword", "#F095C8", "syntaxFunction", "#A9C7EE", "syntaxVariable", "#F6EFF3", "syntaxString", "#B4E7C7", "syntaxNumber", "#F2B86D", "syntaxType", "#E0C27A", "syntaxOperator", "#C4DAF6", "syntaxPunctuation", "#A78E9B",
 	),
 }
 

@@ -15,6 +15,8 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v2/internal/backup"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/installcmd"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/pipeline"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/planner"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/state"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/system"
 )
@@ -215,6 +217,74 @@ func TestAgentInstallStepSkipsMissingNonPiRuntime(t *testing.T) {
 	}
 }
 
+func TestPiAgentInstallProgressUsesAdapterCommandNames(t *testing.T) {
+	restorePreflightLookPath := installcmd.OverrideLookPath(func(name string) (string, error) { return name, nil })
+	t.Cleanup(restorePreflightLookPath)
+
+	restoreCommand := runCommand
+	t.Cleanup(func() { runCommand = restoreCommand })
+	runCommand = func(string, ...string) error { return nil }
+
+	var events []pipeline.ProgressEvent
+	step := agentInstallStep{
+		id:      "agent:pi",
+		agent:   model.AgentPi,
+		homeDir: t.TempDir(),
+		progress: func(event pipeline.ProgressEvent) {
+			events = append(events, event)
+		},
+	}
+	if err := step.Run(); err != nil {
+		t.Fatalf("agentInstallStep.Run() error = %v", err)
+	}
+
+	wantPackages := []string{"pi install npm:gentle-pi", "pi install npm:gentle-engram", "pi install npm:pi-mcp-adapter", engramInitCommandForTest, "pi install npm:pi-subagents-j0k3r", "pi install npm:@juicesharp/rpiv-ask-user-question", "pi install npm:pi-web-access", "pi install npm:@juicesharp/rpiv-todo", "pi install npm:pi-btw"}
+	if len(events) != len(wantPackages)*2 {
+		t.Fatalf("progress events = %d, want %d: %v", len(events), len(wantPackages)*2, events)
+	}
+	for i, commandLabel := range wantPackages {
+		wantID := "agent:pi:" + commandLabel
+		if events[i*2].StepID != wantID || events[i*2].Status != pipeline.StepStatusRunning {
+			t.Fatalf("running event[%d] = %+v, want step %q", i*2, events[i*2], wantID)
+		}
+		if events[i*2+1].StepID != wantID || events[i*2+1].Status != pipeline.StepStatusSucceeded {
+			t.Fatalf("succeeded event[%d] = %+v, want step %q", i*2+1, events[i*2+1], wantID)
+		}
+	}
+}
+
+func TestRunCommandSequenceWithProgressStopsAfterFailedCommand(t *testing.T) {
+	restoreCommand := runCommand
+	t.Cleanup(func() { runCommand = restoreCommand })
+	var commands []string
+	runCommand = func(name string, args ...string) error {
+		commands = append(commands, strings.Join(append([]string{name}, args...), " "))
+		return errors.New("package install failed")
+	}
+
+	var events []pipeline.ProgressEvent
+	err := runCommandSequenceWithProgress(
+		[][]string{{"pi", "install", "npm:first"}, {"pi", "install", "npm:second"}},
+		func(event pipeline.ProgressEvent) { events = append(events, event) },
+		"agent:pi",
+	)
+	if err == nil || !strings.Contains(err.Error(), "package install failed") {
+		t.Fatalf("runCommandSequenceWithProgress() error = %v, want package failure", err)
+	}
+	if len(commands) != 1 || commands[0] != "pi install npm:first" {
+		t.Fatalf("commands = %v, want only the failed command", commands)
+	}
+	if len(events) != 2 {
+		t.Fatalf("progress events = %v, want running and failed", events)
+	}
+	if events[0].StepID != "agent:pi:pi install npm:first" || events[0].Status != pipeline.StepStatusRunning {
+		t.Fatalf("running event = %+v", events[0])
+	}
+	if events[1].StepID != events[0].StepID || events[1].Status != pipeline.StepStatusFailed || events[1].Err == nil {
+		t.Fatalf("failed event = %+v", events[1])
+	}
+}
+
 func TestPiAgentInstallRunsPackageCommandsWhenPiAlreadyInstalled(t *testing.T) {
 	binDir := t.TempDir()
 	fakePi := filepath.Join(binDir, "pi")
@@ -330,6 +400,53 @@ func TestRunInstallRollsBackOnComponentFailure(t *testing.T) {
 
 	if string(after) != string(before) {
 		t.Fatalf("settings content changed after rollback\nafter=%s\nbefore=%s", after, before)
+	}
+}
+
+type failingPersonaInstallStep struct{}
+
+func (failingPersonaInstallStep) ID() string { return "test:fail-after-persona" }
+func (failingPersonaInstallStep) Run() error {
+	return errors.New("forced failure after persona cleanup")
+}
+
+func TestInstallPersonaOnlyRollbackRestoresOpenCodeSettingsAfterCleanup(t *testing.T) {
+	home := t.TempDir()
+	settingsPath := filepath.Join(home, ".config", "opencode", "opencode.json")
+	before := []byte("// preserve exact JSONC bytes\n{\"agent\":{\"gentleman\":{\"tools\":{\"write\":true},\"description\":\"keep\"},\"user-owned\":{\"tools\":{\"custom\":true}}}}\n")
+	if err := os.MkdirAll(filepath.Dir(settingsPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(settingsPath, before, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	selection := model.Selection{
+		Agents:     []model.AgentID{model.AgentOpenCode},
+		Components: []model.ComponentID{model.ComponentPersona},
+		Persona:    model.PersonaGentleman,
+	}
+	resolved := planner.ResolvedPlan{Agents: selection.Agents, OrderedComponents: selection.Components}
+	runtime, err := newInstallRuntime(home, ScopeGlobal, ChannelStable, selection, resolved, system.PlatformProfile{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	restoreCommand := runCommand
+	runCommand = func(string, ...string) error { return nil }
+	t.Cleanup(func() { runCommand = restoreCommand })
+	plan := runtime.stagePlan()
+	plan.Prepare = plan.Prepare[1:]
+	plan.Apply = append(plan.Apply, failingPersonaInstallStep{})
+	result := pipeline.NewOrchestrator(pipeline.DefaultRollbackPolicy()).Execute(plan)
+	if result.Err == nil || !result.Rollback.Success {
+		t.Fatalf("persona-only install rollback = %#v", result)
+	}
+	after, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(after) != string(before) {
+		t.Fatalf("persona-only install rollback settings = %q, want exact before-image %q", after, before)
 	}
 }
 
