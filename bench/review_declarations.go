@@ -112,6 +112,7 @@ var coreJourneyReviewModes = map[string]ReviewPrecondition{
 	"j98-sdd-flat-root-spec-is-discovered":                                      reviewUntouched,
 	"j99-issue-2906-finalize-missing-contract":                                  reviewOptedIn,
 	"j115-recovery-selector-is-collected-before-authorization":                  reviewOptedIn,
+	"j116-codex-committed-correction-runs-returned-status-continuation":         reviewOptedIn,
 }
 
 func declareCoreJourneyReviewModes(journeys []Journey) []Journey {

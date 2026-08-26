@@ -344,10 +344,41 @@ func TestCodexProviderAdapterUsesPinnedLocalRuntime(t *testing.T) {
 		t.Fatalf("Codex version = %q, %v", strings.TrimSpace(string(version)), err)
 	}
 	harness := newOrganicHarness(t)
+	baseTree := strings.TrimSpace(harness.git("rev-parse", "HEAD^{tree}"))
 	harness.writeFiles(map[string]string{"internal/provider/candidate.go": "package provider\n\nfunc Value() int { return 1 }\n"})
+	harness.git("add", "--", "internal/provider/candidate.go")
+	harness.git("commit", "-qm", "feat: committed Codex correction candidate")
 	const lineage = "codex-loopback-egress-proof"
-	_ = organicProviderStart(t, harness, lineage, "codex")
-	binding := organicProviderBinding(t, organicProviderStatus(t, harness, lineage, "codex"))
+	statusPayload := harness.gentle(
+		"review", "status", "--cwd", harness.repo.worktree, "--contract", "gentle-ai.review-integration/v2",
+		"--agent", "codex", "--lineage", lineage, "--base-ref", baseTree, "--committed-only", "--next-transition",
+	)
+	var negotiated organicProviderStatusResult
+	if err := json.Unmarshal(statusPayload, &negotiated); err != nil || negotiated.NextTransition == nil || negotiated.NextTransition.Execute == nil {
+		t.Fatalf("decode committed Codex START: %v\n%s", err, statusPayload)
+	}
+	start := negotiated.NextTransition.Execute
+	stdout, stderr, err := harness.gentleAllowFailure(
+		"review", "start", "--cwd", harness.repo.worktree, "--contract", "gentle-ai.review-integration/v2",
+		"--target", start.argument("target"), "--projection", start.argument("projection"), "--base-ref", baseTree, "--committed-only",
+		"--lineage", lineage, "--agent", "codex", "--consent", "granted", "--focus", "reliability",
+	)
+	if err != nil {
+		t.Fatalf("committed Codex START: %v\nstdout:\n%s\nstderr:\n%s", err, stdout, stderr)
+	}
+	var started organicStartResult
+	if err := json.Unmarshal([]byte(stdout), &started); err != nil || started.State != "reviewing" || len(started.SelectedLenses) != 1 {
+		t.Fatalf("committed Codex START = %#v, %v\n%s", started, err, stdout)
+	}
+	statusPayload = harness.gentle(
+		"review", "status", "--cwd", harness.repo.worktree, "--contract", "gentle-ai.review-integration/v2",
+		"--agent", "codex", "--lineage", lineage, "--base-ref", baseTree, "--committed-only", "--next-transition",
+	)
+	var reviewing organicProviderStatusResult
+	if err := json.Unmarshal(statusPayload, &reviewing); err != nil {
+		t.Fatalf("decode committed Codex capture STATUS: %v\n%s", err, statusPayload)
+	}
+	binding := organicProviderBinding(t, reviewing)
 	order, err := strconv.Atoi(binding["order"])
 	if err != nil {
 		t.Fatal(err)
@@ -356,8 +387,13 @@ func TestCodexProviderAdapterUsesPinnedLocalRuntime(t *testing.T) {
 		"subject_hash": binding["subject-hash"],
 		"inspection":   map[string]any{"status": "completed", "paths": []string{"internal/provider/candidate.go"}},
 		"lens":         binding["lens"],
-		"findings":     []any{},
-		"evidence":     []string{"loopback inspected the frozen candidate"},
+		"findings": []any{map[string]any{
+			"location": "internal/provider/candidate.go:3", "severity": "CRITICAL",
+			"claim":          "the committed candidate returns the wrong value",
+			"proof_refs":     []string{"internal/provider/candidate.go:3 is introduced by the committed candidate"},
+			"evidence_class": "deterministic", "causal_disposition": "introduced",
+		}},
+		"evidence": []string{"loopback found a candidate-caused blocker in the frozen committed candidate"},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -423,7 +459,7 @@ exec "$GENTLE_AI_RUNTIME_TRACE_BINARY" -ff -o "$GENTLE_AI_RUNTIME_TRACE_LOG" -e 
 		"--repository-context", binding["repository-context"], "--expected-revision", binding["expected-revision"],
 		"--lineage", binding["lineage"], "--target", binding["target"], "--lens", binding["lens"], "--order", strconv.Itoa(order),
 	}
-	stdout, stderr, err := runOrganicCommand(t, organicBinary, harness.repo.worktree, environment, arguments...)
+	stdout, stderr, err = runOrganicCommand(t, organicBinary, harness.repo.worktree, environment, arguments...)
 	if err != nil {
 		t.Fatalf("registered Codex provider route: %v\nstdout:\n%s\nstderr:\n%s", err, stdout, stderr)
 	}
@@ -444,14 +480,45 @@ exec "$GENTLE_AI_RUNTIME_TRACE_BINARY" -ff -o "$GENTLE_AI_RUNTIME_TRACE_LOG" -e 
 		}
 	}
 	t.Logf("Codex egress proof: %d external attempts denied by the loopback proxy; strace observed %d Internet-socket connects, all loopback: %v", denied, len(connections), connections)
-	var terminal organicFinalizeResult
+	var terminal struct {
+		organicFinalizeResult
+		StatusContinuation *organicProviderExecute `json:"status_continuation"`
+	}
 	if err := json.Unmarshal([]byte(stdout), &terminal); err != nil {
 		t.Fatalf("decode terminal Codex provider capture: %v\n%s", err, stdout)
 	}
-	if terminal.Operation != "review/capture-result" || terminal.State != organicStateApproved {
-		t.Fatalf("registered Codex provider capture did not close the clean review: %#v", terminal)
+	if terminal.Operation != "review/capture-result" || terminal.State != organicStateCorrectionRequired || terminal.StatusContinuation == nil {
+		t.Fatalf("registered Codex provider capture did not open committed correction: %#v", terminal)
 	}
-	harness.assertReviewBurned(lineage, terminal)
+	if terminal.StatusContinuation.Operation != "review.status" {
+		t.Fatalf("Codex committed correction continuation operation = %q, want review.status", terminal.StatusContinuation.Operation)
+	}
+	wantTokens := map[string]bool{
+		"--lineage=" + lineage: false, "--base-ref=" + baseTree: false,
+		"--committed-only=true": false, "--agent=codex": false,
+	}
+	continuationArguments := []string{"review", "status"}
+	for _, argument := range terminal.StatusContinuation.Arguments {
+		continuationArguments = append(continuationArguments, argument.Token)
+		if _, found := wantTokens[argument.Token]; found {
+			wantTokens[argument.Token] = true
+		}
+	}
+	for token, found := range wantTokens {
+		if !found {
+			t.Fatalf("Codex committed correction continuation omitted %q: %#v", token, terminal.StatusContinuation)
+		}
+	}
+	continuationPayload := harness.gentle(continuationArguments...)
+	var correction organicProviderStatusResult
+	if err := json.Unmarshal(continuationPayload, &correction); err != nil {
+		t.Fatalf("decode returned Codex correction STATUS: %v\n%s", err, continuationPayload)
+	}
+	if correction.Authority.LineageID != lineage || correction.Authority.State != organicStateCorrectionRequired ||
+		correction.Projection.BaseTree != baseTree || correction.NextTransition == nil ||
+		correction.NextTransition.ReasonCode != "correction_plan_required" {
+		t.Fatalf("returned Codex committed correction STATUS = %#v", correction)
+	}
 }
 
 // codexTracedConnectAddresses parses one trace per child process. strace -ff
@@ -1467,6 +1534,13 @@ type organicProviderStatusResult struct {
 	TargetIdentity string                     `json:"target_identity"`
 	Applicability  string                     `json:"applicability"`
 	NextTransition *organicProviderTransition `json:"next_transition"`
+	Authority      struct {
+		LineageID string `json:"lineage_id"`
+		State     string `json:"state"`
+	} `json:"authority"`
+	Projection struct {
+		BaseTree string `json:"base_tree"`
+	} `json:"projection"`
 }
 
 type organicProviderTransition struct {
@@ -1499,6 +1573,7 @@ type organicProviderArtifact struct {
 type organicProviderArgument struct {
 	Name  string `json:"name"`
 	Value string `json:"value"`
+	Token string `json:"token"`
 }
 
 func (execute organicProviderExecute) argument(name string) string {
