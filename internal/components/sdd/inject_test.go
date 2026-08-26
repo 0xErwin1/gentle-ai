@@ -2780,7 +2780,7 @@ func TestInjectOpenCodeRemovesOnlyManagedLegacyTools(t *testing.T) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	const seed = "// JSONC input\n{\"permission\":{\"read\":{\"*\":\"allow\",\"**/.env\":\"deny\"}},\"agent\":{\"user-owned\":{\"tools\":{\"read\":true,\"custom\":true}},\"gentle-orchestrator\":{\"tools\":{\"read\":true}},\"sdd-apply-fast\":{\"tools\":{\"read\":true}}}}"
+	const seed = "// JSONC input\n{\"permission\":{\"read\":{\"*\":\"allow\",\"**/.env\":\"deny\",\"**/credentials/**\":\"deny\",\"**/sensitive/**\":\"deny\"}},\"agent\":{\"user-owned\":{\"tools\":{\"read\":true,\"custom\":true}},\"gentle-orchestrator\":{\"tools\":{\"read\":true}},\"sdd-apply-fast\":{\"tools\":{\"read\":true},\"permission\":{\"task\":{\"review-validator\":\"allow\"}}}}}"
 	if err := os.WriteFile(path, []byte(seed), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -2797,7 +2797,7 @@ func TestInjectOpenCodeRemovesOnlyManagedLegacyTools(t *testing.T) {
 		t.Fatal(err)
 	}
 	agents := root["agent"].(map[string]any)
-	if !reflect.DeepEqual(root["permission"], map[string]any{"read": map[string]any{"*": "allow", "**/.env": "deny"}}) || !reflect.DeepEqual(agents["user-owned"].(map[string]any)["tools"], map[string]any{"read": true, "custom": true}) {
+	if !reflect.DeepEqual(root["permission"], map[string]any{"read": map[string]any{"*": "allow", "**/.env": "deny", "**/credentials/**": "deny", "**/sensitive/**": "deny"}}) || !reflect.DeepEqual(agents["user-owned"].(map[string]any)["tools"], map[string]any{"read": true, "custom": true}) || !reflect.DeepEqual(agents["sdd-apply-fast"].(map[string]any)["permission"], map[string]any{"task": map[string]any{"review-validator": "allow"}}) {
 		t.Fatalf("global policy or user-owned tools changed: %#v", root)
 	}
 	for name, raw := range agents {
