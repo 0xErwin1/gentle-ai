@@ -137,6 +137,32 @@ func TestReviewNextTransitionExecuteCommandUsesCanonicalToolName(t *testing.T) {
 	}
 }
 
+func TestStatusV2RetainsHistoricalTransitionFragments(t *testing.T) {
+	payload, err := os.ReadFile(filepath.Join("..", "..", "contracts", "review-integration", "v1", "schemas", "status-v2.schema.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var status struct {
+		Defs map[string]map[string]any `json:"$defs"`
+	}
+	if err := json.Unmarshal(payload, &status); err != nil {
+		t.Fatal(err)
+	}
+	_, canonicalDefs := reviewTransitionExecutionSchema(t, "status-v2.schema.json")
+	for _, name := range []string{"transition_argument", "executable_transition_argument", "transition_binding", "transition_execution", "transition_artifact"} {
+		want := "transition-execution.schema.json#/$defs/" + name
+		if name == "transition_execution" {
+			want = "transition-execution.schema.json"
+		}
+		if got := status.Defs[name]["$ref"]; got != want {
+			t.Errorf("$defs/%s = %#v, want %q", name, got, want)
+		}
+		if name != "transition_execution" && canonicalDefs[name] == nil {
+			t.Errorf("canonical transition execution has no $defs/%s", name)
+		}
+	}
+}
+
 // reviewTransitionExecutionOperationEnum reads the published operation enum
 // straight out of one shipped status schema, so this enumeration can never
 // degrade into a hardcoded list of today's operations.
@@ -156,7 +182,9 @@ func reviewTransitionExecutionSchema(t *testing.T, schemaFile string) (map[strin
 		t.Fatalf("%s has no $defs", schemaFile)
 	}
 	if execution, ok := defs["transition_execution"].(map[string]any); ok {
-		return execution, defs
+		if _, aliased := execution["$ref"]; !aliased {
+			return execution, defs
+		}
 	}
 	next, ok := defs["next_transition"].(map[string]any)
 	if !ok {

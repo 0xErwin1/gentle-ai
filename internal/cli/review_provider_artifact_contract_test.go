@@ -36,7 +36,7 @@ func TestReviewProviderArtifactV1ContractsArePinned(t *testing.T) {
 		// stale-burn fields.
 		"schemas/start-v2.schema.json":             "ec8550cd93bbe84af1ce87dfd7abfa9e24692f42b20f8f0bf9cac1d4b88ea46c",
 		"schemas/status.schema.json":               "86d0a5ff09a833ff723804c3e31185a80826cbd81a73cf61026feea8c5df2314",
-		"schemas/status-v2.schema.json":            "38ff09f07f2ebb2e34c05aaddc9b37163ed0e0088cb2abe171ae1b5f442b8388",
+		"schemas/status-v2.schema.json":            "7c51627d133592839ba4afa860b358b68109afd5f70ee998cd421f563201b23e",
 		"schemas/transition-execution.schema.json": "ddee03bd0c1b6e70f21c399bae7fe528aa4ad46cebb5a48ec72b6e6b3694aa2d",
 	}
 	for name, expected := range want {
