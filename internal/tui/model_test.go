@@ -10,6 +10,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -888,6 +889,34 @@ func TestReviewToInstallingInitializesProgress(t *testing.T) {
 	}
 }
 
+func updateModel(m Model, msg tea.Msg) Model { next, _ := m.Update(msg); return next.(Model) }
+func installingModel(labels []string, runID uint64) Model {
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen, m.pipelineRunning, m.installRunID = ScreenInstalling, runID != 0, runID
+	m.progressRun, m.Progress = newInstallProgressRun(), NewProgressState(labels)
+	return m
+}
+
+func succeededExecution(stepID string) pipeline.ExecutionResult {
+	return pipeline.ExecutionResult{Apply: pipeline.StageResult{Success: true, Steps: []pipeline.StepResult{{StepID: stepID, Status: pipeline.StepStatusSucceeded}}}}
+}
+
+func TestStepProgressMsgAddsNestedPackageProgress(t *testing.T) {
+	const packageStep = "agent:pi:pi install npm:gentle-pi"
+	state := updateModel(installingModel([]string{"agent:pi"}, 0), StepProgressMsg{StepID: packageStep, Status: pipeline.StepStatusRunning})
+	if len(state.Progress.Items) != 2 {
+		t.Fatalf("progress items = %v, want the nested package item", state.Progress.Items)
+	}
+	if state.Progress.Items[1].Label != packageStep || state.Progress.Items[1].Status != ProgressStatusRunning {
+		t.Fatalf("nested package item = %+v, want running %q", state.Progress.Items[1], packageStep)
+	}
+
+	state = updateModel(state, StepProgressMsg{StepID: packageStep, Status: pipeline.StepStatusSucceeded})
+	if state.Progress.Items[1].Status != string(pipeline.StepStatusSucceeded) {
+		t.Fatalf("nested package status = %q, want succeeded", state.Progress.Items[1].Status)
+	}
+}
+
 func TestStepProgressMsgUpdatesProgressState(t *testing.T) {
 	m := NewModel(system.DetectionResult{}, "dev")
 	m.Screen = ScreenInstalling
@@ -919,6 +948,51 @@ func TestStepProgressMsgUpdatesProgressState(t *testing.T) {
 	}
 }
 
+func TestInstallPipelineProgressDeliveryDoesNotBlockWithoutReceiver(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.ExecuteFn = func(
+		_ model.Selection,
+		_ planner.ResolvedPlan,
+		_ system.DetectionResult,
+		_ model.OpenCodeBackgroundIntent,
+		_ model.OpenCodeBackgroundIntent,
+		_ model.PiBackgroundIntent,
+		_ model.PiBackgroundIntent,
+		progress pipeline.ProgressFunc,
+	) pipeline.ExecutionResult {
+		progress(pipeline.ProgressEvent{StepID: "agent:pi:pi install npm:gentle-pi", Status: pipeline.StepStatusRunning})
+		return pipeline.ExecutionResult{}
+	}
+
+	_, cmd := m.startInstalling()
+	batch, ok := cmd().(tea.BatchMsg)
+	if !ok || len(batch) == 0 {
+		t.Fatalf("startInstalling command = %T/%v, want non-empty batch", cmd(), batch)
+	}
+
+	finished := make(chan struct{})
+	go func() {
+		batch[0]()
+		close(finished)
+	}()
+	select {
+	case <-finished:
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("pipeline command blocked while no progress receiver was scheduled")
+	}
+}
+
+func TestPipelineDoneMsgRejectsStaleProgress(t *testing.T) {
+	m := installingModel([]string{"step-x"}, 1)
+	m.Progress.Start(0)
+	state := updateModel(m, PipelineDoneMsg{RunID: 1, Result: succeededExecution("step-x")})
+	state = updateModel(state, StepProgressMsg{RunID: 1, StepID: "step-x", Status: pipeline.StepStatusFailed, Err: errors.New("late progress")})
+
+	if state.Progress.Items[0].Status != string(pipeline.StepStatusSucceeded) {
+		t.Fatalf("stale progress changed completed status to %q", state.Progress.Items[0].Status)
+	}
+}
+
 func TestPipelineDoneMsgMarksCompletion(t *testing.T) {
 	m := NewModel(system.DetectionResult{}, "dev")
 	m.Screen = ScreenInstalling
@@ -944,6 +1018,41 @@ func TestPipelineDoneMsgMarksCompletion(t *testing.T) {
 
 	if !state.Progress.Done() {
 		t.Fatalf("expected progress to be done")
+	}
+}
+
+func TestPipelineDoneMsgPreservesNestedPackageProgress(t *testing.T) {
+	m := installingModel([]string{"agent:pi", "fallback:with:colon"}, 7)
+
+	const packageStep = "agent:pi:pi install npm:gentle-pi"
+	for _, msg := range []StepProgressMsg{
+		{RunID: 7, StepID: packageStep, Status: pipeline.StepStatusRunning},
+		{RunID: 7, StepID: packageStep, Status: pipeline.StepStatusSucceeded},
+		{RunID: 7, StepID: "agent:pi", Status: pipeline.StepStatusRunning},
+		{RunID: 7, StepID: "agent:pi", Status: pipeline.StepStatusSucceeded},
+	} {
+		m = updateModel(m, msg)
+	}
+
+	state := updateModel(m, PipelineDoneMsg{RunID: 7, Result: succeededExecution("agent:pi")})
+	if state.pipelineRunning {
+		t.Fatal("matching PipelineDoneMsg did not finish the active pipeline")
+	}
+	nestedIndex := state.findProgressItem(packageStep)
+	if nestedIndex < 0 {
+		t.Fatalf("nested package item was dropped: %v", state.Progress.Items)
+	}
+	if !state.Progress.Items[nestedIndex].Nested {
+		t.Fatalf("nested package item = %+v, want explicit nested metadata", state.Progress.Items[nestedIndex])
+	}
+	if state.findProgressItem("fallback:with:colon") >= 0 {
+		t.Fatalf("unmarked colon-containing item was preserved: %v", state.Progress.Items)
+	}
+	if !state.Progress.Done() {
+		t.Fatalf("progress = %+v, want done", state.Progress)
+	}
+	if len(state.Progress.Logs) < 2 || state.Progress.Logs[1] != "done: "+packageStep {
+		t.Fatalf("logs = %v, want nested package log preserved", state.Progress.Logs)
 	}
 }
 
@@ -1023,6 +1132,35 @@ func TestEscBlockedWhilePipelineRunning(t *testing.T) {
 
 	if state.Screen != ScreenInstalling {
 		t.Fatalf("screen = %v, want ScreenInstalling (esc should be blocked)", state.Screen)
+	}
+}
+
+func TestEnterAtFullProgressWaitsForPipelineDone(t *testing.T) {
+	m := installingModel([]string{"only-step"}, 11)
+	m.Progress.Mark(0, string(pipeline.StepStatusSucceeded))
+
+	state := updateModel(m, tea.KeyMsg{Type: tea.KeyEnter})
+	if state.Screen != ScreenInstalling {
+		t.Fatalf("screen = %v, want ScreenInstalling while pipeline is active", state.Screen)
+	}
+
+	state.progressRun.complete(succeededExecution("only-step"))
+	doneValue := state.nextProgressCommand()()
+	doneMsg, ok := doneValue.(PipelineDoneMsg)
+	if !ok {
+		t.Fatalf("progress command returned %T, want PipelineDoneMsg", doneValue)
+	}
+	state = updateModel(state, doneMsg)
+	if state.pipelineRunning {
+		t.Fatal("matching PipelineDoneMsg left pipelineRunning set")
+	}
+	if state.Screen != ScreenInstalling {
+		t.Fatalf("screen after PipelineDoneMsg = %v, want ScreenInstalling until Enter", state.Screen)
+	}
+
+	state = updateModel(state, tea.KeyMsg{Type: tea.KeyEnter})
+	if state.Screen != ScreenComplete {
+		t.Fatalf("screen after completed pipeline Enter = %v, want ScreenComplete", state.Screen)
 	}
 }
 
