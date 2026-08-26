@@ -171,27 +171,32 @@ func captureAllLenses(r *journeyRun) error {
 }
 
 func captureAllLensesFor(r *journeyRun, selectors ...string) error {
+	_, err := captureAllLensesWithLastCaptureFor(r, selectors...)
+	return err
+}
+
+// captureAllLensesWithLastCaptureFor preserves the final capture response for
+// callers whose next lifecycle step is provider-owned by that closure.
+func captureAllLensesWithLastCaptureFor(r *journeyRun, selectors ...string) (Observation, error) {
+	var last Observation
 	for round := 0; round < 8; round++ {
 		envelope, err := readStatusFor(r, selectors...)
 		if err != nil {
-			return err
+			return Observation{}, err
 		}
-		if envelope.NextTransition.Kind != "collect" {
-			return nil
-		}
-		if envelope.NextTransition.Collect.Inputs[0].Name != "reviewer_result" {
-			return nil
+		if envelope.NextTransition.Kind != "collect" || envelope.NextTransition.Collect.Inputs[0].Name != "reviewer_result" {
+			return last, nil
 		}
 		result, err := synthesizeReviewerResult(
 			envelope.NextTransition.Collect.Inputs[0].ArtifactSubject.SubjectHash, envelope.paths())
 		if err != nil {
-			return err
+			return Observation{}, err
 		}
 		path, err := writeScratch(r.sandbox, fmt.Sprintf("reviewer-%d.json", round), result)
 		if err != nil {
-			return err
+			return Observation{}, err
 		}
-		r.run([]string{
+		last = r.run([]string{
 			"review", "capture-result", "--cwd", r.sandbox.Repo,
 			"--lineage", envelope.argument("lineage"),
 			"--target", envelope.argument("target"),
@@ -200,8 +205,90 @@ func captureAllLensesFor(r *journeyRun, selectors ...string) error {
 			"--order", envelope.argument("order"),
 			"--input", path,
 		}, true)
+		if last.ExitCode != 0 {
+			return Observation{}, fmt.Errorf("capture reviewer result: %s", firstLine(last.Stderr))
+		}
+		var closure lastEventClosure
+		if json.Unmarshal([]byte(strings.TrimSpace(last.Stdout)), &closure) == nil && closure.State == "correction_required" {
+			return last, nil
+		}
 	}
-	return errors.New("lens capture loop did not converge")
+	return Observation{}, errors.New("lens capture loop did not converge")
+}
+
+const correctionStatusContinuationKeyPrefix = "last-event-correction-status:"
+
+type lastEventClosure struct {
+	LineageID          string `json:"lineage_id"`
+	State              string `json:"state"`
+	StatusContinuation *struct {
+		Operation string `json:"operation"`
+		Arguments []struct {
+			Token string `json:"token"`
+		} `json:"arguments"`
+	} `json:"status_continuation"`
+}
+
+// correctionStatusFromLastEventCapture executes the closure's status
+// continuation as operation plus ordered provider-issued tokens. It never
+// reconstructs selectors from a lineage, fixture, or retained status state.
+func correctionStatusFromLastEventCapture(r *journeyRun, capture Observation) (statusEnvelope, bool, error) {
+	if capture.ExitCode != 0 {
+		return statusEnvelope{}, false, fmt.Errorf("terminal reviewer capture failed: %s", firstLine(capture.Stderr))
+	}
+	var closure lastEventClosure
+	if err := json.Unmarshal([]byte(strings.TrimSpace(capture.Stdout)), &closure); err != nil {
+		return statusEnvelope{}, false, fmt.Errorf("decode last-event closure: %w", err)
+	}
+	if closure.State != "correction_required" {
+		return statusEnvelope{}, false, nil
+	}
+	if closure.LineageID == "" || closure.StatusContinuation == nil || closure.StatusContinuation.Operation != "review.status" {
+		return statusEnvelope{}, false, fmt.Errorf("correction closure omitted its status continuation: %+v", closure)
+	}
+	arguments := []string{"review", "status"}
+	for _, argument := range closure.StatusContinuation.Arguments {
+		if argument.Token == "" {
+			return statusEnvelope{}, false, errors.New("correction status continuation omitted an argument token")
+		}
+		arguments = append(arguments, argument.Token)
+	}
+	statusObservation := r.run(arguments, false)
+	if statusObservation.ExitCode != 0 {
+		return statusEnvelope{}, false, fmt.Errorf("execute correction status continuation: %s", firstLine(statusObservation.Stderr))
+	}
+	var status statusEnvelope
+	if err := json.Unmarshal([]byte(strings.TrimSpace(statusObservation.Stdout)), &status); err != nil {
+		return statusEnvelope{}, false, fmt.Errorf("decode correction status continuation: %w", err)
+	}
+	if status.Authority.LineageID != closure.LineageID || status.Authority.State != "correction_required" ||
+		status.NextTransition.ReasonCode != "correction_plan_required" {
+		return statusEnvelope{}, false, fmt.Errorf("correction status continuation = authority=%+v transition=%+v, want lineage %q and correction_plan_required", status.Authority, status.NextTransition, closure.LineageID)
+	}
+	return status, true, nil
+}
+
+func rememberCorrectionStatusContinuation(r *journeyRun, lineage string, status statusEnvelope) error {
+	payload, err := json.Marshal(status)
+	if err != nil {
+		return err
+	}
+	r.sandbox.Scratch[correctionStatusContinuationKeyPrefix+lineage] = string(payload)
+	return nil
+}
+
+func takeCorrectionStatusContinuation(r *journeyRun, lineage string) (statusEnvelope, bool, error) {
+	key := correctionStatusContinuationKeyPrefix + lineage
+	payload, found := r.sandbox.Scratch[key]
+	if !found {
+		return statusEnvelope{}, false, nil
+	}
+	delete(r.sandbox.Scratch, key)
+	var status statusEnvelope
+	if err := json.Unmarshal([]byte(payload), &status); err != nil {
+		return statusEnvelope{}, false, fmt.Errorf("decode carried correction status continuation: %w", err)
+	}
+	return status, true, nil
 }
 
 // captureFinalEvidence answers the verification-evidence collect step.

@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -350,6 +351,7 @@ func captureExactSelectedReviewerSlots(r *journeyRun, lineageID string, includeC
 	if err != nil {
 		return err
 	}
+	var terminal Observation
 	for capture := range expected {
 		status, err := readAtomicReviewStatus(r, lineageID)
 		if err != nil {
@@ -400,20 +402,29 @@ func captureExactSelectedReviewerSlots(r *journeyRun, lineageID string, includeC
 		if observation.ExitCode != 0 {
 			return fmt.Errorf("capture selected reviewer slot %d: %s", capture, firstLine(observation.Stderr))
 		}
+		terminal = observation
 	}
 
-	after, err := readAtomicReviewStatus(r, lineageID)
-	if err != nil {
-		return err
-	}
 	if includeCorrectableFinding {
+		after, continued, err := correctionStatusFromLastEventCapture(r, terminal)
+		if err != nil {
+			return err
+		}
+		if !continued {
+			return errors.New("final selected reviewer capture did not carry correction status continuation")
+		}
 		if after.Authority.LineageID != lineageID || after.Authority.State != "correction_required" ||
 			after.NextTransition.Kind != "collect" || after.NextTransition.ReasonCode != "correction_plan_required" ||
 			len(after.NextTransition.Collect.Inputs) != 1 || after.NextTransition.Collect.Inputs[0].Name != "correction_lines" ||
 			after.NextTransition.Collect.Inputs[0].CaptureOperation != "review.capture-correction-plan" {
 			return fmt.Errorf("full selected lens set did not advance to its correction-plan capture: authority=%+v transition=%+v", after.Authority, after.NextTransition)
 		}
-		return nil
+		return rememberCorrectionStatusContinuation(r, lineageID, after)
+	}
+
+	after, err := readAtomicReviewStatus(r, lineageID)
+	if err != nil {
+		return err
 	}
 	if after.Authority.LineageID != "" || after.Authority.State != "" || after.NextTransition.Kind != "execute" ||
 		after.NextTransition.Execute.Operation != "review.start" {
@@ -429,9 +440,15 @@ func captureCorrectionPlanFor(r *journeyRun, lineageID string, correctionLines i
 	if correctionLines <= 0 {
 		return fmt.Errorf("correction plan needs a positive line forecast")
 	}
-	status, err := readAtomicReviewStatusAt(r, r.sandbox.Repo, lineageID, selectors...)
+	status, found, err := takeCorrectionStatusContinuation(r, lineageID)
 	if err != nil {
 		return err
+	}
+	if !found {
+		status, err = readAtomicReviewStatusAt(r, r.sandbox.Repo, lineageID, selectors...)
+		if err != nil {
+			return err
+		}
 	}
 	if status.Authority.LineageID != lineageID || status.Authority.State != "correction_required" ||
 		status.NextTransition.Kind != "collect" || status.NextTransition.ReasonCode != "correction_plan_required" ||

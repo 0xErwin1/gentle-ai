@@ -85,6 +85,26 @@ func TestLowRiskStartBurnsUnderPublishedStatusContract(t *testing.T) {
 	}
 }
 
+func TestPublishedLastEventClosureSchemaAcceptsApprovedTerminalCapture(t *testing.T) {
+	reviewEnabledHome(t)
+	repo := initReviewCLIRepo(t)
+	writeReviewStartCandidate(t, repo, "candidate.go", "package candidate\n\nfunc value() int { return 1 }\n", 0o644)
+	started := runNegotiatedReviewStart(t, repo, "published-approved-terminal-closure")
+	var output bytes.Buffer
+	for order := range started.SelectedLenses {
+		destination := &bytes.Buffer{}
+		if order == len(started.SelectedLenses)-1 {
+			destination = &output
+		}
+		captureCleanCLIReviewerResult(t, repo, ReviewFacadeStartResult{
+			LineageID: started.LineageID, TargetIdentity: started.RepositoryContext.TargetIdentity, SelectedLenses: started.SelectedLenses,
+		}, order, destination)
+	}
+
+	schema := compileWholePublishedReviewSchema(t, "v2", "last-event-closure.schema.json")
+	validatePublishedReviewSchema(t, schema, output.Bytes())
+}
+
 func TestPublishedLastEventClosureSchemaAcceptsTerminalRefuterCapture(t *testing.T) {
 	reviewEnabledHome(t)
 	t.Setenv(reviewPiHostRelayContractEnvironment, reviewPiHostRelayContract)
