@@ -2,6 +2,7 @@ package sdd
 
 import (
 	"encoding/json"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -33,6 +34,29 @@ func TestOpenCodeCommandsIncludesCoreWorkflow(t *testing.T) {
 	}
 	if commands[5].Name != "sdd-research" {
 		t.Fatalf("command after sdd-explore = %q, want sdd-research", commands[5].Name)
+	}
+}
+
+func TestOpenCodeReviewValidatorPermissionContract(t *testing.T) {
+	wantPermission := map[string]any{"write": "deny", "edit": "deny", "task": "deny", "bash": "allow"}
+	for _, path := range []string{"opencode/sdd-overlay-single.json", "opencode/sdd-overlay-multi.json"} {
+		t.Run(path, func(t *testing.T) {
+			var root map[string]any
+			if err := json.Unmarshal([]byte(assets.MustRead(path)), &root); err != nil {
+				t.Fatalf("unmarshal %s: %v", path, err)
+			}
+			validator := root["agent"].(map[string]any)["review-validator"].(map[string]any)
+			if _, exists := validator["tools"]; exists {
+				t.Fatalf("%s validator emits deprecated tools: %#v", path, validator)
+			}
+			permission, ok := validator["permission"].(map[string]any)
+			if !ok || !reflect.DeepEqual(permission, wantPermission) {
+				t.Fatalf("%s validator permission = %#v, want %#v", path, validator["permission"], wantPermission)
+			}
+			if _, exists := permission["read"]; exists {
+				t.Fatalf("%s validator overrides global read policy: %#v", path, permission)
+			}
+		})
 	}
 }
 
