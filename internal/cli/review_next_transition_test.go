@@ -597,6 +597,7 @@ func validateAgainstPublishedStatusNextTransitionSchema(t *testing.T, version, s
 	compiler := jsonschema.NewCompiler()
 	resources := []struct{ version, name string }{
 		{"v1", "status-v2.schema.json"},
+		{"v1", "transition-execution.schema.json"},
 		{"v1", "targeted-validation-request.schema.json"},
 		{"v1", "correction-plan-request.schema.json"},
 		{"v1", "artifact-subject.schema.json"},
