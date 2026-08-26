@@ -1,12 +1,16 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 )
+
+const windowsErrorPrivilegeNotHeld = syscall.Errno(1314)
 
 func issue3557DanglingSymlinkFixture(sandbox *Sandbox) error {
 	if err := baseRepo(sandbox); err != nil {
@@ -16,8 +20,9 @@ func issue3557DanglingSymlinkFixture(sandbox *Sandbox) error {
 	configPath := filepath.Join(sandbox.Home, ".config", "opencode")
 	targetPath := filepath.Join(sandbox.Root, "missing-external-opencode-config")
 	if err := os.Symlink(targetPath, configPath); err != nil {
-		// Symlinks are a filesystem capability, not a failed journey setup. The
-		// next step uses the corpus Skip mechanism to record unsupported.
+		if !errors.Is(err, windowsErrorPrivilegeNotHeld) {
+			return err
+		}
 		sandbox.Scratch["issue-3557-symlink-unavailable"] = err.Error()
 		return nil
 	}
@@ -25,13 +30,10 @@ func issue3557DanglingSymlinkFixture(sandbox *Sandbox) error {
 		return err
 	}
 	statePath := filepath.Join(sandbox.Home, ".gentle-ai", "state.json")
-	// Seed the startup cooldown so this journey isolates Doctor-owned effects.
 	state := fmt.Sprintf(`{"installed_agents":["opencode","claude-code"],"last_update_check":%q}`, time.Now().UTC().Format(time.RFC3339Nano))
 	if err := sandbox.write(statePath, state); err != nil {
 		return err
 	}
-	// The extra healthy Claude entry keeps the unrelated Engram check out of the
-	// "no persisted configuration" branch without touching the dangling path.
 	claudeConfig := `{"mcpServers":{"engram":{"command":"engram-not-installed-for-issue-3557","args":[]}}}`
 	if err := sandbox.write(filepath.Join(sandbox.Home, ".claude.json"), claudeConfig); err != nil {
 		return err
@@ -45,9 +47,7 @@ func issue3557DanglingSymlinkFixture(sandbox *Sandbox) error {
 	return nil
 }
 
-func issue3557DoctorArgs(*Sandbox) ([]string, error) {
-	return []string{"doctor"}, nil
-}
+func issue3557DoctorArgs(*Sandbox) ([]string, error) { return []string{"doctor"}, nil }
 
 func issue3557SymlinkSkip(sandbox *Sandbox) string {
 	if reason := sandbox.Scratch["issue-3557-symlink-unavailable"]; reason != "" {
