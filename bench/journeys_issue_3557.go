@@ -108,7 +108,7 @@ func issue3557VerifyDoctor(sandbox *Sandbox, observation Observation) error {
 
 func issue3557Journeys() []Journey {
 	return []Journey{{
-		ID:     "j115-doctor-dangling-managed-config",
+		ID:     "j117-doctor-dangling-managed-config",
 		Review: reviewUntouched,
 		Title:  "Doctor identifies a dangling managed config symlink without recommending sync",
 		Source: "https://github.com/Gentleman-Programming/gentle-ai/issues/3557",

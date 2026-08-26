@@ -11,7 +11,9 @@ j111-approved-transaction-burns-and-shipped-gates-are-unmanaged
 j112-sdd-attempt-settle-survives-review-mode-transition
 j113-correction-removes-candidate-only-path
 j114-last-reviewer-capture-closes-and-burns
-j115-doctor-dangling-managed-config
+j115-recovery-selector-is-collected-before-authorization
+j116-codex-committed-correction-runs-returned-status-continuation
+j117-doctor-dangling-managed-config
 j12-rejected-capture-then-recapture
 j13-next-transition-runs-verbatim
 j14-abandon-needs-a-hand-built-token
@@ -25,6 +27,7 @@ j40-sdd-attempt-reset-after-drift
 j41-kill-switch-versus-sdd-pre-verify
 j42-kill-switch-versus-sdd-archive
 j44-sdd-historical-requirement-stale-pass
+j47-disabled-mode-archives-discovered-scope-changed-authority
 j49-status-without-cwd-honors-kill-switch
 j51-negotiated-status-correction-continuation
 j59-current-status-and-start-ignore-sibling-worktree-transaction
@@ -40,6 +43,7 @@ j78-lens-finding-id-prefix-discovery
 j79-consecutive-rescope-refuses-before-publication
 j80-rescope-authorized-evidence-only-retry
 j81-rc1-consecutive-rescope-repair-executes-printed-command
+j84-sdd-attempt-selected-untracked-lifecycle
 j87-unmanaged-remediation-uses-chain-failed-evidence
 j88-unborn-status-collects-untracked-selection
 j89-staged-validation-is-informational-and-unmanaged

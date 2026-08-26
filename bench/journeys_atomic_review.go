@@ -7,9 +7,12 @@ import (
 )
 
 // retiredAtomicJourneyReplacements records every ordinary-path journey that
-// asserted the pre-#3417 durable-receipt or deciding-gate model. They are not
-// weakened: the registered corpus replaces that retired surface with j59, j60,
-// and j111's worktree-bound, explicit-active, and terminal-burn journeys.
+// asserted the pre-#3417 durable-receipt or deciding-gate model. #3564
+// reactivates j47 for disabled-mode V2 structural-absence/archive routing: it
+// no longer pins durable-receipt or deciding-gate behavior. The remaining
+// entries are not weakened: the registered corpus replaces that retired surface
+// with j59, j60, and j111's worktree-bound, explicit-active, and terminal-burn
+// journeys.
 var retiredAtomicJourneyReplacements = map[string]string{
 	"j01-docs-happy-path":                                                  "j111-approved-transaction-burns-and-shipped-gates-are-unmanaged",
 	"j06-pre-push-after-publication":                                       "j111-approved-transaction-burns-and-shipped-gates-are-unmanaged",
@@ -17,12 +20,10 @@ var retiredAtomicJourneyReplacements = map[string]string{
 	"j15-linked-worktree":                                                  "j59-current-status-and-start-ignore-sibling-worktree-transaction",
 	"j32-recovery-of-a-recovery":                                           "j60-explicit-active-lineage-keeps-four-lens-correction-and-validator-flow",
 	"j33-escalate-then-recover":                                            "j60-explicit-active-lineage-keeps-four-lens-correction-and-validator-flow",
-	"j37-sdd-bound-passing-attempt-closes-over-a-corrected-candidate":      "j111-approved-transaction-burns-and-shipped-gates-are-unmanaged",
 	"j43-recovery-guard-rails-as-an-operator-meets-them":                   "j60-explicit-active-lineage-keeps-four-lens-correction-and-validator-flow",
 	"j44-corrected-current-changes-delivery":                               "j60-explicit-active-lineage-keeps-four-lens-correction-and-validator-flow",
 	"j45-completed-final-verification-retry":                               "j60-explicit-active-lineage-keeps-four-lens-correction-and-validator-flow",
 	"j46-correction-required-staged-recovery":                              "j60-explicit-active-lineage-keeps-four-lens-correction-and-validator-flow",
-	"j47-disabled-mode-archives-discovered-scope-changed-authority":        "j111-approved-transaction-burns-and-shipped-gates-are-unmanaged",
 	"j48-recovered-workspace-preserves-full-candidate-scope":               "j60-explicit-active-lineage-keeps-four-lens-correction-and-validator-flow",
 	"j50-candidate-decline-denies-generically-then-disabled":               "j111-approved-transaction-burns-and-shipped-gates-are-unmanaged",
 	"j52-sdd-stale-authority-does-not-shadow-approved-candidate":           "j59-current-status-and-start-ignore-sibling-worktree-transaction",

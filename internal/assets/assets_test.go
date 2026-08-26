@@ -353,6 +353,7 @@ func TestAllEmbeddedAssetsAreReadable(t *testing.T) {
 		"skills/sdd-verify/references/report-format.md",
 		"skills/skill-registry/SKILL.md",
 		"skills/judgment-day/references/prompts-and-formats.md",
+		"skills/_shared/README.md",
 		"skills/_shared/persistence-contract.md",
 		"skills/_shared/engram-convention.md",
 		"skills/_shared/openspec-convention.md",
@@ -503,12 +504,39 @@ func TestSDDVerificationAndArchiveContractsIgnoreReviewContext(t *testing.T) {
 	archiveSkill := MustRead("skills/sdd-archive/SKILL.md")
 	for _, want := range []string{
 		"CRITICAL issues in `verify-report` still block archive with no prompt override",
-		"review context remains informational",
-		"The Task Completion Gate and strict verification decide whether archive can proceed",
+		"reviewOffer` is an invitation only and is never read as archive state",
+		"The Task Completion Gate and strict independent verification decide whether archive can proceed",
 	} {
 		if !strings.Contains(archiveSkill, want) {
 			t.Fatalf("sdd-archive missing independent archive prerequisite %q", want)
 		}
+	}
+}
+
+func TestSDDVerifyAndArchiveCommandsRouteOnlyFromRefreshedStatus(t *testing.T) {
+	const verifyRoute = "After verify returns, rerun native SDD status and route only from its refreshed `nextRecommended`."
+	for _, path := range []string{
+		"claude/commands/sdd-verify.md",
+		"opencode/commands/sdd-verify.md",
+	} {
+		t.Run(path, func(t *testing.T) {
+			if content := MustRead(path); !strings.Contains(content, verifyRoute) {
+				t.Fatalf("%s must route post-verify work only from refreshed status", path)
+			}
+		})
+	}
+
+	const archiveRoute = "Archive only when refreshed native SDD status reports `dependencies.archive: ready` and `nextRecommended: archive`."
+	for _, path := range []string{
+		"claude/commands/sdd-archive.md",
+		"opencode/commands/sdd-archive.md",
+		"skills/sdd-archive/SKILL.md",
+	} {
+		t.Run(path, func(t *testing.T) {
+			if content := MustRead(path); !strings.Contains(content, archiveRoute) {
+				t.Fatalf("%s must require refreshed archive readiness and route", path)
+			}
+		})
 	}
 }
 
@@ -755,10 +783,17 @@ func TestSkillRegistryPluginContract(t *testing.T) {
 		"homedir()",
 		".git",
 		".atl",
-		"console.info",
+		"console.error",
 	} {
 		if !strings.Contains(src, want) {
 			t.Fatalf("skill-registry.ts missing %q", want)
+		}
+	}
+	// stdout belongs to OpenCode commands whose output gentle-ai parses
+	// (`opencode models --verbose`); plugin logging must stay on stderr.
+	for _, forbidden := range []string{"console.info", "console.log"} {
+		if strings.Contains(src, forbidden) {
+			t.Fatalf("skill-registry.ts must not log to stdout via %q", forbidden)
 		}
 	}
 	if strings.Contains(src, "exec(") {
@@ -1821,7 +1856,7 @@ func TestEmbeddedAssetCount(t *testing.T) {
 			continue
 		}
 		if entry.Name() == "_shared" {
-			for _, sharedFile := range []string{"persistence-contract.md", "engram-convention.md", "openspec-convention.md", "sdd-phase-common.md", "sdd-status-contract.md", "research-lifecycle.md", "skill-resolver.md"} {
+			for _, sharedFile := range []string{"README.md", "persistence-contract.md", "engram-convention.md", "openspec-convention.md", "sdd-phase-common.md", "sdd-status-contract.md", "research-lifecycle.md", "skill-resolver.md"} {
 				sharedPath := "skills/_shared/" + sharedFile
 				if _, err := Read(sharedPath); err != nil {
 					t.Fatalf("shared directory missing %q: %v", sharedFile, err)
@@ -1867,13 +1902,14 @@ func TestSDDPhaseCommonEnforcesExecutorBoundary(t *testing.T) {
 	}
 }
 
-func TestSDDStatusContractPreservesFrozenExternalV1Projection(t *testing.T) {
+func TestSDDStatusContractPreservesFrozenExternalV2Projection(t *testing.T) {
 	content := MustRead("skills/_shared/sdd-status-contract.md")
 
 	for _, want := range []string{
-		"exact frozen external `StatusV1Projection`",
+		"exact frozen external `StatusV2Projection`",
 		"schemaName: gentle-ai.sdd-status",
-		"schemaVersion: 1",
+		"schemaVersion: 2",
+		"gentle-ai.sdd-status/v2",
 		"changeName: <change-name-or-null>",
 		"artifactStore: openspec | engram | none",
 		"planningHome:",
@@ -1883,9 +1919,12 @@ func TestSDDStatusContractPreservesFrozenExternalV1Projection(t *testing.T) {
 		"artifactPaths:",
 		"contextFiles:",
 		"artifacts:",
-		"reviewPolicy: [<absolute path>]",
-		"reviewPolicy: [<absolute readable files>]",
-		"reviewPolicy: missing | done | partial",
+		"proposal: [<absolute path>]",
+		"verifyReport: [<absolute path>]",
+		"proposal: [<absolute readable files>]",
+		"verifyReport: [<absolute readable files>]",
+		"proposal: missing | done | partial",
+		"verifyReport: missing | done | partial",
 		"taskProgress:",
 		"total: 0",
 		"completed: 0",
@@ -1909,12 +1948,9 @@ func TestSDDStatusContractPreservesFrozenExternalV1Projection(t *testing.T) {
 		"sameDomainActiveChanges: []",
 		"remediationState:",
 		"failedEvidenceRevision:",
-		"lineageId:",
-		"generation: 0",
-		"fixBatch: 0",
-		"reviewGate:",
-		"result: allow | scope-changed | invalidated | escalated",
-		"reviewTransaction: <optional exact gentle-ai.review-transaction/v1 object>",
+		"reviewOffer:",
+		"available: true",
+		"invocation: <fresh review start command>",
 		"phaseInstructions:",
 		"apply: [<instruction strings>]",
 		"verify: [<instruction strings>]",
@@ -1925,13 +1961,26 @@ func TestSDDStatusContractPreservesFrozenExternalV1Projection(t *testing.T) {
 		"Manual fallback status MUST stay shape-compatible with native `gentle-ai.sdd-status` JSON",
 	} {
 		if !strings.Contains(content, want) {
-			t.Fatalf("sdd-status-contract missing frozen SDD v1 field or token %q", want)
+			t.Fatalf("sdd-status-contract missing frozen SDD v2 field or token %q", want)
 		}
 	}
 
 	for _, forbidden := range []string{
 		"runtimeStatus",
 		"correctionBudget",
+		"sdd-status/v1",
+		"reviewGate",
+		"reviewTransaction",
+		"reVerify",
+		"reviewPolicy",
+		"reviewLedger",
+		"reviewReceipt",
+		"reviewBundle",
+		"reviewContext",
+		"reviewState",
+		"lineageId:",
+		"generation: 0",
+		"fixBatch: 0",
 		"routeDecision:",
 		"implementationRoute:",
 		"sddRunRef:",
@@ -2362,7 +2411,6 @@ func TestSDDArchiveFinalStateAuthorityContract(t *testing.T) {
 		"state of the change AT CLOSE",
 		"`apply-progress` and `verify-report` are intermediate snapshots",
 		"at the time it was written",
-		"**Native review context**",
 		"**The persisted tasks artifact**",
 		"**Explicit final-state facts in the orchestrator's launch prompt**",
 		"outranks intermediate snapshots",
@@ -2372,7 +2420,6 @@ func TestSDDArchiveFinalStateAuthorityContract(t *testing.T) {
 		"Never resolve it silently",
 		"at verification time",
 		"record the failure as undiagnosed",
-		"review context remains informational",
 		"requires re-running `sdd-verify`",
 	} {
 		if !strings.Contains(skill, required) {
