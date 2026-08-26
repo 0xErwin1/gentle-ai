@@ -424,6 +424,8 @@ func checkStateJSON(homeDir string) CheckResult {
 			if info.Mode()&os.ModeSymlink != 0 {
 				if _, statErr := os.Stat(dir); os.IsNotExist(statErr) {
 					dangling = append(dangling, dir)
+				} else if statErr != nil {
+					return CheckResult{Name: id, Status: CheckStatusWarn, Detail: fmt.Sprintf("managed config symlink target %s could not be inspected: %v; inspect or repair it manually, then re-run 'gentle-ai doctor'", dir, statErr)}
 				}
 			}
 		}

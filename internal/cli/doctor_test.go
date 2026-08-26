@@ -386,7 +386,7 @@ func TestCheckStateJSON_ManagedConfigPathUnreadable(t *testing.T) {
 	}
 }
 
-func setupDanglingOpenCodeFixture(t *testing.T, statePayload string) (homeDir, configDir, targetPath string) {
+func setupDanglingOpenCodeFixture(t *testing.T, statePayload, symlinkTarget string) (homeDir, configDir, targetPath string) {
 	t.Helper()
 	homeDir = t.TempDir()
 	configDir = filepath.Join(homeDir, ".config", "opencode")
@@ -396,7 +396,10 @@ func setupDanglingOpenCodeFixture(t *testing.T, statePayload string) (homeDir, c
 	if err := os.MkdirAll(filepath.Join(homeDir, ".gentle-ai"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	targetPath = filepath.Join(t.TempDir(), "missing-opencode-config")
+	if symlinkTarget == "" {
+		symlinkTarget = filepath.Join(t.TempDir(), "missing-opencode-config")
+	}
+	targetPath = symlinkTarget
 	if err := os.Symlink(targetPath, configDir); err != nil {
 		t.Skipf("symlink creation unavailable: %v", err)
 	}
@@ -407,7 +410,7 @@ func setupDanglingOpenCodeFixture(t *testing.T, statePayload string) (homeDir, c
 }
 
 func TestCheckStateJSON_AgentConfigDirDanglingSymlink(t *testing.T) {
-	homeDir, configDir, _ := setupDanglingOpenCodeFixture(t, `{"installed_agents":["opencode"]}`)
+	homeDir, configDir, _ := setupDanglingOpenCodeFixture(t, `{"installed_agents":["opencode"]}`, "")
 
 	got := checkStateJSON(homeDir)
 
@@ -435,8 +438,15 @@ func TestCheckStateJSON_AgentConfigDirDanglingSymlink(t *testing.T) {
 	}
 }
 
+func TestCheckStateJSON_AgentConfigDirSymlinkLoop(t *testing.T) {
+	homeDir, _, _ := setupDanglingOpenCodeFixture(t, `{"installed_agents":["opencode"]}`, "opencode")
+	if got := checkStateJSON(homeDir); got.Status != CheckStatusWarn || !strings.Contains(got.Detail, "could not be inspected") || strings.Contains(got.Detail, "dangling symlinks") {
+		t.Fatalf("expected inspection warning for config symlink loop, got %s: %s", got.Status, got.Detail)
+	}
+}
+
 func TestCheckStateJSON_DanglingAndAbsentConfigDirsSuppressSync(t *testing.T) {
-	homeDir, configDir, _ := setupDanglingOpenCodeFixture(t, `{"installed_agents":["opencode","claude-code"]}`)
+	homeDir, configDir, _ := setupDanglingOpenCodeFixture(t, `{"installed_agents":["opencode","claude-code"]}`, "")
 
 	got := checkStateJSON(homeDir)
 
@@ -920,7 +930,7 @@ func TestRunDoctor_DanglingConfigSymlinkIsReadOnly(t *testing.T) {
 		osExecutableDoctor = origExecutable
 	}()
 
-	homeDir, configDir, missingTarget := setupDanglingOpenCodeFixture(t, `{"installed_agents":["opencode"]}`)
+	homeDir, configDir, missingTarget := setupDanglingOpenCodeFixture(t, `{"installed_agents":["opencode"]}`, "")
 	statePath := filepath.Join(homeDir, ".gentle-ai", "state.json")
 	stateDir := filepath.Dir(statePath)
 	stateBefore, err := os.ReadFile(statePath)
@@ -976,7 +986,7 @@ func TestRunDoctor_DanglingConfigSymlinkIsReadOnly(t *testing.T) {
 }
 
 func TestDoctorSyncDisagreement_RealCLIBoundary(t *testing.T) {
-	homeDir, configDir, missingTarget := setupDanglingOpenCodeFixture(t, `{"installed_agents":["opencode"]}`)
+	homeDir, configDir, missingTarget := setupDanglingOpenCodeFixture(t, `{"installed_agents":["opencode"]}`, "")
 	statePath := filepath.Join(homeDir, ".gentle-ai", "state.json")
 	stateBefore, err := os.ReadFile(statePath)
 	if err != nil {
