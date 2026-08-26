@@ -16,7 +16,15 @@
     },
     {
       "if": {"properties": {"operation": {"enum": ["review/capture-result", "review.capture-refuter"]}, "state": {"const": "correction_required"}}, "required": ["operation", "state"]},
-      "then": {"required": ["status_continuation"]},
+      "then": {
+        "required": ["status_continuation"],
+        "properties": {
+          "status_continuation": {
+            "required": ["operation"],
+            "properties": {"operation": {"const": "review.status"}}
+          }
+        }
+      },
       "else": {"not": {"required": ["status_continuation"]}}
     }
   ],

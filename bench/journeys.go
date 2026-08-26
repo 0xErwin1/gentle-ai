@@ -19,6 +19,11 @@ const rejectedRecaptureLineage = "rejected-capture-recapture"
 // benchmark reads. Unknown fields are ignored so older and newer envelopes
 // both parse.
 type statusEnvelope struct {
+	// rawJSON retains the exact STATUS bytes only when a correction closure
+	// executes its provider-owned continuation. Reduced fields below are for
+	// journey assertions and must never be used to reconstruct that binding.
+	rawJSON string
+
 	Authority struct {
 		LineageID string `json:"lineage_id"`
 		State     string `json:"state"`
@@ -216,7 +221,7 @@ func captureAllLensesWithLastCaptureFor(r *journeyRun, selectors ...string) (Obs
 	return Observation{}, errors.New("lens capture loop did not converge")
 }
 
-const correctionStatusContinuationKeyPrefix = "last-event-correction-status:"
+const correctionPlanStatusContinuationKeyPrefix = "last-event-correction-plan-status:"
 
 type lastEventClosure struct {
 	LineageID          string `json:"lineage_id"`
@@ -258,9 +263,10 @@ func correctionStatusFromLastEventCapture(r *journeyRun, capture Observation) (s
 		return statusEnvelope{}, false, fmt.Errorf("execute correction status continuation: %s", firstLine(statusObservation.Stderr))
 	}
 	var status statusEnvelope
-	if err := json.Unmarshal([]byte(strings.TrimSpace(statusObservation.Stdout)), &status); err != nil {
+	if err := json.Unmarshal([]byte(statusObservation.Stdout), &status); err != nil {
 		return statusEnvelope{}, false, fmt.Errorf("decode correction status continuation: %w", err)
 	}
+	status.rawJSON = statusObservation.Stdout
 	if status.Authority.LineageID != closure.LineageID || status.Authority.State != "correction_required" ||
 		status.NextTransition.ReasonCode != "correction_plan_required" {
 		return statusEnvelope{}, false, fmt.Errorf("correction status continuation = authority=%+v transition=%+v, want lineage %q and correction_plan_required", status.Authority, status.NextTransition, closure.LineageID)
@@ -268,27 +274,42 @@ func correctionStatusFromLastEventCapture(r *journeyRun, capture Observation) (s
 	return status, true, nil
 }
 
+// rememberCorrectionStatusContinuation retains the exact correction-plan STATUS
+// returned by the provider-owned continuation. Its only destructive consumer is
+// the successful bounded-plan capture in captureCorrectionPlanFor.
 func rememberCorrectionStatusContinuation(r *journeyRun, lineage string, status statusEnvelope) error {
-	payload, err := json.Marshal(status)
-	if err != nil {
-		return err
+	if status.rawJSON == "" {
+		return errors.New("correction status continuation omitted raw STATUS JSON")
 	}
-	r.sandbox.Scratch[correctionStatusContinuationKeyPrefix+lineage] = string(payload)
+	r.sandbox.Scratch[correctionPlanStatusContinuationKeyPrefix+lineage] = status.rawJSON
 	return nil
 }
 
-func takeCorrectionStatusContinuation(r *journeyRun, lineage string) (statusEnvelope, bool, error) {
-	key := correctionStatusContinuationKeyPrefix + lineage
-	payload, found := r.sandbox.Scratch[key]
+func readCorrectionPlanStatusContinuation(r *journeyRun, lineage string) (string, bool, error) {
+	payload, found := r.sandbox.Scratch[correctionPlanStatusContinuationKeyPrefix+lineage]
 	if !found {
-		return statusEnvelope{}, false, nil
+		return "", false, nil
 	}
-	delete(r.sandbox.Scratch, key)
+	return payload, true, nil
+}
+
+// takeCorrectionStatusContinuation is retained for assertion helpers. Reading a
+// carried correction-plan STATUS is deliberately non-destructive; only the plan
+// consumer clears it after a successful bounded-plan advancement.
+func takeCorrectionStatusContinuation(r *journeyRun, lineage string) (statusEnvelope, bool, error) {
+	payload, found, err := readCorrectionPlanStatusContinuation(r, lineage)
+	if err != nil || !found {
+		return statusEnvelope{}, found, err
+	}
 	var status statusEnvelope
 	if err := json.Unmarshal([]byte(payload), &status); err != nil {
 		return statusEnvelope{}, false, fmt.Errorf("decode carried correction status continuation: %w", err)
 	}
 	return status, true, nil
+}
+
+func clearCorrectionPlanStatusContinuation(r *journeyRun, lineage string) {
+	delete(r.sandbox.Scratch, correctionPlanStatusContinuationKeyPrefix+lineage)
 }
 
 // captureFinalEvidence answers the verification-evidence collect step.

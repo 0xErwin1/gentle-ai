@@ -440,11 +440,16 @@ func captureCorrectionPlanFor(r *journeyRun, lineageID string, correctionLines i
 	if correctionLines <= 0 {
 		return fmt.Errorf("correction plan needs a positive line forecast")
 	}
-	status, found, err := takeCorrectionStatusContinuation(r, lineageID)
+	var status statusEnvelope
+	payload, found, err := readCorrectionPlanStatusContinuation(r, lineageID)
 	if err != nil {
 		return err
 	}
-	if !found {
+	if found {
+		if err := json.Unmarshal([]byte(payload), &status); err != nil {
+			return fmt.Errorf("decode carried correction-plan STATUS: %w", err)
+		}
+	} else {
 		status, err = readAtomicReviewStatusAt(r, r.sandbox.Repo, lineageID, selectors...)
 		if err != nil {
 			return err
@@ -483,6 +488,11 @@ func captureCorrectionPlanFor(r *journeyRun, lineageID string, correctionLines i
 	if captured.Schema != "gentle-ai.review-last-event-closure/v1" || captured.Operation != "review.capture-correction-plan" ||
 		captured.LineageID != lineageID || captured.State != "correction_required" {
 		return fmt.Errorf("correction-plan capture = %+v", captured)
+	}
+	// The carried STATUS belongs solely to this successful bounded-plan advance.
+	// Failed invocation or validation paths retain it for diagnostics and retry.
+	if found {
+		clearCorrectionPlanStatusContinuation(r, lineageID)
 	}
 	return nil
 }
