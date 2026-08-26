@@ -121,7 +121,7 @@ func TestCommittedBaseDiffLastReviewerCapturePublishesExactStatusContinuation(t 
 }
 
 func TestCommittedBaseDiffCorrectionReentryRunsReturnedContinuationForAdvertisedLanes(t *testing.T) {
-	for _, runtime := range []model.AgentID{model.AgentClaudeCode, model.AgentOpenCode} {
+	for _, runtime := range []model.AgentID{model.AgentClaudeCode, model.AgentOpenCode, model.AgentCodex} {
 		t.Run(string(runtime), func(t *testing.T) {
 			reviewEnabledHome(t)
 			repo := initReviewCLIRepo(t)
@@ -170,10 +170,10 @@ func TestCommittedBaseDiffCorrectionReentryRunsReturnedContinuationForAdvertised
 			}
 			var terminal []byte
 			switch runtime {
-			case model.AgentClaudeCode:
+			case model.AgentClaudeCode, model.AgentCodex:
 				previous := reviewProviderAdapterFor
 				reviewProviderAdapterFor = func(_ reviewerprovider.Contract, agent model.AgentID) (reviewerprovider.Adapter, error) {
-					if agent != model.AgentClaudeCode {
+					if agent != runtime {
 						return nil, errors.New("unexpected runtime")
 					}
 					return providerTestAdapter{raw: payload}, nil
