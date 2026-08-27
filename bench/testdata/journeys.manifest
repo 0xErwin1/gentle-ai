@@ -14,6 +14,7 @@ j114-last-reviewer-capture-closes-and-burns
 j115-recovery-selector-is-collected-before-authorization
 j116-codex-committed-correction-runs-returned-status-continuation
 j117-doctor-dangling-managed-config
+j118-doctor-dangling-config-ancestor
 j12-rejected-capture-then-recapture
 j13-next-transition-runs-verbatim
 j14-abandon-needs-a-hand-built-token
