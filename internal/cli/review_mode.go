@@ -88,7 +88,9 @@ func RunReviewMode(args []string, stdout io.Writer) error {
 	var err error
 	if operation == "status" {
 		result.Scope = reviewModeScopeBoth
-		result.Status, err = reviewModeStatus(ctx, *cwd)
+		result.Status, err = ReviewModeStatus(ctx, *cwd)
+	} else if selectedScope == reviewModeScopeGlobal {
+		result.Status, err = SetGlobalReviewMode(ctx, *cwd, operation == "enable")
 	} else {
 		result.Status, err = applyReviewMode(ctx, *cwd, operation, selectedScope, *expectedRevision, revisionProvided)
 	}
