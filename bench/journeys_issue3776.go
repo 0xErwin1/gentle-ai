@@ -12,7 +12,7 @@ import (
 // to receipt-driven development.
 func issue3776Journeys() []Journey {
 	return []Journey{{
-		ID:     "j118-welcome-tui-runs-under-a-real-tty",
+		ID:     "j120-welcome-tui-runs-under-a-real-tty",
 		Review: reviewUntouched,
 		Title:  "#3776: Welcome TUI renders its stable menu under a real TTY and q exits",
 		Source: "#3776: PTY-backed benchmark smoke journey",

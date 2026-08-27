@@ -12,7 +12,7 @@ import (
 // an isolated HOME, so this proof cannot read or change a user's global config.
 func issue3766Journeys() []Journey {
 	return []Journey{{
-		ID:     "j119-rdd-tui-controls-global-mode",
+		ID:     "j121-rdd-tui-controls-global-mode",
 		Review: reviewUntouched,
 		Title:  "#3766: TUI changes the global review mode inside its isolated HOME",
 		Source: "#3766: the switch screen must expose resolved state and never touch a real user config",

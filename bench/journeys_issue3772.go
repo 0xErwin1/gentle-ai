@@ -11,7 +11,7 @@ import (
 // to name both the persisted global value and the source that decided it.
 func issue3772Journeys() []Journey {
 	return []Journey{{
-		ID:     "j117-global-review-mode-status-reports-persisted-source",
+		ID:     "j119-global-review-mode-status-reports-persisted-source",
 		Review: reviewUntouched,
 		Title:  "#3772: global review mode status reports persisted source across fresh processes",
 		Source: "#3772: status must truthfully expose the persisted global source after enable and disable",

@@ -109,6 +109,31 @@ func TestTargetedValidatorPromptCarriesFrozenPolicyAndCausalFindingEvidence(t *t
 	}
 }
 
+func TestTargetedValidatorPromptInstructsProviderToProduceSchemaAdmissibleResult(t *testing.T) {
+	reviewEnabledHome(t)
+	repo, state, revision := driveReviewToOpenTargetedValidation(t)
+	instruction, _, found := strings.Cut(string(targetedValidatorProviderPrompt(t, repo, state, revision)), "\n\nInput:\n")
+	if !found {
+		t.Fatal("targeted validator prompt has no instruction segment before Input")
+	}
+
+	for _, want := range []struct {
+		name string
+		text string
+	}{
+		{"schema validation", "Validate your result against the supplied output schema."},
+		{"bound identity echoes", "Echo targeted_validation_request_hash and correction_target_identity from the input."},
+		{"criteria verdicts", "Include original_criteria and correction_regression, each with a boolean passed and non-empty evidence."},
+		{"follow-up array", "Always emit follow_ups; use [] when none exist."},
+	} {
+		t.Run(want.name, func(t *testing.T) {
+			if !strings.Contains(instruction, want.text) {
+				t.Errorf("targeted validator instruction omits %s", want.name)
+			}
+		})
+	}
+}
+
 // TestTargetedValidatorInspectionRecipeExecutes is the honest half: it does not
 // assert that the prompt mentions a command, it executes the command the
 // prompt describes, using only values parsed out of that prompt. A recipe that
