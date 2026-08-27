@@ -122,21 +122,22 @@ func TestIssueCreationSkillDelegatedWorkflowMutationContract(t *testing.T) {
 		}
 	}
 	reference := MustRead("skills/issue-creation/references/delegated-workflow-actions.md")
-
 	for _, term := range []string{
 		"Only apply or remove existing labels (including categorization), close, or reopen",
 		"authenticated actor has target-host `viewerPermission` `MAINTAIN` or `ADMIN` immediately before mutation",
 		"Before each delegated mutation, read the exact bound target from the target host into `PRE_READ_FILE`",
 		"validate its returned state and complete labels before preserving them as the pre-state",
-		"status:needs-review`, `status:needs-design`, and `status:needs-info`",
-		"exact comma-separated subset",
-		"preserving every unrelated pre-state label",
-		"never use sequential remove/add attempts",
+		"status:needs-review`, `status:needs-design`, and `status:needs-info`", "exact comma-separated subset",
+		"preserving every unrelated pre-state label", "never use sequential remove/add attempts",
 		"read back the same target from the target host into `POST_READ_FILE`",
 		"`confirmed` requires exact target identity, the requested state or label delta, and every unrelated pre-state label preserved",
 		"`no_write` requires both an authoritative target-host rejection proving no mutation was accepted and successful target-host post-readback whose complete target state equals pre-read exactly: same number, URL, open/closed state, and entire label set",
 		"`unknown` includes ambiguity, partial readback, identity mismatch, unavailable post-read, lost response, or any difference at all in requested or unrelated state/labels, including missing labels, and stops all further mutations and retries",
 		"`status:approved` is a strict special case",
+		"Protected policy labels are `status:approved`, `size:exception`, and any repository-defined gate-override or authorization label.",
+		"Before any generic `$LABEL` add/remove command, explicitly reject every protected label from the generic path.",
+		"Ordinary label actions fail closed when classification is unknown.", "Adding or removing a protected label requires current direct instruction verified on the target host as binding exact target/action to a repository maintainer or repository-authorized approver, plus authenticated actor `viewerPermission` `MAINTAIN` or `ADMIN`.",
+		"`size:exception` additionally requires documented over-budget rationale; rationale never replaces policy authority.", "A repository-defined gate-override or authorization label has no generic fallback; require repository-defined protected handling or stop.",
 		"one bounded mutation attempt with no blind retry",
 		"`TRIAGE` is explicitly insufficient for `status:approved`; an unverifiable instructing principal means no mutation.",
 	} {
@@ -144,7 +145,6 @@ func TestIssueCreationSkillDelegatedWorkflowMutationContract(t *testing.T) {
 			t.Errorf("delegated workflow reference is missing contract marker %q", term)
 		}
 	}
-
 	commands := fencedBashCommands(t, reference)
 	wantCommands := []string{
 		`gh issue view "$NUMBER" --repo "$TARGET" --json number,url,state,labels >"$PRE_READ_FILE"`,
@@ -154,6 +154,10 @@ func TestIssueCreationSkillDelegatedWorkflowMutationContract(t *testing.T) {
 		`gh pr edit "$NUMBER" --repo "$TARGET" --add-label "status:approved" --remove-label "$CONFLICTING_LABELS"`,
 		`gh issue edit "$NUMBER" --repo "$TARGET" --add-label "status:approved"`,
 		`gh pr edit "$NUMBER" --repo "$TARGET" --add-label "status:approved"`,
+		`gh issue edit "$NUMBER" --repo "$TARGET" --remove-label "status:approved"`,
+		`gh pr edit "$NUMBER" --repo "$TARGET" --remove-label "status:approved"`,
+		`gh pr edit "$NUMBER" --repo "$TARGET" --add-label "size:exception"`,
+		`gh pr edit "$NUMBER" --repo "$TARGET" --remove-label "size:exception"`,
 		`gh issue edit "$NUMBER" --repo "$TARGET" --add-label "$LABEL"`,
 		`gh issue edit "$NUMBER" --repo "$TARGET" --remove-label "$LABEL"`,
 		`gh pr edit "$NUMBER" --repo "$TARGET" --add-label "$LABEL"`,
@@ -168,7 +172,13 @@ func TestIssueCreationSkillDelegatedWorkflowMutationContract(t *testing.T) {
 	if strings.Join(commands, "\n") != strings.Join(wantCommands, "\n") {
 		t.Errorf("delegated workflow reference fenced Bash commands changed:\n got: %q\nwant: %q", commands, wantCommands)
 	}
-
+	protectedAuthorityGate := strings.Index(reference, wantCommands[2])
+	ordinaryGenericBlock := strings.Index(reference, "## Ordinary bounded action and read-back")
+	genericGuard := strings.Index(reference, "Before any generic `$LABEL` add/remove command, explicitly reject every protected label from the generic path.")
+	firstGenericCommand := strings.Index(reference, wantCommands[11])
+	if genericGuard == -1 || firstGenericCommand == -1 || genericGuard > firstGenericCommand || protectedAuthorityGate == -1 || ordinaryGenericBlock == -1 || strings.Index(reference, wantCommands[3]) <= protectedAuthorityGate || strings.Index(reference, wantCommands[10]) >= ordinaryGenericBlock {
+		t.Error("protected commands must follow their authority gate and remain independent of the guarded generic block")
+	}
 	if strings.Contains(reference, "Never add `status:approved`") {
 		t.Error("delegated workflow reference retains the blanket status:approved prohibition")
 	}
@@ -176,7 +186,6 @@ func TestIssueCreationSkillDelegatedWorkflowMutationContract(t *testing.T) {
 
 func TestIssueCreationSkillDelegationAuthorityBoundaries(t *testing.T) {
 	content := MustRead("skills/issue-creation/SKILL.md")
-
 	cases := []struct {
 		name  string
 		terms []string
@@ -188,12 +197,12 @@ func TestIssueCreationSkillDelegationAuthorityBoundaries(t *testing.T) {
 			},
 		},
 		{
-			name: "approval authority rejects inference and TRIAGE",
+			name: "protected labels require policy authority",
 			terms: []string{
-				"Reject inferred/model-authored authority",
-				"atomic `status:approved`",
-				"target-host `viewerPermission` `MAINTAIN` or `ADMIN` immediately before mutation",
-				"`TRIAGE` is insufficient for `status:approved`; an unverifiable instructing principal means no mutation.",
+				"Protected policy labels are `status:approved`, `size:exception`, and any repository-defined gate-override/authorization label.",
+				"Adding or removing a protected label requires current direct target-host-verified maintainer/authorized-approver instruction for exact add/remove plus authenticated actor target-host `viewerPermission` `MAINTAIN` or `ADMIN`; `TRIAGE` never suffices.",
+				"`size:exception` also needs a documented rationale; unknown gate labels stop.",
+				"Reject inferred/model-authored authority; atomic `status:approved`, exactly one attempt/readback; fail closed.",
 			},
 		},
 		{
@@ -205,7 +214,6 @@ func TestIssueCreationSkillDelegationAuthorityBoundaries(t *testing.T) {
 			},
 		},
 	}
-
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			for _, term := range tc.terms {

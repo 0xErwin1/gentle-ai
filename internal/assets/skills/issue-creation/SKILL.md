@@ -23,9 +23,8 @@ Use this skill for drafting, creating, commenting on, triaging, or approving Git
 - Create-time labels are limited to labels declared by the selected form, discovered to exist, and permitted for the actor.
 - Before ANY post-publication workflow mutation, read `references/delegated-workflow-actions.md` completely and follow it. It is normative, not optional background.
 - Require current direct human instruction: exact `HOST`, `REPO=OWNER/REPO`, issue/PR number/action.
-- For `status:approved`, require target-host evidence binding the direct instructing principal to approval authority as a repository maintainer or repository-authorized approver.
-- Verify target-host capability; `TRIAGE` permits only GitHub-granted existing-label and issue/PR close/reopen actions—not push/merge/label creation/deletion/administration.
-- For `status:approved`, require target-host `viewerPermission` `MAINTAIN` or `ADMIN` immediately before mutation; `TRIAGE` is insufficient for `status:approved`; an unverifiable instructing principal means no mutation.
+- Protected policy labels are `status:approved`, `size:exception`, and any repository-defined gate-override/authorization label. For `status:approved`, require target-host evidence binding the direct instructing principal to approval authority as a repository maintainer or repository-authorized approver.
+- Adding or removing a protected label requires current direct target-host-verified maintainer/authorized-approver instruction for exact add/remove plus authenticated actor target-host `viewerPermission` `MAINTAIN` or `ADMIN`; `TRIAGE` never suffices. `size:exception` also needs a documented rationale; unknown gate labels stop. Verify target-host capability; for ordinary generic actions only, `TRIAGE` permits only GitHub-granted existing-label and issue/PR close/reopen actions—not push/merge/label creation/deletion/administration.
 - Reject inferred/model-authored authority; atomic `status:approved`, exactly one attempt/readback; fail closed.
 - Keep all body-bearing data in private temporary files outside repositories. Do not print the contents of any protected file.
 - Make one create or comment attempt with no blind retry. Classify it exactly `confirmed | no_write | unknown`; `unknown` stops every later mutation and retry.

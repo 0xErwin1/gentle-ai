@@ -52,13 +52,14 @@ These files evolve. Re-read them at the start of every contribution.
 
 1. **Issue-first is mandatory.** No PR opens without an issue that already has `status:approved` under the canonical issue-creation workflow contract. Enforced by `pr-check.yml` and CONTRIBUTING.md.
 2. **Use `Closes/Fixes/Resolves #N`** in the PR body. `Refs #N` does NOT satisfy `Check Issue Reference`. Verified empirically on this repo.
-3. **Exactly one `type:*` label per PR.** Zero or multiple labels fail the check. Route every PR-label mutation through the canonical issue-creation workflow contract: a current direct human instruction binds the exact target/action, target-host capability is verified, and it uses one bounded mutation and target-host readback; otherwise wait without mutation.
-4. **400-line budget per PR** (`additions + deletions`). Above that, `size:exception` additionally requires documented over-budget rationale.
-5. **No `Co-Authored-By` trailers** on commits. AI attribution is not acceptable in this repo.
-6. **No force-push to `main`.** It is protected.
-7. **PR body checkboxes must reflect API state.** If `gh pr view --json labels` shows `labels: []`, do not check the "type:* added" box — record the pending canonical PR-label action instead.
-8. **PR titles follow `^(type)(\(scope\))?!?: <description>`** with exactly **one scope** (no comma). See `skills/branch-pr/SKILL.md` for the regex.
-9. **Pre-existing test failures are named honestly.** This repo has pre-existing failures in `pi_codegraph`, `tui/sync`, and similar packages. Acknowledging them with the verification method (e.g. `git stash` baseline) is mandatory. Claiming "all tests pass" without that context is dishonest.
+3. **Ordinary `type:*` categorization** — zero or multiple labels fail the check. Route it through the canonical issue-creation workflow contract: a current direct human instruction binds the exact target/action, target-host capability is verified, and it uses one bounded mutation and target-host readback; otherwise wait without mutation.
+4. **Protected policy labels** — adding or removing `status:approved` or `size:exception` requires verified policy authority from a target-host repository maintainer or repository-authorized approver for the exact target/action, plus authenticated actor target-host `viewerPermission` `MAINTAIN` or `ADMIN`. `size:exception` additionally requires documented over-budget rationale.
+5. **400-line budget per PR** (`additions + deletions`). Above that, `size:exception` additionally requires documented over-budget rationale.
+6. **No `Co-Authored-By` trailers** on commits. AI attribution is not acceptable in this repo.
+7. **No force-push to `main`.** It is protected.
+8. **PR body checkboxes must reflect API state.** If `gh pr view --json labels` shows `labels: []`, do not check the "type:* added" box — record the pending canonical PR-label action instead.
+9. **PR titles follow `^(type)(\(scope\))?!?: <description>`** with exactly **one scope** (no comma). See `skills/branch-pr/SKILL.md` for the regex.
+10. **Pre-existing test failures are named honestly.** This repo has pre-existing failures in `pi_codegraph`, `tui/sync`, and similar packages. Acknowledging them with the verification method (e.g. `git stash` baseline) is mandatory. Claiming "all tests pass" without that context is dishonest.
 
 ---
 
@@ -72,9 +73,9 @@ This split catches external contributors most often. Verify with `gh` before rec
 | Open a PR from a working branch (wherever they push from) | ✅ | — |
 | Edit own PR body | ✅ | — |
 | Push commits to own branches | ✅ | — |
-| Apply/remove existing issue labels (including `status:approved`) | Only under the canonical issue-creation workflow contract and target-host capability grant | Same; verify the target host grants the action |
-| Apply/remove PR labels (including `type:*`) | Only under the canonical issue-creation workflow contract: current direct human instruction, exact target/action, target-host capability, one bounded mutation and target-host readback | Same; verify the target host grants the action |
-| Apply `size:exception` | Same PR-label gate, plus documented over-budget rationale | Same PR-label gate, plus documented over-budget rationale |
+| Apply/remove ordinary existing issue labels | Only under the canonical issue-creation workflow contract and target-host capability grant | Same; verify the target host grants the action |
+| Apply/remove ordinary `type:*` PR categorization | Only under the canonical issue-creation workflow contract: current direct human instruction, exact target/action, target-host capability, one bounded mutation and target-host readback | Same; verify the target host grants the action |
+| Add/remove protected `status:approved` or `size:exception` | Verified policy authority from a repository maintainer or repository-authorized approver plus actor `MAINTAIN`/`ADMIN`; `size:exception` also needs documented rationale | Same verified policy authority, actor capability, and rationale |
 | Approve `action_required` fork-PR workflows (fork approval gate) | ❌ | ✅ |
 | Review a PR (approve / request changes) | ❌ | ✅ |
 | Merge a PR | ❌ | ✅ |
@@ -135,12 +136,12 @@ Every `[x]` in the Contributor Checklist is a public claim that `pr-check.yml` a
    ```
    If `labels: []`, do not check the "type:* added" box. Instead:
    ```markdown
-   ## Pending maintainer actions
+   ## Pending repository workflow actions
 
    The following remain pending:
 
-   - [ ] `type:feature` label action requires the canonical issue-creation workflow contract
-   - [ ] `size:exception` action requires its documented rationale and the canonical workflow contract
+   - [ ] Ordinary `type:feature` categorization requires the canonical issue-creation workflow contract
+   - [ ] Protected `size:exception` requires its documented rationale and verified policy authority from a repository maintainer or repository-authorized approver
    - [ ] Fork workflow approval — 4 runs in `action_required` awaiting a maintainer
    ```
 
@@ -151,7 +152,7 @@ Every `[x]` in the Contributor Checklist is a public claim that `pr-check.yml` a
    > **Known pre-existing failures (not blocking this PR):** `internal/components/communitytool/pi_codegraph`, `internal/tui/sync`, `internal/tui/sddmode` clusters present on `main` are not introduced by this slice; verified identical via `git stash` baseline.
    ```
 
-Honest rewrites often look like **adding** content, not removing. Adding `## Pending maintainer actions` and a quoted callout for pre-existing failures is normal and expected.
+Honest rewrites often look like **adding** content, not removing. Adding `## Pending repository workflow actions` and a quoted callout for pre-existing failures is normal and expected.
 
 ### Standard honest-rewrite pattern
 
@@ -229,7 +230,7 @@ Run this in your head (or print and tick) before requesting review:
 - [ ] PR title follows `^(type)(\(single-scope\))?!?: <description>` — no comma in scope
 - [ ] Body uses `Closes/Fixes/Resolves #N`, not `Refs`
 - [ ] Line counts in `## 📂 Changes` match `gh pr view --json additions,deletions,changedFiles`
-- [ ] No `[x]` claims contradict what the API shows; moves maintainer-applied actions to `## Pending maintainer actions`
+- [ ] No `[x]` claims contradict what the API shows; moves pending actions to `## Pending repository workflow actions`
 - [ ] Pre-existing failures named with verification method
 - [ ] Conventional Commits in title and commit messages
 - [ ] No `Co-Authored-By` trailers
@@ -249,7 +250,7 @@ Run this in your head (or print and tick) before requesting review:
 |---|---|---|
 | "type:* added" checkbox while `labels: []` | CodeRabbit or maintainer catches the lie on first read | Record the pending canonical PR-label action |
 | `Refs #N` instead of `Closes #N` | `Check Issue Reference` fails; PR auto-rejected | Use `Closes`/`Fixes`/`Resolves` keyword |
-| `[x] PR stays within 400 changed lines` for a 3,200-line PR | `Check PR Cognitive Load` fails; `size:exception` not requested | Compute real totals, document `size:exception` rationale in Pending maintainer section |
+| `[x] PR stays within 400 changed lines` for a 3,200-line PR | `Check PR Cognitive Load` fails; `size:exception` not requested | Compute real totals, document the rationale and verified policy authority in Pending repository workflow actions |
 | `feat(tui,cli): wire...` title | Title fails the single-scope regex | Use one of `feat(tui): ...`, `feat(cli): ...`, `feat(tui-cli): ...` (dash, not comma) |
 | Slice branches all base on `main` with stale carry-over commits | Reviewers can't isolate slice-specific changes; `size:exception` needed | Accept Stacked to main (request exception) OR ask maintainer to push slice branches upstream and use Feature Branch Chain |
 | Mutating a PR label without canonical authority | No current direct instruction or verified capability | Wait without mutation |
