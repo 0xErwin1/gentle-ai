@@ -138,7 +138,10 @@
       "hidden": true,
       "mode": "subagent",
       "permission": {
-        "bash": "allow",
+        "bash": {
+          "*": "deny",
+          "gentle-ai review inspect-candidate --purpose targeted-validation *": "allow"
+        },
         "edit": "deny",
         "task": "deny",
         "write": "deny"

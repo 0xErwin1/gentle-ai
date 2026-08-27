@@ -38,7 +38,19 @@ func TestOpenCodeCommandsIncludesCoreWorkflow(t *testing.T) {
 }
 
 func TestOpenCodeReviewValidatorPermissionContract(t *testing.T) {
-	wantPermission := map[string]any{"write": "deny", "edit": "deny", "task": "deny", "bash": "allow"}
+	// The validator processes untrusted candidate input, so its shell surface
+	// is pinned to the one provider-issued read-only inspection command its
+	// briefing names (reviewerprovider.targetedValidatorPromptInstruction);
+	// every other bash invocation is denied by the wildcard.
+	wantPermission := map[string]any{
+		"write": "deny",
+		"edit":  "deny",
+		"task":  "deny",
+		"bash": map[string]any{
+			"gentle-ai review inspect-candidate --purpose targeted-validation *": "allow",
+			"*": "deny",
+		},
+	}
 	for _, path := range []string{"opencode/sdd-overlay-single.json", "opencode/sdd-overlay-multi.json"} {
 		t.Run(path, func(t *testing.T) {
 			var root map[string]any

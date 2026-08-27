@@ -2919,7 +2919,15 @@ func TestInjectOpenCodeReviewValidatorHasBoundedInspectionPermissions(t *testing
 	if _, exists := validator["tools"]; exists {
 		t.Fatalf("OpenCode validator retained deprecated tools: %#v", validator["tools"])
 	}
-	wantPermission := map[string]any{"write": "deny", "edit": "deny", "task": "deny", "bash": "allow"}
+	wantPermission := map[string]any{
+		"write": "deny",
+		"edit":  "deny",
+		"task":  "deny",
+		"bash": map[string]any{
+			"gentle-ai review inspect-candidate --purpose targeted-validation *": "allow",
+			"*": "deny",
+		},
+	}
 	permission, ok := validator["permission"].(map[string]any)
 	if !ok || !reflect.DeepEqual(permission, wantPermission) {
 		t.Fatalf("OpenCode validator permission = %#v, want %#v", validator["permission"], wantPermission)

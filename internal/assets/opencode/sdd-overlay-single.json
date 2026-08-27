@@ -196,7 +196,10 @@
         "write": "deny",
         "edit": "deny",
         "task": "deny",
-        "bash": "allow"
+        "bash": {
+          "gentle-ai review inspect-candidate --purpose targeted-validation *": "allow",
+          "*": "deny"
+        }
       }
     }
   }
