@@ -115,6 +115,7 @@ var coreJourneyReviewModes = map[string]ReviewPrecondition{
 	"j116-codex-committed-correction-runs-returned-status-continuation":         reviewOptedIn,
 	"j117-global-review-mode-status-reports-persisted-source":                   reviewUntouched,
 	"j118-welcome-tui-runs-under-a-real-tty":                                    reviewUntouched,
+	"j119-rdd-tui-controls-global-mode":                                         reviewUntouched,
 }
 
 func declareCoreJourneyReviewModes(journeys []Journey) []Journey {
