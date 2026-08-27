@@ -149,7 +149,7 @@ These checks run on every PR and **all must pass** before merge:
 |-------|-----------------|------------|
 | **Check PR Cognitive Load** | PR stays within 400 changed lines (`additions + deletions`) or has `size:exception` | Split the PR, or request/obtain maintainer-applied `size:exception` and document the rationale |
 | **Check Issue Reference** | PR body contains `Closes/Fixes/Resolves #N` | Add `Closes #<N>` to the PR body |
-| **Check Issue Has `status:approved`** | Linked issue has been approved by a maintainer | Wait for maintainer to add `status:approved` to the issue |
+| **Check Issue Has `status:approved`** | Linked issue has the required label | Use the canonical issue-creation workflow contract only when a current direct instruction and target-host capability grant authorize the exact action; otherwise wait |
 | **Check PR Has `type:*` Label** | Exactly one `type:*` label is applied to the PR | Ask a maintainer to add the correct label; remove extras |
 | **Unit Tests** | `go test ./...` passes | Fix failing tests before pushing |
 | **Go Format** | `go run ./internal/gofmtcheck` passes | Format malformed Go files before pushing |

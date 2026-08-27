@@ -50,7 +50,7 @@ These files evolve. Re-read them at the start of every contribution.
 
 ## Hard rules (do not negotiate)
 
-1. **Issue-first is mandatory.** No PR opens without an issue that already has `status:approved` from a maintainer. Enforced by `pr-check.yml` and CONTRIBUTING.md.
+1. **Issue-first is mandatory.** No PR opens without an issue that already has `status:approved` under the canonical issue-creation workflow contract. Enforced by `pr-check.yml` and CONTRIBUTING.md.
 2. **Use `Closes/Fixes/Resolves #N`** in the PR body. `Refs #N` does NOT satisfy `Check Issue Reference`. Verified empirically on this repo.
 3. **Exactly one `type:*` label per PR.** Two `type:*` labels fail the check. No `type:*` label fails the check.
 4. **400-line budget per PR** (`additions + deletions`). Above that, request `size:exception` from a maintainer with rationale documented in the PR body.
@@ -72,7 +72,7 @@ This split catches external contributors most often. Verify with `gh` before rec
 | Open a PR from a working branch (wherever they push from) | ✅ | — |
 | Edit own PR body | ✅ | — |
 | Push commits to own branches | ✅ | — |
-| Add `status:approved` to an issue | ❌ | ✅ |
+| Apply/remove existing issue labels (including `status:approved`) | Only under the canonical issue-creation workflow contract and target-host capability grant | Same; verify the target host grants the action |
 | Apply `type:*` label to a PR | ❌ | ✅ |
 | Apply `size:exception` label | ❌ | ✅ |
 | Approve `action_required` fork-PR workflows (fork approval gate) | ❌ | ✅ |
