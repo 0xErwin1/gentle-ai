@@ -56,4 +56,26 @@ func TestIssueCreationAuthorityBoundary(t *testing.T) {
 	if strings.Contains(collaborationText, "gh issue create") {
 		t.Fatal("collaboration skill must delegate issue publication to the canonical authority, not carry direct gh issue create mechanics")
 	}
+	for _, stale := range []string{
+		"status:approved` from a maintainer",
+		"| Add `status:approved` to an issue | ❌ | ✅ |",
+	} {
+		if strings.Contains(collaborationText, stale) {
+			t.Fatalf("collaboration skill retains stale approval authority %q", stale)
+		}
+	}
+	if !strings.Contains(collaborationText, "canonical issue-creation workflow contract") {
+		t.Fatal("collaboration skill must delegate approval actions to the canonical issue-creation workflow contract")
+	}
+
+	branch, err := os.ReadFile(filepath.Join(repositoryRoot, "skills", "branch-pr", "SKILL.md"))
+	if err != nil {
+		t.Fatalf("read branch-pr skill: %v", err)
+	}
+	if strings.Contains(string(branch), "Wait for maintainer to add `status:approved` to the issue") {
+		t.Fatal("branch-pr skill retains stale maintainer-only approval instruction")
+	}
+	if !strings.Contains(string(branch), "canonical issue-creation workflow contract") {
+		t.Fatal("branch-pr skill must route approval actions to the canonical issue-creation workflow contract")
+	}
 }
