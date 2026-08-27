@@ -465,7 +465,9 @@ func TestKilocodeReviewSettingsMatchCurrentMainBaseline(t *testing.T) {
 	// Managed tools are removed only from OpenCode. Kilocode restores its
 	// historical provider shape, including read-only judges and default-deny
 	// sdd-research collection permissions, so the baseline is rederived here.
-	const want = "68b1d088b999dcd7afc4996d993721675bcc8fa967416fbf76f75ac791646b8a"
+	// Merged with main's #3563 causal-failure precedence and #3168 empty
+	// CodeGraph tool-grant changes, so the combined baseline is rederived.
+	const want = "673ed8caf9d34e0b88eeb6a1d1b479762189532a8e35b9e6e082a91be86e7938"
 	if got != want {
 		t.Fatalf("Kilocode settings SHA-256 = %s, want current-main baseline %s", got, want)
 	}
