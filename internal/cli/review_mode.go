@@ -100,6 +100,21 @@ func RunReviewMode(args []string, stdout io.Writer) error {
 
 // reviewModeStatus is strictly read-only: it never creates user state and never
 // creates repository state.
+// ReviewModeStatus resolves the persisted review-mode sources without mutating them.
+func ReviewModeStatus(ctx context.Context, repo string) (reviewtransaction.RDDModeStatus, error) {
+	return reviewModeStatus(ctx, repo)
+}
+
+// SetGlobalReviewMode changes only the global review-mode source and returns the
+// resolved status for the requested repository.
+func SetGlobalReviewMode(ctx context.Context, repo string, enabled bool) (reviewtransaction.RDDModeStatus, error) {
+	operation := "disable"
+	if enabled {
+		operation = "enable"
+	}
+	return applyReviewMode(ctx, repo, operation, reviewModeScopeGlobal, "", false)
+}
+
 func reviewModeStatus(ctx context.Context, repo string) (reviewtransaction.RDDModeStatus, error) {
 	global, err := readGlobalRDDMode()
 	if err != nil {
