@@ -2813,6 +2813,60 @@ func TestInjectOpenCodeRemovesOnlyManagedLegacyTools(t *testing.T) {
 	}
 }
 
+// TestInjectOpenCodeRemovesStaleProfileToolsWithoutExplicitProfiles proves the
+// install/reinstall path: no profile is passed in InjectOptions, yet stale
+// tools blocks on profile-derived managed agents already present on disk
+// (sdd-orchestrator-{name}, {phase}-{name}, {jd}-{name}) are still removed so
+// they cannot preserve a sensitive-path read-deny bypass. Agents whose names
+// only resemble profile keys but carry an invalid profile-name suffix stay
+// user-owned and untouched.
+func TestInjectOpenCodeRemovesStaleProfileToolsWithoutExplicitProfiles(t *testing.T) {
+	mockNoPackageManager(t)
+	home := t.TempDir()
+	path := opencodeAdapter().SettingsPath(home)
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	const seed = `{"agent":{
+    "user-owned": {"tools": {"read": true, "custom": true}},
+    "sdd-apply-fast": {"tools": {"read": true, "bash": true}, "permission": {"task": {"review-validator": "allow"}}},
+    "sdd-orchestrator-fast": {"tools": {"read": true}},
+    "jd-judge-a-fast": {"tools": {"read": true, "bash": true}},
+    "sdd-apply-Fast": {"tools": {"read": true}}
+  }}`
+	if err := os.WriteFile(path, []byte(seed), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if first, err := Inject(home, opencodeAdapter(), model.SDDModeMulti); err != nil || !first.Changed {
+		t.Fatalf("install without explicit profiles = %#v, %v", first, err)
+	}
+
+	agents := readOpenCodeAgents(t, path)
+	for _, stale := range []string{"sdd-apply-fast", "sdd-orchestrator-fast", "jd-judge-a-fast"} {
+		agent, ok := agents[stale].(map[string]any)
+		if !ok {
+			t.Fatalf("profile-derived agent %q missing after install: %#v", stale, agents[stale])
+		}
+		if _, exists := agent["tools"]; exists {
+			t.Errorf("profile-derived agent %q retained stale tools on install: %#v", stale, agent["tools"])
+		}
+	}
+	if !reflect.DeepEqual(agents["sdd-apply-fast"].(map[string]any)["permission"], map[string]any{"task": map[string]any{"review-validator": "allow"}}) {
+		t.Fatalf("profile-derived agent permission changed: %#v", agents["sdd-apply-fast"])
+	}
+	if !reflect.DeepEqual(agents["user-owned"].(map[string]any)["tools"], map[string]any{"read": true, "custom": true}) {
+		t.Fatalf("user-owned tools changed: %#v", agents["user-owned"])
+	}
+	if !reflect.DeepEqual(agents["sdd-apply-Fast"].(map[string]any)["tools"], map[string]any{"read": true}) {
+		t.Fatalf("invalid-profile-suffix agent treated as managed: %#v", agents["sdd-apply-Fast"])
+	}
+
+	if second, err := Inject(home, opencodeAdapter(), model.SDDModeMulti); err != nil || second.Changed {
+		t.Fatalf("repeated install = %#v, %v", second, err)
+	}
+}
+
 func TestInjectKilocodeNamedProfileRetainsToolsSchema(t *testing.T) {
 	home := t.TempDir()
 	if _, err := Inject(home, kilocodeAdapter(), model.SDDModeMulti, InjectOptions{Profiles: []model.Profile{{Name: "fast"}}}); err != nil {
