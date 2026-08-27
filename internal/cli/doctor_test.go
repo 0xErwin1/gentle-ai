@@ -466,6 +466,106 @@ func TestCheckStateJSON_DanglingAndAbsentConfigDirsSuppressSync(t *testing.T) {
 	}
 }
 
+func TestCheckStateJSON_DanglingAncestorSymlinkSuppressesSync(t *testing.T) {
+	homeDir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(homeDir, ".gentle-ai"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	ancestor := filepath.Join(homeDir, ".config")
+	missingTarget := filepath.Join(t.TempDir(), "missing-config-root")
+	if err := os.Symlink(missingTarget, ancestor); err != nil {
+		t.Skipf("symlink creation unavailable: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(homeDir, ".gentle-ai", "state.json"), []byte(`{"installed_agents":["opencode"]}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	configDir := filepath.Join(ancestor, "opencode")
+	if _, err := os.Lstat(configDir); !os.IsNotExist(err) {
+		t.Fatalf("managed path under dangling ancestor: lstat err = %v, want not-exist", err)
+	}
+
+	got := checkStateJSON(homeDir)
+
+	if got.Status != CheckStatusWarn {
+		t.Fatalf("expected warn for dangling ancestor symlink, got %s: %s", got.Status, got.Detail)
+	}
+	if got.Remedy != nil && got.Remedy.ID == doctor.RemedySync {
+		t.Fatalf("dangling ancestor symlink must not recommend sync: %+v", got.Remedy)
+	}
+	for _, want := range []string{configDir, "dangling ancestor symlink " + ancestor, "inspect", "gentle-ai doctor"} {
+		if !strings.Contains(got.Detail, want) {
+			t.Fatalf("dangling ancestor result missing %q: %s", want, got.Detail)
+		}
+	}
+	if strings.Contains(got.Detail, "gentle-ai sync") || strings.Contains(got.Detail, "config dirs are missing") {
+		t.Fatalf("dangling ancestor must not be classified as missing: %s", got.Detail)
+	}
+	info, err := os.Lstat(ancestor)
+	if err != nil {
+		t.Fatalf("Lstat dangling ancestor symlink after doctor: %v", err)
+	}
+	if info.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("doctor changed dangling ancestor into non-symlink: mode %v", info.Mode())
+	}
+	if _, err := os.Lstat(missingTarget); !os.IsNotExist(err) {
+		t.Fatalf("doctor touched the missing ancestor target %q: err = %v", missingTarget, err)
+	}
+}
+
+func TestCheckStateJSON_AbsentAncestorChainKeepsSyncRemedy(t *testing.T) {
+	homeDir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(homeDir, ".gentle-ai"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// windsurf lives two levels below home (~/.codeium/windsurf); neither
+	// level exists, so the path is genuinely missing and sync must stay.
+	if err := os.WriteFile(filepath.Join(homeDir, ".gentle-ai", "state.json"), []byte(`{"installed_agents":["windsurf"]}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	got := checkStateJSON(homeDir)
+
+	if got.Status != CheckStatusWarn {
+		t.Fatalf("expected warn for absent config dir, got %s: %s", got.Status, got.Detail)
+	}
+	if !strings.Contains(got.Detail, "config dirs are missing") {
+		t.Fatalf("absent ancestor chain must classify as missing, got %s", got.Detail)
+	}
+	if got.Remedy == nil || got.Remedy.ID != doctor.RemedySync {
+		t.Fatalf("absent ancestor chain must retain sync remedy, got %+v", got.Remedy)
+	}
+}
+
+func TestCheckStateJSON_HealthySymlinkAncestorKeepsSyncRemedy(t *testing.T) {
+	homeDir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(homeDir, ".gentle-ai"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	realConfigRoot := filepath.Join(t.TempDir(), "real-config-root")
+	if err := os.MkdirAll(realConfigRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(realConfigRoot, filepath.Join(homeDir, ".config")); err != nil {
+		t.Skipf("symlink creation unavailable: %v", err)
+	}
+	// ~/.config resolves fine; only the opencode dir underneath is absent.
+	if err := os.WriteFile(filepath.Join(homeDir, ".gentle-ai", "state.json"), []byte(`{"installed_agents":["opencode"]}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	got := checkStateJSON(homeDir)
+
+	if got.Status != CheckStatusWarn {
+		t.Fatalf("expected warn for absent config dir, got %s: %s", got.Status, got.Detail)
+	}
+	if !strings.Contains(got.Detail, "config dirs are missing") {
+		t.Fatalf("healthy symlink ancestor must classify as missing, got %s", got.Detail)
+	}
+	if got.Remedy == nil || got.Remedy.ID != doctor.RemedySync {
+		t.Fatalf("healthy symlink ancestor must retain sync remedy, got %+v", got.Remedy)
+	}
+}
+
 func TestCheckStateJSON_OK(t *testing.T) {
 	homeDir := t.TempDir()
 	stateDir := filepath.Join(homeDir, ".gentle-ai")
