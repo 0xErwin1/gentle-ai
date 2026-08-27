@@ -2160,7 +2160,33 @@ func removeManagedOpenCodeAgentTools(baseJSON, overlay []byte) ([]byte, error) {
 			}
 		}
 	}
+	keys = append(keys, discoverManagedProfileAgentKeys(baseJSON)...)
 	return filemerge.RemoveJSONAgentTools(baseJSON, keys...)
+}
+
+// discoverManagedProfileAgentKeys returns every profile-derived managed agent
+// key already present in the base settings. Install and reinstall merge no
+// profile overlay, so without this discovery a stale tools block on a named
+// profile agent (for example agent.sdd-apply-fast.tools) would survive and
+// keep bypassing the global sensitive-path read denies. Only canonical managed
+// prefixes with a valid profile-name suffix qualify; user-owned agents are
+// never returned.
+func discoverManagedProfileAgentKeys(baseJSON []byte) []string {
+	root, err := filemerge.UnmarshalJSONObject(baseJSON)
+	if err != nil {
+		return nil
+	}
+	agents, ok := root["agent"].(map[string]any)
+	if !ok {
+		return nil
+	}
+	keys := make([]string, 0, len(agents))
+	for key := range agents {
+		if _, managed := managedProfileAgentName(key); managed {
+			keys = append(keys, key)
+		}
+	}
+	return keys
 }
 
 // defaultOpenCodeShareDisabled adds a defensive OpenCode default for SDD

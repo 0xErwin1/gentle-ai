@@ -144,6 +144,31 @@ func ProfileAgentKeys(name string) []string {
 	return keys
 }
 
+// managedProfileAgentPrefixes returns the canonical key prefixes that identify
+// profile-derived managed agents: the profile orchestrator plus every SDD phase
+// and Judgment Day agent that profiles can generate.
+func managedProfileAgentPrefixes() []string {
+	prefixes := []string{"sdd-orchestrator-"}
+	for _, phase := range ProfileAssignmentPhaseOrder() {
+		prefixes = append(prefixes, phase+"-")
+	}
+	return prefixes
+}
+
+// managedProfileAgentName returns the profile name and true when key names a
+// profile-derived managed agent: a canonical managed prefix followed by a valid
+// profile-name slug. Any other key — including one that resembles a profile key
+// but carries an invalid suffix — is user-owned and returns false.
+func managedProfileAgentName(key string) (string, bool) {
+	for _, prefix := range managedProfileAgentPrefixes() {
+		if strings.HasPrefix(key, prefix) {
+			name := strings.TrimPrefix(key, prefix)
+			return name, ValidateProfileName(name) == nil
+		}
+	}
+	return "", false
+}
+
 // DetectProfiles reads opencode.json at settingsPath and returns all named
 // SDD profiles found in the agent map. The default profile (bare sdd-orchestrator
 // without suffix) is NOT included in the result. Returns an empty slice if the
@@ -174,21 +199,11 @@ func DetectProfiles(settingsPath string) ([]model.Profile, error) {
 	// Scan every canonical profile key, not just the orchestrator. A prior sync
 	// can leave an orphaned phase entry behind; it remains managed and must be
 	// refreshed (including removal of deprecated tools) on the next sync.
-	prefixes := []string{"sdd-orchestrator-"}
-	for _, phase := range ProfileAssignmentPhaseOrder() {
-		prefixes = append(prefixes, phase+"-")
-	}
 	profileNames := make([]string, 0)
 	seen := make(map[string]bool)
 	for key := range agentMap {
-		profileName := ""
-		for _, prefix := range prefixes {
-			if strings.HasPrefix(key, prefix) {
-				profileName = strings.TrimPrefix(key, prefix)
-				break
-			}
-		}
-		if profileName == "" || seen[profileName] || ValidateProfileName(profileName) != nil {
+		profileName, managed := managedProfileAgentName(key)
+		if !managed || seen[profileName] {
 			continue
 		}
 		seen[profileName] = true
