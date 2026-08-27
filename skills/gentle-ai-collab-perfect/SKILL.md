@@ -52,11 +52,11 @@ These files evolve. Re-read them at the start of every contribution.
 
 1. **Issue-first is mandatory.** No PR opens without an issue that already has `status:approved` under the canonical issue-creation workflow contract. Enforced by `pr-check.yml` and CONTRIBUTING.md.
 2. **Use `Closes/Fixes/Resolves #N`** in the PR body. `Refs #N` does NOT satisfy `Check Issue Reference`. Verified empirically on this repo.
-3. **Exactly one `type:*` label per PR.** Two `type:*` labels fail the check. No `type:*` label fails the check.
-4. **400-line budget per PR** (`additions + deletions`). Above that, request `size:exception` from a maintainer with rationale documented in the PR body.
+3. **Exactly one `type:*` label per PR.** Zero or multiple labels fail the check. Route every PR-label mutation through the canonical issue-creation workflow contract: a current direct human instruction binds the exact target/action, target-host capability is verified, and it uses one bounded mutation and target-host readback; otherwise wait without mutation.
+4. **400-line budget per PR** (`additions + deletions`). Above that, `size:exception` additionally requires documented over-budget rationale.
 5. **No `Co-Authored-By` trailers** on commits. AI attribution is not acceptable in this repo.
 6. **No force-push to `main`.** It is protected.
-7. **PR body checkboxes must reflect API state.** If `gh pr view --json labels` shows `labels: []`, do not check the "type:* added" box — write a `## Pending maintainer actions` section instead.
+7. **PR body checkboxes must reflect API state.** If `gh pr view --json labels` shows `labels: []`, do not check the "type:* added" box — record the pending canonical PR-label action instead.
 8. **PR titles follow `^(type)(\(scope\))?!?: <description>`** with exactly **one scope** (no comma). See `skills/branch-pr/SKILL.md` for the regex.
 9. **Pre-existing test failures are named honestly.** This repo has pre-existing failures in `pi_codegraph`, `tui/sync`, and similar packages. Acknowledging them with the verification method (e.g. `git stash` baseline) is mandatory. Claiming "all tests pass" without that context is dishonest.
 
@@ -73,16 +73,14 @@ This split catches external contributors most often. Verify with `gh` before rec
 | Edit own PR body | ✅ | — |
 | Push commits to own branches | ✅ | — |
 | Apply/remove existing issue labels (including `status:approved`) | Only under the canonical issue-creation workflow contract and target-host capability grant | Same; verify the target host grants the action |
-| Apply `type:*` label to a PR | ❌ | ✅ |
-| Apply `size:exception` label | ❌ | ✅ |
+| Apply/remove PR labels (including `type:*`) | Only under the canonical issue-creation workflow contract: current direct human instruction, exact target/action, target-host capability, one bounded mutation and target-host readback | Same; verify the target host grants the action |
+| Apply `size:exception` | Same PR-label gate, plus documented over-budget rationale | Same PR-label gate, plus documented over-budget rationale |
 | Approve `action_required` fork-PR workflows (fork approval gate) | ❌ | ✅ |
 | Review a PR (approve / request changes) | ❌ | ✅ |
 | Merge a PR | ❌ | ✅ |
 | Push slice/* branches to upstream so cross-fork base refs work | ❌ | ✅ |
 
-If the contributor's PR is "stuck" on something, the next step is almost always a maintainer action — not the contributor trying it. Trying it surfaces GraphQL 403 (`AddLabelsToLabelable`, `requestReviewsByLogin`, deployment-protection API) and makes the contributor look unaware of the workflow.
-
-**Verified empirically** in this repo (July 2026): `gh pr edit --add-label type:feature` returns **403** `ardelperal does not have the correct permissions to execute AddLabelsToLabelable`. Treat that error as policy, not as a bug.
+If a PR-label action lacks a current direct instruction or verified target-host capability, wait without mutation. Other maintainer-only actions remain maintainer-only.
 
 ---
 
@@ -139,11 +137,11 @@ Every `[x]` in the Contributor Checklist is a public claim that `pr-check.yml` a
    ```markdown
    ## Pending maintainer actions
 
-   The following are **maintainer-applied per `pr-check.yml` and CONTRIBUTING.md** in this repo — not within contributor scope:
+   The following remain pending:
 
-   - [ ] `type:feature` label applied to this PR — pending Alan
-   - [ ] `size:exception` consideration — see rationale below
-   - [ ] Fork workflow approval — 4 runs in `action_required` awaiting Alan
+   - [ ] `type:feature` label action requires the canonical issue-creation workflow contract
+   - [ ] `size:exception` action requires its documented rationale and the canonical workflow contract
+   - [ ] Fork workflow approval — 4 runs in `action_required` awaiting a maintainer
    ```
 
 2. **Numbers and file counts must match the API.** If you can't trust the API, recount locally: `git diff --stat <base>..<head>`.
@@ -158,7 +156,7 @@ Honest rewrites often look like **adding** content, not removing. Adding `## Pen
 ### Standard honest-rewrite pattern
 
 When the contributor checks a box that doesn't reflect reality:
-- Move the unfulfillable contributor-side check into `## Pending maintainer actions` with `pending Alan` suffix
+- For a PR label, record its pending canonical workflow action; keep other maintainer-only actions distinct
 - Update diff numbers to match the API exactly; if a qualifier is needed (e.g. "slice-specific commits only"), state it explicitly
 - For test claims, state the exact local commands run and the count of PASS/SKIP observed; don't aggregate to "all pass" if any were skipped on Windows
 - Always name pre-existing repo failures that the contributor observed but did not fix, with the verification method (`git stash` baseline)
@@ -196,12 +194,7 @@ The maintainer is the only one who can make Feature Branch Chain work; the contr
 
 Before recommending any action that touches permissions, label state, or commit history:
 
-1. **Dry-verify with `gh` first.** Attempt the action and surface the error if it fails. Example:
-   ```
-   $ gh pr edit 1132 --add-label type:feature
-   → GraphQL: ardelperal does not have the correct permissions to execute `AddLabelsToLabelable`
-   ```
-   That output IS your answer. Don't try to work around it.
+1. **Verify authority before a PR-label action.** Use the canonical issue-creation workflow contract; do not probe a mutation to discover authority.
 
 2. **Cross-check PR body claims against the GitHub API.**
    ```bash
@@ -254,12 +247,12 @@ Run this in your head (or print and tick) before requesting review:
 
 | Anti-pattern | Symptom | Fix |
 |---|---|---|
-| "type:* added" checkbox while `labels: []` | CodeRabbit or maintainer catches the lie on first read | Move to `## Pending maintainer actions` with `pending Alan` |
+| "type:* added" checkbox while `labels: []` | CodeRabbit or maintainer catches the lie on first read | Record the pending canonical PR-label action |
 | `Refs #N` instead of `Closes #N` | `Check Issue Reference` fails; PR auto-rejected | Use `Closes`/`Fixes`/`Resolves` keyword |
 | `[x] PR stays within 400 changed lines` for a 3,200-line PR | `Check PR Cognitive Load` fails; `size:exception` not requested | Compute real totals, document `size:exception` rationale in Pending maintainer section |
 | `feat(tui,cli): wire...` title | Title fails the single-scope regex | Use one of `feat(tui): ...`, `feat(cli): ...`, `feat(tui-cli): ...` (dash, not comma) |
 | Slice branches all base on `main` with stale carry-over commits | Reviewers can't isolate slice-specific changes; `size:exception` needed | Accept Stacked to main (request exception) OR ask maintainer to push slice branches upstream and use Feature Branch Chain |
-| Trying `gh pr edit --add-label` as contributor | GraphQL 403 `AddLabelsToLabelable` | Stop, ask the maintainer via comment on the issue |
+| Mutating a PR label without canonical authority | No current direct instruction or verified capability | Wait without mutation |
 | Burning reviewer attention on smoke-test green | Low-cardinality tests pass without exercising the behavior; reviewer flags in CodeRabbit | Each test asserts specific behavior, not just non-panicking |
 | Pretending local test run = `go test ./...` clean | Repo has pre-existing failures (`pi_codegraph`, `tui/sync`); saying "all tests pass" is dishonest | Run with `git stash` baseline, name pre-existing failures explicitly |
 | Calling a working repo a "fork" in code or docs | Misrepresents the contributor's relationship to the upstream | Use neutral language: "your working branch", "the contributor's push location", not "your fork" |
@@ -271,7 +264,7 @@ Run this in your head (or print and tick) before requesting review:
 When you (the AI assistant) are helping a contributor with anything that touches this repo:
 
 1. **Before recommending any action**, look up the relevant `CONTRIBUTING.md` / template / workflow section and cite it.
-2. **Before any label, status, merge, or fork-workflow approval**, check the contributor-vs-maintainer scope table; if maintainer-only, route to the maintainer with a comment or note — do NOT suggest the contributor try it.
+2. **Before any label, status, merge, or fork-workflow approval**, check the contributor-vs-maintainer scope table. Route PR labels only through the canonical issue-creation workflow contract; route other maintainer-only actions to a maintainer without suggesting an unauthorized attempt.
 3. **Before recommending body rewrites**, fetch the PR's current state and cross-check every claim against the API.
 4. **Before recommending chained-PR structure**, ask the contributor whether each slice can land independently (Stacked) or needs atomic integration (Feature Branch Chain). Be explicit about the cross-fork base-ref limitation.
 5. **Always** use Conventional Commits in title and commit messages.
