@@ -16,6 +16,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v2/internal/installcmd"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/pipeline"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/planner"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/state"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/system"
 )
@@ -399,6 +400,53 @@ func TestRunInstallRollsBackOnComponentFailure(t *testing.T) {
 
 	if string(after) != string(before) {
 		t.Fatalf("settings content changed after rollback\nafter=%s\nbefore=%s", after, before)
+	}
+}
+
+type failingPersonaInstallStep struct{}
+
+func (failingPersonaInstallStep) ID() string { return "test:fail-after-persona" }
+func (failingPersonaInstallStep) Run() error {
+	return errors.New("forced failure after persona cleanup")
+}
+
+func TestInstallPersonaOnlyRollbackRestoresOpenCodeSettingsAfterCleanup(t *testing.T) {
+	home := t.TempDir()
+	settingsPath := filepath.Join(home, ".config", "opencode", "opencode.json")
+	before := []byte("// preserve exact JSONC bytes\n{\"agent\":{\"gentleman\":{\"tools\":{\"write\":true},\"description\":\"keep\"},\"user-owned\":{\"tools\":{\"custom\":true}}}}\n")
+	if err := os.MkdirAll(filepath.Dir(settingsPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(settingsPath, before, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	selection := model.Selection{
+		Agents:     []model.AgentID{model.AgentOpenCode},
+		Components: []model.ComponentID{model.ComponentPersona},
+		Persona:    model.PersonaGentleman,
+	}
+	resolved := planner.ResolvedPlan{Agents: selection.Agents, OrderedComponents: selection.Components}
+	runtime, err := newInstallRuntime(home, ScopeGlobal, ChannelStable, selection, resolved, system.PlatformProfile{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	restoreCommand := runCommand
+	runCommand = func(string, ...string) error { return nil }
+	t.Cleanup(func() { runCommand = restoreCommand })
+	plan := runtime.stagePlan()
+	plan.Prepare = plan.Prepare[1:]
+	plan.Apply = append(plan.Apply, failingPersonaInstallStep{})
+	result := pipeline.NewOrchestrator(pipeline.DefaultRollbackPolicy()).Execute(plan)
+	if result.Err == nil || !result.Rollback.Success {
+		t.Fatalf("persona-only install rollback = %#v", result)
+	}
+	after, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(after) != string(before) {
+		t.Fatalf("persona-only install rollback settings = %q, want exact before-image %q", after, before)
 	}
 }
 
