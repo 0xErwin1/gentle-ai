@@ -2031,13 +2031,10 @@ func TestOpenCodeSDDOverlaySubagentsAreExplicitExecutors(t *testing.T) {
 			if !ok || permissions["question"] != "allow" {
 				t.Fatalf("%q gentle-orchestrator must allow question permission", assetPath)
 			}
-			tools, ok := orchestrator["tools"].(map[string]any)
-			if !ok {
-				t.Fatalf("%q gentle-orchestrator missing tools", assetPath)
-			}
-			replacedTools, ok := tools["__replace__"].(map[string]any)
-			if !ok || replacedTools["question"] != true {
-				t.Fatalf("%q gentle-orchestrator must enable question tool", assetPath)
+			for name, raw := range agents {
+				if _, exists := raw.(map[string]any)["tools"]; exists {
+					t.Fatalf("%q agent %q emits deprecated tools", assetPath, name)
+				}
 			}
 
 			for _, phase := range []string{"sdd-init", "sdd-explore", "sdd-propose", "sdd-spec", "sdd-design", "sdd-tasks", "sdd-apply", "sdd-verify", "sdd-archive"} {
