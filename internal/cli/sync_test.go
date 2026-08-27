@@ -885,6 +885,68 @@ func TestComponentSyncStepRunsSDDInject(t *testing.T) {
 	}
 }
 
+func TestSyncRollbackRestoresOpenCodeSettingsAfterManagedToolsCleanup(t *testing.T) {
+	home := t.TempDir()
+	settingsPath := filepath.Join(home, ".config", "opencode", "opencode.json")
+	before := []byte("// keep this exact JSONC before-image\n{\"agent\":{\"gentle-orchestrator\":{\"tools\":{\"read\":true}},\"user-owned\":{\"tools\":{\"custom\":true}}}}\n")
+	mustWriteFile(t, settingsPath, before)
+
+	selection := model.Selection{
+		Agents:     []model.AgentID{model.AgentOpenCode},
+		Components: []model.ComponentID{model.ComponentSDD, model.ComponentID("later-failure")},
+		SDDMode:    model.SDDModeSingle,
+	}
+	targets, err := syncBackupTargets(home, "", selection, resolveAdapters(selection.Agents))
+	if err != nil {
+		t.Fatalf("syncBackupTargets() error = %v", err)
+	}
+	if !containsPath(targets, settingsPath) {
+		t.Fatalf("sync backup targets omit OpenCode settings mutated by managed-tools cleanup: %v", targets)
+	}
+
+	if _, err := RunSyncWithSelection(home, selection); err == nil {
+		t.Fatal("RunSyncWithSelection() error = nil, want later pipeline failure")
+	}
+	after, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatalf("read restored OpenCode settings: %v", err)
+	}
+	if !bytes.Equal(after, before) {
+		t.Fatalf("OpenCode settings after rollback = %q, want exact before-image %q", after, before)
+	}
+}
+
+func TestSyncPersonaOnlyRollbackRestoresOpenCodeSettingsAfterGentlemanCleanup(t *testing.T) {
+	home := t.TempDir()
+	settingsPath := filepath.Join(home, ".config", "opencode", "opencode.json")
+	before := []byte("// preserve exact JSONC bytes\n{\"agent\":{\"gentleman\":{\"tools\":{\"write\":true},\"description\":\"keep\"},\"user-owned\":{\"tools\":{\"custom\":true}}}}\n")
+	mustWriteFile(t, settingsPath, before)
+
+	selection := model.Selection{
+		Agents:     []model.AgentID{model.AgentOpenCode},
+		Components: []model.ComponentID{model.ComponentPersona, model.ComponentID("later-failure")},
+		Persona:    model.PersonaGentleman,
+	}
+	targets, err := syncBackupTargets(home, "", selection, resolveAdapters(selection.Agents))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !containsPath(targets, settingsPath) {
+		t.Fatalf("sync backup targets omit OpenCode settings mutated by Gentleman cleanup: %v", targets)
+	}
+
+	if _, err := RunSyncWithSelection(home, selection); err == nil {
+		t.Fatal("RunSyncWithSelection() error = nil, want later pipeline failure")
+	}
+	after, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(after, before) {
+		t.Fatalf("persona-only sync rollback settings = %q, want exact before-image %q", after, before)
+	}
+}
+
 func TestComponentSyncStepRunsGGAInjectWithoutBinaryInstall(t *testing.T) {
 	home := t.TempDir()
 	restoreCommand := runCommand

@@ -174,9 +174,13 @@ func TestGoldenSDD_OpenCode_Multi(t *testing.T) {
 
 	// Golden-check the settings file with multi overlay merged.
 	settingsJSON := readTestFile(t, filepath.Join(home, ".config", "opencode", "opencode.json"))
-	for _, toolName := range []string{"\"task\""} {
-		if !strings.Contains(string(settingsJSON), toolName) {
-			t.Fatalf("multi-mode settings missing orchestrator tool %s", toolName)
+	var settings map[string]any
+	if err := json.Unmarshal(settingsJSON, &settings); err != nil {
+		t.Fatalf("unmarshal generated OpenCode settings: %v", err)
+	}
+	for name, raw := range settings["agent"].(map[string]any) {
+		if _, exists := raw.(map[string]any)["tools"]; exists {
+			t.Fatalf("generated managed agent %q emits deprecated tools", name)
 		}
 	}
 	assertGolden(t, "sdd-opencode-multi-settings.golden", settingsJSON)

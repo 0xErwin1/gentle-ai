@@ -462,7 +462,12 @@ func TestKilocodeReviewSettingsMatchCurrentMainBaseline(t *testing.T) {
 	// settings hash is recomputed from the combined source.
 	// #3564 replaces the shared SDD status contract with v2, so the embedded
 	// pre-proposal contract now names the sole public status version.
-	const want = "421237bd384a32355c89991675d9251dd0696afe5209e0b57c0e5030661391b1"
+	// Managed tools are removed only from OpenCode. Kilocode restores its
+	// historical provider shape, including read-only judges and default-deny
+	// sdd-research collection permissions, so the baseline is rederived here.
+	// Merged with main's #3563 causal-failure precedence and #3168 empty
+	// CodeGraph tool-grant changes, so the combined baseline is rederived.
+	const want = "673ed8caf9d34e0b88eeb6a1d1b479762189532a8e35b9e6e082a91be86e7938"
 	if got != want {
 		t.Fatalf("Kilocode settings SHA-256 = %s, want current-main baseline %s", got, want)
 	}
