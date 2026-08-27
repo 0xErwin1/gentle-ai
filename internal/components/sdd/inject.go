@@ -1162,7 +1162,20 @@ func expandOpenCodeBoundedReviewAgents(agentsMap map[string]any, usePermissions 
 
 	if validator, ok := agentsMap[opencode.ReviewValidatorAgent].(map[string]any); ok {
 		if permissions {
-			validator["permission"] = map[string]any{"write": "deny", "edit": "deny", "task": "deny", "bash": "allow"}
+			// The validator handles untrusted candidate input, so its shell is
+			// pinned to the single provider-issued read-only inspection command
+			// its briefing names (reviewerprovider contract); everything else
+			// is denied. Read stays unspecified so the global sensitive-path
+			// read denies remain authoritative.
+			validator["permission"] = map[string]any{
+				"write": "deny",
+				"edit":  "deny",
+				"task":  "deny",
+				"bash": map[string]any{
+					"gentle-ai review inspect-candidate --purpose targeted-validation *": "allow",
+					"*": "deny",
+				},
+			}
 		} else {
 			delete(validator, "permission")
 			validator["tools"] = map[string]any{"read": true, "write": false, "edit": false, "bash": true, "task": false}
