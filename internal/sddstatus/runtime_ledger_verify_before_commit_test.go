@@ -17,10 +17,19 @@ import (
 //
 // The record must now replay as a candidate BEFORE HEAD moves.
 
-// corruptNewestRecordOnSync corrupts the record that was just written, at the
-// moment its directory is synced, so the candidate replay must reject it. This
-// uses the seam the ledger already exposes rather than adding one.
-func corruptNewestRecordOnSync(t *testing.T, store RuntimeStore) {
+// corruptRecordsOnSync overwrites every published record with valid but wrong
+// JSON at the moment the records directory is synced, so the candidate replay
+// must reject what was just written. It uses the seam the ledger already
+// exposes rather than adding one.
+//
+// It deliberately does not single out the newest record: the ledger names
+// records by content address, so there is no ordering to select on, and this
+// test publishes exactly one.
+func corruptRecordsOnSync(t *testing.T, store RuntimeStore) {
+	corruptRecordsOnSyncWith(t, store, []byte("{}\n"))
+}
+
+func corruptRecordsOnSyncWith(t *testing.T, store RuntimeStore, replacement []byte) {
 	t.Helper()
 	recordsDir := filepath.Join(store.Dir, "records")
 	original := runtimeSyncDirectory
@@ -39,7 +48,7 @@ func corruptNewestRecordOnSync(t *testing.T, store RuntimeStore) {
 				if statErr != nil || info.Size() == 0 {
 					continue
 				}
-				if writeErr := os.WriteFile(full, []byte("{}\n"), 0o600); writeErr != nil {
+				if writeErr := os.WriteFile(full, replacement, 0o600); writeErr != nil {
 					return writeErr
 				}
 			}
@@ -72,7 +81,7 @@ func TestRejectedRecordNeverReachesHead(t *testing.T) {
 	}
 
 	before := readRuntimeHeadRevision(t, store)
-	corruptNewestRecordOnSync(t, store)
+	corruptRecordsOnSync(t, store)
 
 	_, err = store.Begin(context.Background(), BeginAttemptRequest{
 		ExpectedRevision: before, RequestID: "verify-first-begin", WorkUnit: "work",
@@ -83,11 +92,41 @@ func TestRejectedRecordNeverReachesHead(t *testing.T) {
 		t.Fatal("a record that cannot replay was committed")
 	}
 
+	// Unconditional: this path must produce no publication outcome at all,
+	// because nothing was published. Gating this on errors.As would let the
+	// assertion pass silently for exactly the error type this path returns.
 	var publication *RuntimePublicationError
-	if errors.As(err, &publication) && publication.Committed {
-		t.Errorf("rejected record reported as committed: %v", err)
+	if errors.As(err, &publication) {
+		t.Errorf("rejected record produced a publication error (committed=%v): %v", publication.Committed, err)
 	}
 	if after := readRuntimeHeadRevision(t, store); after != before {
 		t.Errorf("HEAD advanced to %q despite a rejected record (was %q)", after, before)
+	}
+}
+
+// TestUnreadableCandidateRecordNeverReachesHead covers the other new branch:
+// a record whose bytes do not parse at all fails on loadRevision itself rather
+// than on the revision comparison. The first test corrupts to valid-but-wrong
+// JSON and therefore only exercises the mismatch branch.
+func TestUnreadableCandidateRecordNeverReachesHead(t *testing.T) {
+	repo := initRuntimeLedgerRepo(t)
+	store, err := OpenRuntimeStore(context.Background(), repo, "verify-before-commit-unreadable")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	before := readRuntimeHeadRevision(t, store)
+	corruptRecordsOnSyncWith(t, store, []byte("not json at all\n"))
+
+	_, err = store.Begin(context.Background(), BeginAttemptRequest{
+		ExpectedRevision: before, RequestID: "verify-first-unreadable", WorkUnit: "work",
+		EvidenceGoal: "prove an unreadable candidate never advances HEAD",
+		MaxAttempts:  2, MaxChangedLines: 90,
+	})
+	if err == nil {
+		t.Fatal("an unreadable record was committed")
+	}
+	if after := readRuntimeHeadRevision(t, store); after != before {
+		t.Errorf("HEAD advanced to %q despite an unreadable record (was %q)", after, before)
 	}
 }
