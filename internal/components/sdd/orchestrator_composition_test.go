@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/gentleman-programming/gentle-ai/v2/internal/assets"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/catalog"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
 )
@@ -20,10 +21,14 @@ func TestCanonicalCompositionPreservesHistoricalOrchestratorBytes(t *testing.T) 
 	for _, agent := range catalog.AllAgents() {
 		t.Run(string(agent.ID), func(t *testing.T) {
 			path := sddOrchestratorAsset(agent.ID)
-			before := renderBoundedReviewAsset(agent.ID, path)
+			// #3817 adds shared-section substitution to the composition. The
+			// invariant is unchanged in spirit: composition is bounded review
+			// plus the shared sections plus the Pi route, and nothing else.
+			content := substituteSharedOrchestratorSections(assets.MustRead(path))
 			if agent.ID == model.AgentPi {
-				before = strings.Replace(before, testGenericFallbackOnlyNativeRoute, testPiClosedSingleSelectNativeRoute, 1)
+				content = strings.Replace(content, testGenericFallbackOnlyNativeRoute, testPiClosedSingleSelectNativeRoute, 1)
 			}
+			before := bindRuntimeAgentIdentity(renderBoundedReviewAssetBodyFromContent(agent.ID, path, content), agent.ID)
 			after := composeOrchestratorPrompt(agent.ID)
 			if after != before {
 				t.Fatalf("canonical composition changed %s orchestrator bytes", agent.ID)
