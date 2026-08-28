@@ -24,7 +24,11 @@ type ArtifactStore string
 const (
 	ArtifactStoreOpenSpec ArtifactStore = "openspec"
 	ArtifactStoreEngram   ArtifactStore = "engram"
-	ArtifactStoreNone     ArtifactStore = "none"
+	// ArtifactStoreHybrid used to exist only in prompt prose. #3636 reported
+	// the consequence: a workspace declaring it was reported as openspec, and
+	// its file writes were invisible to a status that read it as pure Engram.
+	ArtifactStoreHybrid ArtifactStore = "hybrid"
+	ArtifactStoreNone   ArtifactStore = "none"
 )
 
 type ArtifactState string
@@ -359,7 +363,65 @@ func explorationOnlyChangeDir(changeRoot string) bool {
 	return true
 }
 
+// Resolve reports SDD status for a workspace. A workspace that DECLARES an
+// artifact store gets that store: the declaration selects the resolver instead
+// of decorating whatever the OpenSpec-first preference order happened to find.
+//
+// #3636 / #3814: before this, Engram was consulted only as a fallback when
+// OpenSpec held nothing, so `sdd.artifact_store` could not change the outcome
+// whenever OpenSpec data existed. The enum, the config key, and the documented
+// "choose your store" vocabulary were decoration over a hardcoded order.
 func Resolve(options ResolveOptions) (Status, error) {
+	workspaceRoot, err := resolveWorkspaceRoot(options)
+	if err != nil {
+		return Status{}, err
+	}
+	declared, declaredOK := declaredArtifactStore(workspaceRoot)
+
+	if declaredOK && declared == ArtifactStoreEngram {
+		reviewDisabled, err := resolveReviewDisabled(options, workspaceRoot)
+		if err != nil {
+			return Status{}, err
+		}
+		status, resolved, err := resolveEngramStatus(workspaceRoot, strings.TrimSpace(options.ChangeName), options.IncludeInstructions, reviewDisabled)
+		if err != nil {
+			return Status{}, err
+		}
+		if resolved {
+			return status, nil
+		}
+		// An empty declared store is an empty declared store. Serving the
+		// OpenSpec artifacts that happen to sit on disk would report a store
+		// the workspace did not declare.
+		return blockedEngramStatus(workspaceRoot, nil, "sdd-new", []string{
+			"No SDD changes found in the declared Engram artifact store.",
+		}, options.IncludeInstructions), nil
+	}
+
+	status, err := resolveByPreferenceOrder(options)
+	if err != nil {
+		return status, err
+	}
+	// A hybrid workspace is ONE declared store. Reporting engram for the change
+	// that happened to resolve from the Engram half, and openspec for the one
+	// that resolved from disk, is the same inference-over-declaration defect in
+	// a different direction.
+	if declaredOK && declared == ArtifactStoreHybrid && status.ArtifactStore != ArtifactStoreNone {
+		status.ArtifactStore = ArtifactStoreHybrid
+	}
+	return status, nil
+}
+
+// resolveReviewDisabled applies the caller's per-workspace review-mode hook
+// exactly once, shared by both resolution routes.
+func resolveReviewDisabled(options ResolveOptions, workspaceRoot string) (bool, error) {
+	if options.ReviewDisabledForWorkspace == nil {
+		return options.ReviewDisabled, nil
+	}
+	return options.ReviewDisabledForWorkspace(workspaceRoot)
+}
+
+func resolveByPreferenceOrder(options ResolveOptions) (Status, error) {
 	workspaceRoot, err := resolveWorkspaceRoot(options)
 	if err != nil {
 		return Status{}, err
@@ -792,29 +854,44 @@ func blockedEngramStatus(workspaceRoot string, changeName *string, next string, 
 }
 
 func shouldTryEngram(workspaceRoot string) bool {
+	// A declaration is authoritative in both directions: it opts a workspace
+	// in, and it also opts one out even when a .engram directory is present.
+	if declared, ok := declaredArtifactStore(workspaceRoot); ok {
+		return declared == ArtifactStoreEngram || declared == ArtifactStoreHybrid
+	}
 	if os.Getenv("GENTLE_AI_SDD_STATUS_ENGRAM") != "" {
 		return true
 	}
 	if _, err := os.Stat(filepath.Join(workspaceRoot, ".engram")); err == nil {
 		return true
 	}
-	for _, path := range []string{filepath.Join(workspaceRoot, "openspec", "config.yaml"), filepath.Join(workspaceRoot, "openspec", "config.yml")} {
-		content, err := os.ReadFile(path)
-		if err == nil && configMentionsEngram(string(content)) {
-			return true
-		}
-	}
 	return false
 }
 
-func configMentionsEngram(content string) bool {
-	for _, line := range strings.Split(content, "\n") {
-		trimmed := strings.TrimSpace(strings.SplitN(line, "#", 2)[0])
-		if strings.HasPrefix(trimmed, "artifact_store:") || strings.HasPrefix(trimmed, "artifactStore:") {
-			return strings.Contains(strings.ToLower(trimmed), "engram") || strings.Contains(strings.ToLower(trimmed), "hybrid")
+// declaredArtifactStore reads the store a workspace declares in
+// openspec/config.yaml. It replaces the previous substring probe, which could
+// only answer the binary question "does this mention engram or hybrid" and so
+// could never distinguish the two or honour a declared openspec.
+func declaredArtifactStore(workspaceRoot string) (ArtifactStore, bool) {
+	for _, path := range []string{filepath.Join(workspaceRoot, "openspec", "config.yaml"), filepath.Join(workspaceRoot, "openspec", "config.yml")} {
+		content, err := os.ReadFile(path)
+		if err != nil {
+			continue
+		}
+		for _, line := range strings.Split(string(content), "\n") {
+			trimmed := strings.TrimSpace(strings.SplitN(line, "#", 2)[0])
+			if !strings.HasPrefix(trimmed, "artifact_store:") && !strings.HasPrefix(trimmed, "artifactStore:") {
+				continue
+			}
+			value := strings.ToLower(strings.Trim(strings.TrimSpace(strings.SplitN(trimmed, ":", 2)[1]), `"'`))
+			switch ArtifactStore(value) {
+			case ArtifactStoreEngram, ArtifactStoreOpenSpec, ArtifactStoreHybrid, ArtifactStoreNone:
+				return ArtifactStore(value), true
+			}
+			return "", false
 		}
 	}
-	return false
+	return "", false
 }
 
 func exportEngramObservations(workspaceRoot string) ([]engramObservation, error) {
@@ -1659,10 +1736,14 @@ func artifactLocator(locators []string) string {
 // lives and HOW to read it, which is exactly what the phase agent contracts
 // used to hardcode per store.
 func artifactReadVerb(store ArtifactStore) string {
-	if store == ArtifactStoreEngram {
+	switch store {
+	case ArtifactStoreEngram:
 		return "read the Engram observation named by that locator"
+	case ArtifactStoreHybrid:
+		return "read the file at that path when the locator is a path, or the Engram observation when it is a topic key"
+	default:
+		return "read the file at that path"
 	}
-	return "read the file at that path"
 }
 
 func renderPhaseInstructions(status Status) PhaseInstructions {
