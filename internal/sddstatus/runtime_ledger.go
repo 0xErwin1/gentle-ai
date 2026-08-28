@@ -883,7 +883,7 @@ func (store RuntimeStore) Finish(ctx context.Context, request FinishAttemptReque
 			Diagnosis: request.Diagnosis, HarnessDisposition: request.HarnessDisposition,
 			CleanupEvidence: request.CleanupEvidence, ProcessEvidence: request.ProcessEvidence,
 			RemediatesEvidenceRevision: request.RemediatesEvidenceRevision,
-			ChangedLineBudgetExceeded:  status.CumulativeChangedLines+changedLines > status.Objective.MaxChangedLines,
+			ChangedLineBudgetExceeded:  runtimeChangedLineBudgetExceeded(status, changedLines),
 		}
 		return runtimeRecord{Operation: runtimeOperationFinish, Finish: event}, nil
 	})
@@ -2048,13 +2048,24 @@ func applyRuntimeAdvanceEvent(replay *runtimeReplay, revision string, record run
 	return applyRuntimeBeginEvent(replay, revision, record)
 }
 
+// runtimeChangedLineBudgetExceeded is the one owner of the changed-line budget
+// decision. The writer stamps it onto the finish record and replay recomputes
+// it to check the record did not lie about its own derived field; both must
+// happen, and #2830 is what it costs when two copies of a rule disagree.
+//
+// Callers reach this only with an active attempt, which cannot exist without an
+// objective, so the dereference matches what both inlined copies already did.
+func runtimeChangedLineBudgetExceeded(status RuntimeStatus, changedLines int) bool {
+	return status.CumulativeChangedLines+changedLines > status.Objective.MaxChangedLines
+}
+
 func applyRuntimeFinishEvent(replay *runtimeReplay, event *runtimeFinishEvent, unmanagedRemediation bool) error {
 	active := replay.Status.ActiveAttempt
 	if active == nil || active.Ordinal != event.Ordinal || len(replay.Status.Attempts) == 0 ||
 		replay.Status.Attempts[len(replay.Status.Attempts)-1].Outcome != AttemptRunning {
 		return errors.New("finish record does not match the active attempt")
 	}
-	budgetExceeded := replay.Status.CumulativeChangedLines+event.ChangedLines > replay.Status.Objective.MaxChangedLines
+	budgetExceeded := runtimeChangedLineBudgetExceeded(replay.Status, event.ChangedLines)
 	if event.ChangedLineBudgetExceeded != budgetExceeded {
 		return errors.New("finish record changed-line budget decision does not match replay state")
 	}
