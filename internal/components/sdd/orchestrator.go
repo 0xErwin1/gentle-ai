@@ -2,6 +2,7 @@ package sdd
 
 import (
 	"fmt"
+	"regexp"
 	"strings"
 
 	"github.com/gentleman-programming/gentle-ai/v2/internal/assets"
@@ -44,28 +45,27 @@ func sharedOrchestratorSection(name string) string {
 	return strings.TrimSpace(source[start:end])
 }
 
+// sharedOrchestratorSectionPlaceholder matches one {{GENTLE_AI_SDD_SECTION:<name>}}.
+var sharedOrchestratorSectionPlaceholder = regexp.MustCompile(`\{\{GENTLE_AI_SDD_SECTION:([^}]*)\}\}`)
+
 // substituteSharedOrchestratorSections resolves every shared-section
-// placeholder. An unresolvable placeholder panics rather than shipping a prompt
-// with a literal template token in it, which is the failure mode the rendered
-// goldens would otherwise hide.
+// placeholder in one pass. An unresolvable placeholder panics rather than
+// shipping a prompt with a literal template token in it, which is the failure
+// mode the rendered goldens would otherwise hide.
+//
+// One pass, deliberately: a canonical body is literal text, so a placeholder
+// appearing inside one is not a nested reference to expand. The earlier
+// implementation rescanned from the start after each substitution, which would
+// not terminate if a body ever contained a placeholder.
 func substituteSharedOrchestratorSections(content string) string {
-	for {
-		open := strings.Index(content, sharedOrchestratorSectionOpen)
-		if open < 0 {
-			return content
-		}
-		rest := content[open+len(sharedOrchestratorSectionOpen):]
-		close := strings.Index(rest, "}}")
-		if close < 0 {
-			panic("sdd: unterminated shared orchestrator section placeholder")
-		}
-		name := rest[:close]
+	return sharedOrchestratorSectionPlaceholder.ReplaceAllStringFunc(content, func(match string) string {
+		name := sharedOrchestratorSectionPlaceholder.FindStringSubmatch(match)[1]
 		body := sharedOrchestratorSection(name)
 		if body == "" {
 			panic(fmt.Sprintf("sdd: shared orchestrator section %q has no canonical body", name))
 		}
-		content = content[:open] + body + rest[close+len("}}"):]
-	}
+		return body
+	})
 }
 
 // composeOrchestratorPrompt is the renderer-owned source seam for every SDD
