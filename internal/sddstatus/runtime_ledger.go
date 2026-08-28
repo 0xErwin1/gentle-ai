@@ -2161,9 +2161,11 @@ func applyRuntimeFinishEvent(replay *runtimeReplay, event *runtimeFinishEvent, u
 	replay.Status.ActiveAttempt = nil
 	replay.Status.CumulativeChangedLines += event.ChangedLines
 	replay.Status.LifetimeChangedLines += event.ChangedLines
-	// The objective budget refunds a call that advanced the unit. LifetimeAttempts
-	// is never refunded, so the chain still records every call that ran.
-	if runtimeAttemptDeliveredIncrement(event.Outcome, event.ChangedLines) && replay.Status.CumulativeAttempts > 0 {
+	// The objective budget refunds a call that advanced the unit, up to the
+	// configured ceiling. LifetimeAttempts is never refunded, so the chain still
+	// records every call that ran.
+	if runtimeAttemptDeliveredIncrement(event.Outcome, event.ChangedLines) && replay.Status.CumulativeAttempts > 0 &&
+		runtimeRefundedAttempts(replay.Status) <= replay.Status.Objective.MaxAttempts {
 		replay.Status.CumulativeAttempts--
 	}
 	replay.Status.EvidenceRevision = event.EvidenceRevision
@@ -2178,6 +2180,27 @@ func applyRuntimeFinishEvent(replay *runtimeReplay, event *runtimeFinishEvent, u
 		replay.Status.NextAction = RuntimeActionBegin
 	}
 	return nil
+}
+
+// runtimeRefundedAttempts counts the settlements in the current objective that
+// earned their call back, including the one being applied. It feeds the cap
+// that keeps max_attempts a real bound: without it Begin's +1 and the refund's
+// -1 cancel for every call that touches a line, so a partially productive
+// stall runs until the changed-line cap and the human escalation max_attempts
+// exists to trigger never fires. An objective earns back at most MaxAttempts
+// calls, so it spends at most twice what the operator configured.
+func runtimeRefundedAttempts(status RuntimeStatus) int {
+	if status.Objective == nil {
+		return 0
+	}
+	refunded := 0
+	for _, attempt := range status.Attempts {
+		if attempt.ObjectiveID == status.Objective.ID && attempt.ObjectiveGeneration == status.Objective.Generation &&
+			runtimeAttemptDeliveredIncrement(attempt.Outcome, attempt.ChangedLines) {
+			refunded++
+		}
+	}
+	return refunded
 }
 
 // runtimeAttemptDeliveredIncrement reports whether a settlement earned back the
