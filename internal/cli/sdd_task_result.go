@@ -15,6 +15,10 @@ import (
 // outright. A delegated phase returns a report, never a payload.
 const maxSDDTaskResultBytes = 4 << 20
 
+// sddTaskResultUsage is the runnable form every usage refusal names, so a
+// caller is never told what is missing without being told how to supply it.
+const sddTaskResultUsage = "`gentle-ai sdd-task-result --phase <phase> --cwd <repo> --input <path|->`"
+
 // RunSDDTaskResult classifies one delegated SDD phase result and renders the
 // typed terminal failure when it is not usable.
 //
@@ -39,10 +43,10 @@ func runSDDTaskResult(args []string, stdin io.Reader, stdout io.Writer) error {
 		return err
 	}
 	if strings.TrimSpace(*phase) == "" {
-		return errors.New("sdd-task-result requires --phase")
+		return errors.New("sdd-task-result requires --phase; run " + sddTaskResultUsage)
 	}
 	if strings.TrimSpace(*cwd) == "" {
-		return errors.New("sdd-task-result requires --cwd")
+		return errors.New("sdd-task-result requires --cwd; run " + sddTaskResultUsage)
 	}
 
 	// A latched session never dispatched, so the result bytes are irrelevant:
@@ -50,7 +54,7 @@ func runSDDTaskResult(args []string, stdin io.Reader, stdout io.Writer) error {
 	// actually produced.
 	if *latchedPhase != "" || *latchedCode != "" {
 		if *latchedPhase == "" || *latchedCode == "" {
-			return errors.New("sdd-task-result requires both --latched-phase and --latched-code")
+			return errors.New("sdd-task-result requires both --latched-phase and --latched-code, or neither; run " + sddTaskResultUsage)
 		}
 		return errors.New(sddtaskresult.DispatchLatched(*phase, *latchedPhase, *latchedCode, *cwd))
 	}
@@ -81,7 +85,7 @@ func readSDDTaskResult(input string, stdin io.Reader) (string, error) {
 		return "", fmt.Errorf("read SDD task result: %w", err)
 	}
 	if len(content) > maxSDDTaskResultBytes {
-		return "", fmt.Errorf("SDD task result exceeds %d bytes", maxSDDTaskResultBytes)
+		return "", fmt.Errorf("SDD task result exceeds %d bytes; a phase returns a report, not a payload — re-run the phase and pass its report to %s", maxSDDTaskResultBytes, sddTaskResultUsage)
 	}
 	return string(content), nil
 }
