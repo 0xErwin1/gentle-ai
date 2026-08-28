@@ -2,6 +2,7 @@ package sddstatus
 
 import (
 	"context"
+	"fmt"
 	"testing"
 )
 
@@ -100,5 +101,35 @@ func TestInterruptedCallThatDeliveredNothingStillSpendsTheBudget(t *testing.T) {
 	}
 	if status.LifetimeAttempts != 1 {
 		t.Errorf("LifetimeAttempts = %d, want 1; the lifetime counter is never refunded", status.LifetimeAttempts)
+	}
+}
+
+// TestRefundsAreCappedAtTheConfiguredAttemptCeiling pins the bound: an
+// objective earns back at most MaxAttempts calls, so it spends at most twice
+// what the operator configured and max_attempts still escalates.
+func TestRefundsAreCappedAtTheConfiguredAttemptCeiling(t *testing.T) {
+	repo := initRuntimeLedgerRepo(t)
+	store, err := OpenRuntimeStore(context.Background(), repo, "budget-refund-cap")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	status := RuntimeStatus{}
+	expected := ""
+	for call := 1; call <= 4; call++ {
+		status = beginRuntimeAttempt(t, store, expected, fmt.Sprintf("cap-begin-%d", call))
+		appendRuntimeLedgerFile(t, repo, fmt.Sprintf("slice %d\n", call))
+		status = interruptRuntimeAttempt(t, store, status.Revision, fmt.Sprintf("cap-finish-%d", call))
+		expected = status.Revision
+		if call < 4 && status.DecisionRequired {
+			t.Fatalf("call %d reached decision-required before the 2x ceiling", call)
+		}
+	}
+
+	if !status.DecisionRequired {
+		t.Errorf("four delivering calls on a 2-attempt objective did not reach decision-required; max_attempts no longer escalates")
+	}
+	if status.LifetimeAttempts != 4 {
+		t.Errorf("LifetimeAttempts = %d, want 4; every call that ran must stay recorded", status.LifetimeAttempts)
 	}
 }
