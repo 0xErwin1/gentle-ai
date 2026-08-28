@@ -1587,6 +1587,24 @@ func (store RuntimeStore) commitRecordLocked(record runtimeRecord) (RuntimeStatu
 	if err := store.publishRecord(revision, payload); err != nil {
 		return RuntimeStatus{}, err
 	}
+	// Verify BEFORE committing (#2833). Replay a candidate chain that ends at
+	// this record; HEAD advances only if that replay lands on the expected
+	// revision. Previously HEAD moved first and the replay could only report a
+	// state it had already made permanent, so a record the store's own
+	// validator rejects was on the chain and every later read walked into it.
+	// The wedge class disappears by construction rather than by catching it.
+	//
+	// A record that fails here stays on disk, unreferenced by HEAD. Records are
+	// content-addressed and immutable, so an unreachable one is inert: the next
+	// attempt at the same record re-publishes identical bytes.
+	if candidate, err := store.loadRevision(revision); err != nil {
+		return RuntimeStatus{}, fmt.Errorf("replay candidate SDD runtime record: %w", err)
+	} else if candidate.Status.Revision != revision {
+		// HEAD did not move, so the chain is intact and status is actionable.
+		// This deliberately does not say "restore the store": nothing was
+		// committed, which is the entire point of verifying first.
+		return RuntimeStatus{}, errors.New("candidate SDD runtime record did not replay to its own revision; HEAD was not advanced and the chain is unchanged; " + runtimeLedgerStatusPointer)
+	}
 	if err := store.publishHead(revision); err != nil {
 		return RuntimeStatus{}, err
 	}
