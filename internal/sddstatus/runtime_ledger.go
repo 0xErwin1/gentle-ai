@@ -2161,6 +2161,11 @@ func applyRuntimeFinishEvent(replay *runtimeReplay, event *runtimeFinishEvent, u
 	replay.Status.ActiveAttempt = nil
 	replay.Status.CumulativeChangedLines += event.ChangedLines
 	replay.Status.LifetimeChangedLines += event.ChangedLines
+	// The objective budget refunds a call that advanced the unit. LifetimeAttempts
+	// is never refunded, so the chain still records every call that ran.
+	if runtimeAttemptDeliveredIncrement(event.Outcome, event.ChangedLines) && replay.Status.CumulativeAttempts > 0 {
+		replay.Status.CumulativeAttempts--
+	}
 	replay.Status.EvidenceRevision = event.EvidenceRevision
 	if event.Outcome == AttemptPassed && !event.ChangedLineBudgetExceeded {
 		replay.Status.Complete = true
@@ -2173,6 +2178,22 @@ func applyRuntimeFinishEvent(replay *runtimeReplay, event *runtimeFinishEvent, u
 		replay.Status.NextAction = RuntimeActionBegin
 	}
 	return nil
+}
+
+// runtimeAttemptDeliveredIncrement reports whether a settlement earned back the
+// call it spent. #3815: RuntimeAttempt was one provider call, one unit of
+// budget and one unit of work at once, so a work unit that legitimately needs
+// several calls exhausted its objective by accounting rather than by failure —
+// #3808, where two calls delivered zero production and ended at
+// decision_required.
+//
+// An interrupted call that left measurable increment advanced the unit, so it
+// does not discharge an attempt against the objective. A call that delivered
+// nothing is still spent, which is what keeps max_attempts bounding calls that
+// produce nothing. The refund cannot run away: earning one costs delivered
+// lines, and cumulative changed lines remain capped by the objective.
+func runtimeAttemptDeliveredIncrement(outcome AttemptOutcome, changedLines int) bool {
+	return outcome == AttemptInterrupted && changedLines > 0
 }
 
 // applyRuntimeGrantEvent accumulates a grant's canonical roots into the
