@@ -2,6 +2,7 @@ package sddstatus
 
 import (
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -72,5 +73,42 @@ func TestDeclaredOpenSpecStoreBeatsEngramDataPresence(t *testing.T) {
 	}
 	if status.ArtifactStore != ArtifactStoreOpenSpec {
 		t.Errorf("ArtifactStore = %q, want openspec", status.ArtifactStore)
+	}
+}
+
+// TestDeclaredEngramWithOpenSpecOnDiskDoesNotRecommendANewChange pins the
+// bounded review's finding. An empty Engram resolution is not only the
+// genuinely-empty case: inferEngramProject falls back to the directory name, so
+// a project mismatch or an unpopulated store also returns zero changes. If that
+// reported "no SDD changes found — start a new change" while OpenSpec artifacts
+// sat on disk, an orchestrator routing on nextRecommended would open a
+// duplicate change on top of live work.
+//
+// A declared store that resolves nothing while the other store holds work is a
+// conflict for a human, not an invitation to start over.
+func TestDeclaredEngramWithOpenSpecOnDiskDoesNotRecommendANewChange(t *testing.T) {
+	root := t.TempDir()
+	seedReadyChange(t, root, "add-auth", "- [x] 1.1 Work\n")
+	declareArtifactStore(t, root, "engram")
+	defer stubEngramExport(t, nil)()
+
+	status, err := Resolve(ResolveOptions{CWD: root})
+	if err != nil {
+		t.Fatalf("Resolve() error = %v", err)
+	}
+	if status.NextRecommended == "sdd-new" {
+		t.Error("an empty declared Engram store recommended a new change while OpenSpec work exists on disk")
+	}
+	if status.NextRecommended != "resolve-blockers" {
+		t.Errorf("NextRecommended = %q, want resolve-blockers", status.NextRecommended)
+	}
+	if len(status.BlockedReasons) == 0 {
+		t.Fatal("the conflict was reported with no blocked reason")
+	}
+	joined := strings.Join(status.BlockedReasons, " ")
+	for _, want := range []string{"engram", "openspec"} {
+		if !strings.Contains(strings.ToLower(joined), want) {
+			t.Errorf("blocked reasons do not name %s: %v", want, status.BlockedReasons)
+		}
 	}
 }

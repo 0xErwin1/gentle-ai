@@ -393,6 +393,24 @@ func Resolve(options ResolveOptions) (Status, error) {
 		// An empty declared store is an empty declared store. Serving the
 		// OpenSpec artifacts that happen to sit on disk would report a store
 		// the workspace did not declare.
+		//
+		// But an empty Engram resolution is not only the genuinely-empty case:
+		// inferEngramProject falls back to the directory name, so a project
+		// mismatch or an unpopulated store also returns zero changes. Saying
+		// "start a new change" then, while OpenSpec work sits on disk, invites
+		// an orchestrator that routes on nextRecommended to open a duplicate on
+		// top of live work. That disagreement is a human decision.
+		active, activeErr := listActiveOpenSpecChanges(workspaceRoot)
+		if activeErr != nil {
+			return Status{}, activeErr
+		}
+		if len(active) > 0 {
+			return blockedStatus(ArtifactStoreEngram, workspaceRoot, nil, nil, "resolve-blockers", []string{
+				"The workspace declares the engram artifact store, but it resolved no changes for the inferred project.",
+				fmt.Sprintf("These openspec changes are on disk and were not served because they are not the declared store: %s.", strings.Join(active, ", ")),
+				"Populate the declared store, correct the inferred project, or change sdd.artifact_store to match where the work lives.",
+			}, options.IncludeInstructions), nil
+		}
 		return blockedEngramStatus(workspaceRoot, nil, "sdd-new", []string{
 			"No SDD changes found in the declared Engram artifact store.",
 		}, options.IncludeInstructions), nil
