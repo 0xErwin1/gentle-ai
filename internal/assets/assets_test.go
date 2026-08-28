@@ -2255,7 +2255,7 @@ func TestSDDOrchestratorsUseNativeRuntimeAttemptAuthority(t *testing.T) {
 		causalFailureDisclosure,
 	}
 	for _, path := range paths {
-		content := MustRead(path)
+		content := resolveSharedOrchestratorSections(MustRead(path))
 		if path == "claude/sdd-orchestrator.md" {
 			content += "\n" + MustRead("claude/sdd-orchestrator-workflow.md")
 		}
