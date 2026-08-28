@@ -1074,14 +1074,21 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.OperationRunning = false
 		m.ReviewModeStatus = msg.Status
 		m.ReviewModeErr = msg.Err
+		if msg.Err != nil {
+			m.ReviewModeStatus = reviewtransaction.RDDModeStatus{}
+		}
 		return m, nil
 	case ReviewModeUpdatedMsg:
 		if m.Screen != ScreenReviewMode {
 			return m, nil
 		}
 		m.OperationRunning = false
-		m.ReviewModeStatus = msg.Status
 		m.ReviewModeErr = msg.Err
+		if msg.Err != nil {
+			return m, nil
+		}
+		m.ReviewModeStatus = msg.Status
+		m.setScreen(ScreenWelcome)
 		return m, nil
 	case ReviewStoreResetDoneMsg:
 		// Deliberately not guarded on the current screen. This message reports
@@ -2817,13 +2824,15 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 		// Refresh the backup list to reflect any changes from the restore.
 		m = m.finishBackupResult(false)
 	case ScreenReviewMode:
-		switch m.Cursor {
-		case 0, 1:
-			m.OperationRunning = true
-			return m, tea.Batch(m.startReviewModeUpdate(m.Cursor == 0), tickCmd())
-		default:
+		options := screens.ReviewModeOptions(m.ReviewModeStatus, m.ReviewModeErr)
+		if m.Cursor != 0 || len(options) == 1 {
 			m.setScreen(ScreenWelcome)
+			return m, nil
 		}
+		m.OperationRunning = true
+		m.ReviewModeErr = nil
+		enabled := m.ReviewModeStatus.Global != reviewtransaction.RDDModeOn
+		return m, tea.Batch(m.startReviewModeUpdate(enabled), tickCmd())
 	case ScreenReviewStoreResetConfirm:
 		// Cursor 0 is "Delete permanently" only when the survey found
 		// something safe to delete; in every other state the sole option is
@@ -3215,6 +3224,7 @@ func (m Model) startOpenCodePluginUninstall() tea.Cmd {
 // nothing is worse than one that explains itself.
 func (m Model) startReviewModeLoad() (tea.Model, tea.Cmd) {
 	m.OperationRunning = true
+	m.ReviewModeStatus = reviewtransaction.RDDModeStatus{}
 	m.ReviewModeErr = nil
 	m.setScreen(ScreenReviewMode)
 	cwd := m.ReviewModeCwdFn
@@ -4129,7 +4139,7 @@ func (m Model) optionCount() int {
 	case ScreenReviewStoreResetConfirm:
 		return screens.ReviewStoreResetConfirmOptionCount(m.ReviewStoreResetReport, m.ReviewStoreResetSurveyErr)
 	case ScreenReviewMode:
-		return len(screens.ReviewModeOptions())
+		return len(screens.ReviewModeOptions(m.ReviewModeStatus, m.ReviewModeErr))
 	case ScreenReviewStoreResetResult:
 		return 0
 	case ScreenRenameBackup:

@@ -38,23 +38,22 @@ func reviewModeTTYExchange(reader *bufio.Reader, writer io.WriteCloser) error {
 		if _, err := io.WriteString(writer, strings.Repeat("\x1b[A", 4)+"\r"); err != nil {
 			return err
 		}
-		return waitForReviewModeTTY(reader, "Global: unset", "Clone-local: unset", func() error {
-			return waitForReviewModeTTY(reader, "Effective: disabled", "Decided by: default", func() error {
-				if _, err := io.WriteString(writer, "\r"); err != nil {
+		return waitForReviewModeTTY(reader, "Global: unset", "Enable globally", func() error {
+			if _, err := io.WriteString(writer, "\r"); err != nil {
+				return err
+			}
+			return waitForReviewModeTTY(reader, "Start installation", "q: quit", func() error {
+				time.Sleep(100 * time.Millisecond)
+				if _, err := io.WriteString(writer, strings.Repeat("\x1b[A", 4)+"\r"); err != nil {
 					return err
 				}
-				return waitForReviewModeTTY(reader, "Global: enabled", "Decided by: global", func() error {
-					if _, err := io.WriteString(writer, "j\r"); err != nil {
+				return waitForReviewModeTTY(reader, "Global: enabled", "Disable globally", func() error {
+					if _, err := io.WriteString(writer, "\r"); err != nil {
 						return err
 					}
-					return waitForReviewModeTTY(reader, "Global: disabled", "Effective: disabled", func() error {
-						if _, err := io.WriteString(writer, "\x1b"); err != nil {
-							return err
-						}
-						return waitForReviewModeTTY(reader, "Start installation", "q: quit", func() error {
-							_, err := io.WriteString(writer, "q")
-							return err
-						})
+					return waitForReviewModeTTY(reader, "Start installation", "q: quit", func() error {
+						_, err := io.WriteString(writer, "q")
+						return err
 					})
 				})
 			})

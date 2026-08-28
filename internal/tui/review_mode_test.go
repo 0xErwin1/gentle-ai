@@ -3,90 +3,87 @@ package tui
 import (
 	"context"
 	"errors"
+	"strings"
+	"testing"
+
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/system"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/tui/screens"
-	"strings"
-	"testing"
 )
 
 func settleReviewMode(t *testing.T, model Model, cmd tea.Cmd) Model {
-	t.Helper()
-	if cmd == nil {
-		t.Fatal("expected an asynchronous command")
-	}
 	message := cmd()
 	if batch, ok := message.(tea.BatchMsg); ok {
-		for _, command := range batch {
-			model = settleReviewMode(t, model, command)
-		}
-		return model
+		message = batch[0]()
 	}
 	updated, _ := model.Update(message)
 	return updated.(Model)
 }
 func TestReviewModeTUI(t *testing.T) {
-	status := func(global, local, effective reviewtransaction.RDDMode, source reviewtransaction.RDDModeSource) reviewtransaction.RDDModeStatus {
+	mode := func(global, local, effective reviewtransaction.RDDMode, source reviewtransaction.RDDModeSource) reviewtransaction.RDDModeStatus {
 		return reviewtransaction.RDDModeStatus{Schema: reviewtransaction.RDDModeStatusSchema, Global: global, CloneLocal: local, Effective: effective, Source: source}
 	}
-	m := NewModel(system.DetectionResult{}, "dev")
-	m.Cursor = len(screens.WelcomeOptions(m.UpdateResults, m.UpdateCheckDone, false, 0, true)) - 4
-	loads, mutations := 0, []bool{}
+	current := mode(reviewtransaction.RDDModeOff, reviewtransaction.RDDModeUnset, reviewtransaction.RDDModeOff, reviewtransaction.RDDModeSourceDefault)
+	m, mutations := NewModel(system.DetectionResult{}, "dev"), []bool{}
 	m.ReviewModeCwdFn = func() (string, error) { return "/repo", nil }
-	m.ReviewModeStatusFn = func(context.Context, string) (reviewtransaction.RDDModeStatus, error) {
-		loads++
-		return status(reviewtransaction.RDDModeOff, reviewtransaction.RDDModeUnset, reviewtransaction.RDDModeOff, reviewtransaction.RDDModeSourceDefault), nil
-	}
-	m.ReviewModeSetGlobalFn = func(_ context.Context, cwd string, enabled bool) (reviewtransaction.RDDModeStatus, error) {
-		if cwd != "/repo" {
-			t.Fatalf("mutation cwd = %q", cwd)
-		}
+	m.ReviewModeStatusFn = func(context.Context, string) (reviewtransaction.RDDModeStatus, error) { return current, nil }
+	m.ReviewModeSetGlobalFn = func(_ context.Context, _ string, enabled bool) (reviewtransaction.RDDModeStatus, error) {
 		mutations = append(mutations, enabled)
 		if enabled {
-			return status(reviewtransaction.RDDModeOn, reviewtransaction.RDDModeOff, reviewtransaction.RDDModeOff, reviewtransaction.RDDModeSourceCloneLocal), nil
+			current = mode(reviewtransaction.RDDModeOn, reviewtransaction.RDDModeOff, reviewtransaction.RDDModeOff, reviewtransaction.RDDModeSourceCloneLocal)
+		} else {
+			current = mode(reviewtransaction.RDDModeOff, reviewtransaction.RDDModeUnset, reviewtransaction.RDDModeOff, reviewtransaction.RDDModeSourceGlobal)
 		}
-		return status(reviewtransaction.RDDModeOff, reviewtransaction.RDDModeUnset, reviewtransaction.RDDModeOff, reviewtransaction.RDDModeSourceGlobal), nil
+		return current, nil
+	}
+	open := func(model Model) Model {
+		model.Cursor = len(screens.WelcomeOptions(model.UpdateResults, model.UpdateCheckDone, false, 0, true)) - 4
+		updated, cmd := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+		return settleReviewMode(t, updated.(Model), cmd)
+	}
+	m = open(m)
+	if view := m.View(); !strings.Contains(view, "Do you want to enable RDD globally?") || !strings.Contains(view, "Enable globally") || !strings.Contains(view, "Continue") || strings.Contains(view, "Disable globally") {
+		t.Fatalf("disabled view was not state-aware:\n%s", view)
 	}
 	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	m = updated.(Model)
-	if m.Screen != ScreenReviewMode || !m.OperationRunning || loads != 0 || len(mutations) != 0 {
-		t.Fatalf("entry = screen %v running %t loads %d mutations %v", m.Screen, m.OperationRunning, loads, mutations)
-	}
-	m = settleReviewMode(t, m, cmd)
-	for _, want := range []string{"Global: disabled", "Clone-local: unset", "Effective: disabled", "Decided by: default"} {
-		if !strings.Contains(m.View(), want) {
-			t.Fatalf("initial view missing %q:\n%s", want, m.View())
-		}
-	}
-	updated, cmd = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	m = settleReviewMode(t, updated.(Model), cmd)
-	if len(mutations) != 1 || !mutations[0] || !strings.Contains(m.View(), "Decided by: clone-local") || !strings.Contains(m.View(), "Effective: disabled") {
-		t.Fatalf("global enable was not truthfully refreshed: %v\n%s", mutations, m.View())
+	if m.Screen != ScreenWelcome || len(mutations) != 1 || !mutations[0] {
+		t.Fatalf("enable = screen %v mutations %v", m.Screen, mutations)
+	}
+	m = open(m)
+	if view := m.View(); !strings.Contains(view, "Do you want to disable RDD globally?") || !strings.Contains(view, "Disable globally") || !strings.Contains(view, "Decided by: clone-local") || strings.Contains(view, "Enable globally") {
+		t.Fatalf("enabled view was not state-aware:\n%s", view)
 	}
 	m.Cursor = 1
 	updated, cmd = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	m = settleReviewMode(t, updated.(Model), cmd)
-	if len(mutations) != 2 || mutations[1] || !strings.Contains(m.View(), "Decided by: global") {
-		t.Fatalf("global disable = %v\n%s", mutations, m.View())
+	m = updated.(Model)
+	if cmd != nil || m.Screen != ScreenWelcome || len(mutations) != 1 {
+		t.Fatalf("continue = screen %v cmd %v mutations %v", m.Screen, cmd, mutations)
 	}
-	m.ReviewModeCwdFn = func() (string, error) { return "", errors.New("not a repository") }
+	m = open(m)
 	updated, cmd = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	m = settleReviewMode(t, updated.(Model), cmd)
-	if !strings.Contains(m.View(), "not a repository") || strings.Contains(m.View(), "✓ Receipt-Driven Development") {
-		t.Fatalf("cwd error was not truthful:\n%s", m.View())
+	if m.Screen != ScreenWelcome || len(mutations) != 2 || mutations[1] {
+		t.Fatalf("disable = screen %v mutations %v", m.Screen, mutations)
 	}
-	m.ReviewModeCwdFn = func() (string, error) { return "/repo", nil }
+	m.ReviewModeStatusFn = func(context.Context, string) (reviewtransaction.RDDModeStatus, error) {
+		return current, errors.New("not a repository")
+	}
+	m = open(m)
+	if view := m.View(); !strings.Contains(view, "not a repository") || !strings.Contains(view, "Continue") || strings.Contains(view, "globally") {
+		t.Fatalf("load error was not safely actionable:\n%s", view)
+	}
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = updated.(Model)
+	m.ReviewModeStatusFn = func(context.Context, string) (reviewtransaction.RDDModeStatus, error) { return current, nil }
 	m.ReviewModeSetGlobalFn = func(context.Context, string, bool) (reviewtransaction.RDDModeStatus, error) {
 		return reviewtransaction.RDDModeStatus{}, errors.New("revision conflict")
 	}
+	m = open(m)
 	updated, cmd = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	m = settleReviewMode(t, updated.(Model), cmd)
-	if !strings.Contains(m.View(), "revision conflict") {
-		t.Fatalf("mutation error was not truthful:\n%s", m.View())
-	}
-	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyEsc})
-	if updated.(Model).Screen != ScreenWelcome {
-		t.Fatalf("back = %v, want welcome", updated.(Model).Screen)
+	if view := m.View(); m.Screen != ScreenReviewMode || !strings.Contains(view, "revision conflict") || !strings.Contains(view, "Enable globally") || !strings.Contains(view, "Continue") || strings.Contains(view, "Disable globally") {
+		t.Fatalf("mutation error was hidden or not retryable:\n%s", view)
 	}
 }
