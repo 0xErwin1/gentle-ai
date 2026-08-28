@@ -1911,7 +1911,8 @@ func TestSDDStatusContractPreservesFrozenExternalV2Projection(t *testing.T) {
 		"schemaVersion: 2",
 		"gentle-ai.sdd-status/v2",
 		"changeName: <change-name-or-null>",
-		"artifactStore: openspec | engram | none",
+		// #3636: hybrid reaches the public v2 document; kept in lockstep with statusV2ArtifactStore.
+		"artifactStore: openspec | engram | hybrid | none",
 		"planningHome:",
 		"mode: repo-local",
 		"path: <absolute path to openspec>",
