@@ -1,6 +1,8 @@
 package sdd
 
 import (
+	"io/fs"
+	"path"
 	"strings"
 	"testing"
 
@@ -29,16 +31,39 @@ var sharedOrchestratorSectionNames = []string{
 }
 
 // TestSharedOrchestratorSectionsHaveOneSource pins that each shared section
-// body lives in the shared asset and not in the per-runtime orchestrators.
+// body lives in the shared asset and NOT in the per-runtime orchestrators.
+//
+// It opens the runtime assets. An earlier version only checked the shared
+// asset against a substring extracted from that same shared asset, which is a
+// tautology: it could not fail, while its name promised that no duplicated
+// body survives in the eleven per-runtime files.
 func TestSharedOrchestratorSectionsHaveOneSource(t *testing.T) {
-	shared := assets.MustRead(sharedOrchestratorSectionsAsset)
+	runtimeAssets := map[string]string{}
+	err := fs.WalkDir(assets.FS, ".", func(assetPath string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if !entry.IsDir() && path.Base(assetPath) == "sdd-orchestrator.md" {
+			runtimeAssets[assetPath] = assets.MustRead(assetPath)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("walk orchestrator assets: %v", err)
+	}
+	if len(runtimeAssets) == 0 {
+		t.Fatal("no runtime orchestrator assets were found")
+	}
+
 	for _, name := range sharedOrchestratorSectionNames {
 		body := sharedOrchestratorSection(name)
 		if strings.TrimSpace(body) == "" {
 			t.Fatalf("shared asset carries no body for %q", name)
 		}
-		if !strings.Contains(shared, body) {
-			t.Errorf("shared asset does not contain the canonical body for %q", name)
+		for assetPath, content := range runtimeAssets {
+			if strings.Contains(content, body) {
+				t.Errorf("%s still carries the %q body inline; it must carry the placeholder instead", assetPath, name)
+			}
 		}
 	}
 }
