@@ -1640,6 +1640,31 @@ func resolveNextRecommended(dependencies Dependencies, applyState ApplyState, ve
 
 const runtimeRemediationVerifyRefreshInstruction = "A passing native remediation settlement completed after the persisted verification report; run fresh verification and persist a report bound after that settlement before archive."
 
+// artifactLocator renders the locators the native surface already resolved
+// for one artifact. #3814: phase instructions must name what Resolve produced
+// for the ACTIVE artifact store -- an OpenSpec path or an Engram topic key --
+// so a delegated actor never has to detect the store or guess a filename.
+// Unresolved is explicit rather than silently omitted: a phase actor that
+// cannot be told where its input lives must fail loudly, not read the wrong
+// store.
+func artifactLocator(locators []string) string {
+	if len(locators) == 0 {
+		return "<unresolved>"
+	}
+	return strings.Join(locators, ", ")
+}
+
+// artifactReadVerb names how the active store's locators are read. It is the
+// second half of the locator contract: the brief carries WHERE the artifact
+// lives and HOW to read it, which is exactly what the phase agent contracts
+// used to hardcode per store.
+func artifactReadVerb(store ArtifactStore) string {
+	if store == ArtifactStoreEngram {
+		return "read the Engram observation named by that locator"
+	}
+	return "read the file at that path"
+}
+
 func renderPhaseInstructions(status Status) PhaseInstructions {
 	change := "<unresolved>"
 	if status.ChangeName != nil {
@@ -1650,7 +1675,10 @@ func renderPhaseInstructions(status Status) PhaseInstructions {
 		fmt.Sprintf("Change: %s", change),
 		fmt.Sprintf("State: %s", status.Dependencies.Apply),
 		"Read proposal, specs, design, and tasks before editing.",
-		"Implement only unchecked tasks and update tasks.md checkboxes as work completes.",
+		fmt.Sprintf("Artifact store: %s; %s.", status.ArtifactStore, artifactReadVerb(status.ArtifactStore)),
+		fmt.Sprintf("Tasks locator: %s", artifactLocator(status.ArtifactPaths.Tasks)),
+		fmt.Sprintf("Apply-progress locator: %s", artifactLocator(status.ArtifactPaths.ApplyProgress)),
+		"Resume from the apply-progress locator when it resolves; implement only unchecked tasks and mark each complete at the tasks locator as work completes.",
 	}
 	verifyInstructions := []string{
 		fmt.Sprintf("Change: %s", change),
@@ -1675,7 +1703,8 @@ func renderPhaseInstructions(status Status) PhaseInstructions {
 		Archive: []string{
 			fmt.Sprintf("Change: %s", change),
 			fmt.Sprintf("State: %s", status.Dependencies.Archive),
-			"Archive only when verify-report.md exists and every task checkbox is complete.",
+			fmt.Sprintf("Verify-report locator: %s", artifactLocator(status.ArtifactPaths.VerifyReport)),
+			fmt.Sprintf("Archive only when a verify report resolves at that locator (%s) and every task is complete.", artifactReadVerb(status.ArtifactStore)),
 		},
 	}
 }
