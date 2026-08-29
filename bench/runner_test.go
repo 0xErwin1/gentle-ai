@@ -74,6 +74,91 @@ func startTTYHelper(t *testing.T, mode string) (*exec.Cmd, io.ReadWriteCloser) {
 	return cmd, terminal
 }
 
+type closeReleasesExchangeTTY struct {
+	closed       chan struct{}
+	exchangeDone <-chan struct{}
+	read         bool
+}
+
+func (terminal *closeReleasesExchangeTTY) Read(p []byte) (int, error) {
+	<-terminal.closed
+	if terminal.read {
+		return 0, io.EOF
+	}
+	terminal.read = true
+	return copy(p, "ready\n"), nil
+}
+
+func (*closeReleasesExchangeTTY) Write(p []byte) (int, error) { return len(p), nil }
+
+func (terminal *closeReleasesExchangeTTY) Close() error {
+	close(terminal.closed)
+	<-terminal.exchangeDone
+	return nil
+}
+
+func TestRunTTYRegainsExchangeOwnershipAfterClosingTheTerminal(t *testing.T) {
+	exchangeDone := make(chan struct{})
+	terminal := &closeReleasesExchangeTTY{closed: make(chan struct{}), exchangeDone: exchangeDone}
+	_, err := runTTYWithTimeout(&exec.Cmd{}, terminal, []string{"welcome"}, func(reader *bufio.Reader, _ io.WriteCloser) error {
+		defer close(exchangeDone)
+		_, err := reader.ReadString('\n')
+		return err
+	}, time.Second, func(context.Context, *exec.Cmd) error {
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("runTTY error after Close joined the exchange = %v", err)
+	}
+}
+
+type delayedDrainTTY struct {
+	closed       chan struct{}
+	drainStarted chan struct{}
+	releaseDrain chan struct{}
+}
+
+func (terminal *delayedDrainTTY) Read([]byte) (int, error) {
+	<-terminal.closed
+	close(terminal.drainStarted)
+	<-terminal.releaseDrain
+	return 0, io.EOF
+}
+
+func (*delayedDrainTTY) Write(p []byte) (int, error) { return len(p), nil }
+func (terminal *delayedDrainTTY) Close() error {
+	close(terminal.closed)
+	return nil
+}
+
+func TestRunTTYJoinsTranscriptDrainAfterClosingTheTerminal(t *testing.T) {
+	terminal := &delayedDrainTTY{
+		closed:       make(chan struct{}),
+		drainStarted: make(chan struct{}),
+		releaseDrain: make(chan struct{}),
+	}
+	result := make(chan error, 1)
+	go func() {
+		_, err := runTTYWithTimeout(&exec.Cmd{}, terminal, []string{"welcome"}, func(*bufio.Reader, io.WriteCloser) error {
+			return nil
+		}, time.Second, func(context.Context, *exec.Cmd) error {
+			return nil
+		})
+		result <- err
+	}()
+	<-terminal.drainStarted
+	select {
+	case err := <-result:
+		close(terminal.releaseDrain)
+		t.Fatalf("runTTY returned before transcript drain ownership was regained: %v", err)
+	case <-time.After(ttyCleanupGrace + 100*time.Millisecond):
+	}
+	close(terminal.releaseDrain)
+	if err := <-result; err != nil {
+		t.Fatalf("runTTY error after joining the drain = %v", err)
+	}
+}
+
 func TestRunTTYTimeoutKillsAndReapsTheHelper(t *testing.T) {
 	cmd, terminal := startTTYHelper(t, "hang")
 	waitCalls := 0

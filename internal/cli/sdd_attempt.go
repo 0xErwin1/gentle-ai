@@ -97,15 +97,45 @@ func runSDDAttempt(ctx context.Context, args []string, stdout io.Writer) error {
 	}
 	var intended []string
 	declaredUntracked := reviewIntendedUntrackedDeclared(untrackedScope, intendedUntracked, expectedUntrackedInventory)
-	if operation == "begin" || (operation == "acquire" && (*token == "" || declaredUntracked)) {
+	skipAcquireUntrackedPreflight := false
+	if operation == "acquire" && !declaredUntracked && *token == "" {
+		status, statusErr := store.Status()
+		skipAcquireUntrackedPreflight = statusErr == nil && status.ActiveAttempt != nil
+	}
+	if operation == "begin" || (operation == "acquire" && (*token == "" || declaredUntracked) && !skipAcquireUntrackedPreflight) {
+		inheritsRescopeSelection := false
+		if !declaredUntracked {
+			inheritsRescopeSelection, err = store.FreshRescopeSuccessorInheritsIntendedUntracked()
+			if err != nil && operation == "begin" {
+				return fmt.Errorf("read rescope successor untracked scope: %w", err)
+			}
+			if err != nil {
+				inheritsRescopeSelection = false
+			}
+		}
+		if !inheritsRescopeSelection {
+			scope, scopeErr := intendedUntrackedScopeForTarget(ctx, reviewtransaction.SnapshotBuilder{Repo: *cwd}, untrackedScope, intendedUntracked, expectedUntrackedInventory, "gentle-ai review status --next-transition", "gentle-ai sdd-attempt "+operation)
+			if scopeErr != nil {
+				return scopeErr
+			}
+			if scope.NeedsSelection {
+				return intendedUntrackedSelectionRequired(scope, "gentle-ai review status --next-transition", "gentle-ai sdd-attempt "+operation)
+			}
+			intended = scope.Intended
+		}
+	}
+	// The preflight above stays a begin/acquire concern: only those operations
+	// may be refused before any authority exists. A settlement resolves a
+	// declaration when the caller makes one, and lets the ledger -- the only
+	// reader of what the attempt began against -- decide whether one was owed.
+	var settlementUntracked *[]string
+	settlementInventory := ""
+	if (operation == "finish" || operation == "settle") && declaredUntracked {
 		scope, scopeErr := intendedUntrackedScopeForTarget(ctx, reviewtransaction.SnapshotBuilder{Repo: *cwd}, untrackedScope, intendedUntracked, expectedUntrackedInventory, "gentle-ai review status --next-transition", "gentle-ai sdd-attempt "+operation)
 		if scopeErr != nil {
 			return scopeErr
 		}
-		if scope.NeedsSelection {
-			return intendedUntrackedSelectionRequired(scope, "gentle-ai review status --next-transition", "gentle-ai sdd-attempt "+operation)
-		}
-		intended = scope.Intended
+		settlementUntracked, settlementInventory = &scope.Intended, scope.Digest
 	}
 	var result any
 	switch operation {
@@ -142,6 +172,7 @@ func runSDDAttempt(ctx context.Context, args []string, stdout io.Writer) error {
 			HarnessDisposition: sddstatus.HarnessDisposition(*harnessDisposition),
 			CleanupEvidence:    *cleanupEvidence, ProcessEvidence: *processEvidence,
 			RemediatesEvidenceRevision: *remediatesEvidenceRevision,
+			IntendedUntracked:          settlementUntracked, ExpectedUntrackedInventory: settlementInventory,
 		})
 	case "handoff":
 		result, err = store.HandoffCompact(ctx, sddstatus.CompactHandoffRequest{
@@ -178,6 +209,7 @@ func runSDDAttempt(ctx context.Context, args []string, stdout io.Writer) error {
 			HarnessDisposition: sddstatus.HarnessDisposition(*harnessDisposition),
 			CleanupEvidence:    *cleanupEvidence, ProcessEvidence: *processEvidence,
 			RemediatesEvidenceRevision: *remediatesEvidenceRevision,
+			IntendedUntracked:          settlementUntracked, ExpectedUntrackedInventory: settlementInventory,
 		})
 	case "grant":
 		// --expected-revision stays optional, unlike begin/finish/reset: the
@@ -272,6 +304,9 @@ var sddAttemptOperationDefinitions = []sddAttemptOperationContract{
 		{name: "cleanup-evidence", required: true, usage: "required; trimmed single-line text, at most 500 bytes"},
 		{name: "process-evidence", required: true, usage: "required; trimmed single-line text, at most 500 bytes"},
 		{name: "remediates-evidence-revision", usage: "optional; repaired sha256:<64 lowercase hex> failed evidence"},
+		{name: "untracked-scope", usage: "required when this attempt left eligible untracked files; select or exclude"},
+		{name: "expected-untracked-inventory", usage: "required with untracked-scope; inventory digest"},
+		{name: "intended-untracked", kind: sddAttemptRepeatableStringFlag, usage: "repeatable selected repo-relative untracked path"},
 	}},
 	{name: "handoff", purpose: "Atomically move the active attempt to one linked worktree", flags: []sddAttemptFlagDefinition{
 		sddAttemptCWDFlag, sddAttemptChangeFlag,
@@ -328,6 +363,9 @@ var sddAttemptOperationDefinitions = []sddAttemptOperationContract{
 		{name: "cleanup-evidence", required: true, usage: "required; trimmed single-line text, at most 500 bytes"},
 		{name: "process-evidence", required: true, usage: "required; trimmed single-line text, at most 500 bytes"},
 		{name: "remediates-evidence-revision", usage: "optional; repaired sha256:<64 lowercase hex> failed evidence"},
+		{name: "untracked-scope", usage: "required when this attempt left eligible untracked files; select or exclude"},
+		{name: "expected-untracked-inventory", usage: "required with untracked-scope; inventory digest"},
+		{name: "intended-untracked", kind: sddAttemptRepeatableStringFlag, usage: "repeatable selected repo-relative untracked path"},
 	}},
 	{name: "grant", purpose: "Record per-change edit authority for roots", flags: []sddAttemptFlagDefinition{
 		sddAttemptCWDFlag, sddAttemptChangeFlag,

@@ -241,9 +241,7 @@ func (s *Sandbox) invokeAt(dir string, args []string) Observation {
 const ttyTimeout = 10 * time.Second
 const ttyCleanupGrace = 250 * time.Millisecond
 
-var errTTYExchangeCleanupTimeout = errors.New("TTY exchange cleanup timed out")
 var errTTYWaitCleanupTimeout = errors.New("TTY wait cleanup timed out")
-var errTTYDrainCleanupTimeout = errors.New("TTY transcript drain cleanup timed out")
 
 func (s *Sandbox) invokeTTY(dir string, args []string, exchange func(*bufio.Reader, io.WriteCloser) error) (Observation, error) {
 	cmd := exec.Command(s.Binary, args...)
@@ -271,6 +269,9 @@ func awaitTTYResult(result <-chan error) (error, bool) {
 		return nil, false
 	}
 }
+
+// runTTYWithTimeout owns every reader worker it starts. Exchange callbacks are
+// package-local and must return when terminal.Close unblocks their pending I/O.
 func runTTYWithTimeout(cmd *exec.Cmd, terminal io.ReadWriteCloser, args []string, exchange func(*bufio.Reader, io.WriteCloser) error, timeout time.Duration, wait func(context.Context, *exec.Cmd) error) (Observation, error) {
 	var closed sync.Once
 	var closeErr error
@@ -303,7 +304,9 @@ func runTTYWithTimeout(cmd *exec.Cmd, terminal io.ReadWriteCloser, args []string
 	if !exchangeDone {
 		exchangeErr, exchangeDone = awaitTTYResult(exchangeResult)
 		if !exchangeDone {
-			cleanupErr = errors.Join(cleanupErr, errTTYExchangeCleanupTimeout)
+			closePTY()
+			exchangeErr = <-exchangeResult
+			exchangeDone = true
 		}
 	}
 	if exchangeErr != nil && timeoutErr == nil {
@@ -335,10 +338,7 @@ func runTTYWithTimeout(cmd *exec.Cmd, terminal io.ReadWriteCloser, args []string
 		drainErr, drainDone = awaitTTYResult(drainResult)
 		if !drainDone {
 			closePTY()
-			drainErr, drainDone = awaitTTYResult(drainResult)
-			if !drainDone {
-				cleanupErr = errors.Join(cleanupErr, errTTYDrainCleanupTimeout)
-			}
+			drainErr = <-drainResult
 		}
 	}
 	closePTY()
