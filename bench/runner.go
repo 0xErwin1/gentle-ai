@@ -238,6 +238,23 @@ func (s *Sandbox) invokeAt(dir string, args []string) Observation {
 	}
 }
 
+type synchronizedBuffer struct {
+	mu     sync.Mutex
+	buffer bytes.Buffer
+}
+
+func (buffer *synchronizedBuffer) Write(p []byte) (int, error) {
+	buffer.mu.Lock()
+	defer buffer.mu.Unlock()
+	return buffer.buffer.Write(p)
+}
+
+func (buffer *synchronizedBuffer) String() string {
+	buffer.mu.Lock()
+	defer buffer.mu.Unlock()
+	return buffer.buffer.String()
+}
+
 const ttyTimeout = 10 * time.Second
 const ttyCleanupGrace = 250 * time.Millisecond
 
@@ -276,7 +293,7 @@ func runTTYWithTimeout(cmd *exec.Cmd, terminal io.ReadWriteCloser, args []string
 	var closeErr error
 	closePTY := func() { closed.Do(func() { closeErr = terminal.Close() }) }
 	defer closePTY()
-	var output bytes.Buffer
+	var output synchronizedBuffer
 	reader := bufio.NewReader(io.TeeReader(terminal, &output))
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
@@ -303,7 +320,11 @@ func runTTYWithTimeout(cmd *exec.Cmd, terminal io.ReadWriteCloser, args []string
 	if !exchangeDone {
 		exchangeErr, exchangeDone = awaitTTYResult(exchangeResult)
 		if !exchangeDone {
-			cleanupErr = errors.Join(cleanupErr, errTTYExchangeCleanupTimeout)
+			closePTY()
+			exchangeErr, exchangeDone = awaitTTYResult(exchangeResult)
+			if !exchangeDone {
+				cleanupErr = errors.Join(cleanupErr, errTTYExchangeCleanupTimeout)
+			}
 		}
 	}
 	if exchangeErr != nil && timeoutErr == nil {
