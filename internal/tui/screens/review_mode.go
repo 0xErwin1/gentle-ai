@@ -9,27 +9,26 @@ import (
 
 func ReviewModeOptions(status reviewtransaction.RDDModeStatus, err error) []string {
 	if err != nil && status.Schema == "" {
-		return []string{"Continue"}
+		return []string{"Back"}
 	}
 	if status.Global == reviewtransaction.RDDModeOn {
-		return []string{"Disable globally", "Continue"}
+		return []string{"Disable globally", "Back"}
 	}
-	return []string{"Enable globally", "Continue"}
+	return []string{"Enable globally", "Back"}
 }
 
 func RenderReviewMode(status reviewtransaction.RDDModeStatus, err error, cursor int) string {
 	var b strings.Builder
 	b.WriteString(styles.TitleStyle.Render("Receipt-Driven Development") + "\n\n")
-	b.WriteString(styles.SubtextStyle.Render("Global changes affect all clones; clone-local overrides still win.") + "\n\n")
+	b.WriteString(styles.SubtextStyle.Render("RDD runs a bounded review before delivery and records an approval receipt.") + "\n")
+	b.WriteString(styles.SubtextStyle.Render("Delivery checks use that receipt to verify the reviewed code has not changed.") + "\n\n")
 	if status.Schema != "" {
-		for _, line := range []string{
-			"Global: " + reviewModeLabel(status.Global),
-			"Clone-local: " + reviewModeLabel(status.CloneLocal),
-			"Effective: " + reviewModeLabel(status.Effective),
-			"Decided by: " + strings.ReplaceAll(string(status.Source), "_", "-"),
-		} {
-			b.WriteString(styles.HeadingStyle.Render(line) + "\n")
+		state := "RDD is currently DISABLED globally."
+		if status.Global == reviewtransaction.RDDModeOn {
+			state = "RDD is currently ENABLED globally."
 		}
+		b.WriteString(styles.HeadingStyle.Render(state) + "\n")
+		b.WriteString(styles.SubtextStyle.Render("Individual clones can override this global setting.") + "\n\n")
 		question := "Do you want to enable RDD globally?"
 		if status.Global == reviewtransaction.RDDModeOn {
 			question = "Do you want to disable RDD globally?"
@@ -41,16 +40,6 @@ func RenderReviewMode(status reviewtransaction.RDDModeStatus, err error, cursor 
 		b.WriteString(styles.ErrorStyle.Render("  "+err.Error()) + "\n\n")
 	}
 	b.WriteString(renderOptions(ReviewModeOptions(status, err), cursor) + "\n")
-	b.WriteString(styles.HelpStyle.Render("j/k: navigate • enter: select • esc: continue"))
+	b.WriteString(styles.HelpStyle.Render("j/k: navigate • enter: select • esc: back"))
 	return b.String()
-}
-
-func reviewModeLabel(mode reviewtransaction.RDDMode) string {
-	if mode == reviewtransaction.RDDModeOn {
-		return "enabled"
-	}
-	if mode == reviewtransaction.RDDModeOff {
-		return "disabled"
-	}
-	return "unset"
 }
