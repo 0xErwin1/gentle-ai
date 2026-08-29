@@ -33,25 +33,25 @@ func issue3766Journeys() []Journey {
 }
 
 func reviewModeTTYExchange(reader *bufio.Reader, writer io.WriteCloser) error {
-	return waitForReviewModeTTY(reader, "Start installation", "q: quit", func() error {
+	return waitForReviewModeTTY(reader, "Start installation", "q: quit", "", func() error {
 		time.Sleep(100 * time.Millisecond)
 		if _, err := io.WriteString(writer, strings.Repeat("\x1b[A", 4)+"\r"); err != nil {
 			return err
 		}
-		return waitForReviewModeTTY(reader, "RDD is currently DISABLED globally.", "Enable globally", func() error {
+		return waitForReviewModeTTY(reader, "RDD runs a bounded review before delivery and records review evidence.", "Delivery remains governed by repository policy", "RDD is currently DISABLED globally.", func() error {
 			if _, err := io.WriteString(writer, "\r"); err != nil {
 				return err
 			}
-			return waitForReviewModeTTY(reader, "Start installation", "q: quit", func() error {
+			return waitForReviewModeTTY(reader, "Start installation", "q: quit", "", func() error {
 				time.Sleep(100 * time.Millisecond)
 				if _, err := io.WriteString(writer, strings.Repeat("\x1b[A", 4)+"\r"); err != nil {
 					return err
 				}
-				return waitForReviewModeTTY(reader, "RDD is currently ENABLED globally.", "Disable globally", func() error {
+				return waitForReviewModeTTY(reader, "RDD is currently ENABLED globally.", "Disable globally", "", func() error {
 					if _, err := io.WriteString(writer, "\r"); err != nil {
 						return err
 					}
-					return waitForReviewModeTTY(reader, "Start installation", "q: quit", func() error {
+					return waitForReviewModeTTY(reader, "Start installation", "q: quit", "", func() error {
 						_, err := io.WriteString(writer, "q")
 						return err
 					})
@@ -61,7 +61,7 @@ func reviewModeTTYExchange(reader *bufio.Reader, writer io.WriteCloser) error {
 	})
 }
 
-func waitForReviewModeTTY(reader *bufio.Reader, required, also string, next func() error) error {
+func waitForReviewModeTTY(reader *bufio.Reader, required, also, third string, next func() error) error {
 	var screen strings.Builder
 	for {
 		byteRead, err := reader.ReadByte()
@@ -69,7 +69,7 @@ func waitForReviewModeTTY(reader *bufio.Reader, required, also string, next func
 			return fmt.Errorf("read TUI before %q: %w; output: %q", required, err, screen.String())
 		}
 		screen.WriteByte(byteRead)
-		if strings.Contains(screen.String(), required) && strings.Contains(screen.String(), also) {
+		if strings.Contains(screen.String(), required) && strings.Contains(screen.String(), also) && strings.Contains(screen.String(), third) {
 			return next()
 		}
 	}

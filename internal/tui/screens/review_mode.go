@@ -20,8 +20,8 @@ func ReviewModeOptions(status reviewtransaction.RDDModeStatus, err error) []stri
 func RenderReviewMode(status reviewtransaction.RDDModeStatus, err error, cursor int) string {
 	var b strings.Builder
 	b.WriteString(styles.TitleStyle.Render("Receipt-Driven Development") + "\n\n")
-	b.WriteString(styles.SubtextStyle.Render("RDD runs a bounded review before delivery and records an approval receipt.") + "\n")
-	b.WriteString(styles.SubtextStyle.Render("Delivery checks use that receipt to verify the reviewed code has not changed.") + "\n\n")
+	b.WriteString(styles.SubtextStyle.Render("RDD runs a bounded review before delivery and records review evidence.") + "\n")
+	b.WriteString(styles.SubtextStyle.Render("Delivery remains governed by repository policy, including required checks and branch protection.") + "\n\n")
 	if status.Schema != "" {
 		state := "RDD is currently DISABLED globally."
 		if status.Global == reviewtransaction.RDDModeOn {
