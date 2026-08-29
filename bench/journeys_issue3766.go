@@ -38,7 +38,7 @@ func reviewModeTTYExchange(reader *bufio.Reader, writer io.WriteCloser) error {
 		if _, err := io.WriteString(writer, strings.Repeat("\x1b[A", 4)+"\r"); err != nil {
 			return err
 		}
-		return waitForReviewModeTTY(reader, "Global: unset", "Enable globally", func() error {
+		return waitForReviewModeTTY(reader, "RDD is currently DISABLED globally.", "Enable globally", func() error {
 			if _, err := io.WriteString(writer, "\r"); err != nil {
 				return err
 			}
@@ -47,7 +47,7 @@ func reviewModeTTYExchange(reader *bufio.Reader, writer io.WriteCloser) error {
 				if _, err := io.WriteString(writer, strings.Repeat("\x1b[A", 4)+"\r"); err != nil {
 					return err
 				}
-				return waitForReviewModeTTY(reader, "Global: enabled", "Disable globally", func() error {
+				return waitForReviewModeTTY(reader, "RDD is currently ENABLED globally.", "Disable globally", func() error {
 					if _, err := io.WriteString(writer, "\r"); err != nil {
 						return err
 					}
