@@ -3,8 +3,10 @@ package cli
 import (
 	"bytes"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strconv"
 	"strings"
 	"testing"
@@ -270,5 +272,106 @@ func TestOverBudgetCorrectionPlanRefusalIsClassifiedAsNotStarted(t *testing.T) {
 	after, err := store.Load()
 	if err != nil || after.Revision != before.Revision || after.State.ProposedCorrectionLines != nil {
 		t.Fatalf("over-budget forecast mutated authority: %#v, %v", after, err)
+	}
+}
+
+// TestCorrectionStatusRoutesWithAnUntrackedArtifactPresent covers the way a
+// correction actually happens: the operator edits, and the tools they run while
+// editing leave files behind. A test artifact, a build output, a coverage
+// profile -- any untracked file appearing during the correction switched STATUS
+// to the untracked-selection transition, which legitimately carries no
+// validation request while the status still carried one, and the consistency
+// check read that as two copies disagreeing.
+//
+// The result was a lineage with no way forward: the exact-lineage STATUS the
+// contract names as the only re-entry refused, and its read-only envelope is
+// content-free by design, so the refusal advertised "retry" and named nothing.
+func TestCorrectionStatusRoutesWithAnUntrackedArtifactPresent(t *testing.T) {
+	repo, started, _, record, request := correctionRequiredForPlanCapture(t)
+	if err := RunReview([]string{
+		"capture-correction-plan", "--cwd", repo, "--lineage", started.LineageID,
+		"--target", request.TargetIdentity, "--expected-revision", record.State.CapturePhaseRevision,
+		"--request-hash", request.RequestHash, "--correction-lines", "2",
+	}, io.Discard); err != nil {
+		t.Fatalf("capture correction plan: %v", err)
+	}
+	// Correct the candidate the way an operator would, then confirm the review
+	// is waiting on validation: that is the state whose validation request the
+	// untracked file has to survive.
+	corrected := "package auth\n\n// CheckToken reports whether a session token is present.\nfunc CheckToken(token string) bool {\n\treturn len(token) > 0\n}\n"
+	if err := os.WriteFile(filepath.Join(repo, "internal", "auth", "session.go"), []byte(corrected), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var beforeArtifact bytes.Buffer
+	if err := RunReview([]string{
+		"status", "--cwd", repo, "--contract", ReviewIntegrationContractV2,
+		"--agent", "claude-code", "--lineage", started.LineageID, "--next-transition",
+	}, &beforeArtifact); err != nil {
+		t.Fatalf("corrected STATUS before the artifact: %v\n%s", err, beforeArtifact.String())
+	}
+	var beforeStatus ReviewTargetStatusResult
+	decodeStrictReviewJSON(t, beforeArtifact.Bytes(), &beforeStatus)
+	if beforeStatus.ValidationRequest == nil {
+		t.Fatalf("corrected STATUS carries no validation request, so this test proves nothing: %s", beforeArtifact.String())
+	}
+
+	// One artifact from the tools the operator ran while correcting.
+	if err := os.WriteFile(filepath.Join(repo, "results.json"), []byte("{}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	var output bytes.Buffer
+	if err := RunReview([]string{
+		"status", "--cwd", repo, "--contract", ReviewIntegrationContractV2,
+		"--agent", "claude-code", "--lineage", started.LineageID, "--next-transition",
+	}, &output); err != nil {
+		t.Fatalf("correction STATUS with an untracked artifact present: %v\n%s", err, output.String())
+	}
+	var status ReviewTargetStatusResult
+	decodeStrictReviewJSON(t, output.Bytes(), &status)
+	if status.NextTransition == nil {
+		t.Fatalf("correction STATUS offered no transition: %s", output.String())
+	}
+	if status.NextTransition.ReasonCode != "intended_untracked_selection_required" {
+		t.Fatalf("correction STATUS reason = %q, want the untracked selection the new file requires", status.NextTransition.ReasonCode)
+	}
+	// The point of the exemption: the pending validation is still true while the
+	// operator declares the file, so the status must keep reporting it.
+	if status.ValidationRequest == nil {
+		t.Fatal("correction STATUS dropped the pending validation request the review is still waiting on")
+	}
+	if !reflect.DeepEqual(*status.ValidationRequest, *beforeStatus.ValidationRequest) {
+		t.Fatalf("the untracked artifact changed the pending validation request: %#v vs %#v", status.ValidationRequest, beforeStatus.ValidationRequest)
+	}
+}
+
+// TestReviewValidationRequestCopiesAgree pins exactly how far the untracked
+// exemption reaches. It relaxes presence parity and nothing else, so a
+// transition that does carry a request is still held to matching the status
+// one, and a transition that carries one the status does not is still wrong
+// however it collects.
+func TestReviewValidationRequestCopiesAgree(t *testing.T) {
+	one := reviewtransaction.TargetedValidationRequest{LineageID: "review-copies", RequestHash: "sha256:" + strings.Repeat("a", 64)}
+	other := reviewtransaction.TargetedValidationRequest{LineageID: "review-copies", RequestHash: "sha256:" + strings.Repeat("b", 64)}
+	for _, tt := range []struct {
+		name                  string
+		transition, status    *reviewtransaction.TargetedValidationRequest
+		collectsSomethingElse bool
+		agree                 bool
+	}{
+		{name: "neither present", agree: true},
+		{name: "both present and equal", transition: &one, status: &one, agree: true},
+		{name: "both present and different", transition: &one, status: &other},
+		{name: "status only, ordinary transition", status: &one},
+		{name: "status only, transition collecting something else", status: &one, collectsSomethingElse: true, agree: true},
+		{name: "transition only", transition: &one},
+		{name: "transition only, collecting something else", transition: &one, collectsSomethingElse: true},
+		{name: "both present and different, collecting something else", transition: &one, status: &other, collectsSomethingElse: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := reviewValidationRequestCopiesAgree(tt.transition, tt.status, tt.collectsSomethingElse); got != tt.agree {
+				t.Fatalf("reviewValidationRequestCopiesAgree() = %v, want %v", got, tt.agree)
+			}
+		})
 	}
 }
