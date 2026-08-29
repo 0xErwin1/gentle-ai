@@ -238,29 +238,10 @@ func (s *Sandbox) invokeAt(dir string, args []string) Observation {
 	}
 }
 
-type synchronizedBuffer struct {
-	mu     sync.Mutex
-	buffer bytes.Buffer
-}
-
-func (buffer *synchronizedBuffer) Write(p []byte) (int, error) {
-	buffer.mu.Lock()
-	defer buffer.mu.Unlock()
-	return buffer.buffer.Write(p)
-}
-
-func (buffer *synchronizedBuffer) String() string {
-	buffer.mu.Lock()
-	defer buffer.mu.Unlock()
-	return buffer.buffer.String()
-}
-
 const ttyTimeout = 10 * time.Second
 const ttyCleanupGrace = 250 * time.Millisecond
 
-var errTTYExchangeCleanupTimeout = errors.New("TTY exchange cleanup timed out")
 var errTTYWaitCleanupTimeout = errors.New("TTY wait cleanup timed out")
-var errTTYDrainCleanupTimeout = errors.New("TTY transcript drain cleanup timed out")
 
 func (s *Sandbox) invokeTTY(dir string, args []string, exchange func(*bufio.Reader, io.WriteCloser) error) (Observation, error) {
 	cmd := exec.Command(s.Binary, args...)
@@ -288,12 +269,15 @@ func awaitTTYResult(result <-chan error) (error, bool) {
 		return nil, false
 	}
 }
+
+// runTTYWithTimeout owns every reader worker it starts. Exchange callbacks are
+// package-local and must return when terminal.Close unblocks their pending I/O.
 func runTTYWithTimeout(cmd *exec.Cmd, terminal io.ReadWriteCloser, args []string, exchange func(*bufio.Reader, io.WriteCloser) error, timeout time.Duration, wait func(context.Context, *exec.Cmd) error) (Observation, error) {
 	var closed sync.Once
 	var closeErr error
 	closePTY := func() { closed.Do(func() { closeErr = terminal.Close() }) }
 	defer closePTY()
-	var output synchronizedBuffer
+	var output bytes.Buffer
 	reader := bufio.NewReader(io.TeeReader(terminal, &output))
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
@@ -321,10 +305,8 @@ func runTTYWithTimeout(cmd *exec.Cmd, terminal io.ReadWriteCloser, args []string
 		exchangeErr, exchangeDone = awaitTTYResult(exchangeResult)
 		if !exchangeDone {
 			closePTY()
-			exchangeErr, exchangeDone = awaitTTYResult(exchangeResult)
-			if !exchangeDone {
-				cleanupErr = errors.Join(cleanupErr, errTTYExchangeCleanupTimeout)
-			}
+			exchangeErr = <-exchangeResult
+			exchangeDone = true
 		}
 	}
 	if exchangeErr != nil && timeoutErr == nil {
@@ -356,10 +338,7 @@ func runTTYWithTimeout(cmd *exec.Cmd, terminal io.ReadWriteCloser, args []string
 		drainErr, drainDone = awaitTTYResult(drainResult)
 		if !drainDone {
 			closePTY()
-			drainErr, drainDone = awaitTTYResult(drainResult)
-			if !drainDone {
-				cleanupErr = errors.Join(cleanupErr, errTTYDrainCleanupTimeout)
-			}
+			drainErr = <-drainResult
 		}
 	}
 	closePTY()
