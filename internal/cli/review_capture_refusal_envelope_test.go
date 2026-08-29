@@ -343,6 +343,65 @@ func TestCorrectionStatusRoutesWithAnUntrackedArtifactPresent(t *testing.T) {
 	if !reflect.DeepEqual(*status.ValidationRequest, *beforeStatus.ValidationRequest) {
 		t.Fatalf("the untracked artifact changed the pending validation request: %#v vs %#v", status.ValidationRequest, beforeStatus.ValidationRequest)
 	}
+
+	// Routing is only half of it. The lineage was stranded because nothing could
+	// drive it forward, so declaring the artifact has to put the review back
+	// where it was: waiting on the same validation.
+	if status.NextTransition.Collect == nil || len(status.NextTransition.Collect.Inputs) != 1 {
+		t.Fatalf("untracked selection offered no single collect input: %#v", status.NextTransition.Collect)
+	}
+	// This input is a decision the operator owns, so it carries values and no
+	// runnable tokens: the product names the exact flags in its own refusal
+	// rather than issuing an invocation. Composing them here is therefore the
+	// real route, and this assertion makes a future change that starts issuing
+	// tokens fail rather than let the test keep hand-building them.
+	for _, argument := range status.NextTransition.Collect.Inputs[0].Arguments {
+		if argument.Token != "" {
+			t.Fatalf("untracked selection now issues runnable tokens; replay them instead of composing flags: %#v", argument)
+		}
+	}
+	inventory := ""
+	for _, argument := range status.NextTransition.Collect.Inputs[0].Arguments {
+		if argument.Name == "expected_untracked_inventory" {
+			if inventory != "" {
+				t.Fatalf("untracked selection repeated its inventory argument: %#v", status.NextTransition.Collect.Inputs[0].Arguments)
+			}
+			inventory = argument.Value
+		}
+	}
+	if inventory == "" {
+		t.Fatalf("untracked selection offered no inventory to declare against: %#v", status.NextTransition.Collect.Inputs[0].Arguments)
+	}
+	var recovered bytes.Buffer
+	if err := RunReview([]string{
+		"status", "--cwd", repo, "--contract", ReviewIntegrationContractV2,
+		"--agent", "claude-code", "--lineage", started.LineageID, "--next-transition",
+		"--untracked-scope=exclude", "--expected-untracked-inventory=" + inventory,
+	}, &recovered); err != nil {
+		t.Fatalf("declaring the artifact did not recover the correction: %v\n%s", err, recovered.String())
+	}
+	var recoveredStatus ReviewTargetStatusResult
+	decodeStrictReviewJSON(t, recovered.Bytes(), &recoveredStatus)
+	if recoveredStatus.NextTransition == nil || recoveredStatus.NextTransition.ReasonCode != "targeted_validation_required" {
+		t.Fatalf("declared artifact left the correction unable to proceed: %#v", recoveredStatus.NextTransition)
+	}
+	if recoveredStatus.ValidationRequest == nil || !reflect.DeepEqual(*recoveredStatus.ValidationRequest, *beforeStatus.ValidationRequest) {
+		t.Fatalf("recovery changed the pending validation request: %#v", recoveredStatus.ValidationRequest)
+	}
+
+	// The exemption relaxes presence parity, so the gate it sits in must still
+	// refuse two copies that genuinely disagree. Nothing else proves that the
+	// gate is wired to the helper at all.
+	// PolicyContent is chosen deliberately: the earlier submission-descriptor and
+	// binding guards pin the request hash, target and trees, so tampering one of
+	// those never reaches this gate. This one only the copies check compares.
+	tampered := beforeStatus
+	disagreeing := *beforeStatus.ValidationRequest
+	disagreeing.PolicyContent = disagreeing.PolicyContent + "\ndrifted"
+	tampered.ValidationRequest = &disagreeing
+	if err := tampered.Validate(); err == nil || !strings.Contains(err.Error(), "validation request copies differ") {
+		t.Fatalf("disagreeing validation request copies validated = %v", err)
+	}
 }
 
 // TestReviewValidationRequestCopiesAgree pins exactly how far the untracked
@@ -352,6 +411,9 @@ func TestCorrectionStatusRoutesWithAnUntrackedArtifactPresent(t *testing.T) {
 // however it collects.
 func TestReviewValidationRequestCopiesAgree(t *testing.T) {
 	one := reviewtransaction.TargetedValidationRequest{LineageID: "review-copies", RequestHash: "sha256:" + strings.Repeat("a", 64)}
+	// A separate value that equals `one`. Passing the same pointer twice would
+	// make the equal cases hold on identity and prove nothing about comparison.
+	sameAsOne := reviewtransaction.TargetedValidationRequest{LineageID: "review-copies", RequestHash: "sha256:" + strings.Repeat("a", 64)}
 	other := reviewtransaction.TargetedValidationRequest{LineageID: "review-copies", RequestHash: "sha256:" + strings.Repeat("b", 64)}
 	for _, tt := range []struct {
 		name                  string
@@ -360,13 +422,15 @@ func TestReviewValidationRequestCopiesAgree(t *testing.T) {
 		agree                 bool
 	}{
 		{name: "neither present", agree: true},
-		{name: "both present and equal", transition: &one, status: &one, agree: true},
+		{name: "both present and equal", transition: &one, status: &sameAsOne, agree: true},
 		{name: "both present and different", transition: &one, status: &other},
 		{name: "status only, ordinary transition", status: &one},
 		{name: "status only, transition collecting something else", status: &one, collectsSomethingElse: true, agree: true},
 		{name: "transition only", transition: &one},
 		{name: "transition only, collecting something else", transition: &one, collectsSomethingElse: true},
 		{name: "both present and different, collecting something else", transition: &one, status: &other, collectsSomethingElse: true},
+		{name: "both present and equal, collecting something else", transition: &one, status: &sameAsOne, collectsSomethingElse: true, agree: true},
+		{name: "neither present, collecting something else", collectsSomethingElse: true, agree: true},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			if got := reviewValidationRequestCopiesAgree(tt.transition, tt.status, tt.collectsSomethingElse); got != tt.agree {
