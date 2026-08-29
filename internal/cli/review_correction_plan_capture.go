@@ -83,7 +83,22 @@ func RunReviewCaptureCorrectionPlan(args []string, stdout io.Writer) error {
 	}
 	state := record.State
 	if err := state.BeginCorrection(*correctionLines); err != nil {
-		return err
+		// The forecast is pre-edit caller input, and BeginCorrection refuses it
+		// before recording a proposal or advancing the capture phase, so the
+		// store is provably untouched here. Falling through untyped would earn
+		// the generic operation_outcome_unknown envelope: a false claim that the
+		// outcome is unknown, which sends the operator to recovery instead of to
+		// a smaller forecast.
+		//
+		// The budget overrun is the only refusal that reaches this line. Every
+		// other BeginCorrection precondition is already excluded above: a
+		// non-positive forecast by the flag check, a wrong state, revision or
+		// target by the binding check, and a proposal already recorded by the
+		// revision it advanced. The typing is still written for the branch
+		// rather than for the one error, because all of them describe the same
+		// fact -- the command returns before store.Replace, so none of them
+		// started.
+		return reviewPreflightError(err)
 	}
 	nextRevision, err := store.Replace(record.Revision, "review/begin-fix", state)
 	if err != nil {

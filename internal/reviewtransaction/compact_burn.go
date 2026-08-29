@@ -117,6 +117,14 @@ func CommitApprovedCompactAcknowledgement(ctx context.Context, store CompactStor
 	}, nil
 }
 
+// ErrApprovedAcknowledgementAuthorityAbsent reports that the acknowledgement
+// names no live authority in this repository. The ordinary way to reach it is a
+// replay: the caller's own earlier acknowledgement already burned the lineage it
+// names. It is deliberately path-free, like every other refusal on this surface,
+// because a caller learns nothing useful from the store layout and a relayed
+// error should not carry it.
+var ErrApprovedAcknowledgementAuthorityAbsent = errors.New("approved acknowledgement names no live compact authority; it was already acknowledged and burned, and no further lifecycle operation applies to it") // refusal:by-design operator-knowledge: an acknowledged lineage is terminal, so start a new review instead of replaying its acknowledgement
+
 // AcknowledgeApprovedCompactAuthority verifies one exact pending acknowledgement
 // and burns the authority while the existing maintenance and version locks remain
 // held. It never writes an acknowledged state, so a failure leaves the pending
@@ -154,6 +162,14 @@ func AcknowledgeApprovedCompactAuthority(ctx context.Context, repo, lineageID, t
 	store := CompactStore{Dir: filepath.Join(base, "v2", lineageID), lineageID: lineageID}
 	record, err := store.loadCompactRecordLocked()
 	if err != nil {
+		// Narrow on the fact, not on the error class: the absent-authority
+		// refusal is only honest when this lineage's state file is the thing
+		// that is missing. An ErrNotExist raised anywhere else inside the load
+		// keeps its wrapped cause rather than being reported as an already
+		// acknowledged lineage.
+		if _, statErr := os.Lstat(store.StatePath()); errors.Is(err, fs.ErrNotExist) && errors.Is(statErr, fs.ErrNotExist) {
+			return ErrApprovedAcknowledgementAuthorityAbsent
+		}
 		return fmt.Errorf("load compact authority: %w", err)
 	}
 	if record.Revision != expectedRevision {
