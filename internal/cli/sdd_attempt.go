@@ -561,7 +561,15 @@ func registerSDDAttemptIntFlag(flags *flag.FlagSet, operation, name string) *int
 	if !ok {
 		return new(int)
 	}
-	return flags.Int(name, 0, definition.usage)
+	// Budgets default at the flag so an explicit zero reaches the range check (#1947).
+	value := 0
+	switch name {
+	case "max-attempts":
+		value = sddstatus.DefaultRuntimeAttemptLimit
+	case "max-changed-lines":
+		value = sddstatus.DefaultRuntimeChangedLines
+	}
+	return flags.Int(name, value, definition.usage)
 }
 
 func registerSDDAttemptRootFlag(flags *flag.FlagSet, operation string, roots *sddAttemptRootList) {
