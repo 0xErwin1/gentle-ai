@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"regexp"
+	"strings"
 )
 
 // untrackedRecoveryLoopCandidatePath is the untracked file born during the
@@ -18,6 +19,16 @@ var sdd4040FinishCapability = &Capability{
 }
 
 var untrackedRecoveryLoopDigestPattern = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
+
+// untrackedRecoveryLoopStaleDigest is well-formed and deliberately wrong: it
+// drives the ledger's freshness refusal (internal/sddstatus/runtime_ledger.go),
+// which is the refusal that names `gentle-ai review status --next-transition`
+// as the route to a current digest. The journey then drives exactly that
+// named route.
+const untrackedRecoveryLoopStaleDigest = "sha256:" + "0000000000000000000000000000000000000000000000000000000000000000"
+
+// untrackedRecoveryLoopStatusRoute is the recovery route the refusals name.
+const untrackedRecoveryLoopStatusRoute = "gentle-ai review status --next-transition"
 
 // driveUntrackedInventoryRecoveryLoop reproduces issue #4040. Refusals from
 // intendedUntrackedScopeForTarget and the runtime ledger name
@@ -44,7 +55,47 @@ func driveUntrackedInventoryRecoveryLoop(r *journeyRun) error {
 		return err
 	}
 
-	// #4040's exact symptom: the recovery route the refusal names must
+	// #4040's entry point, driven before the recovery route is read: a
+	// settlement that declares nothing must refuse, and the refusal must be
+	// the ledger's -- the one that names the unaccounted candidate and the
+	// exact rerun flags. Before Fix B the finish/settle CLI preflight refused
+	// first with a message naming no digest at all, hiding this one. Reading
+	// STATUS without first proving this refusal would still pass if the
+	// product stopped demanding a declaration.
+	if status, err = readRuntimeStatus(r); err != nil {
+		return err
+	}
+	undeclared := r.run(sddAttemptArgs(r, "finish", status.Revision, "bench-4040-undeclared-finish",
+		append([]string{"--outcome", "failed", "--evidence-revision", sddFailedEvidence}, sddTerminalEvidence...)...), false)
+	if undeclared.ExitCode == 0 {
+		return fmt.Errorf("#4040 undeclared finish accepted an unaccounted untracked candidate; it must refuse")
+	}
+	if !strings.Contains(undeclared.Stderr, untrackedRecoveryLoopCandidatePath) ||
+		!strings.Contains(undeclared.Stderr, "--expected-untracked-inventory=") {
+		return fmt.Errorf("#4040 undeclared finish refusal named neither the candidate nor the exact rerun: %s", firstLine(undeclared.Stderr))
+	}
+
+	// The refusal that closes the loop: a declaration carrying a digest the
+	// workspace no longer matches names the negotiated STATUS as the way to
+	// obtain a current one. That is the instruction #4040's reporters
+	// followed into a dead end.
+	if status, err = readRuntimeStatus(r); err != nil {
+		return err
+	}
+	stale := r.run(sddAttemptArgs(r, "finish", status.Revision, "bench-4040-stale-finish",
+		append([]string{
+			"--outcome", "failed", "--evidence-revision", sddFailedEvidence,
+			"--untracked-scope", "select", "--intended-untracked", untrackedRecoveryLoopCandidatePath,
+			"--expected-untracked-inventory", untrackedRecoveryLoopStaleDigest,
+		}, sddTerminalEvidence...)...), false)
+	if stale.ExitCode == 0 {
+		return fmt.Errorf("#4040 finish accepted a stale untracked inventory digest; it must refuse")
+	}
+	if !strings.Contains(stale.Stderr, untrackedRecoveryLoopStatusRoute) {
+		return fmt.Errorf("#4040 stale-digest refusal did not name %q as the recovery route: %s", untrackedRecoveryLoopStatusRoute, firstLine(stale.Stderr))
+	}
+
+	// #4040's exact symptom: the recovery route those refusals name must
 	// itself publish the digest, discoverable at the TOP level -- not the
 	// collect argument journeys_sdd_untracked.go already exercises.
 	review, err := readStatusForContract(r, reviewContractV2)
@@ -95,7 +146,7 @@ func untrackedInventoryRecoveryLoopJourneys() []Journey {
 		Source: "issue #4040: intendedUntrackedScopeForTarget/ValidateIntendedUntrackedSelection refusals name `gentle-ai review status --next-transition` as the recovery route, but that route only published the digest inside a collect argument that RDD-disabled and post-declaration paths both suppress; fixed by publishing eligible_untracked_inventory unconditionally at the status/v7 top level",
 		Steps: []Step{
 			{Name: "fixture: runtime repository", Fixture: sddRuntimeRepo},
-			{Name: "clean begin, born-during untracked candidate, top-level STATUS recovers the digest, declared finish succeeds", Requires: sdd4040FinishCapability, Composite: driveUntrackedInventoryRecoveryLoop},
+			{Name: "clean begin, born-during untracked candidate, undeclared and stale finishes refuse and name the STATUS route, top-level STATUS recovers the digest, declared finish succeeds", Requires: sdd4040FinishCapability, Composite: driveUntrackedInventoryRecoveryLoop},
 		},
 	}}
 }
