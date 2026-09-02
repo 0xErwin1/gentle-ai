@@ -85,9 +85,14 @@ type ModelPickerState struct {
 	SDDModels           map[string][]opencode.Model // provider ID -> SDD-capable models
 	ConfigWarning       string
 	CatalogStatus       RuntimeCatalogStatus
-	CatalogError        error
-	CatalogRequestID    uint64
-	CatalogProjectDir   string
+	// CatalogError retains the typed discovery failure from the last runtime
+	// catalog attempt so the failed-phase message can state the real cause
+	// (timeout, oversized output, malformed catalog) instead of always
+	// blaming a missing OpenCode binary. It is cleared after a successful
+	// refresh.
+	CatalogError      error
+	CatalogRequestID  uint64
+	CatalogProjectDir string
 
 	Mode             ModelPickerMode
 	SelectedPhaseIdx int    // which phase row was selected (0 = "Set all")
@@ -133,6 +138,9 @@ type ModelPickerState struct {
 	catalogDiscover RuntimeCatalogDiscoverer
 }
 
+// NewRuntimeModelPickerStateWithDiscoverer builds the picker state with a
+// runtime catalog discoverer, starting in the loading phase and seeding the
+// custom native agent list from the project's opencode.json.
 func NewRuntimeModelPickerStateWithDiscoverer(settingsPath string, discover RuntimeCatalogDiscoverer) ModelPickerState {
 	state := ModelPickerState{Providers: map[string]opencode.Provider{}, SDDModels: map[string][]opencode.Model{}, CatalogStatus: RuntimeCatalogLoading, Mode: ModePhaseList, catalogDiscover: discover}
 	if agents, err := sdd.DiscoverCustomAgents(settingsPath); err != nil {
@@ -143,6 +151,9 @@ func NewRuntimeModelPickerStateWithDiscoverer(settingsPath string, discover Runt
 	return state
 }
 
+// StartRuntimeCatalogDiscovery launches the async OpenCode catalog discovery
+// for projectDir, tagging the request so late or stale discovery results can
+// be ignored by Update.
 func (state *ModelPickerState) StartRuntimeCatalogDiscovery(requestID uint64, projectDir string) tea.Cmd {
 	state.CatalogRequestID = requestID
 	state.CatalogProjectDir = projectDir
@@ -156,6 +167,11 @@ func (state *ModelPickerState) StartRuntimeCatalogDiscovery(requestID uint64, pr
 	}
 }
 
+// Update applies runtime catalog discovery results to the picker state.
+// Stale requests (mismatched request ID or project dir) are ignored; a failed
+// discovery records the typed CatalogError for truthful diagnostics, while a
+// success clears it and transitions to ready (or empty when no provider offers
+// SDD-capable models).
 func (state ModelPickerState) Update(msg tea.Msg) ModelPickerState {
 	if discovery, ok := msg.(RuntimeCatalogDiscoveryMsg); ok {
 		if discovery.RequestID != state.CatalogRequestID || discovery.ProjectDir != state.CatalogProjectDir {
@@ -190,6 +206,9 @@ func (state ModelPickerState) hasSelectableConfiguredModels() bool {
 	return false
 }
 
+// refreshRuntimeModels recomputes the provider list and SDD-capable models
+// from the discovered catalog, keeping only providers that offer tool_call
+// capable models.
 func (state *ModelPickerState) refreshRuntimeModels() {
 	state.AvailableIDs = state.AvailableIDs[:0]
 	state.SDDModels = make(map[string][]opencode.Model, len(state.Providers))
@@ -1061,6 +1080,11 @@ func resolveNames(assignment model.ModelAssignment, state ModelPickerState) (pro
 	return provName, modelName
 }
 
+// modelPickerCatalogFailureExplanation renders the user-facing diagnostic for
+// a failed runtime catalog discovery. Each CatalogError kind maps to a truthful
+// headline and next step so the picker never blames a missing OpenCode binary
+// for failures caused by output size, timeouts, or malformed catalogs. Unknown
+// errors keep the generic installation guidance.
 func modelPickerCatalogFailureExplanation(err error) (string, string) {
 	var catalogErr *opencode.CatalogError
 	if errors.As(err, &catalogErr) {
