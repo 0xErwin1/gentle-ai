@@ -25,6 +25,8 @@ gentle-ai review status \
   --next-transition
 ```
 
+Claude Code also gets a deterministic per-session baseline and end-of-turn reminder through its installed `SessionStart` and `Stop` hooks, both backed by the review stop-hook subcommand: SessionStart records the session's starting candidate, and Stop reminds only about candidates that session itself produced; neither starts a review by itself.
+
 ## Cross-repository root
 
 A session in repository A may review a nested target in unrelated repository B only after the user explicitly authorizes B. Native Go resolves the requested path to B's canonical worktree root; adapters carry opaque provider output and never parse authorization or roots.
