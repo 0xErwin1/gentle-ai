@@ -1753,7 +1753,11 @@ func installSkillRegistryAutomation(homeDir string, adapter agents.Adapter) (Inj
 	if err != nil {
 		return InjectionResult{}, fmt.Errorf("install Claude skill-registry hook: %w", err)
 	}
-	return InjectionResult{Changed: changed, Files: []string{settingsPath}}, nil
+	stopHookChanged, err := ensureClaudeReviewStopHook(settingsPath, adapter.Agent())
+	if err != nil {
+		return InjectionResult{}, fmt.Errorf("install Claude review stop-hook: %w", err)
+	}
+	return InjectionResult{Changed: changed || stopHookChanged, Files: []string{settingsPath}}, nil
 }
 
 func ensureCodexSkillRegistryHook(hooksPath string) (bool, error) {
@@ -1866,12 +1870,108 @@ func ensureClaudeSkillRegistryHook(settingsPath string) (bool, error) {
 	return wr.Changed, nil
 }
 
+// ensureClaudeReviewStopHook appends the managed review preflight commands to
+// hooks.Stop and hooks.SessionStart in the Claude Code settings file. The
+// pair makes the review preflight deterministic across a Claude turn.
+// `gentle-ai review stop-hook --agent <agentID>` reads `hook_event_name` from
+// the payload on stdin: at SessionStart it records the session's starting
+// candidate as the per-session baseline, and at Stop it prints a block
+// decision only when RDD is enabled and the session has produced an
+// unreviewed candidate since that baseline. It never starts a review by
+// itself. The runtime identity is always the caller-supplied agentID (never
+// a compiled literal) per issue #2440: only the caller states which runtime
+// is executing.
+func ensureClaudeReviewStopHook(settingsPath string, agentID model.AgentID) (bool, error) {
+	root := map[string]any{}
+	if data, err := os.ReadFile(settingsPath); err == nil && len(strings.TrimSpace(string(data))) > 0 {
+		if err := json.Unmarshal(data, &root); err != nil {
+			return false, fmt.Errorf("parse Claude settings %q: %w", settingsPath, err)
+		}
+	} else if err != nil && !os.IsNotExist(err) {
+		return false, err
+	}
+
+	command := fmt.Sprintf("gentle-ai review stop-hook --agent %s", agentID)
+
+	hooksRaw, hasHooks := root["hooks"]
+	hooksMap, _ := hooksRaw.(map[string]any)
+	if hasHooks && hooksMap == nil {
+		return false, fmt.Errorf("Claude settings %q has unsupported hooks shape: want object", settingsPath)
+	}
+	if hooksMap == nil {
+		hooksMap = map[string]any{}
+	}
+
+	stopChanged, err := appendClaudeReviewStopHookEntry(hooksMap, "Stop", settingsPath, command, map[string]any{
+		"matcher": "",
+		"hooks": []any{
+			map[string]any{
+				"type":    "command",
+				"command": command,
+				"timeout": 60,
+			},
+		},
+	})
+	if err != nil {
+		return false, err
+	}
+
+	sessionStartChanged, err := appendClaudeReviewStopHookEntry(hooksMap, "SessionStart", settingsPath, command, map[string]any{
+		"matcher": "startup|resume|clear|compact",
+		"hooks": []any{
+			map[string]any{
+				"type":    "command",
+				"command": command,
+				"timeout": 30,
+			},
+		},
+	})
+	if err != nil {
+		return false, err
+	}
+
+	if !stopChanged && !sessionStartChanged {
+		return false, nil
+	}
+
+	root["hooks"] = hooksMap
+	out, err := json.MarshalIndent(root, "", "  ")
+	if err != nil {
+		return false, err
+	}
+	out = append(out, '\n')
+	wr, err := filemerge.WriteFileAtomic(settingsPath, out, 0o644)
+	if err != nil {
+		return false, err
+	}
+	return wr.Changed, nil
+}
+
+// appendClaudeReviewStopHookEntry appends entry to hooksMap[hookKey] unless
+// an entry with the identical command is already present under that exact
+// key, so the Stop reminder and the SessionStart baseline (which share the
+// same command string) are tracked independently and both keys can coexist
+// with the UserPromptSubmit skill-registry hook.
+func appendClaudeReviewStopHookEntry(hooksMap map[string]any, hookKey, settingsPath, command string, entry map[string]any) (bool, error) {
+	raw, has := hooksMap[hookKey]
+	entries, _ := raw.([]any)
+	if has && entries == nil {
+		return false, fmt.Errorf("Claude settings %q has unsupported hooks.%s shape: want array", settingsPath, hookKey)
+	}
+	if claudeHookListContains(entries, command) {
+		return false, nil
+	}
+	entries = append(entries, entry)
+	hooksMap[hookKey] = entries
+	return true, nil
+}
+
 func claudeHookExists(root map[string]any, command string) bool {
 	hooksMap, ok := root["hooks"].(map[string]any)
 	if !ok {
 		return false
 	}
-	for _, key := range []string{"UserPromptSubmit", "SessionStart"} {
+	for _, key := range []string{"UserPromptSubmit", "SessionStart", "Stop"} {
 		hookEntries, ok := hooksMap[key].([]any)
 		if !ok {
 			continue
