@@ -83,6 +83,20 @@ func TestExplicitFrozenReviewingStatusUsesFrozenUntrackedScope(t *testing.T) {
 		status.NextTransition == nil || status.NextTransition.ReasonCode != "reviewer_results_required" {
 		t.Fatalf("explicit frozen untracked status = %#v", status)
 	}
+	// design.md R2 (compact_reviewing scenario): the compact-reviewing
+	// replacement at review_facade.go:917-924 deliberately zeros the frozen
+	// scope's Digest (the #1972 fail-closed recover read), but
+	// EligibleUntrackedInventory is assigned before that replacement runs, so
+	// it still carries the live workspace digest — not the frozen scope's
+	// empty one, and not zeroed by the replacement.
+	builder := reviewtransaction.SnapshotBuilder{Repo: repo}
+	_, wantDigest, err := builder.IntendedUntrackedInventory(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if wantDigest == "" || status.EligibleUntrackedInventory != wantDigest {
+		t.Fatalf("explicit frozen untracked status eligible_untracked_inventory = %q, want independently computed live digest %q", status.EligibleUntrackedInventory, wantDigest)
+	}
 }
 
 func TestExplicitFrozenTerminalStatusRestoresUntrackedScope(t *testing.T) {

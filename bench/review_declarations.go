@@ -124,6 +124,7 @@ var coreJourneyReviewModes = map[string]ReviewPrecondition{
 	"j124-sdd-attempt-reset-after-selected-untracked-lands":                     reviewOptedIn,
 	"j125-claude-code-stop-hook-reminds-once-per-candidate":                     reviewOptedIn,
 	"j126-selected-untracked-terminal-status-resumes-without-flags":             reviewOptedIn,
+	"j4040-untracked-inventory-recovery-loop":                                   reviewUntouched,
 }
 
 func declareCoreJourneyReviewModes(journeys []Journey) []Journey {
