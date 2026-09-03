@@ -1,3 +1,4 @@
+<!-- markdownlint-disable-next-line MD041 -->
 <a id="top"></a>
 
 <div align="center">
