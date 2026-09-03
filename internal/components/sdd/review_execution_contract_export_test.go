@@ -113,12 +113,12 @@ func TestReviewExecutionContractForPiCoversEveryStopContinuation(t *testing.T) {
 		t.Fatalf("ReviewExecutionContractFor(pi): %v", err)
 	}
 	for code, continuation := range map[string]string{
-		"captured_verification_evidence_invalid":       "maintainer inspects authority/lineage, or `D`",
-		"correction_repository_verification_failed":   "Change the correction candidate within the same open budget, then `S`.",
-		"final_verification_retry_unavailable":        "maintainer inspects authority/lineage, or `D`",
-		"original_finalize_request_required":          "exact original-finalize replay bound to the stop",
-		"staged_delivery_candidate_required":          "Stage every reviewed path exactly as reviewed, then `S`.",
-		"unchanged_or_unverified_authority":           "Change the candidate content, then start a new transaction, or `D`.",
+		"captured_verification_evidence_invalid":    "maintainer inspects authority/lineage, or `D`",
+		"correction_repository_verification_failed": "Change the correction candidate within the same open budget, then `S`.",
+		"final_verification_retry_unavailable":      "maintainer inspects authority/lineage, or `D`",
+		"original_finalize_request_required":        "exact original-finalize replay bound to the stop",
+		"staged_delivery_candidate_required":        "Stage every reviewed path exactly as reviewed, then `S`.",
+		"unchanged_or_unverified_authority":         "Change the candidate content, then start a new transaction, or `D`.",
 	} {
 		if !strings.Contains(contract, "`"+code+"`") || !strings.Contains(contract, continuation) {
 			t.Errorf("Pi review contract lacks safe continuation for %q", code)
