@@ -343,6 +343,19 @@ var reviewPreflightSlotOccupiedReason = reviewPreflightReason{
 	NextAction: "review.status",
 }
 
+// reviewPreflightProviderCaptureRefusedReason classifies a non-lens provider
+// role capture (targeted validator or refuter) refused on both admission
+// attempts, including the single corrective re-invocation: the provider, not
+// the operator's request, produced malformed output twice, so
+// "correct_request" would be an actively wrong instruction (issue #4061).
+// Nothing was captured, and the bound slot is unchanged, so the way out is
+// the same STATUS re-query and relaunch every other capture refusal uses.
+var reviewPreflightProviderCaptureRefusedReason = reviewPreflightReason{
+	Code:       "provider_capture_result_refused",
+	Message:    "The provider role capture result was refused on both admission attempts; the provider, not the request, produced a malformed result.",
+	NextAction: "review.status",
+}
+
 type reviewIntegrationPreflightError struct {
 	cause  error
 	reason *reviewPreflightReason
@@ -926,14 +939,13 @@ func newReviewIntegrationFailure(operation string, args []string, runErr error) 
 		failure.Code = "operation_failed"
 		failure.Message = "The negotiated read-only review operation failed safely."
 		failure.MutationOutcome = ReviewMutationNotStarted
-		failure.RetrySafe = true
 		failure.Replayability = reviewtransaction.ReplayabilityNotReplayable
+		// Issues #2981 and #3379: the catch-all used to clear the universal
+		// scrubbed cause, so an unclassified read-only failure was content-free.
+		// It keeps the cause now; retry stays honest because this branch is the
+		// residue of everything the typed classifier did not recognise.
+		failure.RetrySafe = true
 		failure.NextAction = "retry"
-		// The read-only catch-all is deliberately content-free: it is the one
-		// envelope whose whole contract is "retry safely", so it clears the
-		// universal cause default rather than leaking an arbitrary internal
-		// error to a caller who has nothing to repair.
-		failure.Cause = ""
 		return failure
 	}
 	// The true operation_outcome_unknown default: no typed branch above

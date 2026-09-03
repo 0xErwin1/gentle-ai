@@ -13,9 +13,11 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v2/internal/agents"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/claude"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/codex"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/pi"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/backup"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/components/communitytool"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/components/engram"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/components/sdd"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
 	opencodeactivation "github.com/gentleman-programming/gentle-ai/v2/internal/opencode"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/state"
@@ -114,6 +116,47 @@ func TestBuildPlanSnapshotsPiManifestAndOwnedOverlay(t *testing.T) {
 		if !slices.Contains(plan.backupTargets, path) {
 			t.Fatalf("backup targets = %v, missing Pi artifact %q", plan.backupTargets, path)
 		}
+	}
+	promptPath := pi.NewAdapter().SystemPromptFile(homeDir)
+	if !slices.Contains(plan.backupTargets, promptPath) {
+		t.Fatalf("backup targets = %v, missing Pi system prompt file %q", plan.backupTargets, promptPath)
+	}
+}
+
+// TestExecutePlanRetiresStalePiSystemPromptBlocks covers issue #4057: a Pi
+// install made before SupportsSystemPrompt()==false for Pi left gentle-ai
+// managed blocks in ~/.pi/agent/APPEND_SYSTEM.md. Since adapter.SupportsSystemPrompt()
+// is false, componentOperations() never queues a rewrite op for that file, so
+// uninstall must retire the stale blocks directly.
+func TestExecutePlanRetiresStalePiSystemPromptBlocks(t *testing.T) {
+	home := t.TempDir()
+	svc, err := NewService(home, t.TempDir(), "dev")
+	if err != nil {
+		t.Fatal(err)
+	}
+	svc.snapshotter = stubSnapshotter{}
+
+	promptPath := pi.NewAdapter().SystemPromptFile(home)
+	if err := os.MkdirAll(filepath.Dir(promptPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	stale := "user text\n\n<!-- gentle-ai:sdd-orchestrator -->\nSDD body\n<!-- /gentle-ai:sdd-orchestrator -->\n"
+	if err := os.WriteFile(promptPath, []byte(stale), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := svc.executePlan(plan{}, []model.AgentID{model.AgentPi})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	got := string(mustReadServiceFile(t, promptPath))
+	want := "user text\n"
+	if got != want {
+		t.Fatalf("APPEND_SYSTEM.md = %q, want %q", got, want)
+	}
+	if !slices.Contains(result.ChangedFiles, promptPath) {
+		t.Fatalf("ChangedFiles = %v, want to contain %q", result.ChangedFiles, promptPath)
 	}
 }
 
@@ -331,7 +374,7 @@ func TestPartialUninstallClaudeThemeRemovesOnlyThemeAssets(t *testing.T) {
 		filepath.Join(homeDir, ".claude", "settings.json"):                     `{"theme":"active","outputStyle":"gentleman"}`,
 		filepath.Join(homeDir, ".claude", "CLAUDE.md"):                         "# persona\n",
 		filepath.Join(homeDir, ".claude", "output-styles", "gentleman.md"):     "# output style\n",
-		filepath.Join(homeDir, ".claude", "commands", "sdd-apply.md"):          "# SDD asset\n",
+		filepath.Join(homeDir, ".claude", "commands", "gentle-sdd-apply.md"):   "# SDD asset\n",
 		filepath.Join(homeDir, ".config", "opencode", "tui.json"):              `{"plugins":["./tui-plugins/gentle-logo.tsx"]}`,
 		filepath.Join(homeDir, ".config", "opencode", "themes", "custom.json"): `{"theme":"custom"}`,
 	}
@@ -842,7 +885,9 @@ func TestComponentOperationsSDD_ClaudeRemovesManagedCommandFiles(t *testing.T) {
 		t.Fatalf("MkdirAll(commands dir) error = %v", err)
 	}
 
-	managed := []string{"sdd-init.md", "sdd-explore.md", "sdd-onboard.md"}
+	// sdd-init.md is the unprefixed name a pre-#2644 install managed; uninstall
+	// retires it alongside the namespaced commands.
+	managed := []string{"gentle-sdd-init.md", "gentle-sdd-explore.md", "gentle-sdd-onboard.md", "sdd-init.md"}
 	for _, name := range managed {
 		if err := os.WriteFile(filepath.Join(commandsDir, name), []byte(name), 0o644); err != nil {
 			t.Fatalf("WriteFile(%s) error = %v", name, err)
@@ -1270,6 +1315,78 @@ func TestComponentOperationsSDD_ClaudeRemovesSkillRegistryHook(t *testing.T) {
 	}
 }
 
+func TestComponentOperationsSDD_ClaudeRemovesReviewStopHook(t *testing.T) {
+	homeDir := t.TempDir()
+	workspaceDir := t.TempDir()
+
+	svc, err := NewService(homeDir, workspaceDir, "dev")
+	if err != nil {
+		t.Fatalf("NewService() error = %v", err)
+	}
+	adapter, ok := svc.registry.Get(model.AgentClaudeCode)
+	if !ok {
+		t.Fatal("claude adapter not found in registry")
+	}
+	settingsPath := adapter.SettingsPath(homeDir)
+	if err := os.MkdirAll(filepath.Dir(settingsPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	initial := `{
+  "hooks": {
+    "Stop": [
+      {
+        "matcher": "",
+        "hooks": [
+          {"type": "command", "command": "gentle-ai review stop-hook --agent claude-code", "timeout": 60},
+          {"type": "command", "command": "echo keep"}
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "matcher": "startup|resume|clear|compact",
+        "hooks": [
+          {"type": "command", "command": "gentle-ai review stop-hook --agent claude-code", "timeout": 30},
+          {"type": "command", "command": "echo custom session-start"}
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [{"type": "command", "command": "echo pre"}]
+      }
+    ]
+  }
+}`
+	if err := os.WriteFile(settingsPath, []byte(initial), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	ops, _, err := svc.componentOperations(adapter, model.ComponentSDD)
+	if err != nil {
+		t.Fatalf("componentOperations() error = %v", err)
+	}
+	for _, op := range ops {
+		if op.typeID == opRewriteFile && op.path == settingsPath {
+			if _, _, err := op.apply(op.path); err != nil {
+				t.Fatalf("settings rewrite op.apply() error = %v", err)
+			}
+		}
+	}
+	raw, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(raw)
+	if strings.Contains(text, "gentle-ai review stop-hook") {
+		t.Fatalf("managed stop-hook should be removed from both Stop and SessionStart:\n%s", text)
+	}
+	if !strings.Contains(text, "echo keep") || !strings.Contains(text, "echo pre") || !strings.Contains(text, "echo custom session-start") {
+		t.Fatalf("unrelated hooks should be preserved:\n%s", text)
+	}
+}
+
 func TestComponentOperationsSDD_CodexRemovesSkillRegistryHook(t *testing.T) {
 	homeDir := t.TempDir()
 	workspaceDir := t.TempDir()
@@ -1330,5 +1447,49 @@ func TestComponentOperationsSDD_CodexRemovesSkillRegistryHook(t *testing.T) {
 	}
 	if !strings.Contains(text, "echo keep") || !strings.Contains(text, "echo pre") {
 		t.Fatalf("unrelated hooks should be preserved:\n%s", text)
+	}
+}
+
+// TestComponentOperationsSDD_OpenCodeRemovesManagedPluginsUnderXDGConfigHome
+// pins #3219 for uninstall: the plugin writer resolves the OpenCode config
+// directory through the adapter, so uninstall must look in the same place.
+func TestComponentOperationsSDD_OpenCodeRemovesManagedPluginsUnderXDGConfigHome(t *testing.T) {
+	homeDir := t.TempDir()
+	xdg := filepath.Join(homeDir, ".xdg")
+	t.Setenv("HOME", homeDir)
+	t.Setenv("USERPROFILE", homeDir)
+	t.Setenv("XDG_CONFIG_HOME", xdg)
+
+	svc, err := NewService(homeDir, t.TempDir(), "dev")
+	if err != nil {
+		t.Fatalf("NewService() error = %v", err)
+	}
+	adapter, ok := svc.registry.Get(model.AgentOpenCode)
+	if !ok {
+		t.Fatal("openCode adapter not found in registry")
+	}
+
+	pluginDir := filepath.Join(xdg, "opencode", "plugins")
+	managed := append([]string{"background-agents.ts"}, sdd.OpenCodePluginLifecycleNames(model.AgentOpenCode)...)
+	for _, name := range managed {
+		path := filepath.Join(pluginDir, name)
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte("managed"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	applySDDOpenCodeOperations(t, svc, adapter)
+
+	for _, name := range managed {
+		path := filepath.Join(pluginDir, name)
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Fatalf("managed plugin %q should be removed; stat err = %v", path, err)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(homeDir, ".config", "opencode")); !os.IsNotExist(err) {
+		t.Fatalf("uninstall touched ~/.config/opencode although XDG_CONFIG_HOME is set (stat err = %v)", err)
 	}
 }

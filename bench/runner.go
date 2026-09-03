@@ -42,6 +42,8 @@ type Sandbox struct {
 	// product binary without the bench_fixture tag never reads this
 	// variable at all.
 	BenchCrashAtPhase string
+	// PiReviewRelayContract is injected only by journeys that act as the Pi host.
+	PiReviewRelayContract string
 
 	// Journey state carried between steps.
 	Lineage  string
@@ -100,6 +102,9 @@ func (s *Sandbox) env() []string {
 	}
 	if s.BenchCrashAtPhase != "" {
 		env = append(env, "GENTLE_AI_BENCH_CRASH_AT_PHASE="+s.BenchCrashAtPhase)
+	}
+	if s.PiReviewRelayContract != "" {
+		env = append(env, "GENTLE_PI_REVIEW_RELAY_CONTRACT="+s.PiReviewRelayContract)
 	}
 	// Set last so a journey that poisons the process temp directory overrides
 	// the sandbox's own writable TMP/TEMP/TMPDIR defaults above.
@@ -211,14 +216,25 @@ func (s *Sandbox) invoke(args []string) Observation {
 	return s.invokeAt(s.Repo, args)
 }
 
+// invokeWithStdin is invoke with an explicit stdin payload, for steps whose
+// product surface (a hook, in particular) reads its input from stdin rather
+// than argv.
+func (s *Sandbox) invokeWithStdin(args []string, stdin string) Observation {
+	return s.invokeAtWithStdin(s.Repo, args, stdin)
+}
+
 func (s *Sandbox) invokeAt(dir string, args []string) Observation {
+	return s.invokeAtWithStdin(dir, args, "")
+}
+
+func (s *Sandbox) invokeAtWithStdin(dir string, args []string, stdin string) Observation {
 	cmd := exec.Command(s.Binary, args...)
 	cmd.Dir = dir
 	cmd.Env = s.env()
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
-	cmd.Stdin = strings.NewReader("")
+	cmd.Stdin = strings.NewReader(stdin)
 	err := cmd.Run()
 	exitCode := 0
 	var exitErr *exec.ExitError
@@ -552,6 +568,11 @@ type Step struct {
 	Skip     func(*Sandbox) string
 	Requires *Capability
 	Args     func(*Sandbox) ([]string, error)
+	// Stdin, when non-empty, is piped to the invocation instead of an empty
+	// reader. It is a literal payload, not a template: a step that needs the
+	// sandbox repo path in its stdin JSON resolves it in Args-adjacent setup
+	// and folds the result in here before the step runs.
+	Stdin string
 	// Composite drives a multi-command sub-flow (a lens loop, a rejected
 	// capture and its recapture). It reports its own invocations.
 	Composite func(*journeyRun) error
@@ -844,7 +865,7 @@ func runJourney(binary string, journey Journey) JourneyResult {
 			break
 		}
 
-		observation := sandbox.invoke(args)
+		observation := sandbox.invokeWithStdin(args, step.Stdin)
 		observation.DeclaredDeadEnd = step.DeadEnd
 		observation.DeclaredByDesign = step.ByDesign
 		record := accumulator.observe(step.Name, observation, sandbox.gitCallsSince(), step.ModelRun)

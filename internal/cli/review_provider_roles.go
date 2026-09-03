@@ -118,7 +118,8 @@ type compactProviderRefuterResult struct {
 }
 
 type compactProviderTargetedValidatorResult struct {
-	Outcome string `json:"outcome"`
+	Outcome  string                                             `json:"outcome"`
+	Evidence reviewtransaction.CompactTargetedValidatorEvidence `json:"evidence"`
 }
 
 type reviewProviderEvidence struct {
@@ -171,6 +172,12 @@ func reviewProviderNewRefuterRequest(ctx context.Context, repo, storeDir string,
 }
 
 func reviewProviderRefuterClaims(snapshot string, input reviewtransaction.CompactReviewInput) ([]reviewtransaction.RefuterClaim, error) {
+	claimText := map[string]string{}
+	for _, result := range input.LensResults {
+		for _, finding := range result.Findings {
+			claimText[finding.ID] = finding.Claim
+		}
+	}
 	claims := make([]reviewtransaction.RefuterClaim, 0)
 	for _, classification := range input.Classifications {
 		if classification.Class != reviewtransaction.EvidenceInferential {
@@ -178,7 +185,7 @@ func reviewProviderRefuterClaims(snapshot string, input reviewtransaction.Compac
 		}
 		switch classification.Causality {
 		case reviewtransaction.CausalIntroduced, reviewtransaction.CausalBehaviorActivated, reviewtransaction.CausalWorsened:
-			claims = append(claims, reviewtransaction.RefuterClaim{FindingID: classification.FindingID, SnapshotIdentity: snapshot, Proof: classification.Proof})
+			claims = append(claims, reviewtransaction.RefuterClaim{FindingID: classification.FindingID, SnapshotIdentity: snapshot, Proof: classification.Proof, Claim: claimText[classification.FindingID]})
 		}
 	}
 	if len(claims) == 0 {
@@ -232,12 +239,35 @@ type providerValidationCheckWire struct {
 	Evidence []string `json:"evidence"`
 }
 
+// reviewProviderTargetedValidatorKnownTopLevelJSON allows providers to add
+// advisory top-level metadata without weakening strict decoding of the result's
+// admitted fields or any nested object.
+func reviewProviderTargetedValidatorKnownTopLevelJSON(payload []byte) ([]byte, error) {
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(payload, &fields); err != nil {
+		return nil, err
+	}
+	for name := range fields {
+		switch name {
+		case "targeted_validation_request_hash", "correction_target_identity", "original_criteria", "correction_regression", "follow_ups":
+		default:
+			delete(fields, name)
+		}
+	}
+	return json.Marshal(fields)
+}
+
 func reviewProviderNewTargetedValidatorRequest(ctx context.Context, repo string, state reviewtransaction.CompactState, revision string, correction reviewtransaction.Snapshot) (reviewProviderTargetedValidatorRequest, error) {
 	contract, err := reviewProviderRoleContractFor(reviewProviderRoleTargetedValidator)
 	if err != nil {
 		return reviewProviderTargetedValidatorRequest{}, err
 	}
-	request, err := reviewtransaction.BuildTargetedValidationRequestFromSnapshot(ctx, repo, state, revision, correction)
+	var request reviewtransaction.TargetedValidationRequest
+	if state.State == reviewtransaction.StateEscalated {
+		request, err = reviewtransaction.RebuildAdmittedTargetedValidationRequest(state, revision)
+	} else {
+		request, err = reviewtransaction.BuildTargetedValidationRequestFromSnapshot(ctx, repo, state, revision, correction)
+	}
 	if err != nil {
 		return reviewProviderTargetedValidatorRequest{}, err
 	}
@@ -382,6 +412,18 @@ func reviewProviderCaptureRefuterRaw(ctx context.Context, repo string, store rev
 	if err != nil {
 		return facadeRefuterResult{}, err
 	}
+	return reviewProviderCaptureAdmittedRefuterResult(ctx, repo, store, state, revision, request, result, raw)
+}
+
+// reviewProviderCaptureAdmittedRefuterResult durably captures a refuter
+// result the caller already admitted from raw provider bytes. It stays split
+// from admission so a caller that grants the compiled runtime a corrective
+// re-invocation on a rejected result (issue #4061) can retry admission alone
+// and only ever durably capture the one payload that was actually admitted.
+func reviewProviderCaptureAdmittedRefuterResult(ctx context.Context, repo string, store reviewtransaction.CompactStore, state reviewtransaction.CompactState, revision string, request reviewProviderRefuterRequest, result facadeRefuterResult, raw []byte) (facadeRefuterResult, error) {
+	if request.TargetIdentity != state.InitialSnapshot.Identity {
+		return facadeRefuterResult{}, errors.New("provider refuter request target identity does not match the reviewing authority's initial snapshot identity") // refusal:by-design world-action: this structural compact-authority invariant requires a provider code fix; no operator command can safely repair it
+	}
 	payload, err := canonicalProviderRoleResult(compactProviderRefuterResult{Results: result.native()})
 	if err != nil {
 		return facadeRefuterResult{}, err
@@ -459,6 +501,10 @@ func reviewProviderAdmitTargetedValidatorRaw(request reviewProviderTargetedValid
 	if err != nil {
 		return facadeValidationResult{}, reviewtransaction.ScopedValidationResult{}, err
 	}
+	payload, err = reviewProviderTargetedValidatorKnownTopLevelJSON(payload)
+	if err != nil {
+		return facadeValidationResult{}, reviewtransaction.ScopedValidationResult{}, fmt.Errorf("decode provider targeted validator result: %w", err)
+	}
 	var result facadeValidationResult
 	var wire providerValidationResultWire
 	if err := decodeFacadeJSONBytes(payload, &result); err != nil {
@@ -512,28 +558,73 @@ func reviewProviderCloseTargetedValidatorRaw(ctx context.Context, repo string, s
 		}
 		return facadeValidationResult{}, reviewtransaction.ScopedValidationResult{}, nil, err
 	}
-	outcome := "failed"
-	if native.OriginalCriteria.Passed && native.CorrectionRegression.Passed {
-		outcome = "passed"
-	}
-	payload, err := canonicalProviderRoleResult(compactProviderTargetedValidatorResult{Outcome: outcome})
+	closure, err := reviewProviderCaptureAdmittedTargetedValidatorResult(ctx, repo, store, state, correction, request, result, native)
+	return result, native, closure, err
+}
+
+// reviewProviderCaptureAdmittedTargetedValidatorResult durably captures a
+// targeted validator verdict the caller already admitted from raw provider
+// bytes. It stays split from admission and from the inconclusive-attempt
+// ledger recording above so a caller that grants the compiled runtime a
+// corrective re-invocation on a rejected result (issue #4061) can retry
+// admission alone and only ever durably capture the one verdict that was
+// actually admitted.
+func reviewProviderCaptureAdmittedTargetedValidatorResult(ctx context.Context, repo string, store reviewtransaction.CompactStore, state reviewtransaction.CompactState, correction reviewtransaction.Snapshot, request reviewProviderTargetedValidatorRequest, result facadeValidationResult, native reviewtransaction.ScopedValidationResult) (*reviewLastEventClosureResult, error) {
+	evidence := reviewProviderTargetedValidatorEvidence(result)
+	payload, err := canonicalProviderRoleResult(compactProviderTargetedValidatorResult{
+		Outcome: reviewProviderTargetedValidatorOutcome(native), Evidence: evidence,
+	})
 	if err != nil {
-		return facadeValidationResult{}, reviewtransaction.ScopedValidationResult{}, nil, err
+		return nil, err
 	}
-	if err := store.CaptureAdmittedTargetedValidatorResult(ctx, reviewtransaction.CompactAdmittedTargetedValidatorResultRequest{
-		ExpectedRequest: request.ValidationRequest, Payload: payload,
-	}); err != nil {
-		return facadeValidationResult{}, reviewtransaction.ScopedValidationResult{}, nil, err
+	capture := reviewtransaction.CompactAdmittedTargetedValidatorResultRequest{
+		ExpectedRequest: request.ValidationRequest, Payload: payload, Evidence: &evidence, Validation: &native,
+	}
+	if reviewProviderTargetedValidatorOutcome(native) == "failed" {
+		actual, err := (reviewtransaction.SnapshotBuilder{Repo: repo}).ChangedLines(ctx, correction)
+		if err != nil {
+			return nil, err
+		}
+		complete, err := (reviewtransaction.SnapshotBuilder{Repo: repo}).BuildCorrectedCandidate(ctx, state.InitialSnapshot, correction)
+		if err != nil {
+			return nil, err
+		}
+		capture.Complete = func(next *reviewtransaction.CompactState) error {
+			return next.CompleteCorrectionVerification(correction, actual, native, complete)
+		}
+	}
+	if err := store.CaptureAdmittedTargetedValidatorResult(ctx, capture); err != nil {
+		return nil, err
 	}
 	current, err := store.LoadContext(ctx)
 	if err != nil {
-		return facadeValidationResult{}, reviewtransaction.ScopedValidationResult{}, nil, err
+		return nil, err
 	}
-	closure, err := closeCorrectionOnCapturedValidator(ctx, repo, store, current, correction, request.ValidationRequest, native)
-	if err != nil {
-		return facadeValidationResult{}, reviewtransaction.ScopedValidationResult{}, nil, err
+	if reviewProviderTargetedValidatorOutcome(native) == "passed" {
+		return closeCorrectionOnCapturedValidator(ctx, repo, store, current, correction, request.ValidationRequest, native)
 	}
-	return result, native, closure, nil
+	return newCorrectionCapturedValidatorClosure(repo, current.State, current.Revision, request.ValidationRequest)
+}
+
+func reviewProviderTargetedValidatorEvidence(result facadeValidationResult) reviewtransaction.CompactTargetedValidatorEvidence {
+	return reviewtransaction.CompactTargetedValidatorEvidence{
+		TargetedValidationRequestHash: result.TargetedValidationRequestHash,
+		CorrectionTargetIdentity:      result.CorrectionTargetIdentity,
+		OriginalCriteria: reviewtransaction.CompactTargetedValidatorCheckEvidence{
+			Passed: result.OriginalCriteria.Passed, Evidence: append([]string(nil), result.OriginalCriteria.Evidence...),
+		},
+		CorrectionRegression: reviewtransaction.CompactTargetedValidatorCheckEvidence{
+			Passed: result.CorrectionRegression.Passed, Evidence: append([]string(nil), result.CorrectionRegression.Evidence...),
+		},
+		FollowUps: append([]reviewtransaction.FollowUp{}, result.FollowUps...),
+	}
+}
+
+func reviewProviderTargetedValidatorOutcome(validation reviewtransaction.ScopedValidationResult) string {
+	if validation.OriginalCriteria.Passed && validation.CorrectionRegression.Passed {
+		return "passed"
+	}
+	return "failed"
 }
 
 func readCapturedProviderTargetedValidatorResult(ctx context.Context, repo, _ string, state reviewtransaction.CompactState, revision string) (string, error) {
@@ -565,6 +656,9 @@ func readCapturedProviderTargetedValidatorResult(ctx context.Context, repo, _ st
 }
 
 func reviewProviderTargetedValidatorCorrection(ctx context.Context, repo string, state reviewtransaction.CompactState) (reviewtransaction.Snapshot, error) {
+	if state.State == reviewtransaction.StateEscalated && len(state.CorrectionAttempts) > 0 {
+		return state.CorrectionAttempts[len(state.CorrectionAttempts)-1].Snapshot, nil
+	}
 	if state.State != reviewtransaction.StateCorrectionRequired || state.ProposedCorrectionLines == nil || state.CorrectionAttemptConsumed() {
 		return reviewtransaction.Snapshot{}, errors.New("provider targeted validator request requires an open correction") // refusal:by-design world-action: validator evidence applies only to one open forecasted correction
 	}
