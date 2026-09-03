@@ -61,7 +61,6 @@ gentle-ai doctor
 - [What you get](#what-you-get)
 - [Which agents it works with](#which-agents-it-works-with)
 - [Install](#install)
-- [Your first project](#your-first-project)
 - [How your agent decides how to work](#how-your-agent-decides-how-to-work)
 - [Optional: Spec-Driven Development (SDD)](#optional-spec-driven-development-sdd)
 - [Optional: Receipt-Driven Development (RDD)](#optional-receipt-driven-development-rdd)
@@ -297,25 +296,6 @@ gentle-ai doctor
 > **Expected result:** a read-only health report covering tool binaries, `state.json`, Engram reachability and disk space. It also classifies broken managed paths — dangling ancestor symlinks, config symlink loops and unreadable managed files. Nothing is modified. Run this any time something looks wrong.
 
 **You are now ready to use your agent normally.**
-
-<div align="right"><a href="#top">Back to top</a></div>
-
-<div align="center"><img src="docs/assets/brand/rose.png" width="28" alt="" /></div>
-
-## Your first project
-
-Open your AI agent inside a project and start working. **That's it** — no phases to memorize, no config to hand-edit.
-
-Two optional commands give the agent richer project context:
-
-| Command | What it does | When to re-run |
-| --- | --- | --- |
-| `/gentle-sdd-init` <sub>(Claude Code)</sub> | Detects your stack and testing capabilities; activates Strict TDD Mode if your project supports it | When the project adds or removes test frameworks, or the first time in a new project |
-| `/sdd-init` <sub>(other runtimes)</sub> | Runs the same project initialization through the runtime's SDD command | Same as above |
-| `gentle-ai skill-registry refresh` | Scans installed skills and project conventions, then builds the registry | After installing or removing skills, or the first time in a new project |
-
-> [!TIP]
-> Neither initialization command is required. SDD orchestration runs the runtime-appropriate command when it finds no project context, and startup hooks normally keep the skill registry fresh for agents that support them (Codex, Claude Code, OpenCode, and Pi via `gentle-pi`). If you start Pi with `pi -ns`, startup hooks are skipped — refresh the registry manually when you need updated project rules.
 
 <div align="right"><a href="#top">Back to top</a></div>
 
