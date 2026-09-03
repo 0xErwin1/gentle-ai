@@ -947,6 +947,17 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 		}
 		result := newReviewTargetStatusResultForContract(native, *contract)
 		result.intendedUntracked = intendedScope
+		// Issue #4040: publish the digest once, here, before every path that
+		// could suppress it — the compact-reviewing replacement immediately
+		// below (which deliberately zeros Digest for the #1972 fail-closed
+		// recover read; do NOT touch that), newReviewNextTransition, and the
+		// rdd_disabled guard. Ordering does the work, not a new condition.
+		// `intendedUntrackedInventoryDigest` hashes a domain tag even for an
+		// empty population, so this is always non-empty for a projection
+		// that inspects untracked files; the staged branch above never
+		// resolves intendedScope through intendedUntrackedScopeForTarget, so
+		// its Digest stays the zero value and `omitempty` drops the key.
+		result.EligibleUntrackedInventory = intendedScope.Digest
 		// Explicit reviewing resume keeps the immutable scope that the reviewer
 		// artifacts bind, rather than asking live workspace drift to select one.
 		// The same holds when the live target still equals the frozen one: an
@@ -1219,9 +1230,10 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 			// allowlisted downstream. The registered Tier C statements remain
 			// in review_narration.go as the human-surface vocabulary source.
 		}
-		if runtime != "" && (intendedScope.NeedsSelection || reviewFlagWasProvided(flags, "intended-untracked-selection")) {
-			result.Schema = ReviewIntegrationStatusSchemaV6
-		}
+		// v7 is emitted unconditionally for contract v2 (design decision 4):
+		// newReviewTargetStatusResultForContract already resolved
+		// result.Schema from the ReviewIntegrationStatusSchema alias, so no
+		// per-request bump is needed here anymore.
 		if intendedScope.NeedsSelection &&
 			(result.NextTransition == nil || result.NextTransition.Kind != reviewNextTransitionStop || result.NextTransition.ReasonCode != "rdd_disabled") {
 			transition := reviewIntendedUntrackedCollection(result, intendedScope, runtime)

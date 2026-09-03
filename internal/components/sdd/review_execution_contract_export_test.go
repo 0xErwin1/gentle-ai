@@ -93,7 +93,7 @@ func TestReviewExecutionContractForPiUsesFacadeLifecycleRoutes(t *testing.T) {
 		"Pi never reconstructs lineage, target, revision, repository context, lens, order, or commands",
 		"`gentle_review` with operation `answer-consent` and the exact `consentBinding`",
 		"resubmit the same exact binding with `reviewerRunAcknowledged: true`",
-		"`gentle-ai review mode enable --scope global`",
+		"exact source-scoped `gentle-ai review mode enable` command rendered by bound facade STATUS",
 	} {
 		if !strings.Contains(contract, want) {
 			t.Errorf("Pi review contract missing facade route %q", want)
@@ -101,5 +101,27 @@ func TestReviewExecutionContractForPiUsesFacadeLifecycleRoutes(t *testing.T) {
 	}
 	if strings.Contains(contract, "gentle-ai review status") {
 		t.Fatal("Pi review contract instructs raw gentle-ai review status instead of gentle_review")
+	}
+	if strings.Contains(contract, "gentle-ai review mode enable --scope global") {
+		t.Fatal("Pi review contract hard-codes global RDD enablement")
+	}
+}
+
+func TestReviewExecutionContractForPiCoversEveryStopContinuation(t *testing.T) {
+	contract, err := ReviewExecutionContractFor(model.AgentPi)
+	if err != nil {
+		t.Fatalf("ReviewExecutionContractFor(pi): %v", err)
+	}
+	for code, continuation := range map[string]string{
+		"captured_verification_evidence_invalid":    "maintainer inspects authority/lineage, or `D`",
+		"correction_repository_verification_failed": "Change the correction candidate within the same open budget, then `S`.",
+		"final_verification_retry_unavailable":      "maintainer inspects authority/lineage, or `D`",
+		"original_finalize_request_required":        "exact original-finalize replay bound to the stop",
+		"staged_delivery_candidate_required":        "Stage every reviewed path exactly as reviewed, then `S`.",
+		"unchanged_or_unverified_authority":         "Change the candidate content, then start a new transaction, or `D`.",
+	} {
+		if !strings.Contains(contract, "`"+code+"`") || !strings.Contains(contract, continuation) {
+			t.Errorf("Pi review contract lacks safe continuation for %q", code)
+		}
 	}
 }
