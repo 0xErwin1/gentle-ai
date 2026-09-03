@@ -795,21 +795,37 @@ func TestTuiSyncClaudeModelConfigWritesSelectedAssignments(t *testing.T) {
 		t.Fatalf("sdd-apply agent did not receive selected model; got:\n%s", body)
 	}
 
+	promptPath := filepath.Join(home, ".claude", "CLAUDE.md")
+	body, err = os.ReadFile(promptPath)
+	if err != nil {
+		t.Fatalf("ReadFile(%s): %v", promptPath, err)
+	}
+	if strings.Contains(string(body), "| orchestrator |") {
+		t.Fatalf("Claude parent prompt should not expose orchestrator as a configurable model row; got:\n%s", body)
+	}
+	for _, want := range []string{
+		"| sdd-apply | haiku | default | Implementation |",
+		"| default | haiku | default | Generic and SDD/JD delegation fallback |",
+		"Every Claude Agent tool call MUST include `model`",
+		"Gentle AI does not configure the main orchestrator model",
+	} {
+		if !strings.Contains(string(body), want) {
+			t.Fatalf("Claude parent prompt missing %q; got:\n%s", want, body)
+		}
+	}
+
 	workflowPath := filepath.Join(home, ".claude", "skills", "_shared", "sdd-orchestrator-workflow.md")
 	body, err = os.ReadFile(workflowPath)
 	if err != nil {
 		t.Fatalf("ReadFile(%s): %v", workflowPath, err)
 	}
-	if strings.Contains(string(body), "| orchestrator |") {
-		t.Fatalf("lazy SDD workflow should not expose orchestrator as a configurable model row; got:\n%s", body)
-	}
-	for _, want := range []string{
-		"| sdd-apply | haiku | default | Implementation |",
-		"| default | haiku | default | SDD/JD phase fallback |",
-		"Gentle AI does not configure the main orchestrator model",
+	for _, unwanted := range []string{
+		"<!-- gentle-ai:sdd-model-assignments -->",
+		"## Model Assignments",
+		"Every Claude Agent tool call MUST include `model`",
 	} {
-		if !strings.Contains(string(body), want) {
-			t.Fatalf("lazy SDD workflow missing %q; got:\n%s", want, body)
+		if strings.Contains(string(body), unwanted) {
+			t.Fatalf("lazy SDD workflow retained model-assignment policy %q; got:\n%s", unwanted, body)
 		}
 	}
 }
@@ -1579,6 +1595,37 @@ func TestRunArgs_TUISkipsSelfUpdate(t *testing.T) {
 	}
 	if tuiCalled != 1 {
 		t.Fatalf("runTUI should be called exactly once for TUI flow; got %d call(s)", tuiCalled)
+	}
+}
+
+func TestRunArgs_TUIFailsClosedOnUnreadableState(t *testing.T) {
+	assumeInteractiveTTY(t)
+	home := t.TempDir()
+	setupMockHome(t, home)
+	if err := os.MkdirAll(filepath.Dir(state.Path(home)), 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	if err := os.WriteFile(state.Path(home), []byte("{not json"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	origDetect, origEnsure, origRunTUI := detectSystem, ensureCurrentOSSupported, runTUI
+	t.Cleanup(func() {
+		detectSystem = origDetect
+		ensureCurrentOSSupported = origEnsure
+		runTUI = origRunTUI
+	})
+	ensureCurrentOSSupported = func() error { return nil }
+	detectSystem = func(context.Context) (system.DetectionResult, error) {
+		return system.DetectionResult{System: system.SystemInfo{Supported: true}}, nil
+	}
+	runTUI = func(tea.Model, ...tea.ProgramOption) (tea.Model, error) {
+		t.Fatal("runTUI called with unreadable state")
+		return nil, nil
+	}
+
+	if err := RunArgs(nil, &bytes.Buffer{}); err == nil || !strings.Contains(err.Error(), "read install state") {
+		t.Fatalf("RunArgs(TUI) error = %v, want unreadable state error", err)
 	}
 }
 

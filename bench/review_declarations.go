@@ -119,6 +119,12 @@ var coreJourneyReviewModes = map[string]ReviewPrecondition{
 	"j119-global-review-mode-status-reports-persisted-source":                   reviewUntouched,
 	"j120-welcome-tui-runs-under-a-real-tty":                                    reviewUntouched,
 	"j121-rdd-tui-controls-global-mode":                                         reviewUntouched,
+	"j122-global-review-mode-from-non-git-cwd":                                  reviewUntouched,
+	"j123-rejected-provider-validator-starts-fresh-high-risk-review":            reviewOptedIn,
+	"j124-sdd-attempt-reset-after-selected-untracked-lands":                     reviewOptedIn,
+	"j125-claude-code-stop-hook-reminds-once-per-candidate":                     reviewOptedIn,
+	"j126-selected-untracked-terminal-status-resumes-without-flags":             reviewOptedIn,
+	"j4040-untracked-inventory-recovery-loop":                                   reviewUntouched,
 }
 
 func declareCoreJourneyReviewModes(journeys []Journey) []Journey {

@@ -25,6 +25,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v2/internal/components/persona"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/components/sdd"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
+	opencodeconfig "github.com/gentleman-programming/gentle-ai/v2/internal/opencode"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/pipeline"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/planner"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/state"
@@ -859,6 +860,41 @@ func TestPiPersonaSyncSnapshotRestoresWorkspaceConfig(t *testing.T) {
 	}
 }
 
+func TestSyncPersonaRollbackRestoresPiSystemPromptFile(t *testing.T) {
+	home := t.TempDir()
+	appendSystemPath := systemPromptFileFor(t, home, model.AgentPi)
+	before := []byte("user text before\n\n<!-- gentle-ai:persona -->\nstale persona\n<!-- /gentle-ai:persona -->\n\nuser text after\n")
+	mustWriteFile(t, appendSystemPath, before)
+	mustWriteFile(t, state.Path(home), []byte(`{"installed_agents":["pi"]}`))
+
+	selection := model.Selection{
+		Agents:     []model.AgentID{model.AgentPi},
+		Components: []model.ComponentID{model.ComponentPersona, model.ComponentID("later-failure")},
+		Persona:    model.PersonaNeutral,
+	}
+	targets, err := syncBackupTargets(home, "", selection, resolveAdapters(selection.Agents))
+	if err != nil {
+		t.Fatalf("syncBackupTargets() error = %v", err)
+	}
+	if !containsPath(targets, appendSystemPath) {
+		t.Fatalf("sync backup targets omit Pi system prompt file: %v", targets)
+	}
+	if containsPath(syncPersonaPathsWithWorkspace(home, "", selection, resolveAdapters(selection.Agents)), appendSystemPath) {
+		t.Fatalf("sync persona paths include backup-only Pi system prompt file")
+	}
+
+	if _, err := RunSyncWithSelection(home, selection); err == nil {
+		t.Fatal("RunSyncWithSelection() error = nil, want later pipeline failure")
+	}
+	after, err := os.ReadFile(appendSystemPath)
+	if err != nil {
+		t.Fatalf("ReadFile(Pi system prompt) error = %v", err)
+	}
+	if !bytes.Equal(after, before) {
+		t.Fatalf("Pi system prompt after rollback = %q, want exact before-image %q", after, before)
+	}
+}
+
 func TestComponentSyncStepRunsSDDInject(t *testing.T) {
 	home := t.TempDir()
 
@@ -883,6 +919,332 @@ func TestComponentSyncStepRunsSDDInject(t *testing.T) {
 	if _, err := os.Stat(commandPath); err != nil {
 		t.Errorf("expected SDD inject to create %q, got err: %v", commandPath, err)
 	}
+}
+
+func TestRunSyncPreservesCurrentOpenCodeAssignmentOverStaleState(t *testing.T) {
+	home, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatalf("EvalSymlinks(temp home) error = %v", err)
+	}
+	settingsPath := filepath.Join(home, ".config", "opencode", "opencode.jsonc")
+	mustWriteFile(t, settingsPath, []byte(`// effective user config
+{
+  "agent": {
+    "sdd-apply": {
+      "mode": "subagent",
+      "model": "anthropic/claude-current",
+      "variant": "high"
+    }
+  },
+}
+`))
+	persisted := state.InstallState{
+		InstalledAgents:     []string{"opencode"},
+		SelectionConfigured: true,
+		Components:          []model.ComponentID{model.ComponentSDD},
+		SDDMode:             model.SDDModeMulti,
+		Persona:             string(model.PersonaNeutral),
+		ModelAssignments: map[string]state.ModelAssignmentState{
+			"sdd-apply": {ProviderID: "openai", ModelID: "gpt-stale", Effort: "low"},
+		},
+	}
+	if err := state.Write(home, persisted); err != nil {
+		t.Fatalf("state.Write() error = %v", err)
+	}
+
+	changedFiles := []string{}
+	step := componentSyncStep{
+		component: model.ComponentSDD,
+		homeDir:   home,
+		agents:    []model.AgentID{model.AgentOpenCode},
+		selection: model.Selection{
+			SDDMode:          model.SDDModeMulti,
+			ModelAssignments: restoreOpenCodeModelAssignmentsFromState(home, "", ScopeGlobal, persisted, model.SDDModeMulti),
+		},
+		changedFiles: &changedFiles,
+	}
+	if err := step.Run(); err != nil {
+		t.Fatalf("componentSyncStep.Run() error = %v", err)
+	}
+	if !containsPath(changedFiles, settingsPath) {
+		t.Fatalf("ChangedFiles = %v, want effective opencode.jsonc", changedFiles)
+	}
+	settings := readOpenCodeAgentMap(t, settingsPath)
+	applyAgent := settings["sdd-apply"].(map[string]any)
+	if got := applyAgent["model"]; got != "anthropic/claude-current" {
+		t.Fatalf("sdd-apply model = %v, want current OpenCode assignment", got)
+	}
+	if got := applyAgent["variant"]; got != "high" {
+		t.Fatalf("sdd-apply variant = %v, want high", got)
+	}
+	if _, err := os.Stat(filepath.Join(home, ".config", "opencode", "opencode.json")); !os.IsNotExist(err) {
+		t.Fatalf("sync must not create opencode.json when opencode.jsonc is effective; stat err = %v", err)
+	}
+}
+
+func TestRunSyncPreservesClearedOpenCodeAssignmentOverStaleState(t *testing.T) {
+	home, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatalf("EvalSymlinks(temp home) error = %v", err)
+	}
+	settingsPath := filepath.Join(home, ".config", "opencode", "opencode.jsonc")
+	mustWriteFile(t, settingsPath, []byte(`// effective user config
+{
+  "model": "openai/gpt-root",
+  "agent": {
+    "sdd-apply": {
+      "mode": "subagent"
+    }
+  },
+}
+`))
+	persisted := state.InstallState{
+		InstalledAgents:     []string{"opencode"},
+		SelectionConfigured: true,
+		Components:          []model.ComponentID{model.ComponentSDD},
+		SDDMode:             model.SDDModeMulti,
+		Persona:             string(model.PersonaNeutral),
+		ModelAssignments: map[string]state.ModelAssignmentState{
+			"sdd-apply": {ProviderID: "openai", ModelID: "gpt-stale", Effort: "low"},
+		},
+	}
+	if err := state.Write(home, persisted); err != nil {
+		t.Fatalf("state.Write() error = %v", err)
+	}
+
+	changedFiles := []string{}
+	step := componentSyncStep{
+		component: model.ComponentSDD,
+		homeDir:   home,
+		agents:    []model.AgentID{model.AgentOpenCode},
+		selection: model.Selection{
+			SDDMode:          model.SDDModeMulti,
+			ModelAssignments: restoreOpenCodeModelAssignmentsFromState(home, "", ScopeGlobal, persisted, model.SDDModeMulti),
+		},
+		changedFiles: &changedFiles,
+	}
+	if err := step.Run(); err != nil {
+		t.Fatalf("componentSyncStep.Run() error = %v", err)
+	}
+	settings := readOpenCodeAgentMap(t, settingsPath)
+	applyAgent := settings["sdd-apply"].(map[string]any)
+	if _, exists := applyAgent["model"]; exists {
+		t.Fatalf("cleared sdd-apply assignment was restored from stale state: %v", applyAgent)
+	}
+	initAgent := settings["sdd-init"].(map[string]any)
+	if got := initAgent["model"]; got != "openai/gpt-root" {
+		t.Fatalf("new SDD agent model = %v, want root model fallback to still apply", got)
+	}
+}
+
+func TestComponentSyncStepWritesSDDModelsToEffectiveProjectOpenCodeConfig(t *testing.T) {
+	home := t.TempDir()
+	workspace := t.TempDir()
+	projectSettings := filepath.Join(workspace, "opencode.jsonc")
+	globalSettings := filepath.Join(home, ".config", "opencode", "opencode.jsonc")
+	mustWriteFile(t, projectSettings, []byte(`{
+  "agent": {
+    "sdd-apply": {"mode": "subagent"}
+  }
+}
+`))
+	globalBefore := []byte(`{
+  "agent": {
+    "sdd-apply": {"model": "global/unchanged"}
+  }
+}
+`)
+	mustWriteFile(t, globalSettings, globalBefore)
+
+	snapshot, err := opencodeconfig.ResolveEffectiveConfigForHome(home, workspace)
+	if err != nil {
+		t.Fatalf("ResolveEffectiveConfigForHome() error = %v", err)
+	}
+	if snapshot.Path != projectSettings || snapshot.WritePath != projectSettings {
+		t.Fatalf("effective config paths = (%q, %q), want project config %q", snapshot.Path, snapshot.WritePath, projectSettings)
+	}
+
+	selection := model.Selection{
+		Agents:     []model.AgentID{model.AgentOpenCode},
+		Components: []model.ComponentID{model.ComponentSDD},
+		SDDMode:    model.SDDModeMulti,
+		ModelAssignments: map[string]model.ModelAssignment{
+			"sdd-apply": {ProviderID: "openai", ModelID: "gpt-project"},
+		},
+	}
+	targets, err := syncBackupTargets(home, workspace, selection, resolveAdapters(selection.Agents))
+	if err != nil {
+		t.Fatalf("syncBackupTargets() error = %v", err)
+	}
+	if !containsPath(targets, projectSettings) {
+		t.Fatalf("sync backup targets omit effective project config %q: %v", projectSettings, targets)
+	}
+	if containsPath(targets, globalSettings) {
+		t.Fatalf("sync backup targets include non-effective global config %q: %v", globalSettings, targets)
+	}
+
+	var changed []string
+	step := componentSyncStep{
+		component:    model.ComponentSDD,
+		homeDir:      home,
+		workspaceDir: workspace,
+		agents:       selection.Agents,
+		selection:    selection,
+		changedFiles: &changed,
+	}
+	if err := step.Run(); err != nil {
+		t.Fatalf("componentSyncStep.Run() error = %v", err)
+	}
+	projectAgents := readOpenCodeAgentMap(t, projectSettings)
+	projectApply := projectAgents["sdd-apply"].(map[string]any)
+	if got := projectApply["model"]; got != "openai/gpt-project" {
+		t.Fatalf("project sdd-apply model = %v, want openai/gpt-project", got)
+	}
+	if !containsPath(changed, projectSettings) {
+		t.Fatalf("ChangedFiles = %v, want effective project config %q", changed, projectSettings)
+	}
+	if containsPath(changed, globalSettings) {
+		t.Fatalf("ChangedFiles = %v, must not include non-effective global config %q", changed, globalSettings)
+	}
+	globalAfter, err := os.ReadFile(globalSettings)
+	if err != nil {
+		t.Fatalf("ReadFile(global config) error = %v", err)
+	}
+	if !bytes.Equal(globalAfter, globalBefore) {
+		t.Fatalf("non-effective global config changed:\n got: %s\nwant: %s", globalAfter, globalBefore)
+	}
+}
+
+func TestRestoreOpenCodeModelAssignmentsDoesNotRestoreExplicitClearOnGeneratedAgent(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		clear func(map[string]any)
+	}{
+		{
+			name: "model and variant removed",
+			clear: func(agent map[string]any) {
+				delete(agent, "model")
+				delete(agent, "variant")
+			},
+		},
+		{
+			name: "model and variant empty",
+			clear: func(agent map[string]any) {
+				agent["model"] = ""
+				agent["variant"] = ""
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			home := t.TempDir()
+			adapter, err := agents.NewAdapter(model.AgentOpenCode)
+			if err != nil {
+				t.Fatalf("NewAdapter(opencode) error = %v", err)
+			}
+			if _, err := sdd.Inject(home, adapter, model.SDDModeMulti, sdd.InjectOptions{
+				OpenCodeModelAssignments: map[string]model.ModelAssignment{
+					"sdd-apply": {ProviderID: "openai", ModelID: "gpt-generated", Effort: "high"},
+				},
+			}); err != nil {
+				t.Fatalf("Inject() error = %v", err)
+			}
+
+			settingsPath := filepath.Join(home, ".config", "opencode", "opencode.json")
+			raw, err := os.ReadFile(settingsPath)
+			if err != nil {
+				t.Fatalf("ReadFile(generated settings) error = %v", err)
+			}
+			root, err := filemerge.UnmarshalJSONObject(raw)
+			if err != nil {
+				t.Fatalf("UnmarshalJSONObject(generated settings) error = %v", err)
+			}
+			agentsMap := root["agent"].(map[string]any)
+			applyAgent := agentsMap["sdd-apply"].(map[string]any)
+			if applyAgent["model"] != "openai/gpt-generated" || applyAgent["variant"] != "high" {
+				t.Fatalf("generated sdd-apply definition lacks assigned model and variant: %#v", applyAgent)
+			}
+			tc.clear(applyAgent)
+			updated, err := json.MarshalIndent(root, "", "  ")
+			if err != nil {
+				t.Fatalf("MarshalIndent(cleared generated settings) error = %v", err)
+			}
+			mustWriteFile(t, settingsPath, append(updated, '\n'))
+
+			if err := state.Write(home, state.InstallState{ModelAssignments: map[string]state.ModelAssignmentState{
+				"sdd-apply": {ProviderID: "openai", ModelID: "gpt-stale", Effort: "low"},
+			}}); err != nil {
+				t.Fatalf("state.Write() error = %v", err)
+			}
+			persisted, err := state.Read(home)
+			if err != nil {
+				t.Fatalf("state.Read() error = %v", err)
+			}
+
+			restored := restoreOpenCodeModelAssignmentsFromState(home, "", ScopeGlobal, persisted, model.SDDModeMulti)
+			if assignment, restoredStale := restored["sdd-apply"]; restoredStale {
+				t.Fatalf("explicitly cleared generated assignment was restored from stale state: %#v", assignment)
+			}
+		})
+	}
+}
+
+func TestRestoreOpenCodeModelAssignmentsSkipsClearedAssignmentInSingleMode(t *testing.T) {
+	home, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatalf("EvalSymlinks(temp home) error = %v", err)
+	}
+	settingsPath := filepath.Join(home, ".config", "opencode", "opencode.jsonc")
+	mustWriteFile(t, settingsPath, []byte(`{
+	  "agent": {
+	    "sdd-apply": {"mode": "subagent"}
+	  }
+	}`))
+	persisted := state.InstallState{ModelAssignments: map[string]state.ModelAssignmentState{
+		"sdd-apply": {ProviderID: "openai", ModelID: "gpt-stale", Effort: "low"},
+	}}
+
+	restored := restoreOpenCodeModelAssignmentsFromState(home, "", ScopeGlobal, persisted, model.SDDModeSingle)
+	if _, exists := restored["sdd-apply"]; exists {
+		t.Fatalf("single-mode cleared assignment restored stale state: %#v", restored)
+	}
+}
+
+func TestRestoreOpenCodeModelAssignmentsRestoresMalformedAssignmentSpec(t *testing.T) {
+	home, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatalf("EvalSymlinks(temp home) error = %v", err)
+	}
+	settingsPath := filepath.Join(home, ".config", "opencode", "opencode.jsonc")
+	mustWriteFile(t, settingsPath, []byte(`{
+	  "agent": {
+	    "sdd-apply": {"mode": "subagent", "model": "not-provider-qualified"}
+	  }
+	}`))
+	persisted := state.InstallState{ModelAssignments: map[string]state.ModelAssignmentState{
+		"sdd-apply": {ProviderID: "openai", ModelID: "gpt-stale", Effort: "low"},
+	}}
+
+	restored := restoreOpenCodeModelAssignmentsFromState(home, "", ScopeGlobal, persisted, model.SDDModeMulti)
+	if got := restored["sdd-apply"]; got.ProviderID != "openai" || got.ModelID != "gpt-stale" || got.Effort != "low" {
+		t.Fatalf("malformed assignment spec was not restored from state: %#v", restored)
+	}
+}
+
+func readOpenCodeAgentMap(t *testing.T, path string) map[string]any {
+	t.Helper()
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile(%q) error = %v", path, err)
+	}
+	root, err := filemerge.UnmarshalJSONObject(content)
+	if err != nil {
+		t.Fatalf("Unmarshal(%q) error = %v\n%s", path, err, content)
+	}
+	agents, ok := root["agent"].(map[string]any)
+	if !ok {
+		t.Fatalf("%q missing agent map: %v", path, root)
+	}
+	return agents
 }
 
 func TestSyncRollbackRestoresOpenCodeSettingsAfterManagedToolsCleanup(t *testing.T) {
@@ -4496,6 +4858,120 @@ func TestRunSyncWithSelectionPiCustomPersistedPersonaIsByteStable(t *testing.T) 
 	}
 	if got := readTextFile(t, piPath); got != string(originalPi) {
 		t.Fatalf("custom Pi persona config changed: got %q, want %q", got, originalPi)
+	}
+}
+
+// TestRunSyncWithSelectionPiRetiresStaleSystemPromptBlocks covers issue #4057:
+// a Pi install made before the capability manifest flipped
+// SupportsSystemPrompt()==false for Pi left gentle-ai managed blocks in
+// ~/.pi/agent/APPEND_SYSTEM.md. Nothing reads or rewrites that file for Pi
+// anymore, so sync must retire those stale blocks directly.
+func TestRunSyncWithSelectionPiRetiresStaleSystemPromptBlocks(t *testing.T) {
+	home := t.TempDir()
+	appendSystemPath := systemPromptFileFor(t, home, model.AgentPi)
+	stale := "user text before\n" +
+		"\n" +
+		"<!-- gentle-ai:sdd-orchestrator -->\n" +
+		"SDD body\n" +
+		"<!-- /gentle-ai:sdd-orchestrator -->\n" +
+		"\n" +
+		"<!-- gentle-ai:persona -->\n" +
+		"persona body\n" +
+		"<!-- /gentle-ai:persona -->\n" +
+		"\n" +
+		"user text after\n"
+	mustWriteFile(t, appendSystemPath, []byte(stale))
+	mustWriteFile(t, state.Path(home), []byte(`{"installed_agents":["pi"]}`))
+
+	result, err := RunSyncWithSelection(home, model.Selection{
+		Agents:     []model.AgentID{model.AgentPi},
+		Components: []model.ComponentID{model.ComponentPersona},
+	})
+	if err != nil {
+		t.Fatalf("RunSyncWithSelection() error = %v", err)
+	}
+
+	// Routing guidance is scheduled per agent too, but the step is a no-op for
+	// Pi (issue #4063: gentle-pi owns the Pi system prompt), so nothing writes
+	// an agent-routing block back into the file. Only the leading and trailing
+	// user content must survive, byte-exact.
+	want := "user text before\n\nuser text after\n"
+	got := readTextFile(t, appendSystemPath)
+	if got != want {
+		t.Fatalf("APPEND_SYSTEM.md = %q, want %q", got, want)
+	}
+	if strings.Contains(got, "sdd-orchestrator") || strings.Contains(got, "gentle-ai:persona") {
+		t.Fatalf("APPEND_SYSTEM.md still carries a stale managed block: %q", got)
+	}
+	if result.FilesChanged < 1 {
+		t.Fatalf("FilesChanged = %d, want >= 1", result.FilesChanged)
+	}
+}
+
+// TestRunSyncWithSelectionPiRoutingGuidanceIsNotRewritten covers issue #4063:
+// a sync with Pi selected must not write, or leave behind, a
+// gentle-ai:agent-routing block in ~/.pi/agent/APPEND_SYSTEM.md. Before the
+// fix, agentRoutingGuidanceStep ran for every agent unconditionally, so a
+// pre-existing agent-routing block was rewritten instead of stripped and
+// left alone.
+func TestRunSyncWithSelectionPiRoutingGuidanceIsNotRewritten(t *testing.T) {
+	home := t.TempDir()
+	appendSystemPath := systemPromptFileFor(t, home, model.AgentPi)
+	stale := "user text before\n" +
+		"\n" +
+		"<!-- gentle-ai:agent-routing -->\n" +
+		"stale routing body\n" +
+		"<!-- /gentle-ai:agent-routing -->\n" +
+		"\n" +
+		"user text after\n"
+	mustWriteFile(t, appendSystemPath, []byte(stale))
+	mustWriteFile(t, state.Path(home), []byte(`{"installed_agents":["pi"]}`))
+
+	if _, err := RunSyncWithSelection(home, model.Selection{
+		Agents:     []model.AgentID{model.AgentPi},
+		Components: []model.ComponentID{model.ComponentPersona},
+	}); err != nil {
+		t.Fatalf("RunSyncWithSelection() error = %v", err)
+	}
+
+	got := readTextFile(t, appendSystemPath)
+	if strings.Contains(got, "gentle-ai:agent-routing") {
+		t.Fatalf("APPEND_SYSTEM.md still carries an agent-routing block: %q", got)
+	}
+	want := "user text before\n\nuser text after\n"
+	if got != want {
+		t.Fatalf("APPEND_SYSTEM.md = %q, want %q", got, want)
+	}
+}
+
+// TestRunSyncWithSelectionPiRetirementDoesNotTouchOtherAgents guards against
+// the Pi-only stale-block cleanup leaking to other agents' prompt files
+// selected in the same sync run.
+func TestRunSyncWithSelectionPiRetirementDoesNotTouchOtherAgents(t *testing.T) {
+	home := t.TempDir()
+	appendSystemPath := systemPromptFileFor(t, home, model.AgentPi)
+	mustWriteFile(t, appendSystemPath, []byte(
+		"<!-- gentle-ai:sdd-orchestrator -->\nSDD body\n<!-- /gentle-ai:sdd-orchestrator -->\n"))
+
+	claudePath := systemPromptFileFor(t, home, model.AgentClaudeCode)
+	claudeContent := "user preamble\n\n" +
+		"<!-- gentle-ai:sdd-orchestrator -->\nKEEP-CLAUDE-SDD\n<!-- /gentle-ai:sdd-orchestrator -->\n"
+	mustWriteFile(t, claudePath, []byte(claudeContent))
+
+	mustWriteFile(t, state.Path(home), []byte(`{"installed_agents":["pi","claude-code"]}`))
+
+	if _, err := RunSyncWithSelection(home, model.Selection{
+		Agents:     []model.AgentID{model.AgentPi, model.AgentClaudeCode},
+		Components: []model.ComponentID{model.ComponentPersona},
+	}); err != nil {
+		t.Fatalf("RunSyncWithSelection() error = %v", err)
+	}
+
+	if got := readTextFile(t, appendSystemPath); strings.Contains(got, "sdd-orchestrator") {
+		t.Fatalf("Pi APPEND_SYSTEM.md still carries a stale block: %q", got)
+	}
+	if got := readTextFile(t, claudePath); !strings.Contains(got, "KEEP-CLAUDE-SDD") {
+		t.Fatalf("Claude system prompt lost unrelated content: %q", got)
 	}
 }
 
