@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -19,13 +20,6 @@ var sdd4040FinishCapability = &Capability{
 }
 
 var untrackedRecoveryLoopDigestPattern = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
-
-// untrackedRecoveryLoopStaleDigest is well-formed and deliberately wrong: it
-// drives the ledger's freshness refusal (internal/sddstatus/runtime_ledger.go),
-// which is the refusal that names `gentle-ai review status --next-transition`
-// as the route to a current digest. The journey then drives exactly that
-// named route.
-const untrackedRecoveryLoopStaleDigest = "sha256:" + "0000000000000000000000000000000000000000000000000000000000000000"
 
 // untrackedRecoveryLoopStatusRoute is the recovery route the refusals name.
 const untrackedRecoveryLoopStatusRoute = "gentle-ai review status --next-transition"
@@ -75,29 +69,10 @@ func driveUntrackedInventoryRecoveryLoop(r *journeyRun) error {
 		return fmt.Errorf("#4040 undeclared finish refusal named neither the candidate nor the exact rerun: %s", firstLine(undeclared.Stderr))
 	}
 
-	// The refusal that closes the loop: a declaration carrying a digest the
-	// workspace no longer matches names the negotiated STATUS as the way to
-	// obtain a current one. That is the instruction #4040's reporters
-	// followed into a dead end.
-	if status, err = readRuntimeStatus(r); err != nil {
-		return err
-	}
-	stale := r.run(sddAttemptArgs(r, "finish", status.Revision, "bench-4040-stale-finish",
-		append([]string{
-			"--outcome", "failed", "--evidence-revision", sddFailedEvidence,
-			"--untracked-scope", "select", "--intended-untracked", untrackedRecoveryLoopCandidatePath,
-			"--expected-untracked-inventory", untrackedRecoveryLoopStaleDigest,
-		}, sddTerminalEvidence...)...), false)
-	if stale.ExitCode == 0 {
-		return fmt.Errorf("#4040 finish accepted a stale untracked inventory digest; it must refuse")
-	}
-	if !strings.Contains(stale.Stderr, untrackedRecoveryLoopStatusRoute) {
-		return fmt.Errorf("#4040 stale-digest refusal did not name %q as the recovery route: %s", untrackedRecoveryLoopStatusRoute, firstLine(stale.Stderr))
-	}
-
-	// #4040's exact symptom: the recovery route those refusals name must
-	// itself publish the digest, discoverable at the TOP level -- not the
-	// collect argument journeys_sdd_untracked.go already exercises.
+	// Read the recovery route while the file exists, then remove it before the
+	// operator can act. The previously current digest is now stale; its refusal
+	// must disclose the canonical empty inventory that can still close the
+	// active attempt.
 	review, err := readStatusForContract(r, reviewContractV2)
 	if err != nil {
 		return err
@@ -108,22 +83,63 @@ func driveUntrackedInventoryRecoveryLoop(r *journeyRun) error {
 	if !untrackedRecoveryLoopDigestPattern.MatchString(review.EligibleUntrackedInventory) {
 		return fmt.Errorf("#4040 recovery STATUS did not publish a top-level eligible_untracked_inventory digest: %q", review.EligibleUntrackedInventory)
 	}
-
+	if err := os.Remove(filepath.Join(r.sandbox.Repo, untrackedRecoveryLoopCandidatePath)); err != nil {
+		return err
+	}
+	refreshed, err := readStatusForContract(r, reviewContractV2)
+	if err != nil {
+		return err
+	}
+	if !untrackedRecoveryLoopDigestPattern.MatchString(refreshed.EligibleUntrackedInventory) ||
+		refreshed.EligibleUntrackedInventory == review.EligibleUntrackedInventory {
+		return fmt.Errorf("#4040 deleted-file STATUS digest = %q, want a new canonical digest distinct from %q", refreshed.EligibleUntrackedInventory, review.EligibleUntrackedInventory)
+	}
 	if status, err = readRuntimeStatus(r); err != nil {
 		return err
 	}
-	finished := r.run(sddAttemptArgs(r, "finish", status.Revision, "bench-4040-finish",
+	stale := r.run(sddAttemptArgs(r, "finish", status.Revision, "bench-4040-stale-finish",
 		append([]string{
-			"--outcome", "failed", "--evidence-revision", sddFailedEvidence,
-			"--untracked-scope", "select", "--intended-untracked", untrackedRecoveryLoopCandidatePath,
+			"--outcome", "interrupted", "--untracked-scope", "select",
+			"--intended-untracked", untrackedRecoveryLoopCandidatePath,
 			"--expected-untracked-inventory", review.EligibleUntrackedInventory,
 		}, sddTerminalEvidence...)...), false)
+	if stale.ExitCode == 0 {
+		return fmt.Errorf("#4040 finish accepted a stale deleted-file inventory digest; it must refuse")
+	}
+	if !strings.Contains(stale.Stderr, untrackedRecoveryLoopStatusRoute) ||
+		!strings.Contains(stale.Stderr, refreshed.EligibleUntrackedInventory) ||
+		!strings.Contains(stale.Stderr, "--expected-untracked-inventory="+refreshed.EligibleUntrackedInventory) {
+		return fmt.Errorf("#4040 stale-digest refusal did not disclose recovery route and current digest: %s", firstLine(stale.Stderr))
+	}
+	if status, err = readRuntimeStatus(r); err != nil || status.ActiveAttempt == nil {
+		return fmt.Errorf("#4040 stale-digest refusal did not preserve the active attempt: status=%#v err=%v", status, err)
+	}
+
+	deleted := r.run(sddAttemptArgs(r, "finish", status.Revision, "bench-4040-deleted-selection",
+		append([]string{
+			"--outcome", "interrupted", "--untracked-scope", "select",
+			"--intended-untracked", untrackedRecoveryLoopCandidatePath,
+			"--expected-untracked-inventory", refreshed.EligibleUntrackedInventory,
+		}, sddTerminalEvidence...)...), false)
+	if deleted.ExitCode == 0 || !strings.Contains(deleted.Stderr, untrackedRecoveryLoopCandidatePath) {
+		return fmt.Errorf("#4040 deleted-file selection did not refuse with its ineligible path: %s", firstLine(deleted.Stderr))
+	}
+	if status, err = readRuntimeStatus(r); err != nil || status.ActiveAttempt == nil {
+		return fmt.Errorf("#4040 deleted-file selection did not preserve the active attempt: status=%#v err=%v", status, err)
+	}
+
+	finished := r.run(sddAttemptArgs(r, "finish", status.Revision, "bench-4040-finish",
+		append([]string{
+			"--outcome", "interrupted", "--untracked-scope", "exclude",
+			"--expected-untracked-inventory", refreshed.EligibleUntrackedInventory,
+		}, sddTerminalEvidence...)...), false)
 	if finished.ExitCode != 0 {
-		return fmt.Errorf("#4040 declared finish exit=%d: %s", finished.ExitCode, firstLine(finished.Stderr))
+		return fmt.Errorf("#4040 refreshed interrupted finish exit=%d: %s", finished.ExitCode, firstLine(finished.Stderr))
 	}
 
 	var final struct {
-		Attempts []struct {
+		ActiveAttempt any `json:"active_attempt"`
+		Attempts      []struct {
 			Outcome           string   `json:"outcome"`
 			IntendedUntracked []string `json:"intended_untracked"`
 		} `json:"attempts"`
@@ -131,9 +147,8 @@ func driveUntrackedInventoryRecoveryLoop(r *journeyRun) error {
 	if err := proveJSON(r.sandbox, &final, "sdd-attempt", "status", "--cwd", r.sandbox.Repo, "--change", sddChange); err != nil {
 		return err
 	}
-	if len(final.Attempts) != 1 || final.Attempts[0].Outcome != "failed" ||
-		len(final.Attempts[0].IntendedUntracked) != 1 || final.Attempts[0].IntendedUntracked[0] != untrackedRecoveryLoopCandidatePath {
-		return fmt.Errorf("#4040 declared finish did not record the recovered selection: %#v", final)
+	if final.ActiveAttempt != nil || len(final.Attempts) != 1 || final.Attempts[0].Outcome != "interrupted" || len(final.Attempts[0].IntendedUntracked) != 0 {
+		return fmt.Errorf("#4040 refreshed finish did not clear the active attempt without selecting the deleted file: %#v", final)
 	}
 	return nil
 }
@@ -142,11 +157,11 @@ func untrackedInventoryRecoveryLoopJourneys() []Journey {
 	return []Journey{{
 		ID:     "j4040-untracked-inventory-recovery-loop",
 		Review: reviewUntouched,
-		Title:  "#4040: a finish refusal's named recovery route now publishes the digest it demands, even with RDD disabled",
-		Source: "issue #4040: intendedUntrackedScopeForTarget/ValidateIntendedUntrackedSelection refusals name `gentle-ai review status --next-transition` as the recovery route, but that route only published the digest inside a collect argument that RDD-disabled and post-declaration paths both suppress; fixed by publishing eligible_untracked_inventory unconditionally at the status/v7 top level",
+		Title:  "#4040: deleting a born-during file does not dead-end its active settlement",
+		Source: "issue #4040: a stale settlement declaration after its born-during eligible file disappears must disclose the current top-level eligible_untracked_inventory digest; retrying with that digest can exclude the deleted path and clear the attempt even with RDD disabled",
 		Steps: []Step{
 			{Name: "fixture: runtime repository", Fixture: sddRuntimeRepo},
-			{Name: "clean begin, born-during untracked candidate, undeclared and stale finishes refuse and name the STATUS route, top-level STATUS recovers the digest, declared finish succeeds", Requires: sdd4040FinishCapability, Composite: driveUntrackedInventoryRecoveryLoop},
+			{Name: "clean begin, born-during untracked candidate, deletion, stale and deleted-path refusals preserve the attempt, and the refreshed STATUS digest closes it", Requires: sdd4040FinishCapability, Composite: driveUntrackedInventoryRecoveryLoop},
 		},
 	}}
 }
