@@ -43,16 +43,13 @@
 
 ### Quick start
 
-<sub>macOS and Linux. Windows, prerequisites and what each step writes to disk: **[Install](#install)**.</sub>
+<sub>First time here? Follow **[Install](#install)** for prerequisites and the platform-specific binary command, then:</sub>
 
 ```bash
-# 1 · Install the binary
-curl -fsSL https://raw.githubusercontent.com/Gentleman-Programming/gentle-ai/main/scripts/install.sh | bash
-
-# 2 · Pick your agents, components and persona
+# Pick your agents, components and persona
 gentle-ai
 
-# 3 · Verify the installation
+# Verify the installation
 gentle-ai doctor
 ```
 
@@ -86,14 +83,14 @@ You installed Claude Code, OpenCode, Cursor or Codex. It writes code — but it 
 <tr>
 <td width="50%" valign="top">
 
-#### Before
+**Before**
 
 > "I installed an AI agent, but it's just a chatbot that writes code."
 
 </td>
 <td width="50%" valign="top">
 
-#### After
+**After**
 
 > The agent remembers your decisions, follows your project's conventions, picks a working style that matches the size of the task, and can produce reviewable evidence for what it changed.
 
@@ -124,16 +121,14 @@ Gentle-AI installs a set of **components**. You pick them individually, or take 
 <tr>
 <td width="50%" valign="top">
 
-#### Engram™
-`Recommended`
+**Engram™** · `Recommended`
 
 Persistent memory across sessions — decisions, bug fixes, and context survive restarts.
 
 </td>
 <td width="50%" valign="top">
 
-#### Skills
-`Recommended`
+**Skills** · `Recommended`
 
 A curated library of coding skills the agent loads when the task matches.
 
@@ -142,16 +137,14 @@ A curated library of coding skills the agent loads when the task matches.
 <tr>
 <td width="50%" valign="top">
 
-#### Persona
-`Optional`
+**Persona** · `Optional`
 
 A teaching-oriented voice (Gentleman or neutral), or your own custom persona.
 
 </td>
 <td width="50%" valign="top">
 
-#### SDD
-`Optional`
+**SDD** · `Optional`
 
 Spec-Driven Development — a planning workflow for substantial features.
 
@@ -160,16 +153,14 @@ Spec-Driven Development — a planning workflow for substantial features.
 <tr>
 <td width="50%" valign="top">
 
-#### Context7
-`Optional`
+**Context7** · `Optional`
 
 An MCP server that fetches live framework and library documentation.
 
 </td>
 <td width="50%" valign="top">
 
-#### Permissions
-`Optional`
+**Permissions** · `Optional`
 
 Security-first guardrails, including a deny list for `~/.ssh`, `.env`, and credential files.
 
@@ -178,16 +169,14 @@ Security-first guardrails, including a deny list for `~/.ssh`, `.env`, and crede
 <tr>
 <td width="50%" valign="top">
 
-#### GGA
-`Optional`
+**GGA** · `Optional`
 
 Gentleman Guardian Angel — an AI provider switcher.
 
 </td>
 <td width="50%" valign="top">
 
-#### Theme
-`Optional`
+**Theme** · `Optional`
 
 Selectable Gentleman and Gentleman-Cute themes for Claude Code and OpenCode.
 
@@ -224,26 +213,23 @@ Gentle-AI configures each agent using that agent's own native features, so capab
 | **Gemini CLI** | Experimental | Custom agents in `~/.gemini/agents/` |
 | **Cursor** | Native subagents | 10 SDD agents in `~/.cursor/agents/` |
 | **VS Code Copilot** | runSubagent | Parallel execution |
+| **Codex** | Native multi-agent | CLI-native TOML config; enabled by default with solo-agent fallback |
+| **Antigravity** | Dynamic subagents | Mission Control uses `define_subagent` + `invoke_subagent` for SDD phases |
 | **Kimi Code** | Native custom agents | Modular prompt templates in `~/.kimi` |
 | **Kiro IDE** | Native subagents | Native `~/.kiro/agents/` + steering orchestration |
 | **Qwen Code** | Native sub-agents | Slash commands, `~/.qwen/commands/`, `auto_edit` mode |
 | **Pi** | Package-managed subagents | First-class `gentle-pi` harness with Pi-native persona/models, SDD, and Engram memory |
+| **Hermes** | `delegate_task` | Ephemeral fresh-context workers; YAML MCP config and `SOUL.md` persona |
 
 ### Solo-agent <sub><sup>runs everything in one conversation</sup></sub>
 
 | Agent | Key feature |
 | --- | --- |
-| **Codex** | CLI-native, TOML config |
 | **Windsurf** | Plan Mode, Code Mode, native workflows |
-| **Antigravity** | Mission Control + built-in Browser/Terminal sub-agents |
 | **OpenClaw** | Workspace-first `AGENTS.md` / `SOUL.md` with global MCP config |
 | **Trae** | Desktop app by ByteDance; `~/.trae/skills/` + OS-specific rules |
 
-### Detect-only
-
-| Agent | Key feature |
-| --- | --- |
-| **Hermes** | YAML MCP config, SOUL.md persona; install manually first |
+> **Hermes must be installed manually first.** Gentle-AI detects and configures the existing runtime; it does not install Hermes.
 
 > [!NOTE]
 > **Pi is package-managed, not just configured.** Selecting Pi installs the first-class [`gentle-pi`](docs/pi.md) harness, which owns Pi-native persona and model controls, SDD assets, chains, and memory wiring.
