@@ -188,29 +188,18 @@ func TestLegacyManifestWithUnknownKindDoesNotDelete(t *testing.T) {
 	}
 }
 
-// TestRestoreLeavesExistingSymlinkUntouched covers the follow-up:
-// when a symlink already exists on disk at OriginalPath, restore
-// must skip LinkTarget validation entirely (validate-only-before-
-// recreate). Otherwise a manifest whose LinkTarget would fail
-// validation aborts an otherwise no-op restore of a pre-existing
-// link.
-func TestRestoreLeavesExistingSymlinkUntouched(t *testing.T) {
+// TestRestoreRejectsExistingOutsideRootSymlink verifies that restore refuses
+// a pre-existing symlink that resolves outside the allowed root without
+// modifying the symlink.
+func TestRestoreRejectsExistingOutsideRootSymlink(t *testing.T) {
 	home := t.TempDir()
 	overrideHomeForBackup(t, home)
+	outside := t.TempDir()
 
-	// Symlink already exists with an absolute target that
-	// validateSymlinkTarget would reject. With the pre-fix order
-	// (validate first), restore refused; with the fix (Lstat first),
-	// restore sees the link is there and skips the recreation branch
-	// (and therefore the validation it gates).
 	link := filepath.Join(home, "pre-existing-link")
-	if err := os.Symlink("/absolute-target", link); err != nil {
+	if err := os.Symlink(outside, link); err != nil {
 		t.Skipf("Symlink not available: %v", err)
 	}
-
-	// Capture the platform-normalized target so the post-restore check
-	// is robust to OS-specific separator conversion (Windows turns the
-	// leading "/" into "\" inside the link target).
 	beforeTarget, err := os.Readlink(link)
 	if err != nil {
 		t.Fatalf("Readlink before restore: %v", err)
@@ -222,16 +211,14 @@ func TestRestoreLeavesExistingSymlinkUntouched(t *testing.T) {
 			OriginalPath: link,
 			Existed:      true,
 			Kind:         PathKindSymlinkDirectory,
-			LinkTarget:   "/absolute-target",
+			LinkTarget:   filepath.Base(outside),
 			Mode:         uint32(os.ModeSymlink | 0o777),
 		}},
 	})
-	if err != nil {
-		t.Fatalf("Restore() error = %v, want nil when pre-existing symlink needs no recreation", err)
+	if err == nil || !strings.Contains(err.Error(), "invalid OriginalPath") {
+		t.Fatalf("Restore() error = %v, want invalid OriginalPath refusal", err)
 	}
 
-	// The on-disk symlink must still resolve to the same target — restore
-	// did not touch it.
 	gotTarget, err := os.Readlink(link)
 	if err != nil {
 		t.Fatalf("Readlink: %v", err)
