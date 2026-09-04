@@ -68,6 +68,7 @@ gentle-ai doctor
 - [Reference](#reference)
 - [Documentation](#documentation)
 - [Community](#community)
+- [About the author](#about-the-author)
 
 </details>
 
@@ -862,6 +863,8 @@ Phased engagements for longer collaborations and recorded training modules on qu
 - **Website:** [gentlemanprogramming.com](https://gentlemanprogramming.com/)
 - **YouTube:** [@GentlemanProgramming](https://www.youtube.com/@GentlemanProgramming)
 - **GitHub:** [Gentleman-Programming](https://github.com/Gentleman-Programming)
+
+<div align="right"><a href="#top">Back to top</a></div>
 
 ---
 
