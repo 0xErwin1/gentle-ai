@@ -114,6 +114,10 @@ func TestExtractProtocolSectionBoundsAllFourMarkerPairs(t *testing.T) {
 	}
 }
 
+// TestProtocolAmbiguousProjectRecoveryDistinction asserts that every rendered protocol
+// surface (full and slim) documents recovery for ambiguous_project errors, explicitly
+// separating the repository directory retry for mem_session_start from write-tool recovery
+// parameters (project, project_choice_reason, recovery_token).
 func TestProtocolAmbiguousProjectRecoveryDistinction(t *testing.T) {
 	surfaces := map[string]string{
 		"full": protocolFull(),
@@ -144,11 +148,26 @@ func TestProtocolAmbiguousProjectRecoveryDistinction(t *testing.T) {
 				}
 			}
 
-			// Verify distinction: session_start must not receive write-tool recovery parameters.
 			normalized := normalizeForSemanticMatch(content)
-			if !strings.Contains(normalized, "do not pass `recovery_token` or `project_choice_reason` to `mem_session_start`") &&
-				!strings.Contains(normalized, "do not apply the write-tool recovery shape") {
-				t.Errorf("surface %q does not enforce distinction preventing write-tool recovery parameters on mem_session_start", surfaceName)
+
+			// Verify session start recovery binds ambiguous_project to directory retry.
+			if !strings.Contains(normalized, "`mem_session_start` fails with `ambiguous_project`") ||
+				!strings.Contains(normalized, "retry `mem_session_start` with that root as `directory`") {
+				t.Errorf("surface %q does not connect mem_session_start ambiguous_project to directory retry", surfaceName)
+			}
+
+			// Verify distinction: mem_session_start must exclude all three write-recovery parameters.
+			hasFullExclusion := strings.Contains(normalized, "`mem_session_start`") &&
+				strings.Contains(normalized, "does not accept `project`, `project_choice_reason`, or `recovery_token`")
+			hasSlimExclusion := strings.Contains(normalized, "do not pass `project`, `project_choice_reason`, or `recovery_token` to `mem_session_start`")
+			if !hasFullExclusion && !hasSlimExclusion {
+				t.Errorf("surface %q does not enforce exclusion of project, project_choice_reason, and recovery_token from mem_session_start", surfaceName)
+			}
+
+			// Verify write-tool recovery binds available_projects, project, project_choice_reason, and recovery_token.
+			if !strings.Contains(normalized, "choose exactly one value from `available_projects`") ||
+				!strings.Contains(normalized, "`project`, `project_choice_reason=user_selected_after_ambiguous_project`, and the returned `recovery_token`") {
+				t.Errorf("surface %q does not connect write-tool recovery parameters to available_projects selection", surfaceName)
 			}
 		})
 	}
