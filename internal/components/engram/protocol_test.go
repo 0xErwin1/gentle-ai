@@ -113,3 +113,43 @@ func TestExtractProtocolSectionBoundsAllFourMarkerPairs(t *testing.T) {
 		}
 	}
 }
+
+func TestProtocolAmbiguousProjectRecoveryDistinction(t *testing.T) {
+	surfaces := map[string]string{
+		"full": protocolFull(),
+		"slim": protocolSlim(),
+	}
+
+	requiredPhrases := []struct {
+		name   string
+		phrase string
+	}{
+		{"ambiguous-project-error-code", "ambiguous_project"},
+		{"session-start-target", "mem_session_start"},
+		{"session-start-directory-retry", "directory"},
+		{"session-start-unregistered-id", "unregistered"},
+		{"write-tools-target-mem-save", "mem_save"},
+		{"write-tools-target-mem-save-prompt", "mem_save_prompt"},
+		{"write-tools-target-mem-session-summary", "mem_session_summary"},
+		{"write-tools-available-projects", "available_projects"},
+		{"write-tools-project-choice-reason", "project_choice_reason=user_selected_after_ambiguous_project"},
+		{"write-tools-recovery-token", "recovery_token"},
+	}
+
+	for surfaceName, content := range surfaces {
+		t.Run(surfaceName, func(t *testing.T) {
+			for _, req := range requiredPhrases {
+				if !strings.Contains(content, req.phrase) {
+					t.Errorf("surface %q missing required phrase %q (%s)", surfaceName, req.phrase, req.name)
+				}
+			}
+
+			// Verify distinction: session_start must not receive write-tool recovery parameters.
+			normalized := normalizeForSemanticMatch(content)
+			if !strings.Contains(normalized, "do not pass `recovery_token` or `project_choice_reason` to `mem_session_start`") &&
+				!strings.Contains(normalized, "do not apply the write-tool recovery shape") {
+				t.Errorf("surface %q does not enforce distinction preventing write-tool recovery parameters on mem_session_start", surfaceName)
+			}
+		})
+	}
+}
