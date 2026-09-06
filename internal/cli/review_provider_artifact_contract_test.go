@@ -206,10 +206,10 @@ func TestReviewProviderArtifactConformanceSchemasArePinned(t *testing.T) {
 	root := filepath.Join("..", "..", "contracts", "review-integration", "v2")
 	want := map[string]string{
 		"schemas/gate-result.schema.json": "afe5e2a030fae9949305811bcac0a6dbc8b4f28802fa61d1e31e58e895f9fcae",
-		// issues #4226/#4453: last-event-closure documents terminal escalation
-		// and exposes complete admitted reviewer results before acknowledgement.
-		// Deliberate, not drift.
-		"schemas/last-event-closure.schema.json": "08a94def144d70c0c1e84b73a1a245cd36bc73dc1ade4aa733b42097b05593eb",
+		// issues #4223/#4226/#4453: last-event-closure publishes rejected
+		// targeted-validator evidence, terminal escalation, and complete admitted
+		// reviewer results before acknowledgement. Deliberate, not drift.
+		"schemas/last-event-closure.schema.json": "0f3d2dda07aef66a4b1acaf52a6798d83c4ab349ad5497a42c51a9711957c2b9",
 		// issue #3894: start/v4 publishes the reviewing status continuation, so
 		// transition-execution gains the start_status_execution definition it
 		// references. Deliberate, not drift.
