@@ -89,11 +89,28 @@ func findEffectiveConfigPath(homeDir, projectDir string) string {
 
 		switch {
 		case jsonExists && jsoncExists:
-			if hasManagedOpenCodeConfig(jsonPath) && !hasManagedOpenCodeConfig(jsoncPath) {
+			jsonManaged := hasManagedOpenCodeConfig(jsonPath)
+			jsoncManaged := hasManagedOpenCodeConfig(jsoncPath)
+			switch {
+			case jsonManaged && !jsoncManaged:
 				return jsonPath
-			}
-			if hasManagedOpenCodeConfig(jsoncPath) && !hasManagedOpenCodeConfig(jsonPath) {
+			case jsoncManaged && !jsonManaged:
 				return jsoncPath
+			case jsonManaged && jsoncManaged:
+				// Both files report managed. Prefer the one with the
+				// explicit Gentle AI ownership marker to avoid selecting a
+				// user-owned config that merely matches the legacy managed
+				// shape (hidden + prompt + permission).
+				jsonHasMarker := hasGentleAIOwnershipMarker(jsonPath)
+				jsoncHasMarker := hasGentleAIOwnershipMarker(jsoncPath)
+				switch {
+				case jsoncHasMarker && !jsonHasMarker:
+					return jsoncPath
+				case jsonHasMarker && !jsoncHasMarker:
+					return jsonPath
+				}
+				// Both or neither have the marker — keep existing default.
+				return jsonPath
 			}
 			return jsonPath
 		case jsonExists:
@@ -103,6 +120,30 @@ func findEffectiveConfigPath(homeDir, projectDir string) string {
 		}
 	}
 	return ""
+}
+
+// hasGentleAIOwnershipMarker returns true if the file at the given path
+// contains at least one agent definition carrying the explicit __managed_by
+// marker added by the installer.  This is used in findEffectiveConfigPath to
+// disambiguate when both JSON and JSONC look "managed" but only one is
+// actually the Gentle AI target.
+func hasGentleAIOwnershipMarker(path string) bool {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return false
+	}
+	root, err := filemerge.UnmarshalJSONObject(raw)
+	if err != nil {
+		return false
+	}
+	agents, _ := root["agent"].(map[string]any)
+	for _, def := range agents {
+		defMap, _ := def.(map[string]any)
+		if looksLikeGentleAIOwnedAgent(defMap) {
+			return true
+		}
+	}
+	return false
 }
 
 func candidateConfigDirs(homeDir, projectDir string) []string {
@@ -261,6 +302,31 @@ func hasManagedOpenCodeConfig(path string) bool {
 		if looksLikeManagedOpenCodeAgent(def) {
 			return true
 		}
+	}
+	// New: require explicit Gentle AI ownership marker to avoid false
+	// positives when both JSON and JSONC contain a user-owned agent that
+	// happens to match the hidden+prompt+permission shape.  The marker is
+	// added to every managed agent definition in the overlay assets by the
+	// installer; if a file has at least one marker the resolver trusts it
+	// as the authority.
+	for _, def := range agents {
+		defMap, _ := def.(map[string]any)
+		if looksLikeGentleAIOwnedAgent(defMap) {
+			return true
+		}
+	}
+	return false
+}
+
+// looksLikeGentleAIOwnedAgent detects the explicit ownership marker added to
+// managed agent definitions in the overlay assets.  It uses a fixed key to
+// avoid collisions with user-facing properties.
+func looksLikeGentleAIOwnedAgent(def map[string]any) bool {
+	if def == nil {
+		return false
+	}
+	if v, ok := def["__managed_by"].(string); ok && v == "gentle-ai/sdd" {
+		return true
 	}
 	return false
 }

@@ -245,6 +245,62 @@ func TestResolveEffectiveConfigSelectsOpenCodeConfigFile(t *testing.T) {
 			}
 		})
 	}
+
+	// Regression for CodeRabbit r3952255572: when JSON has a user-owned agent
+	// with the managed shape (hidden + prompt + permission) but no Gentle AI
+	// ownership marker, and JSONC has the real Gentle AI-managed config with
+	// the marker, the resolver must select JSONC.
+	t.Run("json user-owned managed shape without marker selects jsonc with marker", func(t *testing.T) {
+		home := t.TempDir()
+		projectDir := t.TempDir()
+		t.Setenv("HOME", home)
+		t.Setenv("XDG_CONFIG_HOME", "")
+		t.Setenv("OPENCODE_CONFIG_DIR", "")
+
+		jsonPath := filepath.Join(projectDir, "opencode.json")
+		// User-owned agent that matches hidden+prompt+permission shape
+		// but lacks the __managed_by marker.
+		if err := os.MkdirAll(projectDir, 0o755); err != nil {
+			t.Fatalf("mkdir project dir: %v", err)
+		}
+		if err := os.WriteFile(jsonPath, []byte(`{
+  "agent": {
+    "gentle-orchestrator": {
+      "mode": "primary",
+      "hidden": true,
+      "prompt": "my custom orchestrator",
+      "permission": {"task": "allow"}
+    }
+  }
+}`), 0o600); err != nil {
+			t.Fatalf("write json fixture: %v", err)
+		}
+
+		jsoncPath := filepath.Join(projectDir, "opencode.jsonc")
+		// Real Gentle AI managed config with the ownership marker.
+		if err := os.WriteFile(jsoncPath, []byte(`{
+  "agent": {
+    "gentle-orchestrator": {
+      "mode": "primary",
+      "hidden": true,
+      "prompt": "managed by Gentle AI",
+      "permission": {},
+      "__managed_by": "gentle-ai/sdd"
+    }
+  }
+}`), 0o600); err != nil {
+			t.Fatalf("write jsonc fixture: %v", err)
+		}
+
+		snapshot, err := ResolveEffectiveConfigForHome(home, projectDir)
+		if err != nil {
+			t.Fatalf("ResolveEffectiveConfigForHome() error = %v", err)
+		}
+		wantPath := filepath.Join(projectDir, "opencode.jsonc")
+		if snapshot.Path != wantPath || snapshot.WritePath != wantPath {
+			t.Fatalf("paths = (%q, %q), want %q", snapshot.Path, snapshot.WritePath, wantPath)
+		}
+	})
 }
 
 func TestResolveEffectiveConfigUsesOpenCodeConfigDir(t *testing.T) {
