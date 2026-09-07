@@ -128,13 +128,9 @@ func currentOpenCodeSettingsPath() string {
 	if err != nil {
 		return modelPickerSettingsPath()
 	}
-	if snapshot, err := opencode.ResolveEffectiveConfig(projectDir); err == nil {
-		if snapshot.Path != "" {
-			return snapshot.Path
-		}
-		if snapshot.WritePath != "" {
-			return snapshot.WritePath
-		}
+	home, _ := os.UserHomeDir()
+	if path := opencode.EffectiveSettingsPath(home, projectDir); path != "" {
+		return path
 	}
 	return modelPickerSettingsPath()
 }
@@ -5036,17 +5032,17 @@ func (m *Model) initializeModelPicker() tea.Cmd {
 		}
 	}
 	settingsPath := modelPickerSettingsPath()
-	var configuredProviders map[string]opencode.Provider
-	if snapshot, err := opencode.ResolveEffectiveConfig(projectDir); err == nil {
-		configuredProviders = snapshot.Providers
-		if snapshot.Path != "" {
-			settingsPath = snapshot.Path
-		} else if snapshot.WritePath != "" {
-			settingsPath = snapshot.WritePath
-		}
+	snapshot, configErr := opencode.ResolveEffectiveConfig(projectDir)
+	if snapshot.WritePath != "" {
+		settingsPath = snapshot.WritePath
 	}
 	m.ModelPicker = screens.NewRuntimeModelPickerStateWithDiscoverer(settingsPath, modelPickerCatalogDiscoverer)
-	m.ModelPicker.ConfiguredProviders = configuredProviders
+	m.ModelPicker.ConfiguredProviders = snapshot.Providers
+	if configErr != nil {
+		m.ModelPicker.ConfigWarning = fmt.Sprintf("Could not read OpenCode config: %v", configErr)
+	} else if len(snapshot.Diagnostics) > 0 {
+		m.ModelPicker.ConfigWarning = strings.Join(snapshot.Diagnostics, "\n")
+	}
 	return m.ModelPicker.StartRuntimeCatalogDiscovery(requestID, projectDir)
 }
 

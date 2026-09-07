@@ -501,7 +501,9 @@ func TestKilocodeReviewSettingsMatchCurrentMainBaseline(t *testing.T) {
 	// OpenCode orchestrator asset, so the baseline is rederived.
 	// #2855 replaces identity-free task-failure commands with coordinator
 	// guidance. Kilocode embeds the changed OpenCode consumer wording.
-	const want = "d4942d1415835c3208ddeda190790cba93528ab1d691da3092996adc6247bd20"
+	// #4315 adds __managed_by metadata through the shared OpenCode overlay.
+	// Kilocode inherits that metadata, not additional native RDD support.
+	const want = "01a5b51ff7e11740fc47698fff1e710826c2d34862c36da16ef0769a9e1e3b41"
 	if got != want {
 		t.Fatalf("Kilocode settings SHA-256 = %s, want current-main baseline %s", got, want)
 	}
