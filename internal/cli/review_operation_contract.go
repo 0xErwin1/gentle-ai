@@ -79,6 +79,13 @@ type reviewIntegrationOperationMetadata struct {
 // the verb; see the field's own comment for why the difference is load-bearing.
 var reviewIntegrationOperationRegistry = []reviewIntegrationOperationMetadata{
 	{Command: "capabilities", Operation: "review.capabilities", Label: "Review CAPABILITIES", Negotiated: true},
+	// review.assess owns a verb without joining the published negotiated
+	// surface (see Negotiated above). It is a read-only projection of the same
+	// candidate risk assessment START uses to select lenses: no authority, no
+	// lineage, no store mutation, so it declares no flag or timeout metadata --
+	// those fields are consumed only on the negotiated and collect-capture
+	// routes this row does not take (issue #4295).
+	{Command: "assess", Operation: "review.assess", Label: "Review ASSESS"},
 	// CollectCapture rows carry the exact flag sets their Run functions define,
 	// so a refusal envelope never silently drops the bound lineage.
 	{Command: "capture-correction-plan", Operation: reviewCaptureCorrectionPlanOperation, Label: "Review CAPTURE-CORRECTION-PLAN", CollectCapture: true, ValueFlags: []string{"cwd", "repository-context", "lineage", "target", "expected-revision", "request-hash"}, IntFlags: []string{"correction-lines"}, MutatesAuthority: true},
