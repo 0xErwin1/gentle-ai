@@ -1499,7 +1499,14 @@ func TestSDDModeMultiEmptyModelPickerCanContinueWithDefaults(t *testing.T) {
 }
 
 func TestConfigureOpenCodeModelsShowsJSONCCustomProviderWithRuntimeProviders(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("XDG_CONFIG_HOME", "")
+	t.Setenv("OPENCODE_CONFIG_DIR", "")
 	dir := t.TempDir()
+	writePath := filepath.Join(dir, "opencode.json")
+	if err := os.WriteFile(writePath, []byte(`{"agent":{"gentle-orchestrator":{"__managed_by":"gentle-ai/sdd"}},"provider":{"custom-cloud":{"name":"Lower priority"}}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	settingsPath := filepath.Join(dir, "opencode.jsonc")
 	settings := `{
   // Custom provider configured only in the effective OpenCode file.
@@ -1519,6 +1526,9 @@ func TestConfigureOpenCodeModelsShowsJSONCCustomProviderWithRuntimeProviders(t *
 		t.Fatalf("write opencode.jsonc: %v", err)
 	}
 	withModelPickerWorkingDir(t, dir)
+	if got := currentOpenCodeSettingsPath(); got != writePath {
+		t.Fatalf("profile/deletion target = %q, want %q", got, writePath)
+	}
 	withModelPickerCatalogDiscoverer(t, func(_ context.Context, projectDir string) (map[string]opencode.Provider, error) {
 		if projectDir != dir {
 			t.Fatalf("projectDir = %q, want %q", projectDir, dir)
@@ -1551,6 +1561,9 @@ func TestConfigureOpenCodeModelsShowsJSONCCustomProviderWithRuntimeProviders(t *
 	}
 	if gotProviders["runtime-ai"] != 1 || gotProviders["custom-cloud"] != 1 {
 		t.Fatalf("provider entries = %+v, want runtime-ai and custom-cloud with one selectable model each", entries)
+	}
+	if state.ModelPicker.ConfiguredProviders["custom-cloud"].Name != "Custom Cloud" || state.ModelPicker.ConfigWarning == "" {
+		t.Fatalf("missing JSONC precedence or layered-config warning: %+v", state.ModelPicker)
 	}
 	if got := state.ModelPicker.SDDModels["custom-cloud"][0].ID; got != "custom-reasoner" {
 		t.Fatalf("custom-cloud selectable model = %q, want custom-reasoner", got)
