@@ -204,7 +204,7 @@
       "properties": {
         "id": {"type": "string", "minLength": 1},
         "location": {"type": "string", "pattern": "\\S"},
-        "claim": {"type": "string", "minLength": 1},
+        "claim": {"type": "string", "pattern": "\\S"},
         "proof_refs": {
           "type": "array",
           "minItems": 1,
@@ -217,7 +217,7 @@
       "additionalProperties": false,
       "required": ["observation", "proof_refs"],
       "properties": {
-        "observation": {"type": "string", "minLength": 1},
+        "observation": {"type": "string", "pattern": "\\S"},
         "proof_refs": {
           "type": "array",
           "minItems": 1,

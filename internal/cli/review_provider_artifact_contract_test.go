@@ -209,7 +209,7 @@ func TestReviewProviderArtifactConformanceSchemasArePinned(t *testing.T) {
 		// issues #4223/#4226/#4453: last-event-closure publishes rejected
 		// targeted-validator evidence, terminal escalation, and complete admitted
 		// reviewer results before acknowledgement. Deliberate, not drift.
-		"schemas/last-event-closure.schema.json": "25c4044782aeb3a24bf77c04a8a0bdf6762de68b0341c1eaa20b025414db4888",
+		"schemas/last-event-closure.schema.json": "d0fa6e52fbe0cf22862ac0ab31f76996885dd9454b5dbe70eca17e7416af5d56",
 		// issue #3894: start/v4 publishes the reviewing status continuation, so
 		// transition-execution gains the start_status_execution definition it
 		// references. Deliberate, not drift.
