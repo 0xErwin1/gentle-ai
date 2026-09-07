@@ -487,7 +487,13 @@ func TestKilocodeReviewSettingsMatchCurrentMainBaseline(t *testing.T) {
 	// renders the OpenCode orchestrator asset, so the baseline is rederived.
 	// #3499 projects the canonical three-choice session preflight into the
 	// OpenCode-derived Kilocode prompt, so the combined baseline is rederived.
-	const want = "7c499e23051f637c9befdc22c040e8c541137d8d3aadbea93b2f3580573fb66f"
+	// #4296 adds the shared "Delegated Verification Gate (MANDATORY)" section
+	// to every runtime orchestrator's Delegation Rules block: the RDD-aware,
+	// risk-gated rule that decides whether a delegated writer's work is
+	// verified by the writer itself, by an on-demand separate verifier, or by
+	// a mandatory independent verifier. Kilo renders that section through the
+	// OpenCode orchestrator asset, so the baseline is rederived.
+	const want = "bd285e2e96a0ddd582f74b20633dbe50088e23e72e1acf16c28f2abf95baa489"
 	if got != want {
 		t.Fatalf("Kilocode settings SHA-256 = %s, want current-main baseline %s", got, want)
 	}
