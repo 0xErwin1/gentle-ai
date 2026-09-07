@@ -1117,11 +1117,15 @@ func TestComponentSyncStepWritesSDDModelsToEffectiveProjectOpenCodeConfig(t *tes
 
 func TestComponentSyncStepWritesSDDModelsToManagedOpenCodeJSONWhenJSONCAlsoExists(t *testing.T) {
 	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", "")
+	t.Setenv("OPENCODE_CONFIG_DIR", "")
 	settingsDir := filepath.Join(home, ".config", "opencode")
 	jsonSettings := filepath.Join(settingsDir, "opencode.json")
 	jsoncSettings := filepath.Join(settingsDir, "opencode.jsonc")
 	jsoncBefore := []byte(`// user-owned JSONC config
 {
+  "agent": {"sdd-apply": {"model": "user/override"}},
   "provider": {
     "user": {"models": {"m": {}}}
   }
@@ -1176,6 +1180,17 @@ func TestComponentSyncStepWritesSDDModelsToManagedOpenCodeJSONWhenJSONCAlsoExist
 	}
 	if !bytes.Equal(jsoncAfter, jsoncBefore) {
 		t.Fatalf("non-selected JSONC config changed:\n got: %s\nwant: %s", jsoncAfter, jsoncBefore)
+	}
+	report := runPostApplyVerification(postApplyVerificationInput{
+		HomeDir: home, Resolved: planner.ResolvedPlan{Agents: selection.Agents},
+	})
+	if report.Warnings != 1 || !report.Ready || !strings.Contains(report.Checks[0].Error, jsoncSettings) {
+		t.Fatalf("expected non-blocking override warning: %+v", report)
+	}
+	for _, noOp := range []bool{false, true} {
+		if rendered := RenderSyncReport(SyncResult{Agents: selection.Agents, Verify: report, NoOp: noOp}); !strings.Contains(rendered, jsoncSettings) {
+			t.Fatalf("sync hid override warning (no-op=%t): %s", noOp, rendered)
+		}
 	}
 }
 

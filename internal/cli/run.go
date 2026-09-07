@@ -2727,8 +2727,28 @@ func runPostApplyVerification(input postApplyVerificationInput) verify.Report {
 		checks = append(checks, engramHealthChecks(input.State, input.Resolved.Agents)...)
 	}
 	checks = append(checks, antigravityCollisionCheck(input.Resolved.Agents)...)
+	checks = append(checks, openCodeConfigChecks(input.HomeDir, input.WorkspaceDir, input.Resolved.Agents)...)
 
 	return verify.BuildReport(verify.RunChecks(context.Background(), checks))
+}
+
+func openCodeConfigChecks(homeDir, workspaceDir string, agentIDs []model.AgentID) []verify.Check {
+	if !containsAgent(agentIDs, model.AgentOpenCode) {
+		return nil
+	}
+	return []verify.Check{{
+		ID: "verify:opencode:config-layers", Description: "OpenCode model write authority", Soft: true,
+		Run: func(context.Context) error {
+			snapshot, err := opencodeactivation.ResolveRuntimeConfigForHome(homeDir, workspaceDir)
+			if err != nil {
+				return err
+			}
+			if len(snapshot.Diagnostics) > 0 {
+				return errors.New(strings.Join(snapshot.Diagnostics, "\n"))
+			}
+			return nil
+		},
+	}}
 }
 
 // isRetiredManagedPath reports whether path names a managed file that install

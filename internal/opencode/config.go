@@ -1,6 +1,7 @@
 package opencode
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -28,16 +29,70 @@ type AssignmentPresence struct {
 	Assignment model.ModelAssignment
 }
 
-// ResolveEffectiveConfig locates and parses the effective OpenCode config for
-// projectDir. Existing project configs win over global configs; within the same
-// directory, an already-managed Gentle AI config wins; otherwise JSON wins over
-// JSONC. OPENCODE_CONFIG_DIR overrides the global config directory. Ancestor
-// lookup stops at the nearest Git root; this snapshot does not implement
-// OpenCode's full multi-file merge semantics or OPENCODE_CONFIG file overrides.
-// When no config exists, WritePath points at OpenCode's default settings path.
+// ResolveEffectiveConfig reads the layered local JSON/JSONC view. WritePath is
+// independently selected; Path is the highest-priority file, not a write target.
+// This does not emulate OpenCode's remote config, substitutions, plugins, or
+// OPENCODE_CONFIG overrides. Assignments are not a full runtime model resolution.
 func ResolveEffectiveConfig(projectDir string) (ConfigSnapshot, error) {
 	home, _ := os.UserHomeDir()
-	return ResolveEffectiveConfigForHome(home, projectDir)
+	return ResolveRuntimeConfigForHome(home, projectDir)
+}
+
+// ResolveRuntimeConfigForHome overlays normal global, ancestor/project, then
+// additive OPENCODE_CONFIG_DIR files. Within each directory JSONC overrides JSON.
+func ResolveRuntimeConfigForHome(homeDir, projectDir string) (ConfigSnapshot, error) {
+	snapshot, err := ResolveEffectiveConfigForHome(homeDir, projectDir)
+	if err != nil {
+		return snapshot, err
+	}
+	dirs := candidateConfigDirs(homeDir, projectDir)
+	if override := strings.TrimSpace(os.Getenv("OPENCODE_CONFIG_DIR")); filepath.IsAbs(override) {
+		dirs = append([]string{override}, dirs[:len(dirs)-1]...)
+		if homeDir != "" {
+			dirs = append(dirs, filepath.Dir(DefaultSettingsPathForHome(homeDir)))
+		}
+	}
+	root := map[string]any{}
+	var paths []string
+	for i := len(dirs) - 1; i >= 0; i-- {
+		for _, name := range []string{"opencode.json", "opencode.jsonc"} {
+			path := filepath.Join(dirs[i], name)
+			if !fileExists(path) {
+				continue
+			}
+			raw, err := os.ReadFile(path)
+			if err != nil {
+				return snapshot, err
+			}
+			layer, err := filemerge.UnmarshalJSONObject(raw)
+			if err != nil {
+				return snapshot, fmt.Errorf("read OpenCode config %s: %w", path, err)
+			}
+			overlayConfigFields(root, layer)
+			snapshot.Path = path
+			paths = append(paths, path)
+		}
+	}
+	snapshot.Providers = configuredProviders(root)
+	snapshot.Assignments = configuredAssignments(root)
+	if len(paths) > 1 {
+		snapshot.Diagnostics = append(snapshot.Diagnostics, fmt.Sprintf("OpenCode layered config (%s): higher-priority overrides are preserved. Model edits to %s may not be effective; file-backed model/profile values are not runtime assignments.", strings.Join(paths, " < "), snapshot.WritePath))
+	}
+	return snapshot, err
+}
+
+// overlayConfigFields overlays local object fields without interpreting installer
+// directives such as __replace__; those keys are ordinary data in runtime reads.
+func overlayConfigFields(base, layer map[string]any) {
+	for key, value := range layer {
+		baseMap, baseOK := base[key].(map[string]any)
+		layerMap, layerOK := value.(map[string]any)
+		if baseOK && layerOK {
+			overlayConfigFields(baseMap, layerMap)
+		} else {
+			base[key] = value
+		}
+	}
 }
 
 // EffectiveSettingsPath returns the shared OpenCode settings write path.
@@ -52,8 +107,8 @@ func EffectiveSettingsPath(homeDir, projectDir string) string {
 	return defaultEffectiveSettingsPath(homeDir)
 }
 
-// ResolveEffectiveConfigForHome is ResolveEffectiveConfig with an explicit home
-// directory for callers that already operate on a test or installation root.
+// ResolveEffectiveConfigForHome retains the file-backed write authority for
+// install, sync restoration, profiles, and deletion; it does not merge reads.
 func ResolveEffectiveConfigForHome(homeDir, projectDir string) (ConfigSnapshot, error) {
 	path := findEffectiveConfigPath(homeDir, projectDir)
 	snapshot := ConfigSnapshot{
@@ -67,6 +122,12 @@ func ResolveEffectiveConfigForHome(homeDir, projectDir string) (ConfigSnapshot, 
 		return snapshot, nil
 	}
 
+	return ReadConfigSnapshot(path)
+}
+
+// ReadConfigSnapshot reads only the named file, including restoration evidence.
+func ReadConfigSnapshot(path string) (ConfigSnapshot, error) {
+	snapshot := ConfigSnapshot{Path: path, WritePath: path}
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		return snapshot, err
@@ -89,28 +150,8 @@ func findEffectiveConfigPath(homeDir, projectDir string) string {
 
 		switch {
 		case jsonExists && jsoncExists:
-			jsonManaged := hasManagedOpenCodeConfig(jsonPath)
-			jsoncManaged := hasManagedOpenCodeConfig(jsoncPath)
-			switch {
-			case jsonManaged && !jsoncManaged:
-				return jsonPath
-			case jsoncManaged && !jsonManaged:
+			if managedConfigPriority(jsoncPath) > managedConfigPriority(jsonPath) {
 				return jsoncPath
-			case jsonManaged && jsoncManaged:
-				// Both files report managed. Prefer the one with the
-				// explicit Gentle AI ownership marker to avoid selecting a
-				// user-owned config that merely matches the legacy managed
-				// shape (hidden + prompt + permission).
-				jsonHasMarker := hasGentleAIOwnershipMarker(jsonPath)
-				jsoncHasMarker := hasGentleAIOwnershipMarker(jsoncPath)
-				switch {
-				case jsoncHasMarker && !jsonHasMarker:
-					return jsoncPath
-				case jsonHasMarker && !jsoncHasMarker:
-					return jsonPath
-				}
-				// Both or neither have the marker — keep existing default.
-				return jsonPath
 			}
 			return jsonPath
 		case jsonExists:
@@ -120,30 +161,6 @@ func findEffectiveConfigPath(homeDir, projectDir string) string {
 		}
 	}
 	return ""
-}
-
-// hasGentleAIOwnershipMarker returns true if the file at the given path
-// contains at least one agent definition carrying the explicit __managed_by
-// marker added by the installer.  This is used in findEffectiveConfigPath to
-// disambiguate when both JSON and JSONC look "managed" but only one is
-// actually the Gentle AI target.
-func hasGentleAIOwnershipMarker(path string) bool {
-	raw, err := os.ReadFile(path)
-	if err != nil {
-		return false
-	}
-	root, err := filemerge.UnmarshalJSONObject(raw)
-	if err != nil {
-		return false
-	}
-	agents, _ := root["agent"].(map[string]any)
-	for _, def := range agents {
-		defMap, _ := def.(map[string]any)
-		if looksLikeGentleAIOwnedAgent(defMap) {
-			return true
-		}
-	}
-	return false
 }
 
 func candidateConfigDirs(homeDir, projectDir string) []string {
@@ -287,48 +304,31 @@ func looksLikeManagedOpenCodeAgent(def map[string]any) bool {
 	return ok
 }
 
-func hasManagedOpenCodeConfig(path string) bool {
+// managedConfigPriority ranks explicit markers above the legacy shape heuristic.
+// The heuristic preserves old installs; it is not proof of ownership.
+func managedConfigPriority(path string) int {
 	raw, err := os.ReadFile(path)
 	if err != nil {
-		return false
+		return 0
 	}
 	root, err := filemerge.UnmarshalJSONObject(raw)
 	if err != nil {
-		return false
+		return 0
 	}
 	agents, _ := root["agent"].(map[string]any)
+	for _, raw := range agents {
+		def, _ := raw.(map[string]any)
+		if def["__managed_by"] == "gentle-ai/sdd" {
+			return 2
+		}
+	}
 	for _, key := range managedOpenCodeAgentKeys() {
 		def, _ := agents[key].(map[string]any)
 		if looksLikeManagedOpenCodeAgent(def) {
-			return true
+			return 1
 		}
 	}
-	// New: require explicit Gentle AI ownership marker to avoid false
-	// positives when both JSON and JSONC contain a user-owned agent that
-	// happens to match the hidden+prompt+permission shape.  The marker is
-	// added to every managed agent definition in the overlay assets by the
-	// installer; if a file has at least one marker the resolver trusts it
-	// as the authority.
-	for _, def := range agents {
-		defMap, _ := def.(map[string]any)
-		if looksLikeGentleAIOwnedAgent(defMap) {
-			return true
-		}
-	}
-	return false
-}
-
-// looksLikeGentleAIOwnedAgent detects the explicit ownership marker added to
-// managed agent definitions in the overlay assets.  It uses a fixed key to
-// avoid collisions with user-facing properties.
-func looksLikeGentleAIOwnedAgent(def map[string]any) bool {
-	if def == nil {
-		return false
-	}
-	if v, ok := def["__managed_by"].(string); ok && v == "gentle-ai/sdd" {
-		return true
-	}
-	return false
+	return 0
 }
 
 func managedOpenCodeAgentKeys() []string {

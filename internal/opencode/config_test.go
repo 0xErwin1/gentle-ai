@@ -79,8 +79,8 @@ func TestResolveEffectiveConfigPrecedenceAndDefaultWriteTarget(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ResolveEffectiveConfig() error = %v", err)
 	}
-	if snapshot.Path != projectJSON {
-		t.Fatalf("effective path = %q, want nearest project opencode.json", snapshot.Path)
+	if snapshot.Path != projectJSONC || snapshot.WritePath != projectJSON {
+		t.Fatalf("paths = (%q, %q), want JSONC read / JSON write", snapshot.Path, snapshot.WritePath)
 	}
 	if _, ok := snapshot.Providers["json"]; !ok {
 		t.Fatalf("providers = %#v, want project JSON provider", snapshot.Providers)
@@ -321,6 +321,50 @@ func TestResolveEffectiveConfigUsesOpenCodeConfigDir(t *testing.T) {
 	wantPath := filepath.Join(overrideDir, "opencode.jsonc")
 	if snapshot.Path != wantPath || snapshot.WritePath != wantPath {
 		t.Fatalf("paths = (%q, %q), want OPENCODE_CONFIG_DIR config %q", snapshot.Path, snapshot.WritePath, wantPath)
+	}
+}
+
+func TestRuntimeConfigPreservesWriteAuthorityAndLayeredReads(t *testing.T) {
+	home, project, override := t.TempDir(), t.TempDir(), t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", "")
+	t.Setenv("OPENCODE_CONFIG_DIR", override)
+	global := DefaultSettingsPathForHome(home)
+	writeOpenCodeConfigFixture(t, global, false)
+	jsonPath := filepath.Join(project, "opencode.json")
+	jsoncPath := filepath.Join(project, "opencode.jsonc")
+	writeOpenCodeConfigFixture(t, jsonPath, true)
+	for _, path := range []string{jsoncPath, filepath.Join(override, "opencode.jsonc")} {
+		if err := os.WriteFile(path, []byte(`{"agent":{"gentle-orchestrator":{"model":"custom/override"}},"provider":{"custom":{"name":"Higher priority","models":{"__replace__":{}}}}}`), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	snapshot, err := ResolveEffectiveConfig(project)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snapshot.WritePath != jsonPath || snapshot.Path != filepath.Join(override, "opencode.jsonc") {
+		t.Fatalf("read/write paths = %q / %q", snapshot.Path, snapshot.WritePath)
+	}
+	if snapshot.Assignments["gentle-orchestrator"].Assignment.ModelID != "override" || snapshot.Providers["custom"].Name != "Higher priority" || len(snapshot.Providers["custom"].Models) != 1 || len(snapshot.Providers["fixture"].Models) != 1 || len(snapshot.Diagnostics) == 0 {
+		t.Fatalf("missing layered reads or conflict warning: %+v", snapshot)
+	}
+	// The same directory's JSONC wins without the additive config directory.
+	t.Setenv("OPENCODE_CONFIG_DIR", "")
+	snapshot, err = ResolveEffectiveConfig(project)
+	if err != nil || snapshot.Path != jsoncPath || snapshot.WritePath != jsonPath || snapshot.Assignments["gentle-orchestrator"].Assignment.ModelID != "override" {
+		t.Fatalf("JSONC precedence: %+v, %v", snapshot, err)
+	}
+	for _, path := range []string{jsoncPath, jsonPath} {
+		if path == jsonPath {
+			writeOpenCodeConfigFixture(t, jsoncPath, false)
+		}
+		if err := os.WriteFile(path, []byte(`{"broken":`), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := ResolveEffectiveConfig(project); err == nil {
+			t.Fatalf("malformed config %s silently ignored", path)
+		}
 	}
 }
 
