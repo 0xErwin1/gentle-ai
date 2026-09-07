@@ -115,7 +115,7 @@ With `--json`, it prints the typed `gentle-ai.review-assessment/v1` envelope:
 
 `risk` is `passive`, `medium`, or `high`. `passive` is exactly the tier START selects zero reviewer lenses for (every authored path proven passive documentation by its own frozen bytes); `medium` and `high` keep the same vocabulary and evidence codes START's own `risk_reasons` already publishes, so this projection can never disagree with the classification a review of the same candidate would use. Without `--json`, it prints the same information as human-readable text.
 
-When the candidate cannot be built or classified (for example an unresolvable `--base-ref`), the command fails closed and names a runnable `gentle-ai review assess ...` continuation. A host that cannot resolve the named continuation should treat the failure exactly as it would treat a `"high"` result.
+When the candidate cannot be built or classified (for example an unresolvable `--base-ref`), the command fails closed and names a runnable continuation of the same command with a resolvable `--base-ref`. A host that cannot resolve the named continuation should treat the failure exactly as it would treat a `"high"` result.
 
 ## Delivery remains human-owned
 
