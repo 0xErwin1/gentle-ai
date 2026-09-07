@@ -9,8 +9,6 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
 )
 
-var supportedConfigNames = []string{"opencode.jsonc", "opencode.json"}
-
 // ConfigSnapshot is the file-backed OpenCode configuration view shared by UI,
 // install, and sync flows.
 type ConfigSnapshot struct {
@@ -32,26 +30,26 @@ type AssignmentPresence struct {
 
 // ResolveEffectiveConfig locates and parses the effective OpenCode config for
 // projectDir. Existing project configs win over global configs; within the same
-// directory, JSONC wins over JSON. Ancestor lookup stops at the nearest Git root;
-// this snapshot does not implement OpenCode's full multi-file merge semantics or
-// OPENCODE_CONFIG overrides. When no config exists, WritePath points at
-// OpenCode's default settings path.
+// directory, an already-managed Gentle AI config wins; otherwise JSON wins over
+// JSONC. OPENCODE_CONFIG_DIR overrides the global config directory. Ancestor
+// lookup stops at the nearest Git root; this snapshot does not implement
+// OpenCode's full multi-file merge semantics or OPENCODE_CONFIG file overrides.
+// When no config exists, WritePath points at OpenCode's default settings path.
 func ResolveEffectiveConfig(projectDir string) (ConfigSnapshot, error) {
 	home, _ := os.UserHomeDir()
 	return ResolveEffectiveConfigForHome(home, projectDir)
 }
 
-// EffectiveSettingsPath returns the shared OpenCode settings write path. Existing
-// JSONC wins over JSON so user-owned comments are not silently flattened.
+// EffectiveSettingsPath returns the shared OpenCode settings write path.
 func EffectiveSettingsPath(homeDir, projectDir string) string {
 	snapshot, err := ResolveEffectiveConfigForHome(homeDir, projectDir)
 	if snapshot.WritePath != "" {
 		return snapshot.WritePath
 	}
 	if err != nil {
-		return DefaultSettingsPathForHome(homeDir)
+		return defaultEffectiveSettingsPath(homeDir)
 	}
-	return DefaultSettingsPathForHome(homeDir)
+	return defaultEffectiveSettingsPath(homeDir)
 }
 
 // ResolveEffectiveConfigForHome is ResolveEffectiveConfig with an explicit home
@@ -65,7 +63,7 @@ func ResolveEffectiveConfigForHome(homeDir, projectDir string) (ConfigSnapshot, 
 		Assignments: map[string]AssignmentPresence{},
 	}
 	if snapshot.WritePath == "" {
-		snapshot.WritePath = DefaultSettingsPathForHome(homeDir)
+		snapshot.WritePath = defaultEffectiveSettingsPath(homeDir)
 		return snapshot, nil
 	}
 
@@ -84,11 +82,24 @@ func ResolveEffectiveConfigForHome(homeDir, projectDir string) (ConfigSnapshot, 
 
 func findEffectiveConfigPath(homeDir, projectDir string) string {
 	for _, dir := range candidateConfigDirs(homeDir, projectDir) {
-		for _, name := range supportedConfigNames {
-			path := filepath.Join(dir, name)
-			if fileExists(path) {
-				return path
+		jsonPath := filepath.Join(dir, "opencode.json")
+		jsoncPath := filepath.Join(dir, "opencode.jsonc")
+		jsonExists := fileExists(jsonPath)
+		jsoncExists := fileExists(jsoncPath)
+
+		switch {
+		case jsonExists && jsoncExists:
+			if hasManagedOpenCodeConfig(jsonPath) && !hasManagedOpenCodeConfig(jsoncPath) {
+				return jsonPath
 			}
+			if hasManagedOpenCodeConfig(jsoncPath) && !hasManagedOpenCodeConfig(jsonPath) {
+				return jsoncPath
+			}
+			return jsonPath
+		case jsonExists:
+			return jsonPath
+		case jsoncExists:
+			return jsoncPath
 		}
 	}
 	return ""
@@ -111,10 +122,27 @@ func candidateConfigDirs(homeDir, projectDir string) []string {
 			}
 		}
 	}
-	if homeDir != "" {
-		dirs = append(dirs, filepath.Dir(DefaultSettingsPathForHome(homeDir)))
+	if globalDir := effectiveGlobalConfigDir(homeDir); globalDir != "" {
+		dirs = append(dirs, globalDir)
 	}
 	return dirs
+}
+
+func effectiveGlobalConfigDir(homeDir string) string {
+	if dir := strings.TrimSpace(os.Getenv("OPENCODE_CONFIG_DIR")); filepath.IsAbs(dir) {
+		return dir
+	}
+	if homeDir == "" {
+		return ""
+	}
+	return filepath.Dir(DefaultSettingsPathForHome(homeDir))
+}
+
+func defaultEffectiveSettingsPath(homeDir string) string {
+	if dir := effectiveGlobalConfigDir(homeDir); dir != "" {
+		return filepath.Join(dir, "opencode.json")
+	}
+	return ""
 }
 
 func fileExists(path string) bool {
@@ -216,6 +244,32 @@ func looksLikeManagedOpenCodeAgent(def map[string]any) bool {
 	}
 	_, ok := def["permission"].(map[string]any)
 	return ok
+}
+
+func hasManagedOpenCodeConfig(path string) bool {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return false
+	}
+	root, err := filemerge.UnmarshalJSONObject(raw)
+	if err != nil {
+		return false
+	}
+	agents, _ := root["agent"].(map[string]any)
+	for _, key := range managedOpenCodeAgentKeys() {
+		def, _ := agents[key].(map[string]any)
+		if looksLikeManagedOpenCodeAgent(def) {
+			return true
+		}
+	}
+	return false
+}
+
+func managedOpenCodeAgentKeys() []string {
+	keys := []string{"gentle-orchestrator", "sdd-orchestrator", ReviewRefuterAgent, ReviewValidatorAgent}
+	keys = append(keys, SDDPhases()...)
+	keys = append(keys, JDPhases()...)
+	return keys
 }
 
 func stringValue(value any, fallback string) string {

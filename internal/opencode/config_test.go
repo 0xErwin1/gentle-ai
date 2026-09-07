@@ -79,11 +79,11 @@ func TestResolveEffectiveConfigPrecedenceAndDefaultWriteTarget(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ResolveEffectiveConfig() error = %v", err)
 	}
-	if snapshot.Path != projectJSONC {
-		t.Fatalf("effective path = %q, want nearest project opencode.jsonc", snapshot.Path)
+	if snapshot.Path != projectJSON {
+		t.Fatalf("effective path = %q, want nearest project opencode.json", snapshot.Path)
 	}
-	if _, ok := snapshot.Providers["jsonc"]; !ok {
-		t.Fatalf("providers = %#v, want project JSONC provider", snapshot.Providers)
+	if _, ok := snapshot.Providers["json"]; !ok {
+		t.Fatalf("providers = %#v, want project JSON provider", snapshot.Providers)
 	}
 
 	if err := os.Remove(parentConfig); err != nil {
@@ -203,5 +203,90 @@ func TestEffectiveSettingsPathPreservesSelectedWritePathOnReadError(t *testing.T
 
 	if got := EffectiveSettingsPath(home, projectDir); got != configPath {
 		t.Fatalf("EffectiveSettingsPath() = %q, want selected malformed config path %q", got, configPath)
+	}
+}
+
+func TestResolveEffectiveConfigSelectsOpenCodeConfigFile(t *testing.T) {
+	for _, tt := range []struct {
+		name         string
+		writeJSON    bool
+		jsonManaged  bool
+		writeJSONC   bool
+		jsoncManaged bool
+		wantName     string
+	}{
+		{name: "only json", writeJSON: true, wantName: "opencode.json"},
+		{name: "only jsonc", writeJSONC: true, wantName: "opencode.jsonc"},
+		{name: "both managed only in json", writeJSON: true, jsonManaged: true, writeJSONC: true, wantName: "opencode.json"},
+		{name: "both managed only in jsonc", writeJSON: true, writeJSONC: true, jsoncManaged: true, wantName: "opencode.jsonc"},
+		{name: "both managed in neither", writeJSON: true, writeJSONC: true, wantName: "opencode.json"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			home := t.TempDir()
+			projectDir := t.TempDir()
+			t.Setenv("HOME", home)
+			t.Setenv("XDG_CONFIG_HOME", "")
+			t.Setenv("OPENCODE_CONFIG_DIR", "")
+
+			if tt.writeJSON {
+				writeOpenCodeConfigFixture(t, filepath.Join(projectDir, "opencode.json"), tt.jsonManaged)
+			}
+			if tt.writeJSONC {
+				writeOpenCodeConfigFixture(t, filepath.Join(projectDir, "opencode.jsonc"), tt.jsoncManaged)
+			}
+
+			snapshot, err := ResolveEffectiveConfigForHome(home, projectDir)
+			if err != nil {
+				t.Fatalf("ResolveEffectiveConfigForHome() error = %v", err)
+			}
+			wantPath := filepath.Join(projectDir, tt.wantName)
+			if snapshot.Path != wantPath || snapshot.WritePath != wantPath {
+				t.Fatalf("paths = (%q, %q), want %q", snapshot.Path, snapshot.WritePath, wantPath)
+			}
+		})
+	}
+}
+
+func TestResolveEffectiveConfigUsesOpenCodeConfigDir(t *testing.T) {
+	home := t.TempDir()
+	projectDir := t.TempDir()
+	defaultDir := filepath.Join(home, ".config", "opencode")
+	overrideDir := filepath.Join(t.TempDir(), "opencode")
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", "")
+	t.Setenv("OPENCODE_CONFIG_DIR", overrideDir)
+	writeOpenCodeConfigFixture(t, filepath.Join(defaultDir, "opencode.json"), true)
+	writeOpenCodeConfigFixture(t, filepath.Join(overrideDir, "opencode.jsonc"), false)
+
+	snapshot, err := ResolveEffectiveConfigForHome(home, projectDir)
+	if err != nil {
+		t.Fatalf("ResolveEffectiveConfigForHome() error = %v", err)
+	}
+	wantPath := filepath.Join(overrideDir, "opencode.jsonc")
+	if snapshot.Path != wantPath || snapshot.WritePath != wantPath {
+		t.Fatalf("paths = (%q, %q), want OPENCODE_CONFIG_DIR config %q", snapshot.Path, snapshot.WritePath, wantPath)
+	}
+}
+
+func writeOpenCodeConfigFixture(t *testing.T, path string, managed bool) {
+	t.Helper()
+	content := `{"provider":{"fixture":{"models":{"m":{}}}}}`
+	if managed {
+		content = `{
+  "agent": {
+    "gentle-orchestrator": {
+      "mode": "primary",
+      "hidden": true,
+      "prompt": "managed by Gentle AI",
+      "permission": {}
+    }
+  }
+}`
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatalf("mkdir config dir: %v", err)
+	}
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatalf("write config fixture: %v", err)
 	}
 }

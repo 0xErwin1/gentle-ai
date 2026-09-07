@@ -1115,6 +1115,70 @@ func TestComponentSyncStepWritesSDDModelsToEffectiveProjectOpenCodeConfig(t *tes
 	}
 }
 
+func TestComponentSyncStepWritesSDDModelsToManagedOpenCodeJSONWhenJSONCAlsoExists(t *testing.T) {
+	home := t.TempDir()
+	settingsDir := filepath.Join(home, ".config", "opencode")
+	jsonSettings := filepath.Join(settingsDir, "opencode.json")
+	jsoncSettings := filepath.Join(settingsDir, "opencode.jsonc")
+	jsoncBefore := []byte(`// user-owned JSONC config
+{
+  "provider": {
+    "user": {"models": {"m": {}}}
+  }
+}
+`)
+	mustWriteFile(t, jsonSettings, []byte(`{
+  "agent": {
+    "gentle-orchestrator": {
+      "mode": "primary",
+      "hidden": true,
+      "prompt": "managed by Gentle AI",
+      "permission": {}
+    }
+  }
+}
+`))
+	mustWriteFile(t, jsoncSettings, jsoncBefore)
+
+	selection := model.Selection{
+		Agents:     []model.AgentID{model.AgentOpenCode},
+		Components: []model.ComponentID{model.ComponentSDD},
+		SDDMode:    model.SDDModeMulti,
+		ModelAssignments: map[string]model.ModelAssignment{
+			"sdd-apply": {ProviderID: "openai", ModelID: "gpt-json"},
+		},
+	}
+	var changed []string
+	step := componentSyncStep{
+		component:    model.ComponentSDD,
+		homeDir:      home,
+		agents:       selection.Agents,
+		selection:    selection,
+		changedFiles: &changed,
+	}
+	if err := step.Run(); err != nil {
+		t.Fatalf("componentSyncStep.Run() error = %v", err)
+	}
+	jsonAgents := readOpenCodeAgentMap(t, jsonSettings)
+	applyAgent := jsonAgents["sdd-apply"].(map[string]any)
+	if got := applyAgent["model"]; got != "openai/gpt-json" {
+		t.Fatalf("sdd-apply model = %v, want openai/gpt-json", got)
+	}
+	if !containsPath(changed, jsonSettings) {
+		t.Fatalf("ChangedFiles = %v, want selected JSON config %q", changed, jsonSettings)
+	}
+	if containsPath(changed, jsoncSettings) {
+		t.Fatalf("ChangedFiles = %v, must not include non-selected JSONC config %q", changed, jsoncSettings)
+	}
+	jsoncAfter, err := os.ReadFile(jsoncSettings)
+	if err != nil {
+		t.Fatalf("ReadFile(JSONC config) error = %v", err)
+	}
+	if !bytes.Equal(jsoncAfter, jsoncBefore) {
+		t.Fatalf("non-selected JSONC config changed:\n got: %s\nwant: %s", jsoncAfter, jsoncBefore)
+	}
+}
+
 func TestRestoreOpenCodeModelAssignmentsDoesNotRestoreExplicitClearOnGeneratedAgent(t *testing.T) {
 	for _, tc := range []struct {
 		name  string
