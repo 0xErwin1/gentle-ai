@@ -10,7 +10,7 @@ Thanks to everyone who has contributed to gentle-ai. This project exists because
 
 ## Contributors
 
-Ordered by number of merged pull requests.
+Ordered by number of merged pull requests descending, then alphabetically by GitHub login.
 
 | | Name | GitHub | Contributions |
 |---|---|---|---|
