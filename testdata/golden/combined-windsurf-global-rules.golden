@@ -175,7 +175,7 @@ This runtime has no subagent delegation mechanism, so there is no separate write
 - **Passive**: structural readback only; do not run the `## Verification` commands.
 - **Medium or high**: run the exact `## Verification` commands yourself, in the foreground, and report `<command>: <observed result>`.
 
-The parent spot check — re-running one reported command before delivery — still applies. The receipt-driven development state does not change this table: native review remains the independent check on top of whatever verification ran here.
+The parent spot check — re-running one reported command before delivery — still applies. The receipt-driven development state does not change this table: native review remains the independent check on top of whatever verification ran here. That independent check only stands once the native review reaches a terminal outcome for this candidate: a decline of the consent envelope for this candidate (candidate-scoped; never the kill switch), receipt-driven development disabled for the clone after this status was read, or a START or STATUS refusal are all treated as not closed, and never excuse the agent from running the tier's verification commands above.
 
 #### Native Checking Contract
 

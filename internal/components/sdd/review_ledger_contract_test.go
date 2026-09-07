@@ -493,7 +493,13 @@ func TestKilocodeReviewSettingsMatchCurrentMainBaseline(t *testing.T) {
 	// verified by the writer itself, by an on-demand separate verifier, or by
 	// a mandatory independent verifier. Kilo renders that section through the
 	// OpenCode orchestrator asset, so the baseline is rederived.
-	const want = "bd285e2e96a0ddd582f74b20633dbe50088e23e72e1acf16c28f2abf95baa489"
+	// #4304 adds the declined-review fallback to that same shared section: the
+	// RDD-on shortcut holds only while the native review reaches a terminal
+	// outcome for this candidate, and a declined consent envelope, clone-local
+	// RDD disable, or a START/STATUS refusal fall back to the risk-gated tier
+	// table exactly like RDD off. Kilo renders that section through the
+	// OpenCode orchestrator asset, so the baseline is rederived.
+	const want = "130994280552d21a9f9e15e50ab8e82a9408dc0564588850c932b9ef13554b36"
 	if got != want {
 		t.Fatalf("Kilocode settings SHA-256 = %s, want current-main baseline %s", got, want)
 	}

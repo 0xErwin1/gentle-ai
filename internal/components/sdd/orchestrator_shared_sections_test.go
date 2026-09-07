@@ -101,6 +101,39 @@ func TestEveryRuntimeRendersTheSharedSections(t *testing.T) {
 	}
 }
 
+// TestDelegatedVerificationGateDeclinedReviewFallbackRenders pins #4304: the
+// canonical body (full and reduced forms) must state that the RDD-on
+// shortcut holds only while the native review reaches a terminal outcome for
+// this candidate, and that a declined consent envelope, clone-local RDD
+// disable, or a START/STATUS refusal fall back to the risk-gated tier table
+// exactly like the RDD-off path -- never to a lower bar than RDD off.
+func TestDelegatedVerificationGateDeclinedReviewFallbackRenders(t *testing.T) {
+	const fallbackPhrase = "the native review reaches a terminal outcome for this candidate"
+
+	for _, name := range []string{
+		"Delegated Verification Gate (MANDATORY)",
+		"Delegated Verification Gate (Reduced Form)",
+	} {
+		if body := sharedOrchestratorSection(name); !strings.Contains(body, fallbackPhrase) {
+			t.Errorf("shared section %q canonical body does not carry %q", name, fallbackPhrase)
+		}
+	}
+
+	for _, agent := range []model.AgentID{
+		model.AgentOpenCode, model.AgentCursor, model.AgentGeminiCLI, model.AgentQwenCode,
+		model.AgentHermes, model.AgentKimi, model.AgentWindsurf, model.AgentCodex,
+		model.AgentClaudeCode, model.AgentKiroIDE, model.AgentAntigravity, model.AgentVSCodeCopilot,
+	} {
+		rendered := renderSDDOrchestratorAsset(agent)
+		if !strings.Contains(rendered, "Delegated Verification Gate") {
+			continue // a runtime that never carries either form keeps not carrying it
+		}
+		if !strings.Contains(rendered, fallbackPhrase) {
+			t.Errorf("%s renders a Delegated Verification Gate section without the declined-review fallback phrase", agent)
+		}
+	}
+}
+
 // TestNoRawSharedSectionPlaceholderSurvivesRendering pins that no placeholder
 // reaches a rendered prompt.
 func TestNoRawSharedSectionPlaceholderSurvivesRendering(t *testing.T) {
