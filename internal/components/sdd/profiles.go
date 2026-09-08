@@ -499,7 +499,7 @@ func cleanupStaleProfileJDAgents(settingsPath string, profile model.Profile) (fi
 	}
 
 	root["agent"] = agentMap
-	out, err := json.MarshalIndent(root, "", "  ")
+	out, err := filemerge.MarshalJSONPreservingPermissions(data, root)
 	if err != nil {
 		return filemerge.WriteResult{}, fmt.Errorf("marshal settings: %w", err)
 	}
@@ -552,7 +552,7 @@ func cleanupKilocodeProfileJDPermissions(settingsPath string, profile model.Prof
 	}
 
 	root["agent"] = agentMap
-	out, err := json.MarshalIndent(root, "", "  ")
+	out, err := filemerge.MarshalJSONPreservingPermissions(data, root)
 	if err != nil {
 		return filemerge.WriteResult{}, fmt.Errorf("marshal settings: %w", err)
 	}
@@ -836,7 +836,7 @@ func RemoveProfileAgents(settingsPath string, profileName string) error {
 	}
 
 	root["agent"] = agentMap
-	out, err := json.MarshalIndent(root, "", "  ")
+	out, err := filemerge.MarshalJSONPreservingPermissions(data, root)
 	if err != nil {
 		return fmt.Errorf("marshal settings: %w", err)
 	}

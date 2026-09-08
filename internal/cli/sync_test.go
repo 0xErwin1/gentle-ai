@@ -6054,6 +6054,28 @@ func runSyncComponentSteps(t *testing.T, home string, selection model.Selection)
 	}
 }
 
+func TestSyncRemoteAuthorizationUpdatesExistingInstallation(t *testing.T) {
+	home := t.TempDir()
+	path := systemPromptFileFor(t, home, model.AgentClaudeCode)
+	const personal = "Personal instruction: ask before deployment.\n"
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(personal), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	selection := model.Selection{Agents: []model.AgentID{model.AgentClaudeCode}}
+	runSyncInjectionSteps(t, home, selection)
+	first := readTextFile(t, path)
+	if !strings.Contains(first, personal) || !strings.Contains(first, "<!-- gentle-ai:remote-authorization -->") {
+		t.Fatal("component-independent sync lost personal text or omitted remote authorization")
+	}
+	runSyncInjectionSteps(t, home, selection)
+	if got := readTextFile(t, path); got != first {
+		t.Fatal("repeat sync changed the primary instruction carrier")
+	}
+}
+
 func TestSyncDeliversRoutingGuidanceWithoutSDDComponent(t *testing.T) {
 	home := t.TempDir()
 
