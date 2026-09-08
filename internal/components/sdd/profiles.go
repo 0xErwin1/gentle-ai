@@ -414,6 +414,7 @@ func GenerateProfileOverlay(profile model.Profile, homeDir, settingsPath string,
 	}
 
 	injectCodeGraphGuidanceIntoOpenCodeSubagentPrompts(agentMap, codeGraphGuidance)
+	injectRemoteAuthorizationIntoSubagentPrompts(agentMap)
 
 	overlay := map[string]any{
 		"agent": agentMap,
