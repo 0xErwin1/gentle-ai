@@ -75,6 +75,9 @@ COMPATIBILITY COMMANDS
   upgrade [--channel=stable|beta] [--dry-run] [--no-backup] [-- <tool>...]
                Apply updates to managed tools; beta takes gentle-ai's newest
                release candidate and Engram from main
+  telemetry <status|enable|disable|preview|trigger> [--json]
+               Anonymous, opt-out usage telemetry; preview shows the exact payload without sending it;
+               trigger runs the opportunistic check for hosts that never call install/update/sync
   restore      Restore a config backup
   doctor       Run ecosystem health diagnostics
   version      Print version
