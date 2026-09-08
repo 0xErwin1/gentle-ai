@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strconv"
 	"strings"
 	"sync"
@@ -1189,4 +1190,118 @@ func TestNegotiatedStatusReplaysPendingAcknowledgementDespiteUnreadableSiblingSt
 		t.Fatalf("selectorless STATUS = applicability=%q transition=%#v, want the pending acknowledgement", selectorless.Applicability, selectorless.NextTransition)
 	}
 	assertApprovedAcknowledgementTransition(t, selectorless.NextTransition.Execute, repo, started.LineageID, pending.TargetIdentity, pending.ExpectedRevision)
+}
+
+// TestRefuterCaptureInconclusiveRoutesToCorrectionRequiredWithoutEscalating
+// proves the fix for issue #4226: an inconclusive refuter verdict for a
+// severe inferential finding is treated as candidate-caused and routed into
+// bounded correction (StateCorrectionRequired), not an immediate terminal escalation.
+func TestRefuterCaptureInconclusiveRoutesToCorrectionRequiredWithoutEscalating(t *testing.T) {
+	reviewEnabledHome(t)
+	t.Setenv(reviewPiHostRelayContractEnvironment, reviewPiHostRelayContract)
+	repo, store, record, handle := piRefuterReview(t)
+	request, err := reviewProviderNewRefuterRequest(t.Context(), repo, store.Dir, record.State, record.State.CapturePhaseRevision)
+	if err != nil {
+		t.Fatal(err)
+	}
+	inconclusive, err := json.Marshal(facadeRefuterResult{
+		RequestHash: request.RequestHash,
+		Results: []facadeRefuterOutcome{{
+			FindingID: "R3-001", Outcome: reviewtransaction.OutcomeInconclusive, ProofRefs: []string{"could not observe wrapped state.Read error"},
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	overrideProviderRoleHostAdapter(t, providerTestAdapter{raw: inconclusive})
+
+	var output bytes.Buffer
+	if err := RunReview(append(append([]string{"capture-refuter"}, piRefuterBinding(repo, record, handle)...), "--agent", "pi", "--execute=true"), &output); err != nil {
+		t.Fatalf("capture refuter inconclusive: %v\n%s", err, output.String())
+	}
+
+	var terminal reviewLastEventClosureResult
+	decodeStrictReviewJSON(t, output.Bytes(), &terminal)
+	if terminal.State != reviewtransaction.StateCorrectionRequired {
+		t.Fatalf("inconclusive refuter capture state = %q, want %q", terminal.State, reviewtransaction.StateCorrectionRequired)
+	}
+	if terminal.StatusContinuation == nil || terminal.StatusContinuation.Operation != "review.status" {
+		t.Fatalf("inconclusive refuter capture status_continuation = %#v", terminal.StatusContinuation)
+	}
+	after, err := store.Load()
+	if err != nil || after.State.State != reviewtransaction.StateCorrectionRequired {
+		t.Fatalf("inconclusive refuter capture left authority = %#v, %v", after, err)
+	}
+	if len(after.State.FixFindingIDs) != 1 || after.State.FixFindingIDs[0] != "R3-001" {
+		t.Fatalf("inconclusive refuter capture FixFindingIDs = %v, want [R3-001]", after.State.FixFindingIDs)
+	}
+}
+
+// TestLineageEscalationPublishesEscalationCauseInClosureAndStatusEnvelopes
+// proves that when a lineage escalates (issue #4226), both the terminal
+// closure envelope and the STATUS envelope publish escalation with cause and finding_ids.
+func TestLineageEscalationPublishesEscalationCauseInClosureAndStatusEnvelopes(t *testing.T) {
+	reviewEnabledHome(t)
+	repo, lineage, request := providerCorrectionReadyWithoutVerificationEvidence(t)
+	store, err := reviewtransaction.CompactAuthoritativeStore(t.Context(), repo, lineage)
+	if err != nil {
+		t.Fatal(err)
+	}
+	record, err := store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	failedPayload, err := json.Marshal(facadeValidationResult{
+		TargetedValidationRequestHash: request.RequestHash,
+		CorrectionTargetIdentity:      request.CorrectionTargetIdentity,
+		OriginalCriteria:              facadeValidationCheck{Passed: false, Evidence: []string{"acceptance test failed"}},
+		CorrectionRegression:          facadeValidationCheck{Passed: true, Evidence: []string{"no regression observed"}},
+		FollowUps:                     []reviewtransaction.FollowUp{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	originalAdapter := reviewProviderRoleHostAdapter
+	reviewProviderRoleHostAdapter = func() reviewerprovider.Adapter {
+		return providerTestAdapterFunc(func(context.Context, reviewerprovider.Invocation) ([]byte, error) {
+			return failedPayload, nil
+		})
+	}
+	t.Cleanup(func() { reviewProviderRoleHostAdapter = originalAdapter })
+
+	var terminalOutput bytes.Buffer
+	if err := RunReviewCaptureValidation([]string{
+		"--cwd", repo,
+		"--lineage", lineage,
+		"--target", request.CorrectionTargetIdentity,
+		"--expected-revision", record.State.CapturePhaseRevision,
+		"--request-hash", request.RequestHash,
+		"--agent", string(model.AgentPi),
+		"--execute=true",
+	}, &terminalOutput); err != nil {
+		t.Fatalf("capture rejected targeted validator: %v\n%s", err, terminalOutput.String())
+	}
+	var terminal reviewLastEventClosureResult
+	decodeStrictReviewJSON(t, terminalOutput.Bytes(), &terminal)
+	if terminal.State != reviewtransaction.StateEscalated {
+		t.Fatalf("closure state = %q, want %q", terminal.State, reviewtransaction.StateEscalated)
+	}
+	if terminal.Escalation == nil || terminal.Escalation.Cause != "targeted_validator_rejected" || len(terminal.Escalation.FindingIDs) == 0 {
+		t.Fatalf("closure escalation = %#v, want cause targeted_validator_rejected", terminal.Escalation)
+	}
+
+	var statusOutput bytes.Buffer
+	if err := RunReviewStatus([]string{
+		"--cwd", repo,
+		"--lineage", lineage,
+		"--contract", ReviewIntegrationContractV2,
+		"--next-transition",
+	}, &statusOutput); err != nil {
+		t.Fatalf("status query on escalated lineage: %v\n%s", err, statusOutput.String())
+	}
+	var status ReviewTargetStatusResult
+	decodeStrictReviewJSON(t, statusOutput.Bytes(), &status)
+	if status.Escalation == nil || status.Escalation.Cause != "targeted_validator_rejected" || !reflect.DeepEqual(status.Escalation.FindingIDs, terminal.Escalation.FindingIDs) {
+		t.Fatalf("STATUS escalation = %#v, want matching closure escalation %#v", status.Escalation, terminal.Escalation)
+	}
 }

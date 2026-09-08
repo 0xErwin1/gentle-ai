@@ -22,6 +22,7 @@ type reviewLastEventClosureResult struct {
 	State                     reviewtransaction.State                             `json:"state"`
 	Action                    string                                              `json:"action"`
 	TargetedValidatorEvidence *reviewtransaction.CompactTargetedValidatorEvidence `json:"targeted_validator_evidence,omitempty"`
+	Escalation                *reviewtransaction.CompactEscalationEvidence        `json:"escalation,omitempty"`
 	AdvisoryFindings          *reviewtransaction.AdvisoryFindingSet               `json:"advisory_findings,omitempty"`
 	StatusContinuation        *ReviewTransitionExecution                          `json:"status_continuation,omitempty"`
 	Acknowledgement           *ReviewTransitionExecution                          `json:"acknowledgement,omitempty"`
@@ -140,6 +141,7 @@ func closeCorrectionOnCapturedValidator(
 		telemetryRecordReviewOutcome("approved")
 	case reviewtransaction.StateEscalated:
 		result.Action = "the targeted validator rejected the correction; maintainer action is informational"
+		result.Escalation = state.EscalationEvidence()
 		telemetryRecordReviewOutcome("escalated")
 	default:
 		return nil, fmt.Errorf("targeted validator capture produced unsupported state %q", state.State) // refusal:by-design human-authority: an unmodeled terminal authority outcome requires maintainer inspection
@@ -174,7 +176,7 @@ func newCorrectionCapturedValidatorClosure(repo string, state reviewtransaction.
 	return &reviewLastEventClosureResult{
 		Schema: reviewLastEventClosureSchema, Operation: "review/capture-validation", LineageID: state.LineageID,
 		State: state.State, Action: "the targeted validator rejected the correction; maintainer action is informational",
-		TargetedValidatorEvidence: &evidence, AdvisoryFindings: reviewtransaction.AdvisoryFindingSetFor(state), StoreRevision: revision,
+		TargetedValidatorEvidence: &evidence, Escalation: state.EscalationEvidence(), AdvisoryFindings: reviewtransaction.AdvisoryFindingSetFor(state), StoreRevision: revision,
 	}, nil
 }
 
@@ -291,6 +293,7 @@ func closeReviewOnLastCapturedLens(
 		telemetryRecordReviewOutcome("correction")
 	case reviewtransaction.StateEscalated:
 		result.Action = "review completed with inconclusive severe findings; maintainer action is informational"
+		result.Escalation = state.EscalationEvidence()
 		telemetryRecordReviewOutcome("escalated")
 	default:
 		return nil, fmt.Errorf("last reviewer capture produced unsupported state %q", state.State) // refusal:by-design human-authority: an unmodeled terminal authority outcome requires maintainer inspection

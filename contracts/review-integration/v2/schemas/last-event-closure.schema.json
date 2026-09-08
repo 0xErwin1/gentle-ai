@@ -45,6 +45,41 @@
     "status_continuation": {"$ref": "transition-execution.schema.json#/$defs/last_event_status_execution"},
     "acknowledgement": {"$ref": "transition-execution.schema.json#/$defs/approved_acknowledgement_execution"},
     "store_revision": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "escalation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["cause", "finding_ids"],
+      "properties": {
+        "cause": {
+          "type": "string",
+          "enum": [
+            "unknown_causality",
+            "insufficient_evidence",
+            "missing_refuter_outcome",
+            "targeted_validator_rejected",
+            "correction_budget_exceeded",
+            "unresolved_severe_findings"
+          ]
+        },
+        "finding_ids": {
+          "type": "array",
+          "items": {"type": "string", "minLength": 1}
+        },
+        "refuter_outcomes": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["finding_id", "outcome", "proof"],
+            "properties": {
+              "finding_id": {"type": "string", "minLength": 1},
+              "outcome": {"type": "string", "enum": ["corroborated", "refuted", "inconclusive"]},
+              "proof": {"type": "string", "minLength": 1}
+            }
+          }
+        }
+      }
+    },
     "advisory_findings": {
       "type": "object",
       "additionalProperties": false,

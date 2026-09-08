@@ -96,6 +96,7 @@ type ReviewTargetStatusResult struct {
 	Eligibility       *ReviewActionEligibility                     `json:"eligibility,omitempty"`
 	Forecast          *ReviewForecast                              `json:"forecast,omitempty"`
 	NextTransition    *ReviewNextTransition                        `json:"next_transition,omitempty"`
+	Escalation        *reviewtransaction.CompactEscalationEvidence `json:"escalation,omitempty"`
 	RepositoryContext *ReviewRepositoryContextReference            `json:"repository_context,omitempty"`
 	ValidationRequest *reviewtransaction.TargetedValidationRequest `json:"validation_request,omitempty"`
 	decision          reviewtransaction.TargetStatusDecision       `json:"-"`
@@ -227,6 +228,9 @@ func newReviewTargetStatusResultForContract(native reviewtransaction.TargetStatu
 	if native.AuthorityVersion == reviewtransaction.AuthorityVersionCompact &&
 		native.AuthorityTargetIdentity != "" && native.AuthorityTargetIdentity != native.TargetIdentity {
 		result.AuthorityTargetIdentity = native.AuthorityTargetIdentity
+	}
+	if native.Escalation != nil {
+		result.Escalation = native.Escalation
 	}
 	if native.Applicability != reviewtransaction.TargetApplicabilityCurrent {
 		return result
