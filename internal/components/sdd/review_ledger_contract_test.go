@@ -503,7 +503,9 @@ func TestKilocodeReviewSettingsMatchCurrentMainBaseline(t *testing.T) {
 	// guidance. Kilocode embeds the changed OpenCode consumer wording.
 	// #4315 adds __managed_by metadata through the shared OpenCode overlay.
 	// Kilocode inherits that metadata, not additional native RDD support.
-	const want = "01a5b51ff7e11740fc47698fff1e710826c2d34862c36da16ef0769a9e1e3b41"
+	// #4324 appends canonical remote authorization to managed executor prompts;
+	// native permissions and the primary orchestrator remain unchanged.
+	const want = "d2f4aad13b3930df018219bd91ea56ef8ddac3bc3978cd0374b1857e2a1c5944"
 	if got != want {
 		t.Fatalf("Kilocode settings SHA-256 = %s, want current-main baseline %s", got, want)
 	}
@@ -791,8 +793,10 @@ func TestOpenCodeRenderedReviewProtocolCost(t *testing.T) {
 		// one. Deliberate, not drift; the ceilings move with it
 		// (ceilings move again by the same amount) to restore the same small
 		// headroom each row already had.
-		{name: "standard", agents: []string{"review-reliability"}, beforeChars: 42_301, wantChars: 17_364, maxCharacters: 17_367},
-		{name: "full-4R", agents: []string{"review-risk", "review-resilience", "review-readability", "review-reliability"}, beforeChars: 106_998, wantChars: 29_709, maxCharacters: 31_242},
+		// #4324 adds 1,354 canonical remote-authorization characters per reviewer.
+		// Preserve the existing absolute ceiling margins (3 and 1,533 characters).
+		{name: "standard", agents: []string{"review-reliability"}, beforeChars: 42_301, wantChars: 18_718, maxCharacters: 18_721},
+		{name: "full-4R", agents: []string{"review-risk", "review-resilience", "review-readability", "review-reliability"}, beforeChars: 106_998, wantChars: 35_125, maxCharacters: 36_658},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

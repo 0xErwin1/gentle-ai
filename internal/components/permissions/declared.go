@@ -80,7 +80,10 @@ func InjectDeclared(homeDir string, adapter agents.Adapter, declared Declared) (
 		return InjectionResult{}, fmt.Errorf("encode declared permissions: %w", err)
 	}
 
-	writeResult, err := mergeJSONFile(settingsPath, overlay)
+	// Declared rules are explicit additions after their lists have already been
+	// unioned with the staged guardrails, not defaults that an existing list may
+	// override.
+	writeResult, err := mergeJSONFile(settingsPath, overlay, false)
 	if err != nil {
 		return InjectionResult{}, err
 	}

@@ -37,10 +37,13 @@ RELEASE_TAG=""
 LOCAL_SOURCE=""
 WITH_GRAFANA="false"
 DOMAIN=""
+ADDRESS=""
 BIN_DEST="/usr/local/bin/gentle-telemetry"
 UNIT_DIR="/etc/systemd/system"
 CONFIG_DIR="/etc/gentle-telemetry"
 STATE_DIR="/var/lib/gentle-telemetry"
+# Where systemd keeps DynamicUser state; only the migration reads it.
+PRIVATE_STATE_ROOT="/var/lib/private"
 APACHE_INCLUDE_FILE="/etc/apache2/conf.d/includes/post_virtualhost_global.conf"
 RENDERED_VHOST="/root/telemetry-vhost.conf.rendered"
 GRAFANA_INI="/etc/grafana/grafana.ini"
@@ -53,6 +56,15 @@ usage() {
 	cat >&2 <<EOF
 Usage: $0 (--release-tag <tag> | --local-source <path>)
           [--domain <fqdn>] [--with-grafana]
+          [--address <ipv4|*>]
+
+  --address  Address to bind the rendered <VirtualHost> blocks to. On a
+             cPanel/WHM Apache box, a "*:80"/"*:443" block is silently
+             skipped once any other vhost is bound to the server's IPv4
+             address instead of "*" (name-based selection only happens
+             among vhosts bound to the same address). By default this is
+             detected from \${APACHE_INCLUDE_FILE}; pass this flag to
+             override that detection.
 EOF
 	exit 1
 }
@@ -71,6 +83,10 @@ while [[ $# -gt 0 ]]; do
 		DOMAIN="$2"
 		shift 2
 		;;
+	--address)
+		ADDRESS="$2"
+		shift 2
+		;;
 	--with-grafana)
 		WITH_GRAFANA="true"
 		shift
@@ -87,6 +103,34 @@ done
 
 if [[ -z "${RELEASE_TAG}" && -z "${LOCAL_SOURCE}" ]]; then
 	usage
+fi
+
+# validate_ipv4_or_star accepts "*" or a dotted-quad IPv4 address with every
+# octet in 0-255. Used for --address so a typo produces a clear error here
+# rather than silently rendering a broken <VirtualHost> line.
+validate_ipv4_or_star() {
+	local addr="$1"
+	if [[ "${addr}" == "*" ]]; then
+		return 0
+	fi
+	if [[ ! "${addr}" =~ ^([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})$ ]]; then
+		return 1
+	fi
+	local octet
+	for octet in "${BASH_REMATCH[@]:1}"; do
+		# Force base 10: a leading zero would otherwise make bash read the
+		# octet as octal, and "08"/"09" would abort the arithmetic instead of
+		# being compared.
+		if ((10#${octet} > 255)); then
+			return 1
+		fi
+	done
+	return 0
+}
+
+if [[ -n "${ADDRESS}" ]] && ! validate_ipv4_or_star "${ADDRESS}"; then
+	printf 'invalid --address value: %s (expected an IPv4 address such as 203.0.113.10, or "*")\n' "${ADDRESS}" >&2
+	exit 1
 fi
 
 if [[ "$(id -u)" -ne 0 ]]; then
@@ -147,8 +191,79 @@ if ! command -v rclone >/dev/null 2>&1; then
 	dnf install -y rclone 2>/dev/null || curl -fsS https://rclone.org/install.sh | bash
 fi
 
+# create_telemetry_user idempotently creates the static system user/group
+# gentle-telemetry.service runs as. A static user (rather than systemd's
+# DynamicUser) gives Grafana a stable, grantable path: DynamicUser would
+# materialize StateDirectory under /var/lib/private/<name> with a symlink
+# at STATE_DIR, and granting Grafana search access on /var/lib/private
+# widens that directory beyond the 0700 systemd requires, which makes the
+# unit refuse to (re)start on the next restart.
+create_telemetry_user() {
+	if getent passwd gentle-telemetry >/dev/null 2>&1; then
+		return
+	fi
+	printf 'creating system user/group gentle-telemetry\n'
+	useradd --system --home-dir "${STATE_DIR}" --shell /sbin/nologin --user-group gentle-telemetry
+}
+
+# migrate_dynamic_user_layout moves an existing DynamicUser install (STATE_DIR
+# is a symlink to the private state directory) onto the static-user layout.
+# The data is staged next to STATE_DIR first, so an interrupted run can be
+# resumed by running the installer again, and the private root only ever
+# loses the one ACL entry this kit used to add. Prints one line per step
+# actually taken; a fresh or already migrated install prints nothing.
+migrate_dynamic_user_layout() {
+	local old="${PRIVATE_STATE_ROOT}/gentle-telemetry" staging="${STATE_DIR}.migrating" link
+	if [[ -d "${staging}" && ! -L "${staging}" ]]; then
+		printf 'resuming an interrupted migration from %s\n' "${staging}"
+	elif [[ -L "${STATE_DIR}" ]]; then
+		# Only the exact link systemd wrote is followed, never a prefix match,
+		# and only when it points at a real root-owned directory: a unit that
+		# was installed but never started leaves a dangling link behind.
+		link="$(readlink "${STATE_DIR}")"
+		[[ "${link}" == "${old}" || "${link}" == "private/gentle-telemetry" ]] || return 0
+		if [[ ! -d "${old}" || -L "${old}" || "$(stat -c '%u' "${old}")" != "0" ]]; then
+			printf 'leaving %s alone: %s is not a root-owned directory\n' "${STATE_DIR}" "${old}"
+			return 0
+		fi
+		printf 'migrating %s off the DynamicUser layout\n' "${STATE_DIR}"
+		if systemctl is-active --quiet gentle-telemetry.service 2>/dev/null; then
+			systemctl stop gentle-telemetry.service
+			printf '  stopped gentle-telemetry.service\n'
+		fi
+		mv "${old}" "${staging}"
+		printf '  staged %s as %s\n' "${old}" "${staging}"
+	else
+		return 0
+	fi
+	if [[ -L "${STATE_DIR}" ]]; then
+		rm "${STATE_DIR}"
+		printf '  removed symlink %s\n' "${STATE_DIR}"
+	elif [[ -d "${STATE_DIR}" ]]; then
+		rmdir "${STATE_DIR}" 2>/dev/null || { printf 'refusing to overwrite the non-empty %s; move it aside and rerun\n' "${STATE_DIR}" >&2; exit 1; }
+	fi
+	mv "${staging}" "${STATE_DIR}"
+	printf '  moved the state to %s\n' "${STATE_DIR}"
+	chown -R gentle-telemetry:gentle-telemetry "${STATE_DIR}"
+	printf '  chowned %s to gentle-telemetry:gentle-telemetry\n' "${STATE_DIR}"
+	if [[ -d "${PRIVATE_STATE_ROOT}" ]]; then
+		if command -v setfacl >/dev/null 2>&1 && getfacl -p "${PRIVATE_STATE_ROOT}" 2>/dev/null | grep -q '^user:grafana:'; then
+			setfacl -x u:grafana "${PRIVATE_STATE_ROOT}"
+			printf '  removed the grafana ACL entry from %s\n' "${PRIVATE_STATE_ROOT}"
+		fi
+		if [[ "$(stat -c '%a' "${PRIVATE_STATE_ROOT}")" != "700" ]]; then
+			chmod 0700 "${PRIVATE_STATE_ROOT}"
+			printf '  restored %s to mode 0700\n' "${PRIVATE_STATE_ROOT}"
+		fi
+	fi
+}
+
+create_telemetry_user
+migrate_dynamic_user_layout
+
 mkdir -p "${CONFIG_DIR}" "${STATE_DIR}"
 chmod 0755 "${CONFIG_DIR}"
+chown gentle-telemetry:gentle-telemetry "${STATE_DIR}"
 
 if [[ ! -f "${CONFIG_DIR}/summary.token" ]]; then
 	printf 'generating a new /v1/summary bearer token at %s/summary.token\n' "${CONFIG_DIR}"
@@ -308,25 +423,16 @@ EOF
 	# avoids ever creating -wal/-shm sidecar files. That leaves only one
 	# file for a second, read-only process to deal with: grant Grafana's
 	# system user read access to it via a POSIX ACL rather than group
-	# membership, because gentle-telemetry.service runs under systemd's
-	# DynamicUser, whose group is allocated per-unit with no stable name
-	# to add "grafana" to.
+	# membership, since gentle-telemetry:gentle-telemetry is not a group
+	# grafana belongs to.
 	dnf install -y acl >/dev/null 2>&1 || true
-	# With DynamicUser, systemd materialises StateDirectory under
-	# /var/lib/private (mode 0700) and leaves a symlink at STATE_DIR, so
-	# grafana also needs search permission on every ancestor that is not
-	# world-searchable; without it the datasource fails with
-	# "permission denied" even though the file ACL below is in place.
-	local ancestor
-	ancestor="$(dirname "$(readlink -f "${STATE_DIR}" 2>/dev/null || printf '/')")"
-	# Walk only absolute paths below "/": an unresolvable STATE_DIR (unit
-	# never started, dangling symlink) yields "." and must not loop forever.
-	while [[ "${ancestor}" == /?* ]]; do
-		if [[ ! -x "${ancestor}" ]] || [[ "$(stat -c '%A' "${ancestor}")" != *x ]]; then
-			setfacl -m u:grafana:--x "${ancestor}"
-		fi
-		ancestor="$(dirname "${ancestor}")"
-	done
+	# STATE_DIR is a real directory owned by the static gentle-telemetry
+	# user (not a DynamicUser symlink into /var/lib/private), so the ACL
+	# only needs to land on it and on the database file — never on an
+	# ancestor. Granting Grafana access anywhere under /var/lib/private
+	# would widen that directory past the exactly-0700 mode systemd
+	# requires for its own DynamicUser bookkeeping and would make other
+	# DynamicUser units refuse to (re)start.
 	setfacl -m u:grafana:rx "${STATE_DIR}"
 	if [[ -f "${STATE_DIR}/events.sqlite" ]]; then
 		setfacl -m u:grafana:r "${STATE_DIR}/events.sqlite"
@@ -344,8 +450,38 @@ fi
 
 mkdir -p /var/log/gentle-telemetry
 
+# detect_vhost_address looks for an existing IPv4-bound :443 vhost in
+# ${APACHE_INCLUDE_FILE} and prints the first address it finds, or "*" if
+# the file is missing or has none. On a cPanel/WHM box, Apache selects a
+# name-based vhost only among the vhosts bound to the address a request
+# arrived on, so matching that existing address (rather than "*") is what
+# makes the rendered blocks actually reachable — see the comment in
+# apache/telemetry-vhost.conf.tmpl.
+detect_vhost_address() {
+	local include_file="$1" detected
+	if [[ -f "${include_file}" ]]; then
+		detected="$(grep -oE '<VirtualHost[[:space:]]+[0-9]+(\.[0-9]+){3}:443>' "${include_file}" 2>/dev/null |
+			head -n1 | grep -oE '[0-9]+(\.[0-9]+){3}')"
+		if [[ -n "${detected}" ]]; then
+			printf '%s' "${detected}"
+			return
+		fi
+	fi
+	printf '*'
+}
+
 if [[ -n "${DOMAIN}" ]]; then
-	sed "s/__DOMAIN__/${DOMAIN}/g" "${SCRIPT_DIR}/apache/telemetry-vhost.conf.tmpl" >"${RENDERED_VHOST}"
+	if [[ -n "${ADDRESS}" ]]; then
+		printf 'binding the rendered vhost blocks to %s (from --address)\n' "${ADDRESS}"
+	else
+		ADDRESS="$(detect_vhost_address "${APACHE_INCLUDE_FILE}")"
+		if [[ "${ADDRESS}" == "*" ]]; then
+			printf 'binding the rendered vhost blocks to "*": no IPv4-bound :443 vhost found in %s (pass --address to override)\n' "${APACHE_INCLUDE_FILE}"
+		else
+			printf 'binding the rendered vhost blocks to %s: matched an existing :443 vhost in %s\n' "${ADDRESS}" "${APACHE_INCLUDE_FILE}"
+		fi
+	fi
+	sed -e "s/__DOMAIN__/${DOMAIN}/g" -e "s/__ADDRESS__/${ADDRESS}/g" "${SCRIPT_DIR}/apache/telemetry-vhost.conf.tmpl" >"${RENDERED_VHOST}"
 	chmod 0600 "${RENDERED_VHOST}"
 	# The :80 block's DocumentRoot and Certbot's --webroot both need this
 	# directory to exist before httpd is reloaded with the block appended.

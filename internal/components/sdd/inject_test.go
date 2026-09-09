@@ -285,6 +285,84 @@ func TestInjectHermesSDDIdempotent(t *testing.T) {
 	}
 }
 
+func TestRemoteAuthorizationInstalledExecutors(t *testing.T) {
+	for _, tc := range []struct {
+		id    model.AgentID
+		count int
+	}{
+		{"claude-code", 19}, {"cursor", 16}, {model.AgentKiroIDE, 19}, {"kimi", 16},
+	} {
+		t.Run(string(tc.id), func(t *testing.T) {
+			adapter, err := agents.NewAdapter(tc.id)
+			if err != nil {
+				t.Fatal(err)
+			}
+			home := t.TempDir()
+			mockNoPackageManager(t)
+			if _, err := Inject(home, adapter, model.SDDModeMulti); err != nil {
+				t.Fatal(err)
+			}
+			entries, err := os.ReadDir(adapter.SubAgentsDir(home))
+			if err != nil {
+				t.Fatal(err)
+			}
+			count := 0
+			for _, entry := range entries {
+				if !isMarkdownSubAgentPromptFile(entry.Name()) {
+					continue
+				}
+				count++
+				content, err := os.ReadFile(filepath.Join(adapter.SubAgentsDir(home), entry.Name()))
+				if err != nil {
+					t.Fatal(err)
+				}
+				if strings.Count(string(content), strings.TrimSpace(agentguidance.InjectRemoteAuthorization(""))) != 1 {
+					t.Errorf("%s: missing unique canonical contract", entry.Name())
+				}
+			}
+			if count != tc.count {
+				t.Errorf("markdown count = %d, want %d", count, tc.count)
+			}
+			if result, err := Inject(home, adapter, model.SDDModeMulti); err != nil || result.Changed {
+				t.Errorf("second injection changed=%v err=%v", result.Changed, err)
+			}
+		})
+	}
+}
+
+func TestRemoteAuthorizationEmbeddedExecutors(t *testing.T) {
+	for _, adapter := range []agents.Adapter{opencodeAdapter(), kilocodeAdapter()} {
+		t.Run(string(adapter.Agent()), func(t *testing.T) {
+			home := t.TempDir()
+			mockNoPackageManager(t)
+			if _, err := Inject(home, adapter, model.SDDModeMulti); err != nil {
+				t.Fatal(err)
+			}
+			content, err := os.ReadFile(adapter.SettingsPath(home))
+			if err != nil {
+				t.Fatal(err)
+			}
+			var settings map[string]any
+			if err := json.Unmarshal(content, &settings); err != nil {
+				t.Fatal(err)
+			}
+			for name, raw := range settings["agent"].(map[string]any) {
+				agent := raw.(map[string]any)
+				if agent["mode"] == "primary" {
+					continue
+				}
+				prompt, ok := agent["prompt"].(string)
+				if !ok || strings.HasPrefix(prompt, "{file:") {
+					continue
+				}
+				if strings.Count(prompt, strings.TrimSpace(agentguidance.InjectRemoteAuthorization(""))) != 1 {
+					t.Errorf("%s: missing unique canonical contract", name)
+				}
+			}
+		})
+	}
+}
+
 func TestInjectOpenCodeAndKilocodeLanguageContractOutputs(t *testing.T) {
 	tests := []struct {
 		name    string
