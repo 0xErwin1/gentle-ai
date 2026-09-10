@@ -53,15 +53,20 @@
       ],
       "fieldConfig": {
         "defaults": {
-          "unit": "short",
+          "unit": "locale",
           "min": 0,
-          "decimals": 0
+          "decimals": 0,
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "#73BF69"
+          }
         },
         "overrides": []
       },
       "options": {
         "orientation": "horizontal",
-        "textMode": "value_and_name",
+        "textMode": "value",
+        "colorMode": "value",
         "graphMode": "none",
         "reduceOptions": {
           "values": false,
@@ -97,15 +102,20 @@
       ],
       "fieldConfig": {
         "defaults": {
-          "unit": "short",
+          "unit": "locale",
           "min": 0,
-          "decimals": 0
+          "decimals": 0,
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "#73BF69"
+          }
         },
         "overrides": []
       },
       "options": {
         "orientation": "horizontal",
-        "textMode": "value_and_name",
+        "textMode": "value",
+        "colorMode": "value",
         "graphMode": "none",
         "reduceOptions": {
           "values": false,
@@ -141,15 +151,20 @@
       ],
       "fieldConfig": {
         "defaults": {
-          "unit": "short",
+          "unit": "locale",
           "min": 0,
-          "decimals": 0
+          "decimals": 0,
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "#73BF69"
+          }
         },
         "overrides": []
       },
       "options": {
         "orientation": "horizontal",
-        "textMode": "value_and_name",
+        "textMode": "value",
+        "colorMode": "value",
         "graphMode": "none",
         "reduceOptions": {
           "values": false,
@@ -185,15 +200,20 @@
       ],
       "fieldConfig": {
         "defaults": {
-          "unit": "short",
+          "unit": "locale",
           "min": 0,
-          "decimals": 0
+          "decimals": 0,
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "#73BF69"
+          }
         },
         "overrides": []
       },
       "options": {
         "orientation": "horizontal",
-        "textMode": "value_and_name",
+        "textMode": "value",
+        "colorMode": "value",
         "graphMode": "none",
         "reduceOptions": {
           "values": false,
@@ -229,15 +249,20 @@
       ],
       "fieldConfig": {
         "defaults": {
-          "unit": "short",
+          "unit": "locale",
           "min": 0,
-          "decimals": 0
+          "decimals": 0,
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "#73BF69"
+          }
         },
         "overrides": []
       },
       "options": {
         "orientation": "horizontal",
-        "textMode": "value_and_name",
+        "textMode": "value",
+        "colorMode": "value",
         "graphMode": "none",
         "reduceOptions": {
           "values": false,
@@ -275,13 +300,18 @@
         "defaults": {
           "unit": "percent",
           "min": 0,
-          "decimals": 0
+          "decimals": 0,
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "#73BF69"
+          }
         },
         "overrides": []
       },
       "options": {
         "orientation": "horizontal",
-        "textMode": "value_and_name",
+        "textMode": "value",
+        "colorMode": "value",
         "graphMode": "none",
         "reduceOptions": {
           "values": false,
@@ -317,15 +347,20 @@
       ],
       "fieldConfig": {
         "defaults": {
-          "unit": "short",
+          "unit": "locale",
           "min": 0,
-          "decimals": 0
+          "decimals": 0,
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "#73BF69"
+          }
         },
         "overrides": []
       },
       "options": {
         "orientation": "horizontal",
-        "textMode": "value_and_name",
+        "textMode": "value",
+        "colorMode": "value",
         "graphMode": "none",
         "reduceOptions": {
           "values": false,
@@ -361,15 +396,20 @@
       ],
       "fieldConfig": {
         "defaults": {
-          "unit": "short",
+          "unit": "locale",
           "min": 0,
-          "decimals": 0
+          "decimals": 0,
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "#73BF69"
+          }
         },
         "overrides": []
       },
       "options": {
         "orientation": "horizontal",
-        "textMode": "value_and_name",
+        "textMode": "value",
+        "colorMode": "value",
         "graphMode": "none",
         "reduceOptions": {
           "values": false,
@@ -571,12 +611,18 @@
         "defaults": {
           "unit": "short",
           "min": 0,
-          "decimals": 0
+          "decimals": 0,
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "#8AB8A8"
+          }
         },
         "overrides": []
       },
       "options": {
         "orientation": "horizontal",
+        "xField": "Agent",
+        "showValue": "always",
         "legend": {
           "showLegend": false
         }
@@ -609,12 +655,18 @@
         "defaults": {
           "unit": "short",
           "min": 0,
-          "decimals": 0
+          "decimals": 0,
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "#8AB8A8"
+          }
         },
         "overrides": []
       },
       "options": {
         "orientation": "horizontal",
+        "xField": "Component",
+        "showValue": "always",
         "legend": {
           "showLegend": false
         }
@@ -647,12 +699,18 @@
         "defaults": {
           "unit": "short",
           "min": 0,
-          "decimals": 0
+          "decimals": 0,
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "#8AB8A8"
+          }
         },
         "overrides": []
       },
       "options": {
         "orientation": "horizontal",
+        "xField": "Platform",
+        "showValue": "always",
         "legend": {
           "showLegend": false
         }
@@ -677,20 +735,26 @@
         {
           "refId": "A",
           "queryType": "table",
-          "queryText": "SELECT key AS Version, SUM(value) AS Installs FROM rollups_daily WHERE metric = 'version' AND day = (SELECT MAX(day) FROM rollups_daily WHERE metric = 'version') GROUP BY key ORDER BY Installs DESC LIMIT 10",
-          "rawQueryText": "SELECT key AS Version, SUM(value) AS Installs FROM rollups_daily WHERE metric = 'version' AND day = (SELECT MAX(day) FROM rollups_daily WHERE metric = 'version') GROUP BY key ORDER BY Installs DESC LIMIT 10"
+          "queryText": "WITH normalized AS (SELECT CASE WHEN instr(key, '-') > 0 THEN substr(key, 1, instr(key, '-') - 1) || ' (main)' ELSE key END AS Version, value FROM rollups_daily WHERE metric = 'version' AND day = (SELECT MAX(day) FROM rollups_daily WHERE metric = 'version')) SELECT CAST(Version AS TEXT) AS Version, SUM(value) AS Installs FROM normalized GROUP BY Version ORDER BY Installs DESC LIMIT 10",
+          "rawQueryText": "WITH normalized AS (SELECT CASE WHEN instr(key, '-') > 0 THEN substr(key, 1, instr(key, '-') - 1) || ' (main)' ELSE key END AS Version, value FROM rollups_daily WHERE metric = 'version' AND day = (SELECT MAX(day) FROM rollups_daily WHERE metric = 'version')) SELECT CAST(Version AS TEXT) AS Version, SUM(value) AS Installs FROM normalized GROUP BY Version ORDER BY Installs DESC LIMIT 10"
         }
       ],
       "fieldConfig": {
         "defaults": {
           "unit": "short",
           "min": 0,
-          "decimals": 0
+          "decimals": 0,
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "#8AB8A8"
+          }
         },
         "overrides": []
       },
       "options": {
         "orientation": "horizontal",
+        "xField": "Version",
+        "showValue": "always",
         "legend": {
           "showLegend": false
         }
@@ -734,76 +798,20 @@
       ],
       "fieldConfig": {
         "defaults": {
-          "unit": "short",
+          "unit": "locale",
           "min": 0,
-          "decimals": 0
-        },
-        "overrides": [
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "pi"
-            },
-            "properties": [
-              {
-                "id": "color",
-                "value": {
-                  "mode": "fixed",
-                  "fixedColor": "#73BF69"
-                }
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "opencode"
-            },
-            "properties": [
-              {
-                "id": "color",
-                "value": {
-                  "mode": "fixed",
-                  "fixedColor": "#5794F2"
-                }
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "claude-code"
-            },
-            "properties": [
-              {
-                "id": "color",
-                "value": {
-                  "mode": "fixed",
-                  "fixedColor": "#FF9830"
-                }
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "codex"
-            },
-            "properties": [
-              {
-                "id": "color",
-                "value": {
-                  "mode": "fixed",
-                  "fixedColor": "#B877D9"
-                }
-              }
-            ]
+          "decimals": 0,
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "#73BF69"
           }
-        ]
+        },
+        "overrides": []
       },
       "options": {
         "orientation": "horizontal",
-        "textMode": "value_and_name",
+        "textMode": "value",
+        "colorMode": "value",
         "graphMode": "none",
         "reduceOptions": {
           "values": false,
@@ -839,76 +847,20 @@
       ],
       "fieldConfig": {
         "defaults": {
-          "unit": "short",
+          "unit": "locale",
           "min": 0,
-          "decimals": 0
-        },
-        "overrides": [
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "pi"
-            },
-            "properties": [
-              {
-                "id": "color",
-                "value": {
-                  "mode": "fixed",
-                  "fixedColor": "#73BF69"
-                }
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "opencode"
-            },
-            "properties": [
-              {
-                "id": "color",
-                "value": {
-                  "mode": "fixed",
-                  "fixedColor": "#5794F2"
-                }
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "claude-code"
-            },
-            "properties": [
-              {
-                "id": "color",
-                "value": {
-                  "mode": "fixed",
-                  "fixedColor": "#FF9830"
-                }
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "codex"
-            },
-            "properties": [
-              {
-                "id": "color",
-                "value": {
-                  "mode": "fixed",
-                  "fixedColor": "#B877D9"
-                }
-              }
-            ]
+          "decimals": 0,
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "#73BF69"
           }
-        ]
+        },
+        "overrides": []
       },
       "options": {
         "orientation": "horizontal",
-        "textMode": "value_and_name",
+        "textMode": "value",
+        "colorMode": "value",
         "graphMode": "none",
         "reduceOptions": {
           "values": false,
@@ -944,76 +896,20 @@
       ],
       "fieldConfig": {
         "defaults": {
-          "unit": "short",
+          "unit": "locale",
           "min": 0,
-          "decimals": 0
-        },
-        "overrides": [
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "pi"
-            },
-            "properties": [
-              {
-                "id": "color",
-                "value": {
-                  "mode": "fixed",
-                  "fixedColor": "#73BF69"
-                }
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "opencode"
-            },
-            "properties": [
-              {
-                "id": "color",
-                "value": {
-                  "mode": "fixed",
-                  "fixedColor": "#5794F2"
-                }
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "claude-code"
-            },
-            "properties": [
-              {
-                "id": "color",
-                "value": {
-                  "mode": "fixed",
-                  "fixedColor": "#FF9830"
-                }
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "codex"
-            },
-            "properties": [
-              {
-                "id": "color",
-                "value": {
-                  "mode": "fixed",
-                  "fixedColor": "#B877D9"
-                }
-              }
-            ]
+          "decimals": 0,
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "#73BF69"
           }
-        ]
+        },
+        "overrides": []
       },
       "options": {
         "orientation": "horizontal",
-        "textMode": "value_and_name",
+        "textMode": "value",
+        "colorMode": "value",
         "graphMode": "none",
         "reduceOptions": {
           "values": false,
@@ -1049,76 +945,20 @@
       ],
       "fieldConfig": {
         "defaults": {
-          "unit": "short",
+          "unit": "locale",
           "min": 0,
-          "decimals": 0
-        },
-        "overrides": [
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "pi"
-            },
-            "properties": [
-              {
-                "id": "color",
-                "value": {
-                  "mode": "fixed",
-                  "fixedColor": "#73BF69"
-                }
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "opencode"
-            },
-            "properties": [
-              {
-                "id": "color",
-                "value": {
-                  "mode": "fixed",
-                  "fixedColor": "#5794F2"
-                }
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "claude-code"
-            },
-            "properties": [
-              {
-                "id": "color",
-                "value": {
-                  "mode": "fixed",
-                  "fixedColor": "#FF9830"
-                }
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "codex"
-            },
-            "properties": [
-              {
-                "id": "color",
-                "value": {
-                  "mode": "fixed",
-                  "fixedColor": "#B877D9"
-                }
-              }
-            ]
+          "decimals": 0,
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "#73BF69"
           }
-        ]
+        },
+        "overrides": []
       },
       "options": {
         "orientation": "horizontal",
-        "textMode": "value_and_name",
+        "textMode": "value",
+        "colorMode": "value",
         "graphMode": "none",
         "reduceOptions": {
           "values": false,
@@ -1130,407 +970,15 @@
       }
     },
     {
-      "id": 405,
-      "title": "Tokens processed by host",
-      "description": "Derived token volume compares runtime usage across supported agent hosts.",
-      "type": "barchart",
-      "gridPos": {
-        "x": 0,
-        "y": 32,
-        "w": 12,
-        "h": 7
-      },
-      "datasource": {
-        "type": "frser-sqlite-datasource",
-        "uid": "gentle-telemetry-sqlite"
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "queryType": "table",
-          "queryText": "SELECT SUM(CASE WHEN COALESCE(NULLIF(json_extract(d.canonical_payload, '$.host'), ''), 'unknown') = 'pi' THEN (CASE WHEN json_extract(r.row_json, '$.input_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.input_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.output_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.output_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.cache_read_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.cache_read_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.cache_creation_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.cache_creation_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.reasoning_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.reasoning_tokens.sum'), 0) ELSE 0 END) ELSE 0 END) AS pi, SUM(CASE WHEN COALESCE(NULLIF(json_extract(d.canonical_payload, '$.host'), ''), 'unknown') = 'opencode' THEN (CASE WHEN json_extract(r.row_json, '$.input_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.input_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.output_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.output_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.cache_read_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.cache_read_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.cache_creation_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.cache_creation_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.reasoning_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.reasoning_tokens.sum'), 0) ELSE 0 END) ELSE 0 END) AS opencode, SUM(CASE WHEN COALESCE(NULLIF(json_extract(d.canonical_payload, '$.host'), ''), 'unknown') = 'claude-code' THEN (CASE WHEN json_extract(r.row_json, '$.input_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.input_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.output_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.output_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.cache_read_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.cache_read_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.cache_creation_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.cache_creation_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.reasoning_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.reasoning_tokens.sum'), 0) ELSE 0 END) ELSE 0 END) AS \"claude-code\", SUM(CASE WHEN COALESCE(NULLIF(json_extract(d.canonical_payload, '$.host'), ''), 'unknown') = 'codex' THEN (CASE WHEN json_extract(r.row_json, '$.input_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.input_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.output_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.output_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.cache_read_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.cache_read_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.cache_creation_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.cache_creation_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.reasoning_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.reasoning_tokens.sum'), 0) ELSE 0 END) ELSE 0 END) AS codex FROM runtime_rows r JOIN runtime_deliveries d ON d.delivery_id = r.delivery_id WHERE d.received_at >= ${__from} * 1000000 AND d.received_at <= ${__to} * 1000000 HAVING COUNT(*) > 0",
-          "rawQueryText": "SELECT SUM(CASE WHEN COALESCE(NULLIF(json_extract(d.canonical_payload, '$.host'), ''), 'unknown') = 'pi' THEN (CASE WHEN json_extract(r.row_json, '$.input_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.input_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.output_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.output_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.cache_read_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.cache_read_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.cache_creation_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.cache_creation_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.reasoning_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.reasoning_tokens.sum'), 0) ELSE 0 END) ELSE 0 END) AS pi, SUM(CASE WHEN COALESCE(NULLIF(json_extract(d.canonical_payload, '$.host'), ''), 'unknown') = 'opencode' THEN (CASE WHEN json_extract(r.row_json, '$.input_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.input_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.output_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.output_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.cache_read_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.cache_read_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.cache_creation_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.cache_creation_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.reasoning_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.reasoning_tokens.sum'), 0) ELSE 0 END) ELSE 0 END) AS opencode, SUM(CASE WHEN COALESCE(NULLIF(json_extract(d.canonical_payload, '$.host'), ''), 'unknown') = 'claude-code' THEN (CASE WHEN json_extract(r.row_json, '$.input_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.input_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.output_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.output_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.cache_read_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.cache_read_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.cache_creation_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.cache_creation_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.reasoning_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.reasoning_tokens.sum'), 0) ELSE 0 END) ELSE 0 END) AS \"claude-code\", SUM(CASE WHEN COALESCE(NULLIF(json_extract(d.canonical_payload, '$.host'), ''), 'unknown') = 'codex' THEN (CASE WHEN json_extract(r.row_json, '$.input_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.input_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.output_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.output_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.cache_read_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.cache_read_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.cache_creation_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.cache_creation_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.reasoning_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.reasoning_tokens.sum'), 0) ELSE 0 END) ELSE 0 END) AS codex FROM runtime_rows r JOIN runtime_deliveries d ON d.delivery_id = r.delivery_id WHERE d.received_at >= ${__from} * 1000000 AND d.received_at <= ${__to} * 1000000 HAVING COUNT(*) > 0"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "short",
-          "min": 0,
-          "decimals": 0
-        },
-        "overrides": [
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "pi"
-            },
-            "properties": [
-              {
-                "id": "color",
-                "value": {
-                  "mode": "fixed",
-                  "fixedColor": "#73BF69"
-                }
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "opencode"
-            },
-            "properties": [
-              {
-                "id": "color",
-                "value": {
-                  "mode": "fixed",
-                  "fixedColor": "#5794F2"
-                }
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "claude-code"
-            },
-            "properties": [
-              {
-                "id": "color",
-                "value": {
-                  "mode": "fixed",
-                  "fixedColor": "#FF9830"
-                }
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "codex"
-            },
-            "properties": [
-              {
-                "id": "color",
-                "value": {
-                  "mode": "fixed",
-                  "fixedColor": "#B877D9"
-                }
-              }
-            ]
-          }
-        ]
-      },
-      "options": {
-        "orientation": "horizontal",
-        "legend": {
-          "showLegend": false
-        }
-      }
-    },
-    {
-      "id": 406,
-      "title": "Responses by host",
-      "description": "Reported response occurrences compare activity across supported agent hosts.",
-      "type": "barchart",
-      "gridPos": {
-        "x": 12,
-        "y": 32,
-        "w": 12,
-        "h": 7
-      },
-      "datasource": {
-        "type": "frser-sqlite-datasource",
-        "uid": "gentle-telemetry-sqlite"
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "queryType": "table",
-          "queryText": "SELECT SUM(CASE WHEN COALESCE(NULLIF(json_extract(d.canonical_payload, '$.host'), ''), 'unknown') = 'pi' THEN CASE WHEN json_type(r.row_json, '$.responses') = 'integer' THEN json_extract(r.row_json, '$.responses') ELSE 0 END ELSE 0 END) AS pi, SUM(CASE WHEN COALESCE(NULLIF(json_extract(d.canonical_payload, '$.host'), ''), 'unknown') = 'opencode' THEN CASE WHEN json_type(r.row_json, '$.responses') = 'integer' THEN json_extract(r.row_json, '$.responses') ELSE 0 END ELSE 0 END) AS opencode, SUM(CASE WHEN COALESCE(NULLIF(json_extract(d.canonical_payload, '$.host'), ''), 'unknown') = 'claude-code' THEN CASE WHEN json_type(r.row_json, '$.responses') = 'integer' THEN json_extract(r.row_json, '$.responses') ELSE 0 END ELSE 0 END) AS \"claude-code\", SUM(CASE WHEN COALESCE(NULLIF(json_extract(d.canonical_payload, '$.host'), ''), 'unknown') = 'codex' THEN CASE WHEN json_type(r.row_json, '$.responses') = 'integer' THEN json_extract(r.row_json, '$.responses') ELSE 0 END ELSE 0 END) AS codex FROM runtime_rows r JOIN runtime_deliveries d ON d.delivery_id = r.delivery_id WHERE d.received_at >= ${__from} * 1000000 AND d.received_at <= ${__to} * 1000000 HAVING COUNT(*) > 0",
-          "rawQueryText": "SELECT SUM(CASE WHEN COALESCE(NULLIF(json_extract(d.canonical_payload, '$.host'), ''), 'unknown') = 'pi' THEN CASE WHEN json_type(r.row_json, '$.responses') = 'integer' THEN json_extract(r.row_json, '$.responses') ELSE 0 END ELSE 0 END) AS pi, SUM(CASE WHEN COALESCE(NULLIF(json_extract(d.canonical_payload, '$.host'), ''), 'unknown') = 'opencode' THEN CASE WHEN json_type(r.row_json, '$.responses') = 'integer' THEN json_extract(r.row_json, '$.responses') ELSE 0 END ELSE 0 END) AS opencode, SUM(CASE WHEN COALESCE(NULLIF(json_extract(d.canonical_payload, '$.host'), ''), 'unknown') = 'claude-code' THEN CASE WHEN json_type(r.row_json, '$.responses') = 'integer' THEN json_extract(r.row_json, '$.responses') ELSE 0 END ELSE 0 END) AS \"claude-code\", SUM(CASE WHEN COALESCE(NULLIF(json_extract(d.canonical_payload, '$.host'), ''), 'unknown') = 'codex' THEN CASE WHEN json_type(r.row_json, '$.responses') = 'integer' THEN json_extract(r.row_json, '$.responses') ELSE 0 END ELSE 0 END) AS codex FROM runtime_rows r JOIN runtime_deliveries d ON d.delivery_id = r.delivery_id WHERE d.received_at >= ${__from} * 1000000 AND d.received_at <= ${__to} * 1000000 HAVING COUNT(*) > 0"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "short",
-          "min": 0,
-          "decimals": 0
-        },
-        "overrides": [
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "pi"
-            },
-            "properties": [
-              {
-                "id": "color",
-                "value": {
-                  "mode": "fixed",
-                  "fixedColor": "#73BF69"
-                }
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "opencode"
-            },
-            "properties": [
-              {
-                "id": "color",
-                "value": {
-                  "mode": "fixed",
-                  "fixedColor": "#5794F2"
-                }
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "claude-code"
-            },
-            "properties": [
-              {
-                "id": "color",
-                "value": {
-                  "mode": "fixed",
-                  "fixedColor": "#FF9830"
-                }
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "codex"
-            },
-            "properties": [
-              {
-                "id": "color",
-                "value": {
-                  "mode": "fixed",
-                  "fixedColor": "#B877D9"
-                }
-              }
-            ]
-          }
-        ]
-      },
-      "options": {
-        "orientation": "horizontal",
-        "legend": {
-          "showLegend": false
-        }
-      }
-    },
-    {
-      "id": 407,
-      "title": "Tokens by model",
-      "description": "Model-level usage keeps unknown and custom model evidence visible instead of hiding incomplete attribution.",
-      "type": "table",
-      "gridPos": {
-        "x": 0,
-        "y": 39,
-        "w": 12,
-        "h": 9
-      },
-      "datasource": {
-        "type": "frser-sqlite-datasource",
-        "uid": "gentle-telemetry-sqlite"
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "queryType": "table",
-          "queryText": "SELECT COALESCE(NULLIF(json_extract(d.canonical_payload, '$.host'), ''), 'unknown') AS Host, COALESCE(NULLIF(json_extract(r.row_json, '$.model.provider'), ''), 'unknown') AS Provider, COALESCE(NULLIF(json_extract(r.row_json, '$.model.id'), ''), 'unknown') AS Model, COALESCE(NULLIF(json_extract(r.row_json, '$.model_evidence'), ''), 'unknown') AS Evidence, SUM(CASE WHEN json_type(r.row_json, '$.responses') = 'integer' THEN json_extract(r.row_json, '$.responses') ELSE 0 END) AS Responses, SUM((CASE WHEN json_extract(r.row_json, '$.input_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.input_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.output_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.output_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.cache_read_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.cache_read_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.cache_creation_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.cache_creation_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.reasoning_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.reasoning_tokens.sum'), 0) ELSE 0 END)) AS \"Tokens processed\", ROUND(1.0 * SUM((CASE WHEN json_extract(r.row_json, '$.input_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.input_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.output_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.output_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.cache_read_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.cache_read_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.cache_creation_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.cache_creation_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.reasoning_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.reasoning_tokens.sum'), 0) ELSE 0 END)) / NULLIF(SUM(CASE WHEN json_type(r.row_json, '$.responses') = 'integer' THEN json_extract(r.row_json, '$.responses') ELSE 0 END), 0), 1) AS \"Avg tokens per response\" FROM runtime_rows r JOIN runtime_deliveries d ON d.delivery_id = r.delivery_id WHERE d.received_at >= ${__from} * 1000000 AND d.received_at <= ${__to} * 1000000 GROUP BY Host, Provider, Model, Evidence ORDER BY \"Tokens processed\" DESC LIMIT 1000",
-          "rawQueryText": "SELECT COALESCE(NULLIF(json_extract(d.canonical_payload, '$.host'), ''), 'unknown') AS Host, COALESCE(NULLIF(json_extract(r.row_json, '$.model.provider'), ''), 'unknown') AS Provider, COALESCE(NULLIF(json_extract(r.row_json, '$.model.id'), ''), 'unknown') AS Model, COALESCE(NULLIF(json_extract(r.row_json, '$.model_evidence'), ''), 'unknown') AS Evidence, SUM(CASE WHEN json_type(r.row_json, '$.responses') = 'integer' THEN json_extract(r.row_json, '$.responses') ELSE 0 END) AS Responses, SUM((CASE WHEN json_extract(r.row_json, '$.input_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.input_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.output_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.output_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.cache_read_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.cache_read_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.cache_creation_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.cache_creation_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.reasoning_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.reasoning_tokens.sum'), 0) ELSE 0 END)) AS \"Tokens processed\", ROUND(1.0 * SUM((CASE WHEN json_extract(r.row_json, '$.input_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.input_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.output_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.output_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.cache_read_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.cache_read_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.cache_creation_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.cache_creation_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.reasoning_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.reasoning_tokens.sum'), 0) ELSE 0 END)) / NULLIF(SUM(CASE WHEN json_type(r.row_json, '$.responses') = 'integer' THEN json_extract(r.row_json, '$.responses') ELSE 0 END), 0), 1) AS \"Avg tokens per response\" FROM runtime_rows r JOIN runtime_deliveries d ON d.delivery_id = r.delivery_id WHERE d.received_at >= ${__from} * 1000000 AND d.received_at <= ${__to} * 1000000 GROUP BY Host, Provider, Model, Evidence ORDER BY \"Tokens processed\" DESC LIMIT 1000"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "short",
-          "min": 0
-        },
-        "overrides": [
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "pi"
-            },
-            "properties": [
-              {
-                "id": "color",
-                "value": {
-                  "mode": "fixed",
-                  "fixedColor": "#73BF69"
-                }
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "opencode"
-            },
-            "properties": [
-              {
-                "id": "color",
-                "value": {
-                  "mode": "fixed",
-                  "fixedColor": "#5794F2"
-                }
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "claude-code"
-            },
-            "properties": [
-              {
-                "id": "color",
-                "value": {
-                  "mode": "fixed",
-                  "fixedColor": "#FF9830"
-                }
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "codex"
-            },
-            "properties": [
-              {
-                "id": "color",
-                "value": {
-                  "mode": "fixed",
-                  "fixedColor": "#B877D9"
-                }
-              }
-            ]
-          }
-        ]
-      },
-      "options": {
-        "showHeader": true,
-        "cellHeight": "sm",
-        "enablePagination": true
-      }
-    },
-    {
-      "id": 408,
-      "title": "Responses and tokens by selected effort",
-      "description": "Selected reasoning effort shows how usage and token volume are distributed across requested effort levels.",
-      "type": "table",
-      "gridPos": {
-        "x": 12,
-        "y": 39,
-        "w": 12,
-        "h": 9
-      },
-      "datasource": {
-        "type": "frser-sqlite-datasource",
-        "uid": "gentle-telemetry-sqlite"
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "queryType": "table",
-          "queryText": "SELECT COALESCE(NULLIF(json_extract(r.row_json, '$.selected_effort'), ''), 'unknown') AS \"Selected effort\", SUM(CASE WHEN json_type(r.row_json, '$.responses') = 'integer' THEN json_extract(r.row_json, '$.responses') ELSE 0 END) AS Responses, SUM((CASE WHEN json_extract(r.row_json, '$.input_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.input_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.output_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.output_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.cache_read_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.cache_read_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.cache_creation_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.cache_creation_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.reasoning_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.reasoning_tokens.sum'), 0) ELSE 0 END)) AS \"Tokens processed\", ROUND(1.0 * SUM((CASE WHEN json_extract(r.row_json, '$.input_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.input_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.output_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.output_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.cache_read_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.cache_read_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.cache_creation_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.cache_creation_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.reasoning_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.reasoning_tokens.sum'), 0) ELSE 0 END)) / NULLIF(SUM(CASE WHEN json_type(r.row_json, '$.responses') = 'integer' THEN json_extract(r.row_json, '$.responses') ELSE 0 END), 0), 1) AS \"Avg tokens per response\" FROM runtime_rows r JOIN runtime_deliveries d ON d.delivery_id = r.delivery_id WHERE d.received_at >= ${__from} * 1000000 AND d.received_at <= ${__to} * 1000000 GROUP BY \"Selected effort\" ORDER BY Responses DESC, \"Tokens processed\" DESC LIMIT 1000",
-          "rawQueryText": "SELECT COALESCE(NULLIF(json_extract(r.row_json, '$.selected_effort'), ''), 'unknown') AS \"Selected effort\", SUM(CASE WHEN json_type(r.row_json, '$.responses') = 'integer' THEN json_extract(r.row_json, '$.responses') ELSE 0 END) AS Responses, SUM((CASE WHEN json_extract(r.row_json, '$.input_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.input_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.output_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.output_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.cache_read_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.cache_read_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.cache_creation_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.cache_creation_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.reasoning_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.reasoning_tokens.sum'), 0) ELSE 0 END)) AS \"Tokens processed\", ROUND(1.0 * SUM((CASE WHEN json_extract(r.row_json, '$.input_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.input_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.output_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.output_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.cache_read_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.cache_read_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.cache_creation_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.cache_creation_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.reasoning_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.reasoning_tokens.sum'), 0) ELSE 0 END)) / NULLIF(SUM(CASE WHEN json_type(r.row_json, '$.responses') = 'integer' THEN json_extract(r.row_json, '$.responses') ELSE 0 END), 0), 1) AS \"Avg tokens per response\" FROM runtime_rows r JOIN runtime_deliveries d ON d.delivery_id = r.delivery_id WHERE d.received_at >= ${__from} * 1000000 AND d.received_at <= ${__to} * 1000000 GROUP BY \"Selected effort\" ORDER BY Responses DESC, \"Tokens processed\" DESC LIMIT 1000"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "short",
-          "min": 0
-        },
-        "overrides": [
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "pi"
-            },
-            "properties": [
-              {
-                "id": "color",
-                "value": {
-                  "mode": "fixed",
-                  "fixedColor": "#73BF69"
-                }
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "opencode"
-            },
-            "properties": [
-              {
-                "id": "color",
-                "value": {
-                  "mode": "fixed",
-                  "fixedColor": "#5794F2"
-                }
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "claude-code"
-            },
-            "properties": [
-              {
-                "id": "color",
-                "value": {
-                  "mode": "fixed",
-                  "fixedColor": "#FF9830"
-                }
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "codex"
-            },
-            "properties": [
-              {
-                "id": "color",
-                "value": {
-                  "mode": "fixed",
-                  "fixedColor": "#B877D9"
-                }
-              }
-            ]
-          }
-        ]
-      },
-      "options": {
-        "showHeader": true,
-        "cellHeight": "sm",
-        "enablePagination": true
-      }
-    },
-    {
       "id": 409,
       "title": "Usage by host, subagent, model and effort",
-      "description": "The most active host, subagent, model, and effort combinations reveal how customers put the product to work.",
+      "description": "Answers which subagent used which model at which effort and how many tokens were processed.",
       "type": "table",
       "gridPos": {
         "x": 0,
-        "y": 48,
+        "y": 32,
         "w": 24,
-        "h": 10
+        "h": 14
       },
       "datasource": {
         "type": "frser-sqlite-datasource",
@@ -1615,19 +1063,379 @@
       "options": {
         "showHeader": true,
         "cellHeight": "sm",
-        "enablePagination": true
+        "footer": {
+          "enablePagination": false
+        }
+      }
+    },
+    {
+      "id": 405,
+      "title": "Tokens processed by host",
+      "description": "Derived token volume compares runtime usage across supported agent hosts.",
+      "type": "barchart",
+      "gridPos": {
+        "x": 0,
+        "y": 46,
+        "w": 12,
+        "h": 7
+      },
+      "datasource": {
+        "type": "frser-sqlite-datasource",
+        "uid": "gentle-telemetry-sqlite"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "queryType": "table",
+          "queryText": "SELECT CAST(COALESCE(NULLIF(json_extract(d.canonical_payload, '$.host'), ''), 'unknown') AS TEXT) AS Host, SUM((CASE WHEN json_extract(r.row_json, '$.input_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.input_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.output_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.output_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.cache_read_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.cache_read_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.cache_creation_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.cache_creation_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.reasoning_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.reasoning_tokens.sum'), 0) ELSE 0 END)) AS \"Tokens processed\" FROM runtime_rows r JOIN runtime_deliveries d ON d.delivery_id = r.delivery_id WHERE d.received_at >= ${__from} * 1000000 AND d.received_at <= ${__to} * 1000000 GROUP BY Host HAVING COUNT(*) > 0 ORDER BY \"Tokens processed\" DESC LIMIT 1000",
+          "rawQueryText": "SELECT CAST(COALESCE(NULLIF(json_extract(d.canonical_payload, '$.host'), ''), 'unknown') AS TEXT) AS Host, SUM((CASE WHEN json_extract(r.row_json, '$.input_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.input_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.output_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.output_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.cache_read_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.cache_read_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.cache_creation_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.cache_creation_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.reasoning_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.reasoning_tokens.sum'), 0) ELSE 0 END)) AS \"Tokens processed\" FROM runtime_rows r JOIN runtime_deliveries d ON d.delivery_id = r.delivery_id WHERE d.received_at >= ${__from} * 1000000 AND d.received_at <= ${__to} * 1000000 GROUP BY Host HAVING COUNT(*) > 0 ORDER BY \"Tokens processed\" DESC LIMIT 1000"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0,
+          "decimals": 0
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Host"
+            },
+            "properties": [
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "value",
+                    "options": {
+                      "pi": {
+                        "color": "#73BF69",
+                        "index": 0,
+                        "text": "pi"
+                      },
+                      "opencode": {
+                        "color": "#5794F2",
+                        "index": 1,
+                        "text": "opencode"
+                      },
+                      "claude-code": {
+                        "color": "#FF9830",
+                        "index": 2,
+                        "text": "claude-code"
+                      },
+                      "codex": {
+                        "color": "#B877D9",
+                        "index": 3,
+                        "text": "codex"
+                      }
+                    }
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "orientation": "horizontal",
+        "xField": "Host",
+        "colorByField": "Host",
+        "showValue": "always",
+        "legend": {
+          "showLegend": false
+        }
+      }
+    },
+    {
+      "id": 406,
+      "title": "Responses by host",
+      "description": "Reported response occurrences compare activity across supported agent hosts.",
+      "type": "barchart",
+      "gridPos": {
+        "x": 12,
+        "y": 46,
+        "w": 12,
+        "h": 7
+      },
+      "datasource": {
+        "type": "frser-sqlite-datasource",
+        "uid": "gentle-telemetry-sqlite"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "queryType": "table",
+          "queryText": "SELECT CAST(COALESCE(NULLIF(json_extract(d.canonical_payload, '$.host'), ''), 'unknown') AS TEXT) AS Host, SUM(CASE WHEN json_type(r.row_json, '$.responses') = 'integer' THEN json_extract(r.row_json, '$.responses') ELSE 0 END) AS \"Responses\" FROM runtime_rows r JOIN runtime_deliveries d ON d.delivery_id = r.delivery_id WHERE d.received_at >= ${__from} * 1000000 AND d.received_at <= ${__to} * 1000000 GROUP BY Host HAVING COUNT(*) > 0 ORDER BY \"Responses\" DESC LIMIT 1000",
+          "rawQueryText": "SELECT CAST(COALESCE(NULLIF(json_extract(d.canonical_payload, '$.host'), ''), 'unknown') AS TEXT) AS Host, SUM(CASE WHEN json_type(r.row_json, '$.responses') = 'integer' THEN json_extract(r.row_json, '$.responses') ELSE 0 END) AS \"Responses\" FROM runtime_rows r JOIN runtime_deliveries d ON d.delivery_id = r.delivery_id WHERE d.received_at >= ${__from} * 1000000 AND d.received_at <= ${__to} * 1000000 GROUP BY Host HAVING COUNT(*) > 0 ORDER BY \"Responses\" DESC LIMIT 1000"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0,
+          "decimals": 0
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Host"
+            },
+            "properties": [
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "value",
+                    "options": {
+                      "pi": {
+                        "color": "#73BF69",
+                        "index": 0,
+                        "text": "pi"
+                      },
+                      "opencode": {
+                        "color": "#5794F2",
+                        "index": 1,
+                        "text": "opencode"
+                      },
+                      "claude-code": {
+                        "color": "#FF9830",
+                        "index": 2,
+                        "text": "claude-code"
+                      },
+                      "codex": {
+                        "color": "#B877D9",
+                        "index": 3,
+                        "text": "codex"
+                      }
+                    }
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "orientation": "horizontal",
+        "xField": "Host",
+        "colorByField": "Host",
+        "showValue": "always",
+        "legend": {
+          "showLegend": false
+        }
+      }
+    },
+    {
+      "id": 407,
+      "title": "Tokens by model",
+      "description": "Model-level usage keeps unknown and custom model evidence visible instead of hiding incomplete attribution.",
+      "type": "table",
+      "gridPos": {
+        "x": 0,
+        "y": 53,
+        "w": 12,
+        "h": 10
+      },
+      "datasource": {
+        "type": "frser-sqlite-datasource",
+        "uid": "gentle-telemetry-sqlite"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "queryType": "table",
+          "queryText": "SELECT COALESCE(NULLIF(json_extract(d.canonical_payload, '$.host'), ''), 'unknown') AS Host, COALESCE(NULLIF(json_extract(r.row_json, '$.model.provider'), ''), 'unknown') AS Provider, COALESCE(NULLIF(json_extract(r.row_json, '$.model.id'), ''), 'unknown') AS Model, COALESCE(NULLIF(json_extract(r.row_json, '$.model_evidence'), ''), 'unknown') AS Evidence, SUM(CASE WHEN json_type(r.row_json, '$.responses') = 'integer' THEN json_extract(r.row_json, '$.responses') ELSE 0 END) AS Responses, SUM((CASE WHEN json_extract(r.row_json, '$.input_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.input_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.output_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.output_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.cache_read_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.cache_read_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.cache_creation_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.cache_creation_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.reasoning_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.reasoning_tokens.sum'), 0) ELSE 0 END)) AS \"Tokens processed\", ROUND(1.0 * SUM((CASE WHEN json_extract(r.row_json, '$.input_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.input_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.output_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.output_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.cache_read_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.cache_read_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.cache_creation_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.cache_creation_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.reasoning_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.reasoning_tokens.sum'), 0) ELSE 0 END)) / NULLIF(SUM(CASE WHEN json_type(r.row_json, '$.responses') = 'integer' THEN json_extract(r.row_json, '$.responses') ELSE 0 END), 0), 1) AS \"Avg tokens per response\" FROM runtime_rows r JOIN runtime_deliveries d ON d.delivery_id = r.delivery_id WHERE d.received_at >= ${__from} * 1000000 AND d.received_at <= ${__to} * 1000000 GROUP BY Host, Provider, Model, Evidence ORDER BY \"Tokens processed\" DESC LIMIT 1000",
+          "rawQueryText": "SELECT COALESCE(NULLIF(json_extract(d.canonical_payload, '$.host'), ''), 'unknown') AS Host, COALESCE(NULLIF(json_extract(r.row_json, '$.model.provider'), ''), 'unknown') AS Provider, COALESCE(NULLIF(json_extract(r.row_json, '$.model.id'), ''), 'unknown') AS Model, COALESCE(NULLIF(json_extract(r.row_json, '$.model_evidence'), ''), 'unknown') AS Evidence, SUM(CASE WHEN json_type(r.row_json, '$.responses') = 'integer' THEN json_extract(r.row_json, '$.responses') ELSE 0 END) AS Responses, SUM((CASE WHEN json_extract(r.row_json, '$.input_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.input_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.output_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.output_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.cache_read_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.cache_read_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.cache_creation_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.cache_creation_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.reasoning_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.reasoning_tokens.sum'), 0) ELSE 0 END)) AS \"Tokens processed\", ROUND(1.0 * SUM((CASE WHEN json_extract(r.row_json, '$.input_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.input_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.output_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.output_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.cache_read_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.cache_read_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.cache_creation_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.cache_creation_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.reasoning_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.reasoning_tokens.sum'), 0) ELSE 0 END)) / NULLIF(SUM(CASE WHEN json_type(r.row_json, '$.responses') = 'integer' THEN json_extract(r.row_json, '$.responses') ELSE 0 END), 0), 1) AS \"Avg tokens per response\" FROM runtime_rows r JOIN runtime_deliveries d ON d.delivery_id = r.delivery_id WHERE d.received_at >= ${__from} * 1000000 AND d.received_at <= ${__to} * 1000000 GROUP BY Host, Provider, Model, Evidence ORDER BY \"Tokens processed\" DESC LIMIT 1000"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "pi"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#73BF69"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "opencode"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#5794F2"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "claude-code"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#FF9830"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "codex"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#B877D9"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm",
+        "footer": {
+          "enablePagination": false
+        }
+      }
+    },
+    {
+      "id": 408,
+      "title": "Responses and tokens by selected effort",
+      "description": "Selected reasoning effort shows how usage and token volume are distributed across requested effort levels.",
+      "type": "table",
+      "gridPos": {
+        "x": 12,
+        "y": 53,
+        "w": 12,
+        "h": 10
+      },
+      "datasource": {
+        "type": "frser-sqlite-datasource",
+        "uid": "gentle-telemetry-sqlite"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "queryType": "table",
+          "queryText": "SELECT COALESCE(NULLIF(json_extract(r.row_json, '$.selected_effort'), ''), 'unknown') AS \"Selected effort\", SUM(CASE WHEN json_type(r.row_json, '$.responses') = 'integer' THEN json_extract(r.row_json, '$.responses') ELSE 0 END) AS Responses, SUM((CASE WHEN json_extract(r.row_json, '$.input_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.input_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.output_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.output_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.cache_read_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.cache_read_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.cache_creation_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.cache_creation_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.reasoning_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.reasoning_tokens.sum'), 0) ELSE 0 END)) AS \"Tokens processed\", ROUND(1.0 * SUM((CASE WHEN json_extract(r.row_json, '$.input_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.input_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.output_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.output_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.cache_read_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.cache_read_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.cache_creation_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.cache_creation_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.reasoning_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.reasoning_tokens.sum'), 0) ELSE 0 END)) / NULLIF(SUM(CASE WHEN json_type(r.row_json, '$.responses') = 'integer' THEN json_extract(r.row_json, '$.responses') ELSE 0 END), 0), 1) AS \"Avg tokens per response\" FROM runtime_rows r JOIN runtime_deliveries d ON d.delivery_id = r.delivery_id WHERE d.received_at >= ${__from} * 1000000 AND d.received_at <= ${__to} * 1000000 GROUP BY \"Selected effort\" ORDER BY Responses DESC, \"Tokens processed\" DESC LIMIT 1000",
+          "rawQueryText": "SELECT COALESCE(NULLIF(json_extract(r.row_json, '$.selected_effort'), ''), 'unknown') AS \"Selected effort\", SUM(CASE WHEN json_type(r.row_json, '$.responses') = 'integer' THEN json_extract(r.row_json, '$.responses') ELSE 0 END) AS Responses, SUM((CASE WHEN json_extract(r.row_json, '$.input_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.input_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.output_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.output_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.cache_read_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.cache_read_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.cache_creation_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.cache_creation_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.reasoning_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.reasoning_tokens.sum'), 0) ELSE 0 END)) AS \"Tokens processed\", ROUND(1.0 * SUM((CASE WHEN json_extract(r.row_json, '$.input_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.input_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.output_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.output_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.cache_read_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.cache_read_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.cache_creation_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.cache_creation_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.reasoning_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.reasoning_tokens.sum'), 0) ELSE 0 END)) / NULLIF(SUM(CASE WHEN json_type(r.row_json, '$.responses') = 'integer' THEN json_extract(r.row_json, '$.responses') ELSE 0 END), 0), 1) AS \"Avg tokens per response\" FROM runtime_rows r JOIN runtime_deliveries d ON d.delivery_id = r.delivery_id WHERE d.received_at >= ${__from} * 1000000 AND d.received_at <= ${__to} * 1000000 GROUP BY \"Selected effort\" ORDER BY Responses DESC, \"Tokens processed\" DESC LIMIT 1000"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "pi"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#73BF69"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "opencode"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#5794F2"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "claude-code"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#FF9830"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "codex"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#B877D9"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm",
+        "footer": {
+          "enablePagination": false
+        }
       }
     },
     {
       "id": 410,
-      "title": "Tokens processed per hour by host",
-      "description": "Hourly derived token volume shows when and where runtime usage is happening.",
+      "title": "Tokens processed per hour by host (last 24h)",
+      "description": "Hourly derived token volume over the last 24 hours shows recent runtime activity by host.",
       "type": "timeseries",
       "gridPos": {
         "x": 0,
-        "y": 58,
+        "y": 63,
         "w": 12,
-        "h": 9
+        "h": 11
       },
       "datasource": {
         "type": "frser-sqlite-datasource",
@@ -1733,7 +1541,8 @@
           "mode": "multi",
           "sort": "desc"
         }
-      }
+      },
+      "timeFrom": "24h"
     },
     {
       "id": 411,
@@ -1742,9 +1551,9 @@
       "type": "table",
       "gridPos": {
         "x": 12,
-        "y": 58,
+        "y": 63,
         "w": 12,
-        "h": 9
+        "h": 11
       },
       "datasource": {
         "type": "frser-sqlite-datasource",
@@ -1829,7 +1638,9 @@
       "options": {
         "showHeader": true,
         "cellHeight": "sm",
-        "enablePagination": true
+        "footer": {
+          "enablePagination": false
+        }
       }
     },
     {
@@ -1839,7 +1650,7 @@
       "type": "barchart",
       "gridPos": {
         "x": 0,
-        "y": 67,
+        "y": 74,
         "w": 12,
         "h": 7
       },
@@ -1938,7 +1749,7 @@
       "type": "table",
       "gridPos": {
         "x": 12,
-        "y": 67,
+        "y": 74,
         "w": 12,
         "h": 7
       },
@@ -1994,7 +1805,9 @@
       "options": {
         "showHeader": true,
         "cellHeight": "sm",
-        "enablePagination": false
+        "footer": {
+          "enablePagination": false
+        }
       }
     }
   ]
