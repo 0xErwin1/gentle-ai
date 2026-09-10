@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
@@ -13,23 +14,41 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v2/internal/telemetry"
 )
 
-// Tests inject transport and the stdin deadline. Native execution never spawns
-// another sender. The 500 ms input budget precedes the 3-second HTTP budget.
+// Tests inject transport and stdin deadlines. Direct send/OpenCode input keeps
+// its 500 ms EOF budget. Hook runtimes allow 3 seconds for delayed hook delivery
+// but return as soon as one complete JSON value arrives; the sender's separate
+// 3-second HTTP budget starts afterward.
 var runtimeHTTPClient = func() *http.Client { return nil }
 var runtimeStdinTimeout = 500 * time.Millisecond
+var runtimeHookStdinTimeout = 3 * time.Second
+
+func runtimeStdinConfig(verb string) (time.Duration, bool) {
+	if verb == "claude" || verb == "codex" {
+		return runtimeHookStdinTimeout, true
+	}
+	return runtimeStdinTimeout, false
+}
 
 // readRuntimeStdin is CLI/process scoped, not a library reader API. We do not own
-// arbitrary caller readers (including shared os.Stdin), so never close them. On
-// timeout at most this one reader goroutine can remain until process exit. Its
-// buffered result cannot block a late completion, and its byte limit bounds data.
-func readRuntimeStdin(ctx context.Context, input io.Reader) ([]byte, bool) {
+// arbitrary caller readers (including shared os.Stdin), so never close them.
+// Hook readers stop after the first complete JSON value and ignore trailing
+// bytes, because hook hosts can keep stdin open. On timeout at most this one
+// reader goroutine can remain until process exit. Its buffered result cannot
+// block a late completion, and every mode has a strict byte limit.
+func readRuntimeStdin(ctx context.Context, input io.Reader, firstJSONValue bool) ([]byte, bool) {
 	type result struct {
 		data []byte
 		err  error
 	}
 	done := make(chan result, 1)
 	go func() {
-		data, err := io.ReadAll(io.LimitReader(input, telemetry.RuntimeMaxBytes+1))
+		var data []byte
+		var err error
+		if firstJSONValue {
+			data, err = readRuntimeJSONValue(input)
+		} else {
+			data, err = io.ReadAll(io.LimitReader(input, telemetry.RuntimeMaxBytes+1))
+		}
 		done <- result{data, err}
 	}()
 	select {
@@ -38,6 +57,15 @@ func readRuntimeStdin(ctx context.Context, input io.Reader) ([]byte, bool) {
 	case got := <-done:
 		return got.data, ctx.Err() == nil && got.err == nil && len(got.data) <= telemetry.RuntimeMaxBytes
 	}
+}
+
+func readRuntimeJSONValue(input io.Reader) ([]byte, error) {
+	decoder := json.NewDecoder(io.LimitReader(input, telemetry.RuntimeMaxBytes+1))
+	var value json.RawMessage
+	if err := decoder.Decode(&value); err != nil || decoder.InputOffset() > telemetry.RuntimeMaxBytes || len(value) > telemetry.RuntimeMaxBytes {
+		return nil, errors.New("invalid bounded runtime hook input")
+	}
+	return value, nil
 }
 
 func runTelemetryRuntime(args []string, stdout io.Writer) error {
@@ -58,8 +86,9 @@ func runTelemetryRuntimeInput(args []string, stdout io.Writer, input io.Reader) 
 			// library rechecks fresh policy after this read and immediately before HTTP.
 			policy, err := telemetry.LoadPolicyState(home)
 			if err == nil && policy.NoticeShown && telemetry.Decide(os.Getenv, policy).Enabled {
-				ctx, cancel := context.WithTimeout(context.Background(), runtimeStdinTimeout)
-				data, ok := readRuntimeStdin(ctx, input)
+				timeout, firstJSONValue := runtimeStdinConfig(args[0])
+				ctx, cancel := context.WithTimeout(context.Background(), timeout)
+				data, ok := readRuntimeStdin(ctx, input, firstJSONValue)
 				cancel()
 				decision = "discarded"
 				if ok {
