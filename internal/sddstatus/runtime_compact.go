@@ -299,7 +299,7 @@ func (store RuntimeStore) Acquire(ctx context.Context, request CompactAcquireReq
 	}
 	// A declared correction must be structurally settleable before it spends an
 	// attempt. The immutable failed-evidence chain owns the binding, while the
-	// existing candidate and audited-reset/rescope predicates decide whether an
+	// existing candidate and audited reset/rescope/supersede predicates decide whether an
 	// unchanged retry is already authorized. Calling Begin's read-only admission
 	// predicate here captures the exact candidate it would record without opening
 	// an attempt or issuing a token.
@@ -316,7 +316,7 @@ func (store RuntimeStore) Acquire(ctx context.Context, request CompactAcquireReq
 			BeginCandidateIdentity: admission.Snapshot.Identity,
 			BeginCandidateTree:     admission.Snapshot.CandidateTree,
 		}
-		if !runtimeEvidenceOnlyRetryAuthorized(replay.Status.LastReset, replay.Status.LastRescope, failed, admission.Snapshot.CandidateTree) &&
+		if !runtimeEvidenceOnlyRetryAuthorized(replay.Status.LastReset, replay.Status.LastRescope, replay.Status.LastSupersede, failed, admission.Snapshot.CandidateTree) &&
 			runtimeRemediationCandidateUnchanged(failed, active, admission.Snapshot.Identity, admission.Snapshot.CandidateTree) {
 			return compactBlocked(CompactBlockRemediationUnsatisfiable, ""), nil
 		}
