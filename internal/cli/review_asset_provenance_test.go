@@ -372,10 +372,13 @@ func TestManagedAssetsContinuationUsesInvokingExecutable(t *testing.T) {
 		path string
 		goos string
 	}{
-		"posix safe path":            {`/opt/gentle-ai/bin/gentle-ai`, "linux"},
-		"posix path with expansion":  {`/opt/$HOME/gentle-ai`, "linux"},
-		"posix path with apostrophe": {`/opt/o'brien/gentle-ai`, "linux"},
-		"windows path with spaces":   {`C:\Program Files\gentle-ai\gentle-ai.exe`, "windows"},
+		"posix safe path":                {`/opt/gentle-ai/bin/gentle-ai`, "linux"},
+		"posix path with expansion":      {`/opt/$HOME/gentle-ai`, "linux"},
+		"posix path with apostrophe":     {`/opt/o'brien/gentle-ai`, "linux"},
+		"posix path with backslashes":    {`/opt/we ird\x\gentle-ai`, "linux"},
+		"windows path with spaces":       {`C:\Program Files\gentle-ai\gentle-ai.exe`, "windows"},
+		"quoted UNC path with spaces":    {`\\server\gentle tools\gentle-ai.exe`, "windows"},
+		"quoted UNC path without spaces": {`\\server\share\gentle-ai.exe`, "windows"},
 	} {
 		t.Run("round-trip "+name, func(t *testing.T) {
 			previousGOOS := reviewManagedAssetsGOOS
@@ -504,11 +507,11 @@ func splitContinuationCommand(command string) []string {
 		c := command[index]
 		switch {
 		case open == '"':
-			// Inside double quotes a backslash escapes only a double
-			// quote or another backslash (the Windows form the renderer
-			// emits); anything else stays literal.
-			if c == '\\' && index+1 < len(command) &&
-				(command[index+1] == '"' || command[index+1] == '\\') {
+			// Inside double quotes only a backslash-quote sequence is an
+			// escape (the Windows form the renderer emits for an embedded
+			// quote); every other backslash stays literal so Windows path
+			// separators and doubled leading UNC backslashes survive intact.
+			if c == '\\' && index+1 < len(command) && command[index+1] == '"' {
 				index++
 				token.WriteByte(command[index])
 			} else if c == open {
@@ -524,10 +527,12 @@ func splitContinuationCommand(command string) []string {
 				token.WriteByte(c)
 			}
 		case c == '\\':
-			// Outside any quote a backslash escapes the next character
-			// -- the splice the renderer emits between single-quoted
-			// spans for an embedded apostrophe.
-			if index+1 < len(command) {
+			// Outside any quote only a backslash-quote sequence is an
+			// escape -- the splice the renderer emits between single-quoted
+			// spans for an embedded apostrophe. A backslash before any other
+			// character stays literal, so a path separator or a UNC lead
+			// outside quotes is preserved rather than consumed.
+			if index+1 < len(command) && (command[index+1] == '\'' || command[index+1] == '"') {
 				index++
 				token.WriteByte(command[index])
 			} else {
