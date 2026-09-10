@@ -126,7 +126,7 @@ Receipt-Driven Development. The system freezes the exact bytes your agent change
 
 **[Docs →](docs/review-integration.md)**
 
-<img width="100%" src="docs/assets/features/rdd.gif" alt="RDD freezing a candidate and running review lenses" />
+<img width="100%" src="docs/assets/features/rdd.png" alt="A review that derived its own effort from the frozen candidate, ran the reliability lens, and closed with an explicit acknowledgement" />
 
 </td>
 <td width="50%" valign="top">
