@@ -15,7 +15,7 @@ const RuntimeSchema = "gentle-ai.telemetry-runtime-aggregate/v1"
 const RuntimeMaxBytes = 16384
 
 // Public package categories, not proof of runtime authority or agent-name identity.
-const runtimeAgentClasses = "orchestrator|worker|explore|verify|unknown|sdd-apply|sdd-archive|sdd-design|sdd-explore|sdd-init|sdd-onboard|sdd-proposal|sdd-research|sdd-spec|sdd-status|sdd-sync|sdd-tasks|sdd-verify|review-readability|review-reliability|review-resilience|review-risk|jd-fix-agent|jd-judge-a|jd-judge-b"
+const runtimeAgentClasses = "orchestrator|worker|explore|verify|unknown|sdd-init|sdd-explore|sdd-research|sdd-propose|sdd-spec|sdd-design|sdd-tasks|sdd-apply|sdd-verify|sdd-archive|sdd-onboard|jd-judge-a|jd-judge-b|jd-fix-agent|review-risk|review-readability|review-reliability|review-resilience|review-refuter|review-validator"
 const runtimeEfforts = "off|minimal|low|medium|high|xhigh|max|not_selected|unknown|custom|unavailable|unsupported"
 
 // RuntimeBatch is the sanitized stdin aggregate, not a persistent batch.
@@ -272,6 +272,11 @@ func decodeRuntime(data []byte) (RuntimeBatch, error) {
 func normalizeRuntimeRows(rows []RuntimeRow) error {
 	for i := range rows {
 		r := &rows[i]
+		// Deprecated compatibility alias emitted by older registry-1 clients.
+		// Keep it out of the canonical vocabulary and normalize it before storage.
+		if r.AgentClass == "sdd-proposal" {
+			r.AgentClass = "sdd-propose"
+		}
 		if !runtimeMember(r.ModelEvidence, "selected|response|unknown") || !runtimeModelOK(r.Model) || !runtimeMember(r.AgentKind, "orchestrator|built_in|custom|unknown") || !runtimeMember(r.AgentClass, runtimeAgentClasses) {
 			return errRuntimeInput
 		}

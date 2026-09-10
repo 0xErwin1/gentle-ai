@@ -83,12 +83,23 @@ cumulative snapshots. No parent-child links or source IDs exist.
 | `host` | `pi`, `opencode`, `claude-code`, or `codex`; never a hostname |
 | `model` | Registered public provider/model pair, otherwise the `unknown` or `custom` pair |
 | `model_evidence` | `selected`, `response`, or `unknown`; selected model is not proof of response model |
-| `agent_kind`, `agent_class` | Closed broad category and known package class, otherwise `unknown`; no private agent names |
+| `agent_kind`, `agent_class` | Closed broad category and known package class, otherwise `unknown`; no private agent names. See the canonical vocabulary below. |
 | `selected_effort`, `effective_effort` | Independent source evidence; never infer one from the other |
 | `launches`, `responses` | Source-observed event occurrence counts, `null` if unobserved, or `"unsupported"`; not sessions, successes, or reconstructed composition |
 | Six token fields | Independent `{reported, unavailable, unsupported, sum}` coverage objects |
 | `duration` | Typed source-reported request or message elapsed time, never inferred latency |
 | `error_category` | `none`, `unknown`, `auth`, `output_length`, `aborted`, `api`, `rate_limit`, or `server`; never error text |
+
+### Agent class vocabulary
+
+Canonical `agent_class` values are:
+
+- Fixed classes: `orchestrator`, `worker`, `explore`, `verify`, `unknown`
+- SDD agents: `sdd-init`, `sdd-explore`, `sdd-research`, `sdd-propose`, `sdd-spec`, `sdd-design`, `sdd-tasks`, `sdd-apply`, `sdd-verify`, `sdd-archive`, `sdd-onboard`
+- Judgment Day agents: `jd-judge-a`, `jd-judge-b`, `jd-fix-agent`
+- Review agents: `review-risk`, `review-readability`, `review-reliability`, `review-resilience`, `review-refuter`, `review-validator`
+
+The collector accepts deprecated `sdd-proposal` from older registry-1 clients and normalizes it to `sdd-propose` before storage.
 
 Occurrence counts remain because they describe the event's observed coverage, not
 session reconstruction. Token coverage does not derive from these counts. A
