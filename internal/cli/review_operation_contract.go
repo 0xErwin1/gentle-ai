@@ -239,10 +239,14 @@ var reviewManagedAssetsGOOS = runtime.GOOS
 // managedAssetsExecutableToken renders one executable path as a command-line
 // token using one exact platform-specific encoding (#4434): POSIX platforms
 // quote with single quotes, which no POSIX shell expands ($ and backticks
-// expand even inside double quotes); Windows quotes with double quotes, which
-// cmd.exe and PowerShell both accept, because cmd.exe does not treat single
-// quotes as command syntax. A path that needs no quoting on either platform
-// stays bare.
+// expand even inside double quotes); Windows quotes with double quotes, the
+// command syntax cmd.exe accepts, because cmd.exe does not treat single
+// quotes as command syntax. A path over the safe bare class stays bare and
+// runs as printed in every shell. Caveat: PowerShell requires the call
+// operator for a leading quoted token (`& "C:\..." sync ...`), so the quoted
+// Windows form is the cmd.exe contract, not a paste-and-run PowerShell one;
+// machine relays that spawn the anchored executable directly, and bare
+// tokens, are unaffected.
 func managedAssetsExecutableToken(path string) string {
 	if managedAssetsBareExecutable.MatchString(path) {
 		return path

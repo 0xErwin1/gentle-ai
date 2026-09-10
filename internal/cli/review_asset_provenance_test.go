@@ -287,10 +287,23 @@ func TestManagedAssetsContinuationUsesInvokingExecutable(t *testing.T) {
 		t.Skipf("invoking executable unresolvable: %v", err)
 	}
 	// The expectation renders the executable token independently of the
-	// production helper (ContainsAny dispatch instead of the shared allowlist
-	// regex) so the two cannot agree by construction.
+	// production helper -- a byte-scan allowlist instead of the shared regex,
+	// with the same platform dispatch -- so the two cannot agree by
+	// construction. A Windows path of backslashes is quoted here exactly as
+	// production quotes it, because backslash is outside the safe bare class
+	// on every platform.
 	quoted := func(path string) string {
-		if !strings.ContainsAny(path, " \t\n$`'\"") {
+		bare := path != ""
+		for i := 0; i < len(path); i++ {
+			c := path[i]
+			switch {
+			case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c >= '0' && c <= '9':
+			case c == '/' || c == '.' || c == '_' || c == '+' || c == '=' || c == '@' || c == ':' || c == ',' || c == '-':
+			default:
+				bare = false
+			}
+		}
+		if bare {
 			return path
 		}
 		if runtime.GOOS == "windows" {
@@ -428,9 +441,22 @@ func TestManagedAssetsContinuationUsesInvokingExecutable(t *testing.T) {
 	if len(argv) != 4 || argv[0] != invoking || argv[1] != "sync" || argv[2] != "--agent" || argv[3] != "opencode" {
 		t.Fatalf("continuation command %q split to argv %q, want the invoking executable %q plus the sync dispatch", status.NextTransition.Continuation.Command, argv, invoking)
 	}
-	standin := exec.Command(argv[0], argv[1:]...)
-	standin.Env = append(os.Environ(), "GENTLE_AI_TEST_CLI_STANDIN=1")
-	if out, err := standin.CombinedOutput(); err != nil {
+	var run *exec.Cmd
+	if runtime.GOOS == "windows" {
+		// The quoted Windows form is cmd.exe command syntax; PowerShell
+		// requires the call operator for a leading quoted token, so no
+		// in-process shell here can prove that platform's paste-and-run
+		// contract. The argv dispatch still exercises executable startup,
+		// CLI dispatch, and flag parsing.
+		run = exec.Command(argv[0], argv[1:]...)
+	} else {
+		// POSIX: run the printed line through a real shell exactly as an
+		// operator would paste it, proving the quoting survives expansion
+		// rather than merely decoding it ourselves.
+		run = exec.Command("sh", "-c", status.NextTransition.Continuation.Command)
+	}
+	run.Env = append(os.Environ(), "GENTLE_AI_TEST_CLI_STANDIN=1")
+	if out, err := run.CombinedOutput(); err != nil {
 		t.Fatalf("executing the advertised continuation %q failed: %v\n%s", status.NextTransition.Continuation.Command, err, out)
 	}
 	var convergedOutput bytes.Buffer
