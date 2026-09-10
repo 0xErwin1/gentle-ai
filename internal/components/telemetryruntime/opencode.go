@@ -8,11 +8,17 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"os"
+	"strings"
 
+	"github.com/gentleman-programming/gentle-ai/v2/internal/components/filemerge"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/opencode"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/telemetry"
 )
 
 const OpenCodeSchema = "gentle-ai.telemetry-opencode/v1"
+const openCodeConfigMaxBytes = 65536
 
 var errEnvelope = errors.New("invalid OpenCode runtime envelope")
 
@@ -28,6 +34,7 @@ type openCodeInfo struct {
 	} `json:"time"`
 	ProviderID string `json:"providerID"`
 	ModelID    string `json:"modelID"`
+	Agent      string `json:"agent,omitempty"`
 	Summary    bool   `json:"summary,omitempty"`
 	Tokens     *struct {
 		Input     *json.RawMessage `json:"input,omitempty"`
@@ -113,11 +120,48 @@ func sendOpenCode(ctx context.Context, home string, getenv func(string) string, 
 	if observation == nil {
 		return "ignored", nil
 	}
+	applyOpenCodeAssignment(&observation.Row, readOpenCodeAssignment(home, observation.Agent))
 	batch, err := json.Marshal(telemetry.RuntimeBatch{Schema: telemetry.RuntimeSchema, Registry: json.RawMessage("1"), Host: "opencode", Rows: []telemetry.RuntimeRow{observation.Row}})
 	if err != nil {
 		return "", errEnvelope
 	}
 	return telemetry.SendRuntime(ctx, home, getenv, bytes.NewReader(batch), client), nil
+}
+
+func applyOpenCodeAssignment(row *telemetry.RuntimeRow, assignment model.ModelAssignment) {
+	if telemetry.RuntimeEffortAllowed(assignment.Effort) {
+		row.SelectedEffort = assignment.Effort
+	}
+	if row.ModelEvidence == "unknown" && assignment.ProviderID != "" && assignment.ModelID != "" {
+		row.Model = telemetry.NormalizeRuntimeModel(assignment.ProviderID, assignment.ModelID)
+		row.ModelEvidence = "selected"
+	}
+}
+
+func readOpenCodeAssignment(home, agent string) model.ModelAssignment {
+	if agent == "" {
+		return model.ModelAssignment{}
+	}
+	path := opencode.DefaultSettingsPathForHome(home)
+	file, err := os.Open(path)
+	if err != nil {
+		return model.ModelAssignment{}
+	}
+	defer file.Close()
+	data, err := io.ReadAll(io.LimitReader(file, openCodeConfigMaxBytes+1))
+	if err != nil || len(data) > openCodeConfigMaxBytes {
+		return model.ModelAssignment{}
+	}
+	root, err := filemerge.UnmarshalJSONObject(data)
+	if err != nil {
+		return model.ModelAssignment{}
+	}
+	agents, _ := root["agent"].(map[string]any)
+	definition, _ := agents[agent].(map[string]any)
+	modelSpec, _ := definition["model"].(string)
+	provider, modelID, _ := model.SplitModelSpec(strings.TrimSpace(modelSpec))
+	effort, _ := definition["variant"].(string)
+	return model.ModelAssignment{ProviderID: provider, ModelID: modelID, Effort: effort}
 }
 
 // Reject duplicate keys and case aliases before struct decoding. All accepted
@@ -151,7 +195,7 @@ func strictObjectKeys(d *json.Decoder, depth int) error {
 			return errEnvelope
 		}
 		switch s {
-		case "schema", "info", "role", "time", "created", "completed", "providerID", "modelID", "summary", "tokens", "input", "output", "reasoning", "cache", "read", "write", "error", "name", "data", "statusCode":
+		case "schema", "info", "role", "time", "created", "completed", "providerID", "modelID", "agent", "summary", "tokens", "input", "output", "reasoning", "cache", "read", "write", "error", "name", "data", "statusCode":
 		default:
 			return errEnvelope
 		}

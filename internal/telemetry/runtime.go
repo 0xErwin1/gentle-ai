@@ -181,6 +181,29 @@ func runtimeMember(value, choices string) bool {
 	return false
 }
 
+// RuntimeEffortAllowed reports whether value belongs to the runtime telemetry
+// contract's closed effort vocabulary.
+func RuntimeEffortAllowed(value string) bool {
+	return runtimeMember(value, runtimeEfforts)
+}
+
+// NormalizeRuntimeModel keeps model attribution inside the runtime telemetry
+// contract without exposing unregistered provider or model names.
+func NormalizeRuntimeModel(provider, id string) RuntimeModel {
+	m := RuntimeModel{Provider: provider, ID: id}
+	if provider == "" || id == "" {
+		return RuntimeModel{Provider: "unknown", ID: "unknown"}
+	}
+	if runtimeModelOK(m) {
+		return m
+	}
+	m = RuntimeModel{Provider: "custom", ID: "custom"}
+	if provider == "opencode" {
+		m.Provider = "opencode"
+	}
+	return m
+}
+
 // Registry 1: public names verified by the parent against official catalogs.
 // Namespace is a caller assertion, not endpoint/route attestation.
 func runtimeModelOK(m RuntimeModel) bool {
@@ -276,7 +299,7 @@ func normalizeRuntimeRows(rows []RuntimeRow) error {
 			return errRuntimeInput
 		}
 		for _, effort := range []string{r.SelectedEffort, r.EffectiveEffort} {
-			if !runtimeMember(effort, runtimeEfforts) {
+			if !RuntimeEffortAllowed(effort) {
 				return errRuntimeInput
 			}
 		}
