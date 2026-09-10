@@ -18,6 +18,16 @@ import (
 const ownershipSchema = "gentle-ai.telemetry-runtime-ownership/v1"
 const ownershipMarker = "// gentle-ai:managed telemetry-runtime/v1\n"
 
+// approvedPriorPluginDigests is an append-only provenance allowlist. Each
+// managed plugin change must add the immediately previous embedded asset digest.
+// Commit a9cab7dd embedded telemetry-runtime.ts with SHA-256
+// 902fe09299c0bb04590f12ba993a196b838e1fbbd8a94e96100ea3d5f30182b7.
+const priorPluginDigestA9cab7dd = "902fe09299c0bb04590f12ba993a196b838e1fbbd8a94e96100ea3d5f30182b7"
+
+var approvedPriorPluginDigests = map[string]struct{}{
+	priorPluginDigestA9cab7dd: {},
+}
+
 // Windows exposes writable regular files as 0666 regardless of the requested
 // POSIX permission bits. Retain exact modes elsewhere and never equate a
 // read-only file with a writable managed file.
@@ -120,11 +130,10 @@ func inspect(configDir string) ([][]byte, error) {
 		(!managedModeMatches(0600, os.FileMode(manifest.File.Mode)) && !managedModeMatches(0644, os.FileMode(manifest.File.Mode))) || manifest.File.AfterHash != fmt.Sprintf("%x", sha256.Sum256([]byte(manifest.File.After))) {
 		return nil, conflict
 	}
-	// This first, unreleased adapter has no approved historical asset versions.
-	// A self-consistent user-edited pair is not package provenance. Future asset
-	// upgrades must explicitly retain approved prior digests, never learn from disk.
 	embedded, err := assets.Read("opencode/plugins/telemetry-runtime.ts")
-	if err != nil || manifest.File.After != embedded {
+	embeddedDigest := fmt.Sprintf("%x", sha256.Sum256([]byte(embedded)))
+	_, approvedPrior := approvedPriorPluginDigests[manifest.File.AfterHash]
+	if err != nil || (manifest.File.AfterHash != embeddedDigest && !approvedPrior) {
 		return nil, conflict
 	}
 	for i, path := range paths {
