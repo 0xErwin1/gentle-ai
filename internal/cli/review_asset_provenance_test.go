@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -285,39 +286,65 @@ func TestManagedAssetsContinuationUsesInvokingExecutable(t *testing.T) {
 		t.Skipf("invoking executable unresolvable: %v", err)
 	}
 	// The expectation renders the executable token independently of the
-	// production helper so the two cannot agree by construction.
+	// production helper (ContainsAny dispatch instead of the shared allowlist
+	// regex) so the two cannot agree by construction.
 	quoted := func(path string) string {
-		if strings.ContainsAny(path, " \t\"") {
+		if !strings.ContainsAny(path, " \t\n$`'\"") {
+			return path
+		}
+		if runtime.GOOS == "windows" {
 			return "\"" + strings.ReplaceAll(path, "\"", "\\\"") + "\""
 		}
-		return path
+		return "'" + strings.ReplaceAll(path, "'", `'\''`) + "'"
 	}
 
 	// Unit: the rendered command is rooted at whichever executable resolution
-	// reports. A path that needs quoting is quoted; one that does not stays bare;
+	// reports, using one exact platform-specific encoding: POSIX paths quote
+	// with single quotes (no POSIX shell expands anything inside them, so $ and
+	// backticks survive literally), Windows paths quote with double quotes
+	// (cmd.exe command syntax), a path over the safe bare class stays bare, and
 	// an unresolvable executable keeps the historical bare `gentle-ai` form
 	// instead of guessing a path it cannot prove.
 	for name, tc := range map[string]struct {
 		executable func() (string, error)
+		goos       string
 		want       string
 	}{
-		"windows-style path with spaces": {
+		"windows path with spaces uses double quotes": {
 			executable: func() (string, error) { return `C:\Program Files\gentle-ai\gentle-ai.exe`, nil },
+			goos:       "windows",
 			want:       `"C:\Program Files\gentle-ai\gentle-ai.exe" sync --agent opencode`,
 		},
-		"posix path without spaces": {
+		"posix path with shell expansion uses single quotes": {
+			executable: func() (string, error) { return `/opt/$HOME/gentle-ai`, nil },
+			goos:       "linux",
+			want:       `'/opt/$HOME/gentle-ai' sync --agent opencode`,
+		},
+		"posix path with an embedded single quote escapes it": {
+			executable: func() (string, error) { return `/opt/o'brien/gentle-ai`, nil },
+			goos:       "linux",
+			want:       `'/opt/o'\''brien/gentle-ai' sync --agent opencode`,
+		},
+		"posix path over the safe bare class stays bare": {
 			executable: func() (string, error) { return `/opt/gentle-ai/bin/gentle-ai`, nil },
+			goos:       "linux",
 			want:       `/opt/gentle-ai/bin/gentle-ai sync --agent opencode`,
 		},
 		"unresolvable executable keeps the bare fallback": {
 			executable: func() (string, error) { return "", errors.New("unresolvable") },
+			goos:       "linux",
 			want:       `gentle-ai sync --agent opencode`,
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
-			previous := reviewManagedAssetsExecutablePath
+			previousPath := reviewManagedAssetsExecutablePath
+			previousGOOS := reviewManagedAssetsGOOS
 			reviewManagedAssetsExecutablePath = tc.executable
-			t.Cleanup(func() { reviewManagedAssetsExecutablePath = previous })
+			reviewManagedAssetsGOOS = tc.goos
+			t.Cleanup(func() {
+				reviewManagedAssetsExecutablePath = previousPath
+				reviewManagedAssetsGOOS = previousGOOS
+			})
 			continuation := managedAssetsContinuation("opencode", []string{"sha256:stale"})
 			if continuation.Command != tc.want {
 				t.Fatalf("continuation command = %q, want %q", continuation.Command, tc.want)
@@ -326,6 +353,13 @@ func TestManagedAssetsContinuationUsesInvokingExecutable(t *testing.T) {
 				t.Fatalf("continuation command %q does not satisfy the published pattern", continuation.Command)
 			}
 		})
+	}
+
+	// The published contract itself must refuse a shell-significant bare
+	// executable token: `/opt/$HOME/gentle-ai sync` unquoted is exactly the
+	// shape a POSIX shell would expand into the wrong binary.
+	if validManagedAssetsContinuationCommand(`/opt/$HOME/gentle-ai sync --agent pi`) {
+		t.Fatal("published pattern accepted a shell-significant bare executable token")
 	}
 
 	// End to end: a stale-assets STATUS stop produced by THIS (test) binary

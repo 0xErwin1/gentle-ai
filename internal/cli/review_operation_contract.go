@@ -11,6 +11,7 @@ import (
 	"os"
 	"reflect"
 	"regexp"
+	"runtime"
 	"strconv"
 	"strings"
 
@@ -206,26 +207,52 @@ type ReviewManagedAssetsContinuation struct {
 // managedAssetsContinuationCommandPattern is the executable-identity half of
 // the published managed_assets_continuation `command` contract (failure.schema
 // .json carries the same regex). The executable token is either the bare
-// `gentle-ai` fallback or a path -- quoted, with `\"` escapes, exactly when it
-// contains whitespace or a double quote -- followed by `sync` and an optional
-// `--agent <id>`. Keeping the JSON schema and this Go mirror in one shape is
-// what lets Validate() enforce the same contract the published schema does.
-const managedAssetsContinuationCommandPattern = `^(?:[^\s"]+|"(?:[^"\\]|\\.)*") sync(?: --agent \S+)?$`
+// `gentle-ai` fallback, an unquoted path, or one of the two shell quoting forms
+// the renderer picks per platform -- POSIX single quotes (the only form no
+// POSIX shell expands) or Windows double quotes (cmd.exe command syntax) --
+// followed by `sync` and an optional `--agent <id>`. Keeping the JSON schema
+// and this Go mirror in one shape is what lets Validate() enforce the same
+// contract the published schema does. The pattern governs structure; the safe
+// choice of form for a given path is managedAssetsExecutableToken's job.
+const managedAssetsContinuationCommandPattern = `^(?:` + managedAssetsBareExecutableClass + `|"(?:[^"\\]|\\.)*"|'(?:[^']|'\\'')*') sync(?: --agent \S+)?$`
+
+// managedAssetsBareExecutablePattern is the conservative allowlist of path
+// characters that are safe unquoted in every shell that may run the
+// continuation. An allowlist rather than a blacklist: a character outside it
+// (whitespace, $, backtick, quotes, globs, separators) always forces quoting,
+// so safety never depends on enumerating the metacharacter set of every shell
+// in existence.
+const managedAssetsBareExecutableClass = `[A-Za-z0-9/._+=@:,-]+`
+
+var managedAssetsBareExecutable = regexp.MustCompile(`^` + managedAssetsBareExecutableClass + `$`)
 
 // reviewManagedAssetsExecutablePath resolves the binary that would diagnose a
 // managed-asset skew, so its continuation can be anchored to it. Var
 // indirection keeps the resolution stubbable in tests.
 var reviewManagedAssetsExecutablePath = os.Executable
 
+// reviewManagedAssetsGOOS selects the quoting form for a path that needs it:
+// the invoking binary knows the platform the continuation will run on. Var
+// indirection keeps it stubbable in tests.
+var reviewManagedAssetsGOOS = runtime.GOOS
+
 // managedAssetsExecutableToken renders one executable path as a command-line
-// token: quoted (with `\"` escapes) only when the path contains whitespace or a
-// double quote, bare otherwise, which is literally runnable in POSIX shells,
-// cmd.exe, and PowerShell alike.
+// token using one exact platform-specific encoding (#4434): POSIX platforms
+// quote with single quotes, which no POSIX shell expands ($ and backticks
+// expand even inside double quotes); Windows quotes with double quotes, which
+// cmd.exe and PowerShell both accept, because cmd.exe does not treat single
+// quotes as command syntax. A path that needs no quoting on either platform
+// stays bare.
 func managedAssetsExecutableToken(path string) string {
-	if !strings.ContainsAny(path, " \t\n\"") {
+	if managedAssetsBareExecutable.MatchString(path) {
 		return path
 	}
-	return "\"" + strings.ReplaceAll(path, "\"", "\\\"") + "\""
+	if reviewManagedAssetsGOOS == "windows" {
+		return "\"" + strings.ReplaceAll(path, "\"", "\\\"") + "\""
+	}
+	// The standard POSIX idiom for an embedded single quote: close the quoted
+	// span, emit an escaped quote, reopen the span.
+	return "'" + strings.ReplaceAll(path, "'", `'\''`) + "'"
 }
 
 // managedAssetsContinuationExecutable resolves the executable identity the
