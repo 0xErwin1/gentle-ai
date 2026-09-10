@@ -1460,14 +1460,14 @@ func validManagedAssetsContinuationCommand(command string) bool {
 // structured agent must describe the same single sync invocation.
 func validateManagedAssetsContinuation(continuation *ReviewManagedAssetsContinuation) error {
 	if continuation == nil || continuation.Operation != "sync" || !validManagedAssetsContinuationCommand(continuation.Command) {
-		return errors.New("invalid managed-assets continuation command")
+		return errors.New("invalid managed-assets continuation command") // refusal:by-design world-action: a malformed provider continuation is a construction bug; only corrected producer code can emit a valid command
 	}
 	expectedSuffix := " sync"
 	if continuation.Agent != "" {
 		expectedSuffix += " --agent " + continuation.Agent
 	}
 	if !strings.HasSuffix(continuation.Command, expectedSuffix) {
-		return errors.New("managed-assets continuation command and agent differ")
+		return errors.New("managed-assets continuation command and agent differ") // refusal:by-design world-action: mismatched provider fields are a construction bug; only corrected producer code can bind the command to its agent
 	}
 	return nil
 }
