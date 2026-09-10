@@ -1289,6 +1289,13 @@ func TestLineageEscalationPublishesEscalationCauseInClosureAndStatusEnvelopes(t 
 	if terminal.Escalation == nil || terminal.Escalation.Cause != "targeted_validator_rejected" || len(terminal.Escalation.FindingIDs) == 0 {
 		t.Fatalf("closure escalation = %#v, want cause targeted_validator_rejected", terminal.Escalation)
 	}
+	closureSchema := compileWholePublishedReviewSchema(t, "v2", "last-event-closure.schema.json")
+	closureDocument := decodeJSONObjectCopy(t, terminalOutput.Bytes())
+	delete(closureDocument, "targeted_validator_evidence")
+	delete(closureDocument, "escalation")
+	if err := closureSchema.Validate(closureDocument); err == nil {
+		t.Fatal("last-event closure schema accepted escalated state without escalation")
+	}
 
 	var statusOutput bytes.Buffer
 	if err := RunReviewStatus([]string{
@@ -1303,5 +1310,12 @@ func TestLineageEscalationPublishesEscalationCauseInClosureAndStatusEnvelopes(t 
 	decodeStrictReviewJSON(t, statusOutput.Bytes(), &status)
 	if status.Escalation == nil || status.Escalation.Cause != "targeted_validator_rejected" || !reflect.DeepEqual(status.Escalation.FindingIDs, terminal.Escalation.FindingIDs) {
 		t.Fatalf("STATUS escalation = %#v, want matching closure escalation %#v", status.Escalation, terminal.Escalation)
+	}
+	statusSchema := compileWholeNativeStatusSchema(t, "status-v7.schema.json")
+	validatePublishedReviewSchema(t, statusSchema, statusOutput.Bytes())
+	statusDocument := decodeJSONObjectCopy(t, statusOutput.Bytes())
+	delete(statusDocument, "escalation")
+	if err := statusSchema.Validate(statusDocument); err == nil {
+		t.Fatal("status-v7 schema accepted escalated authority without escalation")
 	}
 }

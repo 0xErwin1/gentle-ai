@@ -521,6 +521,9 @@ func (result ReviewTargetStatusResult) validateWithCompactAuthority(authority *r
 	default:
 		return errors.New("unsupported review status recovery disposition")
 	}
+	if (result.Authority != nil && result.Authority.Version == reviewtransaction.AuthorityVersionCompact && result.Authority.State == reviewtransaction.StateEscalated) != (result.Escalation != nil) {
+		return errors.New("status escalation must match escalated authority")
+	}
 	return nil
 }
 

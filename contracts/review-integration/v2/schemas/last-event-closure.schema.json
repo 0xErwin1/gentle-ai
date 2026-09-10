@@ -31,7 +31,8 @@
       "if": {"properties": {"state": {"const": "approved"}}, "required": ["state"]},
       "then": {"required": ["acknowledgement"]},
       "else": {"not": {"required": ["acknowledgement"]}}
-    }
+    },
+    {"if": {"properties": {"state": {"const": "escalated"}}, "required": ["state"]}, "then": {"required": ["escalation"]}, "else": {"not": {"required": ["escalation"]}}}
   ],
   "properties": {
     "schema": {"const": "gentle-ai.review-last-event-closure/v1"},

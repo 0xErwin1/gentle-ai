@@ -205,7 +205,7 @@ func TestReviewProviderArtifactConformanceSchemasArePinned(t *testing.T) {
 		// issue #4226: last-event-closure documents the CompactEscalationEvidence
 		// contract (cause, finding_ids, refuter_outcomes) for terminal escalation.
 		// Deliberate, not drift.
-		"schemas/last-event-closure.schema.json": "f35e8a66f89df88a70b4d7a0e61b1a8a95e09598900078bd226bfb3a605da5e9",
+		"schemas/last-event-closure.schema.json": "1c720e2bf6e5363fd6138a4da8cd5f65c55bf7bad5ab863838f9d43b8294f8a1",
 		// issue #3894: start/v4 publishes the reviewing status continuation, so
 		// transition-execution gains the start_status_execution definition it
 		// references. Deliberate, not drift.
@@ -252,7 +252,7 @@ func TestReviewProviderArtifactStatusV7ContractsArePinned(t *testing.T) {
 		//
 		// issue #4226: status/v7 documents the CompactEscalationEvidence contract
 		// on terminal escalation. Deliberate, not drift.
-		"schemas/status-v7.schema.json":         "601c0c17ecb156a32b47fd21a2895f4300b5d4b85abefe9c1036ec0468dfe272",
+		"schemas/status-v7.schema.json":         "277abd6aed05ff7358fc32374bf524c9c3d10d3760d42c68c4e8a235e2f86968",
 		"schemas/capabilities-v2.5.schema.json": "9fcdb1717a54bcd4f73d4dee1283d9ec2f27cccbb5d54804ee8b40a6ed2db553",
 	}
 	for name, expected := range want {

@@ -79,13 +79,8 @@ func (state CompactState) EscalationEvidence() *CompactEscalationEvidence {
 			}
 		}
 	}
-	if state.ProposedCorrectionLines != nil && *state.ProposedCorrectionLines > state.CorrectionBudget {
-		return &CompactEscalationEvidence{
-			Cause:      "correction_budget_exceeded",
-			FindingIDs: findingIDs,
-		}
-	}
-	if state.CumulativeCorrectionLines > state.CorrectionBudget {
+	if state.CumulativeCorrectionLines > state.CorrectionBudget ||
+		state.ProposedCorrectionLines != nil && state.CumulativeCorrectionLines+*state.ProposedCorrectionLines > state.CorrectionBudget {
 		return &CompactEscalationEvidence{
 			Cause:      "correction_budget_exceeded",
 			FindingIDs: findingIDs,
