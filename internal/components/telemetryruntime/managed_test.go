@@ -8,6 +8,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v2/internal/components/mutationjournal"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -64,6 +65,52 @@ func TestOpenCodeTelemetryOwnedUpdateRollback(t *testing.T) {
 	}
 }
 
+func TestOpenCodeTelemetryManagedModeEquivalence(t *testing.T) {
+	for _, tt := range []struct {
+		name     string
+		goos     string
+		expected os.FileMode
+		observed os.FileMode
+		want     bool
+	}{
+		{"exact writable on Unix", "linux", 0644, 0644, true},
+		{"read-only drift on Unix", "linux", 0644, 0444, false},
+		{"different writable mode on Unix", "linux", 0644, 0640, false},
+		{"widened writable plugin on Windows", "windows", 0644, 0666, true},
+		{"widened writable manifest on Windows", "windows", 0600, 0666, true},
+		{"read-only expected file remains distinct on Windows", "windows", 0444, 0666, false},
+		{"other writable modes remain distinct on Windows", "windows", 0644, 0664, false},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := managedModeMatchesForOS(tt.goos, tt.expected, tt.observed); got != tt.want {
+				t.Errorf("managedModeMatchesForOS(%q, %#o, %#o) = %t, want %t", tt.goos, tt.expected, tt.observed, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestOpenCodeTelemetryManagedModeLifecycle(t *testing.T) {
+	dir := t.TempDir()
+	changed, rollback, err := ReconcileWithRollback(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(changed) != 2 {
+		t.Fatalf("first reconcile changed %d files, want 2", len(changed))
+	}
+	if err := CheckManaged(dir); err != nil {
+		t.Fatalf("validate reconciled files: %v", err)
+	}
+	if err := rollback(); err != nil {
+		t.Fatalf("rollback reconciled files: %v", err)
+	}
+	for _, path := range ManagedPaths(dir) {
+		if _, err := os.Lstat(path); !os.IsNotExist(err) {
+			t.Fatalf("rollback left managed file %s: %v", path, err)
+		}
+	}
+}
+
 func TestOpenCodeTelemetryManifestStrictness(t *testing.T) {
 	for _, kind := range []string{"alias", "nested-alias", "duplicate", "nested-duplicate", "missing", "null", "schema-null", "mode-null", "mode-type", "mode-value", "mode-drift", "metadata-mode", "unknown-pair", "oversized", "trailing"} {
 		t.Run(kind, func(t *testing.T) {
@@ -98,11 +145,19 @@ func TestOpenCodeTelemetryManifestStrictness(t *testing.T) {
 			case "mode-value":
 				text = strings.Replace(text, `"mode": 420`, `"mode": 511`, 1)
 			case "mode-drift":
-				if err := os.Chmod(paths[0], 0600); err != nil {
+				mode := os.FileMode(0600)
+				if runtime.GOOS == "windows" {
+					mode = 0444
+				}
+				if err := os.Chmod(paths[0], mode); err != nil {
 					t.Fatal(err)
 				}
 			case "metadata-mode":
-				if err := os.Chmod(paths[1], 0644); err != nil {
+				mode := os.FileMode(0644)
+				if runtime.GOOS == "windows" {
+					mode = 0444
+				}
+				if err := os.Chmod(paths[1], mode); err != nil {
 					t.Fatal(err)
 				}
 			case "unknown-pair":

@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 
 	"github.com/gentleman-programming/gentle-ai/v2/internal/assets"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/components/mutationjournal"
@@ -16,6 +17,23 @@ import (
 
 const ownershipSchema = "gentle-ai.telemetry-runtime-ownership/v1"
 const ownershipMarker = "// gentle-ai:managed telemetry-runtime/v1\n"
+
+// Windows exposes writable regular files as 0666 regardless of the requested
+// POSIX permission bits. Retain exact modes elsewhere and never equate a
+// read-only file with a writable managed file.
+func managedModeMatches(expected, observed os.FileMode) bool {
+	return managedModeMatchesForOS(runtime.GOOS, expected, observed)
+}
+
+func managedModeMatchesForOS(goos string, expected, observed os.FileMode) bool {
+	if expected == observed {
+		return true
+	}
+	return goos == "windows" &&
+		expected.Perm()&0222 != 0 &&
+		observed.Perm() == 0666 &&
+		expected&^os.ModePerm == observed&^os.ModePerm
+}
 
 type managedManifest struct {
 	Schema string                    `json:"schema"`
@@ -99,7 +117,7 @@ func inspect(configDir string) ([][]byte, error) {
 	}
 	file, err := manifestObject(root["file"], "after", "afterHash", "overlay", "mode")
 	if err != nil || !bytes.Equal(bytes.TrimSpace(file["overlay"]), []byte("false")) || json.Unmarshal(current[1], &manifest) != nil || manifest.Schema != ownershipSchema ||
-		(manifest.File.Mode != 0600 && manifest.File.Mode != 0644) || manifest.File.AfterHash != fmt.Sprintf("%x", sha256.Sum256([]byte(manifest.File.After))) {
+		(!managedModeMatches(0600, os.FileMode(manifest.File.Mode)) && !managedModeMatches(0644, os.FileMode(manifest.File.Mode))) || manifest.File.AfterHash != fmt.Sprintf("%x", sha256.Sum256([]byte(manifest.File.After))) {
 		return nil, conflict
 	}
 	// This first, unreleased adapter has no approved historical asset versions.
@@ -118,7 +136,7 @@ func inspect(configDir string) ([][]byte, error) {
 		if i == 0 {
 			expected = os.FileMode(manifest.File.Mode)
 		}
-		if err != nil || info.Mode() != expected {
+		if err != nil || !managedModeMatches(expected, info.Mode()) {
 			return nil, conflict
 		}
 	}
@@ -198,7 +216,7 @@ func (f *guardedFile) restore() error {
 	}
 	current, err := readManaged(f.path)
 	info, statErr := os.Lstat(f.path)
-	if err != nil || statErr != nil || info.Mode() != f.mode || !bytes.Equal(current, f.expected) {
+	if err != nil || statErr != nil || !managedModeMatches(f.mode, info.Mode()) || !bytes.Equal(current, f.expected) {
 		return fmt.Errorf("telemetry runtime rollback conflict: %s; edited file preserved", f.path)
 	}
 	if err := f.journal.Restore(); err != nil {
@@ -262,7 +280,7 @@ func ReconcileWithRollback(configDir string) (changed []string, rollback func() 
 	if err != nil {
 		return nil, rollback, err
 	}
-	if info.Mode() != files[0].mode {
+	if !managedModeMatches(files[0].mode, info.Mode()) {
 		return nil, rollback, fmt.Errorf("telemetry runtime mode conflict: %s", paths[0])
 	}
 	owned.Before = nil
