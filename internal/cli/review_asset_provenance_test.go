@@ -129,6 +129,13 @@ func TestNegotiatedReviewStartClassifiesStaleManagedAssetsBeforeAuthority(t *tes
 	if err := failure.Validate(); err != nil {
 		t.Fatalf("stale managed assets failure does not satisfy its published contract: %v", err)
 	}
+	malformedFailure := failure
+	malformedContinuation := *failure.Continuation
+	malformedContinuation.Command = "'/tmp/gentle\nai' sync --agent opencode"
+	malformedFailure.Continuation = &malformedContinuation
+	if err := malformedFailure.Validate(); err == nil {
+		t.Fatal("FAILURE accepted a multiline managed-assets continuation command")
+	}
 }
 
 func TestNegotiatedReviewStartWithCurrentManagedAssetsStillStarts(t *testing.T) {
@@ -233,6 +240,15 @@ func TestManagedAssetsStopTransitionCarriesExactlyOneSignal(t *testing.T) {
 	}
 	if err := stale.Validate(); err != nil {
 		t.Fatalf("baseline stale managed assets STATUS should validate: %v", err)
+	}
+	malformedStatus := stale
+	malformedTransition := *stale.NextTransition
+	malformedContinuation := *stale.NextTransition.Continuation
+	malformedContinuation.Command = "'/tmp/gentle\rai' sync --agent opencode"
+	malformedTransition.Continuation = &malformedContinuation
+	malformedStatus.NextTransition = &malformedTransition
+	if err := malformedStatus.Validate(); err == nil {
+		t.Fatal("STATUS accepted a multiline managed-assets continuation command")
 	}
 
 	// A managed_assets_outdated stop without its continuation names no way
@@ -353,12 +369,17 @@ func TestManagedAssetsContinuationUsesInvokingExecutable(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			previousPath := reviewManagedAssetsExecutablePath
 			previousGOOS := reviewManagedAssetsGOOS
+			previousArgs := append([]string(nil), os.Args...)
 			reviewManagedAssetsExecutablePath = tc.executable
 			reviewManagedAssetsGOOS = tc.goos
 			t.Cleanup(func() {
 				reviewManagedAssetsExecutablePath = previousPath
 				reviewManagedAssetsGOOS = previousGOOS
+				os.Args = previousArgs
 			})
+			// Keep these renderer cases focused on os.Executable. A relative
+			// argv[0] remains only the final compatibility fallback.
+			os.Args = append([]string{"gentle-ai"}, os.Args[1:]...)
 			continuation := managedAssetsContinuation("opencode", []string{"sha256:stale"})
 			if continuation.Command != tc.want {
 				t.Fatalf("continuation command = %q, want %q", continuation.Command, tc.want)
@@ -470,6 +491,58 @@ func TestManagedAssetsContinuationUsesInvokingExecutable(t *testing.T) {
 	if converged.NextTransition == nil || converged.NextTransition.Kind != reviewNextTransitionExecute ||
 		converged.NextTransition.ReasonCode != "fresh_target_ready" {
 		t.Fatalf("post-continuation STATUS transition = %#v, want execute/fresh_target_ready", converged.NextTransition)
+	}
+}
+
+func TestManagedAssetsContinuationRejectsUnsafeExecutableIdentities(t *testing.T) {
+	absoluteArgvZero := filepath.Join(t.TempDir(), "gentle-ai")
+	for _, test := range []struct {
+		name       string
+		executable string
+		resolveErr error
+		argvZero   string
+		want       string
+	}{
+		{
+			name:       "resolver failure accepts absolute argv zero",
+			resolveErr: errors.New("executable unavailable"),
+			argvZero:   absoluteArgvZero,
+			want:       managedAssetsExecutableToken(absoluteArgvZero) + " sync --agent opencode",
+		},
+		{
+			name:       "multiline resolver falls through to absolute argv zero",
+			executable: filepath.Join(t.TempDir(), "gentle\nai"),
+			argvZero:   absoluteArgvZero,
+			want:       managedAssetsExecutableToken(absoluteArgvZero) + " sync --agent opencode",
+		},
+		{
+			name:       "multiline argv zero falls through to canonical fallback",
+			resolveErr: errors.New("executable unavailable"),
+			argvZero:   filepath.Join(t.TempDir(), "gentle\rai"),
+			want:       "gentle-ai sync --agent opencode",
+		},
+		{
+			name:       "relative argv zero falls through to canonical fallback",
+			resolveErr: errors.New("executable unavailable"),
+			argvZero:   "gentle-ai",
+			want:       "gentle-ai sync --agent opencode",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			previousPath := reviewManagedAssetsExecutablePath
+			previousArgs := append([]string(nil), os.Args...)
+			reviewManagedAssetsExecutablePath = func() (string, error) { return test.executable, test.resolveErr }
+			os.Args = append([]string{test.argvZero}, os.Args[1:]...)
+			t.Cleanup(func() {
+				reviewManagedAssetsExecutablePath = previousPath
+				os.Args = previousArgs
+			})
+
+			continuation := managedAssetsContinuation("opencode", nil)
+			if strings.ContainsAny(continuation.Command, "\r\n") || continuation.Command != test.want {
+				t.Fatalf("continuation command = %q, want %q", continuation.Command, test.want)
+			}
+		})
 	}
 }
 

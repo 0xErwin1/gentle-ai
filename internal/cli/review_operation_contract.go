@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"reflect"
 	"regexp"
 	"runtime"
@@ -192,11 +193,12 @@ type ReviewIntegrationFailure struct {
 
 // ReviewManagedAssetsContinuation names the sync invocation that resolves a
 // managed_assets_outdated refusal without abandoning the frozen candidate.
-// Command is the exact, literally runnable command line, bound to the same
-// runtime agent the blocked operation was asked for; its executable token is
-// anchored to the binary that diagnosed the stale assets (#4434), so running
-// Command cannot reach a different `gentle-ai` through PATH and fail to
-// converge. StaleAssets carries the stale recorded digest when it is known.
+// Command is the literally runnable command line, bound to the same runtime
+// agent the blocked operation was asked for. When this process can identify its
+// executable, the token is anchored to that binary (#4434). The final bare
+// `gentle-ai` compatibility fallback is not an exact executable identity and
+// may resolve through PATH. StaleAssets carries the stale recorded digest when
+// it is known.
 type ReviewManagedAssetsContinuation struct {
 	Operation   string   `json:"operation"`
 	Command     string   `json:"command"`
@@ -214,7 +216,7 @@ type ReviewManagedAssetsContinuation struct {
 // and this Go mirror in one shape is what lets Validate() enforce the same
 // contract the published schema does. The pattern governs structure; the safe
 // choice of form for a given path is managedAssetsExecutableToken's job.
-const managedAssetsContinuationCommandPattern = `^(?:` + managedAssetsBareExecutableClass + `|"(?:[^"\\]|\\.)*"|'(?:[^']|'\\'')*') sync(?: --agent \S+)?$`
+const managedAssetsContinuationCommandPattern = `^(?:` + managedAssetsBareExecutableClass + `|"(?:[^"\\\r\n]|\\.)*"|'(?:[^'\r\n]|'\\'')*') sync(?: --agent \S+)?$`
 
 // managedAssetsBareExecutablePattern is the conservative allowlist of path
 // characters that are safe unquoted in every shell that may run the
@@ -260,16 +262,31 @@ func managedAssetsExecutableToken(path string) string {
 }
 
 // managedAssetsContinuationExecutable resolves the executable identity the
-// continuation is anchored to: the invoking binary when os.Executable can name
-// it, and the historical bare `gentle-ai` when it cannot -- a path that cannot
-// be proven must not be guessed, and the bare form is still the best available
-// recovery for a binary that cannot even resolve itself.
+// continuation is anchored to. os.Executable is authoritative when it returns
+// a safe single-line path; an absolute argv[0] is the bounded fallback for
+// hosts where that lookup fails. The final bare `gentle-ai` fallback retains legacy
+// recovery behavior but is intentionally not presented as an exact identity.
 func managedAssetsContinuationExecutable() string {
-	path, err := reviewManagedAssetsExecutablePath()
-	if err != nil || strings.TrimSpace(path) == "" {
-		return "gentle-ai"
+	if path, err := reviewManagedAssetsExecutablePath(); err == nil && managedAssetsExecutableIdentity(path) {
+		return managedAssetsExecutableToken(path)
 	}
-	return managedAssetsExecutableToken(path)
+	if len(os.Args) > 0 && managedAssetsArgvZeroIdentity(os.Args[0]) {
+		return managedAssetsExecutableToken(os.Args[0])
+	}
+	return "gentle-ai"
+}
+
+// managedAssetsExecutableIdentity accepts os.Executable's resolved identity
+// only when it is non-empty and single-line. In particular, a CR or LF must not
+// reach either quoting renderer, because continuation commands are always one line.
+func managedAssetsExecutableIdentity(path string) bool {
+	return path != "" && !strings.ContainsAny(path, "\r\n")
+}
+
+// managedAssetsArgvZeroIdentity is narrower than the os.Executable path: an
+// unqualified argv[0] may be a PATH command, not this process's exact identity.
+func managedAssetsArgvZeroIdentity(path string) bool {
+	return managedAssetsExecutableIdentity(path) && filepath.IsAbs(path)
 }
 
 // managedAssetsContinuation builds the one continuation a
@@ -1418,7 +1435,7 @@ func (failure ReviewIntegrationFailure) Validate() error {
 		return errors.New("managed_assets_outdated failures must carry exactly the sync continuation") // refusal:by-design world-action: a producer that pairs this code with no continuation, or attaches one to any other code, built a malformed envelope and requires a code fix, not an operator command
 	}
 	if continuation := failure.Continuation; continuation != nil {
-		if continuation.Operation != "sync" || !validManagedAssetsContinuationCommand(continuation.Command) {
+		if err := validateManagedAssetsContinuation(continuation); err != nil {
 			return errors.New("invalid negotiated review failure continuation") // refusal:by-design world-action: a continuation whose command is not an executable-anchored `sync` invocation was built wrong; only a code fix produces a valid one
 		}
 	}
@@ -1431,8 +1448,28 @@ func (failure ReviewIntegrationFailure) Validate() error {
 // quoted when it contains whitespace -- followed by `sync` and an optional
 // `--agent <id>` (#4434).
 func validManagedAssetsContinuationCommand(command string) bool {
+	if strings.ContainsAny(command, "\r\n") {
+		return false
+	}
 	matched, err := regexp.MatchString(managedAssetsContinuationCommandPattern, command)
 	return err == nil && matched
+}
+
+// validateManagedAssetsContinuation is the shared strict contract for the
+// managed-assets continuation emitted by FAILURE and STATUS. Its command and
+// structured agent must describe the same single sync invocation.
+func validateManagedAssetsContinuation(continuation *ReviewManagedAssetsContinuation) error {
+	if continuation == nil || continuation.Operation != "sync" || !validManagedAssetsContinuationCommand(continuation.Command) {
+		return errors.New("invalid managed-assets continuation command")
+	}
+	expectedSuffix := " sync"
+	if continuation.Agent != "" {
+		expectedSuffix += " --agent " + continuation.Agent
+	}
+	if !strings.HasSuffix(continuation.Command, expectedSuffix) {
+		return errors.New("managed-assets continuation command and agent differ")
+	}
+	return nil
 }
 
 func supportedReviewIntegrationFailureInput(input string) bool {
