@@ -31,6 +31,7 @@ type ClaudeHook struct {
 // ClaudeUsage is bounded response evidence extracted from a transcript tail.
 type ClaudeUsage struct {
 	Evidence      bool
+	Correlated    bool
 	Model         string
 	Input         json.RawMessage
 	Output        json.RawMessage
@@ -88,13 +89,12 @@ func ClaudeNamedAgent(name string) bool {
 	return !runtimeMember(name, "orchestrator|worker|explore|verify|unknown")
 }
 
-// ParseClaudeTranscriptTail accepts only a complete, matching final non-empty
-// JSONL record. firstPartial means the bounded tail starts inside an older line.
+// ParseClaudeTranscriptTail returns the last valid assistant usage record in a
+// subagent transcript. firstPartial means the bounded tail starts inside an
+// older line. Message correlation strengthens the evidence but is not required:
+// agent_transcript_path is already scoped to this single subagent run.
 func ParseClaudeTranscriptTail(data []byte, firstPartial bool, expectedDigest [32]byte) (ClaudeUsage, bool) {
 	if len(data) > ClaudeTranscriptMaxBytes {
-		return ClaudeUsage{}, false
-	}
-	if expectedDigest == ([32]byte{}) {
 		return ClaudeUsage{}, false
 	}
 	if firstPartial {
@@ -123,10 +123,10 @@ func ParseClaudeTranscriptTail(data []byte, firstPartial bool, expectedDigest [3
 				} `json:"usage"`
 			} `json:"message"`
 		}
-		if json.Unmarshal(line, &record) != nil || record.Type != "assistant" || record.Message.Usage == nil || len(record.Message.Model) > 256 || !claudeMessageMatches(record.Message.Content, expectedDigest) {
-			return ClaudeUsage{}, false
+		if json.Unmarshal(line, &record) != nil || record.Type != "assistant" || record.Message.Usage == nil || len(record.Message.Model) > 256 {
+			continue
 		}
-		u := ClaudeUsage{Evidence: true, Model: record.Message.Model, Input: record.Message.Usage.Input, Output: record.Message.Usage.Output, CacheRead: record.Message.Usage.CacheRead, CacheCreation: record.Message.Usage.CacheCreation}
+		u := ClaudeUsage{Evidence: true, Correlated: expectedDigest != ([32]byte{}) && claudeMessageMatches(record.Message.Content, expectedDigest), Model: record.Message.Model, Input: record.Message.Usage.Input, Output: record.Message.Usage.Output, CacheRead: record.Message.Usage.CacheRead, CacheCreation: record.Message.Usage.CacheCreation}
 		valid := true
 		for _, raw := range []json.RawMessage{u.Input, u.Output, u.CacheRead, u.CacheCreation} {
 			if raw != nil && runtimeNumber(raw) == "" {
@@ -135,7 +135,7 @@ func ParseClaudeTranscriptTail(data []byte, firstPartial bool, expectedDigest [3
 			}
 		}
 		if !valid {
-			return ClaudeUsage{}, false
+			continue
 		}
 		return u, true
 	}
@@ -184,6 +184,7 @@ func NormalizeClaude(hook ClaudeHook, usage ClaudeUsage, agentDefinition []byte)
 		r.AgentKind, r.AgentClass = "built_in", hook.AgentType
 	}
 	selectedModel, selectedEffort := claudeFrontmatter(agentDefinition)
+	selectedModel = claudeCanonicalModelID(selectedModel)
 	if selectedEffort != "" && runtimeMember(selectedEffort, runtimeEfforts) {
 		r.SelectedEffort = selectedEffort
 	}
@@ -191,7 +192,7 @@ func NormalizeClaude(hook ClaudeHook, usage ClaudeUsage, agentDefinition []byte)
 	if usage.Evidence {
 		r.Launches, r.Responses = json.RawMessage("null"), json.RawMessage("1")
 		if usage.Model != "" {
-			model, r.ModelEvidence = usage.Model, "response"
+			model, r.ModelEvidence = claudeCanonicalModelID(usage.Model), "response"
 		}
 	}
 	if r.ModelEvidence == "unknown" && model != "" {
@@ -214,6 +215,34 @@ func claudeModel(id string) RuntimeModel {
 		return m
 	}
 	return RuntimeModel{Provider: "custom", ID: "custom"}
+}
+
+// Claude Code frontmatter uses sonnet/opus/haiku aliases, while transcripts
+// may append release or revision suffixes to registry IDs. Selectors that defer
+// model choice carry no selected-model evidence. Registry matching uses the
+// longest current Anthropic ID so overlapping registered IDs stay exact.
+func claudeCanonicalModelID(id string) string {
+	id = strings.TrimSpace(id)
+	switch id {
+	case "", "inherit", "default":
+		return ""
+	case "sonnet":
+		return "claude-sonnet-5"
+	case "opus":
+		return "claude-opus-5"
+	case "haiku":
+		return "claude-haiku-4-5"
+	}
+	longest := ""
+	for _, registered := range strings.Split(runtimeAnthropicModels, "|") {
+		if (id == registered || strings.HasPrefix(id, registered+"-")) && len(registered) > len(longest) {
+			longest = registered
+		}
+	}
+	if longest != "" {
+		return longest
+	}
+	return id
 }
 
 func claudeFrontmatter(data []byte) (string, string) {
