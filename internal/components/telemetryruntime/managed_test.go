@@ -5,16 +5,127 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/components/mutationjournal"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
+
+	"github.com/gentleman-programming/gentle-ai/v2/internal/assets"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/components/mutationjournal"
 )
 
-// Exercise the retained guard with a genuine changed prior image, independently
-// of the initial release's intentionally empty historical-asset approval set.
+func TestOpenCodeTelemetryApprovedPriorAssetUpgrade(t *testing.T) {
+	dir := t.TempDir()
+	prior, err := os.ReadFile("testdata/telemetry-runtime-a9cab7dd.ts")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if digest := fmt.Sprintf("%x", sha256.Sum256(prior)); digest != priorPluginDigestA9cab7dd {
+		t.Fatalf("prior asset digest = %s, want %s", digest, priorPluginDigestA9cab7dd)
+	}
+	writeManagedTelemetryFixture(t, dir, prior)
+
+	changed, err := Reconcile(dir)
+	if err != nil {
+		t.Fatalf("upgrade approved prior asset: %v", err)
+	}
+	if len(changed) != 2 {
+		t.Fatalf("upgrade changed %d files, want plugin and manifest", len(changed))
+	}
+	paths := ManagedPaths(dir)
+	current := assets.MustRead("opencode/plugins/telemetry-runtime.ts")
+	if plugin, err := os.ReadFile(paths[0]); err != nil || string(plugin) != current {
+		t.Fatalf("plugin was not upgraded: %v", err)
+	}
+	manifestBytes, err := os.ReadFile(paths[1])
+	if err != nil {
+		t.Fatal(err)
+	}
+	var manifest managedManifest
+	if err := json.Unmarshal(manifestBytes, &manifest); err != nil {
+		t.Fatal(err)
+	}
+	if manifest.File.After != current || manifest.File.AfterHash != fmt.Sprintf("%x", sha256.Sum256([]byte(current))) {
+		t.Fatal("ownership manifest was not refreshed to the current asset")
+	}
+	if err := CheckManaged(dir); err != nil {
+		t.Fatalf("upgraded asset is not currently owned: %v", err)
+	}
+	customPath := filepath.Join(dir, "plugins", "custom.ts")
+	if err := os.WriteFile(customPath, []byte("custom"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	removed, err := RemoveManaged(dir)
+	if err != nil || len(removed) != 2 {
+		t.Fatalf("remove upgraded owned asset: %v, paths=%v", err, removed)
+	}
+	for _, path := range paths {
+		if _, err := os.Lstat(path); !os.IsNotExist(err) {
+			t.Fatalf("owned path remains after uninstall: %s: %v", path, err)
+		}
+	}
+	if custom, err := os.ReadFile(customPath); err != nil || string(custom) != "custom" {
+		t.Fatalf("uninstall changed unrelated file: %q, %v", custom, err)
+	}
+}
+
+func TestOpenCodeTelemetryUnapprovedPriorAssetConflicts(t *testing.T) {
+	dir := t.TempDir()
+	unapproved := []byte(ownershipMarker + "// unapproved historical content\n")
+	writeManagedTelemetryFixture(t, dir, unapproved)
+	paths := ManagedPaths(dir)
+
+	if err := CheckManaged(dir); err == nil {
+		t.Fatal("unapproved prior asset passed ownership validation")
+	}
+	if _, err := Reconcile(dir); err == nil {
+		t.Fatal("unapproved prior asset was upgraded")
+	}
+	if _, err := RemoveManaged(dir); err == nil {
+		t.Fatal("unapproved prior asset was removed")
+	}
+	if plugin, err := os.ReadFile(paths[0]); err != nil || !bytes.Equal(plugin, unapproved) {
+		t.Fatalf("unapproved plugin was not preserved: %v", err)
+	}
+}
+
+func TestOpenCodeTelemetryCurrentAssetRemainsOwned(t *testing.T) {
+	dir := t.TempDir()
+	if changed, err := Reconcile(dir); err != nil || len(changed) != 2 {
+		t.Fatalf("install current asset: changed=%v err=%v", changed, err)
+	}
+	if changed, err := Reconcile(dir); err != nil || len(changed) != 0 {
+		t.Fatalf("current asset is not idempotent: changed=%v err=%v", changed, err)
+	}
+	if err := CheckManaged(dir); err != nil {
+		t.Fatalf("current asset is not owned: %v", err)
+	}
+}
+
+func writeManagedTelemetryFixture(t *testing.T, dir string, content []byte) {
+	t.Helper()
+	paths := ManagedPaths(dir)
+	if err := os.MkdirAll(filepath.Dir(paths[0]), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(paths[0], content, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	manifest := managedManifest{Schema: ownershipSchema, File: mutationjournal.OwnedFile{
+		After: string(content), AfterHash: fmt.Sprintf("%x", sha256.Sum256(content)), Overlay: false, Mode: 0o644,
+	}}
+	raw, err := json.MarshalIndent(manifest, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(paths[1], append(raw, '\n'), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// Exercise the retained rollback guard with a synthetic changed prior image,
+// independently of the approved-digest upgrade path.
 func TestOpenCodeTelemetryOwnedUpdateRollback(t *testing.T) {
 	for _, edited := range []int{0, 1} {
 		t.Run(fmt.Sprint(edited), func(t *testing.T) {

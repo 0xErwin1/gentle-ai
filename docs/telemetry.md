@@ -215,9 +215,11 @@ Install/sync still reconcile the dedicated `plugins/telemetry-runtime.ts` and
 independently of SDD and using the existing scope/XDG resolution. These are static
 installation assets, **not metric state**. Managed byte/hash/mode checks, guarded
 rollback, unowned/edited-file preservation, and validated-pair uninstall remain
-unchanged. Initial unreleased ownership accepts only the embedded asset; approving
-historical digests for a rollout is separate work. Disable leaves the plugin inert
-under existing policy; installation never reenrolls or changes exporter settings.
+unchanged. Each managed plugin asset change must append the immediately previous
+embedded asset digest to the explicit provenance allowlist so owned installs can
+upgrade without treating arbitrary self-consistent content as package provenance.
+Disable leaves the plugin inert under existing policy; installation never reenrolls
+or changes exporter settings.
 
 ## Automatic Claude Code collection
 
