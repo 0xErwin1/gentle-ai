@@ -18,7 +18,7 @@ import (
 )
 
 const OpenCodeSchema = "gentle-ai.telemetry-opencode/v1"
-const openCodeConfigMaxBytes = 65536
+const openCodeConfigMaxBytes = 1 << 20
 
 var errEnvelope = errors.New("invalid OpenCode runtime envelope")
 

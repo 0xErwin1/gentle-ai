@@ -201,7 +201,7 @@ agents map `explore` to the built-in `explore` class and `general` to the built-
 map to their built-in class. Other non-empty names map to `custom`/`unknown`;
 their raw names never leave native code. Missing names remain `unknown`/`unknown`.
 
-For the observed agent, native code reads the bounded local `opencode.json`
+For the observed agent, native code reads up to 1 MiB from the local `opencode.json`
 `agent.<name>.model` and `agent.<name>.variant` assignment. A valid contract effort
 becomes `selected_effort`; `effective_effort` remains `unavailable` because OpenCode
 does not report it. A response provider/model remains authoritative with
