@@ -21,8 +21,11 @@ func tokenReported(sum string) string {
 	return `{"reported":1,"unavailable":0,"unsupported":0,"sum":` + sum + `}`
 }
 
-func TestRuntimeAgentClassesMatchConfigurableAgents(t *testing.T) {
+func TestRuntimeAgentClassesMatchPackagedAgents(t *testing.T) {
 	want := append([]string{"orchestrator", "worker", "explore", "verify", "unknown"}, opencode.ConfigurableAgentPhases()...)
+	// Pi packages exactly these additional agents outside the configurable OpenCode phases.
+	piOnlyPackagedAgents := []string{"sdd-status", "sdd-sync"}
+	want = append(want, piOnlyPackagedAgents...)
 	goClasses := strings.Split(runtimeAgentClasses, "|")
 
 	data, err := os.ReadFile("../../contracts/telemetry/runtime/v1/schemas/aggregate.schema.json")
@@ -49,7 +52,7 @@ func TestRuntimeAgentClassesMatchConfigurableAgents(t *testing.T) {
 	for source, got := range map[string][]string{"Go": goClasses, "JSON Schema": schemaClasses} {
 		slices.Sort(got)
 		if !slices.Equal(got, want) {
-			t.Errorf("%s runtime agent classes = %v, want fixed classes plus configurable agents %v", source, got, want)
+			t.Errorf("%s runtime agent classes = %v, want fixed classes plus OpenCode and Pi packaged agents %v", source, got, want)
 		}
 	}
 }
