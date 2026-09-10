@@ -79,6 +79,10 @@ and no way to prove what it did beyond asking you to read every line.
 
 ## Features
 
+<table>
+<tr>
+<td width="50%" valign="top">
+
 ### Engram™ — memory that persists
 
 Decisions, bug fixes and conventions survive sessions, restarts and compaction. Your agent stops starting from zero every morning.
@@ -86,6 +90,9 @@ Decisions, bug fixes and conventions survive sessions, restarts and compaction. 
 **[Docs →](docs/engram.md)**
 
 <img width="100%" src="docs/assets/features/engram.gif" alt="Engram recalling a past decision" />
+
+</td>
+<td width="50%" valign="top">
 
 ### SDD — spec-driven, our way
 
@@ -95,6 +102,11 @@ Research → Spec → Design → Tasks → strict TDD → **Verify**. An indepen
 
 <img width="100%" src="docs/assets/features/sdd.gif" alt="SDD phases running end to end" />
 
+</td>
+</tr>
+<tr>
+<td width="50%" valign="top">
+
 ### RDD — we created it
 
 Receipt-Driven Development. The system freezes the exact bytes your agent changed and derives the evidence itself. Zero ceremony on a README. Four reviewers on two lines of auth code. Opt-in, off until you turn it on.
@@ -102,6 +114,9 @@ Receipt-Driven Development. The system freezes the exact bytes your agent change
 **[Docs →](docs/review-integration.md)**
 
 <img width="100%" src="docs/assets/features/rdd.gif" alt="RDD freezing a candidate and running review lenses" />
+
+</td>
+<td width="50%" valign="top">
 
 ### Deterministic by design
 
@@ -111,6 +126,11 @@ SDD and RDD live in the **`gentle-ai` binary**, not in prompt prose a model can 
 
 <img width="100%" src="docs/assets/features/deterministic.gif" alt="The binary returning the exact next transition" />
 
+</td>
+</tr>
+<tr>
+<td width="50%" valign="top">
+
 ### Gentle-Shell
 
 Our interface for Pi. Context and spend as live gauges, <kbd>ctrl+g</kbd> for a session diff against the HEAD you started from, `/gentle:usage` for the provider windows you have left.
@@ -119,6 +139,9 @@ Our interface for Pi. Context and spend as live gauges, <kbd>ctrl+g</kbd> for a 
 
 <img width="100%" src="docs/assets/features/gentle-shell.gif" alt="Gentle-Shell bar, prompt and diff overlay" />
 
+</td>
+<td width="50%" valign="top">
+
 ### 16 agents, one behavior
 
 Claude Code, Codex, Cursor, OpenCode, Copilot, Gemini and ten more — each configured through **its own native features**. Thirteen delegate to focused sub-agents; three run solo. Same workflow on all of them.
@@ -126,6 +149,10 @@ Claude Code, Codex, Cursor, OpenCode, Copilot, Gemini and ten more — each conf
 **[Docs →](docs/agents.md)**
 
 <img width="100%" src="docs/assets/features/agents.gif" alt="The installer configuring multiple agents" />
+
+</td>
+</tr>
+</table>
 
 ### Also in the box
 
