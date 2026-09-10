@@ -137,7 +137,7 @@ SDD and RDD live in the **`gentle-ai` binary**, not in prompt prose a model can 
 
 **[Docs →](docs/trigger-rules.md)**
 
-<img width="100%" src="docs/assets/features/deterministic.gif" alt="The binary returning the exact next transition" />
+<img width="100%" src="docs/assets/features/deterministic.png" alt="The agent explaining that the SDD status engine chose the next step, not the model, and that a new session reaches the same answer from files on disk" />
 
 </td>
 </tr>
