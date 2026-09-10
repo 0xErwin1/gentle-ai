@@ -7,21 +7,21 @@ import (
 )
 
 // Source-shaped fixture, not a released SDK compatibility claim.
-const openCodeFixture = `{"type":"message.updated","properties":{"info":{"id":"PRIVATE_ID","sessionID":"PRIVATE_SESSION","role":"assistant","parentID":"PRIVATE_PARENT","modelID":"gpt-5.4","providerID":"openai","mode":"build","path":{"cwd":"PRIVATE_PATH","root":"PRIVATE_ROOT"},"cost":0,"time":{"created":1000,"completed":1250},"tokens":{"input":12,"output":8,"reasoning":3,"cache":{"read":2,"write":0}},"finish":"stop"}}}`
+const openCodeFixture = `{"type":"message.updated","properties":{"info":{"id":"PRIVATE_ID","sessionID":"PRIVATE_SESSION","role":"assistant","parentID":"PRIVATE_PARENT","modelID":"gpt-5.4","providerID":"openai","agent":"build","path":{"cwd":"PRIVATE_PATH","root":"PRIVATE_ROOT"},"cost":0,"time":{"created":1000,"completed":1250},"tokens":{"input":12,"output":8,"reasoning":3,"cache":{"read":2,"write":0}},"finish":"stop"}}}`
 
 func TestOpenCodeRuntimeSanitizedIdentity(t *testing.T) {
 	for _, tc := range []struct {
-		provider, model, wantProvider, wantModel string
+		provider, model, wantProvider, wantModel, wantEvidence string
 	}{
-		{"opencode", "PRIVATE_MODEL", "opencode", "custom"},
-		{"opencode", "gpt-5.4", "opencode", "custom"},
-		{"opencode", "custom", "opencode", "custom"},
-		{"OpenCode", "PRIVATE_MODEL", "custom", "custom"},
-		{"PRIVATE_PROVIDER", "PRIVATE_MODEL", "custom", "custom"},
-		{"openai", "PRIVATE_MODEL", "custom", "custom"},
-		{"openai", "gpt-5.4", "openai", "gpt-5.4"},
-		{"opencode", "", "unknown", "unknown"},
-		{"", "PRIVATE_MODEL", "unknown", "unknown"},
+		{"opencode", "PRIVATE_MODEL", "opencode", "custom", "response"},
+		{"opencode", "gpt-5.4", "opencode", "custom", "response"},
+		{"opencode", "custom", "opencode", "custom", "response"},
+		{"OpenCode", "PRIVATE_MODEL", "custom", "custom", "response"},
+		{"PRIVATE_PROVIDER", "PRIVATE_MODEL", "custom", "custom", "response"},
+		{"openai", "PRIVATE_MODEL", "custom", "custom", "response"},
+		{"openai", "gpt-5.4", "openai", "gpt-5.4", "response"},
+		{"opencode", "", "unknown", "unknown", "unknown"},
+		{"", "PRIVATE_MODEL", "unknown", "unknown", "unknown"},
 	} {
 		t.Run(tc.provider+"/"+tc.model, func(t *testing.T) {
 			input := strings.Replace(openCodeFixture, `"providerID":"openai"`, `"providerID":"`+tc.provider+`"`, 1)
@@ -30,8 +30,8 @@ func TestOpenCodeRuntimeSanitizedIdentity(t *testing.T) {
 			if err != nil || o == nil {
 				t.Fatal(err)
 			}
-			if o.Row.Model != (RuntimeModel{Provider: tc.wantProvider, ID: tc.wantModel}) {
-				t.Fatalf("unexpected model: %+v", o.Row.Model)
+			if o.Row.Model != (RuntimeModel{Provider: tc.wantProvider, ID: tc.wantModel}) || o.Row.ModelEvidence != tc.wantEvidence {
+				t.Fatalf("unexpected model attribution: %+v evidence %q", o.Row.Model, o.Row.ModelEvidence)
 			}
 			assertRuntimeRetained(t, o.Row, "opencode")
 		})
@@ -43,13 +43,13 @@ func TestOpenCodeRuntimeCompleted(t *testing.T) {
 	if err != nil || o == nil {
 		t.Fatalf("normalize: %v, %v", o, err)
 	}
-	if o.Row.Model.ID != "gpt-5.4" || o.Row.ModelEvidence != "response" || o.Row.AgentKind != "unknown" || o.Row.SelectedEffort != "unavailable" || o.Row.EffectiveEffort != "unavailable" {
+	if o.Row.Model.ID != "gpt-5.4" || o.Row.ModelEvidence != "response" || o.Row.AgentKind != "orchestrator" || o.Row.AgentClass != "orchestrator" || o.Row.SelectedEffort != "unavailable" || o.Row.EffectiveEffort != "unavailable" {
 		t.Fatalf("row: %+v", o.Row)
 	}
 	if string(o.Row.Input) != tokenReported("12") || string(o.Row.Output) != tokenReported("8") || string(o.Row.CacheRead) != tokenReported("2") || string(o.Row.CacheCreation) != tokenAbsent || string(o.ReasoningTokens) != tokenReported("3") || o.MessageDurationMS == nil || *o.MessageDurationMS != 250 {
 		t.Fatalf("metrics: %+v", o)
 	}
-	if string(o.Row.ReasoningTokens) != tokenReported("3") || o.Row.AgentClass != "unknown" || string(o.Row.TotalTokens) != tokenAbsent || o.Row.ErrorCategory != "none" || o.Row.Duration.Kind != "message" || string(o.Row.Duration.MeasuredCount) != "1" || string(o.Row.Duration.SumMS) != "25e1" {
+	if string(o.Row.ReasoningTokens) != tokenReported("3") || string(o.Row.TotalTokens) != tokenAbsent || o.Row.ErrorCategory != "none" || o.Row.Duration.Kind != "message" || string(o.Row.Duration.MeasuredCount) != "1" || string(o.Row.Duration.SumMS) != "25e1" {
 		t.Fatalf("common metrics: %+v", o.Row)
 	}
 	assertRuntimeRetained(t, o.Row, "opencode")
@@ -64,6 +64,41 @@ func TestOpenCodeRuntimeCompleted(t *testing.T) {
 	again, err := NormalizeOpenCode(strings.NewReader(openCodeFixture))
 	if err != nil || again == nil {
 		t.Fatal("pure normalizer must not lifetime-dedupe")
+	}
+}
+
+func TestOpenCodeRuntimeAgentAttribution(t *testing.T) {
+	for _, tt := range []struct {
+		name       string
+		agent      string
+		wantKind   string
+		wantClass  string
+		wantStored string
+	}{
+		{"native build agent", "build", "orchestrator", "orchestrator", "build"},
+		{"native plan agent", "plan", "orchestrator", "orchestrator", "plan"},
+		{"gentle ai orchestrator", "gentle-orchestrator", "orchestrator", "orchestrator", "gentle-orchestrator"},
+		{"fallback explore agent", "explore", "built_in", "explore", "explore"},
+		{"fallback general agent", "general", "built_in", "worker", "general"},
+		{"named gentle ai agent", "sdd-apply", "built_in", "sdd-apply", "sdd-apply"},
+		{"custom agent", "team-private-agent", "custom", "unknown", "team-private-agent"},
+		{"missing agent", "", "unknown", "unknown", ""},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			input := openCodeFixture
+			if tt.agent == "" {
+				input = strings.Replace(input, `,"agent":"build"`, "", 1)
+			} else {
+				input = strings.Replace(input, `"agent":"build"`, `"agent":"`+tt.agent+`"`, 1)
+			}
+			o, err := NormalizeOpenCode(strings.NewReader(input))
+			if err != nil || o == nil {
+				t.Fatalf("NormalizeOpenCode() = %+v, %v", o, err)
+			}
+			if o.Row.AgentKind != tt.wantKind || o.Row.AgentClass != tt.wantClass || o.Agent != tt.wantStored {
+				t.Fatalf("agent attribution = %q/%q stored %q, want %q/%q stored %q", o.Row.AgentKind, o.Row.AgentClass, o.Agent, tt.wantKind, tt.wantClass, tt.wantStored)
+			}
+		})
 	}
 }
 
@@ -141,7 +176,9 @@ func TestOpenCodeRuntimeBounds(t *testing.T) {
 		strings.Repeat(" ", OpenCodeMaxBytes+1),
 		openCodeFixture + ` {}`,
 		`{"x":` + strings.Repeat(`[`, 34) + `0` + strings.Repeat(`]`, 34) + `}`,
-		strings.Replace(openCodeFixture, `"mode":"build"`, `"mode":"`+strings.Repeat("x", 4097)+`"`, 1),
+		strings.Replace(openCodeFixture, `"agent":"build"`, `"agent":"`+strings.Repeat("x", 4097)+`"`, 1),
+		strings.Replace(openCodeFixture, `"agent":"build"`, `"agent":"`+strings.Repeat("x", 65)+`"`, 1),
+		strings.Replace(openCodeFixture, `"agent":"build"`, `"agent":"bad\nagent"`, 1),
 		strings.Replace(openCodeFixture, `"cost":0`, `"error":{"name":"APIError","data":{"statusCode":999}}`, 1),
 	} {
 		if _, err := NormalizeOpenCode(strings.NewReader(s)); err == nil {

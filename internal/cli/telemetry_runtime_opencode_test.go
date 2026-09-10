@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -16,6 +17,12 @@ import (
 const completedOpenCodeEnvelope = `{"schema":"gentle-ai.telemetry-opencode/v1","info":{"role":"assistant","time":{"created":1,"completed":3},"providerID":"PRIVATE_PROVIDER","modelID":"PRIVATE_MODEL"}}`
 
 type noOpenCodeRead struct{ t *testing.T }
+
+type openCodeRoundTripFunc func(*http.Request) (*http.Response, error)
+
+func (fn openCodeRoundTripFunc) RoundTrip(request *http.Request) (*http.Response, error) {
+	return fn(request)
+}
 
 func (r noOpenCodeRead) Read([]byte) (int, error) {
 	r.t.Fatal("read event without permission")
@@ -56,6 +63,77 @@ func TestTelemetryRuntimeOpenCodeDirectSend(t *testing.T) {
 		if requests != i+1 || !reflect.DeepEqual(before, runtimeCLIDisk(t, home)) {
 			t.Fatal("extra attempt or disk mutation")
 		}
+	}
+}
+
+func TestTelemetryRuntimeOpenCodeUsesAgentAssignment(t *testing.T) {
+	for _, tt := range []struct {
+		name         string
+		agent        string
+		provider     string
+		model        string
+		config       string
+		wantModel    telemetry.RuntimeModel
+		wantEvidence string
+		wantKind     string
+		wantClass    string
+		wantEffort   string
+	}{
+		{
+			name: "response model wins while selected effort is retained", agent: "sdd-apply", provider: "openai", model: "gpt-5.4",
+			config:    `{"agent":{"sdd-apply":{"model":"openai/gpt-5.6","variant":"high"}}}`,
+			wantModel: telemetry.RuntimeModel{Provider: "openai", ID: "gpt-5.4"}, wantEvidence: "response", wantKind: "built_in", wantClass: "sdd-apply", wantEffort: "high",
+		},
+		{
+			name: "selected model fills absent response model", agent: "gentle-orchestrator",
+			config:    `{"agent":{"gentle-orchestrator":{"model":"anthropic/claude-opus-5","variant":"xhigh"}}}`,
+			wantModel: telemetry.RuntimeModel{Provider: "anthropic", ID: "claude-opus-5"}, wantEvidence: "selected", wantKind: "orchestrator", wantClass: "orchestrator", wantEffort: "xhigh",
+		},
+		{
+			name: "custom agent name stays private and invalid effort falls back", agent: "private-team-agent",
+			config:    `{"agent":{"private-team-agent":{"model":"openai/gpt-5.4","variant":"turbo"}}}`,
+			wantModel: telemetry.RuntimeModel{Provider: "openai", ID: "gpt-5.4"}, wantEvidence: "selected", wantKind: "custom", wantClass: "unknown", wantEffort: "unavailable",
+		},
+		{
+			name: "oversized config fails open to unavailable attribution", agent: "sdd-apply",
+			config:    strings.Repeat(" ", 65537),
+			wantModel: telemetry.RuntimeModel{Provider: "unknown", ID: "unknown"}, wantEvidence: "unknown", wantKind: "built_in", wantClass: "sdd-apply", wantEffort: "unavailable",
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			runtimeCLIHome(t)
+			configPath := filepath.Join(os.Getenv("XDG_CONFIG_HOME"), "opencode", "opencode.json")
+			if err := os.MkdirAll(filepath.Dir(configPath), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(configPath, []byte(tt.config), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			previousClient := runtimeHTTPClient
+			t.Cleanup(func() { runtimeHTTPClient = previousClient })
+			runtimeHTTPClient = func() *http.Client {
+				return &http.Client{Transport: openCodeRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+					body, _ := io.ReadAll(r.Body)
+					event, err := telemetry.ParseRuntimeEvent(body)
+					if err != nil {
+						t.Fatal(err)
+					}
+					row := event.Rows[0]
+					if row.Model != tt.wantModel || row.ModelEvidence != tt.wantEvidence || row.AgentKind != tt.wantKind || row.AgentClass != tt.wantClass || row.SelectedEffort != tt.wantEffort || row.EffectiveEffort != "unavailable" {
+						t.Fatalf("row = %+v", row)
+					}
+					if bytes.Contains(body, []byte(tt.agent)) && tt.wantClass == "unknown" {
+						t.Fatal("custom agent name leaked")
+					}
+					return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{"schema":"gentle-ai.telemetry-runtime-delivery/v1","decision":"stored"}`)), Header: make(http.Header)}, nil
+				})}
+			}
+			input := `{"schema":"gentle-ai.telemetry-opencode/v1","info":{"role":"assistant","time":{"created":1,"completed":3},"providerID":"` + tt.provider + `","modelID":"` + tt.model + `","agent":"` + tt.agent + `"}}`
+			var out bytes.Buffer
+			if err := runTelemetryRuntimeInput([]string{"opencode", "--json"}, &out, strings.NewReader(input)); err != nil || !strings.Contains(out.String(), `"stored"`) {
+				t.Fatalf("send = %q, %v", out.String(), err)
+			}
+		})
 	}
 }
 
@@ -114,6 +192,8 @@ func TestTelemetryRuntimeOpenCodeRejectsUnsafeEnvelope(t *testing.T) {
 		strings.Replace(completedOpenCodeEnvelope, `"created":1,`, "", 1),
 		strings.Replace(completedOpenCodeEnvelope, `"role":"assistant"`, `"role":"assistant","tokens":{"input":"2"}`, 1),
 		strings.Replace(completedOpenCodeEnvelope, `"role":"assistant"`, `"role":"assistant","id":"PRIVATE_SOURCE_ID"`, 1),
+		strings.Replace(completedOpenCodeEnvelope, `"role":"assistant"`, `"role":"assistant","agent":"`+strings.Repeat("x", 65)+`"`, 1),
+		strings.Replace(completedOpenCodeEnvelope, `"role":"assistant"`, `"role":"assistant","agent":"bad\nagent"`, 1),
 		strings.Replace(completedOpenCodeEnvelope, `"info":`, `"batch_id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","info":`, 1),
 		completedOpenCodeEnvelope + `{}`, strings.Repeat("x", 16385),
 	} {

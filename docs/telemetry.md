@@ -173,16 +173,17 @@ and asynchronously. Native code checks policy, normalizes one bounded source
 observation, then uses the same one-attempt sender. Example stdin:
 
 ```json
-{"schema":"gentle-ai.telemetry-opencode/v1","info":{"role":"assistant","time":{"created":1,"completed":3},"providerID":"anthropic","modelID":"claude-opus-5"}}
+{"schema":"gentle-ai.telemetry-opencode/v1","info":{"role":"assistant","time":{"created":1,"completed":3},"providerID":"anthropic","modelID":"claude-opus-5","agent":"sdd-apply"}}
 ```
 
 Only completed non-summary assistant `message.updated` events qualify. Source
 compatibility is pinned to [plugin 1.18.30](https://unpkg.com/@opencode-ai/plugin@1.18.30/dist/index.d.ts)
 and its [V1 SDK](https://unpkg.com/@opencode-ai/sdk@1.18.30/dist/gen/types.gen.d.ts),
 not V2; this is not an installed-runtime smoke test. Source timestamps become
-message elapsed time and do not leave native code. Unknown provider/model names
-become `custom`; error names/status become closed categories. Prompts, parts, paths,
-raw error text, tools, and source/session/task IDs never enter the envelope.
+message elapsed time and do not leave native code. The source `mode` is forwarded
+as `agent` only when it is 1-64 printable ASCII characters. Unknown provider/model
+names become `custom`; error names/status become closed categories. Prompts, parts,
+paths, raw error text, tools, and source/session/task IDs never enter the envelope.
 
 The hook does not read message/session IDs, reconstruct sessions, dedupe across
 events, or retain failed payloads. Each event gets at most one native process.
@@ -193,8 +194,21 @@ Disposal terminates active children. Repeated source events can be counted again
 this intentionally makes no exactly-once coverage claim.
 
 Missing/default-zero source tokens remain unavailable; available reasoning is
-preserved, and total tokens are not inferred. OpenCode agent class and selected/
-effective effort remain unknown/unavailable without source evidence.
+preserved, and total tokens are not inferred. Native `build` and `plan`, plus
+`gentle-orchestrator`, map to the orchestrator class. OpenCode's managed fallback
+agents map `explore` to the built-in `explore` class and `general` to the built-in
+`worker` class. Agent names in the runtime contract's named Gentle AI allowlist
+map to their built-in class. Other non-empty names map to `custom`/`unknown`;
+their raw names never leave native code. Missing names remain `unknown`/`unknown`.
+
+For the observed agent, native code reads the bounded local `opencode.json`
+`agent.<name>.model` and `agent.<name>.variant` assignment. A valid contract effort
+becomes `selected_effort`; `effective_effort` remains `unavailable` because OpenCode
+does not report it. A response provider/model remains authoritative with
+`model_evidence: response`; the assigned model is used with
+`model_evidence: selected` only when the response omits provider/model. Missing,
+oversized, or invalid configuration falls back to unavailable/unknown attribution
+and never blocks the send.
 
 Install/sync still reconcile the dedicated `plugins/telemetry-runtime.ts` and
 `.gentle-ai-telemetry-runtime.json` ownership manifest for selected OpenCode,

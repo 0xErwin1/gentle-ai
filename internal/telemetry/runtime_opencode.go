@@ -23,6 +23,7 @@ type OpenCodeObservation struct {
 	ReasoningTokens   json.RawMessage `json:"reasoning_tokens"`
 	MessageDurationMS *int64          `json:"message_duration_ms"`
 	ErrorCategory     string          `json:"error_category,omitempty"`
+	Agent             string          `json:"-"`
 }
 
 // NormalizeOpenCode handles a single completed non-summary assistant message.
@@ -104,16 +105,16 @@ func NormalizeOpenCode(input io.Reader) (*OpenCodeObservation, error) {
 	if err != nil {
 		return nil, err
 	}
-	m := RuntimeModel{Provider: provider, ID: model}
-	if provider == "" || model == "" {
-		m = RuntimeModel{Provider: "unknown", ID: "unknown"}
-	} else if !runtimeModelOK(m) {
-		m = RuntimeModel{Provider: "custom", ID: "custom"}
-		if provider == "opencode" {
-			m.Provider = "opencode"
-		}
+	agent, err := openCodeAgent(info["agent"])
+	if err != nil {
+		return nil, err
 	}
-	r := RuntimeRow{Model: m, ModelEvidence: "response", AgentKind: "unknown", AgentClass: "unknown", SelectedEffort: "unavailable", EffectiveEffort: "unavailable", Launches: json.RawMessage("null"), Responses: json.RawMessage("1")}
+	modelEvidence := "response"
+	if provider == "" || model == "" {
+		modelEvidence = "unknown"
+	}
+	agentKind, agentClass := openCodeAgentAttribution(agent)
+	r := RuntimeRow{Model: NormalizeRuntimeModel(provider, model), ModelEvidence: modelEvidence, AgentKind: agentKind, AgentClass: agentClass, SelectedEffort: "unavailable", EffectiveEffort: "unavailable", Launches: json.RawMessage("null"), Responses: json.RawMessage("1")}
 	tokens := openCodeObject{}
 	if raw, ok := info["tokens"]; ok {
 		tokens, err = openCodeMap(raw)
@@ -128,7 +129,7 @@ func NormalizeOpenCode(input io.Reader) (*OpenCodeObservation, error) {
 			return nil, err
 		}
 	}
-	o := &OpenCodeObservation{MessageDurationMS: &duration}
+	o := &OpenCodeObservation{MessageDurationMS: &duration, Agent: agent}
 	for _, metric := range []struct {
 		raw    json.RawMessage
 		target *json.RawMessage
@@ -163,6 +164,37 @@ func NormalizeOpenCode(input io.Reader) (*OpenCodeObservation, error) {
 	o.ReasoningTokens = r.ReasoningTokens
 	o.ErrorCategory = r.ErrorCategory
 	return o, nil
+}
+
+func openCodeAgent(raw []byte) (string, error) {
+	agent, err := openCodeString(raw)
+	if err != nil || len(agent) > 64 {
+		return "", errOpenCode
+	}
+	for i := 0; i < len(agent); i++ {
+		if agent[i] < 0x20 || agent[i] > 0x7e {
+			return "", errOpenCode
+		}
+	}
+	return agent, nil
+}
+
+func openCodeAgentAttribution(agent string) (kind, class string) {
+	switch agent {
+	case "":
+		return "unknown", "unknown"
+	case "build", "plan", "gentle-orchestrator":
+		return "orchestrator", "orchestrator"
+	case "explore":
+		return "built_in", "explore"
+	case "general":
+		return "built_in", "worker"
+	default:
+		if runtimeMember(agent, runtimeAgentClasses) && agent != "orchestrator" && agent != "worker" && agent != "explore" && agent != "verify" && agent != "unknown" {
+			return "built_in", agent
+		}
+		return "custom", "unknown"
+	}
 }
 
 func openCodeMap(raw []byte) (openCodeObject, error) {
