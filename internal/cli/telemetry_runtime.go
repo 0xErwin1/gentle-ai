@@ -45,8 +45,8 @@ func runTelemetryRuntime(args []string, stdout io.Writer) error {
 }
 
 func runTelemetryRuntimeInput(args []string, stdout io.Writer, input io.Reader) error {
-	if len(args) != 2 || (args[0] != "send" && args[0] != "opencode") || args[1] != "--json" {
-		return errors.New("usage: gentle-ai telemetry runtime <send|opencode> --json (bounded aggregate on stdin)")
+	if len(args) != 2 || (args[0] != "send" && args[0] != "opencode" && args[0] != "claude") || args[1] != "--json" {
+		return errors.New("usage: gentle-ai telemetry runtime <send|opencode|claude> --json (bounded aggregate or hook on stdin)")
 	}
 	decision := "disabled"
 	if telemetry.Decide(os.Getenv, telemetry.State{Enabled: true}).Enabled {
@@ -65,6 +65,8 @@ func runTelemetryRuntimeInput(args []string, stdout io.Writer, input io.Reader) 
 				if ok {
 					if args[0] == "opencode" {
 						decision = telemetryruntime.SendOpenCode(context.Background(), home, os.Getenv, bytes.NewReader(data), runtimeHTTPClient())
+					} else if args[0] == "claude" {
+						decision = telemetryruntime.SendClaude(context.Background(), home, os.Getenv, bytes.NewReader(data), runtimeHTTPClient())
 					} else {
 						decision = telemetry.SendRuntime(context.Background(), home, os.Getenv, bytes.NewReader(data), runtimeHTTPClient())
 					}

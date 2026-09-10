@@ -7697,6 +7697,33 @@ func TestEnsureClaudeReviewStopHookAppendsIdempotently(t *testing.T) {
 	}
 }
 
+func TestEnsureClaudeTelemetryHooksAppendsIdempotently(t *testing.T) {
+	home := t.TempDir()
+	settingsPath := filepath.Join(home, ".claude", "settings.json")
+	if err := os.MkdirAll(filepath.Dir(settingsPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(settingsPath, []byte(`{"hooks":{"Stop":[{"matcher":"","hooks":[{"type":"command","command":"echo keep"}]}]}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	changed, err := ensureClaudeTelemetryHooks(settingsPath)
+	if err != nil || !changed {
+		t.Fatal(changed, err)
+	}
+	changed, err = ensureClaudeTelemetryHooks(settingsPath)
+	if err != nil || changed {
+		t.Fatal(changed, err)
+	}
+	data, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(data)
+	if strings.Count(text, "gentle-ai telemetry runtime claude --json") != 2 || strings.Count(text, `"async": true`) != 2 || !strings.Contains(text, "echo keep") {
+		t.Fatalf("hooks not merged idempotently:\n%s", text)
+	}
+}
+
 func TestEnsureClaudeReviewStopHookRejectsUnexpectedHookSchema(t *testing.T) {
 	home := t.TempDir()
 	settingsPath := filepath.Join(home, ".claude", "settings.json")

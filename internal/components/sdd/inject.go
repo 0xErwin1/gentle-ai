@@ -1801,7 +1801,11 @@ func installSkillRegistryAutomation(homeDir string, adapter agents.Adapter) (Inj
 	if err != nil {
 		return InjectionResult{}, fmt.Errorf("install Claude review stop-hook: %w", err)
 	}
-	return InjectionResult{Changed: changed || stopHookChanged, Files: []string{settingsPath}}, nil
+	telemetryHookChanged, err := ensureClaudeTelemetryHooks(settingsPath)
+	if err != nil {
+		return InjectionResult{}, fmt.Errorf("install Claude runtime telemetry hooks: %w", err)
+	}
+	return InjectionResult{Changed: changed || stopHookChanged || telemetryHookChanged, Files: []string{settingsPath}}, nil
 }
 
 func ensureCodexSkillRegistryHook(hooksPath string) (bool, error) {
@@ -2010,12 +2014,61 @@ func appendClaudeReviewStopHookEntry(hooksMap map[string]any, hookKey, settingsP
 	return true, nil
 }
 
+// ensureClaudeTelemetryHooks installs one asynchronous, one-shot command for
+// both main-agent and subagent completions. Native policy checks run before the
+// hook payload or any transcript is read, so installation itself never enrolls
+// telemetry and disabled installations remain inert.
+func ensureClaudeTelemetryHooks(settingsPath string) (bool, error) {
+	root := map[string]any{}
+	if data, err := os.ReadFile(settingsPath); err == nil && len(strings.TrimSpace(string(data))) > 0 {
+		if err := json.Unmarshal(data, &root); err != nil {
+			return false, fmt.Errorf("parse Claude settings %q: %w", settingsPath, err)
+		}
+	} else if err != nil && !os.IsNotExist(err) {
+		return false, err
+	}
+	hooksRaw, hasHooks := root["hooks"]
+	hooksMap, _ := hooksRaw.(map[string]any)
+	if hasHooks && hooksMap == nil {
+		return false, fmt.Errorf("Claude settings %q has unsupported hooks shape: want object", settingsPath)
+	}
+	if hooksMap == nil {
+		hooksMap = map[string]any{}
+	}
+	const command = "gentle-ai telemetry runtime claude --json"
+	changed := false
+	for _, hookKey := range []string{"SubagentStop", "Stop"} {
+		added, err := appendClaudeReviewStopHookEntry(hooksMap, hookKey, settingsPath, command, map[string]any{
+			"matcher": "",
+			"hooks":   []any{map[string]any{"type": "command", "command": command, "async": true, "timeout": 5}},
+		})
+		if err != nil {
+			return false, err
+		}
+		changed = changed || added
+	}
+	if !changed {
+		return false, nil
+	}
+	root["hooks"] = hooksMap
+	out, err := json.MarshalIndent(root, "", "  ")
+	if err != nil {
+		return false, err
+	}
+	out = append(out, '\n')
+	wr, err := filemerge.WriteFileAtomic(settingsPath, out, 0o644)
+	if err != nil {
+		return false, err
+	}
+	return wr.Changed, nil
+}
+
 func claudeHookExists(root map[string]any, command string) bool {
 	hooksMap, ok := root["hooks"].(map[string]any)
 	if !ok {
 		return false
 	}
-	for _, key := range []string{"UserPromptSubmit", "SessionStart", "Stop"} {
+	for _, key := range []string{"UserPromptSubmit", "SessionStart", "Stop", "SubagentStop"} {
 		hookEntries, ok := hooksMap[key].([]any)
 		if !ok {
 			continue
