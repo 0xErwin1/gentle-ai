@@ -8,7 +8,9 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"os"
 	"reflect"
+	"regexp"
 	"strconv"
 	"strings"
 
@@ -190,8 +192,10 @@ type ReviewIntegrationFailure struct {
 // ReviewManagedAssetsContinuation names the sync invocation that resolves a
 // managed_assets_outdated refusal without abandoning the frozen candidate.
 // Command is the exact, literally runnable command line, bound to the same
-// runtime agent the blocked operation was asked for; StaleAssets carries the
-// stale recorded digest when it is known.
+// runtime agent the blocked operation was asked for; its executable token is
+// anchored to the binary that diagnosed the stale assets (#4434), so running
+// Command cannot reach a different `gentle-ai` through PATH and fail to
+// converge. StaleAssets carries the stale recorded digest when it is known.
 type ReviewManagedAssetsContinuation struct {
 	Operation   string   `json:"operation"`
 	Command     string   `json:"command"`
@@ -199,16 +203,55 @@ type ReviewManagedAssetsContinuation struct {
 	StaleAssets []string `json:"stale_assets,omitempty"`
 }
 
+// managedAssetsContinuationCommandPattern is the executable-identity half of
+// the published managed_assets_continuation `command` contract (failure.schema
+// .json carries the same regex). The executable token is either the bare
+// `gentle-ai` fallback or a path -- quoted, with `\"` escapes, exactly when it
+// contains whitespace or a double quote -- followed by `sync` and an optional
+// `--agent <id>`. Keeping the JSON schema and this Go mirror in one shape is
+// what lets Validate() enforce the same contract the published schema does.
+const managedAssetsContinuationCommandPattern = `^(?:[^\s"]+|"(?:[^"\\]|\\.)*") sync(?: --agent \S+)?$`
+
+// reviewManagedAssetsExecutablePath resolves the binary that would diagnose a
+// managed-asset skew, so its continuation can be anchored to it. Var
+// indirection keeps the resolution stubbable in tests.
+var reviewManagedAssetsExecutablePath = os.Executable
+
+// managedAssetsExecutableToken renders one executable path as a command-line
+// token: quoted (with `\"` escapes) only when the path contains whitespace or a
+// double quote, bare otherwise, which is literally runnable in POSIX shells,
+// cmd.exe, and PowerShell alike.
+func managedAssetsExecutableToken(path string) string {
+	if !strings.ContainsAny(path, " \t\n\"") {
+		return path
+	}
+	return "\"" + strings.ReplaceAll(path, "\"", "\\\"") + "\""
+}
+
+// managedAssetsContinuationExecutable resolves the executable identity the
+// continuation is anchored to: the invoking binary when os.Executable can name
+// it, and the historical bare `gentle-ai` when it cannot -- a path that cannot
+// be proven must not be guessed, and the bare form is still the best available
+// recovery for a binary that cannot even resolve itself.
+func managedAssetsContinuationExecutable() string {
+	path, err := reviewManagedAssetsExecutablePath()
+	if err != nil || strings.TrimSpace(path) == "" {
+		return "gentle-ai"
+	}
+	return managedAssetsExecutableToken(path)
+}
+
 // managedAssetsContinuation builds the one continuation a
-// managed_assets_outdated refusal can offer: the exact `gentle-ai sync`
-// invocation, bound to the runtime agent the blocked STATUS or START was
-// asked for. An empty agent (no runtime declared) produces the bare command
-// instead of guessing one.
+// managed_assets_outdated refusal can offer: the exact `sync` invocation,
+// anchored to the invoking executable (#4434) and bound to the runtime agent
+// the blocked STATUS or START was asked for. An empty agent (no runtime
+// declared) produces the command without one instead of guessing it.
 func managedAssetsContinuation(agent string, staleAssets []string) *ReviewManagedAssetsContinuation {
 	agent = strings.TrimSpace(agent)
-	command := "gentle-ai sync"
+	executable := managedAssetsContinuationExecutable()
+	command := executable + " sync"
 	if agent != "" {
-		command = fmt.Sprintf("gentle-ai sync --agent %s", agent)
+		command = executable + " sync --agent " + agent
 	}
 	continuation := &ReviewManagedAssetsContinuation{Operation: "sync", Command: command, Agent: agent}
 	if len(staleAssets) > 0 {
@@ -1344,12 +1387,21 @@ func (failure ReviewIntegrationFailure) Validate() error {
 		return errors.New("managed_assets_outdated failures must carry exactly the sync continuation") // refusal:by-design world-action: a producer that pairs this code with no continuation, or attaches one to any other code, built a malformed envelope and requires a code fix, not an operator command
 	}
 	if continuation := failure.Continuation; continuation != nil {
-		if continuation.Operation != "sync" || strings.TrimSpace(continuation.Command) == "" ||
-			!strings.HasPrefix(continuation.Command, "gentle-ai sync") {
-			return errors.New("invalid negotiated review failure continuation") // refusal:by-design world-action: a continuation whose command does not start with `gentle-ai sync` was built wrong; only a code fix produces a valid one
+		if continuation.Operation != "sync" || !validManagedAssetsContinuationCommand(continuation.Command) {
+			return errors.New("invalid negotiated review failure continuation") // refusal:by-design world-action: a continuation whose command is not an executable-anchored `sync` invocation was built wrong; only a code fix produces a valid one
 		}
 	}
 	return nil
+}
+
+// validManagedAssetsContinuationCommand reports whether one rendered
+// continuation command satisfies the published managed_assets_continuation
+// pattern: the bare `gentle-ai` fallback or an invoking-executable path --
+// quoted when it contains whitespace -- followed by `sync` and an optional
+// `--agent <id>` (#4434).
+func validManagedAssetsContinuationCommand(command string) bool {
+	matched, err := regexp.MatchString(managedAssetsContinuationCommandPattern, command)
+	return err == nil && matched
 }
 
 func supportedReviewIntegrationFailureInput(input string) bool {

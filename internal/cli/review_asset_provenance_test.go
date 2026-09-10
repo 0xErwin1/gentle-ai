@@ -117,9 +117,10 @@ func TestNegotiatedReviewStartClassifiesStaleManagedAssetsBeforeAuthority(t *tes
 	}
 	// #3299, #4170: the failure names the exact candidate-preserving sync
 	// continuation instead of leaving the caller to guess "run sync" from the
-	// cause prose.
+	// cause prose. #4434: the command is anchored to the invoking executable,
+	// so it cannot resolve to a different `gentle-ai` through PATH.
 	if failure.Continuation == nil || failure.Continuation.Operation != "sync" ||
-		failure.Continuation.Command != "gentle-ai sync --agent opencode" || failure.Continuation.Agent != "opencode" ||
+		failure.Continuation.Command != managedAssetsTestContinuationCommand(t, "opencode") || failure.Continuation.Agent != "opencode" ||
 		len(failure.Continuation.StaleAssets) != 1 || failure.Continuation.StaleAssets[0] != "sha256:stale" {
 		t.Fatalf("stale managed assets continuation = %#v", failure.Continuation)
 	}
@@ -174,7 +175,7 @@ func TestNegotiatedStatusReportsManagedAssetsOutdatedBeforeOfferingStart(t *test
 		t.Fatalf("stale managed assets STATUS transition = %#v", status.NextTransition)
 	}
 	continuation := status.NextTransition.Continuation
-	if continuation == nil || continuation.Operation != "sync" || continuation.Command != "gentle-ai sync --agent opencode" ||
+	if continuation == nil || continuation.Operation != "sync" || continuation.Command != managedAssetsTestContinuationCommand(t, "opencode") ||
 		continuation.Agent != "opencode" || len(continuation.StaleAssets) != 1 || continuation.StaleAssets[0] != "sha256:stale" {
 		t.Fatalf("stale managed assets STATUS continuation = %#v", continuation)
 	}
@@ -270,6 +271,90 @@ func TestManagedAssetsStopTransitionCarriesExactlyOneSignal(t *testing.T) {
 	}
 }
 
+// TestManagedAssetsContinuationUsesInvokingExecutable is the RED-first proof
+// for #4434: a STATUS or START refusal produced by one Gentle AI binary must
+// offer a continuation that runs THAT binary, not whatever `gentle-ai` happens
+// to resolve to on PATH. The continuation used to hard-code the unqualified
+// executable name while describing itself as the exact runnable recovery, so
+// with a different global binary first on PATH the offered sync wrote that
+// binary's digest and the refusing binary never converged: repeating the exact
+// advertised continuation could not clear its own refusal.
+func TestManagedAssetsContinuationUsesInvokingExecutable(t *testing.T) {
+	invoking, err := os.Executable()
+	if err != nil {
+		t.Skipf("invoking executable unresolvable: %v", err)
+	}
+	// The expectation renders the executable token independently of the
+	// production helper so the two cannot agree by construction.
+	quoted := func(path string) string {
+		if strings.ContainsAny(path, " \t\"") {
+			return "\"" + strings.ReplaceAll(path, "\"", "\\\"") + "\""
+		}
+		return path
+	}
+
+	// Unit: the rendered command is rooted at whichever executable resolution
+	// reports. A path that needs quoting is quoted; one that does not stays bare;
+	// an unresolvable executable keeps the historical bare `gentle-ai` form
+	// instead of guessing a path it cannot prove.
+	for name, tc := range map[string]struct {
+		executable func() (string, error)
+		want       string
+	}{
+		"windows-style path with spaces": {
+			executable: func() (string, error) { return `C:\Program Files\gentle-ai\gentle-ai.exe`, nil },
+			want:       `"C:\Program Files\gentle-ai\gentle-ai.exe" sync --agent opencode`,
+		},
+		"posix path without spaces": {
+			executable: func() (string, error) { return `/opt/gentle-ai/bin/gentle-ai`, nil },
+			want:       `/opt/gentle-ai/bin/gentle-ai sync --agent opencode`,
+		},
+		"unresolvable executable keeps the bare fallback": {
+			executable: func() (string, error) { return "", errors.New("unresolvable") },
+			want:       `gentle-ai sync --agent opencode`,
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			previous := reviewManagedAssetsExecutablePath
+			reviewManagedAssetsExecutablePath = tc.executable
+			t.Cleanup(func() { reviewManagedAssetsExecutablePath = previous })
+			continuation := managedAssetsContinuation("opencode", []string{"sha256:stale"})
+			if continuation.Command != tc.want {
+				t.Fatalf("continuation command = %q, want %q", continuation.Command, tc.want)
+			}
+			if !validManagedAssetsContinuationCommand(continuation.Command) {
+				t.Fatalf("continuation command %q does not satisfy the published pattern", continuation.Command)
+			}
+		})
+	}
+
+	// End to end: a stale-assets STATUS stop produced by THIS (test) binary
+	// names THIS binary's own path in its continuation, so running the exact
+	// advertised command cannot reach a different `gentle-ai` through PATH.
+	home, repo := reviewEnabledHome(t), initReviewCLIRepo(t)
+	writeReviewStartCandidate(t, repo, "docs/invoking-executable.md", "# Candidate\n", 0o644)
+	staleManagedReviewerAssets(t, home)
+
+	var output bytes.Buffer
+	if err := RunReview([]string{
+		"status", "--cwd", repo, "--contract", ReviewIntegrationContractV2, "--agent", "opencode", "--next-transition",
+	}, &output); err != nil {
+		t.Fatalf("stale managed assets STATUS: %v\n%s", err, output.String())
+	}
+	var status ReviewTargetStatusResult
+	decodeStrictReviewJSON(t, output.Bytes(), &status)
+	if status.NextTransition == nil || status.NextTransition.Continuation == nil {
+		t.Fatalf("stale managed assets STATUS transition = %#v", status.NextTransition)
+	}
+	if want := quoted(invoking) + " sync --agent opencode"; status.NextTransition.Continuation.Command != want {
+		t.Fatalf("STATUS continuation command = %q, want %q (rooted at the invoking executable %q)",
+			status.NextTransition.Continuation.Command, want, invoking)
+	}
+	// The executable-anchored command must still satisfy the published
+	// continuation contract, not just this test's expectation.
+	validatePublishedReviewSchema(t, compileWholeNativeStatusSchema(t, "status-v7.schema.json"), output.Bytes())
+}
+
 func TestManagedAssetsPreflightDoesNotClassifyUnrelatedRuntimeRefusal(t *testing.T) {
 	failure := newReviewIntegrationFailure("review.start", nil, errors.New("unrelated runtime refusal"))
 	if failure.Code != "operation_outcome_unknown" || failure.Phase != "native_running" ||
@@ -297,6 +382,18 @@ func TestManagedAssetDigestIsStableAndAssetBound(t *testing.T) {
 	if first == build.ID {
 		t.Fatal("digest equals the build identity, so it still carries build metadata")
 	}
+}
+
+// managedAssetsTestContinuationCommand renders the executable-anchored sync
+// command the stale-managed-assets envelope tests expect: the invoking (test)
+// binary plus the runtime agent, mirroring what managedAssetsContinuation must
+// anchor to (#4434). The quoting cases themselves are owned by
+// TestManagedAssetsContinuationUsesInvokingExecutable.
+func managedAssetsTestContinuationCommand(t *testing.T, agent string) string {
+	t.Helper()
+	executable, err := os.Executable()
+	requireManagedAssetProvenanceNoError(t, err)
+	return managedAssetsExecutableToken(executable) + " sync --agent " + agent
 }
 
 // staleManagedReviewerAssets records an asset digest that disagrees with this
