@@ -96,16 +96,18 @@ and no way to prove what it did beyond asking you to read every line.
 <tr>
 <td width="50%" valign="top">
 
+<img width="100%" src="docs/assets/features/engram.png" alt="A brand-new session recalling a product decision from an earlier one, without reading a single file" />
+
 ### Engram™ — memory that persists
 
 Decisions, bug fixes and conventions survive sessions, restarts and compaction. Your agent stops starting from zero every morning.
 
 **[Docs →](docs/engram.md)**
 
-<img width="100%" src="docs/assets/features/engram.png" alt="A brand-new session recalling a product decision from an earlier one, without reading a single file" />
-
 </td>
 <td width="50%" valign="top">
+
+<img width="100%" src="docs/assets/features/sdd.png" alt="A finished SDD cycle: ten tasks done, 4 of 4 requirements and 12 of 12 scenarios verified, 14 tests passing, spec synced and the change archived" />
 
 ### SDD — spec-driven, our way
 
@@ -113,12 +115,12 @@ Research → Spec → Design → Tasks → strict TDD → **Verify**. An indepen
 
 **[Docs →](docs/intended-usage.md)**
 
-<img width="100%" src="docs/assets/features/sdd.png" alt="A finished SDD cycle: ten tasks done, 4 of 4 requirements and 12 of 12 scenarios verified, 14 tests passing, spec synced and the change archived" />
-
 </td>
 </tr>
 <tr>
 <td width="50%" valign="top">
+
+<img width="100%" src="docs/assets/features/rdd.png" alt="A review that derived its own effort from the frozen candidate, ran the reliability lens, and closed with an explicit acknowledgement" />
 
 ### RDD — we created it
 
@@ -126,10 +128,10 @@ Receipt-Driven Development. The system freezes the exact bytes your agent change
 
 **[Docs →](docs/review-integration.md)**
 
-<img width="100%" src="docs/assets/features/rdd.png" alt="A review that derived its own effort from the frozen candidate, ran the reliability lens, and closed with an explicit acknowledgement" />
-
 </td>
 <td width="50%" valign="top">
+
+<img width="100%" src="docs/assets/features/deterministic.png" alt="The agent explaining that the SDD status engine chose the next step, not the model, and that a new session reaches the same answer from files on disk" />
 
 ### Deterministic by design
 
@@ -137,12 +139,12 @@ SDD and RDD live in the **`gentle-ai` binary**, not in prompt prose a model can 
 
 **[Docs →](docs/trigger-rules.md)**
 
-<img width="100%" src="docs/assets/features/deterministic.png" alt="The agent explaining that the SDD status engine chose the next step, not the model, and that a new session reaches the same answer from files on disk" />
-
 </td>
 </tr>
 <tr>
 <td width="50%" valign="top">
+
+<img width="100%" src="docs/assets/features/gentle-shell.png" alt="Gentle-Shell running an SDD sub-agent, with the todo list and the live context and spend bar" />
 
 ### Gentle-Shell
 
@@ -150,18 +152,16 @@ Our interface for Pi. Context and spend as live gauges, <kbd>alt+g</kbd> for a w
 
 **[Docs →](docs/pi.md)**
 
-<img width="100%" src="docs/assets/features/gentle-shell.png" alt="Gentle-Shell running an SDD sub-agent, with the todo list and the live context and spend bar" />
-
 </td>
 <td width="50%" valign="top">
+
+<img width="100%" src="docs/assets/features/agents.png" alt="The installer configuring multiple agents" />
 
 ### 16 agents, one behavior
 
 Claude Code, Codex, Cursor, OpenCode, Copilot, Gemini and ten more — each configured through **its own native features**. Twelve delegate to focused sub-agents; four run solo. Same workflow on all of them.
 
 **[Docs →](docs/agents.md)**
-
-<img width="100%" src="docs/assets/features/agents.png" alt="The installer configuring multiple agents" />
 
 </td>
 </tr>
