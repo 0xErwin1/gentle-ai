@@ -113,7 +113,7 @@ Research → Spec → Design → Tasks → strict TDD → **Verify**. An indepen
 
 **[Docs →](docs/intended-usage.md)**
 
-<img width="100%" src="docs/assets/features/sdd.png" alt="SDD planning complete: the proposal, spec, design and tasks artifacts it created, with strict TDD active" />
+<img width="100%" src="docs/assets/features/sdd.png" alt="A finished SDD cycle: ten tasks done, 4 of 4 requirements and 12 of 12 scenarios verified, 14 tests passing, spec synced and the change archived" />
 
 </td>
 </tr>
