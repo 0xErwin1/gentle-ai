@@ -219,12 +219,60 @@ unchanged. Initial unreleased ownership accepts only the embedded asset; approvi
 historical digests for a rollout is separate work. Disable leaves the plugin inert
 under existing policy; installation never reenrolls or changes exporter settings.
 
-**Automatic sources:** Pi and OpenCode integrations provide one-shot runtime
-telemetry. Claude Code and Codex are unsupported: neither provides a supported
-direct hook supplying sanitized usage under the no-daemon/no-persistence
-constraint. Schema host values remain for compatibility, not as evidence of
-installed support. No installation, deployment, or external-network validation
-is implied here.
+## Automatic Claude Code collection
+
+Claude Code installs asynchronous `Stop` and `SubagentStop` command hooks that
+invoke `gentle-ai telemetry runtime claude --json`. Each hook starts one one-shot
+process; native code checks the existing telemetry policy before reading stdin,
+uses the same 16 KiB/500 ms input bound, and sends at most once with no daemon,
+queue, persistence, retry, or filesystem mutation.
+
+For `SubagentStop`, the documented `agent_type` names the subagent frontmatter.
+Names in Gentle AI's runtime agent-class registry become `built_in` observations;
+all other names become `custom`/`unknown` without transmitting the name.
+
+For `SubagentStop`, the adapter reads at most the last 512 KiB of the matching
+agent transcript, from inside the user's home only. Usage is accepted only when
+the final non-empty JSONL record is a complete assistant record whose text matches
+the hook's memory-only `last_assistant_message`. Any later record, malformed or
+partial trailing record, or unmatched final record leaves the observation
+activity-only. Malformed lines before a valid final match do not invalidate it.
+The matched record supplies response model plus input, output, cache-read, and
+cache-creation tokens. Reasoning tokens are unsupported and total tokens are
+unavailable; neither is inferred.
+
+`Stop` always becomes an `orchestrator` activity-only launch-style observation.
+It does not read or attribute transcript usage or a response model: without a
+unique response identity or persistent replay state, a repeated final message
+could match an older record when the current transcript row has not been flushed.
+
+For a known named subagent, at most 64 KiB of
+`~/.claude/agents/<agent_type>.md` supplies selected model and selected effort.
+The selected model is used only when no response model exists. The hook contract
+does not expose effective effort, duration, or an error shape: effective effort
+and duration remain unavailable, while successful `Stop`/`SubagentStop` events
+use error category `none` (API failures fire the separate `StopFailure` event).
+Unknown model IDs map to `custom`/`custom` under the public registry.
+
+If a subagent transcript is missing, unreadable, malformed, uncorrelated, or lacks
+assistant usage, the completion records the same launch-style occurrence with
+unavailable token coverage rather than claiming a response. This preserves
+observed agent activity without fabricating response evidence. Transcript paths,
+hook/session/agent IDs, cwd, prompts, messages, transcript content, and private
+agent names never enter the aggregate or logs. Symlinks resolving outside the
+user's home are refused.
+
+Hook and subagent-field behavior follows the official
+[Claude Code hooks reference](https://code.claude.com/docs/en/hooks) and
+[subagent reference](https://code.claude.com/docs/en/sub-agents). Transcript JSONL
+`message.model` and `message.usage` shapes are observed implementation evidence,
+not documented compatibility guarantees in those references.
+
+**Automatic sources:** Pi, OpenCode, and Claude Code integrations provide one-shot
+runtime telemetry. Codex remains unsupported because its installed integration
+does not yet provide a supported direct producer under the no-daemon/no-persistence
+constraint. No installation, deployment, or external-network validation is
+implied here.
 
 ## Anonymous runtime collector and retention
 
