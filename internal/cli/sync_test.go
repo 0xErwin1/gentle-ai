@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"runtime"
@@ -664,18 +665,21 @@ func TestComponentSyncStepPreservesSlimEngramProtocol(t *testing.T) {
 
 func TestComponentSyncStepCodexRuntimeGate(t *testing.T) {
 	tests := []struct {
-		name    string
-		version string
-		wantErr bool
+		name             string
+		version          string
+		commandErr       error
+		wantErr          bool
+		preserveProfiles bool
 	}{
-		{name: "old runtime leaves profiles untouched", version: "codex-cli 0.143.9", wantErr: true},
+		{name: "missing CLI writes shared config and leaves profiles untouched", commandErr: exec.ErrNotFound, preserveProfiles: true},
+		{name: "old runtime leaves profiles untouched", version: "codex-cli 0.143.9", wantErr: true, preserveProfiles: true},
 		{name: "exact runtime writes profiles", version: "codex-cli 0.144.0"},
 		{name: "new runtime writes profiles", version: "codex-cli 0.145.1"},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			restore := codex.SetRuntimeVersionCommandForTest(tt.version, nil)
+			restore := codex.SetRuntimeVersionCommandForTest(tt.version, tt.commandErr)
 			t.Cleanup(restore)
 			home := t.TempDir()
 			codexDir := filepath.Join(home, ".codex")
@@ -699,11 +703,17 @@ func TestComponentSyncStepCodexRuntimeGate(t *testing.T) {
 				if readErr != nil {
 					t.Fatal(readErr)
 				}
-				if tt.wantErr && string(content) != "user-content\n" {
-					t.Errorf("old runtime modified %s: %q", name, content)
+				if tt.preserveProfiles && string(content) != "user-content\n" {
+					t.Errorf("runtime should preserve %s: %q", name, content)
 				}
-				if !tt.wantErr && !strings.Contains(string(content), "gpt-5.6-") {
+				if !tt.wantErr && !tt.preserveProfiles && !strings.Contains(string(content), "gpt-5.6-") {
 					t.Errorf("valid runtime did not write GPT-5.6 profile %s: %q", name, content)
+				}
+			}
+			if !tt.wantErr {
+				config, readErr := os.ReadFile(filepath.Join(codexDir, "config.toml"))
+				if readErr != nil || !strings.Contains(string(config), "[mcp_servers.engram]") {
+					t.Fatalf("shared Codex config was not written: got=%q error=%v", config, readErr)
 				}
 			}
 		})
@@ -1675,6 +1685,21 @@ func TestSyncBackupTargetsIncludeClaudeEngramLegacyMigrationSource(t *testing.T)
 	}
 }
 
+func TestSyncBackupTargetsIncludeCodexEngramInstructionFiles(t *testing.T) {
+	home := t.TempDir()
+	selection := model.Selection{Agents: []model.AgentID{model.AgentCodex}, Components: []model.ComponentID{model.ComponentEngram}}
+	targets, err := syncBackupTargets(home, "", selection, resolveAdapters(selection.Agents))
+	if err != nil {
+		t.Fatalf("syncBackupTargets() error = %v", err)
+	}
+	for _, name := range []string{"engram-instructions.md", "engram-compact-prompt.md"} {
+		want := filepath.Join(home, ".codex", name)
+		if !containsPath(targets, want) {
+			t.Fatalf("sync backup targets missing Codex Engram instruction %q: %v", want, targets)
+		}
+	}
+}
+
 func TestSyncBackupTargetsIncludeClaudeContext7CleanupPath(t *testing.T) {
 	home := t.TempDir()
 	selection := model.Selection{
@@ -1769,6 +1794,85 @@ func TestRunSyncRollbackRestoresClaudeEngramMigrationSource(t *testing.T) {
 	}
 	if len(backups) != 1 {
 		t.Fatalf("persistent backup count = %d, want 1 after duplicate transaction", len(backups))
+	}
+}
+
+func TestRunSyncRollbackRestoresCodexEngramInstructionFiles(t *testing.T) {
+	t.Cleanup(codex.SetRuntimeVersionCommandForTest("", exec.ErrNotFound))
+
+	for _, tc := range []struct {
+		name   string
+		exists bool
+	}{
+		{name: "restores existing instruction contents", exists: true},
+		{name: "removes newly created instruction files", exists: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			home := t.TempDir()
+			codexDir := filepath.Join(home, ".codex")
+			if err := os.MkdirAll(codexDir, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(codexDir, "config.toml"), []byte("custom = true\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+
+			setSyncTestHome(t, home)
+
+			instructionFiles := map[string][]byte{
+				"engram-instructions.md":   []byte("original instructions\n"),
+				"engram-compact-prompt.md": []byte("original compact prompt\n"),
+			}
+			if tc.exists {
+				for name, before := range instructionFiles {
+					if err := os.WriteFile(filepath.Join(codexDir, name), before, 0o644); err != nil {
+						t.Fatal(err)
+					}
+				}
+			}
+
+			selection := model.Selection{
+				Agents:     []model.AgentID{model.AgentCodex},
+				Components: []model.ComponentID{model.ComponentEngram},
+			}
+			rt, err := newSyncRuntime(home, selection)
+			if err != nil {
+				t.Fatal(err)
+			}
+			plan := rt.stagePlan()
+			backupStep, ok := plan.Prepare[0].(prepareBackupStep)
+			if !ok {
+				t.Fatalf("prepare step = %T, want prepareBackupStep", plan.Prepare[0])
+			}
+			backupTargets := backupStep.targets[:0]
+			for _, target := range backupStep.targets {
+				rel, err := filepath.Rel(home, target)
+				if err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+					backupTargets = append(backupTargets, target)
+				}
+			}
+			backupStep.targets = backupTargets
+			plan.Prepare[0] = backupStep
+			plan.Apply = append(plan.Apply[:2], failingSyncStep{})
+			result := pipeline.NewOrchestrator(pipeline.DefaultRollbackPolicy()).Execute(plan)
+			if result.Err == nil || !result.Rollback.Success {
+				t.Fatalf("sync rollback success=%t error=%v rollback error=%v", result.Rollback.Success, result.Err, result.Rollback.Err)
+			}
+
+			for name, before := range instructionFiles {
+				path := filepath.Join(codexDir, name)
+				if tc.exists {
+					got, err := os.ReadFile(path)
+					if err != nil || !bytes.Equal(got, before) {
+						t.Fatalf("rollback did not restore %q: got=%q error=%v", path, got, err)
+					}
+					continue
+				}
+				if _, err := os.Stat(path); !os.IsNotExist(err) {
+					t.Fatalf("rollback did not remove newly created %q: stat error=%v", path, err)
+				}
+			}
+		})
 	}
 }
 
