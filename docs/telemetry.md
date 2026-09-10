@@ -234,14 +234,14 @@ Names in Gentle AI's runtime agent-class registry become `built_in` observations
 all other names become `custom`/`unknown` without transmitting the name.
 
 For `SubagentStop`, the adapter reads at most the last 512 KiB of the matching
-agent transcript, from inside the user's home only. Usage is accepted only when
-the final non-empty JSONL record is a complete assistant record whose text matches
-the hook's memory-only `last_assistant_message`. Any later record, malformed or
-partial trailing record, or unmatched final record leaves the observation
-activity-only. Malformed lines before a valid final match do not invalidate it.
-The matched record supplies response model plus input, output, cache-read, and
-cache-creation tokens. Reasoning tokens are unsupported and total tokens are
-unavailable; neither is inferred.
+agent transcript, from inside the user's home only. It scans backward for the
+last complete assistant record carrying valid usage, skipping malformed,
+partial, and non-usage records. A memory-only `last_assistant_message` match is
+stronger correlation evidence, but a missing or different value does not discard
+usage because `agent_transcript_path` is scoped to that subagent run. The record
+supplies response model plus input, output, cache-read, and cache-creation tokens.
+Reasoning tokens are unsupported and total tokens are unavailable; neither is
+inferred.
 
 `Stop` always becomes an `orchestrator` activity-only launch-style observation.
 It does not read or attribute transcript usage or a response model: without a
@@ -254,12 +254,16 @@ The selected model is used only when no response model exists. The hook contract
 does not expose effective effort, duration, or an error shape: effective effort
 and duration remain unavailable, while successful `Stop`/`SubagentStop` events
 use error category `none` (API failures fire the separate `StopFailure` event).
-Unknown model IDs map to `custom`/`custom` under the public registry.
+Selected aliases map as `sonnet` to `claude-sonnet-5`, `opus` to
+`claude-opus-5`, and `haiku` to `claude-haiku-4-5`; `inherit`, `default`, and an
+empty selector remain unknown. Transcript release/revision suffixes are reduced
+by longest registered-ID prefix, so for example `claude-sonnet-5-20260501` maps
+to `claude-sonnet-5`. Other model IDs map to `custom`/`custom`.
 
-If a subagent transcript is missing, unreadable, malformed, uncorrelated, or lacks
-assistant usage, the completion records the same launch-style occurrence with
-unavailable token coverage rather than claiming a response. This preserves
-observed agent activity without fabricating response evidence. Transcript paths,
+If a subagent transcript is missing, unreadable, or has no valid assistant usage,
+the completion records the same launch-style occurrence with unavailable token
+coverage rather than claiming a response. This preserves observed agent activity
+without fabricating response evidence. Transcript paths,
 hook/session/agent IDs, cwd, prompts, messages, transcript content, and private
 agent names never enter the aggregate or logs. Symlinks resolving outside the
 user's home are refused.

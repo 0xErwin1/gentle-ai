@@ -9,7 +9,7 @@ import (
 
 const claudeSubagentHook = `{"session_id":"PRIVATE_SESSION","transcript_path":"PRIVATE_MAIN_PATH","cwd":"PRIVATE_CWD","permission_mode":"default","hook_event_name":"SubagentStop","stop_hook_active":false,"agent_id":"PRIVATE_AGENT_ID","agent_type":"sdd-apply","agent_transcript_path":"PRIVATE_AGENT_PATH","last_assistant_message":"FINAL_MESSAGE"}`
 
-func TestClaudeRuntimeSubagentUsesLastAssistantUsage(t *testing.T) {
+func TestClaudeRuntimeSubagentSelectsLastAssistantUsageBeforeTrailingRecords(t *testing.T) {
 	hook, err := ParseClaudeHook(strings.NewReader(claudeSubagentHook))
 	if err != nil {
 		t.Fatal(err)
@@ -21,6 +21,9 @@ func TestClaudeRuntimeSubagentUsesLastAssistantUsage(t *testing.T) {
 	usage, ok := ParseClaudeTranscriptTail(transcript, false, hook.LastAssistantDigest)
 	if !ok {
 		t.Fatal("usage not found")
+	}
+	if !usage.Correlated {
+		t.Fatal("matching final message was not retained as stronger evidence")
 	}
 	o := NormalizeClaude(hook, usage, []byte("---\nname: sdd-apply\nmodel: claude-haiku-4-5\neffort: high\n---\nPRIVATE_PROMPT"))
 	if o == nil {
@@ -43,23 +46,26 @@ func TestClaudeRuntimeSubagentUsesLastAssistantUsage(t *testing.T) {
 	}
 }
 
-func TestClaudeRuntimeRejectsStaleTranscriptUsage(t *testing.T) {
-	stale := []byte(`{"type":"assistant","message":{"model":"claude-opus-5","content":[{"type":"text","text":"STALE_MESSAGE"}],"usage":{"input_tokens":99,"output_tokens":99}}}` + "\n")
-	for _, input := range []string{
-		claudeSubagentHook,
-		strings.Replace(claudeSubagentHook, `"hook_event_name":"SubagentStop","stop_hook_active":false,"agent_id":"PRIVATE_AGENT_ID","agent_type":"sdd-apply","agent_transcript_path":"PRIVATE_AGENT_PATH"`, `"hook_event_name":"Stop","stop_hook_active":false`, 1),
+func TestClaudeRuntimeSubagentUsesUsageWithoutLastMessageCorrelation(t *testing.T) {
+	mismatching := []byte(`{"type":"assistant","message":{"model":"claude-opus-5","content":[{"type":"text","text":"STALE_MESSAGE"}],"usage":{"input_tokens":99,"output_tokens":99}}}` + "\n")
+	for name, input := range map[string]string{
+		"mismatching message": claudeSubagentHook,
+		"missing message":     strings.Replace(claudeSubagentHook, `,"last_assistant_message":"FINAL_MESSAGE"`, "", 1),
 	} {
-		hook, err := ParseClaudeHook(strings.NewReader(input))
-		if err != nil {
-			t.Fatal(err)
-		}
-		if usage, ok := ParseClaudeTranscriptTail(stale, false, hook.LastAssistantDigest); ok || usage.Evidence {
-			t.Fatalf("%s stale usage accepted: %+v", hook.HookEventName, usage)
-		}
-		o := NormalizeClaude(hook, ClaudeUsage{}, nil)
-		if string(o.Row.Launches) != "1" || string(o.Row.Responses) != "null" || string(o.Row.Input) != tokenAbsent {
-			t.Fatalf("%s stale transcript did not fall back: %+v", hook.HookEventName, o.Row)
-		}
+		t.Run(name, func(t *testing.T) {
+			hook, err := ParseClaudeHook(strings.NewReader(input))
+			if err != nil {
+				t.Fatal(err)
+			}
+			usage, ok := ParseClaudeTranscriptTail(mismatching, false, hook.LastAssistantDigest)
+			if !ok || !usage.Evidence || usage.Correlated || string(usage.Input) != "99" {
+				t.Fatalf("optional final-message correlation discarded subagent usage: %+v %v", usage, ok)
+			}
+			o := NormalizeClaude(hook, usage, nil)
+			if string(o.Row.Launches) != "null" || string(o.Row.Responses) != "1" || string(o.Row.Input) != tokenReported("99") {
+				t.Fatalf("optional final-message correlation did not report response: %+v", o.Row)
+			}
+		})
 	}
 }
 
@@ -92,24 +98,70 @@ func TestClaudeRuntimeSubagentCorrelatesMultipleTextBlocks(t *testing.T) {
 	}
 }
 
-func TestClaudeRuntimeSubagentRejectsNonFinalMatchingUsage(t *testing.T) {
+func TestClaudeRuntimeSubagentUsesLastAssistantUsage(t *testing.T) {
 	hook, err := ParseClaudeHook(strings.NewReader(claudeSubagentHook))
 	if err != nil {
 		t.Fatal(err)
 	}
 	matching := `{"type":"assistant","message":{"model":"claude-opus-5","content":"FINAL_MESSAGE","usage":{"input_tokens":66}}}`
 	for name, transcript := range map[string]string{
-		"later valid record":        matching + "\n" + `{"type":"user","message":{"content":"next"}}` + "\n",
-		"partial current assistant": matching + "\n" + `{"type":"assistant","message":{"content":"FINAL_MESSAGE"`,
+		"later non-usage record":    matching + "\n" + `{"type":"user","message":{"content":"next"}}` + "\n",
+		"partial trailing record":   matching + "\n" + `{"type":"assistant","message":{"content":"FINAL_MESSAGE"`,
+		"later malformed JSON line": matching + "\n" + `{bad` + "\n",
 	} {
 		t.Run(name, func(t *testing.T) {
 			usage, ok := ParseClaudeTranscriptTail([]byte(transcript), false, hook.LastAssistantDigest)
-			if ok || usage.Evidence {
-				t.Fatalf("non-final usage accepted: %+v", usage)
+			if !ok || !usage.Evidence || string(usage.Input) != "66" {
+				t.Fatalf("last assistant usage not selected: %+v %v", usage, ok)
 			}
-			o := NormalizeClaude(hook, ClaudeUsage{}, nil)
-			if string(o.Row.Launches) != "1" || string(o.Row.Responses) != "null" || string(o.Row.Input) != tokenAbsent {
-				t.Fatalf("non-final usage did not remain activity-only: %+v", o.Row)
+		})
+	}
+}
+
+func TestClaudeModelAliasesAndUnknownSelectors(t *testing.T) {
+	hook, _ := ParseClaudeHook(strings.NewReader(claudeSubagentHook))
+	for _, tt := range []struct {
+		selector string
+		want     RuntimeModel
+	}{
+		{selector: "sonnet", want: RuntimeModel{Provider: "anthropic", ID: "claude-sonnet-5"}},
+		{selector: "opus", want: RuntimeModel{Provider: "anthropic", ID: "claude-opus-5"}},
+		{selector: "haiku", want: RuntimeModel{Provider: "anthropic", ID: "claude-haiku-4-5"}},
+		{selector: "inherit", want: RuntimeModel{Provider: "unknown", ID: "unknown"}},
+		{selector: "default", want: RuntimeModel{Provider: "unknown", ID: "unknown"}},
+		{selector: "", want: RuntimeModel{Provider: "unknown", ID: "unknown"}},
+	} {
+		t.Run(tt.selector, func(t *testing.T) {
+			definition := []byte("---\nmodel: " + tt.selector + "\n---\n")
+			o := NormalizeClaude(hook, ClaudeUsage{}, definition)
+			if o.Row.Model != tt.want {
+				t.Fatalf("model = %+v, want %+v", o.Row.Model, tt.want)
+			}
+			wantEvidence := "selected"
+			if tt.want.Provider == "unknown" {
+				wantEvidence = "unknown"
+			}
+			if o.Row.ModelEvidence != wantEvidence {
+				t.Fatalf("model evidence = %q, want %q", o.Row.ModelEvidence, wantEvidence)
+			}
+		})
+	}
+}
+
+func TestClaudeDatedTranscriptModelUsesRegistryLongestPrefix(t *testing.T) {
+	hook, _ := ParseClaudeHook(strings.NewReader(claudeSubagentHook))
+	for _, tt := range []struct {
+		model string
+		want  string
+	}{
+		{model: "claude-sonnet-5-20260501", want: "claude-sonnet-5"},
+		{model: "claude-opus-5-1", want: "claude-opus-5"},
+		{model: "claude-haiku-4-5-20251001", want: "claude-haiku-4-5-20251001"},
+	} {
+		t.Run(tt.model, func(t *testing.T) {
+			o := NormalizeClaude(hook, ClaudeUsage{Evidence: true, Model: tt.model, Input: json.RawMessage("1")}, nil)
+			if o.Row.Model != (RuntimeModel{Provider: "anthropic", ID: tt.want}) || o.Row.ModelEvidence != "response" {
+				t.Fatalf("model = %+v evidence = %q", o.Row.Model, o.Row.ModelEvidence)
 			}
 		})
 	}

@@ -204,12 +204,14 @@ func NormalizeRuntimeModel(provider, id string) RuntimeModel {
 	return m
 }
 
+const runtimeAnthropicModels = "claude-opus-5|claude-haiku-4-5|claude-haiku-4-5-20251001|claude-sonnet-5"
+
 // Registry 1: public names verified by the parent against official catalogs.
 // Namespace is a caller assertion, not endpoint/route attestation.
 func runtimeModelOK(m RuntimeModel) bool {
 	switch m.Provider {
 	case "anthropic":
-		return runtimeMember(m.ID, "claude-opus-5|claude-haiku-4-5|claude-haiku-4-5-20251001|claude-sonnet-5")
+		return runtimeMember(m.ID, runtimeAnthropicModels)
 	case "openai", "openai-codex":
 		return runtimeMember(m.ID, "gpt-6-astra|gpt-5.6-sol|gpt-5.6-terra|gpt-5.6-luna|gpt-5.3-codex-spark|gpt-5.5|gpt-5.4|gpt-5.4-mini|gpt-5.2|gpt-5.3-codex|gpt-5.6")
 	case "opencode":
