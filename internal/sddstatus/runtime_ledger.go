@@ -1940,6 +1940,9 @@ func (store RuntimeStore) rescope(ctx context.Context, request RescopeObjectiveR
 			}
 			return runtimeRecord{}, ErrRuntimeRescopeNotAllowed
 		}
+		if supersede && request.WorkUnit == objective.WorkUnit && request.EvidenceGoal == objective.EvidenceGoal {
+			return runtimeRecord{}, ErrRuntimeSupersedeNotAllowed
+		}
 		last := status.Attempts[len(status.Attempts)-1]
 		// #3842: reconcile the replayed selection once and feed the SAME
 		// reconciled list to this drift capture and the fresh capture below,
@@ -2627,6 +2630,9 @@ func applyRuntimeRescopeEvent(replay *runtimeReplay, revision string, record run
 	objective := replay.Status.Objective
 	if replay.Status.ActiveAttempt != nil || objective == nil || !runtimeObjectiveRescopeStructurallyPermitted(replay.Status) {
 		return rejectRuntimeRecord("objective_rescope_valid_successor")
+	}
+	if supersede && event.WorkUnit == objective.WorkUnit && event.EvidenceGoal == objective.EvidenceGoal {
+		return rejectRuntimeRecord("objective_supersede_same_scope")
 	}
 	// The real narrowing guard runs FIRST and is recomputed against the
 	// REPLAYED objective, never against the record's own (possibly forged)

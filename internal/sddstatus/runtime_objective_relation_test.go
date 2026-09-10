@@ -172,6 +172,106 @@ func TestResetDefaultRelationStillInheritsTheObligation(t *testing.T) {
 // a fresh store to force a full from-genesis replay). A legacy reset must
 // replay exactly as RuntimeObjectiveRelationRemediation: the successor still
 // inherits the chain's unremediated failure.
+func TestSupersedeRequiresDistinctCausalScope(t *testing.T) {
+	for _, test := range []struct {
+		name, workUnit, evidenceGoal string
+		wantErr                      bool
+	}{
+		{"same scope", "verify-a", "verify A", true},
+		{"work-unit-only", "verify-b", "verify A", false},
+		{"evidence-goal-only", "verify-a", "verify B", false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			ctx := context.Background()
+			repo := initRuntimeLedgerRepo(t)
+			store := mustRuntimeStore(t, repo, "supersede-scope-"+test.name)
+			started, err := store.Begin(ctx, BeginAttemptRequest{RequestID: "begin", WorkUnit: "verify-a", EvidenceGoal: "verify A", MaxAttempts: 2, MaxChangedLines: 40})
+			if err != nil {
+				t.Fatal(err)
+			}
+			failed, err := store.Finish(ctx, FinishAttemptRequest{ExpectedRevision: started.Revision, RequestID: "finish", Outcome: AttemptFailed, EvidenceRevision: runtimeTestHash('a'), Diagnosis: "failed", HarnessDisposition: HarnessReused, CleanupEvidence: "unchanged", ProcessEvidence: "none"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			status, err := store.Supersede(ctx, SupersedeObjectiveRequest{ExpectedRevision: failed.Revision, RequestID: "supersede", WorkUnit: test.workUnit, EvidenceGoal: test.evidenceGoal, MaxAttempts: 3, MaxChangedLines: 80, Reason: "distinct successor", Actor: "maintainer"})
+			if test.wantErr {
+				if !errors.Is(err, ErrRuntimeSupersedeNotAllowed) {
+					t.Fatalf("same-scope supersede = %v", err)
+				}
+				unchanged, statusErr := store.Status()
+				if statusErr != nil || unchanged.Revision != failed.Revision || countRuntimeRecords(t, store.Dir) != 2 {
+					t.Fatalf("same-scope supersede mutated ledger: status=%#v err=%v", unchanged, statusErr)
+				}
+				return
+			}
+			if err != nil || status.Objective.WorkUnit != test.workUnit || status.Objective.EvidenceGoal != test.evidenceGoal {
+				t.Fatalf("distinct supersede = %#v, %v", status, err)
+			}
+		})
+	}
+}
+
+func TestSupersedeSameScopePreservesCompleteObjectiveRefusal(t *testing.T) {
+	ctx, repo := context.Background(), initRuntimeLedgerRepo(t)
+	store := mustRuntimeStore(t, repo, "supersede-complete-precedence")
+	started, err := store.Begin(ctx, BeginAttemptRequest{RequestID: "begin", WorkUnit: "verify-a", EvidenceGoal: "verify A", MaxAttempts: 1, MaxChangedLines: 40})
+	if err != nil {
+		t.Fatal(err)
+	}
+	complete, err := store.Finish(ctx, FinishAttemptRequest{ExpectedRevision: started.Revision, RequestID: "finish", Outcome: AttemptPassed, EvidenceRevision: runtimeTestHash('c'), Diagnosis: "passed", HarnessDisposition: HarnessReused, CleanupEvidence: "unchanged", ProcessEvidence: "none"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = store.Supersede(ctx, SupersedeObjectiveRequest{ExpectedRevision: complete.Revision, RequestID: "supersede", WorkUnit: "verify-a", EvidenceGoal: "verify A", MaxAttempts: 3, MaxChangedLines: 80, Reason: "same scope", Actor: "maintainer"})
+	if !errors.Is(err, ErrRuntimeObjectiveDone) {
+		t.Fatalf("complete same-scope supersede = %v, want ErrRuntimeObjectiveDone", err)
+	}
+}
+
+func TestSupersedeReplayRejectsSameCausalScope(t *testing.T) {
+	ctx, repo := context.Background(), initRuntimeLedgerRepo(t)
+	store := mustRuntimeStore(t, repo, "supersede-same-scope-replay")
+	started, err := store.Begin(ctx, BeginAttemptRequest{RequestID: "begin", WorkUnit: "verify-a", EvidenceGoal: "verify A", MaxAttempts: 2, MaxChangedLines: 40})
+	if err != nil {
+		t.Fatal(err)
+	}
+	failed, err := store.Finish(ctx, FinishAttemptRequest{ExpectedRevision: started.Revision, RequestID: "finish", Outcome: AttemptFailed, EvidenceRevision: runtimeTestHash('a'), Diagnosis: "failed", HarnessDisposition: HarnessReused, CleanupEvidence: "unchanged", ProcessEvidence: "none"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	objective, last := failed.Objective, failed.Attempts[len(failed.Attempts)-1]
+	fresh, err := captureRuntimeCandidate(ctx, repo, []string{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := SupersedeObjectiveRequest{ExpectedRevision: failed.Revision, RequestID: "forged", WorkUnit: objective.WorkUnit, EvidenceGoal: objective.EvidenceGoal, MaxAttempts: 3, MaxChangedLines: 80, Reason: "forged budget bypass", Actor: "attacker"}
+	normalized, err := normalizeSupersedeObjectiveRequest(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	event := &runtimeSupersedeEvent{PreviousObjectiveID: objective.ID, PreviousGeneration: objective.Generation, PreviousMaxAttempts: objective.MaxAttempts, PreviousMaxChangedLines: objective.MaxChangedLines, SupersedeCandidateIdentity: fresh.Identity, SupersedeCandidateTree: last.FinishCandidateTree, ObjectiveID: runtimeObjectiveID(store.Change, request.WorkUnit, request.EvidenceGoal, fresh.Identity, failed.ObjectiveGeneration+1), ObjectiveGeneration: failed.ObjectiveGeneration + 1, WorkUnit: request.WorkUnit, EvidenceGoal: request.EvidenceGoal, MaxAttempts: request.MaxAttempts, MaxChangedLines: request.MaxChangedLines, Reason: request.Reason, Actor: request.Actor}
+	record := runtimeRecord{Schema: runtimeRecordSchema, Change: store.Change, PreviousRevision: failed.Revision, Operation: runtimeOperationSupersede, RequestID: request.RequestID, RequestDigest: runtimeValueHash("gentle-ai.sdd-runtime-supersede-request/v1", normalized), Supersede: event}
+	if err := validateRuntimeRecordShape(record); err != nil {
+		t.Fatalf("same-scope record failed shape validation: %v", err)
+	}
+	revision, payload, err := runtimeRecordRevision(record)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.ensureDirectories(); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.publishRecord(revision, payload); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.publishHead(revision); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = store.Status(); err == nil || !strings.Contains(err.Error(), "objective_supersede_same_scope") {
+		t.Fatalf("replay of forged same-scope supersede = %v", err)
+	}
+}
+
 func TestSupersedeClosesDistinctZeroDriftRemediationWithoutFalseNarrowing(t *testing.T) {
 	ctx := context.Background()
 	repo := initRuntimeLedgerRepo(t)
