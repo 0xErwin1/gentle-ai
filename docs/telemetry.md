@@ -205,23 +205,30 @@ stdin, and before the one-attempt sender. Disabled telemetry therefore leaves
 the installed hooks inert. The command writes no stdout because Codex validates
 JSON-looking output as a hook response even for asynchronous hooks.
 
-The hook input is limited to 16 KiB. Native code retains at most the final 256 KiB
-of `agent_transcript_path` for `SubagentStop`, or `transcript_path` for `Stop`;
-one look-behind byte determines whether the first retained line is complete.
+The hook input is limited to 16 KiB. For `SubagentStop`, native code separately
+reads at most the first 64 KiB of `agent_transcript_path` for attribution. Only
+the first `session_meta` record is eligible: the basename of
+`source.subagent.thread_spawn.agent_path` is normalized from Codex's underscored
+task name to the hyphenated runtime class, then checked against the exact Go
+allowlist. A directly allowlisted hook `agent_type` takes precedence; every
+unrecognized result remains `custom`/`unknown`. The nickname, IDs, and source
+path are discarded in memory and never enter telemetry.
+
+Native code also retains at most the final 256 KiB of `agent_transcript_path`
+for `SubagentStop`, or `transcript_path` for `Stop`; one look-behind byte
+determines whether the first retained line is complete.
 The final observed `turn_context` starts the eligible evidence segment. Its valid
 model and effort and that segment's latest valid `event_msg` `token_count`
 `last_token_usage` are used together. The public hook contract does not establish
 that hook `turn_id` has matching semantics in both parent and subagent transcripts,
 so sequence segmentation is the bounded fallback and private IDs stay memory-only.
-Codex documents `agent_type` as a subagent type or profile,
-but its [subagent documentation](https://developers.openai.com/codex/subagents)
-does not establish that `spawn_agent.task_name` becomes `agent_type`. Therefore
-only an exact `agent_type` already present in the runtime agent-class allowlist
-is classified as `built_in`; every other subagent is `custom` with class
-`unknown`. `Stop` is classified as the orchestrator. When response model evidence
-is missing, a valid persisted Gentle AI phase or orchestrator model assignment is
-used with `selected` evidence. Missing, malformed, or unreadable transcript/state
-data never fails the send and remains unavailable.
+Codex's [subagent documentation](https://developers.openai.com/codex/subagents)
+describes subagent configuration. `Stop` is classified as the orchestrator.
+When response model evidence is missing, a valid persisted Gentle AI phase or
+orchestrator model assignment is used with `selected` evidence. The transcript
+`effort` or nested `collaboration_mode.settings.reasoning_effort` is effective
+evidence only and never becomes `selected_effort`. Missing, malformed, or
+unreadable transcript/state data never fails the send and remains unavailable.
 
 | Codex `last_token_usage` field | Runtime field |
 | --- | --- |

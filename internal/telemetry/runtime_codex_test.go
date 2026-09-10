@@ -12,6 +12,11 @@ const codexTranscriptFixture = `{"timestamp":"PRIVATE_TIME","type":"turn_context
 {"timestamp":"PRIVATE_TIME","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":120,"cached_input_tokens":20,"cache_write_input_tokens":4,"output_tokens":30,"reasoning_output_tokens":10,"total_tokens":164},"total_token_usage":{"input_tokens":999}},"rate_limits":{"plan_type":"PRIVATE_PLAN"}}}
 `
 
+const codexRealSubagentTranscriptFixture = `{"timestamp":"PRIVATE_TIME","type":"session_meta","payload":{"id":"PRIVATE_SESSION","source":{"subagent":{"thread_spawn":{"parent_thread_id":"PRIVATE_PARENT","depth":1,"agent_nickname":"PRIVATE_NICKNAME","agent_path":"/root/sdd_explore"}}}}}
+{"timestamp":"PRIVATE_TIME","type":"turn_context","payload":{"turn_id":"PRIVATE_TURN","model":"gpt-5.6-sol","effort":"medium","collaboration_mode":{"settings":{"reasoning_effort":"medium"}}}}
+{"timestamp":"PRIVATE_TIME","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":120,"cached_input_tokens":20,"cache_write_input_tokens":4,"output_tokens":30,"reasoning_output_tokens":10,"total_tokens":164}}}}
+`
+
 func TestCodexRuntimeCompletedSubagent(t *testing.T) {
 	source, err := DecodeCodexHook(strings.NewReader(codexSubagentHookFixture))
 	if err != nil || source == nil {
@@ -82,6 +87,38 @@ func TestCodexRuntimeUsesExistingAgentClassAllowlist(t *testing.T) {
 				t.Fatalf("observation=%+v err=%v", o, err)
 			}
 		})
+	}
+}
+
+func TestCodexRuntimeDerivesAllowlistedAgentFromFirstSessionMeta(t *testing.T) {
+	for _, tt := range []struct {
+		name, agentType, transcriptHead, wantAgentType string
+	}{
+		{"unknown hook uses underscored task path", "default", codexRealSubagentTranscriptFixture, "sdd-explore"},
+		{"direct allowlisted hook wins", "sdd-apply", codexRealSubagentTranscriptFixture, "sdd-apply"},
+		{"unknown derived name stays unknown", "default", strings.Replace(codexRealSubagentTranscriptFixture, "/root/sdd_explore", "/root/private_custom", 1), "default"},
+		{"only first record is eligible", "default", `{"type":"event_msg","payload":{}}
+` + codexRealSubagentTranscriptFixture, "default"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			source := CodexHook{Event: "SubagentStop", AgentType: tt.agentType}
+			resolved, err := ResolveCodexAgentType(source, strings.NewReader(tt.transcriptHead))
+			if err != nil || resolved.AgentType != tt.wantAgentType {
+				t.Fatalf("resolved=%+v err=%v", resolved, err)
+			}
+		})
+	}
+}
+
+func TestCodexRuntimeEffectiveEffortFallsBackToCollaborationSettings(t *testing.T) {
+	transcript := `{"type":"turn_context","payload":{"model":"gpt-5.6-sol","effort":null,"collaboration_mode":{"settings":{"reasoning_effort":"medium"}}}}
+`
+	o, err := NormalizeCodex(CodexHook{Event: "SubagentStop", AgentType: "sdd-explore"}, strings.NewReader(transcript), CodexAssignment{Effort: "xhigh"})
+	if err != nil || o == nil {
+		t.Fatal(err)
+	}
+	if o.Row.SelectedEffort != "xhigh" || o.Row.EffectiveEffort != "medium" {
+		t.Fatalf("row=%+v", o.Row)
 	}
 }
 
