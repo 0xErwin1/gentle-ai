@@ -487,6 +487,9 @@ func printedTransitionArguments(envelope statusEnvelope) ([]string, error) {
 // returns the verb and arguments for execution through the same driven
 // binary, mirroring printedCommandArguments' contract for anchored forms.
 func anchoredContinuationArguments(command, binary string) ([]string, error) {
+	if strings.ContainsAny(command, "\r\n") {
+		return nil, fmt.Errorf("printed a multiline continuation command: %q", command)
+	}
 	words, err := splitPrintedCommandWords(command)
 	if err != nil {
 		return nil, err
