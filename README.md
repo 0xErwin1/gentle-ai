@@ -113,7 +113,7 @@ Research → Spec → Design → Tasks → strict TDD → **Verify**. An indepen
 
 **[Docs →](docs/intended-usage.md)**
 
-<img width="100%" src="docs/assets/features/sdd.gif" alt="SDD phases running end to end" />
+<img width="100%" src="docs/assets/features/sdd.png" alt="SDD planning complete: the proposal, spec, design and tasks artifacts it created, with strict TDD active" />
 
 </td>
 </tr>
