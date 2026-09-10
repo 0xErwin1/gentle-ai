@@ -73,7 +73,7 @@ func TestRuntimeDashboard(t *testing.T) {
 		{"Runtime usage", "Tokens processed per hour by host", "timeseries"},
 		{"Runtime usage", "Token coverage per field", "table"},
 		{"Runtime usage", "Error observations by category", "barchart"},
-		{"Runtime usage", "Measured request duration", "stat"},
+		{"Runtime usage", "Measured duration by kind", "table"},
 	}
 	var gotPanels []struct{ section, title, kind string }
 	section := ""
@@ -122,8 +122,6 @@ func TestRuntimeDashboard(t *testing.T) {
 			wantUnit := "short"
 			if panel.Title == "RDD adoption %" {
 				wantUnit = "percent"
-			} else if panel.Title == "Measured request duration" {
-				wantUnit = "ms"
 			}
 			if defaults["unit"] != wantUnit {
 				t.Errorf("panel %q unit = %v; want %q", panel.Title, defaults["unit"], wantUnit)
@@ -136,12 +134,15 @@ func TestRuntimeDashboard(t *testing.T) {
 		if strings.Contains(string(configJSON), `"axisPlacement":"right"`) {
 			t.Errorf("panel %q introduces a second y-axis", panel.Title)
 		}
-		if section == "Runtime usage" {
+		if section == "Runtime usage" && panel.Title != "Measured duration by kind" {
 			for _, host := range []string{"pi", "opencode", "claude-code", "codex"} {
 				if !strings.Contains(string(configJSON), `"options":"`+host+`"`) {
 					t.Errorf("runtime panel %q does not pin the %s series color", panel.Title, host)
 				}
 			}
+		}
+		if panel.Title == "Measured duration by kind" && (!strings.Contains(string(configJSON), `"options":"Average ms"`) || !strings.Contains(string(configJSON), `"value":"ms"`)) {
+			t.Error("duration table must format only its average column as milliseconds")
 		}
 	}
 	if !reflect.DeepEqual(gotPanels, wantPanels) {
@@ -211,7 +212,7 @@ func TestRuntimeDashboard(t *testing.T) {
 		{"delivery-opencode", "opencode", time.Date(2026, 1, 2, 11, 30, 0, 0, time.UTC).UnixNano(), map[string]any{
 			"model": map[string]string{"provider": "custom", "id": "custom"}, "model_evidence": "unknown", "agent_kind": "worker", "agent_class": "unknown", "selected_effort": "unknown", "effective_effort": "unknown", "launches": 2, "responses": 2,
 			"input_tokens": token(7, 1, 0, 0), "output_tokens": token(4, 1, 0, 0), "cache_read_tokens": token(99, 0, 1, 0), "cache_creation_tokens": token(99, 0, 0, 1), "reasoning_tokens": token(99, 0, 1, 0), "total_tokens": token(999, 0, 1, 0),
-			"error_category": "provider", "duration": map[string]any{"kind": "request", "measured_count": 1, "sum_ms": 40.0},
+			"error_category": "provider", "duration": map[string]any{"kind": "message", "measured_count": 1, "sum_ms": 40.0},
 		}},
 	}
 	for _, fixture := range runtimeFixtures {
@@ -229,6 +230,17 @@ func TestRuntimeDashboard(t *testing.T) {
 		if _, err := s.db.Exec(`INSERT INTO runtime_rows(delivery_id,ordinal,row_json) VALUES(?,0,?)`, fixture.id, string(raw)); err != nil {
 			t.Fatal(err)
 		}
+	}
+	unavailableDuration, err := json.Marshal(map[string]any{
+		"model": map[string]string{"provider": "openai", "id": "gpt-5"}, "model_evidence": "response", "agent_kind": "orchestrator", "agent_class": "orchestrator", "selected_effort": "high", "effective_effort": "high", "launches": 0, "responses": 0,
+		"input_tokens": token(0, 0, 1, 0), "output_tokens": token(0, 0, 1, 0), "cache_read_tokens": token(0, 0, 1, 0), "cache_creation_tokens": token(0, 0, 1, 0), "reasoning_tokens": token(0, 0, 1, 0), "total_tokens": token(0, 0, 1, 0),
+		"error_category": "none", "duration": map[string]any{"kind": "unavailable", "measured_count": 0, "sum_ms": nil},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.db.Exec(`INSERT INTO runtime_rows(delivery_id,ordinal,row_json) VALUES('delivery-codex',1,?)`, string(unavailableDuration)); err != nil {
+		t.Fatal(err)
 	}
 
 	queries := map[string]string{}
@@ -272,7 +284,29 @@ func TestRuntimeDashboard(t *testing.T) {
 	assertSingleNumber("Responses", 5)
 	assertSingleNumber("Deliveries", 2)
 	assertSingleNumber("Hosts reporting", 2)
-	assertSingleNumber("Measured request duration", 30)
+
+	durationRows, err := s.db.Query(queries["Measured duration by kind"])
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer durationRows.Close()
+	var gotDurations [][]any
+	for durationRows.Next() {
+		var kind string
+		var measured int64
+		var average float64
+		if err := durationRows.Scan(&kind, &measured, &average); err != nil {
+			t.Fatal(err)
+		}
+		gotDurations = append(gotDurations, []any{kind, measured, average})
+	}
+	wantDurations := [][]any{{"request", int64(2), float64(25)}, {"message", int64(1), float64(40)}}
+	if !reflect.DeepEqual(gotDurations, wantDurations) {
+		t.Fatalf("duration rows = %#v; want %#v", gotDurations, wantDurations)
+	}
+	if strings.Contains(queries["Measured duration by kind"], "= 'request'") || !strings.Contains(queries["Measured duration by kind"], "<> 'unavailable'") {
+		t.Fatal("duration panel must include every measured kind and exclude unavailable rows")
+	}
 
 	usageRows, err := s.db.Query(queries["Usage by host, subagent, model and effort"])
 	if err != nil {

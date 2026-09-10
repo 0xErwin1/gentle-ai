@@ -1933,9 +1933,9 @@
     },
     {
       "id": 413,
-      "title": "Measured request duration",
-      "description": "Average measured request duration provides a simple view of runtime responsiveness.",
-      "type": "stat",
+      "title": "Measured duration by kind",
+      "description": "Average measured duration and observation count by available timing kind show how responsive instrumented activity is.",
+      "type": "table",
       "gridPos": {
         "x": 12,
         "y": 67,
@@ -1950,13 +1950,13 @@
         {
           "refId": "A",
           "queryType": "table",
-          "queryText": "SELECT ROUND(SUM(CASE WHEN json_extract(r.row_json, '$.duration.kind') = 'request' AND json_type(r.row_json, '$.duration.measured_count') = 'integer' AND json_extract(r.row_json, '$.duration.measured_count') > 0 THEN json_extract(r.row_json, '$.duration.sum_ms') ELSE 0 END) / NULLIF(SUM(CASE WHEN json_extract(r.row_json, '$.duration.kind') = 'request' AND json_type(r.row_json, '$.duration.measured_count') = 'integer' THEN json_extract(r.row_json, '$.duration.measured_count') ELSE 0 END), 0), 1) AS \"Average request duration\" FROM runtime_rows r JOIN runtime_deliveries d ON d.delivery_id = r.delivery_id WHERE d.received_at >= ${__from} * 1000000 AND d.received_at <= ${__to} * 1000000 HAVING SUM(CASE WHEN json_extract(r.row_json, '$.duration.kind') = 'request' AND json_type(r.row_json, '$.duration.measured_count') = 'integer' THEN json_extract(r.row_json, '$.duration.measured_count') ELSE 0 END) > 0",
-          "rawQueryText": "SELECT ROUND(SUM(CASE WHEN json_extract(r.row_json, '$.duration.kind') = 'request' AND json_type(r.row_json, '$.duration.measured_count') = 'integer' AND json_extract(r.row_json, '$.duration.measured_count') > 0 THEN json_extract(r.row_json, '$.duration.sum_ms') ELSE 0 END) / NULLIF(SUM(CASE WHEN json_extract(r.row_json, '$.duration.kind') = 'request' AND json_type(r.row_json, '$.duration.measured_count') = 'integer' THEN json_extract(r.row_json, '$.duration.measured_count') ELSE 0 END), 0), 1) AS \"Average request duration\" FROM runtime_rows r JOIN runtime_deliveries d ON d.delivery_id = r.delivery_id WHERE d.received_at >= ${__from} * 1000000 AND d.received_at <= ${__to} * 1000000 HAVING SUM(CASE WHEN json_extract(r.row_json, '$.duration.kind') = 'request' AND json_type(r.row_json, '$.duration.measured_count') = 'integer' THEN json_extract(r.row_json, '$.duration.measured_count') ELSE 0 END) > 0"
+          "queryText": "SELECT json_extract(r.row_json, '$.duration.kind') AS Kind, SUM(json_extract(r.row_json, '$.duration.measured_count')) AS \"Measured count\", ROUND(SUM(json_extract(r.row_json, '$.duration.sum_ms')) / NULLIF(SUM(json_extract(r.row_json, '$.duration.measured_count')), 0), 1) AS \"Average ms\" FROM runtime_rows r JOIN runtime_deliveries d ON d.delivery_id = r.delivery_id WHERE d.received_at >= ${__from} * 1000000 AND d.received_at <= ${__to} * 1000000 AND json_extract(r.row_json, '$.duration.kind') <> 'unavailable' AND json_type(r.row_json, '$.duration.measured_count') = 'integer' AND json_extract(r.row_json, '$.duration.measured_count') > 0 AND json_type(r.row_json, '$.duration.sum_ms') IN ('integer', 'real') GROUP BY Kind HAVING SUM(json_extract(r.row_json, '$.duration.measured_count')) > 0 ORDER BY \"Measured count\" DESC, Kind ASC LIMIT 1000",
+          "rawQueryText": "SELECT json_extract(r.row_json, '$.duration.kind') AS Kind, SUM(json_extract(r.row_json, '$.duration.measured_count')) AS \"Measured count\", ROUND(SUM(json_extract(r.row_json, '$.duration.sum_ms')) / NULLIF(SUM(json_extract(r.row_json, '$.duration.measured_count')), 0), 1) AS \"Average ms\" FROM runtime_rows r JOIN runtime_deliveries d ON d.delivery_id = r.delivery_id WHERE d.received_at >= ${__from} * 1000000 AND d.received_at <= ${__to} * 1000000 AND json_extract(r.row_json, '$.duration.kind') <> 'unavailable' AND json_type(r.row_json, '$.duration.measured_count') = 'integer' AND json_extract(r.row_json, '$.duration.measured_count') > 0 AND json_type(r.row_json, '$.duration.sum_ms') IN ('integer', 'real') GROUP BY Kind HAVING SUM(json_extract(r.row_json, '$.duration.measured_count')) > 0 ORDER BY \"Measured count\" DESC, Kind ASC LIMIT 1000"
         }
       ],
       "fieldConfig": {
         "defaults": {
-          "unit": "ms",
+          "unit": "short",
           "min": 0,
           "decimals": 0
         },
@@ -1964,76 +1964,37 @@
           {
             "matcher": {
               "id": "byName",
-              "options": "pi"
+              "options": "Average ms"
             },
             "properties": [
               {
-                "id": "color",
-                "value": {
-                  "mode": "fixed",
-                  "fixedColor": "#73BF69"
-                }
+                "id": "unit",
+                "value": "ms"
+              },
+              {
+                "id": "decimals",
+                "value": 1
               }
             ]
           },
           {
             "matcher": {
               "id": "byName",
-              "options": "opencode"
+              "options": "Kind"
             },
             "properties": [
               {
-                "id": "color",
-                "value": {
-                  "mode": "fixed",
-                  "fixedColor": "#5794F2"
-                }
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "claude-code"
-            },
-            "properties": [
-              {
-                "id": "color",
-                "value": {
-                  "mode": "fixed",
-                  "fixedColor": "#FF9830"
-                }
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "codex"
-            },
-            "properties": [
-              {
-                "id": "color",
-                "value": {
-                  "mode": "fixed",
-                  "fixedColor": "#B877D9"
-                }
+                "id": "custom.width",
+                "value": 160
               }
             ]
           }
         ]
       },
       "options": {
-        "orientation": "horizontal",
-        "textMode": "value_and_name",
-        "graphMode": "none",
-        "reduceOptions": {
-          "values": false,
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": ""
-        }
+        "showHeader": true,
+        "cellHeight": "sm",
+        "enablePagination": false
       }
     }
   ]
