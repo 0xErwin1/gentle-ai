@@ -14,6 +14,7 @@ import (
 )
 
 const codexStateMaxBytes = 65536
+const codexTranscriptHeadMaxBytes = telemetry.CodexTranscriptHeadMaxBytes
 
 // SendCodex performs one policy-gated, memory-only normalization and send.
 // It never retries, persists source data, or logs hook fields and paths.
@@ -43,6 +44,12 @@ func sendCodex(ctx context.Context, home string, getenv func(string) string, inp
 	if source == nil {
 		return "ignored", nil
 	}
+	if source.Event == "SubagentStop" {
+		head, _ := readCodexTranscriptHead(source.TranscriptPath)
+		if resolved, resolveErr := telemetry.ResolveCodexAgentType(*source, bytes.NewReader(head)); resolveErr == nil {
+			source = &resolved
+		}
+	}
 	assignment := readCodexAssignment(home, *source)
 	transcript, _ := readCodexTranscriptTail(source.TranscriptPath)
 	if !allowed(home, getenv) {
@@ -59,6 +66,26 @@ func sendCodex(ctx context.Context, home string, getenv func(string) string, inp
 		return "", errEnvelope
 	}
 	return telemetry.SendRuntime(ctx, home, getenv, bytes.NewReader(batch), client), nil
+}
+
+func readCodexTranscriptHead(path string) ([]byte, error) {
+	if path == "" {
+		return nil, nil
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	info, err := f.Stat()
+	if err != nil || !info.Mode().IsRegular() {
+		return nil, errEnvelope
+	}
+	data, err := io.ReadAll(io.LimitReader(f, codexTranscriptHeadMaxBytes))
+	if err != nil {
+		return nil, errEnvelope
+	}
+	return data, nil
 }
 
 func readCodexTranscriptTail(path string) ([]byte, error) {

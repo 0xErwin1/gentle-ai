@@ -5,9 +5,12 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"path"
+	"strings"
 )
 
 const CodexMaxBytes = RuntimeMaxBytes
+const CodexTranscriptHeadMaxBytes = 65536
 const CodexTranscriptMaxBytes = 262144
 
 var errCodex = errors.New("invalid Codex runtime event")
@@ -122,6 +125,46 @@ func codexString(raw json.RawMessage, nullable bool) (string, bool) {
 	return value, true
 }
 
+// ResolveCodexAgentType derives a canonical class from the first transcript
+// record only when the hook's agent_type is not already canonical. Source
+// paths and all other session metadata remain local and are discarded.
+func ResolveCodexAgentType(source CodexHook, transcriptHead io.Reader) (CodexHook, error) {
+	if source.Event != "SubagentStop" || runtimeMember(source.AgentType, runtimeAgentClasses) {
+		return source, nil
+	}
+	data, err := io.ReadAll(io.LimitReader(transcriptHead, CodexTranscriptHeadMaxBytes+1))
+	if err != nil || len(data) > CodexTranscriptHeadMaxBytes {
+		return source, errCodex
+	}
+	if newline := bytes.IndexByte(data, '\n'); newline >= 0 {
+		data = data[:newline]
+	}
+	var record map[string]json.RawMessage
+	if json.Unmarshal(data, &record) != nil {
+		return source, nil
+	}
+	kind, ok := codexString(record["type"], false)
+	if !ok || kind != "session_meta" {
+		return source, nil
+	}
+	var payload, sourceValue, subagent, threadSpawn map[string]json.RawMessage
+	if json.Unmarshal(record["payload"], &payload) != nil ||
+		json.Unmarshal(payload["source"], &sourceValue) != nil ||
+		json.Unmarshal(sourceValue["subagent"], &subagent) != nil ||
+		json.Unmarshal(subagent["thread_spawn"], &threadSpawn) != nil {
+		return source, nil
+	}
+	agentPath, ok := codexString(threadSpawn["agent_path"], false)
+	if !ok || agentPath == "" {
+		return source, nil
+	}
+	candidate := strings.ReplaceAll(path.Base(agentPath), "_", "-")
+	if runtimeMember(candidate, runtimeAgentClasses) {
+		source.AgentType = candidate
+	}
+	return source, nil
+}
+
 // NormalizeCodex converts one decoded hook plus a bounded transcript tail into
 // one sanitized observation. It performs no filesystem, network, persistence,
 // logging, or lifetime deduplication.
@@ -226,11 +269,7 @@ func codexTranscriptEvidence(data []byte) (RuntimeModel, string, codexUsage) {
 			if value, ok := codexString(payload["model"], false); ok && value != "" {
 				model = codexModel(value)
 			}
-			if value, ok := codexString(payload["effort"], false); ok {
-				if normalized := codexEffort(value); normalized != "unavailable" {
-					effort = normalized
-				}
-			}
+			effort = codexContextEffort(payload)
 		case "event_msg":
 			if !hasContext {
 				continue
@@ -255,6 +294,24 @@ func codexTranscriptEvidence(data []byte) (RuntimeModel, string, codexUsage) {
 		}
 	}
 	return model, effort, usage
+}
+
+func codexContextEffort(payload map[string]json.RawMessage) string {
+	if value, ok := codexString(payload["effort"], false); ok {
+		if normalized := codexEffort(value); normalized != "unavailable" {
+			return normalized
+		}
+	}
+	var collaborationMode, settings map[string]json.RawMessage
+	if json.Unmarshal(payload["collaboration_mode"], &collaborationMode) != nil ||
+		json.Unmarshal(collaborationMode["settings"], &settings) != nil {
+		return "unavailable"
+	}
+	value, ok := codexString(settings["reasoning_effort"], false)
+	if !ok {
+		return "unavailable"
+	}
+	return codexEffort(value)
 }
 
 func codexCounter(raw json.RawMessage) json.RawMessage {
