@@ -142,7 +142,7 @@ func TestRuntimeDashboard(t *testing.T) {
 	to := time.Date(2026, 1, 2, 0, 0, 0, 0, time.UTC).UnixMilli()
 	metrics := []string{"input_tokens", "output_tokens", "cache_read_tokens", "cache_creation_tokens", "reasoning_tokens", "total_tokens"}
 	// Two observations share a delivery; receipt time, not a client date, groups them.
-	for i, ns := range []int64{from*1000000 - 1, from*1000000, to*1000000, to*1000000 + 1} {
+	for i, ns := range []int64{from*1000000 - 1, from * 1000000, to * 1000000, to*1000000 + 1} {
 		if _, err := s.db.Exec(`INSERT INTO runtime_deliveries VALUES (?, ?, '{"host":"codex"}')`, fmt.Sprint(i), ns); err != nil {
 			t.Fatal(err)
 		}
