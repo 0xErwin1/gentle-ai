@@ -387,6 +387,29 @@ func TestManagedAssetsContinuationUsesInvokingExecutable(t *testing.T) {
 	// The executable-anchored command must still satisfy the published
 	// continuation contract, not just this test's expectation.
 	validatePublishedReviewSchema(t, compileWholeNativeStatusSchema(t, "status-v7.schema.json"), output.Bytes())
+
+	// Convergence (#4434's invariant, not just the rendered shape): executing
+	// the advertised continuation -- the sync this very binary performs for
+	// `gentle-ai sync --agent opencode` -- records this binary's own embedded
+	// digest, so the next STATUS from the same binary must leave the refusal
+	// behind and offer the START again.
+	if _, err := RunSyncWithSelection(home, model.Selection{
+		Agents: []model.AgentID{model.AgentOpenCode}, Components: []model.ComponentID{model.ComponentGGA, model.ComponentSDD}, SDDMode: model.SDDModeSingle,
+	}); err != nil {
+		t.Fatalf("executing the advertised continuation (sync) failed: %v", err)
+	}
+	var convergedOutput bytes.Buffer
+	if err := RunReview([]string{
+		"status", "--cwd", repo, "--contract", ReviewIntegrationContractV2, "--agent", "opencode", "--next-transition",
+	}, &convergedOutput); err != nil {
+		t.Fatalf("post-continuation STATUS: %v\n%s", err, convergedOutput.String())
+	}
+	var converged ReviewTargetStatusResult
+	decodeStrictReviewJSON(t, convergedOutput.Bytes(), &converged)
+	if converged.NextTransition == nil || converged.NextTransition.Kind != reviewNextTransitionExecute ||
+		converged.NextTransition.ReasonCode != "fresh_target_ready" {
+		t.Fatalf("post-continuation STATUS transition = %#v, want execute/fresh_target_ready", converged.NextTransition)
+	}
 }
 
 func TestManagedAssetsPreflightDoesNotClassifyUnrelatedRuntimeRefusal(t *testing.T) {
