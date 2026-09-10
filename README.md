@@ -34,6 +34,19 @@ and no way to prove what it did beyond asking you to read every line.
 
 <br/>
 
+<!--
+  HERO SLOT — the only animation on this page. The six Features images are stills,
+  so motion is spent once, here, right after the pitch lands.
+
+  Uncomment when docs/assets/features/hero-pi.gif exists. It is a real-time capture
+  of the complete Pi startup: banner, extensions, skills and startup output, never
+  trimmed. A stripped startup does not look like the real thing.
+
+<img width="100%" src="docs/assets/features/hero-pi.gif" alt="Gentle-AI starting up inside Pi" />
+
+<br/>
+-->
+
 <sub><strong>If Gentle-AI made your agent worth trusting, a star helps other people find it.</strong></sub>
 
 <!--
@@ -133,7 +146,7 @@ SDD and RDD live in the **`gentle-ai` binary**, not in prompt prose a model can 
 
 ### Gentle-Shell
 
-Our interface for Pi. Context and spend as live gauges, <kbd>ctrl+g</kbd> for a session diff against the HEAD you started from, `/gentle:usage` for the provider windows you have left.
+Our interface for Pi. Context and spend as live gauges, <kbd>alt+g</kbd> for a working-tree diff overlay against HEAD, `/gentle:usage` for the provider windows you have left.
 
 **[Docs →](docs/pi.md)**
 
@@ -144,7 +157,7 @@ Our interface for Pi. Context and spend as live gauges, <kbd>ctrl+g</kbd> for a 
 
 ### 16 agents, one behavior
 
-Claude Code, Codex, Cursor, OpenCode, Copilot, Gemini and ten more — each configured through **its own native features**. Thirteen delegate to focused sub-agents; three run solo. Same workflow on all of them.
+Claude Code, Codex, Cursor, OpenCode, Copilot, Gemini and ten more — each configured through **its own native features**. Twelve delegate to focused sub-agents; four run solo. Same workflow on all of them.
 
 **[Docs →](docs/agents.md)**
 
