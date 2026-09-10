@@ -25,6 +25,7 @@ func TestRuntimeDashboard(t *testing.T) {
 			ID          int
 			Title       string
 			Type        string
+			TimeFrom    string
 			Description string
 			GridPos     struct{ X, Y, W, H int }
 			Datasource  struct{ UID string }
@@ -33,6 +34,7 @@ func TestRuntimeDashboard(t *testing.T) {
 				TimeColumns                        []string
 			}
 			FieldConfig map[string]any
+			Options     map[string]any
 		}
 	}
 	if err := json.Unmarshal(data, &dashboard); err != nil {
@@ -65,12 +67,12 @@ func TestRuntimeDashboard(t *testing.T) {
 		{"Runtime usage", "Responses", "stat"},
 		{"Runtime usage", "Deliveries", "stat"},
 		{"Runtime usage", "Hosts reporting", "stat"},
+		{"Runtime usage", "Usage by host, subagent, model and effort", "table"},
 		{"Runtime usage", "Tokens processed by host", "barchart"},
 		{"Runtime usage", "Responses by host", "barchart"},
 		{"Runtime usage", "Tokens by model", "table"},
 		{"Runtime usage", "Responses and tokens by selected effort", "table"},
-		{"Runtime usage", "Usage by host, subagent, model and effort", "table"},
-		{"Runtime usage", "Tokens processed per hour by host", "timeseries"},
+		{"Runtime usage", "Tokens processed per hour by host (last 24h)", "timeseries"},
 		{"Runtime usage", "Token coverage per field", "table"},
 		{"Runtime usage", "Error observations by category", "barchart"},
 		{"Runtime usage", "Measured duration by kind", "table"},
@@ -120,7 +122,9 @@ func TestRuntimeDashboard(t *testing.T) {
 			t.Errorf("panel %q has no field defaults", panel.Title)
 		} else {
 			wantUnit := "short"
-			if panel.Title == "RDD adoption %" {
+			if panel.Type == "stat" && panel.Title != "RDD adoption %" {
+				wantUnit = "locale"
+			} else if panel.Title == "RDD adoption %" {
 				wantUnit = "percent"
 			}
 			if defaults["unit"] != wantUnit {
@@ -134,11 +138,66 @@ func TestRuntimeDashboard(t *testing.T) {
 		if strings.Contains(string(configJSON), `"axisPlacement":"right"`) {
 			t.Errorf("panel %q introduces a second y-axis", panel.Title)
 		}
-		if section == "Runtime usage" && panel.Title != "Measured duration by kind" {
+		if panel.Type == "stat" {
+			if panel.Options["textMode"] != "value" || panel.Options["colorMode"] != "value" || panel.Options["graphMode"] != "none" {
+				t.Errorf("stat panel %q does not use exact-value neutral presentation", panel.Title)
+			}
+			if !strings.Contains(string(configJSON), `"color":{"fixedColor":"#73BF69","mode":"fixed"}`) || strings.Contains(string(configJSON), `"thresholds"`) {
+				t.Errorf("stat panel %q does not use one fixed color without thresholds", panel.Title)
+			}
+		}
+		if panel.Title == "Tokens processed by host" || panel.Title == "Responses by host" {
+			if panel.Options["xField"] != "Host" || panel.Options["colorByField"] != "Host" {
+				t.Errorf("host bar panel %q must use Host as its category and color field", panel.Title)
+			}
+			if !strings.Contains(target.RawQueryText, "CAST(") || !strings.Contains(target.RawQueryText, " AS TEXT) AS Host") || !strings.Contains(target.RawQueryText, "GROUP BY Host") {
+				t.Errorf("host bar panel %q must return long-form text host rows", panel.Title)
+			}
+			for host, color := range map[string]string{"pi": "#73BF69", "opencode": "#5794F2", "claude-code": "#FF9830", "codex": "#B877D9"} {
+				if !strings.Contains(string(configJSON), `"`+host+`":{"color":"`+color+`"`) {
+					t.Errorf("host bar panel %q does not map %s to its fixed color", panel.Title, host)
+				}
+			}
+		}
+		if panel.Title == "Tokens processed per hour by host (last 24h)" {
+			if panel.TimeFrom != "24h" {
+				t.Error("runtime token trend must override its range to the last 24 hours")
+			}
 			for _, host := range []string{"pi", "opencode", "claude-code", "codex"} {
 				if !strings.Contains(string(configJSON), `"options":"`+host+`"`) {
-					t.Errorf("runtime panel %q does not pin the %s series color", panel.Title, host)
+					t.Errorf("runtime token trend does not pin the %s series color", host)
 				}
+			}
+		}
+		if panel.Type == "table" {
+			footer, ok := panel.Options["footer"].(map[string]any)
+			if !ok || footer["enablePagination"] != false {
+				t.Errorf("table panel %q must scroll without pagination", panel.Title)
+			}
+		}
+		if wantHeight, ok := map[string]int{
+			"Usage by host, subagent, model and effort": 14,
+			"Tokens by model":                         10,
+			"Responses and tokens by selected effort": 10,
+			"Token coverage per field":                11,
+		}[panel.Title]; ok && panel.GridPos.H < wantHeight {
+			t.Errorf("table panel %q height = %d; want at least %d", panel.Title, panel.GridPos.H, wantHeight)
+		}
+		if panel.Title == "Usage by host, subagent, model and effort" {
+			if panel.GridPos.X != 0 || panel.GridPos.Y != 32 || panel.GridPos.W != 24 || !strings.Contains(panel.Description, "which subagent used which model at which effort and how many tokens") {
+				t.Error("usage table must be the full-width runtime centerpiece directly below the stat tiles")
+			}
+		}
+		if panel.Title == "Version adoption" {
+			for _, fragment := range []string{"instr(key, '-')", "substr(key, 1, instr(key, '-') - 1)", "' (main)'", "GROUP BY Version", "LIMIT 10"} {
+				if !strings.Contains(target.RawQueryText, fragment) {
+					t.Errorf("version normalization query missing %q", fragment)
+				}
+			}
+		}
+		if panel.Title == "Agent adoption" || panel.Title == "Component adoption" || panel.Title == "OS and architecture" || panel.Title == "Version adoption" {
+			if panel.Options["showValue"] != "always" || !strings.Contains(string(configJSON), `"fixedColor":"#8AB8A8"`) {
+				t.Errorf("categorical adoption panel %q must show values with one neutral color", panel.Title)
 			}
 		}
 		if panel.Title == "Measured duration by kind" && (!strings.Contains(string(configJSON), `"options":"Average ms"`) || !strings.Contains(string(configJSON), `"value":"ms"`)) {
@@ -185,6 +244,8 @@ func TestRuntimeDashboard(t *testing.T) {
 		{"2026-01-02", "rdd_enabled", "false", 1},
 		{"2026-01-02", "version", "1.0.0", 1},
 		{"2026-01-02", "version", "1.1.0", 1},
+		{"2026-01-02", "version", "1.1.0-0.20260102", 1},
+		{"2026-01-02", "version", "1.1.0-20260102", 2},
 		{"2026-01-02", "npm_downloads_day", "gentle-pi", 100},
 		{"2026-01-02", "npm_downloads_day", "gentle-engram", 200},
 		{"2026-01-02", "github_release_downloads_total", "v1.0.0", 10},
@@ -284,6 +345,56 @@ func TestRuntimeDashboard(t *testing.T) {
 	assertSingleNumber("Responses", 5)
 	assertSingleNumber("Deliveries", 2)
 	assertSingleNumber("Hosts reporting", 2)
+
+	for _, tc := range []struct {
+		title string
+		want  [][]any
+	}{
+		{"Tokens processed by host", [][]any{{"codex", int64(21)}, {"opencode", int64(11)}}},
+		{"Responses by host", [][]any{{"codex", int64(3)}, {"opencode", int64(2)}}},
+	} {
+		t.Run(tc.title+" long format", func(t *testing.T) {
+			rows, err := s.db.Query(queries[tc.title])
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer rows.Close()
+			if columns, err := rows.Columns(); err != nil || !reflect.DeepEqual(columns, []string{"Host", strings.TrimSuffix(tc.title, " by host")}) {
+				t.Fatalf("columns = %v, err = %v", columns, err)
+			}
+			var got [][]any
+			for rows.Next() {
+				var host string
+				var measure int64
+				if err := rows.Scan(&host, &measure); err != nil {
+					t.Fatal(err)
+				}
+				got = append(got, []any{host, measure})
+			}
+			if !reflect.DeepEqual(got, tc.want) {
+				t.Fatalf("rows = %#v; want %#v", got, tc.want)
+			}
+		})
+	}
+
+	versionRows, err := s.db.Query(queries["Version adoption"])
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer versionRows.Close()
+	gotVersions := map[string]int64{}
+	for versionRows.Next() {
+		var version string
+		var installs int64
+		if err := versionRows.Scan(&version, &installs); err != nil {
+			t.Fatal(err)
+		}
+		gotVersions[version] = installs
+	}
+	wantVersions := map[string]int64{"1.0.0": 1, "1.1.0": 1, "1.1.0 (main)": 3}
+	if !reflect.DeepEqual(gotVersions, wantVersions) {
+		t.Fatalf("versions = %#v; want %#v", gotVersions, wantVersions)
+	}
 
 	durationRows, err := s.db.Query(queries["Measured duration by kind"])
 	if err != nil {
