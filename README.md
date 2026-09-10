@@ -3,7 +3,7 @@
 
 <div align="center">
 
-<img width="3276" height="1280" alt="Gentle-AI neon rose banner" src="docs/assets/brand/gentle-ai-banner.png" />
+<img width="100%" alt="Gentle-AI neon rose banner" src="docs/assets/brand/gentle-ai-banner.png" />
 
 <h1>Gentle-AI™</h1>
 
@@ -27,8 +27,8 @@
 <br/>
 
 <p>
-Your agent writes code, then forgets everything. It has no opinion about your project,<br/>
-and no way to prove what it did beyond asking you to read every line.<br/>
+Your agent writes code, then forgets everything. It has no opinion about your project,
+and no way to prove what it did beyond asking you to read every line.
 <strong>Gentle-AI gives it memory, a workflow, and evidence.</strong>
 </p>
 
@@ -89,7 +89,7 @@ Decisions, bug fixes and conventions survive sessions, restarts and compaction. 
 
 **[Docs →](docs/engram.md)**
 
-<img src="docs/assets/features/engram.gif" alt="Engram recalling a past decision" />
+<img width="100%" src="docs/assets/features/engram.gif" alt="Engram recalling a past decision" />
 
 </td>
 <td width="50%" valign="top">
@@ -100,7 +100,7 @@ Research → Spec → Design → Tasks → strict TDD → **Verify**. An indepen
 
 **[Docs →](docs/intended-usage.md)**
 
-<img src="docs/assets/features/sdd.gif" alt="SDD phases running end to end" />
+<img width="100%" src="docs/assets/features/sdd.gif" alt="SDD phases running end to end" />
 
 </td>
 </tr>
@@ -113,7 +113,7 @@ Receipt-Driven Development. The system freezes the exact bytes your agent change
 
 **[Docs →](docs/review-integration.md)**
 
-<img src="docs/assets/features/rdd.gif" alt="RDD freezing a candidate and running review lenses" />
+<img width="100%" src="docs/assets/features/rdd.gif" alt="RDD freezing a candidate and running review lenses" />
 
 </td>
 <td width="50%" valign="top">
@@ -124,7 +124,7 @@ SDD and RDD live in the **`gentle-ai` binary**, not in prompt prose a model can 
 
 **[Docs →](docs/trigger-rules.md)**
 
-<img src="docs/assets/features/deterministic.gif" alt="The binary returning the exact next transition" />
+<img width="100%" src="docs/assets/features/deterministic.gif" alt="The binary returning the exact next transition" />
 
 </td>
 </tr>
@@ -137,7 +137,7 @@ Our interface for Pi. Context and spend as live gauges, <kbd>ctrl+g</kbd> for a 
 
 **[Docs →](docs/pi.md)**
 
-<img src="docs/assets/features/gentle-shell.gif" alt="Gentle-Shell bar, prompt and diff overlay" />
+<img width="100%" src="docs/assets/features/gentle-shell.gif" alt="Gentle-Shell bar, prompt and diff overlay" />
 
 </td>
 <td width="50%" valign="top">
@@ -148,7 +148,7 @@ Claude Code, Codex, Cursor, OpenCode, Copilot, Gemini and ten more — each conf
 
 **[Docs →](docs/agents.md)**
 
-<img src="docs/assets/features/agents.gif" alt="The installer configuring multiple agents" />
+<img width="100%" src="docs/assets/features/agents.gif" alt="The installer configuring multiple agents" />
 
 </td>
 </tr>
@@ -181,13 +181,18 @@ Claude Code, Codex, Cursor, OpenCode, Copilot, Gemini and ten more — each conf
 # macOS / Linux
 curl -fsSL https://raw.githubusercontent.com/Gentleman-Programming/gentle-ai/main/scripts/install.sh | bash
 
+# Windows (PowerShell) — source install, needs Go 1.25.10+
+go install github.com/gentleman-programming/gentle-ai/v2/cmd/gentle-ai@latest
+```
+
+```bash
 gentle-ai          # pick your agents, components and persona
 gentle-ai doctor   # verify — read-only, changes nothing
 ```
 
 Then use your agent normally. Your configs are snapshotted before every write, and **Gentle-AI never installs an AI agent for you** — it configures what you already have.
 
-> **Windows, Homebrew, beta channel, signature verification and per-distro prerequisites: [Quickstart →](docs/quickstart.md)**
+> **Homebrew, beta channel, signature verification and per-distro prerequisites: [Quickstart →](docs/quickstart.md)**
 
 <div align="right"><a href="#top">Back to top</a></div>
 
@@ -223,7 +228,7 @@ Everything labelled [`up-for-grabs`](https://github.com/Gentleman-Programming/ge
 <br/><br/>
 
 <a href="CONTRIBUTORS.md">
-  <img src="https://contrib.rocks/image?repo=Gentleman-Programming/gentle-ai&columns=16" alt="Gentle-AI contributors" />
+  <img width="100%" src="https://contrib.rocks/image?repo=Gentleman-Programming/gentle-ai&columns=16" alt="Gentle-AI contributors" />
 </a>
 
 <p><sub>This project exists because of these people.</sub></p>
