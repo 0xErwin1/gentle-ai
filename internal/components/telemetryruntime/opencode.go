@@ -1,4 +1,4 @@
-// Package telemetryruntime owns the OpenCode event adapter and its managed hook.
+// Package telemetryruntime owns native runtime event adapters and managed hooks.
 package telemetryruntime
 
 import (

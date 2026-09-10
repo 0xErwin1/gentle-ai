@@ -7823,6 +7823,15 @@ func TestEnsureCodexSkillRegistryHookWritesSessionStartHookIdempotently(t *testi
 	if strings.Count(text, "gentle-ai skill-registry refresh") != 1 {
 		t.Fatalf("hook command count mismatch:\n%s", text)
 	}
+	if strings.Count(text, "gentle-ai telemetry runtime codex --json") != 2 {
+		t.Fatalf("Codex telemetry hook must cover SubagentStop and Stop exactly once:\n%s", text)
+	}
+	if strings.Count(text, `"async": true`) != 2 {
+		t.Fatalf("Codex telemetry hooks must be asynchronous:\n%s", text)
+	}
+	if !strings.Contains(text, `"SubagentStop"`) || !strings.Contains(text, `"Stop"`) {
+		t.Fatalf("Codex telemetry hook events missing:\n%s", text)
+	}
 	if !strings.Contains(text, `"SessionStart"`) {
 		t.Fatalf("Codex hook should use SessionStart, got:\n%s", text)
 	}
@@ -7995,6 +8004,9 @@ func TestInject_CodexInstallsSkillRegistryHook(t *testing.T) {
 	}
 	if !strings.Contains(string(data), "gentle-ai skill-registry refresh") {
 		t.Fatalf("Codex hooks.json missing skill-registry refresh:\n%s", data)
+	}
+	if strings.Count(string(data), "gentle-ai telemetry runtime codex --json") != 2 {
+		t.Fatalf("Codex hooks.json missing telemetry Stop hooks:\n%s", data)
 	}
 }
 

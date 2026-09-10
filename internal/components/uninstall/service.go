@@ -1336,7 +1336,7 @@ func removeSkillRegistryHook(raw []byte) ([]byte, bool, error) {
 			for _, hook := range hooks {
 				hookMap, ok := hook.(map[string]any)
 				cmd, _ := hookMap["command"].(string)
-				if ok && (strings.Contains(cmd, "gentle-ai skill-registry refresh") || strings.Contains(cmd, "gentle-ai review stop-hook") || cmd == "gentle-ai telemetry runtime claude --json") {
+				if ok && (strings.Contains(cmd, "gentle-ai skill-registry refresh") || strings.Contains(cmd, "gentle-ai review stop-hook") || cmd == "gentle-ai telemetry runtime claude --json" || cmd == "gentle-ai telemetry runtime codex --json") {
 					changed = true
 					continue
 				}

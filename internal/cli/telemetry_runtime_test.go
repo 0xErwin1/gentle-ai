@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -31,11 +32,11 @@ func TestTelemetryRuntimeStdinDeadline(t *testing.T) {
 	old := runtimeStdinTimeout
 	runtimeStdinTimeout = 20 * time.Millisecond
 	t.Cleanup(func() { runtimeStdinTimeout = old })
-	for _, route := range []string{"send", "opencode"} {
+	for _, route := range []string{"send", "opencode", "codex"} {
 		t.Run(route, func(t *testing.T) {
 			home := runtimeCLIHome(t)
 			before := runtimeCLIDisk(t, home)
-			runtimeCLIServer(t, func(w http.ResponseWriter, r *http.Request) { t.Error("timed-out stdin made HTTP request") })
+			runtimeCLINoRequest(t, "timed-out stdin made HTTP request")
 			release, finished := make(chan struct{}), make(chan struct{})
 			done := make(chan struct{})
 			var out bytes.Buffer
@@ -56,7 +57,7 @@ func TestTelemetryRuntimeStdinDeadline(t *testing.T) {
 			close(release)
 			<-finished
 			<-done
-			if runErr != nil || !strings.Contains(out.String(), `"discarded"`) {
+			if runErr != nil || (route == "codex" && out.Len() != 0) || (route != "codex" && !strings.Contains(out.String(), `"discarded"`)) {
 				t.Fatal("unexpected timeout decision", out.String(), runErr)
 			}
 			if !reflect.DeepEqual(before, runtimeCLIDisk(t, home)) {
@@ -81,10 +82,10 @@ func (r runtimeSignalInput) Read(p []byte) (int, error) {
 }
 
 func TestTelemetryRuntimePolicyRevokedDuringStdin(t *testing.T) {
-	for _, route := range []string{"send", "opencode"} {
+	for _, route := range []string{"send", "opencode", "codex"} {
 		t.Run(route, func(t *testing.T) {
 			home := runtimeCLIHome(t)
-			runtimeCLIServer(t, func(w http.ResponseWriter, r *http.Request) { t.Error("revoked input sent HTTP") })
+			runtimeCLINoRequest(t, "revoked input sent HTTP")
 			r, w := io.Pipe()
 			defer r.Close()
 			defer w.Close()
@@ -109,7 +110,7 @@ func TestTelemetryRuntimePolicyRevokedDuringStdin(t *testing.T) {
 			}
 			_ = w.Close()
 			<-done
-			if runErr != nil || !strings.Contains(out.String(), `"disabled"`) {
+			if runErr != nil || (route == "codex" && out.Len() != 0) || (route != "codex" && !strings.Contains(out.String(), `"disabled"`)) {
 				t.Fatal("policy revocation ignored", out.String(), runErr)
 			}
 			if !reflect.DeepEqual(revoked, runtimeCLIDisk(t, home)) {
@@ -195,6 +196,18 @@ func runtimeCLIServer(t *testing.T, handler http.HandlerFunc) *httptest.Server {
 	t.Cleanup(func() { runtimeHTTPClient = old })
 	t.Setenv(telemetry.EndpointEnvVar, server.URL)
 	return server
+}
+
+func runtimeCLINoRequest(t *testing.T, message string) {
+	t.Helper()
+	old := runtimeHTTPClient
+	runtimeHTTPClient = func() *http.Client {
+		return &http.Client{Transport: codexCLIRoundTrip(func(*http.Request) (*http.Response, error) {
+			t.Error(message)
+			return nil, errors.New("unexpected request")
+		})}
+	}
+	t.Cleanup(func() { runtimeHTTPClient = old })
 }
 
 func TestTelemetryRuntimeStdin(t *testing.T) {
