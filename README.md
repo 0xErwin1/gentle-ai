@@ -94,53 +94,67 @@ and no way to prove what it did beyond asking you to read every line.
 
 ## Features
 
+---
+
+### Engram™ — Keep your project context
+
 <img width="100%" src="docs/assets/features/engram.png" alt="A brand-new session recalling a product decision from an earlier one, without reading a single file" />
 
-### Engram™ — memory that persists
-
-Decisions, bug fixes and conventions survive sessions, restarts and compaction. Your agent stops starting from zero every morning.
+Gentle-AI keeps your decisions, bug fixes, and conventions available across sessions, restarts, and compaction. Your agent can pick up the project with context instead of making you explain it again.
 
 **[Docs →](docs/engram.md)**
 
+---
+
+### SDD — Give each change a clear path
+
 <img width="100%" src="docs/assets/features/sdd.png" alt="A finished SDD cycle: ten tasks done, 4 of 4 requirements and 12 of 12 scenarios verified, 14 tests passing, spec synced and the change archived" />
 
-### SDD — spec-driven, our way
-
-Explore → Research (optional) → Proposal → Spec → Design → Tasks → Apply (with TDD when appropriate) → Verify → Archive. Apply records RED/GREEN evidence; Verify independently checks it.
+Gentle-AI turns a vague request into a visible path: Explore → Research (optional) → Proposal → Spec → Design → Tasks → Apply (with TDD when appropriate) → Verify → Archive. TDD (test-driven development) belongs in Apply when it fits; Verify independently checks the evidence, so you can see what was actually checked.
 
 **[Docs →](docs/intended-usage.md)**
 
+---
+
+### RDD — Check finished work at the right depth
+
 <img width="100%" src="docs/assets/features/rdd.png" alt="A review that derived its own effort from the frozen candidate, ran the reliability lens, and closed with an explicit acknowledgement" />
 
-### RDD — we created it
-
-Receipt-Driven Development is opt-in, risk-classified deep verification of a completed implementation. It freezes the candidate and derives evidence: low risk gets structural readback, medium one focused lens, and high risk the canonical 4R — Risk, Resilience, Readability, Reliability.
+Before you rely on a completed change, Gentle-AI can use opt-in Receipt-Driven Development (RDD) to lock the exact change it checks and derive evidence from that fixed version. This keeps the review tied to what you will use: low risk gets a structural readback, medium risk one focused lens, and high risk the canonical 4R — Risk, Resilience, Readability, Reliability.
 
 **[Docs →](docs/review-integration.md)**
 
+---
+
+### Deterministic by design — Know the next valid step
+
 <img width="100%" src="docs/assets/features/deterministic.png" alt="The agent explaining that the SDD status engine chose the next step, not the model, and that a new session reaches the same answer from files on disk" />
 
-### Deterministic by design
-
-Native SDD status and RDD review transitions are owned by the **`gentle-ai` binary**. It returns the authoritative next valid transition for each state, so the agent follows the lifecycle instead of inventing it from prompt prose.
+Gentle-AI does not ask the model to guess what comes next. The **`gentle-ai` binary** owns native SDD status and RDD review transitions, returning the authoritative next valid transition for the current state.
 
 **[Docs →](docs/trigger-rules.md)**
 
+---
+
+### Gentle Shell — See Pi work more clearly
+
 <img width="100%" src="docs/assets/features/gentle-shell.png" alt="Gentle-Shell running an SDD sub-agent, with the todo list and the live context and spend bar" />
 
-### Gentle Shell
-
-**The way Gentle-AI was intended.** The gentle-pi extension layer turns Pi into a complete coding environment through Pi-native extension points: agent orchestration, a live context gauge, session-cost display, supported-provider account usage, and a working-tree changes/diff view via <kbd>Alt+G</kbd> or `/gentle:changes`.
+**The way Gentle-AI was intended.** Gentle-AI gives Pi a clearer coding experience: Gentle Shell is the visual layer for a live context gauge, session-cost display, and a working-tree changes/diff view with <kbd>Alt+G</kbd> or `/gentle:changes`; the wider gentle-pi package and extensions provide agent orchestration and supported-provider account usage.
 
 **[Docs →](docs/pi.md)**
 
+---
+
+### 16 agents — Keep the agent you already use
+
 <img width="100%" src="docs/assets/features/agents.png" alt="The installer configuring multiple agents" />
 
-### 16 agents, shared workflow
-
-Pi, OpenCode, Claude Code, Codex, and twelve more use a shared workflow adapted to each agent's native capabilities.
+Gentle-AI brings its shared workflow to Pi, OpenCode, Claude Code, Codex, and twelve more agents. Each integration uses that agent's native capabilities, so available features such as delegation and RDD review can differ.
 
 **[Docs →](docs/agents.md)**
+
+---
 
 ### Also in the box
 
