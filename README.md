@@ -102,7 +102,7 @@ Decisions, bug fixes and conventions survive sessions, restarts and compaction. 
 
 **[Docs →](docs/engram.md)**
 
-<img width="100%" src="docs/assets/features/engram.gif" alt="Engram recalling a past decision" />
+<img width="100%" src="docs/assets/features/engram.png" alt="A brand-new session recalling a product decision from an earlier one, without reading a single file" />
 
 </td>
 <td width="50%" valign="top">
