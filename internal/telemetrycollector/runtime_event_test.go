@@ -146,4 +146,16 @@ func TestRuntimeEventContract(t *testing.T) {
 	if bytes.Contains(canonical, []byte("batch_id")) {
 		t.Fatal("local identity in transport")
 	}
+
+}
+
+func TestRuntimeEventDeprecatedAgentClassAliasNormalized(t *testing.T) {
+	legacy := strings.Replace(string(runtimeFixture()), `"agent_class":"sdd-apply"`, `"agent_class":"sdd-proposal"`, 1)
+	legacyEvent, err := telemetry.ParseRuntimeEvent([]byte(legacy))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := legacyEvent.Rows[0].AgentClass; got != "sdd-propose" {
+		t.Fatalf("deprecated agent class normalized to %q, want sdd-propose", got)
+	}
 }
