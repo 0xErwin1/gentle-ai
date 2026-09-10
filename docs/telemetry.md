@@ -137,7 +137,7 @@ The CLI does not close caller-owned readers or shared `os.Stdin`. A timed-out re
 can leave **one process-scoped reader goroutine** until stdin completes or the
 standalone process exits. A buffered result prevents late completion from blocking;
 the deadline timer is canceled on return. This is not a daemon or retry mechanism.
-The library `SendRuntime`/`SendOpenCode` APIs still accept caller-owned readers:
+The library `SendRuntime`/`SendOpenCode`/`SendCodex` APIs still accept caller-owned readers:
 their context bounds HTTP, not arbitrary blocking `Read` implementations. Embedded
 callers must supply bounded input; only the CLI owns this pre-read deadline.
 
@@ -194,12 +194,57 @@ unchanged. Initial unreleased ownership accepts only the embedded asset; approvi
 historical digests for a rollout is separate work. Disable leaves the plugin inert
 under existing policy; installation never reenrolls or changes exporter settings.
 
-**Automatic sources:** Pi and OpenCode integrations provide one-shot runtime
-telemetry. Claude Code and Codex are unsupported: neither provides a supported
-direct hook supplying sanitized usage under the no-daemon/no-persistence
-constraint. Schema host values remain for compatibility, not as evidence of
-installed support. No installation, deployment, or external-network validation
-is implied here.
+## Automatic Codex collection
+
+Managed Codex `hooks.json` entries invoke
+`gentle-ai telemetry runtime codex --json` asynchronously for `SubagentStop` and
+`Stop`. These events and their input fields are documented by the
+[Codex hooks reference](https://developers.openai.com/codex/hooks). Runtime policy is
+checked before hook stdin, local state, or transcript data is read, again after
+stdin, and before the one-attempt sender. Disabled telemetry therefore leaves
+the installed hooks inert. The command writes no stdout because Codex validates
+JSON-looking output as a hook response even for asynchronous hooks.
+
+The hook input is limited to 16 KiB. Native code retains at most the final 256 KiB
+of `agent_transcript_path` for `SubagentStop`, or `transcript_path` for `Stop`;
+one look-behind byte determines whether the first retained line is complete.
+The final observed `turn_context` starts the eligible evidence segment. Its valid
+model and effort and that segment's latest valid `event_msg` `token_count`
+`last_token_usage` are used together. The public hook contract does not establish
+that hook `turn_id` has matching semantics in both parent and subagent transcripts,
+so sequence segmentation is the bounded fallback and private IDs stay memory-only.
+Codex documents `agent_type` as a subagent type or profile,
+but its [subagent documentation](https://developers.openai.com/codex/subagents)
+does not establish that `spawn_agent.task_name` becomes `agent_type`. Therefore
+only an exact `agent_type` already present in the runtime agent-class allowlist
+is classified as `built_in`; every other subagent is `custom` with class
+`unknown`. `Stop` is classified as the orchestrator. When response model evidence
+is missing, a valid persisted Gentle AI phase or orchestrator model assignment is
+used with `selected` evidence. Missing, malformed, or unreadable transcript/state
+data never fails the send and remains unavailable.
+
+| Codex `last_token_usage` field | Runtime field |
+| --- | --- |
+| `input_tokens` | `input_tokens` |
+| `cached_input_tokens` | `cache_read_tokens` |
+| `cache_write_input_tokens` | `cache_creation_tokens` |
+| `output_tokens` | `output_tokens` |
+| `reasoning_output_tokens` | `reasoning_tokens` |
+| `total_tokens` | `total_tokens` |
+
+No identifier, path, prompt, summary, assistant message, raw error, or rate-limit
+detail enters the runtime payload. Missing counters are unavailable rather than
+zero, totals are not inferred, duration is unavailable, and there is no daemon,
+queue, retry, telemetry persistence, or filesystem mutation. Codex explicitly
+notes that transcript format is not a stable hook interface, so this parser is a
+bounded best-effort compatibility layer and may lose coverage after Codex format
+changes.
+
+**Automatic sources:** Pi, OpenCode, and Codex integrations provide one-shot
+runtime telemetry. Claude Code remains unsupported under the current
+no-daemon/no-persistence constraint. Schema host values remain for compatibility,
+not as evidence of installed support. No installation, deployment, or
+external-network validation is implied here.
 
 ## Anonymous runtime collector and retention
 
@@ -310,7 +355,7 @@ installation, gentle-ai does exactly one thing: it prints this line to
 stderr, synchronously, in that same command —
 
 ```text
-Gentle AI sends anonymous usage metrics (version, OS, agents, counters) and may send anonymous runtime usage from supported Pi/OpenCode integrations (public model, effort, agent class, available token usage, timing, error categories); runtime usage is never stored locally; run gentle-ai telemetry disable to opt out.
+Gentle AI sends anonymous usage metrics (version, OS, agents, counters) and may send anonymous runtime usage from supported Pi/OpenCode/Codex integrations (public model, effort, agent class, available token usage, timing, error categories); runtime usage is never stored locally; run gentle-ai telemetry disable to opt out.
 ```
 
 — and stores a locally generated `install_id`. **Nothing is sent on that

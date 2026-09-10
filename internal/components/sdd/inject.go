@@ -1815,10 +1815,6 @@ func ensureCodexSkillRegistryHook(hooksPath string) (bool, error) {
 	}
 
 	const command = `gentle-ai skill-registry refresh --quiet --no-gitignore --cwd "$PWD" || true`
-	if claudeHookExists(root, command) {
-		return false, nil
-	}
-
 	hooksRaw, hasHooks := root["hooks"]
 	hooksMap, _ := hooksRaw.(map[string]any)
 	if hasHooks && hooksMap == nil {
@@ -1828,23 +1824,54 @@ func ensureCodexSkillRegistryHook(hooksPath string) (bool, error) {
 		hooksMap = map[string]any{}
 	}
 
-	sessionRaw, hasSessionStart := hooksMap["SessionStart"]
-	sessionStart, _ := sessionRaw.([]any)
-	if hasSessionStart && sessionStart == nil {
-		return false, fmt.Errorf("Codex hooks %q has unsupported hooks.SessionStart shape: want array", hooksPath)
-	}
-	sessionStart = append(sessionStart, map[string]any{
-		"matcher": "startup|resume|clear|compact",
-		"hooks": []any{
-			map[string]any{
-				"type":          "command",
-				"command":       command,
-				"timeout":       30,
-				"statusMessage": "Refreshing skill registry",
+	changed := false
+	if !hookCommandExists(hooksMap, "SessionStart", command) {
+		sessionRaw, hasSessionStart := hooksMap["SessionStart"]
+		sessionStart, _ := sessionRaw.([]any)
+		if hasSessionStart && sessionStart == nil {
+			return false, fmt.Errorf("Codex hooks %q has unsupported hooks.SessionStart shape: want array", hooksPath)
+		}
+		sessionStart = append(sessionStart, map[string]any{
+			"matcher": "startup|resume|clear|compact",
+			"hooks": []any{
+				map[string]any{
+					"type":          "command",
+					"command":       command,
+					"timeout":       30,
+					"statusMessage": "Refreshing skill registry",
+				},
 			},
-		},
-	})
-	hooksMap["SessionStart"] = sessionStart
+		})
+		hooksMap["SessionStart"] = sessionStart
+		changed = true
+	}
+
+	const telemetryCommand = `gentle-ai telemetry runtime codex --json`
+	for _, event := range []string{"SubagentStop", "Stop"} {
+		if hookCommandExists(hooksMap, event, telemetryCommand) {
+			continue
+		}
+		raw, exists := hooksMap[event]
+		entries, _ := raw.([]any)
+		if exists && entries == nil {
+			return false, fmt.Errorf("Codex hooks %q has unsupported hooks.%s shape: want array", hooksPath, event)
+		}
+		entries = append(entries, map[string]any{
+			"hooks": []any{
+				map[string]any{
+					"type":    "command",
+					"command": telemetryCommand,
+					"async":   true,
+					"timeout": 4,
+				},
+			},
+		})
+		hooksMap[event] = entries
+		changed = true
+	}
+	if !changed {
+		return false, nil
+	}
 	root["hooks"] = hooksMap
 
 	out, err := json.MarshalIndent(root, "", "  ")
@@ -1860,6 +1887,21 @@ func ensureCodexSkillRegistryHook(hooksPath string) (bool, error) {
 		return false, err
 	}
 	return wr.Changed, nil
+}
+
+func hookCommandExists(hooksMap map[string]any, event, command string) bool {
+	entries, _ := hooksMap[event].([]any)
+	for _, entry := range entries {
+		entryMap, _ := entry.(map[string]any)
+		hooks, _ := entryMap["hooks"].([]any)
+		for _, hook := range hooks {
+			hookMap, _ := hook.(map[string]any)
+			if hookMap["command"] == command {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func ensureClaudeSkillRegistryHook(settingsPath string) (bool, error) {

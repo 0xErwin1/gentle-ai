@@ -1632,6 +1632,22 @@ func TestComponentOperationsSDD_ClaudeRemovesSkillRegistryHook(t *testing.T) {
         "matcher": "Bash",
         "hooks": [{"type": "command", "command": "echo pre"}]
       }
+    ],
+    "SubagentStop": [
+      {
+        "hooks": [
+          {"type": "command", "command": "gentle-ai telemetry runtime codex --json", "async": true},
+          {"type": "command", "command": "echo subagent keep"}
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {"type": "command", "command": "gentle-ai telemetry runtime codex --json", "async": true},
+          {"type": "command", "command": "echo stop keep"}
+        ]
+      }
     ]
   }
 }`
@@ -1655,10 +1671,10 @@ func TestComponentOperationsSDD_ClaudeRemovesSkillRegistryHook(t *testing.T) {
 		t.Fatal(err)
 	}
 	text := string(raw)
-	if strings.Contains(text, "gentle-ai skill-registry refresh") {
+	if strings.Contains(text, "gentle-ai skill-registry refresh") || strings.Contains(text, "gentle-ai telemetry runtime codex") {
 		t.Fatalf("managed hook should be removed:\n%s", text)
 	}
-	if !strings.Contains(text, "echo keep") || !strings.Contains(text, "echo pre") {
+	if !strings.Contains(text, "echo keep") || !strings.Contains(text, "echo pre") || !strings.Contains(text, "echo subagent keep") || !strings.Contains(text, "echo stop keep") {
 		t.Fatalf("unrelated hooks should be preserved:\n%s", text)
 	}
 }
