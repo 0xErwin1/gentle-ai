@@ -150,7 +150,7 @@ Our interface for Pi. Context and spend as live gauges, <kbd>alt+g</kbd> for a w
 
 **[Docs →](docs/pi.md)**
 
-<img width="100%" src="docs/assets/features/gentle-shell.gif" alt="Gentle-Shell bar, prompt and diff overlay" />
+<img width="100%" src="docs/assets/features/gentle-shell.png" alt="Gentle-Shell running an SDD sub-agent, with the todo list and the live context and spend bar" />
 
 </td>
 <td width="50%" valign="top">
