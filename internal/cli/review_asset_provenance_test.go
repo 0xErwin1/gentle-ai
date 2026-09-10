@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -388,15 +389,20 @@ func TestManagedAssetsContinuationUsesInvokingExecutable(t *testing.T) {
 	// continuation contract, not just this test's expectation.
 	validatePublishedReviewSchema(t, compileWholeNativeStatusSchema(t, "status-v7.schema.json"), output.Bytes())
 
-	// Convergence (#4434's invariant, not just the rendered shape): executing
-	// the advertised continuation -- the sync this very binary performs for
-	// `gentle-ai sync --agent opencode` -- records this binary's own embedded
-	// digest, so the next STATUS from the same binary must leave the refusal
-	// behind and offer the START again.
-	if _, err := RunSyncWithSelection(home, model.Selection{
-		Agents: []model.AgentID{model.AgentOpenCode}, Components: []model.ComponentID{model.ComponentGGA, model.ComponentSDD}, SDDMode: model.SDDModeSingle,
-	}); err != nil {
-		t.Fatalf("executing the advertised continuation (sync) failed: %v", err)
+	// Convergence (#4434's invariant, not just the rendered shape): execute the
+	// emitted continuation command exactly as printed -- through executable
+	// startup, CLI dispatch, and flag parsing. This test binary IS the anchored
+	// executable, and TestMain routes its CLI arguments to the real sync
+	// dispatch under the stand-in guard, so the command line the refusal
+	// advertised is the command line that runs, against the same captured home.
+	argv := splitContinuationCommand(status.NextTransition.Continuation.Command)
+	if len(argv) != 4 || argv[0] != invoking || argv[1] != "sync" || argv[2] != "--agent" || argv[3] != "opencode" {
+		t.Fatalf("continuation command %q split to argv %q, want the invoking executable %q plus the sync dispatch", status.NextTransition.Continuation.Command, argv, invoking)
+	}
+	standin := exec.Command(argv[0], argv[1:]...)
+	standin.Env = append(os.Environ(), "GENTLE_AI_TEST_CLI_STANDIN=1")
+	if out, err := standin.CombinedOutput(); err != nil {
+		t.Fatalf("executing the advertised continuation %q failed: %v\n%s", status.NextTransition.Continuation.Command, err, out)
 	}
 	var convergedOutput bytes.Buffer
 	if err := RunReview([]string{
@@ -451,6 +457,42 @@ func managedAssetsTestContinuationCommand(t *testing.T, agent string) string {
 	executable, err := os.Executable()
 	requireManagedAssetProvenanceNoError(t, err)
 	return managedAssetsExecutableToken(executable) + " sync --agent " + agent
+}
+
+// splitContinuationCommand splits one rendered continuation command into its
+// argv, honoring both quoting forms the renderer may emit (POSIX single quotes
+// and Windows double quotes) by unquoting, not by shelling out. It is written
+// independently of the production renderer so the regression's execution path
+// cannot agree with it by construction.
+func splitContinuationCommand(command string) []string {
+	var argv []string
+	var token strings.Builder
+	var open byte
+	flush := func() {
+		if token.Len() > 0 {
+			argv = append(argv, token.String())
+			token.Reset()
+		}
+	}
+	for index := 0; index < len(command); index++ {
+		c := command[index]
+		switch {
+		case open != 0:
+			if c == open {
+				open = 0
+			} else {
+				token.WriteByte(c)
+			}
+		case c == '\'' || c == '"':
+			open = c
+		case c == ' ' || c == '\t':
+			flush()
+		default:
+			token.WriteByte(c)
+		}
+	}
+	flush()
+	return argv
 }
 
 // staleManagedReviewerAssets records an asset digest that disagrees with this
