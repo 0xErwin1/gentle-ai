@@ -665,6 +665,9 @@ func targetStatusForCandidate(result TargetStatusResult, candidate targetStatusC
 		result.OriginalChangedLines, result.Tier, result.CorrectionBudget, result.CorrectionBudgetPolicy = state.OriginalChangedLines, state.RiskLevel, state.CorrectionBudget, state.CorrectionBudgetPolicy
 		result.SelectedLenses = append([]string{}, state.SelectedLenses...)
 		result.Projection = targetProjectionFromCompact(state, result.Projection)
+		if state.State == StateEscalated {
+			result.Escalation = state.EscalationEvidence()
+		}
 		if candidate.frozenReviewing && !candidate.frozenReviewingPendingSlots && candidate.frozenReviewingDrifted {
 			result.Action, result.Replayability = TargetStatusActionStop, ReplayabilityManualActionRequired
 			return result
@@ -676,7 +679,6 @@ func targetStatusForCandidate(result TargetStatusResult, candidate targetStatusC
 			return result
 		}
 		if state.State == StateEscalated {
-			result.Escalation = state.EscalationEvidence()
 			result.Action, result.Replayability = TargetStatusActionStop, ReplayabilityManualActionRequired
 			return result
 		}

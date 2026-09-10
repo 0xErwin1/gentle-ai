@@ -229,7 +229,7 @@ func newReviewTargetStatusResultForContract(native reviewtransaction.TargetStatu
 		native.AuthorityTargetIdentity != "" && native.AuthorityTargetIdentity != native.TargetIdentity {
 		result.AuthorityTargetIdentity = native.AuthorityTargetIdentity
 	}
-	if native.Escalation != nil {
+	if native.Escalation != nil && schema == ReviewIntegrationStatusSchemaV7 {
 		result.Escalation = native.Escalation
 	}
 	if native.Applicability != reviewtransaction.TargetApplicabilityCurrent {
@@ -521,8 +521,13 @@ func (result ReviewTargetStatusResult) validateWithCompactAuthority(authority *r
 	default:
 		return errors.New("unsupported review status recovery disposition")
 	}
-	if (result.Authority != nil && result.Authority.Version == reviewtransaction.AuthorityVersionCompact && result.Authority.State == reviewtransaction.StateEscalated) != (result.Escalation != nil) {
-		return errors.New("status escalation must match escalated authority")
+	if result.Escalation != nil && result.Schema != ReviewIntegrationStatusSchemaV7 {
+		return errors.New("status escalation requires review status schema v7") // refusal:by-design world-action: only the provider can omit escalation from a pre-v7 envelope or publish the v7 identity that defines it
+	}
+	escalationRequired := result.Schema == ReviewIntegrationStatusSchemaV7 && result.Authority != nil &&
+		result.Authority.Version == reviewtransaction.AuthorityVersionCompact && result.Authority.State == reviewtransaction.StateEscalated
+	if escalationRequired != (result.Escalation != nil) {
+		return errors.New("status escalation must match escalated authority") // refusal:by-design world-action: only the provider can project canonical escalation evidence for a v7 compact authority
 	}
 	return nil
 }
