@@ -103,6 +103,11 @@ func TestPublishedLastEventClosureSchemaAcceptsApprovedTerminalCapture(t *testin
 
 	schema := compileWholePublishedReviewSchema(t, "v2", "last-event-closure.schema.json")
 	validatePublishedReviewSchema(t, schema, output.Bytes())
+	closure := decodeJSONObjectCopy(t, output.Bytes())
+	closure["escalation"] = map[string]any{"cause": "unresolved_severe_findings", "finding_ids": []any{}}
+	if err := schema.Validate(closure); err == nil {
+		t.Fatal("published last-event closure schema accepted escalation on approved state")
+	}
 }
 
 func TestPublishedLastEventClosureSchemaAcceptsTerminalRefuterCapture(t *testing.T) {
