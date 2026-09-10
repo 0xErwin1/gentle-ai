@@ -136,11 +136,11 @@ Gentle-AI does not ask the model to guess what comes next. The **`gentle-ai` bin
 
 ---
 
-### Gentle Shell — See Pi work more clearly
+### Gentle Shell — A complete workspace for Pi
 
-<img width="100%" src="docs/assets/features/gentle-shell.png" alt="Gentle-Shell running an SDD sub-agent, with the todo list and the live context and spend bar" />
+<img width="100%" src="docs/assets/features/gentle-shell.png" alt="Gentle Shell running an SDD sub-agent, with the todo list and live context and spend information" />
 
-**The way Gentle-AI was intended.** Gentle-AI gives Pi a clearer coding experience: Gentle Shell is the visual layer for a live context gauge, session-cost display, and a working-tree changes/diff view with <kbd>Alt+G</kbd> or `/gentle:changes`; the wider gentle-pi package and extensions provide agent orchestration and supported-provider account usage.
+**The way Gentle-AI was intended.** Gentle-AI brings our native Pi extensions together in one focused development environment: orchestrate specialized agents, monitor usage for supported provider accounts, and review code changes in a built-in diff.
 
 **[Docs →](docs/pi.md)**
 
