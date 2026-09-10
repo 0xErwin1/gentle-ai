@@ -69,32 +69,30 @@ and no way to prove what it did beyond asking you to read every line.
 
 <sub><strong>WORKS WITH THE AGENT YOU ALREADY HAVE</strong></sub>
 
-<img src="https://img.shields.io/badge/Claude%20Code-F095C8?style=for-the-badge&labelColor=1A1218" alt="Claude Code">
-<img src="https://img.shields.io/badge/OpenCode-F095C8?style=for-the-badge&labelColor=1A1218" alt="OpenCode">
-<img src="https://img.shields.io/badge/Codex-F095C8?style=for-the-badge&labelColor=1A1218" alt="Codex">
-<img src="https://img.shields.io/badge/Cursor-F095C8?style=for-the-badge&labelColor=1A1218" alt="Cursor">
-<img src="https://img.shields.io/badge/VS%20Code%20Copilot-F095C8?style=for-the-badge&labelColor=1A1218" alt="VS Code Copilot">
-<img src="https://img.shields.io/badge/Gemini%20CLI-F095C8?style=for-the-badge&labelColor=1A1218" alt="Gemini CLI">
-<img src="https://img.shields.io/badge/Pi-F095C8?style=for-the-badge&labelColor=1A1218" alt="Pi">
-<img src="https://img.shields.io/badge/Kilo%20Code-D7A0B8?style=for-the-badge&labelColor=1A1218" alt="Kilo Code">
-<img src="https://img.shields.io/badge/Kimi%20Code-D7A0B8?style=for-the-badge&labelColor=1A1218" alt="Kimi Code">
-<img src="https://img.shields.io/badge/Kiro%20IDE-D7A0B8?style=for-the-badge&labelColor=1A1218" alt="Kiro IDE">
-<img src="https://img.shields.io/badge/Qwen%20Code-D7A0B8?style=for-the-badge&labelColor=1A1218" alt="Qwen Code">
-<img src="https://img.shields.io/badge/Hermes-D7A0B8?style=for-the-badge&labelColor=1A1218" alt="Hermes">
-<img src="https://img.shields.io/badge/Antigravity-D7A0B8?style=for-the-badge&labelColor=1A1218" alt="Antigravity">
-<img src="https://img.shields.io/badge/Windsurf-D7A0B8?style=for-the-badge&labelColor=1A1218" alt="Windsurf">
-<img src="https://img.shields.io/badge/OpenClaw-D7A0B8?style=for-the-badge&labelColor=1A1218" alt="OpenClaw">
-<img src="https://img.shields.io/badge/Trae-D7A0B8?style=for-the-badge&labelColor=1A1218" alt="Trae">
+<strong><a href="docs/agents.md#pi">Pi</a></strong> ·
+<strong><a href="docs/agents.md#opencode">OpenCode</a></strong> ·
+<strong><a href="docs/agents.md#claude-code">Claude Code</a></strong> ·
+<strong><a href="docs/agents.md#codex">Codex</a></strong> ·
+<strong><a href="docs/agents.md#cursor">Cursor</a></strong> ·
+<strong><a href="docs/agents.md#vs-code-copilot">VS Code Copilot</a></strong> ·
+<strong><a href="docs/agents.md#gemini-cli">Gemini CLI</a></strong> ·
+<strong><a href="docs/agents.md#kilo-code">Kilo Code</a></strong><br/>
+<strong><a href="docs/agents.md#kimi-code">Kimi Code</a></strong> ·
+<strong><a href="docs/agents.md#kiro-ide">Kiro IDE</a></strong> ·
+<strong><a href="docs/agents.md#qwen-code">Qwen Code</a></strong> ·
+<strong><a href="docs/agents.md#hermes">Hermes</a></strong> ·
+<strong><a href="docs/agents.md#antigravity">Antigravity</a></strong> ·
+<strong><a href="docs/agents.md#windsurf">Windsurf</a></strong> ·
+<strong><a href="docs/agents.md#openclaw">OpenClaw</a></strong> ·
+<strong><a href="docs/agents.md#trae">Trae</a></strong>
+
+<sub>16 integrations · native configuration · <a href="docs/agents.md">compare capabilities →</a></sub>
 
 </div>
 
 <div align="center"><img src="docs/assets/brand/rose.png" width="28" alt="" /></div>
 
 ## Features
-
-<table>
-<tr>
-<td width="50%" valign="top">
 
 <img width="100%" src="docs/assets/features/engram.png" alt="A brand-new session recalling a product decision from an earlier one, without reading a single file" />
 
@@ -104,83 +102,59 @@ Decisions, bug fixes and conventions survive sessions, restarts and compaction. 
 
 **[Docs →](docs/engram.md)**
 
-</td>
-<td width="50%" valign="top">
-
 <img width="100%" src="docs/assets/features/sdd.png" alt="A finished SDD cycle: ten tasks done, 4 of 4 requirements and 12 of 12 scenarios verified, 14 tests passing, spec synced and the change archived" />
 
 ### SDD — spec-driven, our way
 
-Research → Spec → Design → Tasks → strict TDD → **Verify**. An independent phase audits the RED/GREEN trail, so the agent never grades its own homework.
+Explore → Research (optional) → Proposal → Spec → Design → Tasks → Apply (with TDD when appropriate) → Verify → Archive. Apply records RED/GREEN evidence; Verify independently checks it.
 
 **[Docs →](docs/intended-usage.md)**
-
-</td>
-</tr>
-<tr>
-<td width="50%" valign="top">
 
 <img width="100%" src="docs/assets/features/rdd.png" alt="A review that derived its own effort from the frozen candidate, ran the reliability lens, and closed with an explicit acknowledgement" />
 
 ### RDD — we created it
 
-Receipt-Driven Development. The system freezes the exact bytes your agent changed and derives the evidence itself. Zero ceremony on a README. Four reviewers on two lines of auth code. Opt-in, off until you turn it on.
+Receipt-Driven Development is opt-in, risk-classified deep verification of a completed implementation. It freezes the candidate and derives evidence: low risk gets structural readback, medium one focused lens, and high risk the canonical 4R — Risk, Resilience, Readability, Reliability.
 
 **[Docs →](docs/review-integration.md)**
-
-</td>
-<td width="50%" valign="top">
 
 <img width="100%" src="docs/assets/features/deterministic.png" alt="The agent explaining that the SDD status engine chose the next step, not the model, and that a new session reaches the same answer from files on disk" />
 
 ### Deterministic by design
 
-SDD and RDD live in the **`gentle-ai` binary**, not in prompt prose a model can reinterpret. Go freezes the candidate and returns the exact next command; the agent runs it verbatim.
+Native SDD status and RDD review transitions are owned by the **`gentle-ai` binary**. It returns the authoritative next valid transition for each state, so the agent follows the lifecycle instead of inventing it from prompt prose.
 
 **[Docs →](docs/trigger-rules.md)**
 
-</td>
-</tr>
-<tr>
-<td width="50%" valign="top">
-
 <img width="100%" src="docs/assets/features/gentle-shell.png" alt="Gentle-Shell running an SDD sub-agent, with the todo list and the live context and spend bar" />
 
-### Gentle-Shell
+### Gentle Shell
 
-Our interface for Pi. Context and spend as live gauges, <kbd>alt+g</kbd> for a working-tree diff overlay against HEAD, `/gentle:usage` for the provider windows you have left.
+**The way Gentle-AI was intended.** The gentle-pi extension layer turns Pi into a complete coding environment through Pi-native extension points: agent orchestration, a live context gauge, session-cost display, supported-provider account usage, and a working-tree changes/diff view via <kbd>Alt+G</kbd> or `/gentle:changes`.
 
 **[Docs →](docs/pi.md)**
 
-</td>
-<td width="50%" valign="top">
-
 <img width="100%" src="docs/assets/features/agents.png" alt="The installer configuring multiple agents" />
 
-### 16 agents, one behavior
+### 16 agents, shared workflow
 
-Claude Code, Codex, Cursor, OpenCode, Copilot, Gemini and ten more — each configured through **its own native features**. Twelve delegate to focused sub-agents; four run solo. Same workflow on all of them.
+Pi, OpenCode, Claude Code, Codex, and twelve more use a shared workflow adapted to each agent's native capabilities.
 
 **[Docs →](docs/agents.md)**
-
-</td>
-</tr>
-</table>
 
 ### Also in the box
 
 | Component | What it does |
 | :--- | :--- |
 | **Skills library** | Loaded automatically when the task matches |
-| **Context7 MCP** | Live framework and library documentation |
+| **Context7 MCP** | Optional, selectable live framework and library documentation |
 | **CodeGraph** | Read-only symbol graph of your codebase |
 | **Security deny-list** | Blocks `~/.ssh`, `.env` and credential files |
 | **Config backups** | Snapshotted before every single write |
 | **Doctor** | `gentle-ai doctor` — read-only health report |
-| **Personas** | Gentleman, neutral, or a voice of your own |
+| **Personas** | Optional personas; Gentleman is a caring but rigorous mentor who guides you toward your goal |
 | **Themes** | Gentleman and Gentleman-Cute |
-| **Provider switcher** | Swap AI providers on the fly |
-| **OpenCode profiles** | A different model for each SDD phase |
+| **Per-phase model assignment** | Assign a model to each phase in Pi and OpenCode |
 
 > **Every component, skill and preset: [Full breakdown →](docs/components.md)**
 
@@ -191,7 +165,10 @@ Claude Code, Codex, Cursor, OpenCode, Copilot, Gemini and ten more — each conf
 ## Get started
 
 ```bash
-# macOS / Linux
+# macOS (Homebrew)
+brew install gentleman-programming/tap/gentle-ai
+
+# macOS / Linux (curl)
 curl -fsSL https://raw.githubusercontent.com/Gentleman-Programming/gentle-ai/main/scripts/install.sh | bash
 
 # Windows (PowerShell) — source install, needs Go 1.25.10+
@@ -205,7 +182,7 @@ gentle-ai doctor   # verify — read-only, changes nothing
 
 Then use your agent normally. Your configs are snapshotted before every write, and **Gentle-AI never installs an AI agent for you** — it configures what you already have.
 
-> **Homebrew, beta channel, signature verification and per-distro prerequisites: [Quickstart →](docs/quickstart.md)**
+> **Beta channel, signature verification and per-distro prerequisites: [Quickstart →](docs/quickstart.md)**
 
 <div align="right"><a href="#top">Back to top</a></div>
 
