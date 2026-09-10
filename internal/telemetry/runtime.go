@@ -15,7 +15,7 @@ const RuntimeSchema = "gentle-ai.telemetry-runtime-aggregate/v1"
 const RuntimeMaxBytes = 16384
 
 // Public package categories, not proof of runtime authority or agent-name identity.
-const runtimeAgentClasses = "orchestrator|worker|explore|verify|unknown|sdd-init|sdd-explore|sdd-research|sdd-propose|sdd-spec|sdd-design|sdd-tasks|sdd-apply|sdd-verify|sdd-archive|sdd-onboard|jd-judge-a|jd-judge-b|jd-fix-agent|review-risk|review-readability|review-reliability|review-resilience|review-refuter|review-validator"
+const runtimeAgentClasses = "orchestrator|worker|explore|verify|unknown|sdd-init|sdd-explore|sdd-research|sdd-propose|sdd-spec|sdd-design|sdd-tasks|sdd-apply|sdd-verify|sdd-archive|sdd-onboard|sdd-status|sdd-sync|jd-judge-a|jd-judge-b|jd-fix-agent|review-risk|review-readability|review-reliability|review-resilience|review-refuter|review-validator"
 const runtimeEfforts = "off|minimal|low|medium|high|xhigh|max|not_selected|unknown|custom|unavailable|unsupported"
 
 // RuntimeBatch is the sanitized stdin aggregate, not a persistent batch.

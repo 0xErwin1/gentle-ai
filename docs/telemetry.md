@@ -95,7 +95,7 @@ cumulative snapshots. No parent-child links or source IDs exist.
 Canonical `agent_class` values are:
 
 - Fixed classes: `orchestrator`, `worker`, `explore`, `verify`, `unknown`
-- SDD agents: `sdd-init`, `sdd-explore`, `sdd-research`, `sdd-propose`, `sdd-spec`, `sdd-design`, `sdd-tasks`, `sdd-apply`, `sdd-verify`, `sdd-archive`, `sdd-onboard`
+- SDD agents: `sdd-init`, `sdd-explore`, `sdd-research`, `sdd-propose`, `sdd-spec`, `sdd-design`, `sdd-tasks`, `sdd-apply`, `sdd-verify`, `sdd-archive`, `sdd-onboard`, `sdd-status`, `sdd-sync`
 - Judgment Day agents: `jd-judge-a`, `jd-judge-b`, `jd-fix-agent`
 - Review agents: `review-risk`, `review-readability`, `review-reliability`, `review-resilience`, `review-refuter`, `review-validator`
 
