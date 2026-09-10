@@ -161,7 +161,7 @@ Claude Code, Codex, Cursor, OpenCode, Copilot, Gemini and ten more — each conf
 
 **[Docs →](docs/agents.md)**
 
-<img width="100%" src="docs/assets/features/agents.gif" alt="The installer configuring multiple agents" />
+<img width="100%" src="docs/assets/features/agents.png" alt="The installer configuring multiple agents" />
 
 </td>
 </tr>
