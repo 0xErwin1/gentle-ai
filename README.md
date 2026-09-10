@@ -110,7 +110,7 @@ Gentle-AI keeps your decisions, bug fixes, and conventions available across sess
 
 <img width="100%" src="docs/assets/features/sdd.png" alt="A finished SDD cycle: ten tasks done, 4 of 4 requirements and 12 of 12 scenarios verified, 14 tests passing, spec synced and the change archived" />
 
-Gentle-AI turns a vague request into a visible path: Explore → Research (optional) → Proposal → Spec → Design → Tasks → Apply (with TDD when appropriate) → Verify → Archive. TDD (test-driven development) belongs in Apply when it fits; Verify independently checks the evidence, so you can see what was actually checked.
+Gentle-AI turns a vague request into a visible path: Init → Explore → Research (optional) → Proposal → Spec → Design → Tasks → Apply (with TDD when appropriate) → Verify → Archive. TDD (test-driven development) belongs in Apply when it fits; Verify independently checks the evidence, so you can see what was actually checked.
 
 **[Docs →](docs/intended-usage.md)**
 
