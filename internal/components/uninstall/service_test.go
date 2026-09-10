@@ -15,16 +15,93 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v2/internal/agents"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/claude"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/codex"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/opencode"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/pi"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/backup"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/components/communitytool"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/components/engram"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/components/gga"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/components/sdd"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/components/telemetryruntime"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
 	opencodeactivation "github.com/gentleman-programming/gentle-ai/v2/internal/opencode"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/state"
 )
+
+func TestUninstallOpenCodeTelemetryOwnershipAndScope(t *testing.T) {
+	for _, kind := range []string{"owned", "modified", "modified-after-plan", "unowned", "other-agent", "component-only"} {
+		t.Run(kind, func(t *testing.T) {
+			home := t.TempDir()
+			t.Setenv("HOME", home)
+			t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, "xdg"))
+			config := opencode.NewAdapter().GlobalConfigDir(home)
+			paths := telemetryruntime.ManagedPaths(config)
+			if kind != "unowned" {
+				if _, err := telemetryruntime.Reconcile(config); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if kind == "modified" || kind == "unowned" {
+				if err := os.MkdirAll(filepath.Dir(paths[0]), 0700); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(paths[0], []byte("user plugin"), 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			sibling := filepath.Join(filepath.Dir(paths[0]), "community.ts")
+			if err := os.WriteFile(sibling, []byte("community"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			svc, err := NewService(home, t.TempDir(), "dev")
+			if err != nil {
+				t.Fatal(err)
+			}
+			agent := model.AgentOpenCode
+			components := allManagedComponents
+			if kind == "other-agent" {
+				agent = model.AgentClaudeCode
+			}
+			if kind == "component-only" {
+				components = []model.ComponentID{model.ComponentSDD}
+			}
+			plan, err := svc.buildPlan([]model.AgentID{agent}, components)
+			var result Result
+			if kind == "modified-after-plan" {
+				if writeErr := os.WriteFile(paths[0], []byte("user plugin"), 0600); writeErr != nil {
+					t.Fatal(writeErr)
+				}
+			}
+			if err == nil {
+				result, err = svc.executePlan(plan, nil)
+			}
+			if strings.HasPrefix(kind, "modified") || kind == "unowned" {
+				if err == nil {
+					t.Fatal("ownership conflict not reported")
+				}
+			} else if err != nil {
+				t.Fatal(err)
+			}
+			if kind == "owned" {
+				for _, path := range paths {
+					if _, err := os.Stat(path); !os.IsNotExist(err) {
+						t.Fatal("owned runtime remains", path)
+					}
+					if !slices.Contains(result.RemovedFiles, path) {
+						t.Fatal("removed file unreported", path)
+					}
+				}
+			} else {
+				if _, err := os.Stat(paths[0]); err != nil {
+					t.Fatal("unrelated/custom runtime removed", err)
+				}
+			}
+			if data, err := os.ReadFile(sibling); err != nil || string(data) != "community" {
+				t.Fatal("community plugin affected")
+			}
+		})
+	}
+}
 
 type stubSnapshotter struct{}
 
