@@ -16,8 +16,8 @@
   "refresh": "1m",
   "panels": [
     {
-      "id": 100,
-      "title": "Adoption",
+      "id": 550,
+      "title": "Active users",
       "type": "row",
       "collapsed": false,
       "panels": [],
@@ -29,13 +29,222 @@
       }
     },
     {
+      "id": 551,
+      "title": "Active users, last 24h",
+      "description": "Installs that opened a Gentle AI session in the last 24 hours; each install reports at most once per day, so shorter windows undercount.",
+      "type": "stat",
+      "gridPos": {
+        "x": 0,
+        "y": 1,
+        "w": 6,
+        "h": 4
+      },
+      "datasource": {
+        "type": "frser-sqlite-datasource",
+        "uid": "gentle-telemetry-sqlite"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "queryType": "table",
+          "queryText": "SELECT COUNT(DISTINCT install_id) AS \"Active users\" FROM events WHERE received_at >= (CAST(strftime('%s', 'now') AS INTEGER) - 86400) * 1000000000 AND received_at <= CAST(strftime('%s', 'now') AS INTEGER) * 1000000000 HAVING COUNT(*) > 0",
+          "rawQueryText": "SELECT COUNT(DISTINCT install_id) AS \"Active users\" FROM events WHERE received_at >= (CAST(strftime('%s', 'now') AS INTEGER) - 86400) * 1000000000 AND received_at <= CAST(strftime('%s', 'now') AS INTEGER) * 1000000000 HAVING COUNT(*) > 0"
+        }
+      ],
+      "options": {
+        "orientation": "horizontal",
+        "textMode": "value",
+        "colorMode": "value",
+        "graphMode": "none",
+        "reduceOptions": {
+          "values": false,
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": ""
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "locale",
+          "min": 0,
+          "decimals": 0,
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "#73BF69"
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 552,
+      "title": "Active users, last 6h",
+      "description": "Distinct installs seen in the last six hours provide a directional view of recent tool use.",
+      "type": "stat",
+      "gridPos": {
+        "x": 6,
+        "y": 1,
+        "w": 6,
+        "h": 4
+      },
+      "datasource": {
+        "type": "frser-sqlite-datasource",
+        "uid": "gentle-telemetry-sqlite"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "queryType": "table",
+          "queryText": "SELECT COUNT(DISTINCT install_id) AS \"Active users\" FROM events WHERE received_at >= (CAST(strftime('%s', 'now') AS INTEGER) - 21600) * 1000000000 AND received_at <= CAST(strftime('%s', 'now') AS INTEGER) * 1000000000 HAVING COUNT(*) > 0",
+          "rawQueryText": "SELECT COUNT(DISTINCT install_id) AS \"Active users\" FROM events WHERE received_at >= (CAST(strftime('%s', 'now') AS INTEGER) - 21600) * 1000000000 AND received_at <= CAST(strftime('%s', 'now') AS INTEGER) * 1000000000 HAVING COUNT(*) > 0"
+        }
+      ],
+      "options": {
+        "orientation": "horizontal",
+        "textMode": "value",
+        "colorMode": "value",
+        "graphMode": "none",
+        "reduceOptions": {
+          "values": false,
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": ""
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "locale",
+          "min": 0,
+          "decimals": 0,
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "#73BF69"
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 553,
+      "title": "Active users, last 1h",
+      "description": "Distinct installs seen in the last hour provide a directional view of immediate tool use.",
+      "type": "stat",
+      "gridPos": {
+        "x": 12,
+        "y": 1,
+        "w": 6,
+        "h": 4
+      },
+      "datasource": {
+        "type": "frser-sqlite-datasource",
+        "uid": "gentle-telemetry-sqlite"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "queryType": "table",
+          "queryText": "SELECT COUNT(DISTINCT install_id) AS \"Active users\" FROM events WHERE received_at >= (CAST(strftime('%s', 'now') AS INTEGER) - 3600) * 1000000000 AND received_at <= CAST(strftime('%s', 'now') AS INTEGER) * 1000000000 HAVING COUNT(*) > 0",
+          "rawQueryText": "SELECT COUNT(DISTINCT install_id) AS \"Active users\" FROM events WHERE received_at >= (CAST(strftime('%s', 'now') AS INTEGER) - 3600) * 1000000000 AND received_at <= CAST(strftime('%s', 'now') AS INTEGER) * 1000000000 HAVING COUNT(*) > 0"
+        }
+      ],
+      "options": {
+        "orientation": "horizontal",
+        "textMode": "value",
+        "colorMode": "value",
+        "graphMode": "none",
+        "reduceOptions": {
+          "values": false,
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": ""
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "locale",
+          "min": 0,
+          "decimals": 0,
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "#73BF69"
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 554,
+      "title": "Active users, last 15 min",
+      "description": "Distinct installs seen in the last 15 minutes provide a directional view of live tool use.",
+      "type": "stat",
+      "gridPos": {
+        "x": 18,
+        "y": 1,
+        "w": 6,
+        "h": 4
+      },
+      "datasource": {
+        "type": "frser-sqlite-datasource",
+        "uid": "gentle-telemetry-sqlite"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "queryType": "table",
+          "queryText": "SELECT COUNT(DISTINCT install_id) AS \"Active users\" FROM events WHERE received_at >= (CAST(strftime('%s', 'now') AS INTEGER) - 900) * 1000000000 AND received_at <= CAST(strftime('%s', 'now') AS INTEGER) * 1000000000 HAVING COUNT(*) > 0",
+          "rawQueryText": "SELECT COUNT(DISTINCT install_id) AS \"Active users\" FROM events WHERE received_at >= (CAST(strftime('%s', 'now') AS INTEGER) - 900) * 1000000000 AND received_at <= CAST(strftime('%s', 'now') AS INTEGER) * 1000000000 HAVING COUNT(*) > 0"
+        }
+      ],
+      "options": {
+        "orientation": "horizontal",
+        "textMode": "value",
+        "colorMode": "value",
+        "graphMode": "none",
+        "reduceOptions": {
+          "values": false,
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": ""
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "locale",
+          "min": 0,
+          "decimals": 0,
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "#73BF69"
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 100,
+      "title": "Adoption",
+      "type": "row",
+      "collapsed": false,
+      "panels": [],
+      "gridPos": {
+        "x": 0,
+        "y": 5,
+        "w": 24,
+        "h": 1
+      }
+    },
+    {
       "id": 101,
       "title": "Unique installs all-time",
       "description": "All installations ever observed, counted once regardless of the selected time range.",
       "type": "stat",
       "gridPos": {
         "x": 0,
-        "y": 1,
+        "y": 6,
         "w": 6,
         "h": 4
       },
@@ -84,7 +293,7 @@
       "type": "stat",
       "gridPos": {
         "x": 6,
-        "y": 1,
+        "y": 6,
         "w": 6,
         "h": 4
       },
@@ -133,7 +342,7 @@
       "type": "stat",
       "gridPos": {
         "x": 12,
-        "y": 1,
+        "y": 6,
         "w": 6,
         "h": 4
       },
@@ -182,7 +391,7 @@
       "type": "stat",
       "gridPos": {
         "x": 18,
-        "y": 1,
+        "y": 6,
         "w": 6,
         "h": 4
       },
@@ -231,7 +440,7 @@
       "type": "stat",
       "gridPos": {
         "x": 0,
-        "y": 5,
+        "y": 10,
         "w": 6,
         "h": 4
       },
@@ -280,7 +489,7 @@
       "type": "stat",
       "gridPos": {
         "x": 6,
-        "y": 5,
+        "y": 10,
         "w": 6,
         "h": 4
       },
@@ -329,7 +538,7 @@
       "type": "stat",
       "gridPos": {
         "x": 12,
-        "y": 5,
+        "y": 10,
         "w": 6,
         "h": 4
       },
@@ -378,7 +587,7 @@
       "type": "stat",
       "gridPos": {
         "x": 18,
-        "y": 5,
+        "y": 10,
         "w": 6,
         "h": 4
       },
@@ -428,7 +637,7 @@
       "panels": [],
       "gridPos": {
         "x": 0,
-        "y": 9,
+        "y": 14,
         "w": 24,
         "h": 1
       }
@@ -440,7 +649,7 @@
       "type": "timeseries",
       "gridPos": {
         "x": 0,
-        "y": 10,
+        "y": 15,
         "w": 8,
         "h": 8
       },
@@ -486,7 +695,7 @@
       "type": "timeseries",
       "gridPos": {
         "x": 8,
-        "y": 10,
+        "y": 15,
         "w": 8,
         "h": 8
       },
@@ -532,7 +741,7 @@
       "type": "timeseries",
       "gridPos": {
         "x": 16,
-        "y": 10,
+        "y": 15,
         "w": 8,
         "h": 8
       },
@@ -579,7 +788,7 @@
       "panels": [],
       "gridPos": {
         "x": 0,
-        "y": 18,
+        "y": 23,
         "w": 24,
         "h": 1
       }
@@ -591,7 +800,7 @@
       "type": "barchart",
       "gridPos": {
         "x": 0,
-        "y": 19,
+        "y": 24,
         "w": 6,
         "h": 8
       },
@@ -635,7 +844,7 @@
       "type": "barchart",
       "gridPos": {
         "x": 6,
-        "y": 19,
+        "y": 24,
         "w": 6,
         "h": 8
       },
@@ -679,7 +888,7 @@
       "type": "barchart",
       "gridPos": {
         "x": 12,
-        "y": 19,
+        "y": 24,
         "w": 6,
         "h": 8
       },
@@ -723,7 +932,7 @@
       "type": "barchart",
       "gridPos": {
         "x": 18,
-        "y": 19,
+        "y": 24,
         "w": 6,
         "h": 8
       },
@@ -768,9 +977,397 @@
       "panels": [],
       "gridPos": {
         "x": 0,
-        "y": 27,
+        "y": 32,
         "w": 24,
         "h": 1
+      }
+    },
+    {
+      "id": 600,
+      "title": "Live activity",
+      "type": "row",
+      "collapsed": false,
+      "panels": [],
+      "gridPos": {
+        "x": 0,
+        "y": 33,
+        "w": 24,
+        "h": 1
+      }
+    },
+    {
+      "id": 601,
+      "title": "Deliveries, last 15 min",
+      "description": "This anonymous activity counts agent responses, not people, and shows telemetry deliveries received in the last 15 minutes.",
+      "type": "stat",
+      "gridPos": {
+        "x": 0,
+        "y": 34,
+        "w": 6,
+        "h": 4
+      },
+      "datasource": {
+        "type": "frser-sqlite-datasource",
+        "uid": "gentle-telemetry-sqlite"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "queryType": "table",
+          "queryText": "SELECT COUNT(DISTINCT d.delivery_id) AS Deliveries FROM runtime_deliveries d WHERE d.received_at >= (CAST(strftime('%s', 'now') AS INTEGER) - 900) * 1000000000 AND d.received_at <= CAST(strftime('%s', 'now') AS INTEGER) * 1000000000 HAVING COUNT(*) > 0",
+          "rawQueryText": "SELECT COUNT(DISTINCT d.delivery_id) AS Deliveries FROM runtime_deliveries d WHERE d.received_at >= (CAST(strftime('%s', 'now') AS INTEGER) - 900) * 1000000000 AND d.received_at <= CAST(strftime('%s', 'now') AS INTEGER) * 1000000000 HAVING COUNT(*) > 0"
+        }
+      ],
+      "options": {
+        "orientation": "horizontal",
+        "textMode": "value",
+        "colorMode": "value",
+        "graphMode": "none",
+        "reduceOptions": {
+          "values": false,
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": ""
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "locale",
+          "min": 0,
+          "decimals": 0,
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "#73BF69"
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 602,
+      "title": "Responses, last 15 min",
+      "description": "This anonymous activity counts agent responses, not people, received in the last 15 minutes.",
+      "type": "stat",
+      "gridPos": {
+        "x": 6,
+        "y": 34,
+        "w": 6,
+        "h": 4
+      },
+      "datasource": {
+        "type": "frser-sqlite-datasource",
+        "uid": "gentle-telemetry-sqlite"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "queryType": "table",
+          "queryText": "SELECT SUM(CASE WHEN json_type(r.row_json, '$.responses') = 'integer' THEN json_extract(r.row_json, '$.responses') ELSE 0 END) AS Responses FROM runtime_rows r JOIN runtime_deliveries d ON d.delivery_id = r.delivery_id WHERE d.received_at >= (CAST(strftime('%s', 'now') AS INTEGER) - 900) * 1000000000 AND d.received_at <= CAST(strftime('%s', 'now') AS INTEGER) * 1000000000 HAVING COUNT(*) > 0",
+          "rawQueryText": "SELECT SUM(CASE WHEN json_type(r.row_json, '$.responses') = 'integer' THEN json_extract(r.row_json, '$.responses') ELSE 0 END) AS Responses FROM runtime_rows r JOIN runtime_deliveries d ON d.delivery_id = r.delivery_id WHERE d.received_at >= (CAST(strftime('%s', 'now') AS INTEGER) - 900) * 1000000000 AND d.received_at <= CAST(strftime('%s', 'now') AS INTEGER) * 1000000000 HAVING COUNT(*) > 0"
+        }
+      ],
+      "options": {
+        "orientation": "horizontal",
+        "textMode": "value",
+        "colorMode": "value",
+        "graphMode": "none",
+        "reduceOptions": {
+          "values": false,
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": ""
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "locale",
+          "min": 0,
+          "decimals": 0,
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "#73BF69"
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 603,
+      "title": "Tokens processed, last 15 min",
+      "description": "This anonymous activity counts agent responses, not people, and totals their derived token volume over the last 15 minutes.",
+      "type": "stat",
+      "gridPos": {
+        "x": 12,
+        "y": 34,
+        "w": 6,
+        "h": 4
+      },
+      "datasource": {
+        "type": "frser-sqlite-datasource",
+        "uid": "gentle-telemetry-sqlite"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "queryType": "table",
+          "queryText": "SELECT SUM((CASE WHEN json_extract(r.row_json, '$.input_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.input_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.output_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.output_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.cache_read_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.cache_read_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.cache_creation_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.cache_creation_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.reasoning_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.reasoning_tokens.sum'), 0) ELSE 0 END)) AS \"Tokens processed\" FROM runtime_rows r JOIN runtime_deliveries d ON d.delivery_id = r.delivery_id WHERE d.received_at >= (CAST(strftime('%s', 'now') AS INTEGER) - 900) * 1000000000 AND d.received_at <= CAST(strftime('%s', 'now') AS INTEGER) * 1000000000 HAVING COUNT(*) > 0",
+          "rawQueryText": "SELECT SUM((CASE WHEN json_extract(r.row_json, '$.input_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.input_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.output_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.output_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.cache_read_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.cache_read_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.cache_creation_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.cache_creation_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.reasoning_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.reasoning_tokens.sum'), 0) ELSE 0 END)) AS \"Tokens processed\" FROM runtime_rows r JOIN runtime_deliveries d ON d.delivery_id = r.delivery_id WHERE d.received_at >= (CAST(strftime('%s', 'now') AS INTEGER) - 900) * 1000000000 AND d.received_at <= CAST(strftime('%s', 'now') AS INTEGER) * 1000000000 HAVING COUNT(*) > 0"
+        }
+      ],
+      "options": {
+        "orientation": "horizontal",
+        "textMode": "value",
+        "colorMode": "value",
+        "graphMode": "none",
+        "reduceOptions": {
+          "values": false,
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": ""
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "locale",
+          "min": 0,
+          "decimals": 0,
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "#73BF69"
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 604,
+      "title": "Hosts active, last 15 min",
+      "description": "This anonymous activity counts agent responses, not people, and shows distinct reporting host types over the last 15 minutes.",
+      "type": "stat",
+      "gridPos": {
+        "x": 18,
+        "y": 34,
+        "w": 6,
+        "h": 4
+      },
+      "datasource": {
+        "type": "frser-sqlite-datasource",
+        "uid": "gentle-telemetry-sqlite"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "queryType": "table",
+          "queryText": "SELECT COUNT(DISTINCT COALESCE(NULLIF(json_extract(d.canonical_payload, '$.host'), ''), 'unknown')) AS \"Hosts active\" FROM runtime_deliveries d WHERE d.received_at >= (CAST(strftime('%s', 'now') AS INTEGER) - 900) * 1000000000 AND d.received_at <= CAST(strftime('%s', 'now') AS INTEGER) * 1000000000 HAVING COUNT(*) > 0",
+          "rawQueryText": "SELECT COUNT(DISTINCT COALESCE(NULLIF(json_extract(d.canonical_payload, '$.host'), ''), 'unknown')) AS \"Hosts active\" FROM runtime_deliveries d WHERE d.received_at >= (CAST(strftime('%s', 'now') AS INTEGER) - 900) * 1000000000 AND d.received_at <= CAST(strftime('%s', 'now') AS INTEGER) * 1000000000 HAVING COUNT(*) > 0"
+        }
+      ],
+      "options": {
+        "orientation": "horizontal",
+        "textMode": "value",
+        "colorMode": "value",
+        "graphMode": "none",
+        "reduceOptions": {
+          "values": false,
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": ""
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "locale",
+          "min": 0,
+          "decimals": 0,
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "#73BF69"
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 605,
+      "title": "Responses per minute by host (last 3h)",
+      "description": "This anonymous activity counts agent responses, not people, and shows their per-minute host distribution over the last three hours.",
+      "type": "timeseries",
+      "timeFrom": "3h",
+      "gridPos": {
+        "x": 0,
+        "y": 38,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "type": "frser-sqlite-datasource",
+        "uid": "gentle-telemetry-sqlite"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "queryType": "table",
+          "queryText": "SELECT CAST(strftime('%s', strftime('%Y-%m-%d %H:%M:00', d.received_at / 1000000000, 'unixepoch')) AS INTEGER) AS time, SUM(CASE WHEN COALESCE(NULLIF(json_extract(d.canonical_payload, '$.host'), ''), 'unknown') = 'pi' THEN CASE WHEN json_type(r.row_json, '$.responses') = 'integer' THEN json_extract(r.row_json, '$.responses') ELSE 0 END ELSE 0 END) AS pi, SUM(CASE WHEN COALESCE(NULLIF(json_extract(d.canonical_payload, '$.host'), ''), 'unknown') = 'opencode' THEN CASE WHEN json_type(r.row_json, '$.responses') = 'integer' THEN json_extract(r.row_json, '$.responses') ELSE 0 END ELSE 0 END) AS opencode, SUM(CASE WHEN COALESCE(NULLIF(json_extract(d.canonical_payload, '$.host'), ''), 'unknown') = 'claude-code' THEN CASE WHEN json_type(r.row_json, '$.responses') = 'integer' THEN json_extract(r.row_json, '$.responses') ELSE 0 END ELSE 0 END) AS \"claude-code\", SUM(CASE WHEN COALESCE(NULLIF(json_extract(d.canonical_payload, '$.host'), ''), 'unknown') = 'codex' THEN CASE WHEN json_type(r.row_json, '$.responses') = 'integer' THEN json_extract(r.row_json, '$.responses') ELSE 0 END ELSE 0 END) AS codex FROM runtime_rows r JOIN runtime_deliveries d ON d.delivery_id = r.delivery_id WHERE d.received_at >= (CAST(strftime('%s', 'now') AS INTEGER) - 10800) * 1000000000 AND d.received_at <= CAST(strftime('%s', 'now') AS INTEGER) * 1000000000 GROUP BY time ORDER BY time ASC",
+          "rawQueryText": "SELECT CAST(strftime('%s', strftime('%Y-%m-%d %H:%M:00', d.received_at / 1000000000, 'unixepoch')) AS INTEGER) AS time, SUM(CASE WHEN COALESCE(NULLIF(json_extract(d.canonical_payload, '$.host'), ''), 'unknown') = 'pi' THEN CASE WHEN json_type(r.row_json, '$.responses') = 'integer' THEN json_extract(r.row_json, '$.responses') ELSE 0 END ELSE 0 END) AS pi, SUM(CASE WHEN COALESCE(NULLIF(json_extract(d.canonical_payload, '$.host'), ''), 'unknown') = 'opencode' THEN CASE WHEN json_type(r.row_json, '$.responses') = 'integer' THEN json_extract(r.row_json, '$.responses') ELSE 0 END ELSE 0 END) AS opencode, SUM(CASE WHEN COALESCE(NULLIF(json_extract(d.canonical_payload, '$.host'), ''), 'unknown') = 'claude-code' THEN CASE WHEN json_type(r.row_json, '$.responses') = 'integer' THEN json_extract(r.row_json, '$.responses') ELSE 0 END ELSE 0 END) AS \"claude-code\", SUM(CASE WHEN COALESCE(NULLIF(json_extract(d.canonical_payload, '$.host'), ''), 'unknown') = 'codex' THEN CASE WHEN json_type(r.row_json, '$.responses') = 'integer' THEN json_extract(r.row_json, '$.responses') ELSE 0 END ELSE 0 END) AS codex FROM runtime_rows r JOIN runtime_deliveries d ON d.delivery_id = r.delivery_id WHERE d.received_at >= (CAST(strftime('%s', 'now') AS INTEGER) - 10800) * 1000000000 AND d.received_at <= CAST(strftime('%s', 'now') AS INTEGER) * 1000000000 GROUP BY time ORDER BY time ASC",
+          "timeColumns": [
+            "time"
+          ]
+        }
+      ],
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0,
+          "decimals": 0,
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 25,
+            "lineWidth": 2,
+            "showPoints": "never",
+            "stacking": {
+              "mode": "normal",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "pi"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#73BF69"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "opencode"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#5794F2"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "claude-code"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#FF9830"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "codex"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#B877D9"
+                }
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": 606,
+      "title": "Tokens processed per minute (last 3h)",
+      "description": "This anonymous activity counts agent responses, not people, and shows their derived token volume per minute over the last three hours.",
+      "type": "timeseries",
+      "timeFrom": "3h",
+      "gridPos": {
+        "x": 12,
+        "y": 38,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "type": "frser-sqlite-datasource",
+        "uid": "gentle-telemetry-sqlite"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "queryType": "table",
+          "queryText": "SELECT CAST(strftime('%s', strftime('%Y-%m-%d %H:%M:00', d.received_at / 1000000000, 'unixepoch')) AS INTEGER) AS time, SUM((CASE WHEN json_extract(r.row_json, '$.input_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.input_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.output_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.output_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.cache_read_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.cache_read_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.cache_creation_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.cache_creation_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.reasoning_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.reasoning_tokens.sum'), 0) ELSE 0 END)) AS \"Tokens processed\" FROM runtime_rows r JOIN runtime_deliveries d ON d.delivery_id = r.delivery_id WHERE d.received_at >= (CAST(strftime('%s', 'now') AS INTEGER) - 10800) * 1000000000 AND d.received_at <= CAST(strftime('%s', 'now') AS INTEGER) * 1000000000 GROUP BY time ORDER BY time ASC",
+          "rawQueryText": "SELECT CAST(strftime('%s', strftime('%Y-%m-%d %H:%M:00', d.received_at / 1000000000, 'unixepoch')) AS INTEGER) AS time, SUM((CASE WHEN json_extract(r.row_json, '$.input_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.input_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.output_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.output_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.cache_read_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.cache_read_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.cache_creation_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.cache_creation_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.reasoning_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.reasoning_tokens.sum'), 0) ELSE 0 END)) AS \"Tokens processed\" FROM runtime_rows r JOIN runtime_deliveries d ON d.delivery_id = r.delivery_id WHERE d.received_at >= (CAST(strftime('%s', 'now') AS INTEGER) - 10800) * 1000000000 AND d.received_at <= CAST(strftime('%s', 'now') AS INTEGER) * 1000000000 GROUP BY time ORDER BY time ASC",
+          "timeColumns": [
+            "time"
+          ]
+        }
+      ],
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0,
+          "decimals": 0,
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "#8AB8A8"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 25,
+            "lineWidth": 2,
+            "showPoints": "never",
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": []
       }
     },
     {
@@ -780,7 +1377,7 @@
       "type": "stat",
       "gridPos": {
         "x": 0,
-        "y": 28,
+        "y": 46,
         "w": 6,
         "h": 4
       },
@@ -829,7 +1426,7 @@
       "type": "stat",
       "gridPos": {
         "x": 6,
-        "y": 28,
+        "y": 46,
         "w": 6,
         "h": 4
       },
@@ -878,7 +1475,7 @@
       "type": "stat",
       "gridPos": {
         "x": 12,
-        "y": 28,
+        "y": 46,
         "w": 6,
         "h": 4
       },
@@ -927,7 +1524,7 @@
       "type": "stat",
       "gridPos": {
         "x": 18,
-        "y": 28,
+        "y": 46,
         "w": 6,
         "h": 4
       },
@@ -970,15 +1567,321 @@
       }
     },
     {
+      "id": 500,
+      "title": "Subagents",
+      "type": "row",
+      "collapsed": false,
+      "panels": [],
+      "gridPos": {
+        "x": 0,
+        "y": 50,
+        "w": 24,
+        "h": 1
+      }
+    },
+    {
+      "id": 501,
+      "title": "Subagent coverage",
+      "description": "Share of observations attributed to a named subagent.",
+      "type": "stat",
+      "gridPos": {
+        "x": 0,
+        "y": 51,
+        "w": 6,
+        "h": 4
+      },
+      "datasource": {
+        "type": "frser-sqlite-datasource",
+        "uid": "gentle-telemetry-sqlite"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "queryType": "table",
+          "queryText": "SELECT 100.0 * SUM(CASE WHEN COALESCE(NULLIF(json_extract(r.row_json, '$.agent_class'), ''), 'unknown') NOT IN ('orchestrator', 'unknown') THEN 1 ELSE 0 END) / NULLIF(COUNT(*), 0) AS \"Subagent coverage\" FROM runtime_rows r JOIN runtime_deliveries d ON d.delivery_id = r.delivery_id WHERE d.received_at >= ${__from} * 1000000 AND d.received_at <= ${__to} * 1000000 HAVING COUNT(*) > 0",
+          "rawQueryText": "SELECT 100.0 * SUM(CASE WHEN COALESCE(NULLIF(json_extract(r.row_json, '$.agent_class'), ''), 'unknown') NOT IN ('orchestrator', 'unknown') THEN 1 ELSE 0 END) / NULLIF(COUNT(*), 0) AS \"Subagent coverage\" FROM runtime_rows r JOIN runtime_deliveries d ON d.delivery_id = r.delivery_id WHERE d.received_at >= ${__from} * 1000000 AND d.received_at <= ${__to} * 1000000 HAVING COUNT(*) > 0"
+        }
+      ],
+      "options": {
+        "orientation": "horizontal",
+        "textMode": "value",
+        "colorMode": "value",
+        "graphMode": "none",
+        "reduceOptions": {
+          "values": false,
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": ""
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "min": 0,
+          "decimals": 0,
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "#8AB8A8"
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 502,
+      "title": "Responses by subagent",
+      "description": "Observed responses and launches show which named subagents ran most often.",
+      "type": "barchart",
+      "gridPos": {
+        "x": 6,
+        "y": 51,
+        "w": 9,
+        "h": 7
+      },
+      "datasource": {
+        "type": "frser-sqlite-datasource",
+        "uid": "gentle-telemetry-sqlite"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "queryType": "table",
+          "queryText": "SELECT CAST(COALESCE(NULLIF(json_extract(r.row_json, '$.agent_class'), ''), 'unknown') AS TEXT) AS Subagent, SUM((COALESCE(CASE WHEN json_type(r.row_json, '$.responses') = 'integer' THEN json_extract(r.row_json, '$.responses') END, 0) + COALESCE(CASE WHEN json_type(r.row_json, '$.launches') = 'integer' THEN json_extract(r.row_json, '$.launches') END, 0))) AS \"Responses\" FROM runtime_rows r JOIN runtime_deliveries d ON d.delivery_id = r.delivery_id WHERE d.received_at >= ${__from} * 1000000 AND d.received_at <= ${__to} * 1000000 AND COALESCE(NULLIF(json_extract(r.row_json, '$.agent_class'), ''), 'unknown') NOT IN ('orchestrator', 'unknown') GROUP BY Subagent HAVING COUNT(*) > 0 ORDER BY \"Responses\" DESC, Subagent ASC LIMIT 1000",
+          "rawQueryText": "SELECT CAST(COALESCE(NULLIF(json_extract(r.row_json, '$.agent_class'), ''), 'unknown') AS TEXT) AS Subagent, SUM((COALESCE(CASE WHEN json_type(r.row_json, '$.responses') = 'integer' THEN json_extract(r.row_json, '$.responses') END, 0) + COALESCE(CASE WHEN json_type(r.row_json, '$.launches') = 'integer' THEN json_extract(r.row_json, '$.launches') END, 0))) AS \"Responses\" FROM runtime_rows r JOIN runtime_deliveries d ON d.delivery_id = r.delivery_id WHERE d.received_at >= ${__from} * 1000000 AND d.received_at <= ${__to} * 1000000 AND COALESCE(NULLIF(json_extract(r.row_json, '$.agent_class'), ''), 'unknown') NOT IN ('orchestrator', 'unknown') GROUP BY Subagent HAVING COUNT(*) > 0 ORDER BY \"Responses\" DESC, Subagent ASC LIMIT 1000"
+        }
+      ],
+      "options": {
+        "orientation": "horizontal",
+        "xField": "Subagent",
+        "showValue": "always",
+        "legend": {
+          "showLegend": false
+        },
+        "barWidth": 0.6,
+        "groupWidth": 0.7
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0,
+          "decimals": 0,
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "#8AB8A8"
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 503,
+      "title": "Tokens processed by subagent",
+      "description": "Derived token volume shows which named subagents handled the most model work.",
+      "type": "barchart",
+      "gridPos": {
+        "x": 15,
+        "y": 51,
+        "w": 9,
+        "h": 7
+      },
+      "datasource": {
+        "type": "frser-sqlite-datasource",
+        "uid": "gentle-telemetry-sqlite"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "queryType": "table",
+          "queryText": "SELECT CAST(COALESCE(NULLIF(json_extract(r.row_json, '$.agent_class'), ''), 'unknown') AS TEXT) AS Subagent, SUM((CASE WHEN json_extract(r.row_json, '$.input_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.input_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.output_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.output_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.cache_read_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.cache_read_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.cache_creation_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.cache_creation_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.reasoning_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.reasoning_tokens.sum'), 0) ELSE 0 END)) AS \"Tokens processed\" FROM runtime_rows r JOIN runtime_deliveries d ON d.delivery_id = r.delivery_id WHERE d.received_at >= ${__from} * 1000000 AND d.received_at <= ${__to} * 1000000 AND COALESCE(NULLIF(json_extract(r.row_json, '$.agent_class'), ''), 'unknown') NOT IN ('orchestrator', 'unknown') GROUP BY Subagent HAVING COUNT(*) > 0 ORDER BY \"Tokens processed\" DESC, Subagent ASC LIMIT 1000",
+          "rawQueryText": "SELECT CAST(COALESCE(NULLIF(json_extract(r.row_json, '$.agent_class'), ''), 'unknown') AS TEXT) AS Subagent, SUM((CASE WHEN json_extract(r.row_json, '$.input_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.input_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.output_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.output_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.cache_read_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.cache_read_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.cache_creation_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.cache_creation_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.reasoning_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.reasoning_tokens.sum'), 0) ELSE 0 END)) AS \"Tokens processed\" FROM runtime_rows r JOIN runtime_deliveries d ON d.delivery_id = r.delivery_id WHERE d.received_at >= ${__from} * 1000000 AND d.received_at <= ${__to} * 1000000 AND COALESCE(NULLIF(json_extract(r.row_json, '$.agent_class'), ''), 'unknown') NOT IN ('orchestrator', 'unknown') GROUP BY Subagent HAVING COUNT(*) > 0 ORDER BY \"Tokens processed\" DESC, Subagent ASC LIMIT 1000"
+        }
+      ],
+      "options": {
+        "orientation": "horizontal",
+        "xField": "Subagent",
+        "showValue": "always",
+        "legend": {
+          "showLegend": false
+        },
+        "barWidth": 0.6,
+        "groupWidth": 0.7
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0,
+          "decimals": 0,
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "#8AB8A8"
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 504,
+      "title": "Subagent model and effort selection",
+      "description": "Shows which named subagent ran on which model and effort, together with launches, responses, and token volume.",
+      "type": "table",
+      "gridPos": {
+        "x": 0,
+        "y": 58,
+        "w": 24,
+        "h": 9
+      },
+      "datasource": {
+        "type": "frser-sqlite-datasource",
+        "uid": "gentle-telemetry-sqlite"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "queryType": "table",
+          "queryText": "SELECT CAST(COALESCE(NULLIF(json_extract(d.canonical_payload, '$.host'), ''), 'unknown') AS TEXT) AS Host, CAST(COALESCE(NULLIF(json_extract(r.row_json, '$.agent_class'), ''), 'unknown') AS TEXT) AS Subagent, COALESCE(NULLIF(json_extract(r.row_json, '$.model.provider'), ''), 'unknown') || '/' || COALESCE(NULLIF(json_extract(r.row_json, '$.model.id'), ''), 'unknown') AS \"Provider/model\", COALESCE(NULLIF(json_extract(r.row_json, '$.model_evidence'), ''), 'unknown') AS Evidence, COALESCE(NULLIF(json_extract(r.row_json, '$.selected_effort'), ''), 'unknown') AS \"Selected effort\", COALESCE(NULLIF(json_extract(r.row_json, '$.effective_effort'), ''), 'unknown') AS \"Effective effort\", SUM(CASE WHEN json_type(r.row_json, '$.launches') = 'integer' THEN json_extract(r.row_json, '$.launches') ELSE 0 END) AS Launches, SUM(CASE WHEN json_type(r.row_json, '$.responses') = 'integer' THEN json_extract(r.row_json, '$.responses') ELSE 0 END) AS Responses, SUM((CASE WHEN json_extract(r.row_json, '$.input_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.input_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.output_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.output_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.cache_read_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.cache_read_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.cache_creation_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.cache_creation_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.reasoning_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.reasoning_tokens.sum'), 0) ELSE 0 END)) AS \"Tokens processed\", ROUND(1.0 * SUM((CASE WHEN json_extract(r.row_json, '$.input_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.input_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.output_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.output_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.cache_read_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.cache_read_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.cache_creation_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.cache_creation_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.reasoning_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.reasoning_tokens.sum'), 0) ELSE 0 END)) / NULLIF(SUM(CASE WHEN json_type(r.row_json, '$.responses') = 'integer' THEN json_extract(r.row_json, '$.responses') ELSE 0 END), 0), 1) AS \"Avg tokens per response\" FROM runtime_rows r JOIN runtime_deliveries d ON d.delivery_id = r.delivery_id WHERE d.received_at >= ${__from} * 1000000 AND d.received_at <= ${__to} * 1000000 AND COALESCE(NULLIF(json_extract(r.row_json, '$.agent_class'), ''), 'unknown') NOT IN ('orchestrator', 'unknown') GROUP BY Host, Subagent, \"Provider/model\", Evidence, \"Selected effort\", \"Effective effort\" HAVING COUNT(*) > 0 ORDER BY Responses DESC, \"Tokens processed\" DESC, Subagent ASC LIMIT 1000",
+          "rawQueryText": "SELECT CAST(COALESCE(NULLIF(json_extract(d.canonical_payload, '$.host'), ''), 'unknown') AS TEXT) AS Host, CAST(COALESCE(NULLIF(json_extract(r.row_json, '$.agent_class'), ''), 'unknown') AS TEXT) AS Subagent, COALESCE(NULLIF(json_extract(r.row_json, '$.model.provider'), ''), 'unknown') || '/' || COALESCE(NULLIF(json_extract(r.row_json, '$.model.id'), ''), 'unknown') AS \"Provider/model\", COALESCE(NULLIF(json_extract(r.row_json, '$.model_evidence'), ''), 'unknown') AS Evidence, COALESCE(NULLIF(json_extract(r.row_json, '$.selected_effort'), ''), 'unknown') AS \"Selected effort\", COALESCE(NULLIF(json_extract(r.row_json, '$.effective_effort'), ''), 'unknown') AS \"Effective effort\", SUM(CASE WHEN json_type(r.row_json, '$.launches') = 'integer' THEN json_extract(r.row_json, '$.launches') ELSE 0 END) AS Launches, SUM(CASE WHEN json_type(r.row_json, '$.responses') = 'integer' THEN json_extract(r.row_json, '$.responses') ELSE 0 END) AS Responses, SUM((CASE WHEN json_extract(r.row_json, '$.input_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.input_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.output_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.output_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.cache_read_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.cache_read_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.cache_creation_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.cache_creation_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.reasoning_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.reasoning_tokens.sum'), 0) ELSE 0 END)) AS \"Tokens processed\", ROUND(1.0 * SUM((CASE WHEN json_extract(r.row_json, '$.input_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.input_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.output_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.output_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.cache_read_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.cache_read_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.cache_creation_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.cache_creation_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.reasoning_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.reasoning_tokens.sum'), 0) ELSE 0 END)) / NULLIF(SUM(CASE WHEN json_type(r.row_json, '$.responses') = 'integer' THEN json_extract(r.row_json, '$.responses') ELSE 0 END), 0), 1) AS \"Avg tokens per response\" FROM runtime_rows r JOIN runtime_deliveries d ON d.delivery_id = r.delivery_id WHERE d.received_at >= ${__from} * 1000000 AND d.received_at <= ${__to} * 1000000 AND COALESCE(NULLIF(json_extract(r.row_json, '$.agent_class'), ''), 'unknown') NOT IN ('orchestrator', 'unknown') GROUP BY Host, Subagent, \"Provider/model\", Evidence, \"Selected effort\", \"Effective effort\" HAVING COUNT(*) > 0 ORDER BY Responses DESC, \"Tokens processed\" DESC, Subagent ASC LIMIT 1000"
+        }
+      ],
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm",
+        "footer": {
+          "enablePagination": false
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Avg tokens per response"
+            },
+            "properties": [
+              {
+                "id": "decimals",
+                "value": 1
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": 505,
+      "title": "Most popular models per subagent",
+      "description": "Ranks the community’s most observed models for each named subagent and shows the effort and hosts behind that usage.",
+      "type": "table",
+      "gridPos": {
+        "x": 0,
+        "y": 67,
+        "w": 24,
+        "h": 9
+      },
+      "datasource": {
+        "type": "frser-sqlite-datasource",
+        "uid": "gentle-telemetry-sqlite"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "queryType": "table",
+          "queryText": "WITH base AS (SELECT CAST(COALESCE(NULLIF(json_extract(r.row_json, '$.agent_class'), ''), 'unknown') AS TEXT) AS Subagent, CAST(COALESCE(NULLIF(json_extract(r.row_json, '$.model.provider'), ''), 'unknown') || '/' || COALESCE(NULLIF(json_extract(r.row_json, '$.model.id'), ''), 'unknown') AS TEXT) AS Model, CAST(COALESCE(NULLIF(json_extract(r.row_json, '$.selected_effort'), ''), 'unknown') AS TEXT) AS Effort, CAST(COALESCE(NULLIF(json_extract(d.canonical_payload, '$.host'), ''), 'unknown') AS TEXT) AS Host, (COALESCE(CASE WHEN json_type(r.row_json, '$.responses') = 'integer' THEN json_extract(r.row_json, '$.responses') END, 0) + COALESCE(CASE WHEN json_type(r.row_json, '$.launches') = 'integer' THEN json_extract(r.row_json, '$.launches') END, 0)) AS Observations FROM runtime_rows r JOIN runtime_deliveries d ON d.delivery_id = r.delivery_id WHERE d.received_at >= ${__from} * 1000000 AND d.received_at <= ${__to} * 1000000 AND COALESCE(NULLIF(json_extract(r.row_json, '$.agent_class'), ''), 'unknown') NOT IN ('orchestrator', 'unknown')), pair_totals AS (SELECT Subagent, Model, SUM(Observations) AS Observations, group_concat(DISTINCT Host) AS Hosts FROM base GROUP BY Subagent, Model), effort_totals AS (SELECT Subagent, Model, Effort, SUM(Observations) AS Observations FROM base GROUP BY Subagent, Model, Effort), effort_ranked AS (SELECT Subagent, Model, Effort, ROW_NUMBER() OVER (PARTITION BY Subagent, Model ORDER BY Observations DESC, Effort ASC) AS effort_rank FROM effort_totals), ranked AS (SELECT p.Subagent, p.Model, e.Effort, p.Observations, p.Hosts, ROW_NUMBER() OVER (PARTITION BY p.Subagent ORDER BY p.Observations DESC, p.Model ASC) AS Rank, SUM(p.Observations) OVER (PARTITION BY p.Subagent) AS subagent_observations FROM pair_totals p JOIN effort_ranked e ON e.Subagent = p.Subagent AND e.Model = p.Model AND e.effort_rank = 1) SELECT Subagent, Rank, Model AS \"Provider/model\", Effort AS \"Most common selected effort\", Observations, ROUND(100.0 * Observations / NULLIF(subagent_observations, 0), 1) AS \"Share of subagent (%)\", Hosts FROM ranked ORDER BY Subagent ASC, Rank ASC LIMIT 1000",
+          "rawQueryText": "WITH base AS (SELECT CAST(COALESCE(NULLIF(json_extract(r.row_json, '$.agent_class'), ''), 'unknown') AS TEXT) AS Subagent, CAST(COALESCE(NULLIF(json_extract(r.row_json, '$.model.provider'), ''), 'unknown') || '/' || COALESCE(NULLIF(json_extract(r.row_json, '$.model.id'), ''), 'unknown') AS TEXT) AS Model, CAST(COALESCE(NULLIF(json_extract(r.row_json, '$.selected_effort'), ''), 'unknown') AS TEXT) AS Effort, CAST(COALESCE(NULLIF(json_extract(d.canonical_payload, '$.host'), ''), 'unknown') AS TEXT) AS Host, (COALESCE(CASE WHEN json_type(r.row_json, '$.responses') = 'integer' THEN json_extract(r.row_json, '$.responses') END, 0) + COALESCE(CASE WHEN json_type(r.row_json, '$.launches') = 'integer' THEN json_extract(r.row_json, '$.launches') END, 0)) AS Observations FROM runtime_rows r JOIN runtime_deliveries d ON d.delivery_id = r.delivery_id WHERE d.received_at >= ${__from} * 1000000 AND d.received_at <= ${__to} * 1000000 AND COALESCE(NULLIF(json_extract(r.row_json, '$.agent_class'), ''), 'unknown') NOT IN ('orchestrator', 'unknown')), pair_totals AS (SELECT Subagent, Model, SUM(Observations) AS Observations, group_concat(DISTINCT Host) AS Hosts FROM base GROUP BY Subagent, Model), effort_totals AS (SELECT Subagent, Model, Effort, SUM(Observations) AS Observations FROM base GROUP BY Subagent, Model, Effort), effort_ranked AS (SELECT Subagent, Model, Effort, ROW_NUMBER() OVER (PARTITION BY Subagent, Model ORDER BY Observations DESC, Effort ASC) AS effort_rank FROM effort_totals), ranked AS (SELECT p.Subagent, p.Model, e.Effort, p.Observations, p.Hosts, ROW_NUMBER() OVER (PARTITION BY p.Subagent ORDER BY p.Observations DESC, p.Model ASC) AS Rank, SUM(p.Observations) OVER (PARTITION BY p.Subagent) AS subagent_observations FROM pair_totals p JOIN effort_ranked e ON e.Subagent = p.Subagent AND e.Model = p.Model AND e.effort_rank = 1) SELECT Subagent, Rank, Model AS \"Provider/model\", Effort AS \"Most common selected effort\", Observations, ROUND(100.0 * Observations / NULLIF(subagent_observations, 0), 1) AS \"Share of subagent (%)\", Hosts FROM ranked ORDER BY Subagent ASC, Rank ASC LIMIT 1000"
+        }
+      ],
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm",
+        "footer": {
+          "enablePagination": false
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Share of subagent (%)"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "percent"
+              },
+              {
+                "id": "decimals",
+                "value": 1
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": 506,
+      "title": "Top model per subagent",
+      "description": "Highlights the most observed model for each named subagent across the selected time range.",
+      "type": "barchart",
+      "gridPos": {
+        "x": 0,
+        "y": 76,
+        "w": 24,
+        "h": 7
+      },
+      "datasource": {
+        "type": "frser-sqlite-datasource",
+        "uid": "gentle-telemetry-sqlite"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "queryType": "table",
+          "queryText": "WITH base AS (SELECT CAST(COALESCE(NULLIF(json_extract(r.row_json, '$.agent_class'), ''), 'unknown') AS TEXT) AS Subagent, CAST(COALESCE(NULLIF(json_extract(r.row_json, '$.model.provider'), ''), 'unknown') || '/' || COALESCE(NULLIF(json_extract(r.row_json, '$.model.id'), ''), 'unknown') AS TEXT) AS Model, CAST(COALESCE(NULLIF(json_extract(r.row_json, '$.selected_effort'), ''), 'unknown') AS TEXT) AS Effort, CAST(COALESCE(NULLIF(json_extract(d.canonical_payload, '$.host'), ''), 'unknown') AS TEXT) AS Host, (COALESCE(CASE WHEN json_type(r.row_json, '$.responses') = 'integer' THEN json_extract(r.row_json, '$.responses') END, 0) + COALESCE(CASE WHEN json_type(r.row_json, '$.launches') = 'integer' THEN json_extract(r.row_json, '$.launches') END, 0)) AS Observations FROM runtime_rows r JOIN runtime_deliveries d ON d.delivery_id = r.delivery_id WHERE d.received_at >= ${__from} * 1000000 AND d.received_at <= ${__to} * 1000000 AND COALESCE(NULLIF(json_extract(r.row_json, '$.agent_class'), ''), 'unknown') NOT IN ('orchestrator', 'unknown')), pair_totals AS (SELECT Subagent, Model, SUM(Observations) AS Observations, group_concat(DISTINCT Host) AS Hosts FROM base GROUP BY Subagent, Model), effort_totals AS (SELECT Subagent, Model, Effort, SUM(Observations) AS Observations FROM base GROUP BY Subagent, Model, Effort), effort_ranked AS (SELECT Subagent, Model, Effort, ROW_NUMBER() OVER (PARTITION BY Subagent, Model ORDER BY Observations DESC, Effort ASC) AS effort_rank FROM effort_totals), ranked AS (SELECT p.Subagent, p.Model, e.Effort, p.Observations, p.Hosts, ROW_NUMBER() OVER (PARTITION BY p.Subagent ORDER BY p.Observations DESC, p.Model ASC) AS Rank, SUM(p.Observations) OVER (PARTITION BY p.Subagent) AS subagent_observations FROM pair_totals p JOIN effort_ranked e ON e.Subagent = p.Subagent AND e.Model = p.Model AND e.effort_rank = 1) SELECT CAST(Subagent || ' · ' || Model AS TEXT) AS \"Subagent and model\", Observations FROM ranked WHERE Rank = 1 ORDER BY Observations DESC, Subagent ASC LIMIT 1000",
+          "rawQueryText": "WITH base AS (SELECT CAST(COALESCE(NULLIF(json_extract(r.row_json, '$.agent_class'), ''), 'unknown') AS TEXT) AS Subagent, CAST(COALESCE(NULLIF(json_extract(r.row_json, '$.model.provider'), ''), 'unknown') || '/' || COALESCE(NULLIF(json_extract(r.row_json, '$.model.id'), ''), 'unknown') AS TEXT) AS Model, CAST(COALESCE(NULLIF(json_extract(r.row_json, '$.selected_effort'), ''), 'unknown') AS TEXT) AS Effort, CAST(COALESCE(NULLIF(json_extract(d.canonical_payload, '$.host'), ''), 'unknown') AS TEXT) AS Host, (COALESCE(CASE WHEN json_type(r.row_json, '$.responses') = 'integer' THEN json_extract(r.row_json, '$.responses') END, 0) + COALESCE(CASE WHEN json_type(r.row_json, '$.launches') = 'integer' THEN json_extract(r.row_json, '$.launches') END, 0)) AS Observations FROM runtime_rows r JOIN runtime_deliveries d ON d.delivery_id = r.delivery_id WHERE d.received_at >= ${__from} * 1000000 AND d.received_at <= ${__to} * 1000000 AND COALESCE(NULLIF(json_extract(r.row_json, '$.agent_class'), ''), 'unknown') NOT IN ('orchestrator', 'unknown')), pair_totals AS (SELECT Subagent, Model, SUM(Observations) AS Observations, group_concat(DISTINCT Host) AS Hosts FROM base GROUP BY Subagent, Model), effort_totals AS (SELECT Subagent, Model, Effort, SUM(Observations) AS Observations FROM base GROUP BY Subagent, Model, Effort), effort_ranked AS (SELECT Subagent, Model, Effort, ROW_NUMBER() OVER (PARTITION BY Subagent, Model ORDER BY Observations DESC, Effort ASC) AS effort_rank FROM effort_totals), ranked AS (SELECT p.Subagent, p.Model, e.Effort, p.Observations, p.Hosts, ROW_NUMBER() OVER (PARTITION BY p.Subagent ORDER BY p.Observations DESC, p.Model ASC) AS Rank, SUM(p.Observations) OVER (PARTITION BY p.Subagent) AS subagent_observations FROM pair_totals p JOIN effort_ranked e ON e.Subagent = p.Subagent AND e.Model = p.Model AND e.effort_rank = 1) SELECT CAST(Subagent || ' · ' || Model AS TEXT) AS \"Subagent and model\", Observations FROM ranked WHERE Rank = 1 ORDER BY Observations DESC, Subagent ASC LIMIT 1000"
+        }
+      ],
+      "options": {
+        "orientation": "horizontal",
+        "xField": "Subagent and model",
+        "showValue": "always",
+        "legend": {
+          "showLegend": false
+        },
+        "barWidth": 0.6,
+        "groupWidth": 0.7
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0,
+          "decimals": 0,
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "#8AB8A8"
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
       "id": 409,
       "title": "Usage by host, subagent, model and effort",
       "description": "Answers which subagent used which model at which effort and how many tokens were processed.",
       "type": "table",
       "gridPos": {
         "x": 0,
-        "y": 32,
+        "y": 83,
         "w": 24,
-        "h": 14
+        "h": 9
       },
       "datasource": {
         "type": "frser-sqlite-datasource",
@@ -1075,7 +1978,7 @@
       "type": "barchart",
       "gridPos": {
         "x": 0,
-        "y": 46,
+        "y": 92,
         "w": 12,
         "h": 7
       },
@@ -1145,7 +2048,9 @@
         "showValue": "always",
         "legend": {
           "showLegend": false
-        }
+        },
+        "barWidth": 0.6,
+        "groupWidth": 0.7
       }
     },
     {
@@ -1155,7 +2060,7 @@
       "type": "barchart",
       "gridPos": {
         "x": 12,
-        "y": 46,
+        "y": 92,
         "w": 12,
         "h": 7
       },
@@ -1225,7 +2130,9 @@
         "showValue": "always",
         "legend": {
           "showLegend": false
-        }
+        },
+        "barWidth": 0.6,
+        "groupWidth": 0.7
       }
     },
     {
@@ -1235,9 +2142,9 @@
       "type": "table",
       "gridPos": {
         "x": 0,
-        "y": 53,
+        "y": 99,
         "w": 12,
-        "h": 10
+        "h": 9
       },
       "datasource": {
         "type": "frser-sqlite-datasource",
@@ -1334,9 +2241,9 @@
       "type": "table",
       "gridPos": {
         "x": 12,
-        "y": 53,
+        "y": 99,
         "w": 12,
-        "h": 10
+        "h": 9
       },
       "datasource": {
         "type": "frser-sqlite-datasource",
@@ -1433,9 +2340,9 @@
       "type": "timeseries",
       "gridPos": {
         "x": 0,
-        "y": 63,
+        "y": 108,
         "w": 12,
-        "h": 11
+        "h": 8
       },
       "datasource": {
         "type": "frser-sqlite-datasource",
@@ -1551,9 +2458,9 @@
       "type": "table",
       "gridPos": {
         "x": 12,
-        "y": 63,
+        "y": 108,
         "w": 12,
-        "h": 11
+        "h": 9
       },
       "datasource": {
         "type": "frser-sqlite-datasource",
@@ -1650,7 +2557,7 @@
       "type": "barchart",
       "gridPos": {
         "x": 0,
-        "y": 74,
+        "y": 117,
         "w": 12,
         "h": 7
       },
@@ -1739,7 +2646,9 @@
         "orientation": "horizontal",
         "legend": {
           "showLegend": false
-        }
+        },
+        "barWidth": 0.6,
+        "groupWidth": 0.7
       }
     },
     {
@@ -1749,9 +2658,9 @@
       "type": "table",
       "gridPos": {
         "x": 12,
-        "y": 74,
+        "y": 117,
         "w": 12,
-        "h": 7
+        "h": 9
       },
       "datasource": {
         "type": "frser-sqlite-datasource",
