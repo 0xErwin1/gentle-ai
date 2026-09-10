@@ -16,388 +16,293 @@ func TestRuntimeDashboard(t *testing.T) {
 		t.Fatal(err)
 	}
 	var dashboard struct {
-		Panels []struct {
+		UID      string
+		Title    string
+		Timezone string
+		Refresh  string
+		Time     struct{ From, To string }
+		Panels   []struct {
 			ID          int
 			Title       string
 			Type        string
 			Description string
 			GridPos     struct{ X, Y, W, H int }
 			Datasource  struct{ UID string }
-			Targets     []struct{ QueryText, RawQueryText string }
+			Targets     []struct {
+				QueryType, QueryText, RawQueryText string
+				TimeColumns                        []string
+			}
 			FieldConfig map[string]any
 		}
 	}
 	if err := json.Unmarshal(data, &dashboard); err != nil {
 		t.Fatal(err)
 	}
-	wantRuntimeGrid := map[int][4]int{
-		19: {0, 0, 24, 1}, 20: {0, 1, 24, 5},
-		15: {0, 6, 24, 8}, 16: {0, 14, 24, 8},
-		21: {0, 22, 24, 10}, 17: {0, 32, 24, 8},
-		22: {0, 40, 12, 7}, 18: {12, 40, 12, 7},
+	if dashboard.UID != "gentle-ai-usage" || dashboard.Title != "Gentle AI — Usage" {
+		t.Fatalf("dashboard identity changed: %q %q", dashboard.UID, dashboard.Title)
 	}
+	if dashboard.Timezone != "browser" || dashboard.Refresh != "1m" || dashboard.Time.From != "now-7d" || dashboard.Time.To != "now" {
+		t.Fatalf("dashboard defaults = timezone %q, refresh %q, range %q to %q", dashboard.Timezone, dashboard.Refresh, dashboard.Time.From, dashboard.Time.To)
+	}
+
+	wantPanels := []struct{ section, title, kind string }{
+		{"Adoption", "Unique installs all-time", "stat"},
+		{"Adoption", "Active installs yesterday", "stat"},
+		{"Adoption", "Active installs in range", "stat"},
+		{"Adoption", "New installs in range", "stat"},
+		{"Adoption", "Heartbeats in range", "stat"},
+		{"Adoption", "RDD adoption %", "stat"},
+		{"Adoption", "npm downloads latest day", "stat"},
+		{"Adoption", "GitHub release downloads", "stat"},
+		{"Growth", "Daily active installs", "timeseries"},
+		{"Growth", "Daily new installs", "timeseries"},
+		{"Growth", "Cumulative unique installs", "timeseries"},
+		{"Where Gentle AI runs", "Agent adoption", "barchart"},
+		{"Where Gentle AI runs", "Component adoption", "barchart"},
+		{"Where Gentle AI runs", "OS and architecture", "barchart"},
+		{"Where Gentle AI runs", "Version adoption", "barchart"},
+		{"Runtime usage", "Tokens processed", "stat"},
+		{"Runtime usage", "Responses", "stat"},
+		{"Runtime usage", "Deliveries", "stat"},
+		{"Runtime usage", "Hosts reporting", "stat"},
+		{"Runtime usage", "Tokens processed by host", "barchart"},
+		{"Runtime usage", "Responses by host", "barchart"},
+		{"Runtime usage", "Tokens by model", "table"},
+		{"Runtime usage", "Responses and tokens by selected effort", "table"},
+		{"Runtime usage", "Usage by host, subagent, model and effort", "table"},
+		{"Runtime usage", "Tokens processed per hour by host", "timeseries"},
+		{"Runtime usage", "Token coverage per field", "table"},
+		{"Runtime usage", "Error observations by category", "barchart"},
+		{"Runtime usage", "Measured request duration", "stat"},
+	}
+	var gotPanels []struct{ section, title, kind string }
+	section := ""
+	seenIDs := map[int]bool{}
 	for i, panel := range dashboard.Panels {
-		g := panel.GridPos
-		if want, ok := wantRuntimeGrid[panel.ID]; ok {
-			if got := [4]int{g.X, g.Y, g.W, g.H}; got != want {
-				t.Errorf("panel %d grid = %v; want %v", panel.ID, got, want)
-			}
-			delete(wantRuntimeGrid, panel.ID)
+		if seenIDs[panel.ID] {
+			t.Fatalf("duplicate panel id %d", panel.ID)
 		}
+		seenIDs[panel.ID] = true
+		g := panel.GridPos
 		for _, other := range dashboard.Panels[:i] {
 			o := other.GridPos
 			if g.X < o.X+o.W && o.X < g.X+g.W && g.Y < o.Y+o.H && o.Y < g.Y+g.H {
 				t.Errorf("panels %d and %d overlap", panel.ID, other.ID)
 			}
 		}
-	}
-	if len(wantRuntimeGrid) != 0 {
-		t.Fatalf("missing runtime panels: %v", wantRuntimeGrid)
-	}
-	runtimeQueries := 0
-	for _, panel := range dashboard.Panels {
-		for _, target := range panel.Targets {
-			if target.QueryText != target.RawQueryText {
-				t.Fatalf("panel %d: query texts differ", panel.ID)
-			}
-		}
-		if panel.ID < 15 {
-			if panel.GridPos.Y < 48 {
-				t.Fatalf("legacy panel %d precedes runtime section", panel.ID)
-			}
+		if panel.Type == "row" {
+			section = panel.Title
 			continue
 		}
-		if panel.ID == 19 {
-			if panel.Type != "row" || panel.GridPos.Y != 0 {
-				t.Fatal("runtime section must start at top")
-			}
+		gotPanels = append(gotPanels, struct{ section, title, kind string }{section, panel.Title, panel.Type})
+		if panel.Description == "" {
+			t.Errorf("panel %q has no description", panel.Title)
+		}
+		if panel.Datasource.UID != "gentle-telemetry-sqlite" || len(panel.Targets) != 1 {
+			t.Errorf("panel %q has wrong datasource or target count", panel.Title)
 			continue
 		}
-		runtimeQueries++
-		if panel.Description == "" || panel.Datasource.UID != "gentle-telemetry-sqlite" || panel.GridPos.Y+panel.GridPos.H > 47 {
-			t.Fatalf("runtime panel %d: missing context, datasource or top layout", panel.ID)
+		target := panel.Targets[0]
+		if target.QueryType != "table" || target.RawQueryText == "" || target.QueryText != target.RawQueryText {
+			t.Errorf("panel %q must use one identical table queryText/rawQueryText pair", panel.Title)
 		}
-		if panel.ID == 16 {
-			if panel.Type != "table" || panel.Title != "Usage by agent, model, and effort" {
-				t.Error("usage panel must be a dimensional table")
+		if strings.Contains(target.RawQueryText, "received_at >= ${__from}") && !strings.Contains(target.RawQueryText, "received_at >= ${__from} * 1000000") {
+			t.Errorf("panel %q does not convert the millisecond lower bound to nanoseconds", panel.Title)
+		}
+		if strings.Contains(target.RawQueryText, "received_at <= ${__to}") && !strings.Contains(target.RawQueryText, "received_at <= ${__to} * 1000000") {
+			t.Errorf("panel %q does not convert the millisecond upper bound to nanoseconds", panel.Title)
+		}
+		if panel.Type == "timeseries" && !reflect.DeepEqual(target.TimeColumns, []string{"time"}) {
+			t.Errorf("time-series panel %q does not identify its numeric time column", panel.Title)
+		}
+		defaults, ok := panel.FieldConfig["defaults"].(map[string]any)
+		if !ok {
+			t.Errorf("panel %q has no field defaults", panel.Title)
+		} else {
+			wantUnit := "short"
+			if panel.Title == "RDD adoption %" {
+				wantUnit = "percent"
+			} else if panel.Title == "Measured request duration" {
+				wantUnit = "ms"
 			}
-			for _, phrase := range []string{"receipt-time", "Responses and launches are separate", "— means not reported; it is not zero", "not sessions, users or people", "Response evidence", "Selected evidence", "Effective effort is never inferred", "unknown", "without identity inference", "No custom or private names"} {
-				if !strings.Contains(panel.Description, phrase) {
-					t.Errorf("launch description missing %q", phrase)
+			if defaults["unit"] != wantUnit {
+				t.Errorf("panel %q unit = %v; want %q", panel.Title, defaults["unit"], wantUnit)
+			}
+		}
+		configJSON, err := json.Marshal(panel.FieldConfig)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(string(configJSON), `"axisPlacement":"right"`) {
+			t.Errorf("panel %q introduces a second y-axis", panel.Title)
+		}
+		if section == "Runtime usage" {
+			for _, host := range []string{"pi", "opencode", "claude-code", "codex"} {
+				if !strings.Contains(string(configJSON), `"options":"`+host+`"`) {
+					t.Errorf("runtime panel %q does not pin the %s series color", panel.Title, host)
 				}
-			}
-			for _, target := range panel.Targets {
-				if !strings.HasSuffix(target.QueryText, `ORDER BY COALESCE(Responses, 0) + COALESCE(Launches, 0) DESC, "Agent observation" ASC, "Model observation" ASC, "Selected → effective" ASC LIMIT 1000`) {
-					t.Error("launch combinations must be bounded and sorted by count then label")
-				}
-				group := strings.SplitN(target.QueryText, "GROUP BY", 2)
-				for _, dimension := range []string{"agent_class", "agent_kind", "host", "model.provider", "model.id", "model_evidence", "selected_effort", "effective_effort"} {
-					if len(group) != 2 || !strings.Contains(group[1], "$."+dimension+"'") {
-						t.Errorf("launch grouping missing %s", dimension)
-					}
-				}
-			}
-		}
-		if panel.ID == 21 {
-			if panel.Type != "table" {
-				t.Fatal("reported tokens must be a full-width dimensional table")
-			}
-			var wantConfig map[string]any
-			if err := json.Unmarshal([]byte(`{
-				"defaults": {"min": 0, "decimals": 0, "noValue": "Not reported", "custom": {"minWidth": 80}},
-				"overrides": [
-					{"matcher": {"id": "byName", "options": "Model observation"}, "properties": [{"id": "custom.width", "value": 340}]},
-					{"matcher": {"id": "byName", "options": "Selected → effective"}, "properties": [{"id": "custom.width", "value": 180}]},
-					{"matcher": {"id": "byRegexp", "options": "^(Input|Output|Cache read|Cache creation|Reasoning|Total)$"}, "properties": [{"id": "mappings", "value": [{"type": "special", "options": {"match": "null", "result": {"text": "—"}}}]}]},
-					{"matcher": {"id": "byName", "options": "Cache creation"}, "properties": [{"id": "displayName", "value": "Cache write"}]}
-				]
-			}`), &wantConfig); err != nil {
-				t.Fatal(err)
-			}
-			if !reflect.DeepEqual(panel.FieldConfig, wantConfig) {
-				t.Errorf("reported token config = %v; want compact null mapping and Cache write display header", panel.FieldConfig)
-			}
-			if !strings.Contains(panel.Description, "— means not reported; it is not zero") {
-				t.Error("reported token description must explain the null display")
-			}
-		}
-		if panel.ID != 16 && panel.ID != 17 && panel.ID != 21 && panel.Type != "barchart" && panel.Type != "stat" {
-			t.Fatalf("runtime panel %d exposes raw columns", panel.ID)
-		}
-		for _, target := range panel.Targets {
-			if strings.Contains(target.QueryText, "GROUP BY") && !strings.HasSuffix(target.QueryText, "LIMIT 1000") {
-				t.Fatalf("runtime panel %d: unbounded groups", panel.ID)
 			}
 		}
 	}
-	if runtimeQueries != 7 {
-		t.Fatalf("expected to execute all seven runtime queries, found %d", runtimeQueries)
+	if !reflect.DeepEqual(gotPanels, wantPanels) {
+		t.Fatalf("panels = %#v; want %#v", gotPanels, wantPanels)
 	}
+
 	s, err := OpenStorage(":memory:")
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer s.Close()
-	from := time.Date(2026, 1, 1, 23, 0, 0, 0, time.UTC).UnixMilli()
-	to := time.Date(2026, 1, 2, 0, 0, 0, 0, time.UTC).UnixMilli()
-	metrics := []string{"input_tokens", "output_tokens", "cache_read_tokens", "cache_creation_tokens", "reasoning_tokens", "total_tokens"}
-	// Two observations share a delivery; receipt time, not a client date, groups them.
-	for i, ns := range []int64{from*1000000 - 1, from * 1000000, to * 1000000, to*1000000 + 1} {
-		if _, err := s.db.Exec(`INSERT INTO runtime_deliveries VALUES (?, ?, '{"host":"codex"}')`, fmt.Sprint(i), ns); err != nil {
+	from := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC).UnixMilli()
+	to := time.Date(2026, 1, 3, 23, 59, 59, 0, time.UTC).UnixMilli()
+	for _, event := range []struct {
+		received                                             int64
+		kind, install, version, os, arch, agents, components string
+		rdd                                                  int
+	}{
+		{from * 1000000, "install", "install-a", "1.0.0", "linux", "amd64", `["codex"]`, `["sdd","skills"]`, 1},
+		{time.Date(2026, 1, 2, 12, 0, 0, 0, time.UTC).UnixNano(), "heartbeat", "install-a", "1.0.0", "linux", "amd64", `["codex"]`, `["sdd","skills"]`, 1},
+		{time.Date(2026, 1, 2, 13, 0, 0, 0, time.UTC).UnixNano(), "install", "install-b", "1.1.0", "darwin", "arm64", `["pi"]`, `["engram"]`, 0},
+		{to * 1000000, "heartbeat", "install-b", "1.1.0", "darwin", "arm64", `["pi"]`, `["engram"]`, 0},
+	} {
+		if _, err := s.db.Exec(`INSERT INTO events(received_at,event,install_id,version,os,arch,agents_json,components_json,rdd_enabled,counters_json) VALUES(?,?,?,?,?,?,?,?,?,NULL)`, event.received, event.kind, event.install, event.version, event.os, event.arch, event.agents, event.components, event.rdd); err != nil {
 			t.Fatal(err)
 		}
-		count := 1
-		if i == 1 {
-			count = 2
-		}
-		for ordinal := 0; ordinal < count; ordinal++ {
-			kind, category, measured, duration := "request", "none", 1, 12.5
-			coverage := "reported"
-			if ordinal == 1 {
-				kind, category, measured, duration, coverage = "unavailable", "unknown", 0, 0, "unsupported"
-			} else if i == 2 {
-				kind, category, duration, coverage = "message", "api", 7.25, "unavailable"
-			}
-			row := map[string]any{
-				"model":          map[string]string{"provider": "openai", "id": "gpt-5"},
-				"model_evidence": "response", "agent_class": "unknown", "agent_kind": "unknown",
-				"selected_effort": "high", "effective_effort": "unavailable",
-				"responses": 2, "launches": 3, "error_category": category,
-				"duration": map[string]any{"kind": kind, "measured_count": measured, "sum_ms": duration},
-			}
-			if ordinal == 1 {
-				row["duration"].(map[string]any)["sum_ms"] = nil
-				row["launches"] = nil
-				row["responses"] = nil
-				row["model"] = map[string]string{"provider": "openai", "id": "null-only"}
-				row["agent_class"] = "null-only"
-			}
-			if i == 2 {
-				row["responses"], row["launches"] = "unsupported", "unsupported"
-				row["model"] = map[string]string{"provider": "openai", "id": "gpt-4"}
-				row["selected_effort"], row["effective_effort"] = "low", "low"
-			}
-			for index, metric := range metrics {
-				// Nonzero unreported sums must never leak into usage.
-				token := map[string]int{"reported": 0, "unavailable": 0, "unsupported": 0, "sum": 99}
-				token[coverage] = 1
-				if coverage == "reported" {
-					token["sum"] = index // Includes explicitly reported zero; total is not inferred.
-				}
-				row[metric] = token
-			}
-			raw, err := json.Marshal(row)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if _, err := s.db.Exec(`INSERT INTO runtime_rows VALUES (?, ?, ?)`, fmt.Sprint(i), ordinal, string(raw)); err != nil {
-				t.Fatal(err)
-			}
-		}
 	}
-	var tokenRows [][]any
-	for _, index := range []int{3, 2, 0, 1, 4, 5} {
-		label := []string{"Input", "Output", "Cache read", "Cache creation", "Reasoning", "Total"}[index]
-		tokenRows = append(tokenRows, []any{label, int64(1), int64(1), int64(1)})
-	}
-	for _, tc := range []struct {
-		title string
-		want  [][]any
+	for _, rollup := range []struct {
+		day, metric, key string
+		value            int
 	}{
-		{"Runtime overview", [][]any{{int64(3), int64(2), int64(3), int64(5), int64(2)}}},
-		{"Responses by model", [][]any{{"openai/gpt-5 · response · codex", int64(2)}}},
-		{"Usage by agent, model, and effort", [][]any{{"unknown / unknown", "codex · openai/gpt-5 · response", "high → unavailable", int64(2), int64(3)}}},
-		{"Token coverage", tokenRows},
-		{"Reported tokens", [][]any{
-			{"codex · openai/gpt-4 · response", "low → low", nil, nil, nil, nil, nil, nil},
-			{"codex · openai/gpt-5 · response", "high → unavailable", int64(0), int64(1), int64(2), int64(3), int64(4), int64(5)},
-			{"codex · openai/null-only · response", "high → unavailable", nil, nil, nil, nil, nil, nil},
-		}},
-		{"Error observations", [][]any{{"api", int64(1)}, {"unknown", int64(1)}}},
-		{"Measured duration", [][]any{{"message", 7.25}, {"request", 12.5}}},
+		{"2026-01-01", "active_install", "install-a", 1},
+		{"2026-01-02", "active_install", "install-a", 1},
+		{"2026-01-02", "active_install", "install-b", 1},
+		{"2026-01-02", "agent", "codex", 1},
+		{"2026-01-02", "agent", "pi", 1},
+		{"2026-01-02", "component", "sdd", 1},
+		{"2026-01-02", "component", "engram", 1},
+		{"2026-01-02", "rdd_enabled", "true", 1},
+		{"2026-01-02", "rdd_enabled", "false", 1},
+		{"2026-01-02", "version", "1.0.0", 1},
+		{"2026-01-02", "version", "1.1.0", 1},
+		{"2026-01-02", "npm_downloads_day", "gentle-pi", 100},
+		{"2026-01-02", "npm_downloads_day", "gentle-engram", 200},
+		{"2026-01-02", "github_release_downloads_total", "v1.0.0", 10},
+		{"2026-01-03", "github_release_downloads_total", "v1.0.0", 20},
+		{"2026-01-03", "github_release_downloads_total", "v1.1.0", 10},
 	} {
-		t.Run(tc.title, func(t *testing.T) {
-			query, found := "", 0
-			for _, panel := range dashboard.Panels {
-				if panel.Title != tc.title {
-					continue
-				}
-				found++
-				if len(panel.Targets) != 1 || panel.Targets[0].QueryText != panel.Targets[0].RawQueryText {
-					t.Fatal("expected one identical queryText/rawQueryText pair")
-				}
-				query = panel.Targets[0].QueryText
-			}
-			if found != 1 {
-				t.Fatalf("expected one runtime panel, found %d", found)
-			}
-			bounds := "d.received_at >= ${__from} * 1000000 AND d.received_at <= ${__to} * 1000000"
-			if !strings.Contains(query, bounds) {
-				t.Fatal("missing inclusive nanosecond receipt bounds")
-			}
-			emptyQuery := strings.NewReplacer("${__from}", "0", "${__to}", "0").Replace(query)
-			query = strings.NewReplacer("${__from}", fmt.Sprint(from), "${__to}", fmt.Sprint(to)).Replace(query)
-			rows, err := s.db.Query(query)
-			if err != nil {
-				t.Fatal(err)
-			}
-			defer rows.Close()
-			columns, err := rows.Columns()
-			if err != nil {
-				t.Fatal(err)
-			}
-			if tc.title == "Usage by agent, model, and effort" {
-				wantColumns := []string{"Agent observation", "Model observation", "Selected → effective", "Responses", "Launches"}
-				if !reflect.DeepEqual(columns, wantColumns) {
-					t.Fatalf("columns = %v; want %v", columns, wantColumns)
-				}
-			}
-			if tc.title == "Reported tokens" {
-				wantColumns := []string{"Model observation", "Selected → effective", "Input", "Output", "Cache read", "Cache creation", "Reasoning", "Total"}
-				if !reflect.DeepEqual(columns, wantColumns) {
-					t.Fatalf("columns (%d) = %v; want exactly %v", len(columns), columns, wantColumns)
-				}
-			}
-			var got [][]any
-			for rows.Next() {
-				values, pointers := make([]any, len(columns)), make([]any, len(columns))
-				for i := range values {
-					pointers[i] = &values[i]
-				}
-				if err := rows.Scan(pointers...); err != nil {
-					t.Fatal(err)
-				}
-				got = append(got, values)
-			}
-			if err := rows.Err(); err != nil {
-				t.Fatal(err)
-			}
-			if !reflect.DeepEqual(got, tc.want) {
-				t.Fatalf("got %#v; want %#v", got, tc.want)
-			}
-			rows.Close()
-			empty, err := s.db.Query(emptyQuery)
-			if err != nil {
-				t.Fatal(err)
-			}
-			defer empty.Close()
-			if empty.Next() || empty.Err() != nil {
-				t.Fatalf("empty receipt range must not invent zeros: %v", empty.Err())
-			}
-		})
+		if _, err := s.db.Exec(`INSERT INTO rollups_daily(day,metric,key,value) VALUES(?,?,?,?)`, rollup.day, rollup.metric, rollup.key, rollup.value); err != nil {
+			t.Fatal(err)
+		}
 	}
-	t.Run("independent usage reports", func(t *testing.T) {
-		// Isolate usage fixtures so other runtime panel expectations stay unchanged.
-		tx, err := s.db.Begin()
+
+	token := func(sum int, reported, unavailable, unsupported int) map[string]int {
+		return map[string]int{"sum": sum, "reported": reported, "unavailable": unavailable, "unsupported": unsupported}
+	}
+	runtimeFixtures := []struct {
+		id, host string
+		received int64
+		row      map[string]any
+	}{
+		{"delivery-codex", "codex", time.Date(2026, 1, 2, 10, 15, 0, 0, time.UTC).UnixNano(), map[string]any{
+			"model": map[string]string{"provider": "openai", "id": "gpt-5"}, "model_evidence": "response", "agent_kind": "orchestrator", "agent_class": "orchestrator", "selected_effort": "high", "effective_effort": "high", "launches": 1, "responses": 3,
+			"input_tokens": token(10, 1, 0, 0), "output_tokens": token(5, 1, 0, 0), "cache_read_tokens": token(2, 1, 0, 0), "cache_creation_tokens": token(1, 1, 0, 0), "reasoning_tokens": token(3, 1, 0, 0), "total_tokens": token(999, 1, 0, 0),
+			"error_category": "none", "duration": map[string]any{"kind": "request", "measured_count": 2, "sum_ms": 50.0},
+		}},
+		{"delivery-opencode", "opencode", time.Date(2026, 1, 2, 11, 30, 0, 0, time.UTC).UnixNano(), map[string]any{
+			"model": map[string]string{"provider": "custom", "id": "custom"}, "model_evidence": "unknown", "agent_kind": "worker", "agent_class": "unknown", "selected_effort": "unknown", "effective_effort": "unknown", "launches": 2, "responses": 2,
+			"input_tokens": token(7, 1, 0, 0), "output_tokens": token(4, 1, 0, 0), "cache_read_tokens": token(99, 0, 1, 0), "cache_creation_tokens": token(99, 0, 0, 1), "reasoning_tokens": token(99, 0, 1, 0), "total_tokens": token(999, 0, 1, 0),
+			"error_category": "provider", "duration": map[string]any{"kind": "request", "measured_count": 1, "sum_ms": 40.0},
+		}},
+	}
+	for _, fixture := range runtimeFixtures {
+		payload, err := json.Marshal(map[string]string{"host": fixture.host})
 		if err != nil {
 			t.Fatal(err)
 		}
-		defer tx.Rollback()
-		for i, report := range []struct{ agent, evidence, responses, launches string }{
-			{"orchestrator", "response", "7", "null"},
-			{"orchestrator", "response", "2", `"unsupported"`},
-			{"subagent", "selected", "null", "6"},
-			{"subagent", "selected", `"unsupported"`, "1"},
-			{"zero", "response", "0", "1.5"},
-			{"zero-launch", "selected", "true", "0"},
-			{"excluded", "selected", "1.5", `"unsupported"`},
-		} {
-			raw := fmt.Sprintf(`{"agent_class":%q,"agent_kind":"unknown","model":{"provider":"openai","id":"gpt-5"},"model_evidence":%q,"selected_effort":"high","effective_effort":"unavailable","responses":%s,"launches":%s}`, report.agent, report.evidence, report.responses, report.launches)
-			// Upper bound must be included, as must the original lower-bound row.
-			if _, err := tx.Exec(`INSERT INTO runtime_rows VALUES ('2', ?, ?)`, i+10, raw); err != nil {
-				t.Fatal(err)
-			}
-		}
-		for _, panel := range dashboard.Panels {
-			if panel.ID != 16 {
-				continue
-			}
-			query := strings.NewReplacer("${__from}", fmt.Sprint(from), "${__to}", fmt.Sprint(to)).Replace(panel.Targets[0].QueryText)
-			rows, err := tx.Query(query)
-			if err != nil {
-				t.Fatal(err)
-			}
-			defer rows.Close()
-			var got [][]any
-			for rows.Next() {
-				var agent, model, effort string
-				var responses, launches any
-				if err := rows.Scan(&agent, &model, &effort, &responses, &launches); err != nil {
-					t.Fatal(err)
-				}
-				got = append(got, []any{agent, model, effort, responses, launches})
-			}
-			if err := rows.Err(); err != nil {
-				t.Fatal(err)
-			}
-			want := [][]any{
-				{"orchestrator / unknown", "codex · openai/gpt-5 · response", "high → unavailable", int64(9), nil},
-				{"subagent / unknown", "codex · openai/gpt-5 · selected", "high → unavailable", nil, int64(7)},
-				{"unknown / unknown", "codex · openai/gpt-5 · response", "high → unavailable", int64(2), int64(3)},
-				{"zero / unknown", "codex · openai/gpt-5 · response", "high → unavailable", int64(0), nil},
-				{"zero-launch / unknown", "codex · openai/gpt-5 · selected", "high → unavailable", nil, int64(0)},
-			}
-			if !reflect.DeepEqual(got, want) {
-				t.Fatalf("usage rows = %#v; want %#v", got, want)
-			}
-		}
-	})
-	t.Run("unavailable-only range", func(t *testing.T) {
-		if _, err := s.db.Exec(`UPDATE runtime_rows SET row_json = json_set(row_json,
-			'$.responses', NULL, '$.launches', NULL,
-			'$.duration.kind', 'unavailable', '$.duration.measured_count', 0, '$.duration.sum_ms', NULL,
-			'$.total_tokens.reported', 0, '$.total_tokens.sum', NULL)`); err != nil {
+		raw, err := json.Marshal(fixture.row)
+		if err != nil {
 			t.Fatal(err)
 		}
-		for _, panel := range dashboard.Panels {
-			if panel.ID != 15 && panel.ID != 16 && panel.ID != 18 && panel.ID != 20 && panel.ID != 21 {
-				continue
-			}
-			query := strings.NewReplacer("${__from}", fmt.Sprint(from), "${__to}", fmt.Sprint(to)).Replace(panel.Targets[0].QueryText)
+		if _, err := s.db.Exec(`INSERT INTO runtime_deliveries(delivery_id,received_at,canonical_payload) VALUES(?,?,?)`, fixture.id, fixture.received, string(payload)); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := s.db.Exec(`INSERT INTO runtime_rows(delivery_id,ordinal,row_json) VALUES(?,0,?)`, fixture.id, string(raw)); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	queries := map[string]string{}
+	for _, panel := range dashboard.Panels {
+		if panel.Type == "row" {
+			continue
+		}
+		query := strings.NewReplacer("${__from}", fmt.Sprint(from), "${__to}", fmt.Sprint(to)).Replace(panel.Targets[0].RawQueryText)
+		queries[panel.Title] = query
+		t.Run("SQL/"+panel.Title, func(t *testing.T) {
 			rows, err := s.db.Query(query)
 			if err != nil {
 				t.Fatal(err)
 			}
-			if panel.ID == 20 {
-				if !rows.Next() {
-					t.Fatal("missing received observations")
-				}
-				var observations, errors int64
-				var responses, launches, tokens any
-				if err := rows.Scan(&observations, &responses, &launches, &tokens, &errors); err != nil {
-					t.Fatal(err)
-				}
-				if observations != 3 || errors != 2 || responses != nil || launches != nil || tokens != nil {
-					t.Fatal("unavailable reports must not become zero or erase observations")
-				}
-			} else if panel.ID == 21 {
-				count := 0
-				for rows.Next() {
-					var model, effort string
-					var input, output, read, creation, reasoning, total any
-					if err := rows.Scan(&model, &effort, &input, &output, &read, &creation, &reasoning, &total); err != nil {
-						t.Fatal(err)
-					}
-					if total != nil {
-						t.Fatal("unreported total must stay null even when categories are reported")
-					}
-					if model == "codex · openai/gpt-5 · response" && (input != int64(0) || output != int64(1) || reasoning != int64(4)) {
-						t.Fatal("missing total must not erase independently reported categories")
-					}
-					count++
-				}
-				if count != 3 {
-					t.Fatalf("got %d combinations; want 3", count)
-				}
-			} else if rows.Next() {
-				t.Fatalf("%s invented a distribution or zero latency", panel.Title)
+			defer rows.Close()
+			if !rows.Next() {
+				t.Fatalf("synthetic fixture did not exercise query: %v", rows.Err())
 			}
-			if err := rows.Err(); err != nil {
-				t.Fatal(err)
-			}
-			rows.Close()
+		})
+	}
+
+	assertSingleNumber := func(title string, want float64) {
+		t.Helper()
+		var got float64
+		if err := s.db.QueryRow(queries[title]).Scan(&got); err != nil {
+			t.Fatalf("%s: %v", title, err)
 		}
-	})
+		if got != want {
+			t.Fatalf("%s = %v; want %v", title, got, want)
+		}
+	}
+	assertSingleNumber("Unique installs all-time", 2)
+	assertSingleNumber("Active installs yesterday", 2)
+	assertSingleNumber("Active installs in range", 2)
+	assertSingleNumber("New installs in range", 2)
+	assertSingleNumber("Heartbeats in range", 2)
+	assertSingleNumber("RDD adoption %", 50)
+	assertSingleNumber("npm downloads latest day", 300)
+	assertSingleNumber("GitHub release downloads", 30)
+	assertSingleNumber("Tokens processed", 32)
+	assertSingleNumber("Responses", 5)
+	assertSingleNumber("Deliveries", 2)
+	assertSingleNumber("Hosts reporting", 2)
+	assertSingleNumber("Measured request duration", 30)
+
+	usageRows, err := s.db.Query(queries["Usage by host, subagent, model and effort"])
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer usageRows.Close()
+	var gotUsage [][]any
+	for usageRows.Next() {
+		values, pointers := make([]any, 9), make([]any, 9)
+		for i := range values {
+			pointers[i] = &values[i]
+		}
+		if err := usageRows.Scan(pointers...); err != nil {
+			t.Fatal(err)
+		}
+		gotUsage = append(gotUsage, values)
+	}
+	wantUsage := [][]any{
+		{"codex", "orchestrator", "orchestrator", "openai/gpt-5", "high", "high", int64(1), int64(3), int64(21)},
+		{"opencode", "worker", "unknown", "custom/custom", "unknown", "unknown", int64(2), int64(2), int64(11)},
+	}
+	if !reflect.DeepEqual(gotUsage, wantUsage) {
+		t.Fatalf("usage rows = %#v; want %#v", gotUsage, wantUsage)
+	}
+	if strings.Contains(queries["Tokens processed"], "$.total_tokens.sum") {
+		t.Fatal("primary token measure must be derived from token categories, not total_tokens")
+	}
+	if !strings.Contains(queries["Token coverage per field"], "$.total_tokens.reported") {
+		t.Fatal("coverage must retain explicitly reported total_tokens")
+	}
 }
 
 func TestRuntimeDashboardEpochBounds(t *testing.T) {
