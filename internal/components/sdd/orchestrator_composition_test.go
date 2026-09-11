@@ -154,7 +154,7 @@ func TestOpenCodeConsentV3QuestionRouteUsesDisplayLabelsWithoutChangingProviderC
 	for _, want := range []string{
 		"Display labels and provider-owned answer tokens may differ; that difference alone never makes an otherwise complete closed single-select domain unrepresentable.",
 		"Before invocation, inspect the active classified `question` schema.",
-		"For a representable `gentle-ai.review-integration.consent/v3` envelope, invoke `question` exactly once only if the sole per-question object schema explicitly exposes both `multiple` and `custom`, both can be set to `false`, and neither field may be omitted.",
+		"For a representable `gentle-ai.review-integration.consent/v3` envelope, invoke `question` exactly once with both `multiple: false` and `custom: false` only if the sole per-question object schema explicitly exposes both settings, both can be set to `false`, and neither field may be omitted.",
 		"Treat absent, unknown, or unhonored controls as unrepresentable. In that case, do not invoke `question`, accept free text, or use a chat-token fallback; surface one actionable compatibility limitation naming the missing closed-domain support and direct the user to a runtime/version that exposes and enforces both controls, then stop.",
 		"Preserve the original option order, labels, descriptions, and effects.",
 		"Map only a returned offered label or ordinal to exactly one provider-owned answer token and invoke only that exact provider-owned invocation once.",
