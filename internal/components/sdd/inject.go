@@ -1414,6 +1414,9 @@ func renderPreservedOpenCodeOrchestratorPrompt(
 	options ...OrchestratorRenderOptions,
 ) string {
 	migrated := migratePreservedOpenCodeOrchestratorPrompt(prompt)
+	if strings.Contains(migrated, openCodeNativeQuestionSourceRoute) {
+		migrated = replaceOpenCodeConsentV3QuestionRoute(migrated, agent)
+	}
 	var renderOptions OrchestratorRenderOptions
 	if len(options) > 0 {
 		renderOptions = options[0]
