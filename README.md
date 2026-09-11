@@ -35,8 +35,8 @@ and no way to prove what it did beyond asking you to read every line.
 <br/>
 
 <!--
-  HERO SLOT — the only animation on this page. Features is all still: three
-  diagrams for the concepts, three captures as proof the thing runs. Motion is
+  HERO SLOT — the only animation on this page. Features is all still: four
+  diagrams for the concepts, two captures as proof the thing runs. Motion is
   spent once, here, right after the pitch lands.
 
   Uncomment when docs/assets/features/hero-pi.gif exists. It is a real-time capture
@@ -129,9 +129,9 @@ Receipt-Driven Development (RDD) is opt-in and stays off until you enable it. It
 
 ### Deterministic by design — Know the next valid step
 
-<img width="100%" src="docs/assets/features/deterministic.png" alt="The agent explaining that the SDD status engine chose the next step, not the model, and that a new session reaches the same answer from files on disk" />
+<img width="100%" src="docs/assets/diagrams/deterministic.svg" alt="A different agent, a different model and a brand-new session all converge on the gentle-ai binary. It reads the change state from files on disk and returns the only valid next transition, so no model votes on what comes next. The answer is always one of four public states: Working, Checking, Ready, or Needs your decision." />
 
-Gentle-AI does not ask the model to guess what comes next. The **`gentle-ai` binary** owns native SDD status and RDD review transitions, returning the authoritative next valid transition for the current state.
+A model that guesses the next step guesses differently tomorrow, and differently again for your teammate. That is the gap between a workflow and a suggestion. The **`gentle-ai` binary** owns native SDD status and RDD review transitions, and because it reads state from files rather than from a context window, two people on two machines get the same answer — and so does the same person a month later.
 
 **[Docs →](docs/trigger-rules.md)**
 
