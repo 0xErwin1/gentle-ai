@@ -1983,6 +1983,8 @@ func TestSDDStatusContractPreservesFrozenExternalV2Projection(t *testing.T) {
 		"archive: [<instruction strings>]",
 		"nextRecommended: propose | spec | design | tasks | apply | verify | remediate | archive | sdd-new | select-change | resolve-blockers",
 		"blockedReasons: []",
+		// #4372: the non-blocking diagnostics channel that keeps blockedReasons a pure gate.
+		"notes: []",
 		"Manual fallback status MUST stay shape-compatible with native `gentle-ai.sdd-status` JSON",
 	} {
 		if !strings.Contains(content, want) {
