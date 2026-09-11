@@ -63,6 +63,7 @@ func readRuntimeJSONValue(input io.Reader) ([]byte, error) {
 	decoder := json.NewDecoder(io.LimitReader(input, telemetry.RuntimeMaxBytes+1))
 	var value json.RawMessage
 	if err := decoder.Decode(&value); err != nil || decoder.InputOffset() > telemetry.RuntimeMaxBytes || len(value) > telemetry.RuntimeMaxBytes {
+		// refusal:by-design world-action: the host hook wrote malformed or oversized stdin; only the host process can emit one complete JSON object within the bound, no gentle-ai command repairs its stream
 		return nil, errors.New("invalid bounded runtime hook input")
 	}
 	return value, nil

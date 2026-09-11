@@ -26,6 +26,8 @@ func codexBridgeHome(t *testing.T, enabled bool) string {
 	home := t.TempDir()
 	t.Setenv("DO_NOT_TRACK", "")
 	t.Setenv("GENTLE_AI_TELEMETRY", "")
+	t.Setenv("CI", "")
+	t.Setenv("GITHUB_ACTIONS", "")
 	if err := telemetry.Save(home, telemetry.State{InstallID: "PRIVATE_INSTALL", Enabled: enabled, NoticeShown: true}); err != nil {
 		t.Fatal(err)
 	}
