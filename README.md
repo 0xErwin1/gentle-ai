@@ -248,7 +248,7 @@ Everything labelled [`up-for-grabs`](https://github.com/Gentleman-Programming/ge
 
 Built by [Alan Buscaglia](https://github.com/Gentleman-Programming) (Gentleman Programming): 15 years of enterprise architecture, a community of thousands of developers testing these tools daily, and one rule for AI-assisted work — **verifying beats generating**.
 
-Teams adopting AI and finding it isn't working — resistance, everyone prompting their own way, no shared quality bar — can reach out about engagements built on these same open-source tools.
+Teams adopting AI and finding it isn't working — resistance, everyone prompting their own way, no shared quality bar — can reach out about **[engagements built on these same open-source tools →](docs/consulting.md)**.
 
 <div align="center">
 
