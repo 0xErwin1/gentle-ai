@@ -27,8 +27,6 @@ const telemetryRuntime: Plugin = async () => {
       try {
         const tokens = info.tokens
         const error = info.error
-        const agent = typeof info.mode === "string" && info.mode.length > 0 && info.mode.length <= 64
-          && /^[\x20-\x7e]+$/.test(info.mode) ? info.mode : undefined
         const knownErrors = ["ProviderAuthError", "UnknownError", "MessageOutputLengthError", "MessageAbortedError", "APIError"]
         const body = JSON.stringify({
           schema: "gentle-ai.telemetry-opencode/v1",
@@ -37,7 +35,6 @@ const telemetryRuntime: Plugin = async () => {
             time: { created: info.time.created, completed: info.time.completed },
             providerID: info.providerID,
             modelID: info.modelID,
-            agent,
             tokens: tokens && {
               input: tokens.input, output: tokens.output, reasoning: tokens.reasoning,
               cache: tokens.cache && { read: tokens.cache.read, write: tokens.cache.write },

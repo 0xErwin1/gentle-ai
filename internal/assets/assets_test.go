@@ -45,7 +45,7 @@ const { default: plugin } = await import("./plugin.mts")
 for (const key of ["DO_NOT_TRACK","GENTLE_AI_TELEMETRY","CI","GITHUB_ACTIONS"]) delete process.env[key]
 const hooks = await plugin({})
 const tick = async () => { await new Promise(resolve => setImmediate(resolve)) }
-const info = { role:"assistant", time:{created:1,completed:2}, providerID:"anthropic", modelID:"claude-opus-5", mode:"PRIVATE_MODE", path:{cwd:"PRIVATE_PATH"}, parts:["PRIVATE_PROMPT"], error:{name:"APIError",data:{statusCode:429,message:"PRIVATE_ERROR"}} }
+const info = { role:"assistant", time:{created:1,completed:2}, providerID:"anthropic", modelID:"claude-opus-5", mode:"sdd-apply", path:{cwd:"PRIVATE_PATH"}, parts:["PRIVATE_PROMPT"], error:{name:"APIError",data:{statusCode:429,message:"PRIVATE_ERROR"}} }
 // No source identifiers are necessary or read, even locally.
 Object.defineProperty(info,"id",{get(){throw new Error("source id read")}})
 Object.defineProperty(info,"sessionID",{get(){throw new Error("session id read")}})
@@ -65,21 +65,26 @@ assert(!calls[0].body.includes("PRIVATE"))
 const envelope=JSON.parse(calls[0].body)
 assert.deepEqual(Object.keys(envelope).sort(),["info","schema"])
 assert.equal(envelope.schema,"gentle-ai.telemetry-opencode/v1")
+assert.equal(envelope.info.agent,"sdd-apply")
 assert.equal(envelope.info.tokens,undefined)
 held.shift()(new Error("PRIVATE_NATIVE_ERROR"),"")
 await tick();await tick();assert.equal(calls.length,1) // failure never retries
 await event(info);assert.equal(calls.length,2) // a new event is a new attempt
 held.shift()(null,JSON.stringify({schema:"gentle-ai.telemetry-runtime-send/v1",decision:"discarded"}))
 await tick();assert.equal(calls.length,2) // discarded metrics stay discarded
+await event({...info,mode:"x".repeat(65)});assert.equal(calls.length,3)
+assert.equal(JSON.parse(calls[2].body).info.agent,undefined);held.shift()(null,"")
+await event({...info,mode:"bad\nagent"});assert.equal(calls.length,4)
+assert.equal(JSON.parse(calls[3].body).info.agent,undefined);held.shift()(null,"")
 // No backlog: saturation discards new events rather than scheduling work.
 for(let i=0;i<100;i++) await event(info)
-assert.equal(held.length,32);assert.equal(calls.length,34)
+assert.equal(held.length,32);assert.equal(calls.length,36)
 for(const cb of held.splice(0))cb(new Error("timeout"),"")
-await tick();assert.equal(calls.length,34)
-await event({...info,modelID:"x".repeat(16385)});assert.equal(calls.length,34)
-await event(info);assert.equal(calls.length,35)
-await hooks.dispose();assert.equal(calls[34].killed,true)
-await event(info);await tick();assert.equal(calls.length,35)
+await tick();assert.equal(calls.length,36)
+await event({...info,modelID:"x".repeat(16385)});assert.equal(calls.length,36)
+await event(info);assert.equal(calls.length,37)
+await hooks.dispose();assert.equal(calls[36].killed,true)
+await event(info);await tick();assert.equal(calls.length,37)
 console.log("ok")
 `
 	output, log := runOpenCodeTransportPluginHarness(t, map[string]string{"plugin.mts": string(source)}, harness, "#!/bin/sh\nexit 99\n")

@@ -2,7 +2,9 @@ package cli
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -29,13 +31,18 @@ func (r runtimeHeldInput) Read([]byte) (int, error) {
 
 func TestTelemetryRuntimeStdinDeadline(t *testing.T) {
 	old := runtimeStdinTimeout
+	oldHook := runtimeHookStdinTimeout
 	runtimeStdinTimeout = 20 * time.Millisecond
-	t.Cleanup(func() { runtimeStdinTimeout = old })
-	for _, route := range []string{"send", "opencode"} {
+	runtimeHookStdinTimeout = 20 * time.Millisecond
+	t.Cleanup(func() {
+		runtimeStdinTimeout = old
+		runtimeHookStdinTimeout = oldHook
+	})
+	for _, route := range []string{"send", "opencode", "codex"} {
 		t.Run(route, func(t *testing.T) {
 			home := runtimeCLIHome(t)
 			before := runtimeCLIDisk(t, home)
-			runtimeCLIServer(t, func(w http.ResponseWriter, r *http.Request) { t.Error("timed-out stdin made HTTP request") })
+			runtimeCLINoRequest(t, "timed-out stdin made HTTP request")
 			release, finished := make(chan struct{}), make(chan struct{})
 			done := make(chan struct{})
 			var out bytes.Buffer
@@ -56,11 +63,139 @@ func TestTelemetryRuntimeStdinDeadline(t *testing.T) {
 			close(release)
 			<-finished
 			<-done
-			if runErr != nil || !strings.Contains(out.String(), `"discarded"`) {
+			if runErr != nil || (route == "codex" && out.Len() != 0) || (route != "codex" && !strings.Contains(out.String(), `"discarded"`)) {
 				t.Fatal("unexpected timeout decision", out.String(), runErr)
 			}
 			if !reflect.DeepEqual(before, runtimeCLIDisk(t, home)) {
 				t.Fatal("timed-out stdin wrote artifacts")
+			}
+		})
+	}
+}
+
+func TestRuntimeStdinBudgetsByVerb(t *testing.T) {
+	for _, tt := range []struct {
+		verb     string
+		want     time.Duration
+		wantJSON bool
+	}{
+		{"send", 500 * time.Millisecond, false},
+		{"opencode", 500 * time.Millisecond, false},
+		{"claude", 3 * time.Second, true},
+		{"codex", 3 * time.Second, true},
+	} {
+		t.Run(tt.verb, func(t *testing.T) {
+			got, gotJSON := runtimeStdinConfig(tt.verb)
+			if got != tt.want || gotJSON != tt.wantJSON {
+				t.Fatalf("timeout=%s json=%t", got, gotJSON)
+			}
+		})
+	}
+}
+
+func TestRuntimeHookStdinCompletesWithoutEOF(t *testing.T) {
+	for _, verb := range []string{"claude", "codex"} {
+		t.Run(verb, func(t *testing.T) {
+			r, w := io.Pipe()
+			defer r.Close()
+			defer w.Close()
+			ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+			defer cancel()
+			type result struct {
+				data []byte
+				ok   bool
+			}
+			done := make(chan result, 1)
+			go func() {
+				_, jsonValue := runtimeStdinConfig(verb)
+				data, ok := readRuntimeStdin(ctx, r, jsonValue)
+				done <- result{data, ok}
+			}()
+			payload := []byte(`{"message":"escaped \" brace } stays inside","nested":{"ok":true}}`)
+			if _, err := w.Write(payload); err != nil {
+				t.Fatal(err)
+			}
+			got := <-done
+			if !got.ok || !bytes.Equal(got.data, payload) {
+				t.Fatalf("data=%q ok=%t", got.data, got.ok)
+			}
+		})
+	}
+}
+
+func TestRuntimeHookStdinAcceptsDelayedPayloadWithinHookBudget(t *testing.T) {
+	old, oldHook := runtimeStdinTimeout, runtimeHookStdinTimeout
+	runtimeStdinTimeout = 10 * time.Millisecond
+	runtimeHookStdinTimeout = 100 * time.Millisecond
+	t.Cleanup(func() {
+		runtimeStdinTimeout = old
+		runtimeHookStdinTimeout = oldHook
+	})
+	for _, verb := range []string{"claude", "codex"} {
+		t.Run(verb, func(t *testing.T) {
+			r, w := io.Pipe()
+			defer r.Close()
+			defer w.Close()
+			go func() {
+				// Scaled timing: this arrives after the direct-input budget but
+				// comfortably within the hook budget, without a real one-second wait.
+				time.Sleep(30 * time.Millisecond)
+				_, _ = io.WriteString(w, `{"late":true}`)
+			}()
+			timeout, jsonValue := runtimeStdinConfig(verb)
+			ctx, cancel := context.WithTimeout(context.Background(), timeout)
+			defer cancel()
+			data, ok := readRuntimeStdin(ctx, r, jsonValue)
+			if !ok || string(data) != `{"late":true}` {
+				t.Fatalf("data=%q ok=%t", data, ok)
+			}
+		})
+	}
+}
+
+func TestRuntimeHookStdinTimeoutAndBounds(t *testing.T) {
+	t.Run("no payload", func(t *testing.T) {
+		r, w := io.Pipe()
+		defer r.Close()
+		defer w.Close()
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+		defer cancel()
+		if data, ok := readRuntimeStdin(ctx, r, true); ok || data != nil {
+			t.Fatalf("data=%q ok=%t", data, ok)
+		}
+	})
+	t.Run("oversized first value", func(t *testing.T) {
+		input := `{"value":"` + strings.Repeat("x", telemetry.RuntimeMaxBytes) + `"}`
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		if data, ok := readRuntimeStdin(ctx, strings.NewReader(input), true); ok || data != nil {
+			t.Fatalf("len=%d ok=%t", len(data), ok)
+		}
+	})
+	t.Run("trailing bytes ignored", func(t *testing.T) {
+		first := `{"first":true}`
+		input := first + strings.Repeat("PRIVATE_TRAILING", telemetry.RuntimeMaxBytes)
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		data, ok := readRuntimeStdin(ctx, strings.NewReader(input), true)
+		if !ok || string(data) != first || bytes.Contains(data, []byte("PRIVATE")) {
+			t.Fatalf("data=%q ok=%t", data, ok)
+		}
+	})
+}
+
+func TestRuntimeDirectStdinStillRequiresEOF(t *testing.T) {
+	for _, verb := range []string{"send", "opencode"} {
+		t.Run(verb, func(t *testing.T) {
+			r, w := io.Pipe()
+			defer r.Close()
+			defer w.Close()
+			go func() { _, _ = io.WriteString(w, `{"complete":true}`) }()
+			ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+			defer cancel()
+			_, jsonValue := runtimeStdinConfig(verb)
+			if data, ok := readRuntimeStdin(ctx, r, jsonValue); ok || data != nil {
+				t.Fatalf("data=%q ok=%t", data, ok)
 			}
 		})
 	}
@@ -81,10 +216,10 @@ func (r runtimeSignalInput) Read(p []byte) (int, error) {
 }
 
 func TestTelemetryRuntimePolicyRevokedDuringStdin(t *testing.T) {
-	for _, route := range []string{"send", "opencode"} {
+	for _, route := range []string{"send", "opencode", "codex"} {
 		t.Run(route, func(t *testing.T) {
 			home := runtimeCLIHome(t)
-			runtimeCLIServer(t, func(w http.ResponseWriter, r *http.Request) { t.Error("revoked input sent HTTP") })
+			runtimeCLINoRequest(t, "revoked input sent HTTP")
 			r, w := io.Pipe()
 			defer r.Close()
 			defer w.Close()
@@ -109,7 +244,7 @@ func TestTelemetryRuntimePolicyRevokedDuringStdin(t *testing.T) {
 			}
 			_ = w.Close()
 			<-done
-			if runErr != nil || !strings.Contains(out.String(), `"disabled"`) {
+			if runErr != nil || (route == "codex" && out.Len() != 0) || (route != "codex" && !strings.Contains(out.String(), `"disabled"`)) {
 				t.Fatal("policy revocation ignored", out.String(), runErr)
 			}
 			if !reflect.DeepEqual(revoked, runtimeCLIDisk(t, home)) {
@@ -195,6 +330,18 @@ func runtimeCLIServer(t *testing.T, handler http.HandlerFunc) *httptest.Server {
 	t.Cleanup(func() { runtimeHTTPClient = old })
 	t.Setenv(telemetry.EndpointEnvVar, server.URL)
 	return server
+}
+
+func runtimeCLINoRequest(t *testing.T, message string) {
+	t.Helper()
+	old := runtimeHTTPClient
+	runtimeHTTPClient = func() *http.Client {
+		return &http.Client{Transport: codexCLIRoundTrip(func(*http.Request) (*http.Response, error) {
+			t.Error(message)
+			return nil, errors.New("unexpected request")
+		})}
+	}
+	t.Cleanup(func() { runtimeHTTPClient = old })
 }
 
 func TestTelemetryRuntimeStdin(t *testing.T) {

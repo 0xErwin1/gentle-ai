@@ -4,9 +4,11 @@ import (
 	"bytes"
 	"encoding/json"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 
+	"github.com/gentleman-programming/gentle-ai/v2/internal/opencode"
 	"github.com/santhosh-tekuri/jsonschema/v6"
 )
 
@@ -17,6 +19,53 @@ const runtimeFixture = `{"schema":"gentle-ai.telemetry-runtime-aggregate/v1","re
 
 func tokenReported(sum string) string {
 	return `{"reported":1,"unavailable":0,"unsupported":0,"sum":` + sum + `}`
+}
+
+func TestRuntimeAgentClassesMatchPackagedAgents(t *testing.T) {
+	want := append([]string{"orchestrator", "worker", "explore", "verify", "unknown"}, opencode.ConfigurableAgentPhases()...)
+	// Pi packages exactly these additional agents outside the configurable OpenCode phases.
+	piOnlyPackagedAgents := []string{"sdd-status", "sdd-sync"}
+	want = append(want, piOnlyPackagedAgents...)
+	goClasses := strings.Split(runtimeAgentClasses, "|")
+
+	data, err := os.ReadFile("../../contracts/telemetry/runtime/v1/schemas/aggregate.schema.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var document struct {
+		Definitions struct {
+			Row struct {
+				Properties struct {
+					AgentClass struct {
+						Enum []string `json:"enum"`
+					} `json:"agent_class"`
+				} `json:"properties"`
+			} `json:"row"`
+		} `json:"$defs"`
+	}
+	if err := json.Unmarshal(data, &document); err != nil {
+		t.Fatal(err)
+	}
+	schemaClasses := document.Definitions.Row.Properties.AgentClass.Enum
+
+	slices.Sort(want)
+	for source, got := range map[string][]string{"Go": goClasses, "JSON Schema": schemaClasses} {
+		slices.Sort(got)
+		if !slices.Equal(got, want) {
+			t.Errorf("%s runtime agent classes = %v, want fixed classes plus OpenCode and Pi packaged agents %v", source, got, want)
+		}
+	}
+}
+
+func TestDeprecatedRuntimeAgentClassAliasNormalized(t *testing.T) {
+	body := strings.Replace(runtimeFixture, `"agent_class":"unknown"`, `"agent_class":"sdd-proposal"`, 1)
+	batch, err := decodeRuntime([]byte(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := batch.Rows[0].AgentClass; got != "sdd-propose" {
+		t.Fatalf("deprecated agent class normalized to %q, want sdd-propose", got)
+	}
 }
 
 // Retained means preserved by canonicalization in memory, never persisted.

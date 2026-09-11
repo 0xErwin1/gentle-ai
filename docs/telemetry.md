@@ -83,12 +83,23 @@ cumulative snapshots. No parent-child links or source IDs exist.
 | `host` | `pi`, `opencode`, `claude-code`, or `codex`; never a hostname |
 | `model` | Registered public provider/model pair, otherwise the `unknown` or `custom` pair |
 | `model_evidence` | `selected`, `response`, or `unknown`; selected model is not proof of response model |
-| `agent_kind`, `agent_class` | Closed broad category and known package class, otherwise `unknown`; no private agent names |
+| `agent_kind`, `agent_class` | Closed broad category and known package class, otherwise `unknown`; no private agent names. See the canonical vocabulary below. |
 | `selected_effort`, `effective_effort` | Independent source evidence; never infer one from the other |
 | `launches`, `responses` | Source-observed event occurrence counts, `null` if unobserved, or `"unsupported"`; not sessions, successes, or reconstructed composition |
 | Six token fields | Independent `{reported, unavailable, unsupported, sum}` coverage objects |
 | `duration` | Typed source-reported request or message elapsed time, never inferred latency |
 | `error_category` | `none`, `unknown`, `auth`, `output_length`, `aborted`, `api`, `rate_limit`, or `server`; never error text |
+
+### Agent class vocabulary
+
+Canonical `agent_class` values are:
+
+- Fixed classes: `orchestrator`, `worker`, `explore`, `verify`, `unknown`
+- SDD agents: `sdd-init`, `sdd-explore`, `sdd-research`, `sdd-propose`, `sdd-spec`, `sdd-design`, `sdd-tasks`, `sdd-apply`, `sdd-verify`, `sdd-archive`, `sdd-onboard`, `sdd-status`, `sdd-sync`
+- Judgment Day agents: `jd-judge-a`, `jd-judge-b`, `jd-fix-agent`
+- Review agents: `review-risk`, `review-readability`, `review-reliability`, `review-resilience`, `review-refuter`, `review-validator`
+
+The collector accepts deprecated `sdd-proposal` from older registry-1 clients and normalizes it to `sdd-propose` before storage.
 
 Occurrence counts remain because they describe the event's observed coverage, not
 session reconstruction. Token coverage does not derive from these counts. A
@@ -137,7 +148,7 @@ The CLI does not close caller-owned readers or shared `os.Stdin`. A timed-out re
 can leave **one process-scoped reader goroutine** until stdin completes or the
 standalone process exits. A buffered result prevents late completion from blocking;
 the deadline timer is canceled on return. This is not a daemon or retry mechanism.
-The library `SendRuntime`/`SendOpenCode` APIs still accept caller-owned readers:
+The library `SendRuntime`/`SendOpenCode`/`SendClaude`/`SendCodex` APIs still accept caller-owned readers:
 their context bounds HTTP, not arbitrary blocking `Read` implementations. Embedded
 callers must supply bounded input; only the CLI owns this pre-read deadline.
 
@@ -162,16 +173,17 @@ and asynchronously. Native code checks policy, normalizes one bounded source
 observation, then uses the same one-attempt sender. Example stdin:
 
 ```json
-{"schema":"gentle-ai.telemetry-opencode/v1","info":{"role":"assistant","time":{"created":1,"completed":3},"providerID":"anthropic","modelID":"claude-opus-5"}}
+{"schema":"gentle-ai.telemetry-opencode/v1","info":{"role":"assistant","time":{"created":1,"completed":3},"providerID":"anthropic","modelID":"claude-opus-5","agent":"sdd-apply"}}
 ```
 
 Only completed non-summary assistant `message.updated` events qualify. Source
 compatibility is pinned to [plugin 1.18.30](https://unpkg.com/@opencode-ai/plugin@1.18.30/dist/index.d.ts)
 and its [V1 SDK](https://unpkg.com/@opencode-ai/sdk@1.18.30/dist/gen/types.gen.d.ts),
 not V2; this is not an installed-runtime smoke test. Source timestamps become
-message elapsed time and do not leave native code. Unknown provider/model names
-become `custom`; error names/status become closed categories. Prompts, parts, paths,
-raw error text, tools, and source/session/task IDs never enter the envelope.
+message elapsed time and do not leave native code. The source `mode` is forwarded
+as `agent` only when it is 1-64 printable ASCII characters. Unknown provider/model
+names become `custom`; error names/status become closed categories. Prompts, parts,
+paths, raw error text, tools, and source/session/task IDs never enter the envelope.
 
 The hook does not read message/session IDs, reconstruct sessions, dedupe across
 events, or retain failed payloads. Each event gets at most one native process.
@@ -182,24 +194,143 @@ Disposal terminates active children. Repeated source events can be counted again
 this intentionally makes no exactly-once coverage claim.
 
 Missing/default-zero source tokens remain unavailable; available reasoning is
-preserved, and total tokens are not inferred. OpenCode agent class and selected/
-effective effort remain unknown/unavailable without source evidence.
+preserved, and total tokens are not inferred. Native `build` and `plan`, plus
+`gentle-orchestrator`, map to the orchestrator class. OpenCode's managed fallback
+agents map `explore` to the built-in `explore` class and `general` to the built-in
+`worker` class. Agent names in the runtime contract's named Gentle AI allowlist
+map to their built-in class. Other non-empty names map to `custom`/`unknown`;
+their raw names never leave native code. Missing names remain `unknown`/`unknown`.
+
+For the observed agent, native code reads up to 1 MiB from the local `opencode.json`
+`agent.<name>.model` and `agent.<name>.variant` assignment. A valid contract effort
+becomes `selected_effort`; `effective_effort` remains `unavailable` because OpenCode
+does not report it. A response provider/model remains authoritative with
+`model_evidence: response`; the assigned model is used with
+`model_evidence: selected` only when the response omits provider/model. Missing,
+oversized, or invalid configuration falls back to unavailable/unknown attribution
+and never blocks the send.
 
 Install/sync still reconcile the dedicated `plugins/telemetry-runtime.ts` and
 `.gentle-ai-telemetry-runtime.json` ownership manifest for selected OpenCode,
 independently of SDD and using the existing scope/XDG resolution. These are static
 installation assets, **not metric state**. Managed byte/hash/mode checks, guarded
 rollback, unowned/edited-file preservation, and validated-pair uninstall remain
-unchanged. Initial unreleased ownership accepts only the embedded asset; approving
-historical digests for a rollout is separate work. Disable leaves the plugin inert
-under existing policy; installation never reenrolls or changes exporter settings.
+unchanged. Each managed plugin asset change must append the immediately previous
+embedded asset digest to the explicit provenance allowlist so owned installs can
+upgrade without treating arbitrary self-consistent content as package provenance.
+Disable leaves the plugin inert under existing policy; installation never reenrolls
+or changes exporter settings.
 
-**Automatic sources:** Pi and OpenCode integrations provide one-shot runtime
-telemetry. Claude Code and Codex are unsupported: neither provides a supported
-direct hook supplying sanitized usage under the no-daemon/no-persistence
-constraint. Schema host values remain for compatibility, not as evidence of
-installed support. No installation, deployment, or external-network validation
-is implied here.
+## Automatic Claude Code collection
+
+Claude Code installs asynchronous `Stop` and `SubagentStop` command hooks that
+invoke `gentle-ai telemetry runtime claude --json`. Each hook starts one one-shot
+process; native code checks the existing telemetry policy before reading stdin,
+uses the same 16 KiB/500 ms input bound, and sends at most once with no daemon,
+queue, persistence, retry, or filesystem mutation.
+
+For `SubagentStop`, the documented `agent_type` names the subagent frontmatter.
+Names in Gentle AI's runtime agent-class registry become `built_in` observations;
+all other names become `custom`/`unknown` without transmitting the name.
+
+For `SubagentStop`, the adapter reads at most the last 512 KiB of the matching
+agent transcript, from inside the user's home only. It scans backward for the
+last complete assistant record carrying valid usage, skipping malformed,
+partial, and non-usage records. A memory-only `last_assistant_message` match is
+stronger correlation evidence, but a missing or different value does not discard
+usage because `agent_transcript_path` is scoped to that subagent run. The record
+supplies response model plus input, output, cache-read, and cache-creation tokens.
+Reasoning tokens are unsupported and total tokens are unavailable; neither is
+inferred.
+
+`Stop` always becomes an `orchestrator` activity-only launch-style observation.
+It does not read or attribute transcript usage or a response model: without a
+unique response identity or persistent replay state, a repeated final message
+could match an older record when the current transcript row has not been flushed.
+
+For a known named subagent, at most 64 KiB of
+`~/.claude/agents/<agent_type>.md` supplies selected model and selected effort.
+The selected model is used only when no response model exists. The hook contract
+does not expose effective effort, duration, or an error shape: effective effort
+and duration remain unavailable, while successful `Stop`/`SubagentStop` events
+use error category `none` (API failures fire the separate `StopFailure` event).
+Selected aliases map as `sonnet` to `claude-sonnet-5`, `opus` to
+`claude-opus-5`, and `haiku` to `claude-haiku-4-5`; `inherit`, `default`, and an
+empty selector remain unknown. Transcript release/revision suffixes are reduced
+by longest registered-ID prefix, so for example `claude-sonnet-5-20260501` maps
+to `claude-sonnet-5`. Other model IDs map to `custom`/`custom`.
+
+If a subagent transcript is missing, unreadable, or has no valid assistant usage,
+the completion records the same launch-style occurrence with unavailable token
+coverage rather than claiming a response. This preserves observed agent activity
+without fabricating response evidence. Transcript paths,
+hook/session/agent IDs, cwd, prompts, messages, transcript content, and private
+agent names never enter the aggregate or logs. Symlinks resolving outside the
+user's home are refused.
+
+Hook and subagent-field behavior follows the official
+[Claude Code hooks reference](https://code.claude.com/docs/en/hooks) and
+[subagent reference](https://code.claude.com/docs/en/sub-agents). Transcript JSONL
+`message.model` and `message.usage` shapes are observed implementation evidence,
+not documented compatibility guarantees in those references.
+
+## Automatic Codex collection
+
+Managed Codex `hooks.json` entries invoke
+`gentle-ai telemetry runtime codex --json` asynchronously for `SubagentStop` and
+`Stop`. These events and their input fields are documented by the
+[Codex hooks reference](https://developers.openai.com/codex/hooks). Runtime policy is
+checked before hook stdin, local state, or transcript data is read, again after
+stdin, and before the one-attempt sender. Disabled telemetry therefore leaves
+the installed hooks inert. The command writes no stdout because Codex validates
+JSON-looking output as a hook response even for asynchronous hooks.
+
+The hook input is limited to 16 KiB. For `SubagentStop`, native code separately
+reads at most the first 64 KiB of `agent_transcript_path` for attribution. Only
+the first `session_meta` record is eligible: the basename of
+`source.subagent.thread_spawn.agent_path` is normalized from Codex's underscored
+task name to the hyphenated runtime class, then checked against the exact Go
+allowlist. A directly allowlisted hook `agent_type` takes precedence; every
+unrecognized result remains `custom`/`unknown`. The nickname, IDs, and source
+path are discarded in memory and never enter telemetry.
+
+Native code also retains at most the final 256 KiB of `agent_transcript_path`
+for `SubagentStop`, or `transcript_path` for `Stop`; one look-behind byte
+determines whether the first retained line is complete.
+The final observed `turn_context` starts the eligible evidence segment. Its valid
+model and effort and that segment's latest valid `event_msg` `token_count`
+`last_token_usage` are used together. The public hook contract does not establish
+that hook `turn_id` has matching semantics in both parent and subagent transcripts,
+so sequence segmentation is the bounded fallback and private IDs stay memory-only.
+Codex's [subagent documentation](https://developers.openai.com/codex/subagents)
+describes subagent configuration. `Stop` is classified as the orchestrator.
+When response model evidence is missing, a valid persisted Gentle AI phase or
+orchestrator model assignment is used with `selected` evidence. The transcript
+`effort` or nested `collaboration_mode.settings.reasoning_effort` is effective
+evidence only and never becomes `selected_effort`. Missing, malformed, or
+unreadable transcript/state data never fails the send and remains unavailable.
+
+| Codex `last_token_usage` field | Runtime field |
+| --- | --- |
+| `input_tokens` | `input_tokens` |
+| `cached_input_tokens` | `cache_read_tokens` |
+| `cache_write_input_tokens` | `cache_creation_tokens` |
+| `output_tokens` | `output_tokens` |
+| `reasoning_output_tokens` | `reasoning_tokens` |
+| `total_tokens` | `total_tokens` |
+
+No identifier, path, prompt, summary, assistant message, raw error, or rate-limit
+detail enters the runtime payload. Missing counters are unavailable rather than
+zero, totals are not inferred, duration is unavailable, and there is no daemon,
+queue, retry, telemetry persistence, or filesystem mutation. Codex explicitly
+notes that transcript format is not a stable hook interface, so this parser is a
+bounded best-effort compatibility layer and may lose coverage after Codex format
+changes.
+
+**Automatic sources:** Pi, OpenCode, Claude Code, and Codex integrations provide
+one-shot runtime telemetry. Schema host values remain for compatibility, not as
+evidence of installed support. No installation, deployment, or external-network
+validation is implied here.
 
 ## Anonymous runtime collector and retention
 
@@ -310,7 +441,7 @@ installation, gentle-ai does exactly one thing: it prints this line to
 stderr, synchronously, in that same command —
 
 ```text
-Gentle AI sends anonymous usage metrics (version, OS, agents, counters) and may send anonymous runtime usage from supported Pi/OpenCode integrations (public model, effort, agent class, available token usage, timing, error categories); runtime usage is never stored locally; run gentle-ai telemetry disable to opt out.
+Gentle AI sends anonymous usage metrics (version, OS, agents, counters) and may send anonymous runtime usage from supported Pi/OpenCode/Codex integrations (public model, effort, agent class, available token usage, timing, error categories); runtime usage is never stored locally; run gentle-ai telemetry disable to opt out.
 ```
 
 — and stores a locally generated `install_id`. **Nothing is sent on that
