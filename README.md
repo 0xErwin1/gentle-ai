@@ -35,8 +35,9 @@ and no way to prove what it did beyond asking you to read every line.
 <br/>
 
 <!--
-  HERO SLOT — the only animation on this page. The six Features images are stills,
-  so motion is spent once, here, right after the pitch lands.
+  HERO SLOT — the only animation on this page. Features is all still: three
+  diagrams for the concepts, three captures as proof the thing runs. Motion is
+  spent once, here, right after the pitch lands.
 
   Uncomment when docs/assets/features/hero-pi.gif exists. It is a real-time capture
   of the complete Pi startup: banner, extensions, skills and startup output, never
@@ -98,9 +99,9 @@ and no way to prove what it did beyond asking you to read every line.
 
 ### Engram™ — Keep your project context
 
-<img width="100%" src="docs/assets/features/engram.png" alt="A brand-new session recalling a product decision from an earlier one, without reading a single file" />
+<img width="100%" src="docs/assets/diagrams/engram-memory.svg" alt="Three work sessions separated by a restart and by context compaction. Each break cuts the session layer but stops at the memory layer underneath. The first session saves a decision, the next one asks memory before asking you, and weeks later the same question is answered from memory instead of by re-reading the repository." />
 
-Gentle-AI keeps your decisions, bug fixes, and conventions available across sessions, restarts, and compaction. Your agent can pick up the project with context instead of making you explain it again.
+The cost of a fresh session is not the tokens — it is you, re-explaining the same decisions every morning. Engram removes that: your agent writes down what it learns as it goes and reaches for it before it reaches for you, so context accumulates instead of resetting.
 
 **[Docs →](docs/engram.md)**
 
