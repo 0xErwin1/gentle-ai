@@ -734,6 +734,27 @@ type reviewTransitionSelector struct {
 	PrePRRepresentable                 bool
 }
 
+// reviewStatusTargetEvidenceToken composes the negotiated evidence token for
+// a STATUS-fresh target. It returns "" unless the components recomputed from
+// the published projection reproduce the exact target identity, so a
+// transition whose target is not the live snapshot never carries evidence
+// that would contradict it.
+func reviewStatusTargetEvidenceToken(status ReviewTargetStatusResult) string {
+	if status.Projection.CurrentCandidateTree == "" || status.Projection.PathsDigest == "" {
+		return ""
+	}
+	token := formatReviewTargetEvidence(reviewtransaction.Snapshot{
+		Kind: status.Projection.Kind, Projection: status.Projection.Projection,
+		BaseTree: status.Projection.BaseTree, CandidateTree: status.Projection.CurrentCandidateTree,
+		PathsDigest: status.Projection.PathsDigest,
+	})
+	parsed, err := parseReviewTargetEvidenceToken(token)
+	if err != nil || parsed.identity() != status.TargetIdentity {
+		return ""
+	}
+	return token
+}
+
 func reviewStartArguments(status ReviewTargetStatusResult, lineage string, runtime model.AgentID, intended reviewIntendedUntrackedScope) []ReviewTransitionArgument {
 	contract := status.Contract
 	if contract == "" {
@@ -742,8 +763,15 @@ func reviewStartArguments(status ReviewTargetStatusResult, lineage string, runti
 	arguments := []ReviewTransitionArgument{
 		{Name: "cwd", Value: status.repositoryRoot}, {Name: "contract", Value: contract},
 		{Name: "target", Value: status.TargetIdentity},
-		{Name: "projection", Value: string(status.Projection.Projection)},
 	}
+	// The self-describing evidence token rides beside the identity hash
+	// (#4494) only when it recomputes the exact target identity, so a
+	// transition whose target is not the live snapshot never carries
+	// contradicting evidence.
+	if token := reviewStatusTargetEvidenceToken(status); token != "" {
+		arguments = append(arguments, ReviewTransitionArgument{Name: "target-evidence", Value: token})
+	}
+	arguments = append(arguments, ReviewTransitionArgument{Name: "projection", Value: string(status.Projection.Projection)})
 	if status.repositoryRoot == "" {
 		arguments = arguments[1:]
 	}
