@@ -165,6 +165,33 @@ func TestOpenCodeConsentV3QuestionRouteUsesDisplayLabelsWithoutChangingProviderC
 	}
 }
 
+func TestOpenCodePreservedPromptReplacesManagedConsentQuestionRoute(t *testing.T) {
+	home := t.TempDir()
+	adapter := opencodeAdapter()
+	settingsPath := adapter.SettingsPath(home)
+	if err := os.MkdirAll(filepath.Dir(settingsPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll(settings) error = %v", err)
+	}
+	seed := `{"agent":{"gentle-orchestrator":{"prompt":` + strconv.Quote(openCodeNativeQuestionSourceRoute) + `}}}`
+	if err := os.WriteFile(settingsPath, []byte(seed), 0o644); err != nil {
+		t.Fatalf("WriteFile(settings) error = %v", err)
+	}
+
+	if _, err := Inject(home, adapter, model.SDDModeSingle, InjectOptions{PreserveOpenCodeOrchestratorPrompt: true}); err != nil {
+		t.Fatalf("Inject() error = %v", err)
+	}
+	prompt := agentPrompt(t, readOpenCodeAgents(t, settingsPath), "gentle-orchestrator")
+	if strings.Contains(prompt, openCodeNativeQuestionSourceRoute) {
+		t.Fatal("preserved OpenCode prompt retained the generic native-question route")
+	}
+	if got := strings.Count(prompt, openCodeConsentV3QuestionRoute); got != 1 {
+		t.Fatalf("preserved OpenCode prompt contains %d consent/v3 question routes, want 1", got)
+	}
+	if !strings.Contains(prompt, "invoke `question` exactly once with both `multiple: false` and `custom: false`") {
+		t.Fatal("preserved OpenCode prompt omitted the explicit closed-domain question invocation")
+	}
+}
+
 func TestOpenCodeConsentV3QuestionRouteFailsClosedWhenSharedSourceClauseIsNotUnique(t *testing.T) {
 	for _, tt := range []struct {
 		name    string
