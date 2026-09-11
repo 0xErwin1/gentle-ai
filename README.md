@@ -108,9 +108,9 @@ Gentle-AI keeps your decisions, bug fixes, and conventions available across sess
 
 ### SDD — Give each change a clear path
 
-<img width="100%" src="docs/assets/features/sdd.png" alt="A finished SDD cycle: ten tasks done, 4 of 4 requirements and 12 of 12 scenarios verified, 14 tests passing, spec synced and the change archived" />
+<img width="100%" src="docs/assets/diagrams/sdd-cycle.svg" alt="The SDD cycle in three bands. Understand: Explore, then optional Research. Plan: Proposal, Spec, Design and Tasks, each writing its own markdown file. Build: Apply writes code and tests, Verify checks the evidence against the spec, Archive merges the specs and closes the cycle." />
 
-Gentle-AI turns a vague request into a visible path: Init → Explore → Research (optional) → Proposal → Spec → Design → Tasks → Apply (with TDD when appropriate) → Verify → Archive. TDD (test-driven development) belongs in Apply when it fits; Verify independently checks the evidence, so you can see what was actually checked.
+Every phase leaves a file on disk you can open, argue with, and correct — so the plan is reviewable before a single line of code exists. TDD (test-driven development) belongs in Apply when it fits, because that is the first point where there is a spec to test against. Verify then runs as its own step against that spec, not as a self-report from whatever wrote the code, so you can see what was actually checked.
 
 **[Docs →](docs/intended-usage.md)**
 
@@ -118,9 +118,9 @@ Gentle-AI turns a vague request into a visible path: Init → Explore → Resear
 
 ### RDD — Check finished work at the right depth
 
-<img width="100%" src="docs/assets/features/rdd.png" alt="A review that derived its own effort from the frozen candidate, ran the reliability lens, and closed with an explicit acknowledgement" />
+<img width="100%" src="docs/assets/diagrams/rdd-review.svg" alt="How RDD checks a finished change. The exact change is frozen to a lineage, revision and target, then a read-only risk assessment picks the depth: passive gets a structural readback with zero reviewer lenses, medium gets one focused lens, high gets the canonical 4R — Risk, Resilience, Readability and Reliability. At most one bounded correction is allowed, and one exact acknowledgement closes the transaction. Delivery stays human-owned." />
 
-Before you rely on a completed change, Gentle-AI can use opt-in Receipt-Driven Development (RDD) to lock the exact change it checks and derive evidence from that fixed version. This keeps the review tied to what you will use: low risk gets a structural readback, medium risk one focused lens, and high risk the canonical 4R — Risk, Resilience, Readability, Reliability.
+Receipt-Driven Development (RDD) is opt-in and stays off until you enable it. Its point is that a review cannot drift: the candidate is frozen before anything reads it, so the evidence belongs to the exact version you are about to rely on — not to whatever the worktree looked like a moment later. The depth comes from that frozen candidate rather than from the model's judgment, and the result is informational. Commit, push and release stay your call.
 
 **[Docs →](docs/review-integration.md)**
 
