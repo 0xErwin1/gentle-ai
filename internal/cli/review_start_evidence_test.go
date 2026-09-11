@@ -370,9 +370,14 @@ func TestReviewFacadeStartLensesRequiredHintsNegotiatedContract(t *testing.T) {
 	}
 	// The direct route refuses --agent, so this caller never declared a
 	// runtime and the hint must omit the complete agent segment (issue #2885).
-	wantCommand := fmt.Sprintf("gentle-ai review start --contract %s --target %s --projection %s", ReviewIntegrationContractV2, started.TargetIdentity, started.Projection)
+	// The self-describing evidence token rides beside --target (#4494), so the
+	// canonical hint carries it between --target and --projection.
+	wantCommand := fmt.Sprintf("gentle-ai review start --contract %s --target %s --target-evidence ", ReviewIntegrationContractV2, started.TargetIdentity)
 	if !strings.Contains(started.Hint, wantCommand) {
 		t.Fatalf("lenses-required start hint = %q, want it to contain %q", started.Hint, wantCommand)
+	}
+	if !strings.Contains(started.Hint, " --projection "+string(started.Projection)) {
+		t.Fatalf("lenses-required start hint = %q, want it to keep the projection segment", started.Hint)
 	}
 }
 

@@ -204,7 +204,7 @@ func reviewNegotiatedStartCommand(snapshot reviewtransaction.Snapshot, runtimeAg
 	if identity != "" {
 		command += " --agent " + identity
 	}
-	command += fmt.Sprintf(" --target %s --projection %s", snapshot.Identity, facadeProjection(snapshot.Projection))
+	command += fmt.Sprintf(" --target %s --target-evidence %s --projection %s", snapshot.Identity, formatReviewTargetEvidence(snapshot), facadeProjection(snapshot.Projection))
 	switch snapshot.Kind {
 	case reviewtransaction.TargetBaseDiff:
 		command += " --base-ref " + snapshot.BaseTree + " --committed-only"
@@ -1934,6 +1934,7 @@ func runReviewFacadeStart(ctx context.Context, args []string, stdout io.Writer) 
 	contract := flags.String("contract", "", "optional negotiated review integration contract")
 	runtimeAgent := flags.String("agent", "", "generated active runtime identity for negotiated lifecycle routing")
 	targetIdentity := flags.String("target", "", "exact frozen target identity for negotiated START")
+	targetEvidence := flags.String("target-evidence", "", "self-describing negotiated candidate evidence (v1:kind:projection:base_tree:candidate_tree:paths_digest) bound to --target, so a stale refusal names the truthful cause (#4494)")
 	lineage := flags.String("lineage", "", "optional explicit review lineage identifier")
 	policySource := flags.String("policy", "", "optional review policy file; the native bounded policy is used by default")
 	focus := flags.String("focus", "reliability", "dominant standard-risk focus: risk, resilience, readability, or reliability; large pure documentation always uses readability")
@@ -1990,7 +1991,7 @@ func runReviewFacadeStart(ctx context.Context, args []string, stdout io.Writer) 
 			return reviewPreflightRefusal(reviewImmutableTransportUnsupportedReason, err)
 		}
 	}
-	if err := validateReviewStartBinding(args, negotiated, *targetIdentity, *projection, *baseRef, *lineage, *committedOnly, *workspaceOverlay, *consent, *locale); err != nil {
+	if err := validateReviewStartBinding(args, negotiated, *targetIdentity, *projection, *baseRef, *lineage, *committedOnly, *workspaceOverlay, *consent, *locale, strings.TrimSpace(*targetEvidence)); err != nil {
 		return reviewPreflightError(err)
 	}
 	consentMode := reviewStartConsentMode(strings.TrimSpace(*consent))
@@ -2045,8 +2046,7 @@ func runReviewFacadeStart(ctx context.Context, args []string, stdout io.Writer) 
 		return fmt.Errorf("build facade review target: %w", err)
 	}
 	if negotiated && snapshot.Identity != *targetIdentity {
-		return reviewPreflightRefusal(reviewPreflightStaleTargetReason,
-			errors.New("review start target does not match the freshly built snapshot"))
+		return reviewNegotiatedStaleTargetRefusal(*targetIdentity, strings.TrimSpace(*targetEvidence), snapshot, consentMode, root)
 	}
 	// Issue #2586: a TargetCurrentChanges candidate with zero changed paths
 	// (a clean, fully-committed worktree) or a TargetBaseDiff candidate
@@ -2111,7 +2111,7 @@ func runReviewFacadeStart(ctx context.Context, args []string, stdout io.Writer) 
 			// persisted; the named follow-up invocations answer for exactly
 			// this frozen candidate and nothing else.
 			question, questionErr := newReviewIntegrationConsentResult(snapshot, assessment,
-				reviewConsentFollowUpBase(*cwd, snapshot.Identity, selectedProjection, strings.TrimSpace(*lineage),
+				reviewConsentFollowUpBase(*cwd, snapshot.Identity, formatReviewTargetEvidence(snapshot), selectedProjection, strings.TrimSpace(*lineage),
 					strings.TrimSpace(*baseRef), strings.TrimSpace(*policySource), strings.TrimSpace(*focus),
 					strings.TrimSpace(*tracePath), *committedOnly, *workspaceOverlay, *contract, *runtimeAgent, strings.TrimSpace(*locale), intendedScope), *contract, *runtimeAgent, consentLocale)
 			if questionErr != nil {
@@ -2250,7 +2250,7 @@ func runReviewFacadeStart(ctx context.Context, args []string, stdout io.Writer) 
 		return encodeReviewJSON(stdout, negotiatedResult)
 	}
 }
-func validateReviewStartBinding(args []string, negotiated bool, target, projection, baseRef, lineage string, committedOnly, workspaceOverlay bool, consent, locale string) error {
+func validateReviewStartBinding(args []string, negotiated bool, target, projection, baseRef, lineage string, committedOnly, workspaceOverlay bool, consent, locale, targetEvidence string) error {
 	counts := reviewStartBindingFlagCounts(args)
 	switch reviewStartConsentMode(strings.TrimSpace(consent)) {
 	case reviewConsentModeNone, reviewConsentModeRelay, reviewConsentModeGranted, reviewConsentModeDeclined:
@@ -2272,11 +2272,26 @@ func validateReviewStartBinding(args []string, negotiated bool, target, projecti
 			// refusal:by-design operator-knowledge: only the caller can supply the complete candidate-bound negotiated START invocation
 			return errors.New("review start --locale requires a negotiated --contract")
 		}
+		if counts["target-evidence"] != 0 {
+			return errors.New("review start --target-evidence requires a negotiated --contract and --target")
+		}
 		return nil
 	}
-	for _, name := range []string{"contract", "agent", "target", "projection", "lineage", "base-ref", "committed-only", "workspace-overlay", "consent", "locale"} {
+	for _, name := range []string{"contract", "agent", "target", "target-evidence", "projection", "lineage", "base-ref", "committed-only", "workspace-overlay", "consent", "locale"} {
 		if counts[name] > 1 {
 			return fmt.Errorf("review start repeats --%s", name)
+		}
+	}
+	if targetEvidence != "" {
+		if strings.TrimSpace(target) == "" {
+			return errors.New("review start --target-evidence requires --target")
+		}
+		token, err := parseReviewTargetEvidenceToken(targetEvidence)
+		if err != nil {
+			return err
+		}
+		if token.identity() != strings.TrimSpace(target) {
+			return errors.New("review start --target-evidence does not hash to --target; the token and the identity come from different negotiations")
 		}
 	}
 	if _, err := normalizeReviewConsentLocale(locale); err != nil {
@@ -2409,9 +2424,11 @@ func validateReviewTransitionSelectorFlagCounts(args []string, operation string)
 // caller bound is reproduced, and --target pins the exact frozen candidate, so
 // the follow-up answers for this candidate and nothing else: if the workspace
 // moves, the negotiated freshness check refuses the stale target instead of
-// silently consenting to different bytes.
+// silently consenting to different bytes. The self-describing --target-evidence
+// token travels beside the identity hash (#4494), so that refusal names the
+// truthful cause instead of looping on an opaque mismatch.
 func reviewConsentFollowUpBase(
-	cwd, target string,
+	cwd, target, evidence string,
 	projection reviewtransaction.Projection,
 	lineage, baseRef, policy, focus, trace string,
 	committedOnly, workspaceOverlay bool,
@@ -2423,8 +2440,11 @@ func reviewConsentFollowUpBase(
 		"--contract " + contract,
 		"--cwd " + reviewTransitionShellWord(cwd),
 		"--target " + target,
-		"--projection " + string(projection),
 	}
+	if evidence != "" {
+		parts = append(parts, "--target-evidence "+evidence)
+	}
+	parts = append(parts, "--projection "+string(projection))
 	if runtimeAgent != "" {
 		parts = append(parts, "--agent "+runtimeAgent)
 	}

@@ -623,7 +623,7 @@ func TestV21ConsentInvocationMustMatchProviderOwnedRequest(t *testing.T) {
 	if err := json.Unmarshal(fixture, &question); err != nil {
 		t.Fatal(err)
 	}
-	base := reviewConsentFollowUpBase("/repo", question.TargetIdentity, question.Projection, "review-consent-fixture", "", "", "reliability", "", false, false, ReviewIntegrationContractV2, "", "", reviewIntendedUntrackedScope{})
+	base := reviewConsentFollowUpBase("/repo", question.TargetIdentity, testTargetEvidenceFromInvocation(t, question.Choices[0].Invocation), question.Projection, "review-consent-fixture", "", "", "reliability", "", false, false, ReviewIntegrationContractV2, "", "", reviewIntendedUntrackedScope{})
 	if err := validateReviewConsentInvocations(question, base); err != nil {
 		t.Fatalf("canonical v2.1 consent invocation: %v", err)
 	}

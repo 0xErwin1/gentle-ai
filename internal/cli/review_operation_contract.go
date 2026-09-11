@@ -108,7 +108,7 @@ var reviewIntegrationOperationRegistry = []reviewIntegrationOperationMetadata{
 	// take, and metadata nothing exercises is metadata nothing keeps honest.
 	{Command: "recover", Operation: "review.recover", Label: "Review RECOVER"},
 	{Command: "repair", Operation: "review.repair", Label: "Review REPAIR", Negotiated: true, ValueFlags: []string{"cwd", "class", "lineage", "expected-revision", "cause", "disposition", "repository-binding", "actor", "reason", "maintainer-authorization"}, BoolFlags: []string{"preflight"}, MutatesAuthority: true, JoinOnTimeout: true, ReadOnlyFlag: "preflight"},
-	{Command: "start", Operation: "review.start", Label: "Review START", Negotiated: true, ValueFlags: []string{"cwd", "agent", "target", "lineage", "policy", "focus", "base-ref", "projection", "trace", "consent", "locale", "untracked-scope", "intended-untracked", "expected-untracked-inventory"}, BoolFlags: []string{"committed-only", "workspace-overlay"}, MutatesAuthority: true},
+	{Command: "start", Operation: "review.start", Label: "Review START", Negotiated: true, ValueFlags: []string{"cwd", "agent", "target", "target-evidence", "lineage", "policy", "focus", "base-ref", "projection", "trace", "consent", "locale", "untracked-scope", "intended-untracked", "expected-untracked-inventory"}, BoolFlags: []string{"committed-only", "workspace-overlay"}, MutatesAuthority: true},
 	{Command: "status", Operation: "review.status", Label: "Review STATUS", Negotiated: true, ValueFlags: []string{"cwd", "agent", "lineage", "projection", "base-ref", "base-tree", "gate", "recovery-successor-lineage", "recovery-reason", "recovery-actor", "recovery-authorization", "repair-actor", "repair-reason", "repair-authorization", "untracked-scope", "intended-untracked", "expected-untracked-inventory"}, BoolFlags: []string{"committed-only", "workspace-overlay", "action-eligibility", "next-transition"}},
 	{Command: "validate", Operation: ReviewIntegrationOperationValidate, Label: "Review VALIDATE", Negotiated: true, ValueFlags: []string{"cwd", "lineage", "gate", "base-ref", "pre-pr-ci-attestation", "policy", "release-configuration", "release-generated", "release-provenance", "release-publication-boundary", "release-evidence-freshness"}},
 }
@@ -310,6 +310,33 @@ func managedAssetsContinuation(agent string, staleAssets []string) *ReviewManage
 
 type ReviewIntegrationFailureContext struct {
 	ScopeChange *ReviewIntegrationScopeChange `json:"scope_change,omitempty"`
+	// TargetDrift is the additive #4494 stale-target evidence: the negotiated
+	// components beside their live rebuild, with the differing component
+	// names. Exactly one of the two context variants is ever set.
+	TargetDrift *ReviewIntegrationTargetDrift `json:"target_drift,omitempty"`
+}
+
+// ReviewIntegrationTargetDrift decomposes one stale-target refusal into the
+// truthful cause: which components of the negotiated candidate evidence no
+// longer describe the live workspace (the moved class), or that every
+// component matches while the identity hash alone drifted (the derivation
+// defect class, #2700/#4353/#4412).
+type ReviewIntegrationTargetDrift struct {
+	Expected            ReviewIntegrationNegotiatedComponents `json:"expected"`
+	Actual              ReviewIntegrationNegotiatedComponents `json:"actual"`
+	DifferingComponents []string                              `json:"differing_components"`
+}
+
+// ReviewIntegrationNegotiatedComponents are the five identity components a
+// negotiated continuation carries. base_tree is optional: an unborn HEAD
+// current-changes candidate has no base tree, and absence means exactly
+// that, never an omission.
+type ReviewIntegrationNegotiatedComponents struct {
+	Kind          string `json:"kind"`
+	Projection    string `json:"projection"`
+	BaseTree      string `json:"base_tree,omitempty"`
+	CandidateTree string `json:"candidate_tree"`
+	PathsDigest   string `json:"paths_digest"`
 }
 
 type ReviewIntegrationScopeChange struct {
@@ -384,11 +411,18 @@ const (
 // refusal. It carries only fields the published v1 failure schema already
 // defines, so classifying a refusal never changes the wire contract. The
 // human-readable half travels separately in the additive `cause` field.
+//
+// Context and RetrySafeFalse are additive classification extensions for the
+// #4494 stale-target decomposition: a moved-candidate refusal carries the
+// typed target_drift evidence, and the identity-only drift refusal must not
+// advertise the same retry as a retryable one.
 type reviewPreflightReason struct {
 	Code           string
 	Message        string
 	RequiredInputs []string
 	NextAction     string
+	Context        *ReviewIntegrationFailureContext
+	RetrySafeFalse bool
 }
 
 // reviewPreflightStaleTargetReason classifies every refusal whose precondition
@@ -926,6 +960,12 @@ func newReviewIntegrationFailure(operation string, args []string, runErr error) 
 		preflightFailure.LineageID = failure.LineageID
 		preflightFailure.RequiredInputs = append([]string{}, reason.RequiredInputs...)
 		preflightFailure.NextAction = reason.NextAction
+		if reason.RetrySafeFalse {
+			preflightFailure.RetrySafe = false
+		}
+		if reason.Context != nil {
+			preflightFailure.Context = reason.Context
+		}
 		if reason.Code == reviewImmutableTransportUnsupportedCode || reason.Code == reviewTransportCapabilityUnsupportedCode {
 			preflightFailure.RetrySafe = false
 		}
@@ -1394,16 +1434,42 @@ func (failure ReviewIntegrationFailure) Validate() error {
 	}
 	if failure.Context != nil {
 		scope := failure.Context.ScopeChange
-		if scope == nil || failure.Operation != ReviewIntegrationOperationValidate {
-			return errors.New("negotiated review scope context is not a gate denial")
+		drift := failure.Context.TargetDrift
+		if (scope == nil) == (drift == nil) {
+			return errors.New("negotiated review failure context carries exactly one variant")
 		}
-		if failure.Code != "gate_scope_changed" && failure.Code != "receipt_scope_changed" || scope.DifferingPathCount < 0 || scope.DifferingPathCount > 1000000 ||
-			!validReviewGitTree(scope.Expected.CandidateTree) || !validReviewCapabilitySHA256(scope.Expected.PathsDigest) ||
-			!validReviewGitTree(scope.Actual.CandidateTree) || !validReviewCapabilitySHA256(scope.Actual.PathsDigest) || !validReviewCapabilitySHA256(scope.DifferingPathsDigest) ||
-			!validReviewIntegrationLineage(scope.PredecessorLineageID) || !validReviewCapabilitySHA256(scope.PredecessorRevision) ||
-			scope.RecoveryOperation != "review.recover" || !reflect.DeepEqual(failure.RequiredInputs, scope.RecoveryRequiredInputs) ||
-			!reflect.DeepEqual(scope.RecoveryRequiredInputs, []string{"predecessor_lineage_id", "expected_predecessor_revision", "successor_lineage_id", "disposition", "reason", "actor"}) {
-			return errors.New("negotiated review scope-change diagnostics are incomplete")
+		if scope != nil {
+			if failure.Operation != ReviewIntegrationOperationValidate {
+				return errors.New("negotiated review scope context is not a gate denial")
+			}
+			if failure.Code != "gate_scope_changed" && failure.Code != "receipt_scope_changed" || scope.DifferingPathCount < 0 || scope.DifferingPathCount > 1000000 ||
+				!validReviewGitTree(scope.Expected.CandidateTree) || !validReviewCapabilitySHA256(scope.Expected.PathsDigest) ||
+				!validReviewGitTree(scope.Actual.CandidateTree) || !validReviewCapabilitySHA256(scope.Actual.PathsDigest) || !validReviewCapabilitySHA256(scope.DifferingPathsDigest) ||
+				!validReviewIntegrationLineage(scope.PredecessorLineageID) || !validReviewCapabilitySHA256(scope.PredecessorRevision) ||
+				scope.RecoveryOperation != "review.recover" || !reflect.DeepEqual(failure.RequiredInputs, scope.RecoveryRequiredInputs) ||
+				!reflect.DeepEqual(scope.RecoveryRequiredInputs, []string{"predecessor_lineage_id", "expected_predecessor_revision", "successor_lineage_id", "disposition", "reason", "actor"}) {
+				return errors.New("negotiated review scope-change diagnostics are incomplete")
+			}
+		}
+		if drift != nil {
+			// Issue #4494: the stale-target refusal carries the decomposed
+			// candidate evidence beside its live rebuild, so the cause names
+			// the truthful difference instead of an opaque identity mismatch.
+			if failure.Operation != "review.start" || failure.Code != reviewPreflightStaleTargetCode {
+				return errors.New("negotiated review target-drift context is stale-target scoped")
+			}
+			if !validReviewTargetDriftComponents(drift.Expected) || !validReviewTargetDriftComponents(drift.Actual) ||
+				len(drift.DifferingComponents) == 0 || len(drift.DifferingComponents) > 5 ||
+				reflect.DeepEqual(drift.Expected, drift.Actual) {
+				return errors.New("negotiated review target-drift diagnostics are incomplete")
+			}
+			seen := make(map[string]bool, len(drift.DifferingComponents))
+			for _, name := range drift.DifferingComponents {
+				if !reviewTargetDriftComponentNames[name] || seen[name] {
+					return errors.New("negotiated review target-drift names an unknown component")
+				}
+				seen[name] = true
+			}
 		}
 	}
 	if failure.LineageID != "" && !validReviewIntegrationLineage(failure.LineageID) ||
