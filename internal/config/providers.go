@@ -65,13 +65,15 @@ type ProviderSelection struct {
 	// MCPServers overrides the flat MCP server set for this provider.
 	MCPServers map[string]MCPServer `json:"mcpServers,omitempty"`
 
-	// Packages is pi-only: an install source overriding npm for one of the
-	// packages gentle-pi's adapter installs. The key is the npm package name
-	// exactly as the adapter names it; the value is an npm spec, a Pi git
-	// shorthand, a plain git URL, or an absolute local path. This is the one
-	// field kept machine-neutral except for the local-path form, which a
-	// consumer chooses knowingly rather than the document assuming a shared
-	// filesystem.
+	// Packages is pi-only: the set of Pi packages the document manages. A key
+	// naming one of the packages gentle-pi's adapter already installs
+	// overrides that package's install source; any other key is an
+	// additional Pi package to install, since Pi extensions are themselves
+	// npm (or git) packages installed the same way. The value is an npm
+	// spec, a Pi git shorthand, a plain git URL, or an absolute local path.
+	// This is the one field kept machine-neutral except for the local-path
+	// form, which a consumer chooses knowingly rather than the document
+	// assuming a shared filesystem.
 	Packages map[string]string `json:"packages,omitempty"`
 }
 
@@ -114,9 +116,12 @@ var reservedPiProfileNames = map[string]struct{}{
 }
 
 // knownPiPackageNames are the npm package names the Pi adapter's
-// InstallCommand installs, spelled exactly as the adapter names them. A
-// packages entry naming anything else can never reach a real install command,
-// so it is refused rather than silently ignored.
+// InstallCommand already installs, spelled exactly as the adapter names
+// them. A packages entry naming one of these overrides that package's
+// install source; a packages entry naming anything else is an additional Pi
+// package the adapter installs alongside the fixed set (see
+// validPiPackageName below), so this table is only consulted to tell the two
+// cases apart and to apply gentle-engram's narrower source rule.
 var knownPiPackageNames = map[string]struct{}{
 	"gentle-pi":                          {},
 	"gentle-engram":                      {},
@@ -126,16 +131,13 @@ var knownPiPackageNames = map[string]struct{}{
 	"pi-btw":                             {},
 }
 
-// sortedPiPackageNames lists knownPiPackageNames in a stable order, only for
-// composing a diagnostic message.
-func sortedPiPackageNames() []string {
-	names := make([]string, 0, len(knownPiPackageNames))
-	for name := range knownPiPackageNames {
-		names = append(names, name)
-	}
-	sort.Strings(names)
-	return names
-}
+// safePiPackageName mirrors the shape of a valid npm package name: an
+// optional "@scope/" prefix followed by lowercase letters, digits, dots,
+// underscores, and hyphens. Pi installs an extra packages entry with "pi
+// install <source>", the same way it installs the fixed six, so a name that
+// could never be a real npm package name can never resolve to anything pi
+// install could act on.
+var safePiPackageName = regexp.MustCompile(`^(@[a-z0-9._-]+/)?[a-z0-9._-]+$`)
 
 // validPiPackageSource reports whether value matches one of the install
 // source shapes the Pi adapter knows how to substitute: an npm spec
@@ -465,8 +467,12 @@ func validateProviderMCPServers(provider model.AgentID, block ProviderSelection,
 }
 
 // validateProviderPackages refuses a packages entry for any provider but pi,
-// a package name the Pi adapter does not install, and a source that matches
-// none of the shapes the adapter knows how to substitute.
+// a key that could not name a real npm package, and a source that matches
+// none of the shapes the adapter knows how to substitute. A key naming one
+// of the packages the adapter already installs (knownPiPackageNames)
+// overrides that package's source; any other key valid as an npm package
+// name is an additional package the adapter installs alongside those, so it
+// is not refused for being unrecognized -- only its source shape is checked.
 func validateProviderPackages(provider model.AgentID, block ProviderSelection, path string, diagnostics *[]Diagnostic) {
 	if len(block.Packages) == 0 {
 		return
@@ -482,8 +488,8 @@ func validateProviderPackages(provider model.AgentID, block ProviderSelection, p
 		source := block.Packages[name]
 		entryPath := packagesPath + "." + name
 
-		if _, known := knownPiPackageNames[name]; !known {
-			*diagnostics = append(*diagnostics, diagnostic("config.pi-package.unknown", entryPath, fmt.Sprintf("unsupported Pi package %q; use %s", name, joinStrings(sortedPiPackageNames()))))
+		if !safePiPackageName.MatchString(name) {
+			*diagnostics = append(*diagnostics, diagnostic("config.pi-package.name-unsupported", entryPath, fmt.Sprintf("unsupported Pi package name %q; use an npm package name, optionally scoped as @scope/name", name)))
 			continue
 		}
 		if name == "gentle-engram" {

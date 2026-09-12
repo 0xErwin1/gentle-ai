@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"slices"
+	"sort"
 	"strings"
 
 	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/capabilitymanifest"
@@ -264,11 +265,29 @@ func (a *Adapter) InstallCommand(profile system.PlatformProfile) ([][]string, er
 	return a.InstallCommandWithSources(profile, nil)
 }
 
+// fixedPiPackageNames are the npm package names InstallCommandWithSources
+// always installs, spelled exactly as the "pi install npm:<name>" commands
+// below name them. A sources key naming one of these overrides that
+// package's install source in place; any other key is an additional package
+// appended after the fixed sequence (see InstallCommandWithSources).
+var fixedPiPackageNames = map[string]struct{}{
+	"gentle-pi":                          {},
+	"gentle-engram":                      {},
+	"pi-mcp-adapter":                     {},
+	"@juicesharp/rpiv-ask-user-question": {},
+	"pi-web-access":                      {},
+	"pi-btw":                             {},
+}
+
 // InstallCommandWithSources builds the same install sequence as
 // InstallCommand, but lets the document override where any of these packages
-// comes from instead of npm. sources is keyed by the npm package name exactly
-// as it appears in the plain "pi install npm:<name>" command below; a name
-// absent from sources installs unchanged.
+// comes from instead of npm, and additionally install any other Pi package it
+// names. sources is keyed by the npm package name exactly as it appears in
+// the plain "pi install npm:<name>" command below; a name absent from
+// sources installs unchanged, and a name naming none of the fixed packages is
+// installed from its given source as an extra "pi install" command appended
+// after the fixed sequence, in sorted key order so the same document always
+// produces the same command sequence.
 func (a *Adapter) InstallCommandWithSources(_ system.PlatformProfile, sources map[string]string) ([][]string, error) {
 	if source, overridden := sources["gentle-engram"]; overridden {
 		normalized := strings.TrimSpace(source)
@@ -304,8 +323,27 @@ func (a *Adapter) InstallCommandWithSources(_ system.PlatformProfile, sources ma
 			commands = append(commands, a.engramInitCommand(sources["gentle-engram"]))
 		}
 	}
+	// Packages the document names beyond the fixed harness are appended after it,
+	// in sorted key order so the same document always produces the same sequence.
+	for _, name := range sortedExtraPiPackageNames(sources) {
+		commands = append(commands, []string{"pi", "install", sources[name]})
+	}
 	return commands, nil
->>>>>>> a5cb6905 (feat(config): let the document choose where Pi's harness packages come from)
+}
+
+// sortedExtraPiPackageNames lists the sources keys that name none of the
+// fixed packages, in sorted order, so appending one "pi install" command per
+// extra entry always produces the same sequence for the same document.
+func sortedExtraPiPackageNames(sources map[string]string) []string {
+	extras := make([]string, 0, len(sources))
+	for name := range sources {
+		if _, fixed := fixedPiPackageNames[name]; fixed {
+			continue
+		}
+		extras = append(extras, name)
+	}
+	sort.Strings(extras)
+	return extras
 }
 
 // piInstallSource resolves the third token of a "pi install" command: the
