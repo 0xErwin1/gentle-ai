@@ -74,7 +74,7 @@ func TestLeakedGoIdentifiersAreRejected(t *testing.T) {
 var userKeyedContainers = []string{
 	"mcpServers", "env", "models", "profiles", "phaseAssignments",
 	"claudePhaseAssignments", "codexCarrilModelAssignments",
-	"codexPhaseModelAssignments", "extensions", "headers", "providers",
+	"codexPhaseModelAssignments", "headers", "providers",
 }
 
 func userKeyed(path string) bool {
@@ -174,7 +174,6 @@ func fullyPopulatedDocument() Document {
 							Orchestrator: &ModelAssignment{Provider: "anthropic", Model: "claude-sonnet", Effort: "high"},
 						},
 					},
-					Packages: map[string]string{"gentle-pi": "git:github.com/Gentleman-Programming/gentle-pi@abc123"},
 				},
 			},
 
