@@ -42,7 +42,7 @@ func renderPiModels(t *testing.T, selection string) map[string]struct {
 // Naming a profile is the point: an operator who has to assign every agent by
 // hand to get a working routing has not been given a profile at all.
 func TestRenderExpandsThePiModelPreset(t *testing.T) {
-	routing := renderPiModels(t, `{"agents":["pi"],"modelPresets":{"pi":"low-cost"}}`)
+	routing := renderPiModels(t, `{"agents":["pi"],"providers":{"pi":{"modelPreset":"low-cost"}}}`)
 
 	if len(routing) == 0 {
 		t.Fatalf("the profile expanded to nothing")
@@ -58,7 +58,7 @@ func TestRenderExpandsThePiModelPreset(t *testing.T) {
 // itself wins over the one the profile would have given that agent, and leaves
 // every other agent on the profile.
 func TestRenderLetsAPiAssignmentOverrideTheProfile(t *testing.T) {
-	routing := renderPiModels(t, `{"agents":["pi"],"modelPresets":{"pi":"low-cost"},"piModelAssignments":{"sdd-apply":{"model":"openai-codex/gpt-5.6-sol","thinking":"max"}}}`)
+	routing := renderPiModels(t, `{"agents":["pi"],"providers":{"pi":{"modelPreset":"low-cost","models":{"sdd-apply":{"model":"openai-codex/gpt-5.6-sol","thinking":"max"}}}}}`)
 
 	if got := routing["sdd-apply"].Model; got != "openai-codex/gpt-5.6-sol" {
 		t.Errorf("sdd-apply model = %q, want the declared one", got)
@@ -74,7 +74,7 @@ func TestRenderLetsAPiAssignmentOverrideTheProfile(t *testing.T) {
 // Without a profile the document is the whole routing, and a document that
 // mentions no models writes no file rather than an empty one.
 func TestRenderWritesOnlyTheDeclaredPiAssignments(t *testing.T) {
-	routing := renderPiModels(t, `{"agents":["pi"],"piModelAssignments":{"sdd-explore":{"model":"moonshotai/kimi-k3"}}}`)
+	routing := renderPiModels(t, `{"agents":["pi"],"providers":{"pi":{"models":{"sdd-explore":{"model":"moonshotai/kimi-k3"}}}}}`)
 
 	if len(routing) != 1 || routing["sdd-explore"].Model != "moonshotai/kimi-k3" {
 		t.Errorf("routing = %v, want only the declared assignment", routing)
@@ -86,9 +86,9 @@ func TestRenderWritesOnlyTheDeclaredPiAssignments(t *testing.T) {
 // place that can still name it.
 func TestConfigRefusesAnInvalidPiRouting(t *testing.T) {
 	for name, document := range map[string]string{
-		"unknown level": `{"version":"v1","selection":{"agents":["pi"],"piModelAssignments":{"sdd-apply":{"thinking":"ludicrous"}}}}`,
-		"unsafe model":  `{"version":"v1","selection":{"agents":["pi"],"piModelAssignments":{"sdd-apply":{"model":"gpt 5 with spaces"}}}}`,
-		"empty entry":   `{"version":"v1","selection":{"agents":["pi"],"piModelAssignments":{"sdd-apply":{}}}}`,
+		"unknown level": `{"version":"v1","selection":{"agents":["pi"],"providers":{"pi":{"models":{"sdd-apply":{"thinking":"ludicrous"}}}}}}`,
+		"unsafe model":  `{"version":"v1","selection":{"agents":["pi"],"providers":{"pi":{"models":{"sdd-apply":{"model":"gpt 5 with spaces"}}}}}}`,
+		"empty entry":   `{"version":"v1","selection":{"agents":["pi"],"providers":{"pi":{"models":{"sdd-apply":{}}}}}}`,
 	} {
 		configPath := filepath.Join(t.TempDir(), "config.json")
 		if err := os.WriteFile(configPath, []byte(document), 0o644); err != nil {
@@ -112,7 +112,7 @@ func TestConfigRefusesAnInvalidPiRouting(t *testing.T) {
 // models at all, and the table it borrows is the one Gentle AI already tunes
 // for that provider rather than a copy in the operator's configuration.
 func TestRenderBorrowsModelsForPiFromAnotherProvider(t *testing.T) {
-	routing := renderPiModels(t, `{"agents":["pi"],"modelPresets":{"pi":"recommended"},"piModelFamily":"codex"}`)
+	routing := renderPiModels(t, `{"agents":["pi"],"providers":{"pi":{"modelPreset":"recommended","modelFamily":"codex"}}}`)
 
 	// Codex's Recommended carriles: Sol reasons, Terra writes, Luna transcribes.
 	for agent, want := range map[string]string{
@@ -132,12 +132,76 @@ func TestRenderBorrowsModelsForPiFromAnotherProvider(t *testing.T) {
 
 // Borrowing is still a profile, so an assignment the document made itself wins.
 func TestRenderLetsAnAssignmentOverrideTheBorrowedModel(t *testing.T) {
-	routing := renderPiModels(t, `{"agents":["pi"],"modelPresets":{"pi":"recommended"},"piModelFamily":"codex","piModelAssignments":{"sdd-apply":{"model":"moonshotai/kimi-k3"}}}`)
+	routing := renderPiModels(t, `{"agents":["pi"],"providers":{"pi":{"modelPreset":"recommended","modelFamily":"codex","models":{"sdd-apply":{"model":"moonshotai/kimi-k3"}}}}}`)
 
 	if got := routing["sdd-apply"].Model; got != "moonshotai/kimi-k3" {
 		t.Errorf("sdd-apply model = %q, want the declared one", got)
 	}
 	if got := routing["sdd-design"].Model; got != "openai-codex/gpt-5.6-sol" {
 		t.Errorf("overriding one agent changed another: %q", got)
+	}
+}
+
+// A declared Pi profile and its active selection stage the profile store, the
+// routing it expands into, and the settings defaults from its orchestrator.
+// None of the three had a covering assertion before this test.
+func TestRenderStagesAPiProfileAndItsActiveDefaults(t *testing.T) {
+	selection := `{"agents":["pi"],"providers":{"pi":{"activeProfile":"deep-work","profiles":{"deep-work":{"orchestrator":{"provider":"anthropic","model":"claude-sonnet","effort":"high"},"phaseAssignments":{"sdd-apply":{"provider":"anthropic","model":"claude-haiku"}}}}}}}`
+
+	configPath := filepath.Join(t.TempDir(), "config.json")
+	document := `{"version":"v1","selection":` + selection + `,"extensions":{"pi":{"defaultModel":"operator-pinned-model"}}}`
+	if err := os.WriteFile(configPath, []byte(document), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	stage := t.TempDir()
+	assertConfigOutput(t, []string{"render", "--config", configPath, "--destination", t.TempDir(), "--stage", stage}, `"operation": "render"`)
+
+	profilesContent, err := os.ReadFile(filepath.Join(stage, ".pi", "gentle-ai", "profiles.json"))
+	if err != nil {
+		t.Fatalf("read staged Pi profiles: %v (staged %v)", err, stagedFiles(t, stage))
+	}
+	var profiles struct {
+		Kind, Active string
+		Version      int
+		Profiles     map[string]map[string]struct{ Model, Thinking string }
+	}
+	if err := json.Unmarshal(profilesContent, &profiles); err != nil {
+		t.Fatalf("decode Pi profiles: %v\n%s", err, profilesContent)
+	}
+	if profiles.Kind != "gentle-pi.agent_model_profiles" || profiles.Version != 1 || profiles.Active != "deep-work" {
+		t.Errorf("profiles document = %+v, want kind gentle-pi.agent_model_profiles, version 1, active deep-work", profiles)
+	}
+	deepWork := profiles.Profiles["deep-work"]
+	if deepWork["orchestrator"].Model != "anthropic/claude-sonnet" || deepWork["orchestrator"].Thinking != "high" {
+		t.Errorf("orchestrator entry = %+v", deepWork["orchestrator"])
+	}
+	if deepWork["sdd-apply"].Model != "anthropic/claude-haiku" {
+		t.Errorf("sdd-apply entry = %+v", deepWork["sdd-apply"])
+	}
+
+	routing := renderPiModels(t, selection)
+	if got := routing["sdd-apply"].Model; got != "anthropic/claude-haiku" {
+		t.Errorf("expanded routing sdd-apply model = %q, want anthropic/claude-haiku", got)
+	}
+
+	settingsContent, err := os.ReadFile(filepath.Join(stage, ".pi", "agent", "settings.json"))
+	if err != nil {
+		t.Fatalf("read staged Pi settings: %v (staged %v)", err, stagedFiles(t, stage))
+	}
+	var settings map[string]any
+	if err := json.Unmarshal(settingsContent, &settings); err != nil {
+		t.Fatalf("decode Pi settings: %v\n%s", err, settingsContent)
+	}
+
+	// The document's own extension must still win over the derived default.
+	if got := settings["defaultModel"]; got != "operator-pinned-model" {
+		t.Errorf("defaultModel = %q, want the declared extension to win", got)
+	}
+	if got := settings["defaultProvider"]; got != "anthropic" {
+		t.Errorf("defaultProvider = %q, want anthropic", got)
+	}
+	if got := settings["defaultThinkingLevel"]; got != "high" {
+		t.Errorf("defaultThinkingLevel = %q, want high", got)
 	}
 }
