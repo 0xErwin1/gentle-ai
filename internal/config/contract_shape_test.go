@@ -49,8 +49,9 @@ func TestPublicDocumentKeysAreContractNames(t *testing.T) {
 // internal model, which uses different identifiers for the same intent.
 func TestProfileExportDoesNotRecreateRetiredFields(t *testing.T) {
 	state := FromSelection(model.Selection{})
-	if len(state.Selection.Profiles) != 0 || state.Selection.SDDProfileStrategy != "" {
-		t.Fatalf("export resurrected retired profiles: %+v", state.Selection)
+	block := state.Selection.Providers[model.AgentOpenCode]
+	if len(block.Profiles) != 0 || block.ProfileStrategy != "" {
+		t.Fatalf("export resurrected retired profiles: %+v", block)
 	}
 }
 
@@ -58,7 +59,7 @@ func TestProfileExportDoesNotRecreateRetiredFields(t *testing.T) {
 // document written against the leaked identifiers must be rejected rather than
 // silently accepted alongside the real one.
 func TestLeakedGoIdentifiersAreRejected(t *testing.T) {
-	document := `{"version":"v1","selection":{"profiles":[{"Name":"cheap","OrchestratorModel":{"ProviderID":"anthropic","ModelID":"claude-haiku"}}]}}`
+	document := `{"version":"v1","selection":{"providers":{"opencode":{"profiles":{"cheap":{"Orchestrator":{"ProviderID":"anthropic","ModelID":"claude-haiku"}}}}}}}`
 
 	_, diagnostics := Decode([]byte(document))
 
@@ -71,10 +72,9 @@ func TestLeakedGoIdentifiersAreRejected(t *testing.T) {
 }
 
 var userKeyedContainers = []string{
-	"mcpServers", "env", "modelAssignments", "claudeModelAssignments",
-	"kiroModelAssignments", "codexModelAssignments", "codexCarrilModelAssignments",
-	"codexPhaseModelAssignments", "claudePhaseAssignments", "phaseAssignments",
-	"skillAssignments", "extensions", "modelPresets", "headers", "mcpServerAssignments",
+	"mcpServers", "env", "models", "profiles", "phaseAssignments",
+	"claudePhaseAssignments", "codexCarrilModelAssignments",
+	"codexPhaseModelAssignments", "extensions", "headers", "providers",
 }
 
 func userKeyed(path string) bool {
@@ -126,43 +126,63 @@ func fullyPopulatedDocument() Document {
 	return Document{
 		Version: CurrentVersion,
 		Selection: Selection{
-			Agents:             []model.AgentID{model.AgentOpenCode},
-			Components:         []model.ComponentID{model.ComponentEngram},
-			Skills:             []model.SkillID{model.SkillSDDApply},
-			SkillExclusions:    []model.SkillID{model.SkillGoTesting},
-			ModelPresets:       map[string]string{"codex": string(model.CodexPresetRecommended)},
-			Persona:            model.PersonaGentleman,
-			Preset:             model.PresetFullGentleman,
-			SDDMode:            model.SDDModeSingle,
-			SDDProfileStrategy: "generated-multi",
-			StrictTDD:          true,
-			BackgroundIntent:   model.OpenCodeBackgroundOn,
-			PiBackgroundIntent: model.PiBackgroundOn,
-			Scope:              model.InstallScopeWorkspace,
-			Channel:            model.InstallChannelBeta,
-			RDDMode:            model.RDDModeOn,
-			CommunityTools:     []model.CommunityToolID{model.CommunityToolCodeGraph},
-			OpenCodePlugins:    []model.OpenCodeCommunityPluginID{model.OpenCodePluginGentleLogo},
-			ModelAssignments:   map[string]ModelAssignment{"sdd-apply": {Provider: "anthropic", Model: "claude-sonnet"}},
+			Agents:          []model.AgentID{model.AgentOpenCode},
+			Components:      []model.ComponentID{model.ComponentEngram},
+			Skills:          []model.SkillID{model.SkillSDDApply},
+			SkillExclusions: []model.SkillID{model.SkillGoTesting},
+			Persona:         model.PersonaGentleman,
+			Preset:          model.PresetFullGentleman,
+			SDDMode:         model.SDDModeSingle,
+			StrictTDD:       true,
+			Scope:           model.InstallScopeWorkspace,
+			Channel:         model.InstallChannelBeta,
+			RDDMode:         model.RDDModeOn,
+			CommunityTools:  []model.CommunityToolID{model.CommunityToolCodeGraph},
+			OpenCodePlugins: []model.OpenCodeCommunityPluginID{model.OpenCodePluginGentleLogo},
 
-			ClaudeModelAssignments:      map[string]model.ClaudeModelAlias{"sdd-apply": model.ClaudeModelOpus},
-			KiroModelAssignments:        map[string]model.KiroModelAlias{"sdd-apply": model.KiroModelDeepSeek},
-			PiModelAssignments:          map[string]model.PiAgentRouting{"sdd-apply": {Model: "openai-codex/gpt-5.6-sol", Thinking: model.PiThinkingHigh}},
-			PiModelFamily:               model.AgentCodex,
-			CodexModelAssignments:       map[string]model.CodexEffort{"sdd-apply": model.CodexEffortHigh},
+			Providers: map[model.AgentID]ProviderSelection{
+				model.AgentOpenCode: {
+					Models:           mustRawJSON(map[string]ModelAssignment{"sdd-apply": {Provider: "anthropic", Model: "claude-sonnet"}}),
+					BackgroundIntent: string(model.OpenCodeBackgroundOn),
+					ProfileStrategy:  "generated-multi",
+					Profiles: map[string]ProviderProfile{
+						"cheap": {
+							Orchestrator:     &ModelAssignment{Provider: "anthropic", Model: "claude-haiku", Effort: "low"},
+							PhaseAssignments: map[string]ModelAssignment{"sdd-apply": {Provider: "anthropic", Model: "claude-sonnet"}},
+						},
+					},
+					Skills:     []model.SkillID{model.SkillSDDApply},
+					MCPServers: map[string]MCPServer{"atlas": {Command: "atlas"}},
+				},
+				model.AgentClaudeCode: {
+					Models: mustRawJSON(map[string]model.ClaudeModelAlias{"sdd-apply": model.ClaudeModelOpus}),
+				},
+				model.AgentKiroIDE: {
+					Models: mustRawJSON(map[string]model.KiroModelAlias{"sdd-apply": model.KiroModelDeepSeek}),
+				},
+				model.AgentCodex: {
+					Models:      mustRawJSON(map[string]model.CodexEffort{"sdd-apply": model.CodexEffortHigh}),
+					ModelPreset: string(model.CodexPresetRecommended),
+				},
+				model.AgentPi: {
+					Models:           mustRawJSON(map[string]model.PiAgentRouting{"sdd-apply": {Model: "openai-codex/gpt-5.6-sol", Thinking: model.PiThinkingHigh}}),
+					ModelFamily:      model.AgentCodex,
+					BackgroundIntent: string(model.PiBackgroundOn),
+					ActiveProfile:    "deep-work",
+					Profiles: map[string]ProviderProfile{
+						"deep-work": {
+							Orchestrator: &ModelAssignment{Provider: "anthropic", Model: "claude-sonnet", Effort: "high"},
+						},
+					},
+				},
+			},
+
 			CodexCarrilModelAssignments: map[string]string{"sdd-mid": "gpt-5.6-luna"},
 			CodexPhaseModelAssignments:  map[string]string{"sdd-apply": "gpt-5.6-sol"},
 			ClaudePhaseAssignments:      map[string]ClaudePhaseAssignment{"sdd-apply": {Model: "opus", Effort: "high"}},
 			CodexOrchestrator:           &CodexOrchestratorAssignment{Model: "gpt-5.6-sol", Effort: "medium"},
 			MCPServers:                  map[string]MCPServer{"atlas": {Command: "atlas", Args: []string{"mcp"}, Env: map[string]string{"TOKEN": "x"}, Headers: map[string]string{"Authorization": "Bearer x"}}},
 			Permissions:                 &Permissions{Allow: []string{"Read(*)"}, Deny: []string{"Bash(curl *)"}, Ask: []string{"Edit(*.tf)"}},
-			SkillAssignments:            map[string][]model.SkillID{"opencode": {model.SkillSDDApply}},
-			MCPServerAssignments:        map[string]map[string]MCPServer{"opencode": {"atlas": {Command: "atlas"}}},
-			Profiles: []Profile{{
-				Name:             "cheap",
-				Orchestrator:     &ModelAssignment{Provider: "anthropic", Model: "claude-haiku", Effort: "low"},
-				PhaseAssignments: map[string]ModelAssignment{"sdd-apply": {Provider: "anthropic", Model: "claude-sonnet"}},
-			}},
 		},
 		Roles: []Role{{
 			ID: "reviewer", RenderedName: "code-reviewer", References: []RoleRef{"reviewer"},
@@ -172,6 +192,14 @@ func fullyPopulatedDocument() Document {
 			Hidden: &hidden,
 		}},
 	}
+}
+
+func mustRawJSON(value any) json.RawMessage {
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		panic(err)
+	}
+	return encoded
 }
 
 // A guard that inspects an encoded document only covers what the fixture
@@ -197,6 +225,29 @@ func TestEveryContractFieldIsPopulated(t *testing.T) {
 		}
 		if _, present := selection[name]; !present {
 			t.Errorf("selection.%s is absent from the fixture, so no shape guard covers it; populate it", name)
+		}
+	}
+
+	providers, _ := selection["providers"].(map[string]any)
+	for index := 0; index < reflect.TypeOf(ProviderSelection{}).NumField(); index++ {
+		field := reflect.TypeOf(ProviderSelection{}).Field(index)
+		name := strings.Split(field.Tag.Get("json"), ",")[0]
+		if name == "" || name == "-" {
+			continue
+		}
+		found := false
+		for _, block := range providers {
+			blockMap, ok := block.(map[string]any)
+			if !ok {
+				continue
+			}
+			if _, present := blockMap[name]; present {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("selection.providers.<id>.%s is absent from every provider in the fixture, so no shape guard covers it; populate it", name)
 		}
 	}
 

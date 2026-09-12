@@ -16,7 +16,7 @@ func backgroundPolicyStaged(t *testing.T, intent string) bool {
 
 	const marker = "gentle-ai:opencode-background-subagents"
 
-	document := `{"version":"v1","selection":{"agents":["opencode"],"components":["sdd"],"sddMode":"multi","backgroundIntent":"` + intent + `"}}`
+	document := `{"version":"v1","selection":{"agents":["opencode"],"components":["sdd"],"sddMode":"multi","providers":{"opencode":{"backgroundIntent":"` + intent + `"}}}}`
 	configPath := filepath.Join(t.TempDir(), "config.json")
 	if err := os.WriteFile(configPath, []byte(document), 0o644); err != nil {
 		t.Fatal(err)
@@ -62,7 +62,7 @@ func TestRenderCarriesTheOpenCodeBackgroundPolicy(t *testing.T) {
 // reads disagree with nothing to say so.
 func TestRenderWritesThePiBackgroundPolicy(t *testing.T) {
 	for _, intent := range []string{"on", "off"} {
-		document := `{"version":"v1","selection":{"agents":["pi"],"piBackgroundIntent":"` + intent + `"}}`
+		document := `{"version":"v1","selection":{"agents":["pi"],"providers":{"pi":{"backgroundIntent":"` + intent + `"}}}}`
 		configPath := filepath.Join(t.TempDir(), "config.json")
 		if err := os.WriteFile(configPath, []byte(document), 0o644); err != nil {
 			t.Fatal(err)
@@ -84,7 +84,7 @@ func TestRenderWritesThePiBackgroundPolicy(t *testing.T) {
 // Auto never reaches projection in the installer either: it means the runtime
 // decides, and writing a resolved policy for it would answer on its behalf.
 func TestRenderLeavesAnUnresolvedPiBackgroundIntentAlone(t *testing.T) {
-	document := `{"version":"v1","selection":{"agents":["pi"],"piBackgroundIntent":"auto"}}`
+	document := `{"version":"v1","selection":{"agents":["pi"],"providers":{"pi":{"backgroundIntent":"auto"}}}}`
 	configPath := filepath.Join(t.TempDir(), "config.json")
 	if err := os.WriteFile(configPath, []byte(document), 0o644); err != nil {
 		t.Fatal(err)
