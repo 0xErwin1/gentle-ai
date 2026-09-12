@@ -1,7 +1,6 @@
 package config
 
 import (
-	"encoding/json"
 	"reflect"
 	"slices"
 	"testing"
@@ -51,6 +50,25 @@ func TestDecode(t *testing.T) {
 		{
 			name:      "rejects unknown fields",
 			document:  `{"version":"v1","selection":{"agents":["opencode"],"unknown":true}}`,
+			wantCodes: []string{"config.document.unknown-field"},
+		},
+		{
+			// providers.pi.packages named Pi package source overrides and
+			// extra packages, a feature Gentle AI itself never had: only its
+			// gentle-ai-nix consumer's own gentle-nix binary manages package
+			// sources. A document still carrying this stale key must be
+			// refused rather than silently accepted with the key ignored.
+			name:      "rejects retired providers.pi.packages",
+			document:  `{"version":"v1","selection":{"agents":["pi"],"providers":{"pi":{"packages":{"gentle-pi":"npm:gentle-pi@1.0.0"}}}}}`,
+			wantCodes: []string{"config.document.unknown-field"},
+		},
+		{
+			// extensions was a document-level escape hatch for provider
+			// configuration Gentle AI's own imperative path never wrote; it
+			// belongs to gentle-ai-nix's own gentle-nix binary. A document
+			// still carrying it must be refused, not silently dropped.
+			name:      "rejects retired top-level extensions",
+			document:  `{"version":"v1","selection":{"agents":["opencode"]},"extensions":{"opencode":{"model":"x"}}}`,
 			wantCodes: []string{"config.document.unknown-field"},
 		},
 	}
@@ -109,7 +127,6 @@ func TestNormalizeRejectsInvalidRolesAndCanonicalizesSelections(t *testing.T) {
 			{ID: "writer", RenderedName: "writer-2"},
 			{ID: "reviewer", References: []RoleRef{"missing"}},
 		},
-		Extensions: map[string]json.RawMessage{"opencode": json.RawMessage(`{"model":"x"}`)},
 	})
 
 	if state.Version != CurrentVersion {
@@ -120,9 +137,6 @@ func TestNormalizeRejectsInvalidRolesAndCanonicalizesSelections(t *testing.T) {
 	}
 	if got := diagnosticCodes(diagnostics); !slices.Equal(got, []string{"config.role.duplicate", "config.role.reference.unresolved"}) {
 		t.Fatalf("diagnostics = %v", got)
-	}
-	if string(state.Extensions["opencode"]) != `{"model":"x"}` {
-		t.Fatalf("extension = %s", state.Extensions["opencode"])
 	}
 }
 
