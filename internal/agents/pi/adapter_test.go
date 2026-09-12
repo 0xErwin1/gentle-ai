@@ -544,7 +544,7 @@ func TestInstallCommandWithSourcesSubstitutesEngramInitFromLocalPath(t *testing.
 	if !reflect.DeepEqual(commands[1], wantInstall) {
 		t.Fatalf("commands[1] = %#v, want %#v", commands[1], wantInstall)
 	}
-	wantInit := []string{"npm", "exec", "--yes", "--package", "/nix/store/xyz-gentle-engram-pi", "--", "pi-engram", "init"}
+	wantInit := []string{"/nix/store/xyz-gentle-engram-pi/bin/pi-engram", "init"}
 	if !reflect.DeepEqual(commands[3], wantInit) {
 		t.Fatalf("commands[3] = %#v, want %#v", commands[3], wantInit)
 	}
