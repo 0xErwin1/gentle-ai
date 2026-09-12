@@ -76,6 +76,7 @@ var selectionParity = map[string]parityDisposition{
 	"PiModelFamily":               represented("Providers"),
 	"PiAgentProfiles":             represented("Providers"),
 	"PiActiveProfile":             represented("Providers"),
+	"PiPackageSources":            represented("Providers"),
 	"CodexModelAssignments":       represented("Providers"),
 	"CodexOrchestratorAssignment": represented("CodexOrchestrator"),
 	"CodexCarrilModelAssignments": represented("CodexCarrilModelAssignments"),
