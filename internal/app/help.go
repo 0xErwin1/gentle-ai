@@ -27,6 +27,9 @@ COMMANDS
                Rescan disk skills and update the shared index only when bytes change
   skill-registry list [--json] [--cwd <project>]
                List the same disk skill winners without writing
+  config presets [--provider <claude-code|codex|kiro-ide>] --json
+               Print gentle-ai's own named model preset tables; reads no
+               document and takes no --config
   review start [--cwd <repo>] [--base-ref <ref>] [--focus <risk|resilience|readability|reliability>] [--locale <en|es>]
   review capture-result --lineage <id> --target <id> --lens <lens> --order <n> --input <review.json>
                Admit one reviewer result; the final capture closes and burns its review
