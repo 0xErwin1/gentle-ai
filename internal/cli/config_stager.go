@@ -504,8 +504,11 @@ var provisionedAgents = map[model.AgentID]bool{
 }
 
 // Resources declares what the document provisions, so a plan reports it instead
-// of a document silently asking for something no operation ever mentions.
-func (stager configurationStager) ProvisionedResources(state configdomain.DesiredState) []render.Resource {
+// of a document silently asking for something no operation ever mentions. The
+// returned error surfaces a provisioning request the selection cannot honor
+// (an unsupported Pi package source override, say) instead of the resource
+// quietly dropping out of the manifest while the caller reports success.
+func (stager configurationStager) ProvisionedResources(state configdomain.DesiredState) ([]render.Resource, error) {
 	selection := configdomain.Project(state)
 	resources := make([]render.Resource, 0, len(selection.Components)+len(selection.Agents))
 
@@ -521,10 +524,14 @@ func (stager configurationStager) ProvisionedResources(state configdomain.Desire
 		})
 	}
 
-	resources = append(resources, agentProvisioning(selection.Agents)...)
+	agentResources, err := agentProvisioning(selection)
+	if err != nil {
+		return nil, err
+	}
+	resources = append(resources, agentResources...)
 	resources = append(resources, communityToolProvisioning(selection)...)
 
-	return resources
+	return resources, nil
 }
 
 // communityToolProvisioning carries the commands that point a declared tool at
@@ -553,13 +560,25 @@ func communityToolProvisioning(selection model.Selection) []render.Resource {
 	return resources
 }
 
+// piPackageSourceAdapter is implemented only by the Pi adapter: a document
+// can override where one of its packages comes from, which no other adapter
+// supports, so this stays a narrow local interface instead of growing the
+// shared agents.Adapter contract for one provider.
+type piPackageSourceAdapter interface {
+	InstallCommandWithSources(profile system.PlatformProfile, sources map[string]string) ([][]string, error)
+}
+
 // agentProvisioning reads each adapter's own install commands rather than
 // restating them, so the packages a harness is made of stay the adapter's to
-// name and a consumer never renders a stale copy of that list.
-func agentProvisioning(selected []model.AgentID) []render.Resource {
-	resources := make([]render.Resource, 0, len(selected))
+// name and a consumer never renders a stale copy of that list. An adapter
+// that cannot honor a requested package source override returns an error
+// naming the agent, rather than the resource silently dropping out of the
+// manifest: an install command an operator asked for but never got is a
+// rendering failure, not an adapter that happens to install nothing.
+func agentProvisioning(selection model.Selection) ([]render.Resource, error) {
+	resources := make([]render.Resource, 0, len(selection.Agents))
 
-	for _, agent := range selected {
+	for _, agent := range selection.Agents {
 		if !provisionedAgents[agent] {
 			continue
 		}
@@ -574,8 +593,26 @@ func agentProvisioning(selected []model.AgentID) []render.Resource {
 		// machines, and the commands these adapters return do not vary by
 		// platform: they run the adapter's own tool, which is a precondition
 		// rather than something a platform provides.
-		commands, err := adapter.InstallCommand(system.PlatformProfile{})
-		if err != nil || len(commands) == 0 {
+		var commands [][]string
+		// Package source overrides are addressed to Pi alone, so only Pi's
+		// dispatch reads them; every other agent keeps its plain install.
+		if piAdapter, ok := adapter.(piPackageSourceAdapter); ok && agent == model.AgentPi {
+			commands, err = piAdapter.InstallCommandWithSources(system.PlatformProfile{}, selection.PiPackageSources)
+		} else if agent == model.AgentPi && len(selection.PiPackageSources) > 0 {
+			// A document that names package source overrides for a Pi
+			// adapter that cannot accept them must not render as if the
+			// overrides were honored: falling back to the source-less install
+			// here would silently drop them while the manifest still looks
+			// complete, so this reports the mismatch instead.
+			// refusal:by-design operator-knowledge: only the operator can drop the overrides from the document; no command can teach an adapter to take a source it does not read.
+			err = fmt.Errorf("agent %q does not support package source overrides", agent)
+		} else {
+			commands, err = adapter.InstallCommand(system.PlatformProfile{})
+		}
+		if err != nil {
+			return nil, fmt.Errorf("provision %s: %w", agent, err)
+		}
+		if len(commands) == 0 {
 			continue
 		}
 
@@ -588,7 +625,7 @@ func agentProvisioning(selected []model.AgentID) []render.Resource {
 		})
 	}
 
-	return resources
+	return resources, nil
 }
 
 // liveProvisioning reports which declared components are already installed,
