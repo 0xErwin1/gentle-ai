@@ -223,6 +223,89 @@ func TestPiProfilesSurviveSelectionRoundTrip(t *testing.T) {
 	}
 }
 
+// A Pi package source override must be refused for any other provider, for a
+// package name gentle-pi's own adapter does not install, and for a source that
+// matches none of the shapes the adapter knows how to substitute.
+func TestDecodeRejectsInvalidPiPackageOverrides(t *testing.T) {
+	tests := []struct {
+		name      string
+		document  string
+		wantCodes []string
+	}{
+		{"packages on a non-pi provider", `{"version":"v1","selection":{"providers":{"opencode":{"packages":{"gentle-pi":"npm:gentle-pi@1.0.0"}}}}}`, []string{"config.provider.packages.unsupported-provider"}},
+		{"unknown package name", `{"version":"v1","selection":{"providers":{"pi":{"packages":{"pi-subagents":"npm:pi-subagents@1.0.0"}}}}}`, []string{"config.pi-package.unknown"}},
+		{"unsupported source shape", `{"version":"v1","selection":{"providers":{"pi":{"packages":{"gentle-pi":"1.0.0"}}}}}`, []string{"config.pi-package.source-unsupported"}},
+		{"empty source", `{"version":"v1","selection":{"providers":{"pi":{"packages":{"gentle-pi":""}}}}}`, []string{"config.pi-package.source-unsupported"}},
+		{"bare scheme prefix", `{"version":"v1","selection":{"providers":{"pi":{"packages":{"gentle-pi":"https://"}}}}}`, []string{"config.pi-package.source-unsupported"}},
+		{"lone root slash", `{"version":"v1","selection":{"providers":{"pi":{"packages":{"gentle-pi":"/"}}}}}`, []string{"config.pi-package.source-unsupported"}},
+		{"gentle-engram git shorthand", `{"version":"v1","selection":{"providers":{"pi":{"packages":{"gentle-engram":"git:github.com/Gentleman-Programming/gentle-engram@main"}}}}}`, []string{"config.pi-package.source-unsupported"}},
+		{"gentle-engram https url", `{"version":"v1","selection":{"providers":{"pi":{"packages":{"gentle-engram":"https://example.com/gentle-engram.git"}}}}}`, []string{"config.pi-package.source-unsupported"}},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			_, diagnostics := Decode([]byte(test.document))
+			codes := make([]string, 0, len(diagnostics))
+			for _, d := range diagnostics {
+				codes = append(codes, d.Code)
+			}
+			if !slices.Equal(codes, test.wantCodes) {
+				t.Fatalf("diagnostics = %v, want %v", codes, test.wantCodes)
+			}
+		})
+	}
+}
+
+// A Pi package source must accept every shape the adapter knows how to
+// substitute: an npm spec with a version, a Pi git shorthand with a ref, a
+// plain git URL, and an absolute local path.
+func TestDecodeAcceptsEveryPiPackageSourceShape(t *testing.T) {
+	tests := []string{
+		"npm:gentle-pi@1.2.3",
+		"git:github.com/Gentleman-Programming/gentle-pi@abc123",
+		"https://example.com/gentle-pi.git",
+		"ssh://git@example.com/gentle-pi.git",
+		"/nix/store/xyz-gentle-engram-pi",
+	}
+
+	for _, source := range tests {
+		t.Run(source, func(t *testing.T) {
+			document := `{"version":"v1","selection":{"providers":{"pi":{"packages":{"gentle-pi":"` + source + `"}}}}}`
+			_, diagnostics := Decode([]byte(document))
+			if len(diagnostics) != 0 {
+				t.Fatalf("unexpected diagnostics for source %q: %v", source, diagnostics)
+			}
+		})
+	}
+}
+
+// Pi package source overrides must survive the trip into the shared semantic
+// model and back, the same way every other Pi provider field already does.
+func TestPiPackageSourcesSurviveSelectionRoundTrip(t *testing.T) {
+	document := `{"version":"v1","selection":{"providers":{"pi":{"packages":{"gentle-pi":"git:github.com/Gentleman-Programming/gentle-pi@abc123","gentle-engram":"/nix/store/xyz-gentle-engram-pi"}}}}}`
+
+	state, diagnostics := Decode([]byte(document))
+	if len(diagnostics) != 0 {
+		t.Fatalf("unexpected diagnostics: %v", diagnostics)
+	}
+
+	selection := Project(state)
+	if got := selection.PiPackageSources["gentle-pi"]; got != "git:github.com/Gentleman-Programming/gentle-pi@abc123" {
+		t.Errorf("PiPackageSources[gentle-pi] = %q", got)
+	}
+	if got := selection.PiPackageSources["gentle-engram"]; got != "/nix/store/xyz-gentle-engram-pi" {
+		t.Errorf("PiPackageSources[gentle-engram] = %q", got)
+	}
+
+	restored := FromSelection(selection).Selection.Providers[model.AgentPi]
+	if got := restored.Packages["gentle-pi"]; got != "git:github.com/Gentleman-Programming/gentle-pi@abc123" {
+		t.Errorf("restored Packages[gentle-pi] = %q", got)
+	}
+	if got := restored.Packages["gentle-engram"]; got != "/nix/store/xyz-gentle-engram-pi" {
+		t.Errorf("restored Packages[gentle-engram] = %q", got)
+	}
+}
+
 // A document written for the pre-2.4.0 flat shape must be refused with one
 // specific diagnostic per superseded key, naming its nested replacement,
 // instead of the generic unknown-field diagnostic.
