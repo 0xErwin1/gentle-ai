@@ -81,9 +81,12 @@ func rejects(diagnostics []configdomain.Diagnostic) bool {
 // RunConfig performs declarative configuration operations.
 func RunConfig(args []string, stdout io.Writer) error {
 	if len(args) == 0 {
-		return fmt.Errorf("usage: gentle-ai config <validate|render|plan|diff|apply|reconcile|adopt|export>")
+		return fmt.Errorf("usage: gentle-ai config <validate|render|plan|diff|apply|reconcile|adopt|export|presets>")
 	}
 	operation := args[0]
+	if operation == "presets" {
+		return RunConfigPresets(args[1:], stdout)
+	}
 	flags := flag.NewFlagSet("config "+operation, flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
 	configPath := flags.String("config", "", "configuration file")
