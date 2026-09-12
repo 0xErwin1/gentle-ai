@@ -14,7 +14,6 @@ Two rules run through the whole contract:
 | `version` | string | Schema version. `v1` is current; `v0` is accepted and migrated. Anything else is rejected. |
 | `selection` | object | What the installation should be. Every field below lives here. |
 | `roles` | array of [role](#roles) | Logical agent roles. |
-| `extensions` | object keyed by provider | Configuration the neutral contract does not model, merged verbatim into that provider's settings. |
 
 ## What to configure
 
@@ -186,7 +185,6 @@ Every diagnostic carries a `code`, the JSON `path` it applies to, a `severity` a
 | `config.role.mode.unsupported` | A mode other than `primary` or `subagent`. |
 | `config.role.unsupported-adapter` | A declared provider expresses no agent roles. |
 | `config.skill-assignment.undeclared-adapter` | A skill assignment naming a provider the document does not declare. |
-| `config.extension.undeclared-provider` | An extension naming a provider the document does not declare. |
 | `config.model-preset.unsupported-provider` | A provider that offers no named profiles. |
 | `config.model-preset.unsupported` | A profile name that provider does not offer. |
 | `config.permissions.unsupported-adapter` | *Warning.* A provider that does not read permissions as rule lists. |

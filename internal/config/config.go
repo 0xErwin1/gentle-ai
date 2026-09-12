@@ -128,17 +128,15 @@ type Selection struct {
 }
 
 type Document struct {
-	Version    string                     `json:"version"`
-	Selection  Selection                  `json:"selection"`
-	Roles      []Role                     `json:"roles,omitempty"`
-	Extensions map[string]json.RawMessage `json:"extensions,omitempty"`
+	Version   string    `json:"version"`
+	Selection Selection `json:"selection"`
+	Roles     []Role    `json:"roles,omitempty"`
 }
 
 type DesiredState struct {
-	Version    string                     `json:"version"`
-	Selection  Selection                  `json:"selection"`
-	Roles      []Role                     `json:"roles,omitempty"`
-	Extensions map[string]json.RawMessage `json:"extensions,omitempty"`
+	Version   string    `json:"version"`
+	Selection Selection `json:"selection"`
+	Roles     []Role    `json:"roles,omitempty"`
 }
 
 // supersededSelectionFields maps a pre-2.4.0 flat selection key to the
@@ -248,16 +246,14 @@ func Normalize(document Document) (DesiredState, []Diagnostic) {
 
 	selection := normalizeSelection(document.Selection, &diagnostics)
 	roles := normalizeRoles(document.Roles, &diagnostics)
-	validateExtensions(document, &diagnostics)
 	if version == "" {
 		return DesiredState{}, diagnostics
 	}
 
 	return DesiredState{
-		Version:    version,
-		Selection:  selection,
-		Roles:      roles,
-		Extensions: copyExtensions(document.Extensions),
+		Version:   version,
+		Selection: selection,
+		Roles:     roles,
 	}, diagnostics
 }
 
@@ -506,29 +502,6 @@ func normalizeSelection(selection Selection, diagnostics *[]Diagnostic) Selectio
 	return selection
 }
 
-// validateExtensions rejects an extension addressed to an adapter the document
-// never declared. An extension is provider-specific by definition, so one whose
-// provider is absent applies to nothing and would sit in the document reading
-// as configuration that took effect.
-func validateExtensions(state Document, diagnostics *[]Diagnostic) {
-	declared := make(map[string]struct{}, len(state.Selection.Agents))
-	for _, agent := range state.Selection.Agents {
-		declared[string(agent)] = struct{}{}
-	}
-
-	providers := make([]string, 0, len(state.Extensions))
-	for provider := range state.Extensions {
-		providers = append(providers, provider)
-	}
-	sort.Strings(providers)
-
-	for _, provider := range providers {
-		if _, ok := declared[provider]; !ok {
-			*diagnostics = append(*diagnostics, diagnostic("config.extension.undeclared-provider", "$.extensions."+provider, fmt.Sprintf("extension targets provider %q, which the document does not declare; add it to agents or remove the extension", provider)))
-		}
-	}
-}
-
 // modelPresetNames are the profiles each provider offers. A provider absent
 // from this table expresses no profile at all: its models are assigned
 // directly, and naming one for it would look configured and do nothing.
@@ -589,17 +562,6 @@ func normalizeRoles(roles []Role, diagnostics *[]Diagnostic) []Role {
 
 func diagnostic(code, path, message string) Diagnostic {
 	return Diagnostic{Code: code, Path: path, Severity: Error, Message: message}
-}
-
-func copyExtensions(extensions map[string]json.RawMessage) map[string]json.RawMessage {
-	if len(extensions) == 0 {
-		return nil
-	}
-	copy := make(map[string]json.RawMessage, len(extensions))
-	for provider, value := range extensions {
-		copy[provider] = append(json.RawMessage(nil), value...)
-	}
-	return copy
 }
 
 func unique[T comparable](values []T) []T {
