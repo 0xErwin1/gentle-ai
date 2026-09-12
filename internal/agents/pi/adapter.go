@@ -245,19 +245,100 @@ func (a *Adapter) CapabilityManifest() capabilitymanifest.AgentCapabilityManifes
 }
 
 func (a *Adapter) InstallCommand(profile system.PlatformProfile) ([][]string, error) {
+	return a.InstallCommandWithSources(profile, nil)
+}
+
+// InstallCommandWithSources builds the same install sequence as
+// InstallCommand, but lets the document override where any of these packages
+// comes from instead of npm. sources is keyed by the npm package name exactly
+// as it appears in the plain "pi install npm:<name>" command below; a name
+// absent from sources installs unchanged.
+func (a *Adapter) InstallCommandWithSources(_ system.PlatformProfile, sources map[string]string) ([][]string, error) {
+	if source, overridden := sources["gentle-engram"]; overridden {
+		normalized := strings.TrimSpace(source)
+		if !validGentleEngramInitSource(normalized) {
+			return nil, fmt.Errorf("pi: unsupported gentle-engram source %q; gentle-engram takes an npm:<name>[@version] spec or an absolute local path because its init step runs through npm exec", source)
+		}
+		// Normalize once, here, so the "pi install" command below and
+		// engramInitCommand's own prefix matching both see the same trimmed
+		// spec: engramInitCommand does not repeat this trim, and matching it
+		// against a whitespace-padded value would fall through to its
+		// "gentle-engram@latest" default while the untrimmed value still
+		// reached "pi install" -- installing one build and initializing
+		// another.
+		if normalized != source {
+			trimmedSources := make(map[string]string, len(sources))
+			for name, value := range sources {
+				trimmedSources[name] = value
+			}
+			trimmedSources["gentle-engram"] = normalized
+			sources = trimmedSources
+		}
+	}
 	return [][]string{
-		{"pi", "install", "npm:gentle-pi"},
-		{"pi", "install", "npm:gentle-engram"},
-		{"pi", "install", "npm:pi-mcp-adapter"},
-		a.engramInitCommand(),
-		{"pi", "install", "npm:@juicesharp/rpiv-ask-user-question"},
-		{"pi", "install", "npm:pi-web-access"},
-		{"pi", "install", "npm:pi-btw"},
+		{"pi", "install", piInstallSource(sources, "gentle-pi")},
+		{"pi", "install", piInstallSource(sources, "gentle-engram")},
+		{"pi", "install", piInstallSource(sources, "pi-mcp-adapter")},
+		a.engramInitCommand(sources["gentle-engram"]),
+		{"pi", "install", piInstallSource(sources, "@juicesharp/rpiv-ask-user-question")},
+		{"pi", "install", piInstallSource(sources, "pi-web-access")},
+		{"pi", "install", piInstallSource(sources, "pi-btw")},
 	}, nil
 }
 
-func (a *Adapter) engramInitCommand() []string {
-	return []string{"npm", "exec", "--yes", "--package", "gentle-engram@latest", "--", "pi-engram", "init"}
+// piInstallSource resolves the third token of a "pi install" command: the
+// overriding source when the document named one for this package, or the
+// package's own npm spec otherwise.
+func piInstallSource(sources map[string]string, name string) string {
+	if source, overridden := sources[name]; overridden {
+		return source
+	}
+	return "npm:" + name
+}
+
+// validGentleEngramInitSource reports whether source can be handed to the
+// engram init command's npm exec call: an npm spec (with its "npm:" prefix
+// stripped) or an absolute local path. InstallCommandWithSources checks this
+// before building any command, because npm exec has no equivalent for Pi's
+// git shorthand or a bare git URL, and silently keeping the init command
+// pinned to the registry while pi install took the override would install
+// one build and initialize another.
+//
+// This mirrors the config package's own gentle-engram source validation. It
+// is duplicated rather than imported because it is the adapter's own
+// constraint on what its init step can consume, not a document-decoding
+// concern.
+func validGentleEngramInitSource(source string) bool {
+	trimmed := strings.TrimSpace(source)
+	switch {
+	case trimmed == "":
+		return false
+	case strings.HasPrefix(trimmed, "npm:"):
+		return len(trimmed) > len("npm:")
+	case strings.HasPrefix(trimmed, "/"):
+		return len(trimmed) > len("/")
+	default:
+		return false
+	}
+}
+
+// engramInitCommand mirrors what "pi install npm:gentle-engram" resolves to,
+// for the one command that does not go through pi install: npm exec wants a
+// bare package spec, not Pi's own install syntax.
+//
+// An npm source loses its "npm:" prefix, because npm exec takes the spec
+// directly. A local path is passed through unchanged, since npm exec accepts
+// a filesystem path as a spec. InstallCommandWithSources already refused
+// every other source shape before this is reached.
+func (a *Adapter) engramInitCommand(gentleEngramSource string) []string {
+	spec := "gentle-engram@latest"
+	switch {
+	case strings.HasPrefix(gentleEngramSource, "npm:"):
+		spec = strings.TrimPrefix(gentleEngramSource, "npm:")
+	case strings.HasPrefix(gentleEngramSource, "/"):
+		spec = gentleEngramSource
+	}
+	return []string{"npm", "exec", "--yes", "--package", spec, "--", "pi-engram", "init"}
 }
 
 func (a *Adapter) GlobalConfigDir(homeDir string) string { return ConfigPath(homeDir) }
