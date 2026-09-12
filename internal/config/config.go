@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"regexp"
 	"sort"
 
 	"github.com/gentleman-programming/gentle-ai/v3/internal/catalog"
@@ -301,22 +300,6 @@ func withModelPresets(selection model.Selection) model.Selection {
 				selection.ClaudeModelAssignments = model.ClaudeModelPresetAssignments(preset)
 			}
 
-		case model.AgentPi:
-			// The profile is a floor, not a ceiling: it fills the agents the
-			// document left alone and never displaces one it assigned. The
-			// other providers replace the whole table instead, so one explicit
-			// assignment silently drops the rest of their profile.
-			routing := model.PiModelPresetAssignments(preset)
-			// Naming the provider Pi runs on turns the profile from reasoning
-			// levels into models as well, taken from that provider's own table.
-			for agent, entry := range model.PiModelsForFamily(selection.PiModelFamily, preset) {
-				routing[agent] = entry
-			}
-			for agent, entry := range selection.PiModelAssignments {
-				routing[agent] = entry
-			}
-			selection.PiModelAssignments = routing
-
 		case model.AgentKiroIDE:
 			if len(selection.KiroModelAssignments) == 0 {
 				selection.KiroModelAssignments = model.KiroModelPresetAssignments(preset)
@@ -399,8 +382,6 @@ func NormalizeSelection(selection model.Selection) (model.Selection, []Diagnosti
 	selection.ModelAssignments = projected.ModelAssignments
 	selection.ClaudeModelAssignments = projected.ClaudeModelAssignments
 	selection.KiroModelAssignments = projected.KiroModelAssignments
-	selection.PiModelAssignments = projected.PiModelAssignments
-	selection.PiModelFamily = projected.PiModelFamily
 	selection.CodexModelAssignments = projected.CodexModelAssignments
 	selection.CodexCarrilModelAssignments = projected.CodexCarrilModelAssignments
 	selection.CodexPhaseModelAssignments = projected.CodexPhaseModelAssignments
@@ -518,16 +499,7 @@ var modelPresetNames = map[model.AgentID][]string{
 		string(model.CodexPresetLowCost), string(model.CodexPresetRecommended),
 		string(model.CodexPresetPowerful),
 	},
-	model.AgentPi: {
-		string(model.PiPresetLowCost), string(model.PiPresetRecommended),
-		string(model.PiPresetPowerful),
-	},
 }
-
-// safePiModelID mirrors the pattern gentle-pi validates a model id against. It
-// is duplicated rather than imported because it is gentle-pi's rule, not this
-// contract's: what matters is refusing here what would be dropped there.
-var safePiModelID = regexp.MustCompile(`^[A-Za-z0-9._~:@/+%-]+$`)
 
 func normalizeRoles(roles []Role, diagnostics *[]Diagnostic) []Role {
 	known := make(map[RoleID]struct{}, len(roles))

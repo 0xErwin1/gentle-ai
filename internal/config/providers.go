@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"regexp"
 	"sort"
 
 	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
@@ -16,8 +15,8 @@ import (
 // provider-specific choice under the provider that owns it, instead of one
 // flat field per provider suffixed with that provider's name, keeps a
 // provider's own vocabulary next to the fields that only make sense for it,
-// and lets a provider gain a field (Pi's ActiveProfile) without every other
-// provider's block growing an unused one.
+// and lets a provider gain a field (OpenCode's ProfileStrategy) without every
+// other provider's block growing an unused one.
 type ProviderSelection struct {
 	// Models carries the provider's own model vocabulary verbatim: a
 	// per-phase ModelAssignment map for opencode, a per-phase model alias map
@@ -26,9 +25,6 @@ type ProviderSelection struct {
 	// this, so the contract never forces every provider's vocabulary through
 	// one common shape.
 	Models json.RawMessage `json:"models,omitempty"`
-
-	// ModelFamily is Pi-only: the provider whose model profile Pi borrows.
-	ModelFamily model.AgentID `json:"modelFamily,omitempty"`
 
 	// ModelPreset names one of gentle-ai's own model profiles for this
 	// provider, rather than restating the models and efforts it resolves to.
@@ -50,11 +46,6 @@ type ProviderSelection struct {
 
 	// ProfileStrategy is opencode-only: how sync handles named SDD profiles.
 	ProfileStrategy model.SDDProfileStrategyID `json:"profileStrategy,omitempty"`
-
-	// ActiveProfile is pi-only: the Profiles key gentle-pi should activate.
-	// Declaring it also materialises the routing and orchestrator defaults
-	// that profile implies, the way gentle-pi's own "apply" would.
-	ActiveProfile string `json:"activeProfile,omitempty"`
 
 	// Skills overrides the flat skill list for this provider. A provider
 	// without this takes the flat list, so the simple form keeps meaning
@@ -81,7 +72,6 @@ var modelCapableProviders = map[model.AgentID]struct{}{
 	model.AgentClaudeCode: {},
 	model.AgentKiroIDE:    {},
 	model.AgentCodex:      {},
-	model.AgentPi:         {},
 }
 
 // backgroundCapableProviders are the providers whose block may carry a
@@ -90,23 +80,6 @@ var backgroundCapableProviders = map[model.AgentID]struct{}{
 	model.AgentOpenCode: {},
 	model.AgentPi:       {},
 }
-
-// safePiProfileName mirrors the pattern gentle-pi validates a profile name
-// against. It is duplicated rather than imported because it is gentle-pi's
-// rule, not this contract's: what matters is refusing here what gentle-pi
-// would refuse to load.
-var safePiProfileName = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`)
-
-var reservedPiProfileNames = map[string]struct{}{
-	"__proto__":   {},
-	"constructor": {},
-	"prototype":   {},
-}
-
-// piReservedPhaseKey is the phase key gentle-pi reserves for the profile's
-// orchestrator entry. A phase assignment cannot reuse it: doing so would
-// silently collide with the orchestrator entry once the profile is written.
-const piReservedPhaseKey = "orchestrator"
 
 // decodeStrict decodes raw into target the same way the top-level document
 // decoder does: unknown fields are refused rather than silently dropped, so a
@@ -140,7 +113,6 @@ func validateProviders(selection Selection, diagnostics *[]Diagnostic) {
 		path := "$.selection.providers." + string(provider)
 
 		validateProviderModels(provider, block, path, diagnostics)
-		validateProviderModelFamily(provider, block, path, diagnostics)
 		validateProviderModelPreset(provider, block, path, diagnostics)
 		validateProviderBackgroundIntent(provider, block, path, diagnostics)
 		validateProviderProfiles(provider, block, path, diagnostics)
@@ -218,41 +190,6 @@ func validateProviderModels(provider model.AgentID, block ProviderSelection, pat
 				*diagnostics = append(*diagnostics, diagnostic("config.codex-effort.unsupported", modelsPath+"."+phase, fmt.Sprintf("unsupported Codex effort %q; use low, medium, high, or xhigh", effort)))
 			}
 		}
-
-	case model.AgentPi:
-		var decoded map[string]model.PiAgentRouting
-		if err := decodeStrict(block.Models, &decoded); err != nil {
-			*diagnostics = append(*diagnostics, diagnostic("config.provider.models.malformed", modelsPath, "models must be an agent-keyed map of Pi routings"))
-			return
-		}
-		validatePiRoutingValues(decoded, modelsPath, diagnostics)
-	}
-}
-
-func validatePiRoutingValues(routings map[string]model.PiAgentRouting, path string, diagnostics *[]Diagnostic) {
-	for _, agent := range sortedKeys(routings) {
-		routing := routings[agent]
-		entryPath := path + "." + agent
-
-		if routing.Model == "" && routing.Thinking == "" {
-			*diagnostics = append(*diagnostics, diagnostic("config.pi-model.empty", entryPath, "a Pi routing assigns a model, a reasoning level, or both"))
-			continue
-		}
-		if routing.Model != "" && !safePiModelID.MatchString(routing.Model) {
-			*diagnostics = append(*diagnostics, diagnostic("config.pi-model.unsupported", entryPath, fmt.Sprintf("unsupported Pi model id %q; gentle-pi accepts letters, digits and ._~:@/+%%-", routing.Model)))
-		}
-		if routing.Thinking != "" && !routing.Thinking.Valid() {
-			*diagnostics = append(*diagnostics, diagnostic("config.pi-model.thinking-unsupported", entryPath, fmt.Sprintf("unsupported Pi reasoning level %q; use off, minimal, low, medium, high, xhigh, or max", routing.Thinking)))
-		}
-	}
-}
-
-func validateProviderModelFamily(provider model.AgentID, block ProviderSelection, path string, diagnostics *[]Diagnostic) {
-	if block.ModelFamily == "" {
-		return
-	}
-	if provider != model.AgentPi {
-		*diagnostics = append(*diagnostics, diagnostic("config.provider.model-family.unsupported-provider", path+".modelFamily", fmt.Sprintf("provider %q does not borrow a model family; only pi does", provider)))
 	}
 }
 
@@ -296,76 +233,11 @@ func validateProviderBackgroundIntent(provider model.AgentID, block ProviderSele
 }
 
 func validateProviderProfiles(provider model.AgentID, block ProviderSelection, path string, diagnostics *[]Diagnostic) {
-	acceptsProfiles := provider == model.AgentOpenCode || provider == model.AgentPi
-	if len(block.Profiles) > 0 && !acceptsProfiles {
+	if len(block.Profiles) > 0 && provider != model.AgentOpenCode {
 		*diagnostics = append(*diagnostics, diagnostic("config.provider.profiles.unsupported-provider", path+".profiles", fmt.Sprintf("provider %q does not support named profiles", provider)))
 	}
 	if block.ProfileStrategy != "" && provider != model.AgentOpenCode {
 		*diagnostics = append(*diagnostics, diagnostic("config.provider.profile-strategy.unsupported-provider", path+".profileStrategy", fmt.Sprintf("provider %q does not support a profile strategy; only opencode does", provider)))
-	}
-	if block.ActiveProfile != "" && provider != model.AgentPi {
-		*diagnostics = append(*diagnostics, diagnostic("config.provider.active-profile.unsupported-provider", path+".activeProfile", fmt.Sprintf("provider %q does not support an active profile; only pi does", provider)))
-	}
-
-	if provider == model.AgentPi {
-		validatePiProfileNames(block, path, diagnostics)
-		validatePiProfileValues(block, path, diagnostics)
-	}
-
-	if block.ActiveProfile != "" && provider == model.AgentPi {
-		if _, exists := block.Profiles[block.ActiveProfile]; !exists {
-			*diagnostics = append(*diagnostics, diagnostic("config.pi-active-profile.unresolved", path+".activeProfile", fmt.Sprintf("activeProfile %q does not name a declared profile", block.ActiveProfile)))
-		}
-	}
-}
-
-// validatePiProfileNames refuses a profile name or phase key gentle-pi would
-// refuse to load. Reporting nothing here would leave a typo the same way a
-// dropped Pi model routing does: a profile that silently never applies.
-func validatePiProfileNames(block ProviderSelection, path string, diagnostics *[]Diagnostic) {
-	for _, name := range sortedProfileNames(block.Profiles) {
-		profilePath := path + ".profiles." + name
-
-		if _, reserved := reservedPiProfileNames[name]; reserved {
-			*diagnostics = append(*diagnostics, diagnostic("config.pi-profile.name-reserved", profilePath, fmt.Sprintf("profile name %q is reserved", name)))
-		} else if !safePiProfileName.MatchString(name) {
-			*diagnostics = append(*diagnostics, diagnostic("config.pi-profile.name-unsupported", profilePath, fmt.Sprintf("unsupported profile name %q; gentle-pi accepts letters, digits, and ._-, starting with a letter or digit", name)))
-		}
-
-		if _, hasOrchestratorPhase := block.Profiles[name].PhaseAssignments[piReservedPhaseKey]; hasOrchestratorPhase {
-			*diagnostics = append(*diagnostics, diagnostic("config.pi-profile.phase-reserved", profilePath+".phaseAssignments."+piReservedPhaseKey, fmt.Sprintf("phase %q is reserved for the profile's orchestrator entry", piReservedPhaseKey)))
-		}
-	}
-}
-
-// validatePiProfileValues refuses a profile orchestrator or phase assignment
-// gentle-pi would refuse to load, the same way validatePiRoutingValues already
-// refuses one under providers.pi.models.
-func validatePiProfileValues(block ProviderSelection, path string, diagnostics *[]Diagnostic) {
-	for _, name := range sortedProfileNames(block.Profiles) {
-		profile := block.Profiles[name]
-		profilePath := path + ".profiles." + name
-
-		if profile.Orchestrator != nil {
-			if profile.Orchestrator.Provider == "" || profile.Orchestrator.Model == "" {
-				*diagnostics = append(*diagnostics, diagnostic("config.pi-profile.orchestrator-incomplete", profilePath+".orchestrator", "a profile orchestrator requires both provider and model"))
-			}
-			orchestrator := map[string]model.PiAgentRouting{piReservedPhaseKey: piRoutingFromAssignment(*profile.Orchestrator)}
-			validatePiRoutingValues(orchestrator, profilePath, diagnostics)
-		}
-
-		if len(profile.PhaseAssignments) > 0 {
-			phasesPath := profilePath + ".phaseAssignments"
-			routings := make(map[string]model.PiAgentRouting, len(profile.PhaseAssignments))
-			for _, phase := range sortedKeys(profile.PhaseAssignments) {
-				assignment := profile.PhaseAssignments[phase]
-				if (assignment.Provider == "") != (assignment.Model == "") {
-					*diagnostics = append(*diagnostics, diagnostic("config.pi-profile.phase-incomplete", phasesPath+"."+phase, "a phase assignment requires both provider and model"))
-				}
-				routings[phase] = piRoutingFromAssignment(assignment)
-			}
-			validatePiRoutingValues(routings, phasesPath, diagnostics)
-		}
 	}
 }
 
@@ -421,9 +293,7 @@ func joinStrings(values []string) string {
 // projectProviders flattens the nested provider blocks into the fields
 // model.Selection already carries, filling selection in place. It runs
 // before withModelPresets so a named profile still fills whatever a provider
-// left unassigned, and it resolves Pi's active profile into
-// PiModelAssignments before that happens too, so an explicit Pi model
-// assignment keeps winning over both the profile and the preset.
+// left unassigned.
 func projectProviders(providers map[model.AgentID]ProviderSelection, selection *model.Selection) {
 	presets := map[string]string{}
 
@@ -457,13 +327,7 @@ func projectProviders(providers map[model.AgentID]ProviderSelection, selection *
 			selection.CodexModelAssignments = decoded
 
 		case model.AgentPi:
-			var decoded map[string]model.PiAgentRouting
-			_ = decodeStrict(block.Models, &decoded)
-			selection.PiModelAssignments = decoded
-			selection.PiModelFamily = block.ModelFamily
 			selection.PiBackgroundIntent = model.PiBackgroundIntent(block.BackgroundIntent)
-			selection.PiAgentProfiles = piProfilesToModel(block.Profiles)
-			selection.PiActiveProfile = block.ActiveProfile
 		}
 
 		if len(block.Skills) > 0 {
@@ -484,48 +348,6 @@ func projectProviders(providers map[model.AgentID]ProviderSelection, selection *
 	if len(presets) > 0 {
 		selection.ModelPresets = presets
 	}
-
-	applyPiActiveProfile(providers, selection)
-}
-
-// applyPiActiveProfile materialises what gentle-pi's own "apply" would do for
-// the declared active profile: the profile's phase entries become the Pi
-// routing, with any model the document assigned directly on top, since an
-// explicit assignment wins over both the profile and the preset it might
-// later expand into.
-func applyPiActiveProfile(providers map[model.AgentID]ProviderSelection, selection *model.Selection) {
-	pi, ok := providers[model.AgentPi]
-	if !ok || pi.ActiveProfile == "" {
-		return
-	}
-	profile, ok := pi.Profiles[pi.ActiveProfile]
-	if !ok {
-		return
-	}
-
-	routing := make(map[string]model.PiAgentRouting, len(profile.PhaseAssignments)+1)
-	if profile.Orchestrator != nil {
-		routing[piReservedPhaseKey] = piRoutingFromAssignment(*profile.Orchestrator)
-	}
-	for phase, assignment := range profile.PhaseAssignments {
-		routing[phase] = piRoutingFromAssignment(assignment)
-	}
-	for agent, entry := range selection.PiModelAssignments {
-		routing[agent] = entry
-	}
-
-	selection.PiModelAssignments = routing
-}
-
-// piRoutingFromAssignment mirrors the mapping gentle-pi's own profile format
-// uses: a phase's provider-qualified model becomes "<provider>/<model>", and
-// its effort becomes the reasoning level.
-func piRoutingFromAssignment(assignment ModelAssignment) model.PiAgentRouting {
-	routing := model.PiAgentRouting{Thinking: model.PiThinkingLevel(assignment.Effort)}
-	if assignment.Provider != "" || assignment.Model != "" {
-		routing.Model = assignment.Provider + "/" + assignment.Model
-	}
-	return routing
 }
 
 func providerProfilesToModel(profiles map[string]ProviderProfile) []model.Profile {
@@ -588,34 +410,6 @@ func providerProfilesFromModel(profiles []model.Profile) map[string]ProviderProf
 	return converted
 }
 
-// piProfilesToModel and piProfilesFromModel carry Pi's named profiles through
-// model.Selection the same way providerProfilesToModel/FromModel already do
-// for OpenCode, keyed by name instead of the slice OpenCode uses.
-func piProfilesToModel(profiles map[string]ProviderProfile) map[string]model.Profile {
-	converted := providerProfilesToModel(profiles)
-	if len(converted) == 0 {
-		return nil
-	}
-
-	keyed := make(map[string]model.Profile, len(converted))
-	for _, profile := range converted {
-		keyed[profile.Name] = profile
-	}
-	return keyed
-}
-
-func piProfilesFromModel(profiles map[string]model.Profile) map[string]ProviderProfile {
-	if len(profiles) == 0 {
-		return nil
-	}
-
-	slice := make([]model.Profile, 0, len(profiles))
-	for _, profile := range profiles {
-		slice = append(slice, profile)
-	}
-	return providerProfilesFromModel(slice)
-}
-
 // providersFromModel builds the nested provider blocks back out of the flat
 // model.Selection fields, so FromSelection produces the same shape Decode
 // accepts. A provider whose block would otherwise be entirely empty is left
@@ -645,11 +439,7 @@ func providersFromModel(selection model.Selection) map[model.AgentID]ProviderSel
 	}
 
 	pi := ProviderSelection{
-		Models:           rawFromMap(selection.PiModelAssignments),
-		ModelFamily:      selection.PiModelFamily,
 		BackgroundIntent: string(selection.PiBackgroundIntent),
-		Profiles:         piProfilesFromModel(selection.PiAgentProfiles),
-		ActiveProfile:    selection.PiActiveProfile,
 	}
 	if !isZeroProviderSelection(pi) {
 		providers[model.AgentPi] = pi
@@ -680,9 +470,9 @@ func providersFromModel(selection model.Selection) map[model.AgentID]ProviderSel
 }
 
 func isZeroProviderSelection(block ProviderSelection) bool {
-	return len(block.Models) == 0 && block.ModelFamily == "" && block.ModelPreset == "" &&
+	return len(block.Models) == 0 && block.ModelPreset == "" &&
 		block.BackgroundIntent == "" && len(block.Profiles) == 0 && block.ProfileStrategy == "" &&
-		block.ActiveProfile == "" && len(block.Skills) == 0 && len(block.MCPServers) == 0
+		len(block.Skills) == 0 && len(block.MCPServers) == 0
 }
 
 func rawFromAssignments(assignments map[string]model.ModelAssignment) json.RawMessage {

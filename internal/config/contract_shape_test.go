@@ -184,15 +184,7 @@ func fullyPopulatedDocument() Document {
 					ModelPreset: string(model.CodexPresetRecommended),
 				},
 				model.AgentPi: {
-					Models:           mustRawJSON(map[string]model.PiAgentRouting{"sdd-apply": {Model: "openai-codex/gpt-5.6-sol", Thinking: model.PiThinkingHigh}}),
-					ModelFamily:      model.AgentCodex,
 					BackgroundIntent: string(model.PiBackgroundOn),
-					ActiveProfile:    "deep-work",
-					Profiles: map[string]ProviderProfile{
-						"deep-work": {
-							Orchestrator: &ModelAssignment{Provider: "anthropic", Model: "claude-sonnet", Effort: "high"},
-						},
-					},
 				},
 			},
 
