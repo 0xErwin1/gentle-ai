@@ -90,6 +90,14 @@ func (stager configurationStager) Stage(state configdomain.DesiredState, stageRo
 		return err
 	}
 
+	if err := stagePiAgentProfiles(stageRoot, selection, adapters); err != nil {
+		return err
+	}
+
+	if err := stagePiActiveProfileDefaults(stageRoot, selection, adapters); err != nil {
+		return err
+	}
+
 	if err := stageDeclaredExtensions(stageRoot, state, adapters); err != nil {
 		return err
 	}
@@ -343,6 +351,140 @@ func stagePiModelRouting(stageRoot string, selection model.Selection, adapters [
 	}
 
 	return os.WriteFile(path, append(content, '\n'), 0o644)
+}
+
+// piAgentProfileModelsFile and piAgentProfilesKind mirror gentle-pi's own
+// profile store: the file it activates a profile from, and the schema kind
+// that marks the document as belonging to it.
+const (
+	piAgentProfilesFile = "profiles.json"
+	piAgentProfilesKind = "gentle-pi.agent_model_profiles"
+)
+
+// piModelEntry is one phase's routing inside a staged Pi profile: the model
+// gentle-pi should run that phase on, its reasoning level, or both.
+type piModelEntry struct {
+	Model    string `json:"model,omitempty"`
+	Thinking string `json:"thinking,omitempty"`
+}
+
+// piAgentProfilesDocument is the file gentle-pi's own "apply" reads profiles
+// from. Its shape is gentle-pi's, not this contract's, which is why it is
+// spelled out here rather than reusing a configdomain type.
+type piAgentProfilesDocument struct {
+	Kind     string                             `json:"kind"`
+	Version  int                                `json:"version"`
+	Active   string                             `json:"active,omitempty"`
+	Profiles map[string]map[string]piModelEntry `json:"profiles"`
+}
+
+// piProfileEntryFromAssignment mirrors the mapping gentle-pi's own profile
+// format uses: a phase's provider-qualified model becomes "<provider>/<model>",
+// and its effort becomes the reasoning level.
+func piProfileEntryFromAssignment(assignment model.ModelAssignment) piModelEntry {
+	entry := piModelEntry{Thinking: assignment.Effort}
+	if assignment.ProviderID != "" || assignment.ModelID != "" {
+		entry.Model = assignment.ProviderID + "/" + assignment.ModelID
+	}
+	return entry
+}
+
+// stagePiAgentProfiles writes the profiles gentle-pi's own "apply" reads at
+// <piConfigHome>/gentle-ai/profiles.json. It runs outside the component loop
+// like the background policy and model routing: Pi agent profiles are not one
+// of Gentle AI's components, and gentle-pi owns the store that would
+// otherwise have carried them.
+func stagePiAgentProfiles(stageRoot string, selection model.Selection, adapters []agents.Adapter) error {
+	if len(selection.PiAgentProfiles) == 0 {
+		return nil
+	}
+
+	declared := false
+	for _, adapter := range adapters {
+		if adapter.Agent() == model.AgentPi {
+			declared = true
+		}
+	}
+	if !declared {
+		return nil
+	}
+
+	document := piAgentProfilesDocument{
+		Kind:     piAgentProfilesKind,
+		Version:  1,
+		Active:   selection.PiActiveProfile,
+		Profiles: make(map[string]map[string]piModelEntry, len(selection.PiAgentProfiles)),
+	}
+
+	for name, profile := range selection.PiAgentProfiles {
+		entries := make(map[string]piModelEntry, len(profile.PhaseAssignments)+1)
+		if profile.OrchestratorModel != (model.ModelAssignment{}) {
+			entries["orchestrator"] = piProfileEntryFromAssignment(profile.OrchestratorModel)
+		}
+		for phase, assignment := range profile.PhaseAssignments {
+			entries[phase] = piProfileEntryFromAssignment(assignment)
+		}
+		document.Profiles[name] = entries
+	}
+
+	content, err := json.MarshalIndent(document, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshal Pi agent profiles: %w", err)
+	}
+
+	path := filepath.Join(stageRoot, ".pi", "gentle-ai", piAgentProfilesFile)
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return fmt.Errorf("create Pi agent profiles directory: %w", err)
+	}
+
+	return os.WriteFile(path, append(content, '\n'), 0o644)
+}
+
+// stagePiActiveProfileDefaults materialises the declared active profile's
+// orchestrator entry as the Pi settings defaults gentle-pi's own "apply"
+// would write. It runs before stageDeclaredExtensions merges the document's
+// own Pi extension block, so an explicit extension value still wins over the
+// one this derives from the profile. Each default is guarded non-empty, the
+// same way the effort default already was.
+func stagePiActiveProfileDefaults(stageRoot string, selection model.Selection, adapters []agents.Adapter) error {
+	if selection.PiActiveProfile == "" {
+		return nil
+	}
+	profile, ok := selection.PiAgentProfiles[selection.PiActiveProfile]
+	if !ok || profile.OrchestratorModel == (model.ModelAssignment{}) {
+		return nil
+	}
+
+	var piAdapter agents.Adapter
+	for _, adapter := range adapters {
+		if adapter.Agent() == model.AgentPi {
+			piAdapter = adapter
+		}
+	}
+	if piAdapter == nil {
+		return nil
+	}
+
+	overlay := map[string]string{}
+	if profile.OrchestratorModel.ProviderID != "" {
+		overlay["defaultProvider"] = profile.OrchestratorModel.ProviderID
+	}
+	if profile.OrchestratorModel.ModelID != "" {
+		overlay["defaultModel"] = profile.OrchestratorModel.ModelID
+	}
+	if profile.OrchestratorModel.Effort != "" {
+		overlay["defaultThinkingLevel"] = profile.OrchestratorModel.Effort
+	}
+	if len(overlay) == 0 {
+		return nil
+	}
+
+	block, err := json.Marshal(overlay)
+	if err != nil {
+		return fmt.Errorf("marshal Pi active profile defaults: %w", err)
+	}
+
+	return mergeExtensionBlock(piAdapter.SettingsPath(stageRoot), block)
 }
 
 // provisionedComponents are performed rather than written: a download or a

@@ -20,16 +20,6 @@ type ModelAssignment struct {
 	Effort   string `json:"effort,omitempty"`
 }
 
-// Profile is the contract form of a named SDD profile. Orchestrator is a
-// pointer because encoding/json defines no empty state for a struct value: a
-// non-pointer field would publish an object of zero values and assert an
-// assignment the user never declared.
-type Profile struct {
-	Name             string                     `json:"name"`
-	Orchestrator     *ModelAssignment           `json:"orchestrator,omitempty"`
-	PhaseAssignments map[string]ModelAssignment `json:"phaseAssignments,omitempty"`
-}
-
 func assignmentToModel(assignment ModelAssignment) model.ModelAssignment {
 	return model.ModelAssignment{
 		ProviderID: assignment.Provider,
@@ -44,67 +34,6 @@ func assignmentFromModel(assignment model.ModelAssignment) ModelAssignment {
 		Model:    assignment.ModelID,
 		Effort:   assignment.Effort,
 	}
-}
-
-func profilesToModel(profiles []Profile) []model.Profile {
-	if profiles == nil {
-		return nil
-	}
-
-	converted := make([]model.Profile, 0, len(profiles))
-	for _, profile := range profiles {
-		phases := make(map[string]model.ModelAssignment, len(profile.PhaseAssignments))
-		for phase, assignment := range profile.PhaseAssignments {
-			phases[phase] = assignmentToModel(assignment)
-		}
-		if len(phases) == 0 {
-			phases = nil
-		}
-
-		orchestrator := model.ModelAssignment{}
-		if profile.Orchestrator != nil {
-			orchestrator = assignmentToModel(*profile.Orchestrator)
-		}
-
-		converted = append(converted, model.Profile{
-			Name:              profile.Name,
-			OrchestratorModel: orchestrator,
-			PhaseAssignments:  phases,
-		})
-	}
-
-	return converted
-}
-
-func profilesFromModel(profiles []model.Profile) []Profile {
-	if profiles == nil {
-		return nil
-	}
-
-	converted := make([]Profile, 0, len(profiles))
-	for _, profile := range profiles {
-		phases := make(map[string]ModelAssignment, len(profile.PhaseAssignments))
-		for phase, assignment := range profile.PhaseAssignments {
-			phases[phase] = assignmentFromModel(assignment)
-		}
-		if len(phases) == 0 {
-			phases = nil
-		}
-
-		var orchestrator *ModelAssignment
-		if profile.OrchestratorModel != (model.ModelAssignment{}) {
-			assignment := assignmentFromModel(profile.OrchestratorModel)
-			orchestrator = &assignment
-		}
-
-		converted = append(converted, Profile{
-			Name:             profile.Name,
-			Orchestrator:     orchestrator,
-			PhaseAssignments: phases,
-		})
-	}
-
-	return converted
 }
 
 func assignmentsToModel(assignments map[string]ModelAssignment) map[string]model.ModelAssignment {
@@ -144,50 +73,6 @@ func copyMap[K comparable, V any](source map[K]V) map[K]V {
 	}
 
 	return copied
-}
-
-// validateAssignments reports every unsupported value rather than the first, so
-// one run surfaces the whole correction a document needs. Ordering is by phase
-// name within each surface to keep diagnostics stable across runs.
-func validateAssignments(selection Selection, diagnostics *[]Diagnostic) {
-	for _, phase := range sortedKeys(selection.ModelAssignments) {
-		assignment := selection.ModelAssignments[phase]
-		if assignment.Provider == "" || assignment.Model == "" {
-			*diagnostics = append(*diagnostics, diagnostic("config.model-assignment.incomplete", "$.selection.modelAssignments."+phase, "a model assignment requires both provider and model"))
-		}
-	}
-
-	for _, phase := range sortedKeys(selection.ClaudeModelAssignments) {
-		if alias := selection.ClaudeModelAssignments[phase]; !alias.Valid() {
-			*diagnostics = append(*diagnostics, diagnostic("config.claude-model.unsupported", "$.selection.claudeModelAssignments."+phase, fmt.Sprintf("unsupported Claude model %q", alias)))
-		}
-	}
-
-	for _, phase := range sortedKeys(selection.KiroModelAssignments) {
-		if alias := selection.KiroModelAssignments[phase]; !alias.Valid() {
-			*diagnostics = append(*diagnostics, diagnostic("config.kiro-model.unsupported", "$.selection.kiroModelAssignments."+phase, fmt.Sprintf("unsupported Kiro model %q", alias)))
-		}
-	}
-
-	for _, phase := range sortedKeys(selection.CodexModelAssignments) {
-		if effort := selection.CodexModelAssignments[phase]; !effort.Valid() {
-			*diagnostics = append(*diagnostics, diagnostic("config.codex-effort.unsupported", "$.selection.codexModelAssignments."+phase, fmt.Sprintf("unsupported Codex effort %q; use low, medium, high, or xhigh", effort)))
-		}
-	}
-
-	for _, surface := range []struct {
-		path        string
-		assignments map[string]string
-	}{
-		{path: "codexCarrilModelAssignments", assignments: selection.CodexCarrilModelAssignments},
-		{path: "codexPhaseModelAssignments", assignments: selection.CodexPhaseModelAssignments},
-	} {
-		for _, phase := range sortedKeys(surface.assignments) {
-			if surface.assignments[phase] == "" {
-				*diagnostics = append(*diagnostics, diagnostic("config.codex-model.empty", "$.selection."+surface.path+"."+phase, "a Codex model assignment requires a model id"))
-			}
-		}
-	}
 }
 
 func sortedKeys[V any](source map[string]V) []string {
@@ -266,6 +151,25 @@ func codexOrchestratorFromModel(assignment *model.CodexOrchestratorAssignment) *
 	return &CodexOrchestratorAssignment{
 		Model:  assignment.Model,
 		Effort: string(assignment.Effort),
+	}
+}
+
+// validateCodexModelSurfaces rejects an empty model id rather than storing a
+// blank assignment, for the two Codex model-id surfaces that stay flat
+// rather than moving under a provider block.
+func validateCodexModelSurfaces(selection Selection, diagnostics *[]Diagnostic) {
+	for _, surface := range []struct {
+		path        string
+		assignments map[string]string
+	}{
+		{path: "codexCarrilModelAssignments", assignments: selection.CodexCarrilModelAssignments},
+		{path: "codexPhaseModelAssignments", assignments: selection.CodexPhaseModelAssignments},
+	} {
+		for _, phase := range sortedKeys(surface.assignments) {
+			if surface.assignments[phase] == "" {
+				*diagnostics = append(*diagnostics, diagnostic("config.codex-model.empty", "$.selection."+surface.path+"."+phase, "a Codex model assignment requires a model id"))
+			}
+		}
 	}
 }
 
@@ -385,32 +289,6 @@ func validateMCPServerSet(servers map[string]MCPServer, prefix string, diagnosti
 	}
 }
 
-func mcpAssignmentsToModel(assignments map[string]map[string]MCPServer) map[model.AgentID]map[string]model.MCPServer {
-	if len(assignments) == 0 {
-		return nil
-	}
-
-	projected := make(map[model.AgentID]map[string]model.MCPServer, len(assignments))
-	for adapter, servers := range assignments {
-		projected[model.AgentID(adapter)] = mcpServersToModel(servers)
-	}
-
-	return projected
-}
-
-func mcpAssignmentsFromModel(assignments map[model.AgentID]map[string]model.MCPServer) map[string]map[string]MCPServer {
-	if len(assignments) == 0 {
-		return nil
-	}
-
-	restored := make(map[string]map[string]MCPServer, len(assignments))
-	for adapter, servers := range assignments {
-		restored[string(adapter)] = mcpServersFromModel(servers)
-	}
-
-	return restored
-}
-
 // Permissions is the contract form of declared permission rules.
 type Permissions struct {
 	Allow []string `json:"allow,omitempty"`
@@ -455,45 +333,4 @@ func copyStringMap(values map[string]string) map[string]string {
 	}
 
 	return copied
-}
-
-func skillAssignmentsToModel(assignments map[string][]model.SkillID) map[model.AgentID][]model.SkillID {
-	if assignments == nil {
-		return nil
-	}
-
-	converted := make(map[model.AgentID][]model.SkillID, len(assignments))
-	for agent, skills := range assignments {
-		converted[model.AgentID(agent)] = append([]model.SkillID(nil), skills...)
-	}
-
-	return converted
-}
-
-func skillAssignmentsFromModel(assignments map[model.AgentID][]model.SkillID) map[string][]model.SkillID {
-	if assignments == nil {
-		return nil
-	}
-
-	converted := make(map[string][]model.SkillID, len(assignments))
-	for agent, skills := range assignments {
-		converted[string(agent)] = append([]model.SkillID(nil), skills...)
-	}
-
-	return converted
-}
-
-// validateSkillAssignments rejects an assignment for an adapter the document
-// never declared, because it would silently apply to nothing.
-func validateSkillAssignments(selection Selection, diagnostics *[]Diagnostic) {
-	declared := make(map[model.AgentID]struct{}, len(selection.Agents))
-	for _, agent := range selection.Agents {
-		declared[agent] = struct{}{}
-	}
-
-	for _, agent := range sortedKeys(selection.SkillAssignments) {
-		if _, ok := declared[model.AgentID(agent)]; !ok {
-			*diagnostics = append(*diagnostics, diagnostic("config.skill-assignment.undeclared-adapter", "$.selection.skillAssignments."+agent, fmt.Sprintf("adapter %q takes skill assignments but is not declared; add it to agents or remove the assignment", agent)))
-		}
-	}
 }

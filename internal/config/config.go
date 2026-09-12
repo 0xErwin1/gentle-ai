@@ -7,9 +7,7 @@ import (
 	"fmt"
 	"io"
 	"regexp"
-	"slices"
 	"sort"
-	"strings"
 
 	"github.com/gentleman-programming/gentle-ai/v3/internal/catalog"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
@@ -79,36 +77,23 @@ type Role struct {
 }
 
 type Selection struct {
-	Agents             []model.AgentID            `json:"agents,omitempty"`
-	Components         []model.ComponentID        `json:"components,omitempty"`
-	Skills             []model.SkillID            `json:"skills,omitempty"`
-	Persona            model.PersonaID            `json:"persona,omitempty"`
-	Preset             model.PresetID             `json:"preset,omitempty"`
-	SDDMode            model.SDDModeID            `json:"sddMode,omitempty"`
-	SDDProfileStrategy model.SDDProfileStrategyID `json:"sddProfileStrategy,omitempty"`
-	StrictTDD          bool                       `json:"strictTDD,omitempty"`
-	Profiles           []Profile                  `json:"profiles,omitempty"`
+	Agents     []model.AgentID     `json:"agents,omitempty"`
+	Components []model.ComponentID `json:"components,omitempty"`
+	Skills     []model.SkillID     `json:"skills,omitempty"`
+	Persona    model.PersonaID     `json:"persona,omitempty"`
+	Preset     model.PresetID      `json:"preset,omitempty"`
+	SDDMode    model.SDDModeID     `json:"sddMode,omitempty"`
+	StrictTDD  bool                `json:"strictTDD,omitempty"`
 
-	// BackgroundIntent stays unresolved when omitted. Defaulting it here would
-	// turn silence into an explicit choice, and only an explicit choice is
-	// persisted as managed state.
-	BackgroundIntent model.OpenCodeBackgroundIntent `json:"backgroundIntent,omitempty"`
+	// Providers hold every choice that is specific to one client: its own
+	// model vocabulary, the background sub-agent policy it reads, the named
+	// profiles it supports, and the skill/MCP overrides that replace the flat
+	// lists for it. Grouping them here instead of one flat field per provider
+	// per concept keeps a provider's block self-contained.
+	Providers map[model.AgentID]ProviderSelection `json:"providers,omitempty"`
 
-	// PiBackgroundIntent is the same choice for Pi and follows the same rule:
-	// silence stays unresolved, because only an explicit choice is persisted.
-	PiBackgroundIntent model.PiBackgroundIntent `json:"piBackgroundIntent,omitempty"`
-
-	// Assignment maps are keyed by phase name. The document is the complete
-	// desired state, so an omitted map declares no assignments rather than
-	// leaving a previous choice untouched.
-	ModelAssignments            map[string]ModelAssignment        `json:"modelAssignments,omitempty"`
-	ClaudeModelAssignments      map[string]model.ClaudeModelAlias `json:"claudeModelAssignments,omitempty"`
-	KiroModelAssignments        map[string]model.KiroModelAlias   `json:"kiroModelAssignments,omitempty"`
-	PiModelAssignments          map[string]model.PiAgentRouting   `json:"piModelAssignments,omitempty"`
-	PiModelFamily               model.AgentID                     `json:"piModelFamily,omitempty"`
-	CodexModelAssignments       map[string]model.CodexEffort      `json:"codexModelAssignments,omitempty"`
-	CodexCarrilModelAssignments map[string]string                 `json:"codexCarrilModelAssignments,omitempty"`
-	CodexPhaseModelAssignments  map[string]string                 `json:"codexPhaseModelAssignments,omitempty"`
+	CodexCarrilModelAssignments map[string]string `json:"codexCarrilModelAssignments,omitempty"`
+	CodexPhaseModelAssignments  map[string]string `json:"codexPhaseModelAssignments,omitempty"`
 
 	ClaudePhaseAssignments map[string]ClaudePhaseAssignment `json:"claudePhaseAssignments,omitempty"`
 	CodexOrchestrator      *CodexOrchestratorAssignment     `json:"codexOrchestrator,omitempty"`
@@ -127,30 +112,9 @@ type Selection struct {
 	// carry a copy of gentle-ai's catalogue and go stale the moment it grows.
 	SkillExclusions []model.SkillID `json:"skillExclusions,omitempty"`
 
-	// ModelPresets name one of gentle-ai's own model profiles per provider,
-	// rather than restating the models and efforts each resolves to. Spelling
-	// those out pins today's matrix into the document, so a profile gentle-ai
-	// retunes stops being the profile the operator asked for.
-	//
-	// The map is keyed by provider because subscriptions are: an operator can
-	// afford the expensive tier on one client and wants the cheap one on
-	// another, which a single global profile cannot say.
-	ModelPresets map[string]string `json:"modelPresets,omitempty"`
-
-	// SkillAssignments override the flat skill list for one adapter. An adapter
-	// without an entry takes the flat list, so the simple form keeps meaning
-	// "every adapter" and the map is only needed when they must differ.
-	SkillAssignments map[string][]model.SkillID `json:"skillAssignments,omitempty"`
-
 	// Permissions add to the guardrails gentle-ai ships rather than replacing
 	// them, so declaring an allowance never quietly removes a shipped deny.
 	Permissions *Permissions `json:"permissions,omitempty"`
-
-	// MCPServerAssignments override the flat server set for one adapter. A
-	// client identifies itself to some servers, and an installation rarely gives
-	// every client the same tools, so an adapter named here takes its own set
-	// and the others keep the flat one.
-	MCPServerAssignments map[string]map[string]MCPServer `json:"mcpServerAssignments,omitempty"`
 
 	// MCPServers are keyed by server name. A local server runs a command; a
 	// remote one is reached at a URL. Declaring both is rejected rather than
@@ -177,8 +141,66 @@ type DesiredState struct {
 	Extensions map[string]json.RawMessage `json:"extensions,omitempty"`
 }
 
+// supersededSelectionFields maps a pre-2.4.0 flat selection key to the
+// nested providers path that replaced it. A document that still uses one of
+// these keys gets a diagnostic naming its replacement instead of the generic
+// unknown-field diagnostic, because the contract is unreleased with a single
+// consumer: there is no compatibility shim and no silent migration.
+var supersededSelectionFields = map[string]string{
+	"backgroundIntent":       "selection.providers.opencode.backgroundIntent",
+	"piBackgroundIntent":     "selection.providers.pi.backgroundIntent",
+	"modelAssignments":       "selection.providers.opencode.models",
+	"claudeModelAssignments": "selection.providers.claude-code.models",
+	"kiroModelAssignments":   "selection.providers.kiro-ide.models",
+	"piModelAssignments":     "selection.providers.pi.models",
+	"piModelFamily":          "selection.providers.pi.modelFamily",
+	"codexModelAssignments":  "selection.providers.codex.models",
+	"modelPresets":           "selection.providers.<id>.modelPreset",
+	"profiles":               "selection.providers.<id>.profiles",
+	"sddProfileStrategy":     "selection.providers.opencode.profileStrategy",
+	"skillAssignments":       "selection.providers.<id>.skills",
+	"mcpServerAssignments":   "selection.providers.<id>.mcpServers",
+}
+
+// supersededFieldDiagnostics detects a pre-2.4.0 flat document before strict
+// decoding runs, so it reports exactly what changed instead of a generic
+// unknown-field diagnostic. It stays silent on malformed input and lets the
+// strict decoder below report that.
+func supersededFieldDiagnostics(input []byte) []Diagnostic {
+	var probe struct {
+		Selection map[string]json.RawMessage `json:"selection"`
+	}
+	if err := json.Unmarshal(input, &probe); err != nil || len(probe.Selection) == 0 {
+		return nil
+	}
+
+	keys := make([]string, 0, len(probe.Selection))
+	for key := range probe.Selection {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+
+	diagnostics := make([]Diagnostic, 0)
+	for _, key := range keys {
+		replacement, ok := supersededSelectionFields[key]
+		if !ok {
+			continue
+		}
+		diagnostics = append(diagnostics, diagnostic(
+			"config.document.superseded-field",
+			"selection."+key,
+			fmt.Sprintf("selection.%s was replaced by %s; rewrite the document under the nested providers shape", key, replacement),
+		))
+	}
+	return diagnostics
+}
+
 // Decode converts a JSON document into canonical desired state without side effects.
 func Decode(input []byte) (DesiredState, []Diagnostic) {
+	if diagnostics := supersededFieldDiagnostics(input); len(diagnostics) > 0 {
+		return DesiredState{}, diagnostics
+	}
+
 	var document Document
 	decoder := json.NewDecoder(bytes.NewReader(input))
 	decoder.DisallowUnknownFields()
@@ -241,27 +263,16 @@ func Normalize(document Document) (DesiredState, []Diagnostic) {
 
 // Project provides the existing planner and installer semantic selection.
 func Project(state DesiredState) model.Selection {
-	return withModelPresets(model.Selection{
-		Agents:             append([]model.AgentID(nil), state.Selection.Agents...),
-		Components:         append([]model.ComponentID(nil), state.Selection.Components...),
-		Skills:             append([]model.SkillID(nil), state.Selection.Skills...),
-		SkillExclusions:    append([]model.SkillID(nil), state.Selection.SkillExclusions...),
-		ModelPresets:       copyStringMap(state.Selection.ModelPresets),
-		Persona:            state.Selection.Persona,
-		Preset:             state.Selection.Preset,
-		SDDMode:            state.Selection.SDDMode,
-		SDDProfileStrategy: state.Selection.SDDProfileStrategy,
-		StrictTDD:          state.Selection.StrictTDD,
-		Profiles:           profilesToModel(state.Selection.Profiles),
-		BackgroundIntent:   state.Selection.BackgroundIntent,
-		PiBackgroundIntent: state.Selection.PiBackgroundIntent,
+	selection := model.Selection{
+		Agents:          append([]model.AgentID(nil), state.Selection.Agents...),
+		Components:      append([]model.ComponentID(nil), state.Selection.Components...),
+		Skills:          append([]model.SkillID(nil), state.Selection.Skills...),
+		SkillExclusions: append([]model.SkillID(nil), state.Selection.SkillExclusions...),
+		Persona:         state.Selection.Persona,
+		Preset:          state.Selection.Preset,
+		SDDMode:         state.Selection.SDDMode,
+		StrictTDD:       state.Selection.StrictTDD,
 
-		ModelAssignments:            assignmentsToModel(state.Selection.ModelAssignments),
-		ClaudeModelAssignments:      copyMap(state.Selection.ClaudeModelAssignments),
-		KiroModelAssignments:        copyMap(state.Selection.KiroModelAssignments),
-		PiModelAssignments:          copyMap(state.Selection.PiModelAssignments),
-		PiModelFamily:               state.Selection.PiModelFamily,
-		CodexModelAssignments:       copyMap(state.Selection.CodexModelAssignments),
 		CodexCarrilModelAssignments: copyMap(state.Selection.CodexCarrilModelAssignments),
 		CodexPhaseModelAssignments:  copyMap(state.Selection.CodexPhaseModelAssignments),
 		ClaudePhaseAssignments:      claudePhasesToModel(state.Selection.ClaudePhaseAssignments),
@@ -273,9 +284,11 @@ func Project(state DesiredState) model.Selection {
 		RDDMode:                     state.Selection.RDDMode,
 		MCPServers:                  mcpServersToModel(state.Selection.MCPServers),
 		Permissions:                 permissionsToModel(state.Selection.Permissions),
-		SkillAssignments:            skillAssignmentsToModel(state.Selection.SkillAssignments),
-		MCPServerAssignments:        mcpAssignmentsToModel(state.Selection.MCPServerAssignments),
-	})
+	}
+
+	projectProviders(state.Selection.Providers, &selection)
+
+	return withModelPresets(selection)
 }
 
 // withModelPresets materialises each named profile into the maps the renderers
@@ -344,17 +357,12 @@ func codexPresetEfforts(preset string) map[string]model.CodexEffort {
 func FromSelection(selection model.Selection) DesiredState {
 	return DesiredState{Version: CurrentVersion, Selection: Selection{
 		Agents: selection.Agents, Components: selection.Components, Skills: selection.Skills,
-		SkillExclusions: selection.SkillExclusions, ModelPresets: copyStringMap(selection.ModelPresets),
-		Persona: selection.Persona, Preset: selection.Preset, SDDMode: selection.SDDMode,
-		SDDProfileStrategy: selection.SDDProfileStrategy, StrictTDD: selection.StrictTDD,
-		Profiles: profilesFromModel(selection.Profiles), BackgroundIntent: selection.BackgroundIntent, PiBackgroundIntent: selection.PiBackgroundIntent,
+		SkillExclusions: selection.SkillExclusions,
+		Persona:         selection.Persona, Preset: selection.Preset, SDDMode: selection.SDDMode,
+		StrictTDD: selection.StrictTDD,
 
-		ModelAssignments:            assignmentsFromModel(selection.ModelAssignments),
-		ClaudeModelAssignments:      copyMap(selection.ClaudeModelAssignments),
-		KiroModelAssignments:        copyMap(selection.KiroModelAssignments),
-		PiModelAssignments:          copyMap(selection.PiModelAssignments),
-		PiModelFamily:               selection.PiModelFamily,
-		CodexModelAssignments:       copyMap(selection.CodexModelAssignments),
+		Providers: providersFromModel(selection),
+
 		CodexCarrilModelAssignments: copyMap(selection.CodexCarrilModelAssignments),
 		CodexPhaseModelAssignments:  copyMap(selection.CodexPhaseModelAssignments),
 		ClaudePhaseAssignments:      claudePhasesFromModel(selection.ClaudePhaseAssignments),
@@ -366,7 +374,6 @@ func FromSelection(selection model.Selection) DesiredState {
 		RDDMode:                     selection.RDDMode,
 		MCPServers:                  mcpServersFromModel(selection.MCPServers),
 		Permissions:                 permissionsFromModel(selection.Permissions),
-		SkillAssignments:            skillAssignmentsFromModel(selection.SkillAssignments),
 	}}
 }
 
@@ -429,13 +436,6 @@ func normalizeSelection(selection Selection, diagnostics *[]Diagnostic) Selectio
 		selection.Components = model.ComponentsForPreset(selection.Preset, selection.Persona)
 	}
 
-	if selection.PiBackgroundIntent != "" && !selection.PiBackgroundIntent.Valid() {
-		*diagnostics = append(*diagnostics, diagnostic("config.pi-background-intent.unsupported", "$.selection.piBackgroundIntent", fmt.Sprintf("unsupported Pi background intent %q; use auto, on, or off", selection.PiBackgroundIntent)))
-	}
-	if selection.BackgroundIntent != "" && !selection.BackgroundIntent.Valid() {
-		*diagnostics = append(*diagnostics, diagnostic("config.background-intent.unsupported", "$.selection.backgroundIntent", fmt.Sprintf("unsupported background intent %q; use auto, on, or off", selection.BackgroundIntent)))
-	}
-
 	if selection.Scope != "" && !selection.Scope.Valid() {
 		*diagnostics = append(*diagnostics, diagnostic("config.scope.unsupported", "$.selection.scope", fmt.Sprintf("unsupported scope %q; use global or workspace", selection.Scope)))
 	}
@@ -447,9 +447,8 @@ func normalizeSelection(selection Selection, diagnostics *[]Diagnostic) Selectio
 	}
 
 	validateMCPServers(selection, diagnostics)
-	validateSkillAssignments(selection, diagnostics)
-	validateMCPAssignments(selection, diagnostics)
-	validateAssignments(selection, diagnostics)
+	validateProviders(selection, diagnostics)
+	validateCodexModelSurfaces(selection, diagnostics)
 	validateStructuredAssignments(selection, diagnostics)
 
 	selection.Agents = unique(selection.Agents)
@@ -487,9 +486,6 @@ func normalizeSelection(selection Selection, diagnostics *[]Diagnostic) Selectio
 			}
 		}
 	}
-
-	validateModelPresets(selection, diagnostics)
-	validatePiModelAssignments(selection, diagnostics)
 
 	for _, agent := range selection.Agents {
 		if !catalog.IsSupportedAgent(agent) {
@@ -555,81 +551,10 @@ var modelPresetNames = map[model.AgentID][]string{
 	},
 }
 
-func validateModelPresets(selection Selection, diagnostics *[]Diagnostic) {
-	providers := make([]string, 0, len(selection.ModelPresets))
-	for provider := range selection.ModelPresets {
-		providers = append(providers, provider)
-	}
-	sort.Strings(providers)
-
-	for _, provider := range providers {
-		path := "$.selection.modelPresets." + provider
-		known, offered := modelPresetNames[model.AgentID(provider)]
-		if !offered {
-			*diagnostics = append(*diagnostics, diagnostic("config.model-preset.unsupported-provider", path, fmt.Sprintf("provider %q offers no model profiles; assign its models directly", provider)))
-			continue
-		}
-
-		preset := selection.ModelPresets[provider]
-		if !slices.Contains(known, preset) {
-			*diagnostics = append(*diagnostics, diagnostic("config.model-preset.unsupported", path, fmt.Sprintf("unsupported %s model profile %q; use %s", provider, preset, strings.Join(known, ", "))))
-		}
-	}
-}
-
 // safePiModelID mirrors the pattern gentle-pi validates a model id against. It
 // is duplicated rather than imported because it is gentle-pi's rule, not this
 // contract's: what matters is refusing here what would be dropped there.
 var safePiModelID = regexp.MustCompile(`^[A-Za-z0-9._~:@/+%-]+$`)
-
-// validatePiModelAssignments refuses a routing gentle-pi would silently drop.
-// It reads the file, discards every entry it cannot parse, and reports nothing,
-// so a typo leaves an agent on the default model with no sign that a choice was
-// ever made.
-func validatePiModelAssignments(selection Selection, diagnostics *[]Diagnostic) {
-	agents := make([]string, 0, len(selection.PiModelAssignments))
-	for agent := range selection.PiModelAssignments {
-		agents = append(agents, agent)
-	}
-	sort.Strings(agents)
-
-	for _, agent := range agents {
-		routing := selection.PiModelAssignments[agent]
-		path := "$.selection.piModelAssignments." + agent
-
-		if routing.Model == "" && routing.Thinking == "" {
-			*diagnostics = append(*diagnostics, diagnostic("config.pi-model.empty", path, "a Pi routing assigns a model, a reasoning level, or both"))
-			continue
-		}
-		if routing.Model != "" && !safePiModelID.MatchString(routing.Model) {
-			*diagnostics = append(*diagnostics, diagnostic("config.pi-model.unsupported", path, fmt.Sprintf("unsupported Pi model id %q; gentle-pi accepts letters, digits and ._~:@/+%%-", routing.Model)))
-		}
-		if routing.Thinking != "" && !routing.Thinking.Valid() {
-			*diagnostics = append(*diagnostics, diagnostic("config.pi-model.thinking-unsupported", path, fmt.Sprintf("unsupported Pi reasoning level %q; use off, minimal, low, medium, high, xhigh, or max", routing.Thinking)))
-		}
-	}
-}
-
-func validateMCPAssignments(selection Selection, diagnostics *[]Diagnostic) {
-	declared := make(map[string]struct{}, len(selection.Agents))
-	for _, agent := range selection.Agents {
-		declared[string(agent)] = struct{}{}
-	}
-
-	adapters := make([]string, 0, len(selection.MCPServerAssignments))
-	for adapter := range selection.MCPServerAssignments {
-		adapters = append(adapters, adapter)
-	}
-	sort.Strings(adapters)
-
-	for _, adapter := range adapters {
-		if _, ok := declared[adapter]; !ok {
-			*diagnostics = append(*diagnostics, diagnostic("config.mcp-assignment.undeclared-adapter", "$.selection.mcpServerAssignments."+adapter, fmt.Sprintf("adapter %q takes MCP servers but is not declared; add it to agents or remove the assignment", adapter)))
-			continue
-		}
-		validateMCPServerSet(selection.MCPServerAssignments[adapter], "$.selection.mcpServerAssignments."+adapter, diagnostics)
-	}
-}
 
 func normalizeRoles(roles []Role, diagnostics *[]Diagnostic) []Role {
 	known := make(map[RoleID]struct{}, len(roles))

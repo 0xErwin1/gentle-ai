@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+
+	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
 )
 
 // An undeclared orchestrator must stay absent from the encoded document. A
@@ -12,8 +14,10 @@ import (
 // never made.
 func TestUndeclaredOrchestratorIsOmitted(t *testing.T) {
 	document := Document{
-		Version:   CurrentVersion,
-		Selection: Selection{Profiles: []Profile{{Name: "name-only"}}},
+		Version: CurrentVersion,
+		Selection: Selection{Providers: map[model.AgentID]ProviderSelection{
+			model.AgentOpenCode: {Profiles: map[string]ProviderProfile{"name-only": {}}},
+		}},
 	}
 
 	encoded, err := json.Marshal(document)
@@ -27,7 +31,7 @@ func TestUndeclaredOrchestratorIsOmitted(t *testing.T) {
 }
 
 func TestDeclaredOrchestratorIsPreserved(t *testing.T) {
-	document := `{"version":"v1","selection":{"profiles":[{"name":"cheap","orchestrator":{"provider":"anthropic","model":"claude-haiku","effort":"low"}}]}}`
+	document := `{"version":"v1","selection":{"providers":{"opencode":{"profiles":{"cheap":{"orchestrator":{"provider":"anthropic","model":"claude-haiku","effort":"low"}}}}}}}`
 
 	state, diagnostics := Decode([]byte(document))
 	if len(diagnostics) != 0 {
@@ -36,7 +40,8 @@ func TestDeclaredOrchestratorIsPreserved(t *testing.T) {
 
 	restored := FromSelection(Project(state))
 
-	orchestrator := restored.Selection.Profiles[0].Orchestrator
+	profile := restored.Selection.Providers[model.AgentOpenCode].Profiles["cheap"]
+	orchestrator := profile.Orchestrator
 	if orchestrator == nil {
 		t.Fatal("declared orchestrator was dropped")
 	}
@@ -48,7 +53,7 @@ func TestDeclaredOrchestratorIsPreserved(t *testing.T) {
 // A profile carrying no orchestrator must survive the round trip without one
 // being invented for it.
 func TestUndeclaredOrchestratorSurvivesRoundTrip(t *testing.T) {
-	document := `{"version":"v1","selection":{"profiles":[{"name":"name-only"}]}}`
+	document := `{"version":"v1","selection":{"providers":{"opencode":{"profiles":{"name-only":{}}}}}}`
 
 	state, diagnostics := Decode([]byte(document))
 	if len(diagnostics) != 0 {
@@ -57,7 +62,7 @@ func TestUndeclaredOrchestratorSurvivesRoundTrip(t *testing.T) {
 
 	restored := FromSelection(Project(state))
 
-	if orchestrator := restored.Selection.Profiles[0].Orchestrator; orchestrator != nil {
+	if orchestrator := restored.Selection.Providers[model.AgentOpenCode].Profiles["name-only"].Orchestrator; orchestrator != nil {
 		t.Errorf("Orchestrator = %+v, want nil", *orchestrator)
 	}
 }
