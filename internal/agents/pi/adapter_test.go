@@ -936,6 +936,54 @@ func TestInstallCommandWithSourcesSubstitutesEveryOverridablePackage(t *testing.
 	}
 }
 
+// A sources entry naming none of the fixed packages is an additional Pi
+// package: it is appended after the fixed sequence as its own "pi install"
+// command, in sorted key order, without altering the fixed sequence's
+// positions or count. The fixed sequence is upstream's: the retired
+// pi-mcp-adapter is never installed, and the engram init step follows the
+// gentle-engram install it configures.
+func TestInstallCommandWithSourcesAppendsExtraPackagesInSortedOrder(t *testing.T) {
+	a := &Adapter{lookPath: func(string) (string, error) { return "", os.ErrNotExist }, statPath: defaultStat}
+
+	commands, err := a.InstallCommandWithSources(system.PlatformProfile{}, map[string]string{
+		"pi-subagents":                  "npm:pi-subagents@1.0.0",
+		"@juicesharp/pi-something-else": "git:github.com/x/y@rev",
+	})
+	if err != nil {
+		t.Fatalf("InstallCommandWithSources() error = %v", err)
+	}
+
+	want := [][]string{
+		{"pi", "install", "npm:gentle-pi"},
+		{"pi", "install", "npm:gentle-engram"},
+		{"npm", "exec", "--yes", "--package", "gentle-engram@latest", "--", "pi-engram", "init"},
+		{"pi", "install", "npm:pi-web-access"},
+		{"pi", "install", "npm:pi-btw"},
+		{"pi", "install", "git:github.com/x/y@rev"},
+		{"pi", "install", "npm:pi-subagents@1.0.0"},
+	}
+	if !reflect.DeepEqual(commands, want) {
+		t.Fatalf("InstallCommandWithSources() = %#v, want %#v", commands, want)
+	}
+}
+
+// A sources map with only fixed-package entries must append nothing extra,
+// and an empty sources map must produce exactly the fixed five commands
+// (four installs plus the engram init step).
+func TestInstallCommandWithSourcesAppendsNothingForFixedPackagesOnly(t *testing.T) {
+	a := &Adapter{lookPath: func(string) (string, error) { return "", os.ErrNotExist }, statPath: defaultStat}
+
+	commands, err := a.InstallCommandWithSources(system.PlatformProfile{}, map[string]string{
+		"gentle-pi": "npm:gentle-pi@9.9.9",
+	})
+	if err != nil {
+		t.Fatalf("InstallCommandWithSources() error = %v", err)
+	}
+	if len(commands) != 5 {
+		t.Fatalf("len(commands) = %d, want 5 (no extras appended): %#v", len(commands), commands)
+	}
+}
+
 func TestPrunePiSettingsFileRemovesRetiredCompanionPackages(t *testing.T) {
 	home := t.TempDir()
 	settingsPath := filepath.Join(home, ".pi", "agent", "settings.json")
