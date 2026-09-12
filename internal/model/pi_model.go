@@ -173,3 +173,10 @@ func PiModelsForFamily(family AgentID, preset string) map[string]PiAgentRouting 
 		return nil
 	}
 }
+
+// Profile is the historical declarative Pi routing DTO, not an SDD runtime profile.
+type Profile struct {
+	Name              string
+	OrchestratorModel ModelAssignment
+	PhaseAssignments  map[string]ModelAssignment
+}
