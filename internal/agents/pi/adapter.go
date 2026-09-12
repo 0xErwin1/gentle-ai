@@ -323,20 +323,21 @@ func validGentleEngramInitSource(source string) bool {
 }
 
 // engramInitCommand mirrors what "pi install npm:gentle-engram" resolves to,
-// for the one command that does not go through pi install: npm exec wants a
-// bare package spec, not Pi's own install syntax.
+// for the one command that does not go through pi install.
 //
 // An npm source loses its "npm:" prefix, because npm exec takes the spec
-// directly. A local path is passed through unchanged, since npm exec accepts
-// a filesystem path as a spec. InstallCommandWithSources already refused
+// directly. A local path runs the package's own bin/pi-engram instead: npm
+// exec links a folder spec into its cache and chmods the linked files, which
+// fails on a read-only tree such as a Nix store path, so a local source is
+// expected to ship that executable. InstallCommandWithSources already refused
 // every other source shape before this is reached.
 func (a *Adapter) engramInitCommand(gentleEngramSource string) []string {
+	if strings.HasPrefix(gentleEngramSource, "/") {
+		return []string{filepath.Join(gentleEngramSource, "bin", "pi-engram"), "init"}
+	}
 	spec := "gentle-engram@latest"
-	switch {
-	case strings.HasPrefix(gentleEngramSource, "npm:"):
+	if strings.HasPrefix(gentleEngramSource, "npm:") {
 		spec = strings.TrimPrefix(gentleEngramSource, "npm:")
-	case strings.HasPrefix(gentleEngramSource, "/"):
-		spec = gentleEngramSource
 	}
 	return []string{"npm", "exec", "--yes", "--package", spec, "--", "pi-engram", "init"}
 }
