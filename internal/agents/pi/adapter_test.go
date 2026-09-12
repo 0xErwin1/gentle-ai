@@ -476,6 +476,197 @@ func TestAdapterInstallCommandSequenceUsesNpmForEngramInitWhenPnpmIsAvailable(t 
 	}
 }
 
+// A document that overrides one npm package's source must replace only that
+// package's install token, leaving every other command, and the order and
+// count of commands, unchanged.
+func TestInstallCommandWithSourcesSubstitutesAnOverriddenNpmPackage(t *testing.T) {
+	a := &Adapter{lookPath: func(string) (string, error) { return "", os.ErrNotExist }, statPath: defaultStat}
+
+	commands, err := a.InstallCommandWithSources(system.PlatformProfile{}, map[string]string{
+		"gentle-pi": "git:github.com/Gentleman-Programming/gentle-pi@abc123",
+	})
+	if err != nil {
+		t.Fatalf("InstallCommandWithSources() error = %v", err)
+	}
+
+	want := [][]string{
+		{"pi", "install", "git:github.com/Gentleman-Programming/gentle-pi@abc123"},
+		{"pi", "install", "npm:gentle-engram"},
+		{"pi", "install", "npm:pi-mcp-adapter"},
+		{"npm", "exec", "--yes", "--package", "gentle-engram@latest", "--", "pi-engram", "init"},
+		{"pi", "install", "npm:@juicesharp/rpiv-ask-user-question"},
+		{"pi", "install", "npm:pi-web-access"},
+		{"pi", "install", "npm:pi-btw"},
+	}
+	if !reflect.DeepEqual(commands, want) {
+		t.Fatalf("InstallCommandWithSources() = %#v, want %#v", commands, want)
+	}
+}
+
+// A nil or empty source map must produce exactly what InstallCommand already
+// returns, so the new method is a strict superset of the old signature.
+func TestInstallCommandDelegatesToInstallCommandWithSourcesWithNoOverrides(t *testing.T) {
+	a := &Adapter{lookPath: func(string) (string, error) { return "", os.ErrNotExist }, statPath: defaultStat}
+
+	plain, err := a.InstallCommand(system.PlatformProfile{})
+	if err != nil {
+		t.Fatalf("InstallCommand() error = %v", err)
+	}
+	withNilSources, err := a.InstallCommandWithSources(system.PlatformProfile{}, nil)
+	if err != nil {
+		t.Fatalf("InstallCommandWithSources(nil) error = %v", err)
+	}
+	if !reflect.DeepEqual(plain, withNilSources) {
+		t.Fatalf("InstallCommand() = %#v, InstallCommandWithSources(nil) = %#v, want equal", plain, withNilSources)
+	}
+}
+
+// Overriding the engram init command's package with an npm source strips the
+// npm: prefix, because npm exec wants a bare package spec rather than Pi's
+// install shorthand.
+func TestInstallCommandWithSourcesSubstitutesEngramInitFromNpmSource(t *testing.T) {
+	a := &Adapter{lookPath: func(string) (string, error) { return "", os.ErrNotExist }, statPath: defaultStat}
+
+	commands, err := a.InstallCommandWithSources(system.PlatformProfile{}, map[string]string{
+		"gentle-engram": "npm:gentle-engram@2.0.0-rc.9",
+	})
+	if err != nil {
+		t.Fatalf("InstallCommandWithSources() error = %v", err)
+	}
+
+	wantInstall := []string{"pi", "install", "npm:gentle-engram@2.0.0-rc.9"}
+	if !reflect.DeepEqual(commands[1], wantInstall) {
+		t.Fatalf("commands[1] = %#v, want %#v", commands[1], wantInstall)
+	}
+	wantInit := []string{"npm", "exec", "--yes", "--package", "gentle-engram@2.0.0-rc.9", "--", "pi-engram", "init"}
+	if !reflect.DeepEqual(commands[3], wantInit) {
+		t.Fatalf("commands[3] = %#v, want %#v", commands[3], wantInit)
+	}
+}
+
+// Overriding the engram init command's package with an absolute local path
+// substitutes that path directly, since npm exec accepts a local path as a
+// package spec.
+func TestInstallCommandWithSourcesSubstitutesEngramInitFromLocalPath(t *testing.T) {
+	a := &Adapter{lookPath: func(string) (string, error) { return "", os.ErrNotExist }, statPath: defaultStat}
+
+	commands, err := a.InstallCommandWithSources(system.PlatformProfile{}, map[string]string{
+		"gentle-engram": "/nix/store/xyz-gentle-engram-pi",
+	})
+	if err != nil {
+		t.Fatalf("InstallCommandWithSources() error = %v", err)
+	}
+
+	wantInstall := []string{"pi", "install", "/nix/store/xyz-gentle-engram-pi"}
+	if !reflect.DeepEqual(commands[1], wantInstall) {
+		t.Fatalf("commands[1] = %#v, want %#v", commands[1], wantInstall)
+	}
+	wantInit := []string{"npm", "exec", "--yes", "--package", "/nix/store/xyz-gentle-engram-pi", "--", "pi-engram", "init"}
+	if !reflect.DeepEqual(commands[3], wantInit) {
+		t.Fatalf("commands[3] = %#v, want %#v", commands[3], wantInit)
+	}
+}
+
+// A source gentle-engram's init step cannot hand to npm exec (a git
+// shorthand, a bare git URL, or an empty/whitespace override) must refuse the
+// whole install sequence instead of silently keeping the init command pinned
+// to the floating registry "latest" tag while the pi install command takes
+// the override: that split would run a different, unpinned build than the
+// one just installed.
+func TestInstallCommandWithSourcesRejectsUnsupportedGentleEngramSource(t *testing.T) {
+	unsupported := []string{
+		"git:github.com/Gentleman-Programming/gentle-engram@main",
+		"https://example.com/gentle-engram.git",
+		"ssh://git@example.com/gentle-engram.git",
+		"   ",
+	}
+
+	for _, source := range unsupported {
+		t.Run(source, func(t *testing.T) {
+			a := &Adapter{lookPath: func(string) (string, error) { return "", os.ErrNotExist }, statPath: defaultStat}
+
+			if _, err := a.InstallCommandWithSources(system.PlatformProfile{}, map[string]string{
+				"gentle-engram": source,
+			}); err == nil {
+				t.Fatalf("InstallCommandWithSources(gentle-engram=%q) error = nil, want an error", source)
+			}
+		})
+	}
+}
+
+// A gentle-engram override padded with leading/trailing whitespace must be
+// normalized once and consistently: the pi install command and the npm-exec
+// init command must both see the trimmed spec, since a mismatch would install
+// one build and initialize a different one.
+func TestInstallCommandWithSourcesTrimsWhitespacePaddedGentleEngramSource(t *testing.T) {
+	a := &Adapter{lookPath: func(string) (string, error) { return "", os.ErrNotExist }, statPath: defaultStat}
+
+	commands, err := a.InstallCommandWithSources(system.PlatformProfile{}, map[string]string{
+		"gentle-engram": "  npm:gentle-engram@1.2.3  ",
+	})
+	if err != nil {
+		t.Fatalf("InstallCommandWithSources() error = %v", err)
+	}
+
+	wantInstall := []string{"pi", "install", "npm:gentle-engram@1.2.3"}
+	if !reflect.DeepEqual(commands[1], wantInstall) {
+		t.Fatalf("commands[1] = %#v, want %#v", commands[1], wantInstall)
+	}
+	wantInit := []string{"npm", "exec", "--yes", "--package", "gentle-engram@1.2.3", "--", "pi-engram", "init"}
+	if !reflect.DeepEqual(commands[3], wantInit) {
+		t.Fatalf("commands[3] = %#v, want %#v", commands[3], wantInit)
+	}
+}
+
+// A lone "/" (with or without surrounding whitespace) has no path component
+// after the root and must be refused the same way providers.go's
+// validGentleEngramSource already refuses it, instead of being accepted as an
+// absolute local path.
+func TestInstallCommandWithSourcesRejectsLoneRootSlash(t *testing.T) {
+	unsupported := []string{"/", " / "}
+
+	for _, source := range unsupported {
+		t.Run(source, func(t *testing.T) {
+			a := &Adapter{lookPath: func(string) (string, error) { return "", os.ErrNotExist }, statPath: defaultStat}
+
+			if _, err := a.InstallCommandWithSources(system.PlatformProfile{}, map[string]string{
+				"gentle-engram": source,
+			}); err == nil {
+				t.Fatalf("InstallCommandWithSources(gentle-engram=%q) error = nil, want an error", source)
+			}
+		})
+	}
+}
+
+// An override on any of the remaining npm-installed packages must replace
+// only that command's third token, by name, without touching the others.
+func TestInstallCommandWithSourcesSubstitutesEveryOverridablePackage(t *testing.T) {
+	a := &Adapter{lookPath: func(string) (string, error) { return "", os.ErrNotExist }, statPath: defaultStat}
+
+	commands, err := a.InstallCommandWithSources(system.PlatformProfile{}, map[string]string{
+		"pi-mcp-adapter":                     "npm:pi-mcp-adapter@3.0.0",
+		"@juicesharp/rpiv-ask-user-question": "/local/rpiv-ask-user-question",
+		"pi-web-access":                      "git:github.com/example/pi-web-access@v2",
+		"pi-btw":                             "https://example.com/pi-btw.git",
+	})
+	if err != nil {
+		t.Fatalf("InstallCommandWithSources() error = %v", err)
+	}
+
+	want := [][]string{
+		{"pi", "install", "npm:gentle-pi"},
+		{"pi", "install", "npm:gentle-engram"},
+		{"pi", "install", "npm:pi-mcp-adapter@3.0.0"},
+		{"npm", "exec", "--yes", "--package", "gentle-engram@latest", "--", "pi-engram", "init"},
+		{"pi", "install", "/local/rpiv-ask-user-question"},
+		{"pi", "install", "git:github.com/example/pi-web-access@v2"},
+		{"pi", "install", "https://example.com/pi-btw.git"},
+	}
+	if !reflect.DeepEqual(commands, want) {
+		t.Fatalf("InstallCommandWithSources() = %#v, want %#v", commands, want)
+	}
+}
+
 func TestAppendPiPackageKeepsSubagentsPackageWhileGentlePiIsPinnedBelowGentleAgents(t *testing.T) {
 	kept := appendPiPackage([]any{"npm:gentle-pi@2.4.0", "npm:pi-subagents-j0k3r@1.5.13"}, "npm:pi-mcp-adapter")
 	if !reflect.DeepEqual(kept, []any{"npm:gentle-pi@2.4.0", "npm:pi-subagents-j0k3r@1.5.13", "npm:pi-mcp-adapter"}) {
