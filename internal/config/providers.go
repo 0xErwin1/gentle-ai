@@ -7,7 +7,6 @@ import (
 	"io"
 	"regexp"
 	"sort"
-	"strings"
 
 	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
 )
@@ -64,17 +63,6 @@ type ProviderSelection struct {
 
 	// MCPServers overrides the flat MCP server set for this provider.
 	MCPServers map[string]MCPServer `json:"mcpServers,omitempty"`
-
-	// Packages is pi-only: the set of Pi packages the document manages. A key
-	// naming one of the packages gentle-pi's adapter already installs
-	// overrides that package's install source; any other key is an
-	// additional Pi package to install, since Pi extensions are themselves
-	// npm (or git) packages installed the same way. The value is an npm
-	// spec, a Pi git shorthand, a plain git URL, or an absolute local path.
-	// This is the one field kept machine-neutral except for the local-path
-	// form, which a consumer chooses knowingly rather than the document
-	// assuming a shared filesystem.
-	Packages map[string]string `json:"packages,omitempty"`
 }
 
 // ProviderProfile is the contract form of one named SDD profile nested under
@@ -113,70 +101,6 @@ var reservedPiProfileNames = map[string]struct{}{
 	"__proto__":   {},
 	"constructor": {},
 	"prototype":   {},
-}
-
-// knownPiPackageNames are the npm package names the Pi adapter's
-// InstallCommand already installs, spelled exactly as the adapter names
-// them. A packages entry naming one of these overrides that package's
-// install source; a packages entry naming anything else is an additional Pi
-// package the adapter installs alongside the fixed set (see
-// validPiPackageName below), so this table is only consulted to tell the two
-// cases apart and to apply gentle-engram's narrower source rule.
-var knownPiPackageNames = map[string]struct{}{
-	"gentle-pi":                          {},
-	"gentle-engram":                      {},
-	"pi-mcp-adapter":                     {},
-	"@juicesharp/rpiv-ask-user-question": {},
-	"pi-web-access":                      {},
-	"pi-btw":                             {},
-}
-
-// safePiPackageName mirrors the shape of a valid npm package name: an
-// optional "@scope/" prefix followed by lowercase letters, digits, dots,
-// underscores, and hyphens. Pi installs an extra packages entry with "pi
-// install <source>", the same way it installs the fixed six, so a name that
-// could never be a real npm package name can never resolve to anything pi
-// install could act on.
-var safePiPackageName = regexp.MustCompile(`^(@[a-z0-9._-]+/)?[a-z0-9._-]+$`)
-
-// validPiPackageSource reports whether value matches one of the install
-// source shapes the Pi adapter knows how to substitute: an npm spec
-// (optionally versioned), Pi's own git shorthand, a plain https/ssh git URL,
-// or an absolute local path. Every shape requires a non-empty remainder after
-// its prefix, so a bare scheme or a lone root slash is refused the same way a
-// bare "npm:" or "git:" already is.
-func validPiPackageSource(value string) bool {
-	switch {
-	case strings.HasPrefix(value, "npm:"):
-		return len(value) > len("npm:")
-	case strings.HasPrefix(value, "git:"):
-		return len(value) > len("git:")
-	case strings.HasPrefix(value, "https://"):
-		return len(value) > len("https://")
-	case strings.HasPrefix(value, "ssh://"):
-		return len(value) > len("ssh://")
-	case strings.HasPrefix(value, "/"):
-		return len(value) > len("/")
-	default:
-		return false
-	}
-}
-
-// validGentleEngramSource narrows validPiPackageSource for the gentle-engram
-// package specifically: unlike every other Pi package, gentle-engram's init
-// step runs through npm exec (see pi.Adapter.engramInitCommand), which only
-// resolves an npm spec or a local filesystem path. A git shorthand or a bare
-// git URL passes pi install but has no npm-exec equivalent, so it is refused
-// here even though validPiPackageSource accepts it for other packages.
-func validGentleEngramSource(value string) bool {
-	switch {
-	case strings.HasPrefix(value, "npm:"):
-		return len(value) > len("npm:")
-	case strings.HasPrefix(value, "/"):
-		return len(value) > len("/")
-	default:
-		return false
-	}
 }
 
 // piReservedPhaseKey is the phase key gentle-pi reserves for the profile's
@@ -222,7 +146,6 @@ func validateProviders(selection Selection, diagnostics *[]Diagnostic) {
 		validateProviderProfiles(provider, block, path, diagnostics)
 		validateProviderSkills(provider, block, path, declaredAgents, diagnostics)
 		validateProviderMCPServers(provider, block, path, declaredAgents, diagnostics)
-		validateProviderPackages(provider, block, path, diagnostics)
 	}
 }
 
@@ -466,44 +389,6 @@ func validateProviderMCPServers(provider model.AgentID, block ProviderSelection,
 	validateMCPServerSet(block.MCPServers, path+".mcpServers", diagnostics)
 }
 
-// validateProviderPackages refuses a packages entry for any provider but pi,
-// a key that could not name a real npm package, and a source that matches
-// none of the shapes the adapter knows how to substitute. A key naming one
-// of the packages the adapter already installs (knownPiPackageNames)
-// overrides that package's source; any other key valid as an npm package
-// name is an additional package the adapter installs alongside those, so it
-// is not refused for being unrecognized -- only its source shape is checked.
-func validateProviderPackages(provider model.AgentID, block ProviderSelection, path string, diagnostics *[]Diagnostic) {
-	if len(block.Packages) == 0 {
-		return
-	}
-	packagesPath := path + ".packages"
-
-	if provider != model.AgentPi {
-		*diagnostics = append(*diagnostics, diagnostic("config.provider.packages.unsupported-provider", packagesPath, fmt.Sprintf("provider %q does not support package source overrides; only pi does", provider)))
-		return
-	}
-
-	for _, name := range sortedKeys(block.Packages) {
-		source := block.Packages[name]
-		entryPath := packagesPath + "." + name
-
-		if !safePiPackageName.MatchString(name) {
-			*diagnostics = append(*diagnostics, diagnostic("config.pi-package.name-unsupported", entryPath, fmt.Sprintf("unsupported Pi package name %q; use an npm package name, optionally scoped as @scope/name", name)))
-			continue
-		}
-		if name == "gentle-engram" {
-			if !validGentleEngramSource(source) {
-				*diagnostics = append(*diagnostics, diagnostic("config.pi-package.source-unsupported", entryPath, fmt.Sprintf("unsupported gentle-engram source %q; gentle-engram takes an npm:<name>[@version] spec or an absolute local path because its init step runs through npm exec", source)))
-			}
-			continue
-		}
-		if !validPiPackageSource(source) {
-			*diagnostics = append(*diagnostics, diagnostic("config.pi-package.source-unsupported", entryPath, fmt.Sprintf("unsupported Pi package source %q; use npm:<name>[@version], git:<host>/<user>/<repo>[@ref], an https/ssh git URL, or an absolute local path", source)))
-		}
-	}
-}
-
 func sortedProfileNames(profiles map[string]ProviderProfile) []string {
 	names := make([]string, 0, len(profiles))
 	for name := range profiles {
@@ -579,12 +464,6 @@ func projectProviders(providers map[model.AgentID]ProviderSelection, selection *
 			selection.PiBackgroundIntent = model.PiBackgroundIntent(block.BackgroundIntent)
 			selection.PiAgentProfiles = piProfilesToModel(block.Profiles)
 			selection.PiActiveProfile = block.ActiveProfile
-			if len(block.Packages) > 0 {
-				selection.PiPackageSources = map[string]string{}
-				for name, source := range block.Packages {
-					selection.PiPackageSources[name] = source
-				}
-			}
 		}
 
 		if len(block.Skills) > 0 {
@@ -771,7 +650,6 @@ func providersFromModel(selection model.Selection) map[model.AgentID]ProviderSel
 		BackgroundIntent: string(selection.PiBackgroundIntent),
 		Profiles:         piProfilesFromModel(selection.PiAgentProfiles),
 		ActiveProfile:    selection.PiActiveProfile,
-		Packages:         piPackagesFromModel(selection.PiPackageSources),
 	}
 	if !isZeroProviderSelection(pi) {
 		providers[model.AgentPi] = pi
@@ -804,23 +682,7 @@ func providersFromModel(selection model.Selection) map[model.AgentID]ProviderSel
 func isZeroProviderSelection(block ProviderSelection) bool {
 	return len(block.Models) == 0 && block.ModelFamily == "" && block.ModelPreset == "" &&
 		block.BackgroundIntent == "" && len(block.Profiles) == 0 && block.ProfileStrategy == "" &&
-		block.ActiveProfile == "" && len(block.Skills) == 0 && len(block.MCPServers) == 0 &&
-		len(block.Packages) == 0
-}
-
-// piPackagesFromModel copies a Pi package source map back into contract form,
-// the same way piProfilesFromModel does for named profiles: nil in, nil out,
-// so an unset override stays absent from the document rather than becoming an
-// empty object.
-func piPackagesFromModel(sources map[string]string) map[string]string {
-	if len(sources) == 0 {
-		return nil
-	}
-	copied := make(map[string]string, len(sources))
-	for name, source := range sources {
-		copied[name] = source
-	}
-	return copied
+		block.ActiveProfile == "" && len(block.Skills) == 0 && len(block.MCPServers) == 0
 }
 
 func rawFromAssignments(assignments map[string]model.ModelAssignment) json.RawMessage {
