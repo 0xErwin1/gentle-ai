@@ -18,6 +18,7 @@ type Selection struct {
 	PiModelFamily                    AgentID                          // provider whose model profile Pi borrows; empty = reasoning levels only
 	PiAgentProfiles                  map[string]Profile               // key = profile name; gentle-pi agent profiles to generate/update during sync
 	PiActiveProfile                  string                           // Profiles/PiAgentProfiles key gentle-pi should activate; empty = unresolved
+	PiPackageSources                 map[string]string                // key = npm package name the Pi adapter installs; value = install source overriding npm
 	CodexModelAssignments            map[string]CodexEffort           // key = phase name; value = low|medium|high|xhigh
 	CodexOrchestratorAssignment      *CodexOrchestratorAssignment     // non-nil = apply curated top-level Codex model/effort
 	ClearCodexOrchestratorAssignment bool                             // true = clear persisted curated assignment while preserving config.toml
