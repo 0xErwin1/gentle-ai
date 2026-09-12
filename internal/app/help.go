@@ -19,6 +19,9 @@ COMMANDS
   config <validate|render|plan|diff|apply|reconcile|adopt|export> --config <path>
                Read, preview and reconcile the declarative desired state;
                'install --config' and 'sync --config' consume the same document
+  config presets [--provider <claude-code|codex|kiro-ide>] --json
+               Print gentle-ai's own named model preset tables; reads no
+               document and takes no --config
   skill-registry refresh
                Refresh .atl/skill-registry.md with cache-hit fast path
   sdd-status [change]
