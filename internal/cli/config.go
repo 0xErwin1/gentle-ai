@@ -154,7 +154,10 @@ func RunConfig(args []string, stdout io.Writer) error {
 		return err
 	}
 	stager := configurationStager{adapters: desired.Selection.Agents, readRoot: *home, destination: *destination}
-	provisioned := stager.ProvisionedResources(desired)
+	provisioned, err := stager.ProvisionedResources(desired)
+	if err != nil {
+		return err
+	}
 	manifest.Resources = append(manifest.Resources, provisioned...)
 	result["manifest"] = manifest
 	if operation == "render" {
