@@ -144,6 +144,7 @@ func TestRenderManifestSubstitutesOverriddenPiPackageSources(t *testing.T) {
 	for _, want := range []string{
 		"pi install git:github.com/Gentleman-Programming/gentle-pi@abc123",
 		"pi install /nix/store/xyz-gentle-engram-pi",
+		"/nix/store/xyz-gentle-engram-pi/bin/pi-engram init",
 	} {
 		if !strings.Contains(joined, want) {
 			t.Errorf("provisioning does not run %q:\n%s", want, joined)
