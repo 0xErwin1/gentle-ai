@@ -70,10 +70,7 @@ gentle-ai install --config gentle-ai.json
       "model": { "provider": "anthropic", "model": "claude-opus-5" }
     },
     { "id": "apply", "renderedName": "gentle-apply", "mode": "subagent", "hidden": true }
-  ],
-  "extensions": {
-    "opencode": { "share": "disabled" }
-  }
+  ]
 }
 ```
 
@@ -102,8 +99,6 @@ gentle-ai config diff --config gentle-ai.json --home ~ --destination ~ --stage /
 ### Per-adapter overrides
 
 `skills` applies to every declared adapter. `skillAssignments` replaces that list for the adapters it names and leaves the rest on the flat list, so a document only names an adapter when it differs.
-
-`extensions` is the escape hatch for client configuration the neutral contract does not model. Each block is merged verbatim into that adapter's settings and only that adapter's; an extension naming an adapter the document does not declare fails validation.
 
 ## Operations
 
@@ -144,8 +139,7 @@ For one invocation, later wins:
 1. Defaults shipped by Gentle AI.
 2. The selected preset.
 3. The document.
-4. Provider extensions (`extensions.<adapter>`).
-5. Existing user-owned client configuration, where the adapter composes rather than replaces.
+4. Existing user-owned client configuration, where the adapter composes rather than replaces.
 
 Declared permission rules are unioned with the shipped guardrails rather than replacing them, so allowing something never silently removes a deny.
 
@@ -179,7 +173,6 @@ Adapters consume the same normalized model and only implement output. Two capabi
 | `config.role.mode.unsupported` | A role declares a mode other than `primary` or `subagent`. |
 | `config.role.unsupported-adapter` | A declared adapter expresses no agent roles. |
 | `config.skill-assignment.undeclared-adapter` | A skill assignment names an adapter the document does not declare. |
-| `config.extension.undeclared-provider` | An extension names an adapter the document does not declare. |
 | `config.permissions.unsupported-adapter` | A declared adapter does not read permissions as rule lists. |
 | `config.flags.exclusive` | `--config` was combined with a semantic selection flag. |
 | `config.export.loss.*` | Export could not represent a value; the message names what to do instead. |
@@ -191,4 +184,4 @@ Adapters consume the same normalized model and only implement output. Two capabi
 - [ ] `config diff` against the intended machine reports only the changes you expect.
 - [ ] `config export` of the result round-trips to the same document with `"lossless": true`.
 - [ ] Roles referenced by other roles are declared in the same document.
-- [ ] Adapters named by `skillAssignments` and `extensions` also appear in `agents`.
+- [ ] Adapters named by `skillAssignments` also appear in `agents`.
