@@ -167,20 +167,41 @@ func TestAssignmentsSurviveSelectionRoundTrip(t *testing.T) {
 	}
 }
 
-// A Pi profile's orchestrator and phase entries must be refused the same way
-// an equivalent providers.pi.models entry already is: an unsafe model id, or
-// an orchestrator missing its model.
-func TestDecodeRejectsInvalidPiProfileValues(t *testing.T) {
+// Pi's model routing, borrowed model family, named profiles, and active
+// profile selection are not something Gentle AI does imperatively: gentle-pi
+// owns its own model assignment surface. A document that still sends one of
+// these fields is refused rather than silently accepted.
+func TestDecodeRefusesRemovedPiFields(t *testing.T) {
 	tests := []struct {
 		name      string
 		document  string
 		wantCodes []string
 	}{
-		{"unsafe orchestrator model id", `{"version":"v1","selection":{"providers":{"pi":{"profiles":{"deep":{"orchestrator":{"provider":"anthropic","model":"bad model"}}}}}}}`, []string{"config.pi-model.unsupported"}},
-		{"orchestrator missing its model", `{"version":"v1","selection":{"providers":{"pi":{"profiles":{"deep":{"orchestrator":{"provider":"anthropic"}}}}}}}`, []string{"config.pi-profile.orchestrator-incomplete"}},
-		{"unsafe phase assignment model id", `{"version":"v1","selection":{"providers":{"pi":{"profiles":{"deep":{"phaseAssignments":{"sdd-apply":{"provider":"anthropic","model":"bad model"}}}}}}}}`, []string{"config.pi-model.unsupported"}},
-		{"phase assignment missing its model", `{"version":"v1","selection":{"providers":{"pi":{"profiles":{"deep":{"phaseAssignments":{"sdd-apply":{"provider":"anthropic"}}}}}}}}`, []string{"config.pi-profile.phase-incomplete"}},
-		{"phase assignment missing its provider", `{"version":"v1","selection":{"providers":{"pi":{"profiles":{"deep":{"phaseAssignments":{"sdd-apply":{"model":"claude-haiku"}}}}}}}}`, []string{"config.pi-profile.phase-incomplete"}},
+		{
+			name:      "models",
+			document:  `{"version":"v1","selection":{"providers":{"pi":{"models":{"sdd-apply":{"model":"openai-codex/gpt-5.6-sol"}}}}}}`,
+			wantCodes: []string{"config.provider.models.unsupported-provider"},
+		},
+		{
+			name:      "modelFamily",
+			document:  `{"version":"v1","selection":{"providers":{"pi":{"modelFamily":"codex"}}}}`,
+			wantCodes: []string{"config.document.unknown-field"},
+		},
+		{
+			name:      "profiles",
+			document:  `{"version":"v1","selection":{"providers":{"pi":{"profiles":{"deep":{"orchestrator":{"provider":"anthropic","model":"claude-sonnet"}}}}}}}`,
+			wantCodes: []string{"config.provider.profiles.unsupported-provider"},
+		},
+		{
+			name:      "activeProfile",
+			document:  `{"version":"v1","selection":{"providers":{"pi":{"activeProfile":"deep-work"}}}}`,
+			wantCodes: []string{"config.document.unknown-field"},
+		},
+		{
+			name:      "modelPreset",
+			document:  `{"version":"v1","selection":{"providers":{"pi":{"modelPreset":"recommended"}}}}`,
+			wantCodes: []string{"config.model-preset.unsupported-provider"},
+		},
 	}
 
 	for _, test := range tests {
@@ -194,32 +215,6 @@ func TestDecodeRejectsInvalidPiProfileValues(t *testing.T) {
 				t.Fatalf("diagnostics = %v, want %v", codes, test.wantCodes)
 			}
 		})
-	}
-}
-
-// A Pi profile and its active selection must survive the round trip into the
-// shared semantic model and back, the same way OpenCode profiles do.
-func TestPiProfilesSurviveSelectionRoundTrip(t *testing.T) {
-	document := `{"version":"v1","selection":{"providers":{"pi":{"activeProfile":"deep-work","profiles":{"deep-work":{"orchestrator":{"provider":"anthropic","model":"claude-sonnet","effort":"high"},"phaseAssignments":{"sdd-apply":{"provider":"anthropic","model":"claude-haiku"}}}}}}}}`
-
-	state, diagnostics := Decode([]byte(document))
-	if len(diagnostics) != 0 {
-		t.Fatalf("unexpected diagnostics: %v", diagnostics)
-	}
-
-	pi := FromSelection(Project(state)).Selection.Providers[model.AgentPi]
-	if pi.ActiveProfile != "deep-work" {
-		t.Errorf("ActiveProfile = %q, want deep-work", pi.ActiveProfile)
-	}
-	profile, ok := pi.Profiles["deep-work"]
-	if !ok {
-		t.Fatal("Pi profile deep-work was dropped")
-	}
-	if profile.Orchestrator == nil || *profile.Orchestrator != (ModelAssignment{Provider: "anthropic", Model: "claude-sonnet", Effort: "high"}) {
-		t.Errorf("Orchestrator = %+v", profile.Orchestrator)
-	}
-	if got := profile.PhaseAssignments["sdd-apply"]; got != (ModelAssignment{Provider: "anthropic", Model: "claude-haiku"}) {
-		t.Errorf("PhaseAssignments[sdd-apply] = %+v", got)
 	}
 }
 
