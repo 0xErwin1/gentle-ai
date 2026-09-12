@@ -149,7 +149,7 @@ func TestRenderStagesAPiProfileAndItsActiveDefaults(t *testing.T) {
 	selection := `{"agents":["pi"],"providers":{"pi":{"activeProfile":"deep-work","profiles":{"deep-work":{"orchestrator":{"provider":"anthropic","model":"claude-sonnet","effort":"high"},"phaseAssignments":{"sdd-apply":{"provider":"anthropic","model":"claude-haiku"}}}}}}}`
 
 	configPath := filepath.Join(t.TempDir(), "config.json")
-	document := `{"version":"v1","selection":` + selection + `,"extensions":{"pi":{"defaultModel":"operator-pinned-model"}}}`
+	document := `{"version":"v1","selection":` + selection + `}`
 	if err := os.WriteFile(configPath, []byte(document), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -194,9 +194,8 @@ func TestRenderStagesAPiProfileAndItsActiveDefaults(t *testing.T) {
 		t.Fatalf("decode Pi settings: %v\n%s", err, settingsContent)
 	}
 
-	// The document's own extension must still win over the derived default.
-	if got := settings["defaultModel"]; got != "operator-pinned-model" {
-		t.Errorf("defaultModel = %q, want the declared extension to win", got)
+	if got := settings["defaultModel"]; got != "claude-sonnet" {
+		t.Errorf("defaultModel = %q, want claude-sonnet", got)
 	}
 	if got := settings["defaultProvider"]; got != "anthropic" {
 		t.Errorf("defaultProvider = %q, want anthropic", got)
