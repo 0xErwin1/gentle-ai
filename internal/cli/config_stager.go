@@ -98,10 +98,6 @@ func (stager configurationStager) Stage(state configdomain.DesiredState, stageRo
 		return err
 	}
 
-	if err := stageDeclaredExtensions(stageRoot, state, adapters); err != nil {
-		return err
-	}
-
 	if err := stagePiBackgroundPolicy(stageRoot, selection, adapters); err != nil {
 		return err
 	}
@@ -442,10 +438,8 @@ func stagePiAgentProfiles(stageRoot string, selection model.Selection, adapters 
 
 // stagePiActiveProfileDefaults materialises the declared active profile's
 // orchestrator entry as the Pi settings defaults gentle-pi's own "apply"
-// would write. It runs before stageDeclaredExtensions merges the document's
-// own Pi extension block, so an explicit extension value still wins over the
-// one this derives from the profile. Each default is guarded non-empty, the
-// same way the effort default already was.
+// would write. Each default is guarded non-empty, the same way the effort
+// default already was.
 func stagePiActiveProfileDefaults(stageRoot string, selection model.Selection, adapters []agents.Adapter) error {
 	if selection.PiActiveProfile == "" {
 		return nil
@@ -484,7 +478,7 @@ func stagePiActiveProfileDefaults(stageRoot string, selection model.Selection, a
 		return fmt.Errorf("marshal Pi active profile defaults: %w", err)
 	}
 
-	return mergeExtensionBlock(piAdapter.SettingsPath(stageRoot), block)
+	return mergeSettingsJSONBlock(piAdapter.SettingsPath(stageRoot), block)
 }
 
 // provisionedComponents are performed rather than written: a download or a
@@ -560,21 +554,13 @@ func communityToolProvisioning(selection model.Selection) []render.Resource {
 	return resources
 }
 
-// piPackageSourceAdapter is implemented only by the Pi adapter: a document
-// can override where one of its packages comes from, which no other adapter
-// supports, so this stays a narrow local interface instead of growing the
-// shared agents.Adapter contract for one provider.
-type piPackageSourceAdapter interface {
-	InstallCommandWithSources(profile system.PlatformProfile, sources map[string]string) ([][]string, error)
-}
-
 // agentProvisioning reads each adapter's own install commands rather than
 // restating them, so the packages a harness is made of stay the adapter's to
 // name and a consumer never renders a stale copy of that list. An adapter
-// that cannot honor a requested package source override returns an error
-// naming the agent, rather than the resource silently dropping out of the
-// manifest: an install command an operator asked for but never got is a
-// rendering failure, not an adapter that happens to install nothing.
+// that fails to build its install commands returns an error naming the
+// agent, rather than the resource silently dropping out of the manifest: an
+// install command an operator asked for but never got is a rendering
+// failure, not an adapter that happens to install nothing.
 func agentProvisioning(selection model.Selection) ([]render.Resource, error) {
 	resources := make([]render.Resource, 0, len(selection.Agents))
 
@@ -593,22 +579,7 @@ func agentProvisioning(selection model.Selection) ([]render.Resource, error) {
 		// machines, and the commands these adapters return do not vary by
 		// platform: they run the adapter's own tool, which is a precondition
 		// rather than something a platform provides.
-		var commands [][]string
-		// Package source overrides are addressed to Pi alone, so only Pi's
-		// dispatch reads them; every other agent keeps its plain install.
-		if piAdapter, ok := adapter.(piPackageSourceAdapter); ok && agent == model.AgentPi {
-			commands, err = piAdapter.InstallCommandWithSources(system.PlatformProfile{}, selection.PiPackageSources)
-		} else if agent == model.AgentPi && len(selection.PiPackageSources) > 0 {
-			// A document that names package source overrides for a Pi
-			// adapter that cannot accept them must not render as if the
-			// overrides were honored: falling back to the source-less install
-			// here would silently drop them while the manifest still looks
-			// complete, so this reports the mismatch instead.
-			// refusal:by-design operator-knowledge: only the operator can drop the overrides from the document; no command can teach an adapter to take a source it does not read.
-			err = fmt.Errorf("agent %q does not support package source overrides", agent)
-		} else {
-			commands, err = adapter.InstallCommand(system.PlatformProfile{})
-		}
+		commands, err := adapter.InstallCommand(system.PlatformProfile{})
 		if err != nil {
 			return nil, fmt.Errorf("provision %s: %w", agent, err)
 		}
@@ -745,34 +716,11 @@ func skillsForAdapter(selection model.Selection, agent model.AgentID) []model.Sk
 	return selectedSkillIDs(selection)
 }
 
-// stageDeclaredExtensions merges each provider's extension block into that
-// adapter's settings. An extension is the escape hatch for configuration the
-// neutral contract does not model, so it lands verbatim rather than being
-// reinterpreted, and only for the adapter it names.
-func stageDeclaredExtensions(stageRoot string, state configdomain.DesiredState, adapters []agents.Adapter) error {
-	if len(state.Extensions) == 0 {
-		return nil
-	}
-
-	for _, adapter := range adapters {
-		block, declared := state.Extensions[string(adapter.Agent())]
-		if !declared {
-			continue
-		}
-
-		settingsPath := adapter.SettingsPath(stageRoot)
-		if settingsPath == "" {
-			continue
-		}
-		if err := mergeExtensionBlock(settingsPath, block); err != nil {
-			return fmt.Errorf("stage extension for %q: %w", adapter.Agent(), err)
-		}
-	}
-
-	return nil
-}
-
-func mergeExtensionBlock(settingsPath string, block json.RawMessage) error {
+// mergeSettingsJSONBlock merges block into the JSON object at settingsPath,
+// creating the file and its directory if needed. It is a low-level helper
+// for the handful of stagers that layer a small overlay onto an adapter's
+// own settings file, such as stagePiActiveProfileDefaults.
+func mergeSettingsJSONBlock(settingsPath string, block json.RawMessage) error {
 	existing, err := os.ReadFile(settingsPath)
 	if err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("read settings %q: %w", settingsPath, err)
@@ -780,7 +728,7 @@ func mergeExtensionBlock(settingsPath string, block json.RawMessage) error {
 
 	merged, err := filemerge.MergeJSONObjects(existing, block)
 	if err != nil {
-		return fmt.Errorf("merge extension into %q: %w", settingsPath, err)
+		return fmt.Errorf("merge settings block into %q: %w", settingsPath, err)
 	}
 
 	if err := os.MkdirAll(filepath.Dir(settingsPath), 0o755); err != nil {
