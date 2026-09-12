@@ -224,8 +224,10 @@ func TestPiProfilesSurviveSelectionRoundTrip(t *testing.T) {
 }
 
 // A Pi package source override must be refused for any other provider, for a
-// package name gentle-pi's own adapter does not install, and for a source that
-// matches none of the shapes the adapter knows how to substitute.
+// key that could not name a real npm package, and for a source that matches
+// none of the shapes the adapter knows how to substitute. A key naming a Pi
+// package the adapter does not already install is no longer refused: it is
+// an additional package to install (see TestDecodeAcceptsExtraPiPackages).
 func TestDecodeRejectsInvalidPiPackageOverrides(t *testing.T) {
 	tests := []struct {
 		name      string
@@ -233,7 +235,7 @@ func TestDecodeRejectsInvalidPiPackageOverrides(t *testing.T) {
 		wantCodes []string
 	}{
 		{"packages on a non-pi provider", `{"version":"v1","selection":{"providers":{"opencode":{"packages":{"gentle-pi":"npm:gentle-pi@1.0.0"}}}}}`, []string{"config.provider.packages.unsupported-provider"}},
-		{"unknown package name", `{"version":"v1","selection":{"providers":{"pi":{"packages":{"pi-subagents":"npm:pi-subagents@1.0.0"}}}}}`, []string{"config.pi-package.unknown"}},
+		{"unsupported package name shape", `{"version":"v1","selection":{"providers":{"pi":{"packages":{"Not Valid!":"npm:pi-btw@1.0.0"}}}}}`, []string{"config.pi-package.name-unsupported"}},
 		{"unsupported source shape", `{"version":"v1","selection":{"providers":{"pi":{"packages":{"gentle-pi":"1.0.0"}}}}}`, []string{"config.pi-package.source-unsupported"}},
 		{"empty source", `{"version":"v1","selection":{"providers":{"pi":{"packages":{"gentle-pi":""}}}}}`, []string{"config.pi-package.source-unsupported"}},
 		{"bare scheme prefix", `{"version":"v1","selection":{"providers":{"pi":{"packages":{"gentle-pi":"https://"}}}}}`, []string{"config.pi-package.source-unsupported"}},
@@ -274,6 +276,26 @@ func TestDecodeAcceptsEveryPiPackageSourceShape(t *testing.T) {
 			_, diagnostics := Decode([]byte(document))
 			if len(diagnostics) != 0 {
 				t.Fatalf("unexpected diagnostics for source %q: %v", source, diagnostics)
+			}
+		})
+	}
+}
+
+// A packages key naming none of the packages the Pi adapter already installs
+// is an additional Pi package to install: it is accepted as long as it looks
+// like an npm package name and its source matches one of the shapes the
+// adapter knows how to substitute.
+func TestDecodeAcceptsExtraPiPackages(t *testing.T) {
+	tests := []string{
+		`{"version":"v1","selection":{"providers":{"pi":{"packages":{"pi-subagents":"npm:pi-subagents@1.0.0"}}}}}`,
+		`{"version":"v1","selection":{"providers":{"pi":{"packages":{"@juicesharp/pi-something-else":"git:github.com/x/y@rev"}}}}}`,
+	}
+
+	for _, document := range tests {
+		t.Run(document, func(t *testing.T) {
+			_, diagnostics := Decode([]byte(document))
+			if len(diagnostics) != 0 {
+				t.Fatalf("unexpected diagnostics: %v", diagnostics)
 			}
 		})
 	}
