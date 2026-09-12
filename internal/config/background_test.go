@@ -16,17 +16,17 @@ func TestDecodeBackgroundIntent(t *testing.T) {
 	}{
 		{
 			name:     "accepts an explicit on choice",
-			document: `{"version":"v1","selection":{"backgroundIntent":"on"}}`,
+			document: `{"version":"v1","selection":{"providers":{"opencode":{"backgroundIntent":"on"}}}}`,
 			want:     model.OpenCodeBackgroundOn,
 		},
 		{
 			name:     "accepts an explicit off choice",
-			document: `{"version":"v1","selection":{"backgroundIntent":"off"}}`,
+			document: `{"version":"v1","selection":{"providers":{"opencode":{"backgroundIntent":"off"}}}}`,
 			want:     model.OpenCodeBackgroundOff,
 		},
 		{
 			name:     "accepts an explicit auto choice",
-			document: `{"version":"v1","selection":{"backgroundIntent":"auto"}}`,
+			document: `{"version":"v1","selection":{"providers":{"opencode":{"backgroundIntent":"auto"}}}}`,
 			want:     model.OpenCodeBackgroundAuto,
 		},
 		{
@@ -36,8 +36,13 @@ func TestDecodeBackgroundIntent(t *testing.T) {
 		},
 		{
 			name:      "rejects an unsupported value with a stable diagnostic",
-			document:  `{"version":"v1","selection":{"backgroundIntent":"maybe"}}`,
+			document:  `{"version":"v1","selection":{"providers":{"opencode":{"backgroundIntent":"maybe"}}}}`,
 			wantCodes: []string{"config.background-intent.unsupported"},
+		},
+		{
+			name:      "rejects the intent for a provider with no background policy",
+			document:  `{"version":"v1","selection":{"providers":{"codex":{"backgroundIntent":"on"}}}}`,
+			wantCodes: []string{"config.provider.background-intent.unsupported-provider"},
 		},
 	}
 
@@ -56,8 +61,8 @@ func TestDecodeBackgroundIntent(t *testing.T) {
 				return
 			}
 
-			if state.Selection.BackgroundIntent != test.want {
-				t.Errorf("BackgroundIntent = %q, want %q", state.Selection.BackgroundIntent, test.want)
+			if got := Project(state).BackgroundIntent; got != test.want {
+				t.Errorf("BackgroundIntent = %q, want %q", got, test.want)
 			}
 		})
 	}
@@ -67,14 +72,14 @@ func TestDecodeBackgroundIntent(t *testing.T) {
 // explicit choice must survive the round trip that carries desired state into
 // the workflows the interactive and flag paths share.
 func TestBackgroundIntentSurvivesSelectionRoundTrip(t *testing.T) {
-	state, diagnostics := Decode([]byte(`{"version":"v1","selection":{"backgroundIntent":"on"}}`))
+	state, diagnostics := Decode([]byte(`{"version":"v1","selection":{"providers":{"opencode":{"backgroundIntent":"on"}}}}`))
 	if len(diagnostics) != 0 {
 		t.Fatalf("unexpected diagnostics: %v", diagnostics)
 	}
 
 	restored := FromSelection(Project(state))
 
-	if restored.Selection.BackgroundIntent != model.OpenCodeBackgroundOn {
-		t.Errorf("BackgroundIntent after round trip = %q, want %q", restored.Selection.BackgroundIntent, model.OpenCodeBackgroundOn)
+	if got := restored.Selection.Providers[model.AgentOpenCode].BackgroundIntent; got != string(model.OpenCodeBackgroundOn) {
+		t.Errorf("BackgroundIntent after round trip = %q, want %q", got, model.OpenCodeBackgroundOn)
 	}
 }

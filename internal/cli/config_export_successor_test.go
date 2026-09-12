@@ -40,8 +40,10 @@ func TestConfigExportLegacyReportsValueSpecificLossesDeterministically(t *testin
 	var result struct {
 		Document struct {
 			Selection struct {
-				Agents           []string `json:"agents"`
-				BackgroundIntent string   `json:"backgroundIntent"`
+				Agents    []string `json:"agents"`
+				Providers map[string]struct {
+					BackgroundIntent string `json:"backgroundIntent"`
+				} `json:"providers"`
 			} `json:"selection"`
 		} `json:"document"`
 		Diagnostics []struct {
@@ -56,7 +58,7 @@ func TestConfigExportLegacyReportsValueSpecificLossesDeterministically(t *testin
 	if got, want := result.Document.Selection.Agents, []string{"opencode"}; !equalStrings(got, want) {
 		t.Fatalf("exported agents = %v, want %v", got, want)
 	}
-	if got, want := result.Document.Selection.BackgroundIntent, "on"; got != want {
+	if got, want := result.Document.Selection.Providers["opencode"].BackgroundIntent, "on"; got != want {
 		t.Fatalf("exported backgroundIntent = %q, want %q", got, want)
 	}
 
