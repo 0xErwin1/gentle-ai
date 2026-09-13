@@ -40,6 +40,8 @@ const rtkPlatformWindows rtkPlatform = "windows"
 type rtkCandidateAsset struct {
 	Platform         rtkPlatform
 	Name             string
+	URL              string
+	ExecutableMember string
 	SizeBytes        int64
 	SHA256           string
 	ChecksumSHA256   string
@@ -51,6 +53,8 @@ var rtkCandidateAssets = []rtkCandidateAsset{
 	{
 		Platform:         rtkPlatformWindows,
 		Name:             "rtk-x86_64-pc-windows-msvc.zip",
+		URL:              "https://github.com/rtk-ai/rtk/releases/download/v0.49.0/rtk-x86_64-pc-windows-msvc.zip",
+		ExecutableMember: "rtk.exe",
 		SizeBytes:        4_448_627,
 		SHA256:           "cb971046598f0e8bd51f6c27780fcdd2c39a4c459a811bd95b0d77ba8c0d7c9f",
 		ChecksumSHA256:   "a5ff3570fe196a21e09a249c1777665d6ed887630d1c7c66de1154d4340d3ad0",
