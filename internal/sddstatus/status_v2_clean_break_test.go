@@ -373,6 +373,7 @@ func snapshotStatusReadTree(t *testing.T, root string) string {
 		if err != nil {
 			return err
 		}
+		relative = filepath.ToSlash(relative)
 		if relative == "." {
 			return nil
 		}
