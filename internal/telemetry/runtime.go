@@ -195,7 +195,7 @@ func RuntimeEffortAllowed(value string) bool {
 // alias. Kept as a single Go string constant so contracts/telemetry stays
 // byte-identical to it (see TestRuntimeModelPatternsMatchSchema); RE2 and
 // ECMAScript compatible, no lookarounds.
-const runtimeModelIDPattern = `^(claude|gpt|o[1-9]|codex|gemini|gemma|deepseek|glm|qwen|qwq|kimi|moonshot|llama|codellama|mistral|mixtral|codestral|devstral|magistral|ministral|minimax|grok|phi|nemotron|command|jamba|sonar|hunyuan|doubao|seed|ernie|mimo|yi|granite|olmo|smollm|starcoder|nova|titan)([-_.:]?[a-z0-9]+){0,8}$`
+const runtimeModelIDPattern = `^(claude|gpt|o[1-9]|codex|gemini|gemma|deepseek|glm|qwen|qwq|kimi|moonshot|llama|codellama|mistral|mixtral|codestral|devstral|magistral|ministral|minimax|grok|phi|nemotron|jamba|hunyuan|doubao|ernie|mimo|granite|olmo|smollm|starcoder|titan)([-_.:]?[a-z0-9]+){0,8}$`
 
 // runtimeModelProviderPattern accepts any short lowercase alphanumeric-dash
 // provider label. The provider itself carries no privacy risk (it is a routing
