@@ -21,7 +21,7 @@ func seedUnmanagedFailedVerification(t *testing.T, repo, change string, maxAttem
 	t.Helper()
 	changeRoot := seedReadyChange(t, repo, change, "- [x] 1.1 Work\n")
 	store, failedEvidence, failed := seedFailedVerificationLedger(t, repo, change, maxAttempts)
-	write(t, filepath.Join(changeRoot, "verify-report.md"), boundedVerifyEnvelope(failedEvidence, "fail"))
+	write(t, filepath.Join(changeRoot, "verify-report.md"), testVerifyEnvelope("fail", 0, 0, "1/1", "1/1", 0, 0))
 	return store, failedEvidence, failed
 }
 
@@ -31,7 +31,7 @@ func resolveDisabledRemediationInstructions(t *testing.T, repo, change string) (
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !status.RemediationState.Required || status.RemediationState.LineageID != "" {
+	if !status.RemediationState.Required {
 		t.Fatalf("fixture did not require unmanaged remediation: %#v", status.RemediationState)
 	}
 	if status.PhaseInstructions == nil {
@@ -70,8 +70,8 @@ func TestStatusKeepsPrescribingChainBoundRemediationAfterReset(t *testing.T) {
 	if !strings.Contains(joined, "--remediates-evidence-revision "+failedEvidence) {
 		t.Fatalf("post-reset status lost the chain-bound correction prescription:\n%s", joined)
 	}
-	if !strings.Contains(joined, "Disabled/unmanaged remediation has one bounded correction attempt") {
-		t.Fatalf("post-reset status lost the bounded correction framing:\n%s", joined)
+	if !strings.Contains(joined, "Remediation follows ordinary SDD failed-evidence accounting.") {
+		t.Fatalf("post-reset status lost the authority-free remediation framing:\n%s", joined)
 	}
 	if strings.Contains(joined, "cannot settle") {
 		t.Fatalf("post-reset status degraded a satisfiable correction to the decision route:\n%s", joined)
@@ -81,9 +81,9 @@ func TestStatusKeepsPrescribingChainBoundRemediationAfterReset(t *testing.T) {
 // TestStatusRendersResetRouteWhileRemediationNeedsADecision covers the wedge
 // every #1974 occurrence reported: failed evidence with an exhausted budget is
 // decision-required, so an immediate correction acquire would return
-// blocked/maintainer_decision. Status renders the audited reset route with
-// the exact current revision, and names the chain binding the post-reset
-// acquire must declare.
+// blocked/maintainer_decision. Status names the status-and-audited-reset route
+// with the current revision for terminal candidate drift, and names the chain
+// binding the post-reset acquire must declare.
 func TestStatusRendersResetRouteWhileRemediationNeedsADecision(t *testing.T) {
 	const change = "decision-required-advice"
 	repo := initRuntimeLedgerRepo(t)
@@ -96,8 +96,12 @@ func TestStatusRendersResetRouteWhileRemediationNeedsADecision(t *testing.T) {
 	if strings.Contains(joined, "bounded correction attempt: run") {
 		t.Fatalf("decision-required status still prescribes the blocked correction acquire:\n%s", joined)
 	}
-	if !strings.Contains(joined, "sdd-attempt reset") || !strings.Contains(joined, failed.Revision) {
-		t.Fatalf("decision-required status does not render the audited reset route:\n%s", joined)
+	if !strings.Contains(joined, "Remediation follows ordinary SDD failed-evidence accounting.") ||
+		!strings.Contains(joined, "gentle-ai sdd-attempt status") ||
+		!strings.Contains(joined, "gentle-ai sdd-attempt reset") ||
+		!strings.Contains(joined, "--expected-revision <the revision that status prints>") ||
+		!strings.Contains(joined, "rescope` only when its narrower-successor contract applies") {
+		t.Fatalf("decision-required status did not name the audited candidate-drift reset route:\n%s", joined)
 	}
 	if !strings.Contains(joined, "--remediates-evidence-revision "+failedEvidence) {
 		t.Fatalf("decision-required status does not name the chain binding for the post-reset acquire:\n%s", joined)
@@ -117,14 +121,18 @@ func TestStatusStillPrescribesSatisfiableUnmanagedRemediation(t *testing.T) {
 	}
 
 	_, joined := resolveDisabledRemediationInstructions(t, repo, change)
-	if !strings.Contains(joined, "Disabled/unmanaged remediation has one bounded correction attempt") {
-		t.Fatalf("satisfiable status lost the bounded correction prescription:\n%s", joined)
+	if !strings.Contains(joined, "Remediation follows ordinary SDD failed-evidence accounting.") {
+		t.Fatalf("satisfiable status lost the authority-free remediation framing:\n%s", joined)
 	}
 	if !strings.Contains(joined, "--remediates-evidence-revision "+failedEvidence) {
 		t.Fatalf("satisfiable status does not bind the settle to the failed evidence:\n%s", joined)
 	}
 	if !strings.Contains(joined, "--max-changed-lines 20 --remediates-evidence-revision "+failedEvidence) {
 		t.Fatalf("satisfiable acquire prescription does not declare the remediation intent:\n%s", joined)
+	}
+	if !strings.Contains(joined, "After a terminal candidate drift, run status and then the audited reset above") ||
+		!strings.Contains(joined, "rescope only when its narrower-successor contract applies") {
+		t.Fatalf("satisfiable status does not name the candidate-drift continuation:\n%s", joined)
 	}
 }
 
@@ -155,13 +163,13 @@ func TestStatusRendersFreshVerificationRouteWhenNothingRemediable(t *testing.T) 
 	}); err != nil {
 		t.Fatal(err)
 	}
-	write(t, filepath.Join(changeRoot, "verify-report.md"), boundedVerifyEnvelope(failedEvidence, "fail"))
+	write(t, filepath.Join(changeRoot, "verify-report.md"), testVerifyEnvelope("fail", 0, 0, "1/1", "1/1", 0, 0))
 
 	_, joined := resolveDisabledRemediationInstructions(t, repo, change)
 	if strings.Contains(joined, "--remediates-evidence-revision "+failedEvidence) {
 		t.Fatalf("nothing-remediable status still prescribes an unsatisfiable binding:\n%s", joined)
 	}
-	if !strings.Contains(joined, "cannot settle") || !strings.Contains(joined, "fresh verification objective") {
-		t.Fatalf("nothing-remediable status does not render the fresh-verification route:\n%s", joined)
+	if !strings.Contains(joined, "A passing remediation requires fresh independent verification before archive.") {
+		t.Fatalf("nothing-remediable status does not preserve the independent-verification route:\n%s", joined)
 	}
 }

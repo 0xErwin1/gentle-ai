@@ -6,6 +6,7 @@ import (
 
 	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/opencode"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/assets"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/components/agentguidance"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/components/filemerge"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
 )
@@ -102,6 +103,7 @@ func WriteSharedPromptFiles(homeDir string, phaseCapabilities map[string]string,
 		// indirection, which the in-settings injection deliberately skips —
 		// the contract must land here or those executors would miss it.
 		content = injectLanguageContractIntoPrompt(content)
+		content = agentguidance.InjectRemoteAuthorization(content)
 
 		path := filepath.Join(promptDir, phase+".md")
 		result, err := filemerge.WriteFileAtomic(path, []byte(content), 0o644)
@@ -166,6 +168,12 @@ func injectCodeGraphToolGrantIntoPrompt(prompt string, agentID model.AgentID, gu
 		if strings.Contains(line, grant) {
 			return prompt
 		}
+		// A deliberately empty tools contract (tool-free reviewers, issue
+		// #3168/#3648) must stay empty: appending the grant would produce
+		// unparseable frontmatter and contradict the agent's own contract.
+		if value := strings.TrimSpace(strings.TrimPrefix(line, "tools:")); value == "" || value == "[]" {
+			return prompt
+		}
 		if agentID == model.AgentClaudeCode {
 			lines[i] = line + ", " + grant
 		} else if strings.HasSuffix(line, "]") {
@@ -197,8 +205,8 @@ func injectCodeGraphGuidanceIntoOpenCodeSubagentPrompts(agentMap map[string]any,
 		if mode, _ := agent["mode"].(string); mode == "primary" {
 			continue
 		}
-		tools, _ := agent["tools"].(map[string]any)
-		if bash, explicitlySet := tools["bash"].(bool); explicitlySet && !bash {
+		permission, _ := agent["permission"].(map[string]any)
+		if permission["bash"] == "deny" {
 			continue
 		}
 		prompt, ok := agent["prompt"].(string)
@@ -206,6 +214,22 @@ func injectCodeGraphGuidanceIntoOpenCodeSubagentPrompts(agentMap map[string]any,
 			continue
 		}
 		agent["prompt"] = injectCodeGraphGuidanceIntoPrompt(prompt, guidance)
+	}
+}
+
+// injectRemoteAuthorizationIntoSubagentPrompts covers inline executors, including
+// tool-free reviewers. Primary routing and shared prompt files own their injection.
+func injectRemoteAuthorizationIntoSubagentPrompts(agentMap map[string]any) {
+	for _, raw := range agentMap {
+		agent, ok := raw.(map[string]any)
+		if !ok || agent["mode"] == "primary" {
+			continue
+		}
+		prompt, ok := agent["prompt"].(string)
+		if !ok || strings.HasPrefix(prompt, "{file:") {
+			continue
+		}
+		agent["prompt"] = agentguidance.InjectRemoteAuthorization(prompt)
 	}
 }
 

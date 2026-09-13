@@ -9,6 +9,7 @@ import (
 	"io"
 	"strings"
 
+	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/sddstatus"
 )
 
@@ -52,13 +53,18 @@ func runSDDAttempt(ctx context.Context, args []string, stdout io.Writer) error {
 	harnessDisposition := registerSDDAttemptStringFlag(flags, operation, "harness-disposition")
 	cleanupEvidence := registerSDDAttemptStringFlag(flags, operation, "cleanup-evidence")
 	processEvidence := registerSDDAttemptStringFlag(flags, operation, "process-evidence")
-	expectedBindingRevision := registerSDDAttemptStringFlag(flags, operation, "expected-binding-revision")
-	successorLineage := registerSDDAttemptStringFlag(flags, operation, "successor-lineage")
 	remediatesEvidenceRevision := registerSDDAttemptStringFlag(flags, operation, "remediates-evidence-revision")
+	remediationEvidence := registerSDDAttemptStringFlag(flags, operation, "remediation-evidence")
 	reason := registerSDDAttemptStringFlag(flags, operation, "reason")
 	actor := registerSDDAttemptStringFlag(flags, operation, "actor")
+	objectiveRelation := registerSDDAttemptStringFlag(flags, operation, "objective-relation")
 	var roots sddAttemptRootList
 	registerSDDAttemptRootFlag(flags, operation, &roots)
+	var intendedUntracked reviewRepeatedPathFlag
+	registerSDDAttemptIntendedUntrackedFlag(flags, operation, &intendedUntracked)
+	var untrackedScope, expectedUntrackedInventory reviewSingleValueFlag
+	registerSDDAttemptSingleValueFlag(flags, operation, "untracked-scope", &untrackedScope)
+	registerSDDAttemptSingleValueFlag(flags, operation, "expected-untracked-inventory", &expectedUntrackedInventory)
 	changeInstance := registerSDDAttemptStringFlag(flags, operation, "change-instance")
 	if err := flags.Parse(args[1:]); err != nil {
 		return err
@@ -66,6 +72,17 @@ func runSDDAttempt(ctx context.Context, args []string, stdout io.Writer) error {
 	if flags.NArg() != 0 {
 		return fmt.Errorf("unexpected sdd-attempt argument %q", flags.Arg(0))
 	}
+	// --max-changed-lines is pre-defaulted at flags.Int (registerSDDAttemptIntFlag)
+	// so an omitted flag and an explicitly-typed default are indistinguishable
+	// from the parsed value alone; flags.Visit sees only flags the caller
+	// actually typed, so it is the one place that still knows which happened
+	// (#2589). acquire/begin surface it as max_changed_lines_source below.
+	maxChangedLinesExplicit := false
+	flags.Visit(func(f *flag.Flag) {
+		if f.Name == "max-changed-lines" {
+			maxChangedLinesExplicit = true
+		}
+	})
 	// Identity/revision-shaped values are trimmed at this CLI boundary so
 	// incidental leading/trailing whitespace from a shell or PowerShell
 	// copy-paste (e.g. `Get-FileHash`/`shasum` output) does not itself cause
@@ -76,7 +93,6 @@ func runSDDAttempt(ctx context.Context, args []string, stdout io.Writer) error {
 	*token = strings.TrimSpace(*token)
 	*changeInstance = strings.TrimSpace(*changeInstance)
 	*evidenceRevision = strings.TrimSpace(*evidenceRevision)
-	*expectedBindingRevision = strings.TrimSpace(*expectedBindingRevision)
 	*remediatesEvidenceRevision = strings.TrimSpace(*remediatesEvidenceRevision)
 	if missing := missingSDDAttemptOperationFlags(args[1:], operation, *outcome); len(missing) != 0 {
 		return missingSDDAttemptOperationError(operation, missing)
@@ -88,19 +104,70 @@ func runSDDAttempt(ctx context.Context, args []string, stdout io.Writer) error {
 		return errors.New("sdd-attempt requires --change")
 	}
 
-	reviewDisabled, err := reviewDrivenDevelopmentDisabled(ctx, *cwd)
-	if err != nil {
-		return fmt.Errorf("read review mode: %w", err)
-	}
 	store, err := sddstatus.OpenRuntimeStore(ctx, *cwd, *change)
 	if err != nil {
 		return fmt.Errorf("open native SDD runtime authority: %w", err)
 	}
-	// The kill switch reaches the runtime ledger here, at the one place that
-	// knows how to read both of its sources. With reviews off, closing an
-	// attempt must not demand a review obligation the operator has no way to
-	// satisfy.
-	store.ReviewDisabled = reviewDisabled
+	var intended []string
+	declaredUntracked := reviewIntendedUntrackedDeclared(untrackedScope, intendedUntracked, expectedUntrackedInventory)
+	skipAcquireUntrackedPreflight := false
+	if operation == "acquire" && !declaredUntracked && *token == "" {
+		status, statusErr := store.Status()
+		skipAcquireUntrackedPreflight = statusErr == nil && status.ActiveAttempt != nil
+	}
+	if operation == "begin" || (operation == "acquire" && (*token == "" || declaredUntracked) && !skipAcquireUntrackedPreflight) {
+		inheritsRescopeSelection := false
+		if !declaredUntracked {
+			inheritsRescopeSelection, err = store.FreshRescopeSuccessorInheritsIntendedUntracked()
+			if err != nil && operation == "begin" {
+				return fmt.Errorf("read rescope successor untracked scope: %w", err)
+			}
+			if err != nil {
+				inheritsRescopeSelection = false
+			}
+		}
+		if !inheritsRescopeSelection {
+			scope, scopeErr := intendedUntrackedScopeForTarget(ctx, reviewtransaction.SnapshotBuilder{Repo: *cwd}, untrackedScope, intendedUntracked, expectedUntrackedInventory, reviewIntendedUntrackedInventoryCommand, "gentle-ai sdd-attempt "+operation)
+			if scopeErr != nil {
+				return scopeErr
+			}
+			if scope.NeedsSelection {
+				return intendedUntrackedSelectionRequired(scope, reviewIntendedUntrackedInventoryCommand, "gentle-ai sdd-attempt "+operation)
+			}
+			intended = scope.Intended
+		}
+	}
+	// The preflight above stays a begin/acquire concern: only those operations
+	// may be refused before any authority exists. A settlement resolves a
+	// declaration when the caller makes one, and lets the ledger -- the only
+	// reader of what the attempt began against -- decide whether one was owed.
+	// Rescope shares this exact division of labor (#4195): a fresh successor
+	// selection is optional, so it is resolved here alongside finish/settle
+	// rather than forced through the begin/acquire preflight above.
+	//
+	// Unlike begin/acquire, finish/settle/rescope do NOT read the workspace
+	// here: the runtime ledger already recomputes the current live inventory
+	// and performs pairing, canonicalization, freshness, and eligibility
+	// checks better than a duplicate CLI-side read could (design decision 7).
+	// Only the flag-shape is validated here, because the ledger only receives
+	// `IntendedUntracked *[]string` and cannot recover the declared mode on
+	// its own -- silently dropping it would turn `--untracked-scope=exclude
+	// --intended-untracked=x` into a select, or accept `--untracked-scope=bogus`.
+	var settlementUntracked *[]string
+	settlementInventory := ""
+	if (operation == "finish" || operation == "settle" || operation == "rescope" || operation == "supersede") && declaredUntracked {
+		if shapeErr := intendedUntrackedDeclarationShape(untrackedScope, intendedUntracked, expectedUntrackedInventory, expectedUntrackedInventory.value, reviewIntendedUntrackedInventoryCommand, "gentle-ai sdd-attempt "+operation); shapeErr != nil {
+			return shapeErr
+		}
+		switch untrackedScope.value {
+		case "exclude":
+			settlementUntracked = &[]string{}
+		case "select":
+			selected := []string(intendedUntracked)
+			settlementUntracked = &selected
+		}
+		settlementInventory = expectedUntrackedInventory.value
+	}
 	var result any
 	switch operation {
 	case "status":
@@ -127,21 +194,17 @@ func runSDDAttempt(ctx context.Context, args []string, stdout io.Writer) error {
 	case "begin":
 		result, err = store.Begin(ctx, sddstatus.BeginAttemptRequest{
 			ExpectedRevision: *expected, RequestID: *requestID, WorkUnit: *workUnit, EvidenceGoal: *evidenceGoal,
-			MaxAttempts: *maxAttempts, MaxChangedLines: *maxChangedLines,
+			MaxAttempts: *maxAttempts, MaxChangedLines: *maxChangedLines, MaxChangedLinesExplicit: maxChangedLinesExplicit,
+			IntendedUntracked: intended,
 		})
 	case "finish":
-		remediationFlags := presentSDDAttemptFlags(args[1:], "expected-binding-revision", "successor-lineage", "remediates-evidence-revision")
-		unmanagedRemediation := *expectedBindingRevision == "" && *successorLineage == "" && *remediatesEvidenceRevision != ""
-		if remediationFlags != 0 && remediationFlags != 3 && !unmanagedRemediation {
-			return errors.New("remediation successor requires --expected-binding-revision, --successor-lineage, and --remediates-evidence-revision together")
-		}
 		result, err = store.Finish(ctx, sddstatus.FinishAttemptRequest{
 			ExpectedRevision: *expected, RequestID: *requestID, Outcome: sddstatus.AttemptOutcome(*outcome),
 			EvidenceRevision: *evidenceRevision, Diagnosis: *diagnosis,
 			HarnessDisposition: sddstatus.HarnessDisposition(*harnessDisposition),
 			CleanupEvidence:    *cleanupEvidence, ProcessEvidence: *processEvidence,
-			ExpectedBindingRevision: *expectedBindingRevision, SuccessorLineageID: *successorLineage,
 			RemediatesEvidenceRevision: *remediatesEvidenceRevision,
+			IntendedUntracked:          settlementUntracked, ExpectedUntrackedInventory: settlementInventory,
 		})
 	case "handoff":
 		result, err = store.HandoffCompact(ctx, sddstatus.CompactHandoffRequest{
@@ -152,11 +215,20 @@ func runSDDAttempt(ctx context.Context, args []string, stdout io.Writer) error {
 	case "reset":
 		result, err = store.Reset(ctx, sddstatus.ResetObjectiveRequest{
 			ExpectedRevision: *expected, RequestID: *requestID, Reason: *reason, Actor: *actor,
+			Relation: sddstatus.RuntimeObjectiveRelation(*objectiveRelation),
 		})
 	case "rescope":
 		result, err = store.Rescope(ctx, sddstatus.RescopeObjectiveRequest{
 			ExpectedRevision: *expected, RequestID: *requestID, WorkUnit: *workUnit, EvidenceGoal: *evidenceGoal,
 			MaxAttempts: *maxAttempts, MaxChangedLines: *maxChangedLines, Reason: *reason, Actor: *actor,
+			Relation:          sddstatus.RuntimeObjectiveRelation(*objectiveRelation),
+			IntendedUntracked: settlementUntracked, ExpectedUntrackedInventory: settlementInventory,
+		})
+	case "supersede":
+		result, err = store.Supersede(ctx, sddstatus.SupersedeObjectiveRequest{
+			ExpectedRevision: *expected, RequestID: *requestID, WorkUnit: *workUnit, EvidenceGoal: *evidenceGoal,
+			MaxAttempts: *maxAttempts, MaxChangedLines: *maxChangedLines, Reason: *reason, Actor: *actor,
+			Relation: sddstatus.RuntimeObjectiveRelation(*objectiveRelation), IntendedUntracked: settlementUntracked, ExpectedUntrackedInventory: settlementInventory,
 		})
 	case "repair":
 		result, err = store.RepairConsecutiveRescope(ctx, sddstatus.RepairConsecutiveRescopeRequest{
@@ -165,8 +237,10 @@ func runSDDAttempt(ctx context.Context, args []string, stdout io.Writer) error {
 	case "acquire":
 		result, err = store.Acquire(ctx, sddstatus.CompactAcquireRequest{
 			BeginAttemptRequest: sddstatus.BeginAttemptRequest{
-				RequestID: *requestID, WorkUnit: *workUnit, EvidenceGoal: *evidenceGoal,
-				MaxAttempts: *maxAttempts, MaxChangedLines: *maxChangedLines,
+				ExpectedRevision: *expected,
+				RequestID:        *requestID, WorkUnit: *workUnit, EvidenceGoal: *evidenceGoal,
+				MaxAttempts: *maxAttempts, MaxChangedLines: *maxChangedLines, MaxChangedLinesExplicit: maxChangedLinesExplicit,
+				IntendedUntracked: intended,
 			},
 			Token:                      *token,
 			RemediatesEvidenceRevision: *remediatesEvidenceRevision,
@@ -177,7 +251,9 @@ func runSDDAttempt(ctx context.Context, args []string, stdout io.Writer) error {
 			EvidenceRevision: *evidenceRevision, Diagnosis: *diagnosis,
 			HarnessDisposition: sddstatus.HarnessDisposition(*harnessDisposition),
 			CleanupEvidence:    *cleanupEvidence, ProcessEvidence: *processEvidence,
-			SuccessorLineageID: *successorLineage, RemediatesEvidenceRevision: *remediatesEvidenceRevision,
+			RemediatesEvidenceRevision: *remediatesEvidenceRevision,
+			RemediationEvidence:        *remediationEvidence,
+			IntendedUntracked:          settlementUntracked, ExpectedUntrackedInventory: settlementInventory,
 		})
 	case "grant":
 		// --expected-revision stays optional, unlike begin/finish/reset: the
@@ -185,19 +261,18 @@ func runSDDAttempt(ctx context.Context, args []string, stdout io.Writer) error {
 		// "empty or sha256"), which matches exactly the fresh pre-attempt
 		// ledger the consent flow grants against; a later widening grant
 		// chains the exact committed revision like every sibling mutation.
-		// The grant binds the caller-owned change-instance identity (#2540
-		// S5): the ledger digest-binds it into the record and replay projects
-		// the grant only for the same identity, so an archived name's reuse
-		// cannot resurrect it. Until S4b derives markers natively, the caller
-		// mints the opaque token and must reuse it for widening grants within
-		// this change's lifecycle.
+		// Check current identity at mutation/replay and return; external replacement
+		// may leave historical records, never usable detected-stale authority.
 		var grantStore sddstatus.RuntimeStore
-		if grantStore, err = store.ForInstance(*changeInstance); err != nil {
+		if grantStore, err = store.ForCurrentChangeInstance(*changeInstance); err != nil {
 			return fmt.Errorf("sdd-attempt grant: %w", err)
 		}
 		result, err = grantStore.Grant(ctx, sddstatus.GrantRootsRequest{
 			ExpectedRevision: *expected, RequestID: *requestID, Roots: roots, Reason: *reason, Actor: *actor,
 		})
+	}
+	if err == nil && (operation == "finish" || operation == "settle") {
+		telemetryRecordSDDPhaseRun()
 	}
 	if err != nil {
 		return fmt.Errorf("sdd-attempt %s: %w", operation, err)
@@ -257,6 +332,9 @@ var sddAttemptOperationDefinitions = []sddAttemptOperationContract{
 		{name: "evidence-goal", required: true, usage: "required; single-line objective, at most 240 bytes"},
 		{name: "max-attempts", kind: sddAttemptIntFlag, usage: "optional; default 2, limit 1..100"},
 		{name: "max-changed-lines", kind: sddAttemptIntFlag, usage: "optional; default 200, limit 1..1000000"},
+		{name: "untracked-scope", usage: "required when eligible untracked files exist; select or exclude"},
+		{name: "expected-untracked-inventory", usage: "required with untracked-scope; inventory digest"},
+		{name: "intended-untracked", kind: sddAttemptRepeatableStringFlag, usage: "repeatable selected repo-relative untracked path"},
 	}},
 	{name: "finish", purpose: "Complete the active runtime attempt", flags: []sddAttemptFlagDefinition{
 		sddAttemptCWDFlag, sddAttemptChangeFlag,
@@ -268,9 +346,10 @@ var sddAttemptOperationDefinitions = []sddAttemptOperationContract{
 		{name: "harness-disposition", required: true, usage: "required; reused or invalidated"},
 		{name: "cleanup-evidence", required: true, usage: "required; trimmed single-line text, at most 500 bytes"},
 		{name: "process-evidence", required: true, usage: "required; trimmed single-line text, at most 500 bytes"},
-		{name: "expected-binding-revision", usage: "optional; with successor-lineage and remediates-evidence-revision"},
-		{name: "successor-lineage", usage: "optional; lowercase approved lineage, at most 128 bytes"},
 		{name: "remediates-evidence-revision", usage: "optional; repaired sha256:<64 lowercase hex> failed evidence"},
+		{name: "untracked-scope", usage: "required when this attempt left eligible untracked files; select or exclude"},
+		{name: "expected-untracked-inventory", usage: "required with untracked-scope; inventory digest"},
+		{name: "intended-untracked", kind: sddAttemptRepeatableStringFlag, usage: "repeatable selected repo-relative untracked path"},
 	}},
 	{name: "handoff", purpose: "Atomically move the active attempt to one linked worktree", flags: []sddAttemptFlagDefinition{
 		sddAttemptCWDFlag, sddAttemptChangeFlag,
@@ -284,6 +363,7 @@ var sddAttemptOperationDefinitions = []sddAttemptOperationContract{
 		{name: "request-id", required: true, usage: "required; lowercase idempotency key, at most 128 bytes"},
 		{name: "reason", required: true, usage: "required; trimmed single-line text, at most 500 bytes"},
 		{name: "actor", required: true, usage: "required; trimmed single-line text, at most 128 bytes"},
+		{name: "objective-relation", usage: "optional; remediation (default) or independent — independent declares the successor does NOT inherit the closed objective's settle_obligation"},
 	}},
 	{name: "rescope", purpose: "Narrow a terminal zero-drift objective", flags: []sddAttemptFlagDefinition{
 		sddAttemptCWDFlag, sddAttemptChangeFlag,
@@ -295,6 +375,29 @@ var sddAttemptOperationDefinitions = []sddAttemptOperationContract{
 		{name: "max-changed-lines", kind: sddAttemptIntFlag, required: true, usage: "required; explicit limit 1..1000000, cannot exceed current objective"},
 		{name: "reason", required: true, usage: "required; trimmed single-line text, at most 500 bytes"},
 		{name: "actor", required: true, usage: "required; trimmed single-line text, at most 128 bytes"},
+		{name: "objective-relation", usage: "optional; remediation (default) or independent — independent declares the successor does NOT inherit the closed objective's settle_obligation"},
+		// Optional maintainer-authorized fresh successor selection (#4195):
+		// admits eligible untracked files authored after the predecessor's
+		// terminal settlement, outside any active attempt, which the
+		// predecessor's recorded selection could never include. Omitting all
+		// three keeps replaying the predecessor's recorded selection.
+		{name: "untracked-scope", usage: "optional; declares a fresh successor selection instead of replaying history; select or exclude"},
+		{name: "expected-untracked-inventory", usage: "required with untracked-scope; inventory digest"},
+		{name: "intended-untracked", kind: sddAttemptRepeatableStringFlag, usage: "repeatable selected repo-relative untracked path"},
+	}},
+	{name: "supersede", purpose: "Open a distinct terminal zero-drift successor without claiming narrowing", flags: []sddAttemptFlagDefinition{
+		sddAttemptCWDFlag, sddAttemptChangeFlag,
+		{name: "expected-revision", required: true, usage: "required; exact sha256:<64 lowercase hex> runtime revision"},
+		{name: "request-id", required: true, usage: "required; lowercase idempotency key, at most 128 bytes"},
+		{name: "work-unit", required: true, usage: "required; declared successor label, at most 160 bytes"},
+		{name: "evidence-goal", required: true, usage: "required; declared successor objective, at most 240 bytes"},
+		{name: "max-attempts", kind: sddAttemptIntFlag, required: true, usage: "required; explicit limit 1..100, above carried attempts"},
+		{name: "max-changed-lines", kind: sddAttemptIntFlag, required: true, usage: "required; explicit limit 1..1000000, above carried lines"},
+		{name: "reason", required: true, usage: "required; trimmed single-line text, at most 500 bytes"}, {name: "actor", required: true, usage: "required; trimmed single-line text, at most 128 bytes"},
+		{name: "objective-relation", usage: "optional; remediation (default) or independent — independent suppresses inherited failed evidence observably"},
+		{name: "untracked-scope", usage: "optional; declares a fresh successor selection instead of replaying history; select or exclude"},
+		{name: "expected-untracked-inventory", usage: "required with untracked-scope; inventory digest"},
+		{name: "intended-untracked", kind: sddAttemptRepeatableStringFlag, usage: "repeatable selected repo-relative untracked path"},
 	}},
 	{name: "repair", purpose: "Repair the historical consecutive-rescope publication defect", flags: []sddAttemptFlagDefinition{
 		sddAttemptCWDFlag, sddAttemptChangeFlag,
@@ -306,12 +409,23 @@ var sddAttemptOperationDefinitions = []sddAttemptOperationContract{
 	{name: "acquire", purpose: "Claim a bounded attempt and return its token", flags: []sddAttemptFlagDefinition{
 		sddAttemptCWDFlag, sddAttemptChangeFlag,
 		{name: "token", usage: "optional; token from an earlier acquire to continue that active attempt"},
+		// #4160: acquire is a compact verb, but reset/status guidance may point
+		// a caller here after a mutation that moved the ledger, exactly as it
+		// points legacy callers at begin/finish/reset with --expected-revision.
+		// Optional and empty by default so every existing acquire call is
+		// unaffected; when given, it is validated as a CAS input against the
+		// live runtime revision, and must agree with --token when both are
+		// present, since a matching token already names that same revision.
+		{name: "expected-revision", usage: "optional; validated CAS input, empty or sha256:<64 lowercase hex>; must equal the current runtime revision, and must agree with --token when both are given"},
 		{name: "request-id", required: true, usage: "required; lowercase idempotency key, at most 128 bytes"},
 		{name: "work-unit", required: true, usage: "required; single-line label, at most 160 bytes"},
 		{name: "evidence-goal", required: true, usage: "required; single-line objective, at most 240 bytes"},
 		{name: "max-attempts", kind: sddAttemptIntFlag, usage: "optional; default 2, limit 1..100"},
 		{name: "max-changed-lines", kind: sddAttemptIntFlag, usage: "optional; default 200, limit 1..1000000"},
-		{name: "remediates-evidence-revision", usage: "optional; sha256:<64 lowercase hex> failed evidence for unmanaged remediation"},
+		{name: "remediates-evidence-revision", usage: "optional; sha256:<64 lowercase hex> failed evidence correction"},
+		{name: "untracked-scope", usage: "required when eligible untracked files exist; select or exclude"},
+		{name: "expected-untracked-inventory", usage: "required with untracked-scope; inventory digest"},
+		{name: "intended-untracked", kind: sddAttemptRepeatableStringFlag, usage: "repeatable selected repo-relative untracked path"},
 	}},
 	{name: "settle", purpose: "Complete the attempt selected by its token", flags: []sddAttemptFlagDefinition{
 		sddAttemptCWDFlag, sddAttemptChangeFlag,
@@ -323,8 +437,11 @@ var sddAttemptOperationDefinitions = []sddAttemptOperationContract{
 		{name: "harness-disposition", required: true, usage: "required; reused or invalidated"},
 		{name: "cleanup-evidence", required: true, usage: "required; trimmed single-line text, at most 500 bytes"},
 		{name: "process-evidence", required: true, usage: "required; trimmed single-line text, at most 500 bytes"},
-		{name: "successor-lineage", usage: "optional; lowercase distinct approved lineage, at most 128 bytes"},
 		{name: "remediates-evidence-revision", usage: "optional; repaired sha256:<64 lowercase hex> failed evidence"},
+		{name: "remediation-evidence", usage: "optional; strict gentle-ai.remediation-evidence/v1 JSON; derives --evidence-revision when it is omitted"},
+		{name: "untracked-scope", usage: "required when this attempt left eligible untracked files; select or exclude"},
+		{name: "expected-untracked-inventory", usage: "required with untracked-scope; inventory digest"},
+		{name: "intended-untracked", kind: sddAttemptRepeatableStringFlag, usage: "repeatable selected repo-relative untracked path"},
 	}},
 	{name: "grant", purpose: "Record per-change edit authority for roots", flags: []sddAttemptFlagDefinition{
 		sddAttemptCWDFlag, sddAttemptChangeFlag,
@@ -520,12 +637,32 @@ func registerSDDAttemptIntFlag(flags *flag.FlagSet, operation, name string) *int
 	if !ok {
 		return new(int)
 	}
-	return flags.Int(name, 0, definition.usage)
+	// Budgets default at the flag so an explicit zero reaches the range check (#1947).
+	value := 0
+	switch name {
+	case "max-attempts":
+		value = sddstatus.DefaultRuntimeAttemptLimit
+	case "max-changed-lines":
+		value = sddstatus.DefaultRuntimeChangedLines
+	}
+	return flags.Int(name, value, definition.usage)
 }
 
 func registerSDDAttemptRootFlag(flags *flag.FlagSet, operation string, roots *sddAttemptRootList) {
 	if definition, ok := sddAttemptOperationFlag(operation, "root"); ok {
 		flags.Var(roots, definition.name, definition.usage)
+	}
+}
+
+func registerSDDAttemptIntendedUntrackedFlag(flags *flag.FlagSet, operation string, paths *reviewRepeatedPathFlag) {
+	if definition, ok := sddAttemptOperationFlag(operation, "intended-untracked"); ok {
+		flags.Var(paths, definition.name, definition.usage)
+	}
+}
+
+func registerSDDAttemptSingleValueFlag(flags *flag.FlagSet, operation, name string, value *reviewSingleValueFlag) {
+	if definition, ok := sddAttemptOperationFlag(operation, name); ok {
+		flags.Var(value, definition.name, definition.usage)
 	}
 }
 
@@ -537,7 +674,11 @@ func missingSDDAttemptOperationFlags(args []string, operation, parsedOutcome str
 			names = append(names, flagDefinition.name)
 		}
 	}
-	if (operation == "finish" || operation == "settle") && parsedOutcome == "interrupted" {
+	// #2896: --remediation-evidence derives --evidence-revision, so a settle
+	// carrying it no longer needs the caller to also invent one.
+	dropEvidenceRevision := (operation == "finish" || operation == "settle") && parsedOutcome == "interrupted" ||
+		operation == "settle" && presentSDDAttemptFlags(args, "remediation-evidence") == 1
+	if dropEvidenceRevision {
 		filtered := names[:0]
 		for _, name := range names {
 			if name != "evidence-revision" {

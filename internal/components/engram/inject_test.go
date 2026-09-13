@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -852,6 +853,158 @@ func TestInjectClaudePreservesAbsoluteCommandFromEngramSetup(t *testing.T) {
 	}
 }
 
+// TestInjectClaudeSkipsMCPServersEngramWhenPluginEnabled reproduces issue
+// #4188: gentle-ai sync must not add mcpServers.engram to ~/.claude.json
+// when the Engram plugin is already enabled via
+// ~/.claude/settings.json's enabledPlugins["engram@engram"], because the
+// plugin already exposes the same 18 tools under a different prefix.
+func TestInjectClaudeSkipsMCPServersEngramWhenPluginEnabled(t *testing.T) {
+	home := t.TempDir()
+	mockEngramLookPath(t, "/opt/homebrew/bin/engram", "")
+	writeClaudeEngramPluginEnabled(t, home)
+
+	registryPath := claude.UserConfigPath(home)
+	registrySeed := []byte(`{"mcpServers":{"context7":{"command":"npx"}}}`)
+	if err := os.WriteFile(registryPath, registrySeed, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Repeated syncs must leave the user registry byte-for-byte unchanged.
+	for run := 1; run <= 2; run++ {
+		if _, err := Inject(home, claudeAdapter()); err != nil {
+			t.Fatalf("Inject() run %d error = %v", run, err)
+		}
+		if got, err := os.ReadFile(registryPath); err != nil || !bytes.Equal(got, registrySeed) {
+			t.Fatalf("Inject() run %d changed registry: got=%q error=%v", run, got, err)
+		}
+	}
+
+	registry := readJSONFile(t, registryPath)
+	mcpServers, _ := registry["mcpServers"].(map[string]any)
+	if _, exists := mcpServers["engram"]; exists {
+		t.Fatalf("mcpServers.engram must not be added when the Engram plugin is enabled; registry = %#v", registry)
+	}
+	assertNestedString(t, registry, "npx", "mcpServers", "context7", "command")
+}
+
+// TestInjectClaudePreservesIdenticalManualRegistrationsWhenPluginEnabled
+// verifies that sync never infers ownership from an Engram registration's
+// shape. A user can author exactly the same registry and legacy entries that
+// gentle-ai would write, so plugin detection must only suppress new writes.
+func TestInjectClaudePreservesIdenticalManualRegistrationsWhenPluginEnabled(t *testing.T) {
+	home := t.TempDir()
+	mockEngramLookPath(t, "/opt/homebrew/bin/engram", "")
+	writeClaudeEngramPluginEnabled(t, home)
+
+	registryPath := claude.UserConfigPath(home)
+	registrySeed := []byte(`{"mcpServers":{"context7":{"command":"npx"},"engram":{"command":"/opt/homebrew/bin/engram","args":["mcp","--tools=agent"]}}}`)
+	if err := os.WriteFile(registryPath, registrySeed, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	legacyPath := filepath.Join(home, ".claude", "mcp", "engram.json")
+	legacySeed := []byte(`{"command":"/opt/homebrew/bin/engram","args":["mcp","--tools=agent"]}`)
+	if err := os.MkdirAll(filepath.Dir(legacyPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(legacyPath, legacySeed, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	for run := 1; run <= 2; run++ {
+		if _, err := Inject(home, claudeAdapter()); err != nil {
+			t.Fatalf("Inject() run %d error = %v", run, err)
+		}
+	}
+	if got, err := os.ReadFile(registryPath); err != nil || !bytes.Equal(got, registrySeed) {
+		t.Fatalf("manual registry changed: got=%q error=%v", got, err)
+	}
+	if got, err := os.ReadFile(legacyPath); err != nil || !bytes.Equal(got, legacySeed) {
+		t.Fatalf("manual legacy config changed: got=%q error=%v", got, err)
+	}
+}
+
+// TestInjectClaudePreservesUserAuthoredMCPServersEngramWhenPluginEnabled
+// verifies that plugin detection only suppresses new direct registration and
+// never alters an existing customized mcpServers.engram entry.
+func TestInjectClaudePreservesUserAuthoredMCPServersEngramWhenPluginEnabled(t *testing.T) {
+	home := t.TempDir()
+	mockEngramLookPath(t, "/opt/homebrew/bin/engram", "")
+	writeClaudeEngramPluginEnabled(t, home)
+
+	registryPath := claude.UserConfigPath(home)
+	seed := `{"mcpServers":{"engram":{"command":"/custom/path/engram","args":["mcp","--tools=agent"],"env":{"FOO":"bar"}}}}`
+	if err := os.WriteFile(registryPath, []byte(seed), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Inject() also bootstraps CLAUDE.md's protocol section on a fresh
+	// tempdir, so overall Changed being true here is expected and not the
+	// behavior under test; only the registry content matters (issue #4188).
+	if _, err := Inject(home, claudeAdapter()); err != nil {
+		t.Fatalf("Inject() error = %v", err)
+	}
+
+	registry := readJSONFile(t, registryPath)
+	assertNestedString(t, registry, "/custom/path/engram", "mcpServers", "engram", "command")
+	assertNestedString(t, registry, "bar", "mcpServers", "engram", "env", "FOO")
+}
+
+func TestInjectClaudeUsesDirectMCPWhenPluginIsNotEnabled(t *testing.T) {
+	for _, tt := range []struct {
+		name     string
+		settings string
+	}{
+		{name: "plugin disabled", settings: `{"enabledPlugins":{"engram@engram":false}}`},
+		{name: "malformed settings", settings: `{not-json`},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			home := t.TempDir()
+			mockEngramLookPath(t, "/opt/homebrew/bin/engram", "")
+			settingsPath := filepath.Join(home, ".claude", "settings.json")
+			if err := os.MkdirAll(filepath.Dir(settingsPath), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(settingsPath, []byte(tt.settings), 0o644); err != nil {
+				t.Fatal(err)
+			}
+
+			if _, err := Inject(home, claudeAdapter()); err != nil {
+				t.Fatalf("Inject() error = %v", err)
+			}
+			registry := readJSONFile(t, claude.UserConfigPath(home))
+			assertNestedString(t, registry, "/opt/homebrew/bin/engram", "mcpServers", "engram", "command")
+		})
+	}
+}
+
+func TestInjectClaudePreservesMalformedRegistryWhenPluginEnabled(t *testing.T) {
+	home := t.TempDir()
+	writeClaudeEngramPluginEnabled(t, home)
+	registryPath := claude.UserConfigPath(home)
+	registrySeed := []byte(`{not-json`)
+	if err := os.WriteFile(registryPath, registrySeed, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := Inject(home, claudeAdapter()); err != nil {
+		t.Fatalf("Inject() error = %v", err)
+	}
+	if got, err := os.ReadFile(registryPath); err != nil || !bytes.Equal(got, registrySeed) {
+		t.Fatalf("malformed user registry changed: got=%q error=%v", got, err)
+	}
+}
+
+func writeClaudeEngramPluginEnabled(t *testing.T, home string) {
+	t.Helper()
+	settingsPath := filepath.Join(home, ".claude", "settings.json")
+	if err := os.MkdirAll(filepath.Dir(settingsPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(settingsPath, []byte(`{"enabledPlugins":{"engram@engram":true}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestInjectClaudePreservesManagedLegacyParentLayouts(t *testing.T) {
 	for _, symlinkParent := range []bool{true, false} {
 		name := "non-empty real parent"
@@ -1077,6 +1230,209 @@ func TestInjectCodexWritesProfiles(t *testing.T) {
 		if !strings.Contains(string(content), want) {
 			t.Fatalf("profile %q: want model_reasoning_effort = %s; got:\n%s", p.name, want, string(content))
 		}
+	}
+}
+
+func TestInjectCodexWithoutCLIUpdatesSharedConfigAndPreservesProfiles(t *testing.T) {
+	restore := codex.SetRuntimeVersionCommandForTest("", exec.ErrNotFound)
+	t.Cleanup(restore)
+
+	home := t.TempDir()
+	configPath := filepath.Join(home, ".codex", "config.toml")
+	if err := os.MkdirAll(filepath.Dir(configPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	const configBefore = "custom = \"preserve\"\n[unrelated]\nkeep = true\n"
+	if err := os.WriteFile(configPath, []byte(configBefore), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	profiles := map[string][]byte{
+		"sdd-strong.config.toml": []byte("user strong profile\n"),
+		"sdd-mid.config.toml":    []byte("user mid profile\n"),
+		"sdd-cheap.config.toml":  []byte("user cheap profile\n"),
+	}
+	for name, before := range profiles {
+		if err := os.WriteFile(filepath.Join(home, ".codex", name), before, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	first, err := Inject(home, codexAdapter())
+	if err != nil {
+		t.Fatalf("Inject(codex) with absent CLI error = %v", err)
+	}
+	if !first.Changed {
+		t.Fatal("Inject(codex) with absent CLI changed = false")
+	}
+	configAfterFirst, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(configAfterFirst), "custom = \"preserve\"") || !strings.Contains(string(configAfterFirst), "[mcp_servers.engram]") {
+		t.Fatalf("shared config was not preserved and updated:\n%s", configAfterFirst)
+	}
+	for name, before := range profiles {
+		got, readErr := os.ReadFile(filepath.Join(home, ".codex", name))
+		if readErr != nil || !bytes.Equal(got, before) {
+			t.Fatalf("profile %q changed with absent CLI: got=%q error=%v", name, got, readErr)
+		}
+	}
+
+	second, err := Inject(home, codexAdapter())
+	if err != nil {
+		t.Fatalf("second Inject(codex) with absent CLI error = %v", err)
+	}
+	if second.Changed {
+		t.Fatal("second Inject(codex) with absent CLI changed = true")
+	}
+	configAfterSecond, err := os.ReadFile(configPath)
+	if err != nil || !bytes.Equal(configAfterSecond, configAfterFirst) {
+		t.Fatalf("shared config was not idempotent: got=%q error=%v", configAfterSecond, err)
+	}
+}
+
+func TestInjectCodexReportsInstructionOnlyRepairsWithoutCLI(t *testing.T) {
+	restore := codex.SetRuntimeVersionCommandForTest("", exec.ErrNotFound)
+	t.Cleanup(restore)
+
+	for _, name := range []string{"engram-instructions.md", "engram-compact-prompt.md"} {
+		t.Run(name, func(t *testing.T) {
+			home := t.TempDir()
+			if _, err := Inject(home, codexAdapter()); err != nil {
+				t.Fatalf("initial Inject(codex) error = %v", err)
+			}
+
+			path := filepath.Join(home, ".codex", name)
+			if err := os.WriteFile(path, []byte("stale instruction\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+
+			result, err := Inject(home, codexAdapter())
+			if err != nil {
+				t.Fatalf("instruction-only repair error = %v", err)
+			}
+			if !result.Changed {
+				t.Fatal("instruction-only repair changed = false")
+			}
+			found := false
+			for _, file := range result.Files {
+				if file == path {
+					found = true
+					break
+				}
+			}
+			if !found {
+				t.Fatalf("instruction-only repair files = %v, want %q", result.Files, path)
+			}
+
+			second, err := Inject(home, codexAdapter())
+			if err != nil {
+				t.Fatalf("idempotent Inject(codex) error = %v", err)
+			}
+			if second.Changed {
+				t.Fatal("idempotent instruction-only repair changed = true")
+			}
+		})
+	}
+}
+
+func TestInjectCodexWithoutCLIWritesSharedConfigWithoutCreatingProfiles(t *testing.T) {
+	restore := codex.SetRuntimeVersionCommandForTest("", exec.ErrNotFound)
+	t.Cleanup(restore)
+
+	home := t.TempDir()
+	configPath := filepath.Join(home, ".codex", "config.toml")
+	profiles := []string{
+		filepath.Join(home, ".codex", "sdd-strong.config.toml"),
+		filepath.Join(home, ".codex", "sdd-mid.config.toml"),
+		filepath.Join(home, ".codex", "sdd-cheap.config.toml"),
+	}
+	assertProfilesAbsent := func(stage string) {
+		t.Helper()
+		for _, path := range profiles {
+			if _, err := os.Stat(path); !os.IsNotExist(err) {
+				t.Fatalf("profile %q %s: stat error = %v; want absent", path, stage, err)
+			}
+		}
+	}
+	assertProfilesAbsent("before injection")
+
+	first, err := Inject(home, codexAdapter())
+	if err != nil {
+		t.Fatalf("Inject(codex) with absent CLI error = %v", err)
+	}
+	if !first.Changed {
+		t.Fatal("Inject(codex) with absent CLI changed = false")
+	}
+	config, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("ReadFile(config.toml) error = %v", err)
+	}
+	if !strings.Contains(string(config), "[mcp_servers.engram]") ||
+		!strings.Contains(string(config), "model_instructions_file") ||
+		!strings.Contains(string(config), "experimental_compact_prompt_file") {
+		t.Fatalf("shared MCP/instruction config was not written:\n%s", config)
+	}
+	for _, path := range []string{
+		filepath.Join(home, ".codex", "engram-instructions.md"),
+		filepath.Join(home, ".codex", "engram-compact-prompt.md"),
+	} {
+		if _, err := os.Stat(path); err != nil {
+			t.Fatalf("shared instruction file %q was not written: %v", path, err)
+		}
+	}
+	assertProfilesAbsent("after first injection")
+
+	second, err := Inject(home, codexAdapter())
+	if err != nil {
+		t.Fatalf("second Inject(codex) with absent CLI error = %v", err)
+	}
+	if second.Changed {
+		t.Fatal("second Inject(codex) with absent CLI changed = true")
+	}
+	assertProfilesAbsent("after repeated injection")
+}
+
+func TestInjectCodexInvalidRuntimeDoesNotMutateFiles(t *testing.T) {
+	tests := []struct {
+		name   string
+		output string
+		err    error
+	}{
+		{name: "broken executable", err: &exec.Error{Name: "codex", Err: os.ErrPermission}},
+		{name: "malformed version", output: "codex-cli development"},
+		{name: "old version", output: "codex-cli 0.143.9"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			restore := codex.SetRuntimeVersionCommandForTest(tt.output, tt.err)
+			t.Cleanup(restore)
+
+			home := t.TempDir()
+			configPath := filepath.Join(home, ".codex", "config.toml")
+			profilePath := filepath.Join(home, ".codex", "sdd-strong.config.toml")
+			const configBefore = "user_setting = \"keep\"\n"
+			const profileBefore = "user profile bytes\n"
+			if err := os.MkdirAll(filepath.Dir(configPath), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(configPath, []byte(configBefore), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(profilePath, []byte(profileBefore), 0o644); err != nil {
+				t.Fatal(err)
+			}
+
+			if _, err := Inject(home, codexAdapter()); err == nil {
+				t.Fatal("Inject(codex) error = nil")
+			}
+			if got, err := os.ReadFile(configPath); err != nil || string(got) != configBefore {
+				t.Fatalf("config changed after validation failure: got=%q error=%v", got, err)
+			}
+			if got, err := os.ReadFile(profilePath); err != nil || string(got) != profileBefore {
+				t.Fatalf("profile changed after validation failure: got=%q error=%v", got, err)
+			}
+		})
 	}
 }
 
@@ -2331,6 +2687,47 @@ func TestInjectCodexOrchestratorAssignmentWritesTopLevelModel(t *testing.T) {
 	text := string(content)
 	if !strings.Contains(text, `model = "gpt-5.6-sol"`) || !strings.Contains(text, `model_reasoning_effort = "medium"`) {
 		t.Fatalf("top-level orchestrator assignment missing:\n%s", text)
+	}
+}
+
+func TestInjectCodexOrchestratorAssignmentPreservesNestedModelAssignments(t *testing.T) {
+	validCodexRuntime(t)
+	home := t.TempDir()
+	path := filepath.Join(home, ".codex", "config.toml")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(`model = "old-top-level-model"
+model_reasoning_effort = "low"
+
+[[profiles]] # user settings
+model = "nested-model"
+model_reasoning_effort = "nested-effort"
+model_instructions_file = "nested-instructions.md"
+experimental_compact_prompt_file = "nested-compact.md"
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	opts := InjectOptions{CodexOrchestratorAssignment: model.CodexPresetOrchestratorAssignment(string(model.CodexPresetRecommended))}
+	if _, err := InjectWithOptions(home, codexAdapter(), opts); err != nil {
+		t.Fatal(err)
+	}
+
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(content)
+	if !strings.Contains(text, `model = "gpt-5.6-sol"`) || !strings.Contains(text, `model_reasoning_effort = "medium"`) {
+		t.Fatalf("top-level orchestrator assignment missing:\n%s", text)
+	}
+	if !strings.Contains(text, `[[profiles]] # user settings
+model = "nested-model"
+model_reasoning_effort = "nested-effort"
+model_instructions_file = "nested-instructions.md"
+experimental_compact_prompt_file = "nested-compact.md"`) {
+		t.Fatalf("nested model assignments were not preserved:\n%s", text)
 	}
 }
 

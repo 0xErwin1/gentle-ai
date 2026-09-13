@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -11,10 +12,13 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/codex"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/kimi"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/backup"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/installcmd"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/pipeline"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/planner"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/state"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/system"
 )
@@ -132,6 +136,45 @@ func TestRunInstallReturnsStatePersistenceFailure(t *testing.T) {
 	}
 }
 
+func TestRunInstallCodexKeepsOldRuntimeFailure(t *testing.T) {
+	home := t.TempDir()
+	restoreHome := osUserHomeDir
+	restoreCommand := runCommand
+	restoreLookPath := cmdLookPath
+	t.Cleanup(func() {
+		osUserHomeDir = restoreHome
+		runCommand = restoreCommand
+		cmdLookPath = restoreLookPath
+	})
+	osUserHomeDir = func() (string, error) { return home, nil }
+	cmdLookPath = func(string) (string, error) { return "/usr/local/bin/engram", nil }
+	runCommand = func(string, ...string) error { return nil }
+	restoreRuntime := codex.SetRuntimeVersionCommandForTest("codex-cli 0.143.9", nil)
+	t.Cleanup(restoreRuntime)
+
+	profiles := []string{"sdd-strong.config.toml", "sdd-mid.config.toml", "sdd-cheap.config.toml"}
+	for _, name := range profiles {
+		path := filepath.Join(home, ".codex", name)
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte("user-content\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	_, err := RunInstall([]string{"--agent", "codex", "--component", "engram"}, macOSDetectionResult())
+	if err == nil || !strings.Contains(err.Error(), "Codex >=0.144.0") {
+		t.Fatalf("RunInstall() error = %v, want old Codex runtime failure", err)
+	}
+	for _, name := range profiles {
+		content, readErr := os.ReadFile(filepath.Join(home, ".codex", name))
+		if readErr != nil || string(content) != "user-content\n" {
+			t.Fatalf("old runtime modified %s: got=%q error=%v", name, content, readErr)
+		}
+	}
+}
+
 func TestRunInstallEngramForPiAndOpenCodeProvisionsBothMCPTargets(t *testing.T) {
 	home := t.TempDir()
 	restoreHome := osUserHomeDir
@@ -215,6 +258,74 @@ func TestAgentInstallStepSkipsMissingNonPiRuntime(t *testing.T) {
 	}
 }
 
+func TestPiAgentInstallProgressUsesAdapterCommandNames(t *testing.T) {
+	restorePreflightLookPath := installcmd.OverrideLookPath(func(name string) (string, error) { return name, nil })
+	t.Cleanup(restorePreflightLookPath)
+
+	restoreCommand := runCommand
+	t.Cleanup(func() { runCommand = restoreCommand })
+	runCommand = func(string, ...string) error { return nil }
+
+	var events []pipeline.ProgressEvent
+	step := agentInstallStep{
+		id:      "agent:pi",
+		agent:   model.AgentPi,
+		homeDir: t.TempDir(),
+		progress: func(event pipeline.ProgressEvent) {
+			events = append(events, event)
+		},
+	}
+	if err := step.Run(); err != nil {
+		t.Fatalf("agentInstallStep.Run() error = %v", err)
+	}
+
+	wantPackages := []string{"pi install npm:gentle-pi", "pi install npm:gentle-engram", "pi install npm:pi-mcp-adapter", engramInitCommandForTest, "pi install npm:@juicesharp/rpiv-ask-user-question", "pi install npm:pi-web-access", "pi install npm:pi-btw"}
+	if len(events) != len(wantPackages)*2 {
+		t.Fatalf("progress events = %d, want %d: %v", len(events), len(wantPackages)*2, events)
+	}
+	for i, commandLabel := range wantPackages {
+		wantID := "agent:pi:" + commandLabel
+		if events[i*2].StepID != wantID || events[i*2].Status != pipeline.StepStatusRunning {
+			t.Fatalf("running event[%d] = %+v, want step %q", i*2, events[i*2], wantID)
+		}
+		if events[i*2+1].StepID != wantID || events[i*2+1].Status != pipeline.StepStatusSucceeded {
+			t.Fatalf("succeeded event[%d] = %+v, want step %q", i*2+1, events[i*2+1], wantID)
+		}
+	}
+}
+
+func TestRunCommandSequenceWithProgressStopsAfterFailedCommand(t *testing.T) {
+	restoreCommand := runCommand
+	t.Cleanup(func() { runCommand = restoreCommand })
+	var commands []string
+	runCommand = func(name string, args ...string) error {
+		commands = append(commands, strings.Join(append([]string{name}, args...), " "))
+		return errors.New("package install failed")
+	}
+
+	var events []pipeline.ProgressEvent
+	err := runCommandSequenceWithProgress(
+		[][]string{{"pi", "install", "npm:first"}, {"pi", "install", "npm:second"}},
+		func(event pipeline.ProgressEvent) { events = append(events, event) },
+		"agent:pi",
+	)
+	if err == nil || !strings.Contains(err.Error(), "package install failed") {
+		t.Fatalf("runCommandSequenceWithProgress() error = %v, want package failure", err)
+	}
+	if len(commands) != 1 || commands[0] != "pi install npm:first" {
+		t.Fatalf("commands = %v, want only the failed command", commands)
+	}
+	if len(events) != 2 {
+		t.Fatalf("progress events = %v, want running and failed", events)
+	}
+	if events[0].StepID != "agent:pi:pi install npm:first" || events[0].Status != pipeline.StepStatusRunning {
+		t.Fatalf("running event = %+v", events[0])
+	}
+	if events[1].StepID != events[0].StepID || events[1].Status != pipeline.StepStatusFailed || events[1].Err == nil {
+		t.Fatalf("failed event = %+v", events[1])
+	}
+}
+
 func TestPiAgentInstallRunsPackageCommandsWhenPiAlreadyInstalled(t *testing.T) {
 	binDir := t.TempDir()
 	fakePi := filepath.Join(binDir, "pi")
@@ -265,10 +376,8 @@ func TestPiAgentInstallRunsPackageCommandsWhenPiAlreadyInstalled(t *testing.T) {
 		"pi install npm:gentle-engram",
 		"pi install npm:pi-mcp-adapter",
 		engramInitCommandForTest,
-		"pi install npm:pi-subagents-j0k3r",
 		"pi install npm:@juicesharp/rpiv-ask-user-question",
 		"pi install npm:pi-web-access",
-		"pi install npm:@juicesharp/rpiv-todo",
 		"pi install npm:pi-btw",
 	} {
 		if !stringSliceContains(commands, want) {
@@ -298,6 +407,7 @@ func TestRunInstallRollsBackOnComponentFailure(t *testing.T) {
 		cmdLookPath = restoreLookPath
 	})
 	cmdLookPath = missingBinaryLookPath
+	useMissingStandardExecutablePaths(t)
 
 	osUserHomeDir = func() (string, error) { return home, nil }
 	runCommand = func(name string, args ...string) error {
@@ -330,6 +440,53 @@ func TestRunInstallRollsBackOnComponentFailure(t *testing.T) {
 
 	if string(after) != string(before) {
 		t.Fatalf("settings content changed after rollback\nafter=%s\nbefore=%s", after, before)
+	}
+}
+
+type failingPersonaInstallStep struct{}
+
+func (failingPersonaInstallStep) ID() string { return "test:fail-after-persona" }
+func (failingPersonaInstallStep) Run() error {
+	return errors.New("forced failure after persona cleanup")
+}
+
+func TestInstallPersonaOnlyRollbackRestoresOpenCodeSettingsAfterCleanup(t *testing.T) {
+	home := t.TempDir()
+	settingsPath := filepath.Join(home, ".config", "opencode", "opencode.json")
+	before := []byte("// preserve exact JSONC bytes\n{\"agent\":{\"gentleman\":{\"tools\":{\"write\":true},\"description\":\"keep\"},\"user-owned\":{\"tools\":{\"custom\":true}}}}\n")
+	if err := os.MkdirAll(filepath.Dir(settingsPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(settingsPath, before, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	selection := model.Selection{
+		Agents:     []model.AgentID{model.AgentOpenCode},
+		Components: []model.ComponentID{model.ComponentPersona},
+		Persona:    model.PersonaGentleman,
+	}
+	resolved := planner.ResolvedPlan{Agents: selection.Agents, OrderedComponents: selection.Components}
+	runtime, err := newInstallRuntime(home, ScopeGlobal, ChannelStable, selection, resolved, system.PlatformProfile{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	restoreCommand := runCommand
+	runCommand = func(string, ...string) error { return nil }
+	t.Cleanup(func() { runCommand = restoreCommand })
+	plan := runtime.stagePlan()
+	plan.Prepare = plan.Prepare[1:]
+	plan.Apply = append(plan.Apply, failingPersonaInstallStep{})
+	result := pipeline.NewOrchestrator(pipeline.DefaultRollbackPolicy()).Execute(plan)
+	if result.Err == nil || !result.Rollback.Success {
+		t.Fatalf("persona-only install rollback = %#v", result)
+	}
+	after, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(after) != string(before) {
+		t.Fatalf("persona-only install rollback settings = %q, want exact before-image %q", after, before)
 	}
 }
 
@@ -813,14 +970,20 @@ func TestRunInstallMacOSStillResolvesBrewCommands(t *testing.T) {
 	restoreHome := osUserHomeDir
 	restoreCommand := runCommand
 	restoreLookPath := cmdLookPath
+	restoreStat := osStat
 	t.Cleanup(func() {
 		osUserHomeDir = restoreHome
 		runCommand = restoreCommand
 		cmdLookPath = restoreLookPath
+		osStat = restoreStat
 	})
 
 	osUserHomeDir = func() (string, error) { return home, nil }
 	cmdLookPath = missingBinaryLookPath
+	// Force resolveEngramInstalledPath's Homebrew-prefix fallback (#4020) to
+	// report "not found" regardless of the real machine running this test,
+	// so this test still exercises the genuinely-missing install path.
+	osStat = func(name string) (os.FileInfo, error) { return nil, os.ErrNotExist }
 	recorder := &commandRecorder{}
 	runCommand = recorder.record
 
@@ -922,6 +1085,7 @@ func TestRunInstallMacOSRollbackStillWorks(t *testing.T) {
 		cmdLookPath = restoreLookPath
 	})
 	cmdLookPath = missingBinaryLookPath
+	useMissingStandardExecutablePaths(t)
 
 	osUserHomeDir = func() (string, error) { return home, nil }
 	runCommand = func(name string, args ...string) error {
@@ -1044,18 +1208,37 @@ func TestRunInstallEngramFallsBackToInjectWhenSetupFails(t *testing.T) {
 	restoreHome := osUserHomeDir
 	restoreCommand := runCommand
 	restoreLookPath := cmdLookPath
+	restoreVerifyVersionCommand := verifyEngramVersionCommand
+	restoreProbeCommand := probeEngramProtocolFlagCommand
 	t.Cleanup(func() {
 		osUserHomeDir = restoreHome
 		runCommand = restoreCommand
 		cmdLookPath = restoreLookPath
+		verifyEngramVersionCommand = restoreVerifyVersionCommand
+		probeEngramProtocolFlagCommand = restoreProbeCommand
 	})
 
 	osUserHomeDir = func() (string, error) { return home, nil }
+	const engramPath = "/usr/local/bin/engram"
 	cmdLookPath = func(name string) (string, error) {
 		return "/usr/local/bin/" + name, nil
 	}
+	verifyEngramVersionCommand = func(command string) (string, error) {
+		if command != engramPath {
+			t.Fatalf("verify command = %q, want %q", command, engramPath)
+		}
+		return "engram 1.20.0", nil
+	}
+	probeEngramProtocolFlagCommand = func(_ context.Context, command string) (string, error) {
+		if command != engramPath {
+			t.Fatalf("protocol probe command = %q, want %q", command, engramPath)
+		}
+		return "Usage: engram setup <slug>", nil
+	}
+	setupFailureTriggered := false
 	runCommand = func(name string, args ...string) error {
-		if name == "engram" && len(args) == 2 && args[0] == "setup" && args[1] == "opencode" {
+		if name == engramPath && len(args) == 2 && args[0] == "setup" && args[1] == "opencode" {
+			setupFailureTriggered = true
 			return errors.New("setup failed")
 		}
 		return nil
@@ -1067,6 +1250,9 @@ func TestRunInstallEngramFallsBackToInjectWhenSetupFails(t *testing.T) {
 	)
 	if err != nil {
 		t.Fatalf("RunInstall() error = %v", err)
+	}
+	if !setupFailureTriggered {
+		t.Fatal("RunInstall() did not execute the controlled setup failure path")
 	}
 	if !result.Verify.Ready {
 		t.Fatalf("verification ready = false")
@@ -1085,22 +1271,41 @@ func TestRunInstallEngramSetupStrictFailsWhenSetupFails(t *testing.T) {
 	restoreHome := osUserHomeDir
 	restoreCommand := runCommand
 	restoreLookPath := cmdLookPath
+	restoreVerifyVersionCommand := verifyEngramVersionCommand
+	restoreProbeCommand := probeEngramProtocolFlagCommand
 	origUserHomeDirFn := backup.UserHomeDirFn
 	t.Cleanup(func() {
 		osUserHomeDir = restoreHome
 		runCommand = restoreCommand
 		cmdLookPath = restoreLookPath
+		verifyEngramVersionCommand = restoreVerifyVersionCommand
+		probeEngramProtocolFlagCommand = restoreProbeCommand
 		backup.UserHomeDirFn = origUserHomeDirFn
 	})
 	// Override restore path validation to accept test temp dirs.
 	backup.UserHomeDirFn = func() (string, error) { return home, nil }
 
 	osUserHomeDir = func() (string, error) { return home, nil }
+	const engramPath = "/usr/local/bin/engram"
 	cmdLookPath = func(name string) (string, error) {
 		return "/usr/local/bin/" + name, nil
 	}
+	verifyEngramVersionCommand = func(command string) (string, error) {
+		if command != engramPath {
+			t.Fatalf("verify command = %q, want %q", command, engramPath)
+		}
+		return "engram 1.20.0", nil
+	}
+	probeEngramProtocolFlagCommand = func(_ context.Context, command string) (string, error) {
+		if command != engramPath {
+			t.Fatalf("protocol probe command = %q, want %q", command, engramPath)
+		}
+		return "Usage: engram setup <slug>", nil
+	}
+	setupFailureTriggered := false
 	runCommand = func(name string, args ...string) error {
-		if name == "engram" && len(args) == 2 && args[0] == "setup" && args[1] == "opencode" {
+		if name == engramPath && len(args) == 2 && args[0] == "setup" && args[1] == "opencode" {
+			setupFailureTriggered = true
 			return errors.New("setup failed")
 		}
 		return nil
@@ -1110,6 +1315,9 @@ func TestRunInstallEngramSetupStrictFailsWhenSetupFails(t *testing.T) {
 		[]string{"--agent", "opencode", "--component", "engram"},
 		macOSDetectionResult(),
 	)
+	if !setupFailureTriggered {
+		t.Fatal("RunInstall() did not execute the controlled strict setup failure path")
+	}
 	if err == nil {
 		t.Fatalf("RunInstall() expected error in strict setup mode")
 	}
@@ -1489,10 +1697,12 @@ func TestRunInstallEngramBrewSkipsGoCheck(t *testing.T) {
 	restoreHome := osUserHomeDir
 	restoreCommand := runCommand
 	restoreLookPath := cmdLookPath
+	restoreStat := osStat
 	t.Cleanup(func() {
 		osUserHomeDir = restoreHome
 		runCommand = restoreCommand
 		cmdLookPath = restoreLookPath
+		osStat = restoreStat
 	})
 
 	osUserHomeDir = func() (string, error) { return home, nil }
@@ -1500,6 +1710,10 @@ func TestRunInstallEngramBrewSkipsGoCheck(t *testing.T) {
 	cmdLookPath = func(string) (string, error) {
 		return "", exec.ErrNotFound
 	}
+	// Force resolveEngramInstalledPath's Homebrew-prefix fallback (#4020) to
+	// report "not found" regardless of the real machine running this test,
+	// so this test still exercises the genuinely-missing install path.
+	osStat = func(name string) (os.FileInfo, error) { return nil, os.ErrNotExist }
 	recorder := &commandRecorder{}
 	runCommand = recorder.record
 
@@ -1932,17 +2146,16 @@ func TestRunInstallCustomPresetExplicitSkillsFlagPopulatesSelection(t *testing.T
 		t.Fatalf("expected branch-pr skill file %q: %v", branchPRPath, err)
 	}
 
-	// Note: the graph defines skills → sdd → engram as a hard dependency chain.
-	// Selecting --component skills auto-resolves sdd (and engram) as dependencies.
-	// The SDD component installs its own 10 SDD+orchestration skills during injection,
-	// regardless of the --skills flag. So sdd-init and other SDD skills ARE installed.
+	// Regression guard for #3554: `skills` no longer has a hard dependency on
+	// `sdd` in the planner graph, so selecting only the skills component must
+	// NOT auto-resolve SDD (or Engram). sdd-init and the rest of the SDD
+	// orchestrator suite are installed only by the SDD component itself.
 	sddInitPath := filepath.Join(home, ".claude", "skills", "sdd-init", "SKILL.md")
-	if _, err := os.Stat(sddInitPath); err != nil {
-		t.Fatalf("sdd-init skill should be installed (sdd is auto-resolved as dep of skills): %v", err)
+	if _, err := os.Stat(sddInitPath); !os.IsNotExist(err) {
+		t.Fatalf("sdd-init skill should NOT be installed (skills has no hard dependency on sdd): err=%v", err)
 	}
 
-	// The --skills flag controls what the skills COMPONENT adds on top of SDD skills.
-	// Total = 10 SDD skills + 2 explicit skills = 12 SKILL.md files.
+	// Total = 2 explicitly requested skills only.
 	skillsDir := filepath.Join(home, ".claude", "skills")
 	entries, err := os.ReadDir(skillsDir)
 	if err != nil {
@@ -1959,10 +2172,8 @@ func TestRunInstallCustomPresetExplicitSkillsFlagPopulatesSelection(t *testing.T
 			skillCount++
 		}
 	}
-	// 11 SDD skills (includes sdd-onboard, judgment-day) + 2 explicit skills
-	// (go-testing, branch-pr) + 1 _shared/SKILL.md = 14.
-	if skillCount != 14 {
-		t.Fatalf("expected 14 skill files (11 SDD + 2 explicit + 1 _shared), got %d", skillCount)
+	if skillCount != 2 {
+		t.Fatalf("expected 2 skill files (go-testing + branch-pr only, no SDD), got %d", skillCount)
 	}
 }
 
@@ -1999,12 +2210,10 @@ func TestRunInstallCustomPresetSkillsNoFlagInstallsNothing(t *testing.T) {
 		t.Fatalf("verification ready = false, report = %#v", result.Verify)
 	}
 
-	// The graph defines skills → sdd → engram as hard dependencies.
-	// Selecting --component skills auto-resolves sdd (and engram).
-	// The SDD component ALWAYS installs its 10 SDD+orchestration skills during injection.
-	// Without --skills flag, selectedSkillIDs() returns nil for custom preset,
-	// so the skills COMPONENT is a no-op — but the sdd DEPENDENCY still runs and
-	// installs its 10 skills.
+	// Regression guard for #3554: skills has no hard dependency on sdd, so
+	// selecting only --component skills without --skills (which leaves
+	// selectedSkillIDs() empty for the custom preset) truly installs nothing —
+	// sdd is not auto-resolved and its skills are not written.
 	skillsDir := filepath.Join(home, ".claude", "skills")
 	// Count SKILL.md files (one per skill, excluding _shared and other non-skill dirs).
 	var skillCount int
@@ -2019,11 +2228,50 @@ func TestRunInstallCustomPresetSkillsNoFlagInstallsNothing(t *testing.T) {
 			}
 		}
 	}
-	// Expect exactly 12 SKILL.md files: 10 SDD phases + judgment-day
-	// (from SDD dependency) + 1 _shared/SKILL.md.
-	// The skills component itself adds 0 (no --skills flag, SkillsForPreset(custom) = nil).
-	if skillCount != 12 {
-		t.Fatalf("expected 12 SDD skill files installed by the sdd dependency, got %d", skillCount)
+	if skillCount != 0 {
+		t.Fatalf("expected 0 skill files (skills has no hard dependency on sdd), got %d", skillCount)
+	}
+}
+
+// TestRunInstallSkillsAndSDDBothSelectedNoDuplicateSkillFiles guards #3554
+// review finding: skills+sdd together must write every sdd-* skill exactly
+// once plus the requested standalone skill — no duplicates, no clobbering.
+func TestRunInstallSkillsAndSDDBothSelectedNoDuplicateSkillFiles(t *testing.T) {
+	home := t.TempDir()
+	restoreHome, restoreCommand, restoreLookPath := osUserHomeDir, runCommand, cmdLookPath
+	t.Cleanup(func() {
+		osUserHomeDir, runCommand, cmdLookPath = restoreHome, restoreCommand, restoreLookPath
+	})
+	osUserHomeDir = func() (string, error) { return home, nil }
+	runCommand = func(string, ...string) error { return nil }
+	cmdLookPath = func(name string) (string, error) { return "/usr/local/bin/" + name, nil }
+
+	result, err := RunInstall([]string{
+		"--agent", "claude-code", "--preset", "custom",
+		"--component", "skills,sdd", "--skills", "go-testing",
+	}, system.DetectionResult{})
+	if err != nil || !result.Verify.Ready {
+		t.Fatalf("RunInstall() error = %v, verify = %#v", err, result.Verify)
+	}
+
+	skillsDir := filepath.Join(home, ".claude", "skills")
+	entries, err := os.ReadDir(skillsDir)
+	if err != nil {
+		t.Fatalf("ReadDir(%q) error = %v", skillsDir, err)
+	}
+	var skillCount int
+	for _, entry := range entries {
+		if _, statErr := os.Stat(filepath.Join(skillsDir, entry.Name(), "SKILL.md")); statErr == nil {
+			skillCount++
+		}
+	}
+	if skillCount != 13 {
+		t.Fatalf("expected 13 skill files (12 SDD + go-testing, no duplicates), got %d", skillCount)
+	}
+	for _, id := range []string{"sdd-init", "go-testing"} {
+		if _, err := os.Stat(filepath.Join(skillsDir, id, "SKILL.md")); err != nil {
+			t.Fatalf("expected %s skill file: %v", id, err)
+		}
 	}
 }
 

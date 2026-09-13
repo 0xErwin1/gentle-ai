@@ -13,6 +13,36 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v2/internal/opencode"
 )
 
+func TestProfileCleanupPreservesPermissionOrder(t *testing.T) {
+	for _, operation := range []string{"stale", "kilo", "remove"} {
+		t.Run(operation, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "opencode.json")
+			seed := `{"permission":{"bash":{"ssh *":"allow","*":"deny"}},"agent":{"jd-judge-a-test":{"permission":{"bash":"deny"}},"sdd-apply-test":{}}}`
+			if err := os.WriteFile(path, []byte(seed), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			profile := model.Profile{Name: "test"}
+			var err error
+			switch operation {
+			case "stale":
+				_, err = cleanupStaleProfileJDAgents(path, profile)
+			case "kilo":
+				profile.PhaseAssignments = map[string]model.ModelAssignment{"jd-judge-a": {ProviderID: "test", ModelID: "test"}}
+				_, err = cleanupKilocodeProfileJDPermissions(path, profile)
+			case "remove":
+				err = RemoveProfileAgents(path, "test")
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			got, err := os.ReadFile(path)
+			if err != nil || !strings.Contains(strings.Join(strings.Fields(string(got)), ""), `"bash":{"ssh*":"allow","*":"deny"}`) {
+				t.Fatalf("cleanup changed last-match deny: %s, %v", got, err)
+			}
+		})
+	}
+}
+
 func TestResolveProfileStrategy_ExplicitWins(t *testing.T) {
 	home := t.TempDir()
 
@@ -109,6 +139,7 @@ func TestProfileAgentKeys_Named(t *testing.T) {
 		"sdd-orchestrator-cheap",
 		"sdd-init-cheap",
 		"sdd-explore-cheap",
+		"sdd-research-cheap",
 		"sdd-propose-cheap",
 		"sdd-spec-cheap",
 		"sdd-design-cheap",
@@ -145,6 +176,7 @@ func TestProfileAgentKeys_Default(t *testing.T) {
 		"sdd-orchestrator",
 		"sdd-init",
 		"sdd-explore",
+		"sdd-research",
 		"sdd-propose",
 		"sdd-spec",
 		"sdd-design",
@@ -171,11 +203,11 @@ func TestProfileAgentKeys_Default(t *testing.T) {
 }
 
 func TestProfileAgentKeys_Count(t *testing.T) {
-	if n := len(ProfileAgentKeys("cheap")); n != 14 {
-		t.Errorf("ProfileAgentKeys(\"cheap\") = %d keys, want 14", n)
+	if n := len(ProfileAgentKeys("cheap")); n != 15 {
+		t.Errorf("ProfileAgentKeys(\"cheap\") = %d keys, want 15", n)
 	}
-	if n := len(ProfileAgentKeys("")); n != 11 {
-		t.Errorf("ProfileAgentKeys(\"\") = %d keys, want 11", n)
+	if n := len(ProfileAgentKeys("")); n != 12 {
+		t.Errorf("ProfileAgentKeys(\"\") = %d keys, want 12", n)
 	}
 }
 
@@ -246,6 +278,20 @@ func TestDetectProfiles_DefaultOnly(t *testing.T) {
 	}
 	if len(profiles) != 0 {
 		t.Fatalf("DetectProfiles() returned %d profiles, want 0 (default is not a detected profile)", len(profiles))
+	}
+}
+
+func TestDetectProfiles_OrphanedManagedPhase(t *testing.T) {
+	settingsPath := filepath.Join(t.TempDir(), "opencode.json")
+	if err := os.WriteFile(settingsPath, []byte(`{"agent":{"sdd-apply-fast":{"tools":{"read":true}}}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	profiles, err := DetectProfiles(settingsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(profiles) != 1 || profiles[0].Name != "fast" {
+		t.Fatalf("DetectProfiles() = %#v, want orphaned fast profile", profiles)
 	}
 }
 
@@ -390,7 +436,7 @@ func makeHaikuProfile() model.Profile {
 	haikuModel := model.ModelAssignment{ProviderID: "anthropic", ModelID: "claude-haiku-3-5"}
 	phases := map[string]model.ModelAssignment{}
 	for _, ph := range []string{
-		"sdd-init", "sdd-explore", "sdd-propose", "sdd-spec",
+		"sdd-init", "sdd-explore", "sdd-research", "sdd-propose", "sdd-spec",
 		"sdd-design", "sdd-tasks", "sdd-apply", "sdd-verify",
 		"sdd-archive", "sdd-onboard",
 	} {
@@ -429,9 +475,9 @@ func TestGenerateProfileOverlay_Structure(t *testing.T) {
 		t.Fatal("overlay 'agent' is not an object")
 	}
 
-	// Must have 11 agents
-	if len(agentMap) != 11 {
-		t.Errorf("agent map has %d entries, want 11", len(agentMap))
+	// Must have 12 agents
+	if len(agentMap) != 12 {
+		t.Errorf("agent map has %d entries, want 12", len(agentMap))
 	}
 
 	// Orchestrator checks
@@ -539,8 +585,8 @@ func TestGenerateProfileOverlay_JDAssignmentsGenerateSuffixedAgents(t *testing.T
 	}
 	agentMap := root["agent"].(map[string]any)
 
-	if len(agentMap) != 14 {
-		t.Fatalf("agent map has %d entries, want 14; keys: %v", len(agentMap), keysOf(agentMap))
+	if len(agentMap) != 15 {
+		t.Fatalf("agent map has %d entries, want 15; keys: %v", len(agentMap), keysOf(agentMap))
 	}
 
 	checks := map[string]string{
@@ -633,7 +679,7 @@ func TestGenerateProfileOverlay_NoJDAssignmentsUsesGlobalJDAgents(t *testing.T) 
 	}
 }
 
-func TestGenerateProfileOverlay_ToolsUseReplaceSentinel(t *testing.T) {
+func TestGenerateProfileOverlayOmitsDeprecatedTools(t *testing.T) {
 	home := t.TempDir()
 
 	overlay, err := GenerateProfileOverlay(makeHaikuProfile(), home, openCodeSettingsPathForTest(home), nil, "")
@@ -647,24 +693,9 @@ func TestGenerateProfileOverlay_ToolsUseReplaceSentinel(t *testing.T) {
 	}
 
 	agentMap := root["agent"].(map[string]any)
-	orch := agentMap["sdd-orchestrator-cheap"].(map[string]any)
-	toolsWrapper, ok := orch["tools"].(map[string]any)
-	if !ok {
-		t.Fatal("sdd-orchestrator-cheap tools is not an object")
-	}
-	tools, hasSentinel := toolsWrapper["__replace__"].(map[string]any)
-	if !hasSentinel {
-		t.Fatal("tools block must use __replace__ sentinel to discard legacy delegate tools on sync")
-	}
-
-	for _, required := range []string{"read", "write", "edit", "bash", "task"} {
-		if enabled, _ := tools[required].(bool); !enabled {
-			t.Fatalf("required tool %q missing or disabled: %#v", required, tools)
-		}
-	}
-	for _, legacyTool := range []string{"delegate", "delegation_read", "delegation_list"} {
-		if _, exists := tools[legacyTool]; exists {
-			t.Fatalf("legacy OpenCode tool %q must not be present: %#v", legacyTool, tools)
+	for name, raw := range agentMap {
+		if _, exists := raw.(map[string]any)["tools"]; exists {
+			t.Fatalf("profile agent %q emits deprecated tools: %#v", name, raw)
 		}
 	}
 }
@@ -701,7 +732,7 @@ func TestDefaultOverlayTaskPermissions_ExplicitAllowlist(t *testing.T) {
 	}
 }
 
-func TestDefaultOverlayToolsUseReplaceSentinel(t *testing.T) {
+func TestDefaultOverlayOmitsDeprecatedTools(t *testing.T) {
 	for _, assetPath := range []string{
 		"opencode/sdd-overlay-single.json",
 		"opencode/sdd-overlay-multi.json",
@@ -713,21 +744,9 @@ func TestDefaultOverlayToolsUseReplaceSentinel(t *testing.T) {
 			}
 
 			agentMap := root["agent"].(map[string]any)
-			orch := agentMap["gentle-orchestrator"].(map[string]any)
-			toolsWrapper := orch["tools"].(map[string]any)
-			tools, hasSentinel := toolsWrapper["__replace__"].(map[string]any)
-			if !hasSentinel {
-				t.Fatal("tools block must use __replace__ sentinel to discard legacy delegate tools on sync")
-			}
-
-			for _, required := range []string{"read", "write", "edit", "bash", "task"} {
-				if enabled, _ := tools[required].(bool); !enabled {
-					t.Fatalf("required tool %q missing or disabled: %#v", required, tools)
-				}
-			}
-			for _, legacyTool := range []string{"delegate", "delegation_read", "delegation_list"} {
-				if _, exists := tools[legacyTool]; exists {
-					t.Fatalf("legacy OpenCode tool %q must not be present: %#v", legacyTool, tools)
+			for name, raw := range agentMap {
+				if _, exists := raw.(map[string]any)["tools"]; exists {
+					t.Fatalf("%s agent %q emits deprecated tools: %#v", assetPath, name, raw)
 				}
 			}
 		})

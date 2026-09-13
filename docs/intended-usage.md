@@ -16,7 +16,7 @@ Open your AI agent in a project and start working. For richer project context, t
 
 ---
 
-## Engram (Memory) -- Automatic, But You CAN Use It
+## Engram™ (Memory) -- Automatic, But You CAN Use It
 
 Engram is persistent memory for your AI agent. It saves decisions, discoveries, bug fixes, and context across sessions -- automatically. The agent manages all of it via MCP tools (`mem_save`, `mem_search`, etc.).
 
@@ -117,7 +117,7 @@ The orchestrator must stop acting as a monolithic executor when complexity appea
 
 - **4-file rule**: reading 4+ files to understand a flow means delegate exploration or run an exploration phase.
 - **Multi-file write rule**: touching 2+ non-trivial files means use one writer or require fresh review before completion.
-- **PR rule**: before commit, push, or PR after code changes, run fresh review unless the diff is trivial (tier 1). Receipt-driven development is opt-in, so this applies once you have enabled it with `gentle-ai review mode enable --scope global`; with it off, delivery follows ordinary repository policy.
+- **PR rule**: review can provide fresh evidence for a commit, push, or PR, but it never authorizes delivery. Receipt-driven development is opt-in with `gentle-ai review mode enable --scope global`; whether it is on or off, ordinary repository policy decides delivery.
 - **Incident rule**: after wrong cwd, worktree/git accident, merge recovery, confusing test command, or environment workaround, run a fresh audit before continuing.
 - **Long-session rule**: after roughly 20 tool calls, 5 exploratory reads, or 2 non-mechanical edits with growing complexity, pause and delegate, re-plan, or justify why not.
 - **Fresh review rule**: use fresh context for adversarial review of diffs, conflicts, PR readiness, and incidents when the agent platform supports it.
@@ -144,7 +144,7 @@ Once installed, your agent detects what you're working on and loads the relevant
 How it works:
 
 1. **The registry refreshes at startup where the agent supports hooks.** Normal Pi startup runs the `gentle-pi` session hook. Codex, Claude Code, and OpenCode run `gentle-ai skill-registry refresh --quiet` from their installed startup/plugin hooks.
-2. **The refresh is cached.** Gentle-AI fingerprints discovered `SKILL.md` files using schema version, path, mtime, and size. If `.atl/.skill-registry.cache.json` matches and `.atl/skill-registry.md` exists, startup is a cheap cache-hit.
+2. **The refresh is cached.** Gentle-AI™ fingerprints discovered `SKILL.md` files using schema version, path, mtime, and size. If `.atl/.skill-registry.cache.json` matches and `.atl/skill-registry.md` exists, startup is a cheap cache-hit.
 3. **The orchestrator uses it automatically** -- once the registry exists, the orchestrator reads it at session start and passes exact matching `SKILL.md` paths to sub-agents. You don't interact with the registry after that.
 4. **Manual fallback stays available** -- run `gentle-ai skill-registry refresh --force` from a project if you want to regenerate immediately.
 
@@ -173,3 +173,50 @@ The less you think about gentle-ai after installing, the better it's working.
 | Let startup hooks or SDD init refresh the skill registry      | Manually rescan skills unless you need `gentle-ai skill-registry refresh --force` |
 | Say "use sdd" if you know you want structured planning     | Worry about which SDD phase comes next                                            |
 | Re-run the installer to update or change your setup        | Manually patch skill files or persona instructions                                |
+
+---
+
+## The SDD cycle, end to end
+
+You never need this diagram to use SDD -- the agent drives the phases. It is here for when you want to see the whole machine at once.
+
+```mermaid
+flowchart TD
+    A["User: sdd-new / sdd-explore<br/>(gentle-sdd-* in Claude Code)"] --> B["Explore<br/>investigate codebase and approaches"]
+    B --> BR{"External research<br/>selected?"}
+    BR -->|"yes"| BX["Research<br/>auditable external evidence<br/>exact grant · source mappings"]
+    BR -->|"no"| C["Propose<br/>intent · scope · approach"]
+    BX --> C
+    C --> D{"User approves<br/>the proposal?"}
+    D -->|"no"| B
+    D -->|"yes"| E["Spec<br/>requirements + scenarios"]
+    E --> F["Design<br/>architecture decisions"]
+    F --> G["Tasks<br/>ordered deliverable checklist"]
+    G --> H["Apply<br/>sub-agent implements against specs<br/>(sdd-attempt acquire/settle · CAS · budgets)"]
+    H --> Q["Verify<br/>independent verification against<br/>spec · design · tasks"]
+    Q -->|"passes"| R["Archive<br/>merge delta-specs · close the cycle"]
+    Q -->|"fails"| H
+    Q -.->|"optional, informational"| I["RDD review offer"]
+
+    subgraph RDD["RDD — same machine as the organic route"]
+        I --> J{"Risk"}
+        J -->|"low"| K["Structural readback"]
+        J -->|"medium / high"| L["1 lens or 4R + consent"]
+        L --> M{"Severe findings?"}
+        M -->|"yes"| N["One bounded correction<br/>+ fix validator"]
+        M -->|"no"| O["Review outcome: approved<br/>(informational)"]
+        K --> O
+        N -->|"validates"| O
+        N -->|"fails"| P["Escalated → recover"]
+        O --> AK["review.acknowledge-approved<br/>only the exact acknowledgement<br/>burns/closes the lineage"]
+    end
+
+    R --> S["Ordinary repository policy"]
+    S --> T["Commit → Push → PR"]
+
+    style O fill:#2D4F67,color:#fff
+    style P fill:#B8860B,color:#fff
+    style T fill:#2D4F67,color:#fff
+```
+
+SDD status v2 runtime state is independent from review. No review binding, receipt or gate controls SDD Archive or delivery; ordinary repository policy remains authoritative.

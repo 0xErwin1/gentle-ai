@@ -1,7 +1,6 @@
 package sddstatus
 
 import (
-	"fmt"
 	"strings"
 	"testing"
 )
@@ -46,14 +45,6 @@ func TestParseVerifyResultFailsClosedAndRequiresCurrentExecutionEvidence(t *test
 
 func TestValidateVerifyReportAdmission(t *testing.T) {
 	valid := testVerifyEnvelope("pass", 0, 0, "2/2", "3/3", 0, 0)
-	authority := strings.TrimSuffix(testVerifyEnvelope("fail", 1, 1, "0/2", "0/3", 125, 125), "```") + strings.Join([]string{
-		"authority_only_failure: true", "missing_review_authority: true", "substantive_failure: false", "command_failed: false",
-		"observed_authority_revision: sha256:" + strings.Repeat("d", 64), "```\n",
-	}, "\n")
-	authority = strings.Replace(authority, "test_exit_code: 1", "test_exit_code: 125", 1)
-	authority = strings.Replace(authority, "build_exit_code: 1", "build_exit_code: 125", 1)
-	authority = strings.ReplaceAll(authority, "sha256:"+strings.Repeat("b", 64), emptyOutputHash)
-	authority = strings.ReplaceAll(authority, "sha256:"+strings.Repeat("c", 64), emptyOutputHash)
 	tests := []struct {
 		name, report, reason string
 		valid                bool
@@ -66,23 +57,29 @@ func TestValidateVerifyReportAdmission(t *testing.T) {
 		{"critical", testVerifyEnvelope("fail", 0, 1, "2/2", "3/3", 0, 0), "", true},
 		{"incomplete requirement", testVerifyEnvelope("fail", 0, 0, "1/2", "3/3", 0, 0), "", true},
 		{"incomplete scenario", testVerifyEnvelope("fail", 0, 0, "2/2", "2/3", 0, 0), "", true},
-		{"authority-only denial", authority, "", true},
 		{"all-green failure", strings.Replace(valid, "verdict: pass", "verdict: fail", 1), "contradictory", false},
 		{"passing blocker", strings.Replace(valid, "blockers: 0", "blockers: 1", 1), "contradicts", false},
 		{"passing incomplete", strings.Replace(valid, "requirements: 2/2", "requirements: 1/2", 1), "contradicts", false},
 		{"count mismatch", valid, "actual requirement count", false},
 		{"front matter", "---\nverdict: pass\n---\n" + valid, "front matter", false},
 		{"prose first", "Result follows\n" + valid, "first non-empty", false},
+		// #2828: the fence contract as the CLI actually admits it.
+		{"utf-8 bom before fence", "\ufeff" + valid, "", true},
+		{"yml fence tag", strings.Replace(valid, "```yaml", "```yml", 1), "", true},
+		{"upper-case fence tag", strings.Replace(valid, "```yaml", "```YAML", 1), "", true},
+		{"untagged fence", strings.Replace(valid, "```yaml", "```", 1), "first non-empty line must be ```yaml", false},
+		{"tilde fence", strings.Replace(valid, "```yaml", "~~~yaml", 1), "first non-empty line must be ```yaml", false},
+		{"heading before fence", "# Verify report\n\n" + valid, "first non-empty line must be ```yaml", false},
+		{"refusal names the validator", strings.Replace(valid, "```yaml", "```", 1), "gentle-ai sdd-verify-validate", false},
 		{"unterminated", strings.TrimSuffix(valid, "```"), "unterminated", false},
 		{"duplicate", strings.Replace(valid, "verdict: pass", "verdict: pass\nverdict: pass", 1), "duplicate", false},
 		{"unknown", strings.Replace(valid, "verdict: pass", "verdict: pass\nextra: value", 1), "unknown", false},
 		{"malformed", strings.Replace(valid, "blockers: 0", "blockers", 1), "malformed", false},
 		{"missing", strings.Replace(valid, "build_command: go test ./cmd/gentle-ai\n", "", 1), "missing build_command", false},
-		{"invalid hash", strings.Replace(valid, "sha256:"+strings.Repeat("b", 64), "sha256:nope", 1), "invalid test_output_hash", false},
+		// #4089: the refusal must name the expected shape, not just the field.
+		{"invalid hash", strings.Replace(valid, "sha256:"+strings.Repeat("b", 64), "sha256:nope", 1), "test_output_hash must be sha256:<64 lowercase hex>", false},
+		{"invalid evidence_revision", strings.Replace(valid, "sha256:"+strings.Repeat("a", 64), "sha256:nope", 1), "evidence_revision must be sha256:<64 lowercase hex>", false},
 		{"placeholder command", strings.Replace(valid, "test_command: go test ./internal/example", "test_command: placeholder", 1), "concrete", false},
-		{"partial authority extension", strings.TrimSuffix(valid, "```") + "authority_only_failure: true\n```", "authority-only", false},
-		{"invalid authority extension", strings.Replace(authority, "command_failed: false", "command_failed: true", 1), "invalid authority-only", false},
-		{"reserved exit without extension", strings.Replace(strings.Replace(valid, "verdict: pass", "verdict: fail", 1), "test_exit_code: 0", "test_exit_code: 125", 1), "requires the exact authority-only", false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -98,14 +95,23 @@ func TestValidateVerifyReportAdmission(t *testing.T) {
 	}
 }
 
-func TestVerifyReportAuthorityOnlyFieldCountUsesContract(t *testing.T) {
-	partial := strings.TrimSuffix(testVerifyEnvelope("pass", 0, 0, "2/2", "3/3", 0, 0), "```") + "authority_only_failure: true\n```"
-	admission := ValidateVerifyReportAdmission(partial, SpecCounts{Requirements: 2, Scenarios: 3})
-	contract := VerifyReportValidationContract()
-	want := fmt.Sprintf("authority-only extension must contain exactly %d fields", len(contract.AuthorityOnlyFields))
-	if admission.Valid || admission.Reason != want {
-		t.Fatalf("admission = %#v, want invalid reason %q", admission, want)
+func TestLegacyMissingReviewAuthorityIsInformationalAndIncomplete(t *testing.T) {
+	report := legacyMissingReviewReport()
+	admission := ValidateVerifyReportAdmission(report, SpecCounts{Requirements: 2, Scenarios: 3})
+	if !admission.Valid {
+		t.Fatalf("legacy report admission = %#v, want decoder compatibility", admission)
 	}
+	evaluation := parseVerifyResult(report, SpecCounts{Requirements: 2, Scenarios: 3})
+	if evaluation.Passing || !strings.Contains(evaluation.Reason, "independent test and build execution evidence is incomplete") {
+		t.Fatalf("legacy evaluation = %#v, want non-passing incomplete verification evidence", evaluation)
+	}
+}
+
+func legacyMissingReviewReport() string {
+	report := testVerifyEnvelope("fail", 1, 1, "0/2", "0/3", 1, 1)
+	report = strings.Replace(report, "test_exit_code: 1", "test_exit_code: 125", 1)
+	report = strings.Replace(report, "build_exit_code: 1", "build_exit_code: 125", 1)
+	return strings.TrimSuffix(report, "```") + "missing_review_authority: true\n```"
 }
 
 func TestCountSpecRequirementsAndScenariosUsesActualArtifacts(t *testing.T) {
@@ -173,4 +179,54 @@ func itoa(value int) string {
 		return "0"
 	}
 	return "1"
+}
+
+// TestDeriveRemediationEvidenceRevision pins #2896: a passing remediation
+// settle must be able to derive its authoritative --evidence-revision from
+// admitted evidence instead of requiring the caller to invent one.
+func TestDeriveRemediationEvidenceRevision(t *testing.T) {
+	failed := "sha256:" + strings.Repeat("a", 64)
+	valid := `{"schema":"gentle-ai.remediation-evidence/v1","failed_evidence_revision":"` + failed + `",` +
+		`"commands":[{"command":"go test ./...","exit_code":0,"result":"293 passed"}],` +
+		`"runtime_harness":{"status":"not_applicable","na_reason":"no runtime harness because this change is test-only"},` +
+		`"rollback":{"boundary":"commit 9ec76eec32","evidence":"git revert 9ec76eec32 restores the prior passing state"}}`
+
+	t.Run("valid evidence derives a stable revision", func(t *testing.T) {
+		first, err := DeriveRemediationEvidenceRevision(valid, failed)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !sha256IdentityPattern.MatchString(first) {
+			t.Fatalf("derived revision %q is not sha256:<64 lowercase hex>", first)
+		}
+		if first == failed {
+			t.Fatalf("derived revision must not equal the failed evidence it repairs")
+		}
+		second, err := DeriveRemediationEvidenceRevision(valid, failed)
+		if err != nil || second != first {
+			t.Fatalf("DeriveRemediationEvidenceRevision is not deterministic: %q vs %q (err=%v)", first, second, err)
+		}
+	})
+
+	tests := []struct {
+		name           string
+		evidence       string
+		expectedFailed string
+	}{
+		{name: "malformed JSON", evidence: "{not json", expectedFailed: failed},
+		{name: "unknown field rejected", evidence: strings.Replace(valid, `"schema"`, `"extra":"x","schema"`, 1), expectedFailed: failed},
+		{name: "wrong schema", evidence: strings.Replace(valid, "gentle-ai.remediation-evidence/v1", "gentle-ai.remediation-evidence/v2", 1), expectedFailed: failed},
+		{name: "failed_evidence_revision mismatch", evidence: valid, expectedFailed: "sha256:" + strings.Repeat("b", 64)},
+		{name: "no commands", evidence: strings.Replace(valid, `"commands":[{"command":"go test ./...","exit_code":0,"result":"293 passed"}]`, `"commands":[]`, 1), expectedFailed: failed},
+		{name: "failing command exit code", evidence: strings.Replace(valid, `"exit_code":0`, `"exit_code":1`, 1), expectedFailed: failed},
+		{name: "runtime_harness status not passed or not_applicable", evidence: strings.Replace(valid, `"status":"not_applicable"`, `"status":"skipped"`, 1), expectedFailed: failed},
+		{name: "rollback boundary not concrete", evidence: strings.Replace(valid, `"boundary":"commit 9ec76eec32"`, `"boundary":"n/a"`, 1), expectedFailed: failed},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if _, err := DeriveRemediationEvidenceRevision(test.evidence, test.expectedFailed); err == nil {
+				t.Fatalf("DeriveRemediationEvidenceRevision(%q) error = nil, want rejection", test.name)
+			}
+		})
+	}
 }

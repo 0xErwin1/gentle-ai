@@ -2,8 +2,76 @@ package filemerge
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 )
+
+func TestPermissionOverlayNewWildcardCannotOverrideExistingDeny(t *testing.T) {
+	got, err := MergeJSONObjects([]byte(`{"permission":{"bash":{"ssh*":"deny"}}}`), []byte(`{"permission":{"bash":{"*":"allow"}}}`))
+	if err != nil || !strings.Contains(strings.Join(strings.Fields(string(got)), ""), `"bash":{"*":"allow","ssh*":"deny"}`) {
+		t.Fatalf("new wildcard changed the effective SSH deny: %s, %v", got, err)
+	}
+}
+
+func TestPermissionOverlayCannotReplaceRestrictionsWithScalarAllow(t *testing.T) {
+	for _, base := range []string{`{"permission":{"bash":{"ssh *":"deny"}}}`, `{"agent":{"custom":{"permission":{"bash":"deny"}}}}`} {
+		got, err := MergeJSONObjects([]byte(base), []byte(`{"permission":"allow","agent":{"custom":{"permission":"allow"}}}`))
+		if err != nil || !strings.Contains(string(got), `"deny"`) {
+			t.Fatalf("scalar overlay erased a restriction: %s, %v", got, err)
+		}
+	}
+}
+
+func TestPermissionDefaultsJSONCAndRestrictiveAgent(t *testing.T) {
+	base := []byte("// personal settings\n" + `{"permission":{"bash":{"*":"allow","ssh*":"deny"}},"agent":{"custom":{"permission":"deny"}}}`)
+	got, err := MergeJSONDefaultsForPath("opencode.jsonc", base, []byte(`{"permission":{"bash":{"*":"allow","ssh *":"ask"}}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(string(got), "// personal settings") {
+		t.Fatal("defaults lost JSONC comment")
+	}
+	repeated, err := MergeJSONDefaultsForPath("opencode.jsonc", got, []byte(`{"permission":{"bash":{"*":"allow","ssh *":"ask"}}}`))
+	if err != nil || string(repeated) != string(got) {
+		t.Fatalf("JSONC defaults are not idempotent: %v", err)
+	}
+	got, err = MergeJSONObjectsForPath("opencode.jsonc", got, []byte(`{"agent":{"custom":{"permission":{"bash":"allow"}}}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	compact := strings.Join(strings.Fields(string(got)), "")
+	if !strings.Contains(compact, `"custom":{"permission":"deny"}`) || !strings.Contains(compact, `"bash":{"*":"allow","ssh*":"ask","ssh*":"deny"}`) {
+		t.Fatalf("cross-writer merge weakened restrictive permission: %s", got)
+	}
+}
+
+func TestPermissionOrderSurvivesCrossWriterMerge(t *testing.T) {
+	for _, path := range []string{"opencode.json", "opencode.jsonc"} {
+		t.Run(path, func(t *testing.T) {
+			base := []byte(`{"permission":{"bash":{"ssh *":"allow","*":"deny"}},"agent":{"custom":{"permission":{"bash":{"ssh *":"allow","*":"deny"}}}}}`)
+			// Agent-tools retirement is another settings writer outside the
+			// overlay merge; it must use the same serialization authority.
+			base = []byte(strings.Replace(string(base), `"custom":{`, `"custom":{"tools":{"bash":true},`, 1))
+			base, err := RemoveJSONAgentTools(base, "custom")
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, overlay := range []string{`{"agent":{"gentle-orchestrator":{"prompt":"guidance"}}}`, `{"agent":{"sdd-apply":{"permission":{}}}}`} {
+				got, err := MergeJSONObjectsForPath(path, base, []byte(overlay))
+				if err != nil {
+					t.Fatal(err)
+				}
+				// Both patterns match ssh example.invalid: the final serialized
+				// rule must remain deny, globally and in the custom agent.
+				compact := strings.Join(strings.Fields(string(got)), "")
+				if strings.Count(compact, `"bash":{"ssh*":"allow","*":"deny"}`) != 2 {
+					t.Fatalf("last-match deny was reordered by %s: %s", overlay, got)
+				}
+				base = got
+			}
+		})
+	}
+}
 
 func TestMergeJSONObjectsRecursively(t *testing.T) {
 	base := []byte(`{"plugins":["a"],"settings":{"theme":"default","flags":{"x":true}}}`)
@@ -63,6 +131,137 @@ func TestMergeJSONObjectsSupportsJSONCBase(t *testing.T) {
 
 	if got["editor.fontSize"] != float64(14) {
 		t.Fatalf("editor.fontSize = %v", got["editor.fontSize"])
+	}
+}
+
+func TestMergeJSONObjectsPreserveJSONCKeepsCommentsAndTrailingCommas(t *testing.T) {
+	base := []byte(`{
+  // user provider note
+  "provider": {
+    "local": {"models": {"m": {},},},
+  },
+  // managed server note
+  "mcp": {
+    "engram": {"command": ["engram", "mcp"],},
+  },
+}`)
+	overlay := []byte(`{"mcp":{"context7":{"type":"remote","enabled":true}}}`)
+
+	merged, err := MergeJSONObjectsPreserveJSONC(base, overlay)
+	if err != nil {
+		t.Fatalf("MergeJSONObjectsPreserveJSONC() error = %v", err)
+	}
+	text := string(merged)
+	for _, want := range []string{"// user provider note", `"m": {},`, "// managed server note"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("merged JSONC missing preserved text %q:\n%s", want, text)
+		}
+	}
+	parsed, err := UnmarshalJSONObject(merged)
+	if err != nil {
+		t.Fatalf("merged JSONC no longer parses: %v\n%s", err, text)
+	}
+	mcp := parsed["mcp"].(map[string]any)
+	if _, ok := mcp["engram"]; !ok {
+		t.Fatalf("existing MCP entry was lost: %#v", mcp)
+	}
+	if _, ok := mcp["context7"]; !ok {
+		t.Fatalf("overlay MCP entry was not added: %#v", mcp)
+	}
+}
+
+func TestMergeJSONObjectsPreserveJSONCInsertsMissingKeyAndUnwrapsSentinel(t *testing.T) {
+	base := []byte(`{
+  "provider": {"local": {}} // keep provider note
+}`)
+	overlay := []byte(`{"mcp":{"engram":{"__replace__":{"command":["engram","mcp"],"type":"local"}}}}`)
+
+	merged, err := MergeJSONObjectsPreserveJSONC(base, overlay)
+	if err != nil {
+		t.Fatalf("MergeJSONObjectsPreserveJSONC() error = %v", err)
+	}
+	text := string(merged)
+	if strings.Contains(text, "__replace__") {
+		t.Fatalf("sentinel leaked into inserted JSONC output:\n%s", text)
+	}
+	if !strings.Contains(text, "// keep provider note") {
+		t.Fatalf("existing trailing comment was not preserved:\n%s", text)
+	}
+	parsed, err := UnmarshalJSONObject(merged)
+	if err != nil {
+		t.Fatalf("merged JSONC no longer parses: %v\n%s", err, text)
+	}
+	mcp := parsed["mcp"].(map[string]any)
+	engram := mcp["engram"].(map[string]any)
+	if _, ok := engram["command"].([]any); !ok {
+		t.Fatalf("engram command was not unwrapped into an array: %#v", engram)
+	}
+}
+
+func TestMergeJSONObjectsPreserveJSONCInsertionIgnoresClosingBraceComments(t *testing.T) {
+	base := []byte(`{
+  "provider": {"local": {}} // keep provider note
+}
+// comment with } after document
+`)
+	overlay := []byte(`{"mcp":{"context7":{"type":"remote"}}}`)
+
+	merged, err := MergeJSONObjectsPreserveJSONC(base, overlay)
+	if err != nil {
+		t.Fatalf("MergeJSONObjectsPreserveJSONC() error = %v", err)
+	}
+	if _, err := UnmarshalJSONObject(merged); err != nil {
+		t.Fatalf("merged JSONC no longer parses: %v\n%s", err, string(merged))
+	}
+	if !strings.Contains(string(merged), "// comment with } after document") {
+		t.Fatalf("closing-brace comment was not preserved:\n%s", string(merged))
+	}
+}
+
+func TestMergeJSONObjectsPreserveJSONCExistingFinalMemberIdempotent(t *testing.T) {
+	base := []byte("{\n  \"theme\": \"default\"  \n}\n")
+	overlay := []byte(`{"theme":"gentleman"}`)
+
+	merged, err := MergeJSONObjectsPreserveJSONC(base, overlay)
+	if err != nil {
+		t.Fatalf("MergeJSONObjectsPreserveJSONC() error = %v", err)
+	}
+	mergedAgain, err := MergeJSONObjectsPreserveJSONC(merged, overlay)
+	if err != nil {
+		t.Fatalf("MergeJSONObjectsPreserveJSONC() second merge error = %v", err)
+	}
+	if string(mergedAgain) != string(merged) {
+		t.Fatalf("repeated merge changed bytes:\nfirst:\n%s\nsecond:\n%s", string(merged), string(mergedAgain))
+	}
+}
+
+func TestMergeJSONObjectsPreserveJSONCRejectsMalformedInputWithoutReplacingBytes(t *testing.T) {
+	base := []byte("// interrupted user edit\n{\n  \"mcp\": {\n")
+	overlay := []byte(`{"mcp":{"context7":{"type":"remote"}}}`)
+
+	merged, err := MergeJSONObjectsPreserveJSONC(base, overlay)
+	if err == nil {
+		t.Fatal("MergeJSONObjectsPreserveJSONC() error = nil, want refusal for malformed JSONC")
+	}
+	if string(merged) != string(base) {
+		t.Fatalf("malformed JSONC was replaced:\n got: %q\nwant: %q", merged, base)
+	}
+}
+
+func TestMergeJSONObjectsPreserveJSONCRejectsDuplicateTouchedTopLevelKey(t *testing.T) {
+	base := []byte(`{
+  "agent": {"effective": "stale"},
+  "agent": {"effective": "current"}
+}
+`)
+	overlay := []byte(`{"agent":{"managed":true}}`)
+
+	merged, err := MergeJSONObjectsPreserveJSONC(base, overlay)
+	if err == nil {
+		t.Fatal("MergeJSONObjectsPreserveJSONC() error = nil, want refusal for duplicate touched top-level key")
+	}
+	if string(merged) != string(base) {
+		t.Fatalf("duplicate-key JSONC was modified on refusal:\n got: %q\nwant: %q", merged, base)
 	}
 }
 

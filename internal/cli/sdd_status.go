@@ -16,9 +16,9 @@ func sddReviewDisabledForWorkspace(workspaceRoot string) (bool, error) {
 // RunSDDStatus is the CLI entry point for `gentle-ai sdd-status [change]`.
 //
 // The kill switch reaches SDD status here, at the one layer that owns the
-// single source of truth for both of its sources. An unreadable switch fails
-// closed to "enabled", while an unsafe RAR path remains an actionable refusal
-// instead of being projected to a misleading gate result.
+// single source of truth for both of its sources. A failed advisory-mode
+// lookup suppresses the review offer, not read-only SDD inspection. Review
+// mutations retain their own unsafe-authority refusals.
 func RunSDDStatus(args []string, stdout io.Writer) error {
 	parsed, err := sddstatus.ParseCommandArgs(args)
 	if err != nil {
@@ -36,9 +36,9 @@ func RunSDDStatus(args []string, stdout io.Writer) error {
 	}
 
 	if parsed.JSON {
-		projected, projectionErr := sddstatus.ProjectStatusV1(status)
+		projected, projectionErr := sddstatus.ProjectStatusV2(status)
 		if projectionErr != nil {
-			return fmt.Errorf("project SDD status v1: %w", projectionErr)
+			return fmt.Errorf("project SDD status v2: %w", projectionErr)
 		}
 		encoder := json.NewEncoder(stdout)
 		encoder.SetIndent("", "  ")
@@ -65,11 +65,23 @@ func RunSDDContinue(args []string, stdout io.Writer) error {
 	if err != nil {
 		return fmt.Errorf("resolve sdd status: %w", err)
 	}
+	if err := sddstatus.PrepareChangeInstanceConsent(status); err != nil {
+		return fmt.Errorf("prepare sdd continuation consent: %w", err)
+	}
+	status, err = sddstatus.Resolve(sddstatus.ResolveOptions{
+		CWD:                        parsed.CWD,
+		ChangeName:                 parsed.ChangeName,
+		IncludeInstructions:        true,
+		ReviewDisabledForWorkspace: sddReviewDisabledForWorkspace,
+	})
+	if err != nil {
+		return fmt.Errorf("resolve prepared sdd continuation status: %w", err)
+	}
 
 	if parsed.JSON {
-		projected, projectionErr := sddstatus.ProjectStatusV1(status)
+		projected, projectionErr := sddstatus.ProjectStatusV2(status)
 		if projectionErr != nil {
-			return fmt.Errorf("project SDD status v1: %w", projectionErr)
+			return fmt.Errorf("project SDD status v2: %w", projectionErr)
 		}
 		encoder := json.NewEncoder(stdout)
 		encoder.SetIndent("", "  ")

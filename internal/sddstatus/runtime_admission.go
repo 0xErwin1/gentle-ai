@@ -3,6 +3,7 @@ package sddstatus
 import (
 	"context"
 	"errors"
+	"slices"
 
 	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
 )
@@ -14,6 +15,57 @@ type runtimeBeginAdmissionResult struct {
 	Advancing  bool
 	Generation int
 	Snapshot   reviewtransaction.Snapshot
+}
+
+// runtimeRescopeSuccessorIntendedUntracked recovers only the exact selection
+// whose candidate opened a fresh rescope successor. #4195: when the rescope
+// itself declared a fresh selection, THAT is the inventory-validated scope
+// that produced InitialCandidate* and must be inherited; otherwise the
+// successor has no attempt of its own yet, so its predecessor's recorded
+// selection is the sole inventory-validated scope that can reproduce it.
+func runtimeRescopeSuccessorIntendedUntracked(status RuntimeStatus) ([]string, bool) {
+	if status.Objective == nil || status.ActiveAttempt != nil || runtimeObjectiveHasRecordedAttempt(status) || len(status.Attempts) == 0 {
+		return nil, false
+	}
+	objectiveID, predecessorID, predecessorGeneration := "", "", 0
+	var intended *[]string
+	if status.LastRescope != nil && status.LastRescope.ObjectiveID == status.Objective.ID {
+		objectiveID, predecessorID, predecessorGeneration, intended = status.LastRescope.ObjectiveID, status.LastRescope.PreviousObjectiveID, status.LastRescope.PreviousGeneration, status.LastRescope.IntendedUntracked
+	} else if status.LastSupersede != nil && status.LastSupersede.ObjectiveID == status.Objective.ID {
+		objectiveID, predecessorID, predecessorGeneration, intended = status.LastSupersede.ObjectiveID, status.LastSupersede.PreviousObjectiveID, status.LastSupersede.PreviousGeneration, status.LastSupersede.IntendedUntracked
+	}
+	if objectiveID != status.Objective.ID {
+		return nil, false
+	}
+	if intended != nil {
+		return slices.Clone(*intended), true
+	}
+	predecessor := status.Attempts[len(status.Attempts)-1]
+	if predecessor.ObjectiveID != predecessorID || predecessor.ObjectiveGeneration != predecessorGeneration ||
+		predecessor.Outcome == AttemptRunning {
+		return nil, false
+	}
+	return slices.Clone(predecessor.IntendedUntracked), true
+}
+
+func (store RuntimeStore) runtimeRescopeSuccessorRequest(ctx context.Context, status RuntimeStatus, request BeginAttemptRequest, inherit bool) (BeginAttemptRequest, error) {
+	if !inherit {
+		return request, nil
+	}
+	if intended, ok := runtimeRescopeSuccessorIntendedUntracked(status); ok {
+		request.IntendedUntracked = intended
+		if status.DecisionRequired || status.Complete {
+			return request, nil
+		}
+		// Only inherited history is reconciled; an explicit caller selection
+		// must still pass the ordinary fresh-candidate validation unchanged.
+		reconciled, err := runtimeReplayedIntendedUntracked(ctx, store.Repo, intended)
+		if err != nil {
+			return request, wrapRuntimeCandidateUnavailable("before launch", err)
+		}
+		request.IntendedUntracked = reconciled
+	}
+	return request, nil
 }
 
 // runtimeBeginAdmission is the ONE evaluator of every precondition Begin must
@@ -38,7 +90,7 @@ func (store RuntimeStore) runtimeBeginAdmission(
 	ctx context.Context, status RuntimeStatus, request BeginAttemptRequest,
 ) (runtimeBeginAdmissionResult, error) {
 	if status.ActiveAttempt != nil {
-		return runtimeBeginAdmissionResult{}, ErrRuntimeAttemptActive
+		return runtimeBeginAdmissionResult{}, store.runtimeAttemptActiveRefusal(*status.ActiveAttempt)
 	}
 	// A passed objective terminates its own scope, not the change. When the
 	// request names a distinct work unit, the ordinary continuation is the
@@ -65,15 +117,29 @@ func (store RuntimeStore) runtimeBeginAdmission(
 		// Finish is the candidate provenance to chase.
 		generation = status.Objective.Generation
 		if runtimeObjectiveScopeChanged(status, request) {
-			return runtimeBeginAdmissionResult{}, store.runtimeObjectiveChangeRefusal(ctx, status)
+			return runtimeBeginAdmissionResult{}, store.runtimeObjectiveChangeRefusal(ctx, status, request)
 		}
 		last := status.Attempts[len(status.Attempts)-1]
 		if last.Outcome == AttemptRunning || last.FinishCandidateIdentity == "" || last.FinishCandidateTree == "" {
 			return runtimeBeginAdmissionResult{}, errors.New("SDD runtime objective has invalid terminal candidate provenance")
 		}
-		snapshot, err = captureRuntimeTerminalCandidate(ctx, store, last.BeginCandidateTree)
+		// #3842: the terminal capture replays the RECORDED selection, which
+		// the user may have legitimately committed since the last settle, so
+		// reconcile it against the current index first — a committed path then
+		// replays as zero drift or as ordinary candidate drift, never as a
+		// capture failure. The request-vs-recorded comparison below
+		// deliberately stays against the recorded list: what the caller must
+		// re-request is the scope the ledger holds, exactly as acquired.
+		var intended []string
+		intended, err = runtimeReplayedIntendedUntracked(ctx, store.Repo, last.IntendedUntracked)
+		if err == nil {
+			snapshot, err = captureRuntimeTerminalCandidate(ctx, store, last.BeginCandidateTree, intended)
+		}
 		if err == nil && (snapshot.Identity != last.FinishCandidateIdentity || snapshot.CandidateTree != last.FinishCandidateTree) {
-			return runtimeBeginAdmissionResult{}, store.runtimeObjectiveChangeRefusal(ctx, status)
+			return runtimeBeginAdmissionResult{}, store.runtimeObjectiveChangeRefusal(ctx, status, request)
+		}
+		if err == nil && !slices.Equal(request.IntendedUntracked, last.IntendedUntracked) {
+			return runtimeBeginAdmissionResult{}, store.runtimeObjectiveChangeRefusal(ctx, status, request)
 		}
 	case status.Objective != nil && !advancing:
 		// A freshly opened objective (Rescope) with no attempt recorded
@@ -88,14 +154,14 @@ func (store RuntimeStore) runtimeBeginAdmission(
 		// #2296 part 2's landmine) and wrongly refuse.
 		generation = status.Objective.Generation
 		if runtimeObjectiveScopeChanged(status, request) {
-			return runtimeBeginAdmissionResult{}, store.runtimeObjectiveChangeRefusal(ctx, status)
+			return runtimeBeginAdmissionResult{}, store.runtimeObjectiveChangeRefusal(ctx, status, request)
 		}
-		snapshot, err = captureRuntimeCandidate(ctx, store.Repo)
+		snapshot, err = captureRuntimeCandidate(ctx, store.Repo, request.IntendedUntracked)
 		if err == nil && (snapshot.Identity != status.Objective.InitialCandidateIdentity || snapshot.CandidateTree != status.Objective.InitialCandidateTree) {
-			return runtimeBeginAdmissionResult{}, store.runtimeObjectiveChangeRefusal(ctx, status)
+			return runtimeBeginAdmissionResult{}, store.runtimeObjectiveChangeRefusal(ctx, status, request)
 		}
 	default:
-		snapshot, err = captureRuntimeCandidate(ctx, store.Repo)
+		snapshot, err = captureRuntimeCandidate(ctx, store.Repo, request.IntendedUntracked)
 	}
 	if err != nil {
 		return runtimeBeginAdmissionResult{}, wrapRuntimeCandidateUnavailable("before launch", err)
@@ -140,17 +206,27 @@ func (store RuntimeStore) AdmissionStatus(ctx context.Context, request BeginAtte
 	// attempt or an exhausted budget does not make the chain owe less, and a
 	// surface that goes quiet under those states would disagree with acquire
 	// exactly when the operator is looking hardest.
-	status.SettleObligation = runtimeSettleObligation(status, store.ReviewDisabled)
+	status.SettleObligation, status.SuppressedObligation = runtimeSettleObligation(status)
 
+	inheritIntendedUntracked := request.IntendedUntracked == nil
 	normalized, err := normalizeBeginAttemptRequest(request)
 	if err != nil {
 		status.BlockedReason = CompactBlockInvalidContinuation
 		status.BlockedExit = err.Error()
 		return status, nil
 	}
+	normalized, err = store.runtimeRescopeSuccessorRequest(ctx, status, normalized, inheritIntendedUntracked)
+	if err != nil {
+		blocked := store.compactMutationFailure(err, false, normalized)
+		status.BlockedReason, status.BlockedExit = blocked.Reason, blocked.Exit
+		return status, nil
+	}
 	if result, terminal := runtimeReadiness(runtimeReadinessInput{
 		Status: status, AttemptTokens: replay.AttemptTokens, Request: normalized,
-	}); terminal && result.State == CompactStateBlocked {
+	}); terminal && result.State != CompactStateProceed {
+		// A complete verdict has no block reason, but its exit (the successor
+		// acquire, #3884) rides BlockedExit rather than a new field, so the
+		// read-only surface names the same continuation acquire does.
 		status.BlockedReason, status.BlockedExit = result.Reason, result.Exit
 		// An exhausted budget is a decision, so it asks instead of ending the
 		// conversation. The grant is the reset the ledger already admits at

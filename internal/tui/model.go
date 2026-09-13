@@ -13,11 +13,13 @@ import (
 	"regexp"
 	"runtime"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/charmbracelet/bubbles/textarea"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/agentbuilder"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/agents"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/backup"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/catalog"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/cli"
@@ -94,11 +96,9 @@ func sanitizeAdvisoryURL(raw string) string {
 	return parsed.String()
 }
 
-// osStatModelCache is a package-level variable so tests can override it to
-// simulate a missing or present OpenCode model cache file.
-var osStatModelCache = os.Stat
-var modelPickerCachePath = opencode.DefaultCachePath
 var modelPickerSettingsPath = opencode.DefaultSettingsPath
+var modelPickerWorkingDir = os.Getwd
+var modelPickerCatalogDiscoverer = screens.RuntimeCatalogDiscoverer(opencode.DiscoverCatalog)
 var osStatPathFn = os.Stat
 var osGetwdFn = os.Getwd
 var osExecutableFn = os.Executable
@@ -122,6 +122,18 @@ var readProfilesFn = func(settingsPath string) ([]model.Profile, error) {
 }
 var removeProfileAgentsFn = sdd.RemoveProfileAgents
 var discoverCodexModels = model.DiscoverCodexModels
+
+func currentOpenCodeSettingsPath() string {
+	projectDir, err := modelPickerWorkingDir()
+	if err != nil {
+		return modelPickerSettingsPath()
+	}
+	home, _ := os.UserHomeDir()
+	if path := opencode.EffectiveSettingsPath(home, projectDir); path != "" {
+		return path
+	}
+	return modelPickerSettingsPath()
+}
 
 func sanitizeKnownModelEfforts(assignments map[string]model.ModelAssignment, sddModels map[string][]opencode.Model) map[string]model.ModelAssignment {
 	if assignments == nil {
@@ -197,6 +209,12 @@ func containsString(values []string, target string) bool {
 // TickMsg drives the spinner animation on the installing screen.
 type TickMsg time.Time
 
+const noAnimationEnv = "GENTLE_AI_NO_ANIMATION"
+
+func tuiAnimationsDisabled() bool {
+	return os.Getenv(noAnimationEnv) == "1"
+}
+
 // CodexModelsDiscoveredMsg delivers one Custom picker catalog discovery result.
 type CodexModelsDiscoveredMsg struct {
 	RequestID uint64
@@ -204,13 +222,78 @@ type CodexModelsDiscoveredMsg struct {
 }
 
 func tickCmd() tea.Cmd {
+	if tuiAnimationsDisabled() {
+		return nil
+	}
 	return tea.Tick(100*time.Millisecond, func(t time.Time) tea.Msg {
 		return TickMsg(t)
 	})
 }
 
+// installProgressRun owns one ordered, lossless event stream.
+type installProgressRun struct {
+	mu     sync.Mutex
+	notify chan struct{}
+	events []pipeline.ProgressEvent
+	result pipeline.ExecutionResult
+	done   bool
+}
+
+func newInstallProgressRun() *installProgressRun {
+	return &installProgressRun{notify: make(chan struct{}, 1)}
+}
+
+func (r *installProgressRun) publish(event pipeline.ProgressEvent) {
+	r.mu.Lock()
+	if r.done {
+		r.mu.Unlock()
+		return
+	}
+	r.events = append(r.events, event)
+	r.mu.Unlock()
+
+	select {
+	case r.notify <- struct{}{}:
+	default:
+	}
+}
+
+func (r *installProgressRun) complete(result pipeline.ExecutionResult) {
+	r.mu.Lock()
+	if !r.done {
+		r.result = result
+		r.done = true
+	}
+	r.mu.Unlock()
+
+	select {
+	case r.notify <- struct{}{}:
+	default:
+	}
+}
+
+func (r *installProgressRun) nextMessage(runID uint64) tea.Msg {
+	for {
+		r.mu.Lock()
+		if len(r.events) > 0 {
+			event := r.events[0]
+			r.events = r.events[1:]
+			r.mu.Unlock()
+			return StepProgressMsg{RunID: runID, StepID: event.StepID, Status: event.Status, Err: event.Err}
+		}
+		if r.done {
+			result := r.result
+			r.mu.Unlock()
+			return PipelineDoneMsg{RunID: runID, Result: result}
+		}
+		r.mu.Unlock()
+		<-r.notify
+	}
+}
+
 // StepProgressMsg is sent from the pipeline goroutine when a step changes status.
 type StepProgressMsg struct {
+	RunID  uint64
 	StepID string
 	Status pipeline.StepStatus
 	Err    error
@@ -218,6 +301,7 @@ type StepProgressMsg struct {
 
 // PipelineDoneMsg is sent when the pipeline finishes execution.
 type PipelineDoneMsg struct {
+	RunID  uint64
 	Result pipeline.ExecutionResult
 }
 
@@ -303,6 +387,33 @@ type ReviewStoreResetSurveyedMsg struct {
 // say which categories went away.
 type ReviewStoreResetDoneMsg struct {
 	Report reviewtransaction.StoreResetReport
+	Err    error
+}
+
+// ReviewModeLoadedMsg carries a read-only review-mode status resolution.
+type ReviewModeLoadedMsg struct {
+	Status reviewtransaction.RDDModeStatus
+	Err    error
+}
+
+// ReviewModeUpdatedMsg carries the resolved status after a global mode mutation.
+type ReviewModeUpdatedMsg struct {
+	Status reviewtransaction.RDDModeStatus
+	Err    error
+}
+
+// InstallReviewModeLoadedMsg carries the read-only global mode status used by
+// the installer-only RDD choice. It is separate from ScreenReviewMode because
+// installation must not mutate state before the pipeline succeeds.
+type InstallReviewModeLoadedMsg struct {
+	Status reviewtransaction.RDDModeStatus
+	Err    error
+}
+
+// InstallReviewModePersistedMsg reports the deferred global-mode update after
+// a successful installation pipeline.
+type InstallReviewModePersistedMsg struct {
+	Status reviewtransaction.RDDModeStatus
 	Err    error
 }
 
@@ -402,6 +513,7 @@ const (
 	ScreenCommunityToolResult
 	ScreenDependencyTree
 	ScreenSkillPicker
+	ScreenInstallReviewMode
 	ScreenReview
 	ScreenOpenCodeBackground
 	ScreenPiBackground
@@ -456,6 +568,8 @@ const (
 	// ScreenReviewStoreResetResult reports what was actually removed,
 	// including a partial run, and returns to Welcome on Enter.
 	ScreenReviewStoreResetResult
+	// ScreenReviewMode displays and changes the global review-mode switch.
+	ScreenReviewMode
 )
 
 type Model struct {
@@ -467,19 +581,20 @@ type Model struct {
 	Version        string
 	SpinnerFrame   int
 
-	Selection         model.Selection
-	Detection         system.DetectionResult
-	DependencyPlan    planner.ResolvedPlan
-	Review            planner.ReviewPayload
-	Progress          ProgressState
-	Execution         pipeline.ExecutionResult
-	Backups           []backup.Manifest
-	ModelPicker       screens.ModelPickerState
-	ClaudeModelPicker screens.ClaudeModelPickerState
-	KiroModelPicker   screens.KiroModelPickerState
-	CodexModelPicker  screens.CodexModelPickerState
-	SkillPicker       []model.SkillID
-	Err               error
+	Selection                      model.Selection
+	Detection                      system.DetectionResult
+	DependencyPlan                 planner.ResolvedPlan
+	Review                         planner.ReviewPayload
+	Progress                       ProgressState
+	Execution                      pipeline.ExecutionResult
+	Backups                        []backup.Manifest
+	ModelPicker                    screens.ModelPickerState
+	runtimeCatalogDiscoveryRequest uint64
+	ClaudeModelPicker              screens.ClaudeModelPickerState
+	KiroModelPicker                screens.KiroModelPickerState
+	CodexModelPicker               screens.CodexModelPickerState
+	SkillPicker                    []model.SkillID
+	Err                            error
 
 	// BackgroundIntent is the effective OpenCode background choice for the
 	// current install. BackgroundPersist is published only after success.
@@ -555,6 +670,9 @@ type Model struct {
 	// pipelineRunning tracks whether the pipeline goroutine is active.
 	pipelineRunning bool
 
+	installRunID uint64
+	progressRun  *installProgressRun
+
 	// codexModelDiscoveryRequest identifies the Custom picker catalog request that
 	// is allowed to update the current picker state.
 	codexModelDiscoveryRequest uint64
@@ -615,6 +733,22 @@ type Model struct {
 	ProfileNameCollision bool            // true when name collides with existing profile (awaiting second enter to overwrite)
 	ProfileDeleteErr     error           // error from the last RemoveProfileAgents call, displayed on ScreenProfiles
 
+	// DefaultModelAssignmentsStash holds a copy of the default (non-profile)
+	// Selection.ModelAssignments captured on entering the profile flow
+	// (ScreenProfiles/ScreenProfileCreate) from any other screen, and restored
+	// when the flow returns to a non-profile, non-picker screen. See setScreen.
+	DefaultModelAssignmentsStash map[string]model.ModelAssignment
+
+	// ProfileFlowActive is true from the moment a profile edit is entered
+	// (ScreenProfiles/ScreenProfileCreate reached from outside the flow) until
+	// it returns to a screen that is neither a profile screen nor the shared
+	// model picker. It defines the profile flow by origin rather than by a
+	// fixed screen set, so a mid-edit detour into ScreenModelPicker (or any
+	// other screen a profile edit may open to display/edit its assignments)
+	// keeps carrying the profile's live assignments instead of having them
+	// silently swapped for the stashed default. See setScreen.
+	ProfileFlowActive bool
+
 	// UninstallMode holds the selected uninstall mode (partial, full, full-remove).
 	UninstallMode model.UninstallMode
 
@@ -674,6 +808,24 @@ type Model struct {
 	ReviewStoreResetSurveyErr error
 	// ReviewStoreResetErr records the outcome of an applied reset.
 	ReviewStoreResetErr error
+	// ReviewModeCwdFn, ReviewModeStatusFn, and ReviewModeSetGlobalFn are injected
+	// so the screen can be tested without filesystem state or CLI process calls.
+	ReviewModeCwdFn       func() (string, error)
+	ReviewModeStatusFn    func(context.Context, string) (reviewtransaction.RDDModeStatus, error)
+	ReviewModeSetGlobalFn func(context.Context, string, bool) (reviewtransaction.RDDModeStatus, error)
+	ReviewModeStatus      reviewtransaction.RDDModeStatus
+	ReviewModeErr         error
+
+	// InstallReviewMode* carries the installer-only choice. It never reuses the
+	// standalone settings screen because that screen intentionally mutates
+	// immediately, while this choice is saved only after installation succeeds.
+	InstallReviewModeStatus     reviewtransaction.RDDModeStatus
+	InstallReviewModeLoadErr    error
+	InstallReviewModeLoading    bool
+	InstallReviewModeChoiceSet  bool
+	InstallReviewModeEnabled    bool
+	InstallReviewModePersisting bool
+	InstallReviewModePersistErr error
 	// OpenCodePluginUninstallFn is the async uninstall runner. Returns a
 	// result and error from the 4-layer engine. Defaults to
 	// opencodeplugin.Uninstall if nil.
@@ -740,15 +892,18 @@ func NewModel(detection system.DetectionResult, version string, installState ...
 	}
 
 	return Model{
-		Screen:               ScreenWelcome,
-		Version:              version,
-		Selection:            selection,
-		Detection:            detection,
-		BackgroundIntent:     s.BackgroundIntent,
-		PiBackgroundIntent:   s.PiBackgroundIntent,
-		UninstallAgents:      agents,
-		UninstallComponents:  defaultUninstallComponents(),
-		UninstallEngramScope: model.EngramUninstallScopeGlobal,
+		Screen:                ScreenWelcome,
+		Version:               version,
+		Selection:             selection,
+		Detection:             detection,
+		BackgroundIntent:      s.BackgroundIntent,
+		PiBackgroundIntent:    s.PiBackgroundIntent,
+		UninstallAgents:       agents,
+		UninstallComponents:   defaultUninstallComponents(),
+		UninstallEngramScope:  model.EngramUninstallScopeGlobal,
+		ReviewModeCwdFn:       os.Getwd,
+		ReviewModeStatusFn:    cli.ReviewModeStatus,
+		ReviewModeSetGlobalFn: cli.SetGlobalReviewMode,
 		Progress: NewProgressState([]string{
 			"Install dependencies",
 			"Configure selected agents",
@@ -866,6 +1021,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.clampAdvisoryScroll()
 		return m, nil
 	case TickMsg:
+		if tuiAnimationsDisabled() {
+			return m, nil
+		}
 		if m.Screen == ScreenInstalling && !m.Progress.Done() {
 			m.SpinnerFrame = (m.SpinnerFrame + 1) % 10
 			return m, tickCmd()
@@ -965,6 +1123,55 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// sequence -- while the CLI equivalent requires typing --confirm.
 		m.Cursor = screens.ReviewStoreResetConfirmDefaultCursor(msg.Report, msg.Err)
 		return m, nil
+	case ReviewModeLoadedMsg:
+		if m.Screen != ScreenReviewMode {
+			return m, nil
+		}
+		m.OperationRunning = false
+		m.ReviewModeStatus = msg.Status
+		m.ReviewModeErr = msg.Err
+		if msg.Err != nil {
+			m.ReviewModeStatus = reviewtransaction.RDDModeStatus{}
+		}
+		return m, nil
+	case ReviewModeUpdatedMsg:
+		if m.Screen != ScreenReviewMode {
+			return m, nil
+		}
+		m.OperationRunning = false
+		m.ReviewModeErr = msg.Err
+		if msg.Err != nil {
+			return m, nil
+		}
+		m.ReviewModeStatus = msg.Status
+		m.setScreen(ScreenWelcome)
+		return m, nil
+	case InstallReviewModeLoadedMsg:
+		if m.Screen != ScreenInstallReviewMode {
+			return m, nil
+		}
+		m.InstallReviewModeLoading = false
+		m.InstallReviewModeStatus = msg.Status
+		m.InstallReviewModeLoadErr = msg.Err
+		if msg.Err == nil {
+			m.Cursor = 1 // RDD OFF is the opt-in default for unset and off global modes.
+			if msg.Status.Global == reviewtransaction.RDDModeOn {
+				m.Cursor = 0
+			}
+		}
+		return m, nil
+	case InstallReviewModePersistedMsg:
+		if m.Screen != ScreenInstalling {
+			return m, nil
+		}
+		m.InstallReviewModePersisting = false
+		m.InstallReviewModePersistErr = msg.Err
+		if msg.Err != nil {
+			m.Progress.AppendLog("FAILED: save global RDD mode — %s", msg.Err)
+			m.Execution.ManualActions = append(m.Execution.ManualActions,
+				"RDD mode was not saved. Retry with `gentle-ai review mode enable --scope global` or `gentle-ai review mode disable --scope global`.")
+		}
+		return m, nil
 	case ReviewStoreResetDoneMsg:
 		// Deliberately not guarded on the current screen. This message reports
 		// an irreversible removal that has already happened; dropping it
@@ -1019,7 +1226,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.AdvisoryURL = sanitizeAdvisoryURL(msg.Advisory.URL)
 		m.AdvisoryScroll = 0
 		return m, nil
-	case screens.LMStudioDiscoveryMsg:
+	case screens.RuntimeCatalogDiscoveryMsg:
+		if !m.activePicker() || msg.RequestID != m.runtimeCatalogDiscoveryRequest || msg.ProjectDir != m.ModelPicker.CatalogProjectDir {
+			return m, nil
+		}
 		m.ModelPicker = m.ModelPicker.Update(msg)
 		return m, nil
 	case CodexModelsDiscoveredMsg:
@@ -1058,7 +1268,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Refresh profile list after sync (profile create/delete/edit flows use sync).
 		// On failure, keep the existing list — this is a non-critical background refresh.
 		// Do NOT set m.Err: ScreenSync never renders it and it would leak to other screens.
-		if profiles, err := readProfilesFn(opencode.DefaultSettingsPath()); err == nil {
+		if profiles, err := readProfilesFn(currentOpenCodeSettingsPath()); err == nil {
 			m.ProfileList = profiles
 			// Clamp cursor to avoid out-of-bounds access when list shrinks after a delete.
 			if m.Cursor >= len(m.ProfileList) {
@@ -1132,10 +1342,24 @@ func (m Model) handleStepProgress(msg StepProgressMsg) (tea.Model, tea.Cmd) {
 	if m.Screen != ScreenInstalling {
 		return m, nil
 	}
+	if msg.RunID != 0 && (m.progressRun == nil || msg.RunID != m.installRunID || !m.pipelineRunning) {
+		return m, nil
+	}
 
 	idx := m.findProgressItem(msg.StepID)
+	if idx < 0 && msg.StepID != "" {
+		// Agent adapters may expose a command sequence inside one pipeline step.
+		// Keep the pipeline generic by accepting those adapter-provided IDs at the
+		// UI boundary instead of teaching the progress model package names.
+		m.Progress.Items = append(m.Progress.Items, ProgressItem{
+			Label:  msg.StepID,
+			Status: ProgressStatusPending,
+			Nested: true,
+		})
+		idx = len(m.Progress.Items) - 1
+	}
 	if idx < 0 {
-		return m, nil
+		return m, m.nextProgressCommand()
 	}
 
 	switch msg.Status {
@@ -1154,16 +1378,46 @@ func (m Model) handleStepProgress(msg StepProgressMsg) (tea.Model, tea.Cmd) {
 		m.Progress.AppendLog("FAILED: %s — %s", msg.StepID, errMsg)
 	}
 
-	return m, nil
+	return m, m.nextProgressCommand()
+}
+
+func (m Model) nextProgressCommand() tea.Cmd {
+	if m.progressRun == nil {
+		return nil
+	}
+	return progressEventCommand(m.progressRun, m.installRunID)
+}
+
+func progressEventCommand(run *installProgressRun, runID uint64) tea.Cmd {
+	return func() tea.Msg {
+		return run.nextMessage(runID)
+	}
 }
 
 func (m Model) handlePipelineDone(msg PipelineDoneMsg) (tea.Model, tea.Cmd) {
+	if msg.RunID != 0 && (m.progressRun == nil || msg.RunID != m.installRunID || !m.pipelineRunning) {
+		return m, nil
+	}
+
+	liveProgress := m.Progress
 	m.Execution = msg.Result
 	m.pipelineRunning = false
+	m.progressRun = nil
 
 	// Rebuild progress from real step results so failed steps show ✗ instead
-	// of being blindly marked as succeeded.
+	// of being blindly marked as succeeded. Preserve adapter-provided nested
+	// command items and logs so the completed install does not erase the useful
+	// per-package history collected while it was running.
 	m.Progress = ProgressFromExecution(msg.Result)
+	m.Progress.Logs = append([]string(nil), liveProgress.Logs...)
+	for _, item := range liveProgress.Items {
+		// Preserve only adapter-created nested items that are not part of the
+		// authoritative execution result.
+		if !item.Nested || m.findProgressItem(item.Label) >= 0 {
+			continue
+		}
+		m.Progress.Items = append(m.Progress.Items, item)
+	}
 
 	// Surface individual error messages so the user knows WHAT failed.
 	appendStepErrors := func(steps []pipeline.StepResult) {
@@ -1178,8 +1432,13 @@ func (m Model) handlePipelineDone(msg PipelineDoneMsg) (tea.Model, tea.Cmd) {
 
 	if msg.Result.Err != nil {
 		m.Progress.AppendLog("pipeline completed with errors")
-	} else {
-		m.Progress.AppendLog("pipeline completed successfully")
+		return m, nil
+	}
+	m.Progress.AppendLog("pipeline completed successfully")
+	if m.InstallReviewModeChoiceSet {
+		m.InstallReviewModePersisting = true
+		m.Progress.AppendLog("saving selected global RDD mode")
+		return m, m.persistInstallReviewMode()
 	}
 
 	return m, nil
@@ -1295,8 +1554,10 @@ func (m Model) View() string {
 		return screens.RenderDependencyTree(m.DependencyPlan, m.Selection, m.Cursor)
 	case ScreenSkillPicker:
 		return screens.RenderSkillPicker(m.SkillPicker, m.Cursor, m.Height)
+	case ScreenInstallReviewMode:
+		return screens.RenderInstallReviewMode(m.InstallReviewModeStatus, m.InstallReviewModeLoadErr, m.Cursor)
 	case ScreenReview:
-		return screens.RenderReview(m.Review, m.Cursor)
+		return screens.RenderReview(m.Review, m.Cursor, m.installReviewModeSummary())
 	case ScreenOpenCodeBackground:
 		return screens.RenderOpenCodeBackground(m.Cursor)
 	case ScreenPiBackground:
@@ -1335,6 +1596,11 @@ func (m Model) View() string {
 		return screens.RenderReviewStoreResetConfirm(m.ReviewStoreResetReport, m.ReviewStoreResetSurveyErr, m.Cursor)
 	case ScreenReviewStoreResetResult:
 		return screens.RenderReviewStoreResetResult(m.ReviewStoreResetReport, m.ReviewStoreResetErr)
+	case ScreenReviewMode:
+		if m.OperationRunning {
+			return screens.RenderOperationRunning("Receipt-Driven Development", "Loading review mode...", m.SpinnerFrame)
+		}
+		return screens.RenderReviewMode(m.ReviewModeStatus, m.ReviewModeErr, m.Cursor)
 	case ScreenDeleteConfirm:
 		return screens.RenderDeleteConfirm(m.SelectedBackup, m.Cursor)
 	case ScreenDeleteResult:
@@ -1648,8 +1914,8 @@ func (m Model) handleKeyPress(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case "esc":
-		// Don't allow going back while pipeline is running.
-		if (m.Screen == ScreenInstalling && m.pipelineRunning) || m.Screen == ScreenCommunityToolInstalling {
+		// Don't allow leaving while the pipeline or its selected RDD mode is running.
+		if (m.Screen == ScreenInstalling && (m.pipelineRunning || m.InstallReviewModePersisting)) || m.Screen == ScreenCommunityToolInstalling {
 			return m, nil
 		}
 		if _, ok := m.GentleAIUpgradeVersion(); ok {
@@ -1861,6 +2127,11 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 
 			if m.Cursor == next {
 				return m.startReviewStoreResetSurvey()
+			}
+			next++
+
+			if m.Cursor == next {
+				return m.startReviewModeLoad()
 			}
 			next++
 
@@ -2113,7 +2384,7 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 	case ScreenProfileDelete:
 		switch m.Cursor {
 		case 0: // "Delete & Sync"
-			if err := removeProfileAgentsFn(opencode.DefaultSettingsPath(), m.ProfileDeleteTarget); err != nil {
+			if err := removeProfileAgentsFn(currentOpenCodeSettingsPath(), m.ProfileDeleteTarget); err != nil {
 				// Store the error so it can be displayed on ScreenProfiles.
 				m.ProfileDeleteErr = err
 				m.setScreen(ScreenProfiles)
@@ -2143,7 +2414,7 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 			// Only when there are no in-session assignments yet — the nil guard
 			// ensures we don't overwrite changes the user already made this session.
 			if m.Selection.ModelAssignments == nil {
-				settingsPath := opencode.DefaultSettingsPath()
+				settingsPath := currentOpenCodeSettingsPath()
 				if current, err := readCurrentAssignmentsFn(settingsPath); err == nil && len(current) > 0 {
 					// Sanitize loaded assignments: clear any stale effort values for
 					// models that no longer report variants (e.g. provider refreshed
@@ -2318,7 +2589,7 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 					m.setScreen(ScreenSkillPicker)
 				} else {
 					m.Review = planner.BuildReviewPayload(m.Selection, m.DependencyPlan)
-					m.setScreen(ScreenReview)
+					return m.startInstallReviewModeLoad()
 				}
 			} else {
 				if m.shouldShowCommunityToolsScreen() {
@@ -2395,7 +2666,7 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 					m.setScreen(ScreenSkillPicker)
 				} else {
 					m.Review = planner.BuildReviewPayload(m.Selection, m.DependencyPlan)
-					m.setScreen(ScreenReview)
+					return m.startInstallReviewModeLoad()
 				}
 			} else if next, ok := m.pickerNextScreen(); ok {
 				// Non-custom: advance to the next screen in the picker slice
@@ -2474,7 +2745,7 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 					return m, nil
 				}
 				m.Review = planner.BuildReviewPayload(m.Selection, m.DependencyPlan)
-				m.setScreen(ScreenReview)
+				return m.startInstallReviewModeLoad()
 			default:
 				m.setScreen(ScreenPreset)
 			}
@@ -2482,8 +2753,7 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 		}
 		if m.Cursor == 0 {
 			m.Review = planner.BuildReviewPayload(m.Selection, m.DependencyPlan)
-			m.setScreen(ScreenReview)
-			return m, nil
+			return m.startInstallReviewModeLoad()
 		}
 		// Non-custom Back: mirrors goBack (Esc) — isPiOnlyAgents early check,
 		// then optional setup guards (outside the slice), then pickerPreviousScreen.
@@ -2508,11 +2778,11 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 		case m.Cursor < len(allSkills):
 			m.toggleCurrentSkill()
 		case m.Cursor == len(allSkills):
-			// "Continue" — store selected skills into Selection and proceed to review.
+			// "Continue" — store selected skills into Selection and proceed to the RDD choice.
 			m.Selection.Skills = make([]model.SkillID, len(m.SkillPicker))
 			copy(m.Selection.Skills, m.SkillPicker)
 			m.Review = planner.BuildReviewPayload(m.Selection, m.DependencyPlan)
-			m.setScreen(ScreenReview)
+			return m.startInstallReviewModeLoad()
 		default:
 			// "Back" — in custom preset, return to the screen that preceded SkillPicker.
 			if m.Selection.Preset == model.PresetCustom {
@@ -2533,6 +2803,20 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 				m.setScreen(ScreenDependencyTree)
 			}
 		}
+	case ScreenInstallReviewMode:
+		options := screens.InstallReviewModeOptions(m.InstallReviewModeLoadErr)
+		if m.Cursor >= len(options) || m.Cursor == len(options)-1 {
+			m.setScreen(ScreenDependencyTree)
+			return m, nil
+		}
+		if m.InstallReviewModeLoading || m.InstallReviewModeLoadErr != nil {
+			return m, nil
+		}
+		m.InstallReviewModeChoiceSet = true
+		m.InstallReviewModeEnabled = m.Cursor == 0
+		m.InstallReviewModePersistErr = nil
+		m.setScreen(ScreenReview)
+		return m, nil
 	case ScreenReview:
 		if m.Cursor == 0 {
 			if m.shouldShowOpenCodeBackgroundScreen() {
@@ -2576,7 +2860,10 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 				m.setScreen(ScreenDependencyTree)
 			}
 		} else {
-			m.setScreen(ScreenDependencyTree)
+			m.setScreen(ScreenInstallReviewMode)
+			if m.InstallReviewModeChoiceSet && !m.InstallReviewModeEnabled {
+				m.Cursor = 1
+			}
 		}
 	case ScreenOpenCodeBackground:
 		options := screens.OpenCodeBackgroundOptions()
@@ -2609,14 +2896,14 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 		m.Err = nil
 		m.setScreen(ScreenReview)
 	case ScreenInstalling:
-		if m.Progress.Done() {
+		if m.Progress.Done() && !m.pipelineRunning && !m.InstallReviewModePersisting {
 			m.setScreen(ScreenComplete)
 			return m, nil
 		}
 		// If no ExecuteFn, fall back to manual step-through for dev/tests.
 		if m.ExecuteFn == nil && !m.pipelineRunning {
 			m.Progress.Mark(m.Progress.Current, "succeeded")
-			if m.Progress.Done() {
+			if m.Progress.Done() && !m.InstallReviewModePersisting {
 				m.setScreen(ScreenComplete)
 			}
 		}
@@ -2641,6 +2928,16 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 		// Enter on the result screen returns to backup selection.
 		// Refresh the backup list to reflect any changes from the restore.
 		m = m.finishBackupResult(false)
+	case ScreenReviewMode:
+		options := screens.ReviewModeOptions(m.ReviewModeStatus, m.ReviewModeErr)
+		if m.Cursor != 0 || len(options) == 1 {
+			m.setScreen(ScreenWelcome)
+			return m, nil
+		}
+		m.OperationRunning = true
+		m.ReviewModeErr = nil
+		enabled := m.ReviewModeStatus.Global != reviewtransaction.RDDModeOn
+		return m, tea.Batch(m.startReviewModeUpdate(enabled), tickCmd())
 	case ScreenReviewStoreResetConfirm:
 		// Cursor 0 is "Delete permanently" only when the survey found
 		// something safe to delete; in every other state the sole option is
@@ -2812,6 +3109,10 @@ func (m Model) startInstalling() (tea.Model, tea.Cmd) {
 	}
 
 	m.pipelineRunning = true
+	m.installRunID++
+	runID := m.installRunID
+	progressRun := newInstallProgressRun()
+	m.progressRun = progressRun
 
 	// Capture values for the goroutine closure.
 	executeFn := m.ExecuteFn
@@ -2823,18 +3124,18 @@ func (m Model) startInstalling() (tea.Model, tea.Cmd) {
 	piBackground := m.PiBackgroundIntent
 	piBackgroundPersist := m.PiBackgroundPersist
 
-	return m, tea.Batch(tickCmd(), func() tea.Msg {
+	pipelineCommand := func() tea.Msg {
 		onProgress := func(event pipeline.ProgressEvent) {
-			// NOTE: ProgressFunc is called synchronously from the pipeline goroutine.
-			// We cannot use p.Send() here because we don't have a reference to the
-			// tea.Program. Instead, these events are collected in the ExecutionResult
-			// and the PipelineDoneMsg handles the final state. For real-time updates,
-			// we rely on the pipeline calling this synchronously from each step.
+			progressRun.publish(event)
 		}
 
 		result := executeFn(selection, resolved, detection, background, backgroundPersist, piBackground, piBackgroundPersist, onProgress)
-		return PipelineDoneMsg{Result: result}
-	})
+		progressRun.complete(result)
+		return nil
+	}
+
+	// The single progress command drains events before emitting PipelineDoneMsg.
+	return m, tea.Batch(pipelineCommand, tickCmd(), progressEventCommand(progressRun, runID))
 }
 
 // withResetSyncState clears sync-result state so ScreenSync shows the confirmation
@@ -3026,6 +3327,91 @@ func (m Model) startOpenCodePluginUninstall() tea.Cmd {
 // read-only survey behind a spinner. The screen is entered first on purpose: a
 // survey that fails has to be reportable, and a menu entry that silently does
 // nothing is worse than one that explains itself.
+func (m Model) startInstallReviewModeLoad() (tea.Model, tea.Cmd) {
+	m.InstallReviewModeStatus = reviewtransaction.RDDModeStatus{}
+	m.InstallReviewModeLoadErr = nil
+	m.InstallReviewModeLoading = true
+	m.InstallReviewModeChoiceSet = false
+	m.InstallReviewModePersistErr = nil
+	m.setScreen(ScreenInstallReviewMode)
+	cwd := m.ReviewModeCwdFn
+	load := m.ReviewModeStatusFn
+	return m, func() tea.Msg {
+		repo, err := cwd()
+		if err != nil {
+			return InstallReviewModeLoadedMsg{Err: err}
+		}
+		if load == nil {
+			return InstallReviewModeLoadedMsg{Err: errors.New("review mode status is not available in this build")}
+		}
+		status, err := load(context.Background(), repo)
+		return InstallReviewModeLoadedMsg{Status: status, Err: err}
+	}
+}
+
+func (m Model) persistInstallReviewMode() tea.Cmd {
+	cwd := m.ReviewModeCwdFn
+	update := m.ReviewModeSetGlobalFn
+	enabled := m.InstallReviewModeEnabled
+	return func() tea.Msg {
+		repo, err := cwd()
+		if err != nil {
+			return InstallReviewModePersistedMsg{Err: err}
+		}
+		if update == nil {
+			return InstallReviewModePersistedMsg{Err: errors.New("review mode update is not available in this build")}
+		}
+		status, err := update(context.Background(), repo, enabled)
+		return InstallReviewModePersistedMsg{Status: status, Err: err}
+	}
+}
+
+func (m Model) installReviewModeSummary() string {
+	if !m.InstallReviewModeChoiceSet {
+		return ""
+	}
+	if m.InstallReviewModeEnabled {
+		return "RDD ON (global setting after successful installation)"
+	}
+	return "RDD OFF (global setting after successful installation)"
+}
+
+func (m Model) startReviewModeLoad() (tea.Model, tea.Cmd) {
+	m.OperationRunning = true
+	m.ReviewModeStatus = reviewtransaction.RDDModeStatus{}
+	m.ReviewModeErr = nil
+	m.setScreen(ScreenReviewMode)
+	cwd := m.ReviewModeCwdFn
+	load := m.ReviewModeStatusFn
+	return m, func() tea.Msg {
+		repo, err := cwd()
+		if err != nil {
+			return ReviewModeLoadedMsg{Err: err}
+		}
+		if load == nil {
+			return ReviewModeLoadedMsg{Err: errors.New("review mode status is not available in this build")}
+		}
+		status, err := load(context.Background(), repo)
+		return ReviewModeLoadedMsg{Status: status, Err: err}
+	}
+}
+
+func (m Model) startReviewModeUpdate(enabled bool) tea.Cmd {
+	cwd := m.ReviewModeCwdFn
+	update := m.ReviewModeSetGlobalFn
+	return func() tea.Msg {
+		repo, err := cwd()
+		if err != nil {
+			return ReviewModeUpdatedMsg{Err: err}
+		}
+		if update == nil {
+			return ReviewModeUpdatedMsg{Err: errors.New("review mode update is not available in this build")}
+		}
+		status, err := update(context.Background(), repo, enabled)
+		return ReviewModeUpdatedMsg{Status: status, Err: err}
+	}
+}
+
 func (m Model) startReviewStoreResetSurvey() (tea.Model, tea.Cmd) {
 	m = m.withResetReviewStoreResetState()
 	m.OperationRunning = true
@@ -3262,7 +3648,7 @@ func (m *Model) refreshUninstallProfiles() {
 		return
 	}
 
-	profiles, err := readProfilesFn(opencode.DefaultSettingsPath())
+	profiles, err := readProfilesFn(currentOpenCodeSettingsPath())
 	if err != nil {
 		m.UninstallProfilesAvailable = nil
 		m.UninstallProfilesToRemove = nil
@@ -3666,8 +4052,18 @@ func (m Model) goBack(cmd *tea.Cmd) Model {
 		}
 	}
 
-	// In custom preset, going back from Review walks through intermediate screens.
-	// Order (reverse of forward): SkillPicker → StrictTDD → SDDMode/ModelPicker → ClaudeModelPicker → DependencyTree.
+	// The final confirmation always returns to the installer RDD choice so the
+	// user can revise it without walking back through the configuration flow.
+	if m.Screen == ScreenReview {
+		m.setScreen(ScreenInstallReviewMode)
+		if m.InstallReviewModeChoiceSet && !m.InstallReviewModeEnabled {
+			m.Cursor = 1
+		}
+		return m
+	}
+
+	// In custom preset, going back from Review used to walk through intermediate
+	// screens. Review now returns above to the immediate RDD choice instead.
 	if m.Screen == ScreenReview && m.Selection.Preset == model.PresetCustom {
 		if m.shouldShowSkillPickerScreen() {
 			if len(m.SkillPicker) == 0 {
@@ -3711,7 +4107,61 @@ func (m Model) goBack(cmd *tea.Cmd) Model {
 	return m
 }
 
+// copyModelAssignments returns a shallow copy of a model assignment map so
+// stashing/restoring it (see setScreen) can never alias the caller's live
+// map — a nil source returns nil, preserving the "no assignments yet"
+// nil-guard semantics used by ScreenModelConfig's pre-population check.
+func copyModelAssignments(src map[string]model.ModelAssignment) map[string]model.ModelAssignment {
+	if src == nil {
+		return nil
+	}
+	dst := make(map[string]model.ModelAssignment, len(src))
+	for k, v := range src {
+		dst[k] = v
+	}
+	return dst
+}
+
+// profileFlowScreen reports whether screen is one of the two dedicated
+// profile screens (the list, and create/edit).
+func profileFlowScreen(screen Screen) bool {
+	return screen == ScreenProfiles || screen == ScreenProfileCreate
+}
+
 func (m *Model) setScreen(next Screen) {
+	// Isolate the default OpenCode model config from custom SDD profile model
+	// assignments (issue #950). Editing a profile loads its own phase
+	// assignments (plus its orchestrator model) into m.Selection.ModelAssignments
+	// so the shared model picker can display and edit them — keyed by the same
+	// "gentle-orchestrator" constant the default config screen uses for its own
+	// base row.
+	//
+	// The profile flow is defined by origin (ProfileFlowActive), not by a fixed
+	// screen set: entering ScreenProfiles/ScreenProfileCreate from outside the
+	// flow stashes a copy of the caller's current (default) assignments and
+	// marks the flow active. While active, a detour into ScreenModelPicker (or
+	// any other screen a profile edit may open to display/edit its own
+	// assignments) keeps carrying the profile's live data — it does NOT get
+	// swapped for the stash, because ScreenModelPicker while ProfileFlowActive
+	// is still "inside" the flow. Only when the flow returns to a screen that
+	// is neither a profile screen nor the picker does it end: the stash (a
+	// copy, never the profile's data) is restored and the flag clears.
+	//
+	// Outside the profile flow (ProfileFlowActive false and next isn't a
+	// profile screen), ScreenModelPicker is reached and left exactly like any
+	// other screen — the default config's own edits are never touched here.
+	enteringProfileFlow := !m.ProfileFlowActive && profileFlowScreen(next)
+	stillInProfileFlow := m.ProfileFlowActive && (profileFlowScreen(next) || next == ScreenModelPicker)
+	leavingProfileFlow := m.ProfileFlowActive && !stillInProfileFlow
+
+	if enteringProfileFlow {
+		m.DefaultModelAssignmentsStash = copyModelAssignments(m.Selection.ModelAssignments)
+		m.ProfileFlowActive = true
+	} else if leavingProfileFlow {
+		m.Selection.ModelAssignments = copyModelAssignments(m.DefaultModelAssignmentsStash)
+		m.DefaultModelAssignmentsStash = nil
+		m.ProfileFlowActive = false
+	}
 	m.PreviousScreen = m.Screen
 	m.Screen = next
 	m.Cursor = 0
@@ -3726,7 +4176,7 @@ func (m *Model) setScreen(next Screen) {
 	}
 	if next == ScreenProfiles {
 		// Refresh on entry without replacing valid data with an empty error state.
-		profiles, err := readProfilesFn(opencode.DefaultSettingsPath())
+		profiles, err := readProfilesFn(currentOpenCodeSettingsPath())
 		if err != nil {
 			m.Err = err
 			m.ProfileDeleteErr = err
@@ -3884,6 +4334,8 @@ func (m Model) optionCount() int {
 		return len(screens.DependencyTreeOptions())
 	case ScreenSkillPicker:
 		return screens.SkillPickerOptionCount()
+	case ScreenInstallReviewMode:
+		return len(screens.InstallReviewModeOptions(m.InstallReviewModeLoadErr))
 	case ScreenReview:
 		return len(screens.ReviewOptions())
 	case ScreenOpenCodeBackground:
@@ -3906,6 +4358,8 @@ func (m Model) optionCount() int {
 		return 0
 	case ScreenReviewStoreResetConfirm:
 		return screens.ReviewStoreResetConfirmOptionCount(m.ReviewStoreResetReport, m.ReviewStoreResetSurveyErr)
+	case ScreenReviewMode:
+		return len(screens.ReviewModeOptions(m.ReviewModeStatus, m.ReviewModeErr))
 	case ScreenReviewStoreResetResult:
 		return 0
 	case ScreenRenameBackup:
@@ -4141,16 +4595,16 @@ func (m Model) confirmCommunityTools() (tea.Model, tea.Cmd) {
 			m.setScreen(ScreenCommunityToolInstalling)
 			return m, tea.Batch(m.startCommunityToolInstallation(), tickCmd())
 		}
-		return m.continueAfterCommunityTools(), nil
+		return m.continueAfterCommunityTools()
 	default:
 		return m.goBackFromCommunityTools(), nil
 	}
 }
 
-func (m Model) continueAfterCommunityTools() Model {
+func (m Model) continueAfterCommunityTools() (tea.Model, tea.Cmd) {
 	if m.shouldShowOpenCodePluginsScreen() {
 		m.setScreen(ScreenOpenCodePlugins)
-		return m
+		return m, nil
 	}
 	if m.Selection.Preset == model.PresetCustom {
 		if m.shouldShowSkillPickerScreen() {
@@ -4160,13 +4614,13 @@ func (m Model) continueAfterCommunityTools() Model {
 			m.setScreen(ScreenSkillPicker)
 		} else {
 			m.Review = planner.BuildReviewPayload(m.Selection, m.DependencyPlan)
-			m.setScreen(ScreenReview)
+			return m.startInstallReviewModeLoad()
 		}
-		return m
+		return m, nil
 	}
 	m.buildDependencyPlan()
 	m.setScreen(ScreenDependencyTree)
-	return m
+	return m, nil
 }
 
 func (m Model) goBackFromCommunityTools() Model {
@@ -4228,18 +4682,18 @@ func (m Model) confirmOpenCodePlugins() (tea.Model, tea.Cmd) {
 			}
 			return m, m.startOpenCodePluginRegistration()
 		}
-		return m.continueAfterOpenCodePlugins(), nil
+		return m.continueAfterOpenCodePlugins()
 	default:
 		return m.goBackFromOpenCodePlugins(), nil
 	}
 }
 
-func (m Model) continueAfterOpenCodePlugins() Model {
+func (m Model) continueAfterOpenCodePlugins() (tea.Model, tea.Cmd) {
 	if m.OpenCodePluginsStandalone {
 		m.OpenCodePluginRegistrationResults = nil
 		m.OpenCodePluginRegistrationErr = nil
 		m.setScreen(ScreenOpenCodePluginResult)
-		return m
+		return m, nil
 	}
 
 	if m.Selection.Preset == model.PresetCustom {
@@ -4250,13 +4704,13 @@ func (m Model) continueAfterOpenCodePlugins() Model {
 			m.setScreen(ScreenSkillPicker)
 		} else {
 			m.Review = planner.BuildReviewPayload(m.Selection, m.DependencyPlan)
-			m.setScreen(ScreenReview)
+			return m.startInstallReviewModeLoad()
 		}
-		return m
+		return m, nil
 	}
 	m.buildDependencyPlan()
 	m.setScreen(ScreenDependencyTree)
-	return m
+	return m, nil
 }
 
 func (m Model) goBackFromOpenCodePlugins() Model {
@@ -4421,29 +4875,20 @@ func (m *Model) buildDependencyPlan() {
 }
 
 // agentsToManage returns the canonical list of agents gentle-ai should manage.
-//
-// Priority:
-//  1. state.InstalledAgents is non-empty → use those (persisted user selection).
-//  2. detectedIDs is non-empty          → use those (filesystem detection fallback).
-//  3. Both empty                         → return all catalog agents (first-time install default).
-//
-// This is the single source of truth for both the TUI pre-selection and the
-// pre-upgrade backup scope. It ensures that a user who deliberately un-selected
-// an agent in the TUI does not see it re-selected or backed-up on the next run.
+// A persisted selection is authoritative, including a deliberately configured
+// empty selection. Only state without an install selection falls back to detected
+// agents, then to the first-install catalog default.
 func agentsToManage(installState state.InstallState, detectedIDs []model.AgentID) []model.AgentID {
-	if len(installState.InstalledAgents) > 0 {
-		ids := make([]model.AgentID, 0, len(installState.InstalledAgents))
-		for _, a := range installState.InstalledAgents {
-			ids = append(ids, model.AgentID(a))
-		}
-		return ids
+	scope := agents.SelectionScopeFromInstallState(installState)
+	if scope.Mode == agents.SelectionScopeConfigured {
+		return scope.AgentIDs
 	}
 	if len(detectedIDs) > 0 {
 		return detectedIDs
 	}
-	agents := catalog.AllAgents()
-	all := make([]model.AgentID, 0, len(agents))
-	for _, agent := range agents {
+	catalogAgents := catalog.AllAgents()
+	all := make([]model.AgentID, 0, len(catalogAgents))
+	for _, agent := range catalogAgents {
 		all = append(all, agent.ID)
 	}
 	return all
@@ -4713,8 +5158,33 @@ func (m *Model) applyPickerEntry(next Screen) tea.Cmd {
 }
 
 func (m *Model) initializeModelPicker() tea.Cmd {
-	m.ModelPicker = screens.NewModelPickerState(modelPickerCachePath(), modelPickerSettingsPath())
-	return m.ModelPicker.DiscoverLMStudioCmd()
+	m.runtimeCatalogDiscoveryRequest++
+	requestID := m.runtimeCatalogDiscoveryRequest
+	projectDir, err := modelPickerWorkingDir()
+	if err != nil {
+		m.ModelPicker = screens.NewRuntimeModelPickerStateWithDiscoverer(modelPickerSettingsPath(), modelPickerCatalogDiscoverer)
+		m.ModelPicker.CatalogRequestID = requestID
+		return func() tea.Msg {
+			return screens.RuntimeCatalogDiscoveryMsg{RequestID: requestID, Err: errors.New("working directory unavailable")}
+		}
+	}
+	settingsPath := modelPickerSettingsPath()
+	snapshot, configErr := opencode.ResolveEffectiveConfig(projectDir)
+	if snapshot.WritePath != "" {
+		settingsPath = snapshot.WritePath
+	}
+	m.ModelPicker = screens.NewRuntimeModelPickerStateWithDiscoverer(settingsPath, modelPickerCatalogDiscoverer)
+	m.ModelPicker.ConfiguredProviders = snapshot.Providers
+	if configErr != nil {
+		m.ModelPicker.ConfigWarning = fmt.Sprintf("Could not read OpenCode config: %v", configErr)
+	} else if len(snapshot.Diagnostics) > 0 {
+		m.ModelPicker.ConfigWarning = strings.Join(snapshot.Diagnostics, "\n")
+	}
+	return m.ModelPicker.StartRuntimeCatalogDiscovery(requestID, projectDir)
+}
+
+func (m Model) activePicker() bool {
+	return m.Screen == ScreenModelPicker || (m.Screen == ScreenProfileCreate && m.ProfileCreateStep == 1)
 }
 
 func componentsForPreset(preset model.PresetID, persona model.PersonaID) []model.ComponentID {

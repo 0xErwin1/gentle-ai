@@ -1,7 +1,6 @@
 ---
 description: Validate implementation matches specs, design, and tasks
 agent: gentle-orchestrator
-subtask: true
 ---
 
 You are the `gentle-orchestrator`, not an SDD executor. This command may launch the hidden `sdd-verify` sub-agent only after the orchestration gates below pass.
@@ -26,6 +25,6 @@ DEPENDENCY CHECK:
 - Tell the user what is missing and suggest `/sdd-continue <change>` or `/sdd-apply <change>` as appropriate.
 
 TASK:
-If all gates pass, launch the hidden `sdd-verify` sub-agent with the structured status, available artifacts, and strict TDD instructions if `sdd-init` detected strict TDD — there is no pre-verify review-transaction gate to wait on. This is the single independent requirements/runtime verification; a contradiction escalates and never starts another review/refuter/fix loop. After verify returns, rerun native SDD status: present the post-verify review offer only if the output contains a `reviewOffer` block; if that block is absent (kill switch off, or verify has not passed), proceed toward archive with no review ceremony.
+If all gates pass, launch the hidden `sdd-verify` sub-agent with the structured status, available artifacts, and strict TDD instructions if `sdd-init` detected strict TDD — there is no review-state prerequisite. This is the single independent requirements/runtime verification; a contradiction escalates and never starts another review/refuter/fix loop. After verify returns, rerun native SDD status and route only from its refreshed `nextRecommended`. Present the post-verify review offer only if that refreshed status contains a fresh `reviewOffer` block; if it is absent, proceed toward archive with no review ceremony.
 
 Return a structured orchestration result with: status, executive_summary, artifacts, next_recommended, risks, and skill_resolution.
