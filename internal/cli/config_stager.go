@@ -7,7 +7,6 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v3/internal/components/filemerge"
 	"os"
 	"path/filepath"
-	"sort"
 
 	"github.com/gentleman-programming/gentle-ai/v3/internal/agents"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/components/communitytool"
@@ -80,14 +79,6 @@ func (stager configurationStager) Stage(state configdomain.DesiredState, stageRo
 		if err := stager.stageComponent(component, stageRoot, selection, adapters); err != nil {
 			return err
 		}
-	}
-
-	if err := stageDeclaredMCPServers(stageRoot, selection, adapters); err != nil {
-		return err
-	}
-
-	if err := stageDeclaredPermissions(stageRoot, selection, adapters); err != nil {
-		return err
 	}
 
 	if err := stagePiBackgroundPolicy(stageRoot, selection, adapters); err != nil {
@@ -172,7 +163,7 @@ func (stager configurationStager) stageComponentForAdapter(
 ) error {
 	switch component {
 	case model.ComponentSkills:
-		skillIDs := skillsForAdapter(selection, adapter.Agent())
+		skillIDs := selectedSkillIDs(selection)
 		if len(skillIDs) == 0 {
 			return nil
 		}
@@ -443,72 +434,6 @@ func liveProvisioning(resources []render.Resource, profile system.PlatformProfil
 	return live
 }
 
-// stageDeclaredMCPServers materialises the servers a document declares through
-// each adapter's own MCP strategy. It runs outside the component loop because a
-// declared server is configuration in its own right, not something the Context7
-// component happens to bring along.
-func stageDeclaredMCPServers(stageRoot string, selection model.Selection, adapters []agents.Adapter) error {
-	for _, adapter := range adapters {
-		servers := mcpServersForAdapter(selection, adapter.Agent())
-		if len(servers) == 0 {
-			continue
-		}
-
-		target := componentInjectionDirScoped(stageRoot, "", ScopeGlobal, adapter)
-		if _, err := mcp.InjectDeclared(target, adapter, servers); err != nil {
-			return fmt.Errorf("stage MCP servers for %q: %w", adapter.Agent(), err)
-		}
-	}
-
-	return nil
-}
-
-// mcpServersForAdapter resolves what one adapter receives. A per-adapter set
-// replaces the flat one for that adapter only, so the simple form keeps meaning
-// "every adapter" and an adapter is only named when it must differ -- a client
-// that identifies itself to a server, or an installation that gives one client
-// tools another has no use for.
-func mcpServersForAdapter(selection model.Selection, agent model.AgentID) []mcp.Server {
-	declared := selection.MCPServers
-	if assigned, ok := selection.MCPServerAssignments[agent]; ok {
-		declared = assigned
-	}
-
-	servers := make([]mcp.Server, 0, len(declared))
-	for _, name := range sortedServerNames(declared) {
-		server := declared[name]
-		servers = append(servers, mcp.Server{
-			Name: name, Command: server.Command, Args: server.Args,
-			Env: server.Env, URL: server.URL, Headers: server.Headers, Enabled: server.Enabled,
-		})
-	}
-
-	return servers
-}
-
-// stageDeclaredPermissions layers the rules a document declares over whatever
-// the permissions component already wrote, so a declaration adds to the shipped
-// guardrails instead of replacing them.
-func stageDeclaredPermissions(stageRoot string, selection model.Selection, adapters []agents.Adapter) error {
-	if selection.Permissions == nil {
-		return nil
-	}
-
-	declared := permissions.Declared{
-		Allow: selection.Permissions.Allow,
-		Deny:  selection.Permissions.Deny,
-		Ask:   selection.Permissions.Ask,
-	}
-
-	for _, adapter := range adapters {
-		if _, err := permissions.InjectDeclared(stageRoot, adapter, declared); err != nil {
-			return fmt.Errorf("stage permissions for %q: %w", adapter.Agent(), err)
-		}
-	}
-
-	return nil
-}
-
 func agentIDs(adapters []agents.Adapter) []model.AgentID {
 	ids := make([]model.AgentID, 0, len(adapters))
 	for _, adapter := range adapters {
@@ -516,25 +441,4 @@ func agentIDs(adapters []agents.Adapter) []model.AgentID {
 	}
 
 	return ids
-}
-
-func sortedServerNames(servers map[string]model.MCPServer) []string {
-	names := make([]string, 0, len(servers))
-	for name := range servers {
-		names = append(names, name)
-	}
-	sort.Strings(names)
-
-	return names
-}
-
-// skillsForAdapter resolves what one adapter receives. A per-adapter assignment
-// replaces the flat list for that adapter only, so the simple form keeps
-// meaning "every adapter" and a document only names an adapter when it differs.
-func skillsForAdapter(selection model.Selection, agent model.AgentID) []model.SkillID {
-	if assigned, ok := selection.SkillAssignments[agent]; ok {
-		return assigned
-	}
-
-	return selectedSkillIDs(selection)
 }
