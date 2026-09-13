@@ -31,12 +31,19 @@ func SendClaude(ctx context.Context, home string, getenv func(string) string, in
 	}
 	var usage telemetry.ClaudeUsage
 	var definition []byte
-	if hook.HookEventName == "SubagentStop" {
+	switch hook.HookEventName {
+	case "SubagentStop":
 		if tail, firstPartial, err := readClaudeFile(home, hook.AgentTranscriptPath, telemetry.ClaudeTranscriptMaxBytes, true); err == nil {
 			usage, _ = telemetry.ParseClaudeTranscriptTail(tail, firstPartial, hook.LastAssistantDigest)
 		}
 		if telemetry.ClaudeNamedAgent(hook.AgentType) {
 			definition, _, _ = readClaudeFile(home, filepath.Join(home, ".claude", "agents", hook.AgentType+".md"), telemetry.ClaudeAgentMaxBytes, false)
+		}
+	case "Stop":
+		// Stop reads its own transcript tail the same way SubagentStop reads a
+		// subagent transcript. Stop never has an agent definition to read.
+		if tail, firstPartial, err := readClaudeFile(home, hook.TranscriptPath, telemetry.ClaudeTranscriptMaxBytes, true); err == nil {
+			usage, _ = telemetry.ParseClaudeTranscriptTail(tail, firstPartial, hook.LastAssistantDigest)
 		}
 	}
 	if !allowed(home, getenv) {
@@ -50,7 +57,7 @@ func SendClaude(ctx context.Context, home string, getenv func(string) string, in
 	if err != nil || len(batch) > telemetry.RuntimeMaxBytes {
 		return "discarded"
 	}
-	return telemetry.SendRuntime(ctx, home, getenv, bytes.NewReader(batch), client)
+	return telemetry.SendRuntimeWithDeliveryID(ctx, home, getenv, bytes.NewReader(batch), client, observation.DeliveryID)
 }
 
 func readClaudeFile(home, source string, limit int, tail bool) ([]byte, bool, error) {

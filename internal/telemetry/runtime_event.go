@@ -11,8 +11,11 @@ const RuntimeEventSchema = "gentle-ai.telemetry-runtime-event/v1"
 const RuntimeDeliverySchema = "gentle-ai.telemetry-runtime-delivery/v1"
 
 // RuntimeEvent is anonymous transport. DeliveryID is fresh for each observation
-// submission, never a batch/session/install identity. Clients send once only;
-// collector deduplication is defensive and does not imply client retries.
+// submission, OR a one-way hash of a host message id whose only purpose is
+// server-side dedupe of a repeated observation (the message id itself never
+// leaves the machine). It is never a batch/session/install identity. Clients
+// send once only; collector deduplication is defensive and does not imply
+// client retries.
 type RuntimeEvent struct {
 	Schema     string          `json:"schema"`
 	Registry   json.RawMessage `json:"registry"`
