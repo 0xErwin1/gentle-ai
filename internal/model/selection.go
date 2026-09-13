@@ -26,12 +26,7 @@ type Selection struct {
 	BackgroundIntent                 OpenCodeBackgroundIntent         // OpenCode background subagent choice; empty = unresolved
 	Scope                            InstallScope                     // install scope; empty = unresolved
 	Channel                          InstallChannel                   // release track; empty = unresolved
-	MCPServers                       map[string]MCPServer             // declared MCP servers, keyed by name
-	SkillExclusions                  []SkillID                        // skills removed from whatever the selection resolves to
 	ModelPresets                     map[string]string                // named model profile per provider; absent provider = unresolved
-	SkillAssignments                 map[AgentID][]SkillID            // per-adapter skill overrides; absent adapter takes the flat Skills list
-	MCPServerAssignments             map[AgentID]map[string]MCPServer // per-adapter server overrides; absent adapter takes the flat MCPServers set
-	Permissions                      *Permissions                     // declared permission rules layered over the shipped defaults
 	RDDMode                          RDDMode                          // global review kill switch; empty = unresolved
 }
 
