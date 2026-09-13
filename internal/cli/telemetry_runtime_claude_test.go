@@ -42,7 +42,7 @@ func TestTelemetryRuntimeClaudeDirectSend(t *testing.T) {
 			requests++
 			body, _ := io.ReadAll(r.Body)
 			event, err := telemetry.ParseRuntimeEvent(body)
-			if err != nil || event.Host != "claude-code" || event.Rows[0].AgentClass != "sdd-apply" || event.Rows[0].Model.ID != "claude-opus-5" || event.Rows[0].ModelEvidence != "response" || event.Rows[0].SelectedEffort != "high" || string(event.Rows[0].Responses) != "1" || bytes.Contains(body, []byte("PRIVATE")) {
+			if err != nil || event.Host != "claude-code" || event.Rows[0].AgentClass != "sdd-apply" || event.Rows[0].Model.ID != "claude-opus-5-1" || event.Rows[0].ModelEvidence != "response" || event.Rows[0].SelectedEffort != "high" || string(event.Rows[0].Responses) != "1" || bytes.Contains(body, []byte("PRIVATE")) {
 				t.Error("incorrect or unsafe event", err, string(body))
 			}
 			return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{"schema":"gentle-ai.telemetry-runtime-delivery/v1","decision":"stored"}`))}, nil

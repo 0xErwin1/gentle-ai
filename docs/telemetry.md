@@ -81,7 +81,7 @@ cumulative snapshots. No parent-child links or source IDs exist.
 | Field | Source rule |
 |---|---|
 | `host` | `pi`, `opencode`, `claude-code`, or `codex`; never a hostname |
-| `model` | Registered public provider/model pair, otherwise the `unknown` or `custom` pair |
+| `model` | Provider/id pair filtered by a generic public model family pattern, otherwise the `unknown` or `custom` pair (see below) |
 | `model_evidence` | `selected`, `response`, or `unknown`; selected model is not proof of response model |
 | `agent_kind`, `agent_class` | Closed broad category and known package class, otherwise `unknown`; no private agent names. See the canonical vocabulary below. |
 | `selected_effort`, `effective_effort` | Independent source evidence; never infer one from the other |
@@ -89,6 +89,22 @@ cumulative snapshots. No parent-child links or source IDs exist.
 | Six token fields | Independent `{reported, unavailable, unsupported, sum}` coverage objects |
 | `duration` | Typed source-reported request or message elapsed time, never inferred latency |
 | `error_category` | `none`, `unknown`, `auth`, `output_length`, `aborted`, `api`, `rate_limit`, or `server`; never error text |
+
+### Model attribution
+
+`model.id` is public only when it starts with a recognized public model family
+name (for example `claude`, `gpt`, `gemini`, `deepseek`, `glm`, `qwen`, `llama`,
+`mistral`, `grok`); every host adapter (Claude Code, OpenCode, Codex) and the
+collector apply the same generic family pattern. `model.provider` is a routing
+label, not itself filtered. An id whose family prefix is public is emitted
+whole, including its version and variant suffixes (`deepseek-v4-flash`,
+`claude-sonnet-5-20260101`): the privacy floor is the family prefix, not suffix
+redaction, so a suffix carried behind a public family does leave the machine.
+Generic English words that are also model brands (`command`, `nova`, `seed`,
+`sonar`, `yi`) are deliberately not in the family list so a private deployment
+named with one of them cannot pass. An id outside the recognized families is
+replaced with `custom` (or `opencode/custom` for OpenCode when the id is
+private), and empty input becomes `unknown/unknown`.
 
 ### Agent class vocabulary
 
