@@ -1790,7 +1790,7 @@ func TestComponentOperationsSDD_ClaudeRemovesSkillRegistryHook(t *testing.T) {
 	}
 }
 
-func TestComponentOperationsSDD_ClaudeRemovesReviewStopHook(t *testing.T) {
+func TestComponentOperationsSDD_ClaudeRemovesReviewAndPreflightHooks(t *testing.T) {
 	homeDir := t.TempDir()
 	workspaceDir := t.TempDir()
 
@@ -1830,6 +1830,25 @@ func TestComponentOperationsSDD_ClaudeRemovesReviewStopHook(t *testing.T) {
       {
         "matcher": "Bash",
         "hooks": [{"type": "command", "command": "echo pre"}]
+      },
+      {
+        "matcher": "Agent",
+        "hooks": [{"type": "command", "command": "gentle-ai sdd-preflight-hook --agent claude-code"}]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "AskUserQuestion",
+        "hooks": [
+          {"type": "command", "command": "gentle-ai sdd-preflight-hook --agent claude-code"},
+          {"type": "command", "command": "echo post keep"}
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "matcher": "",
+        "hooks": [{"type": "command", "command": "gentle-ai sdd-preflight-hook --agent claude-code"}]
       }
     ]
   }
@@ -1854,10 +1873,10 @@ func TestComponentOperationsSDD_ClaudeRemovesReviewStopHook(t *testing.T) {
 		t.Fatal(err)
 	}
 	text := string(raw)
-	if strings.Contains(text, "gentle-ai review stop-hook") {
-		t.Fatalf("managed stop-hook should be removed from both Stop and SessionStart:\n%s", text)
+	if strings.Contains(text, "gentle-ai review stop-hook") || strings.Contains(text, "gentle-ai sdd-preflight-hook") {
+		t.Fatalf("managed review and SDD preflight hooks should be removed:\n%s", text)
 	}
-	if !strings.Contains(text, "echo keep") || !strings.Contains(text, "echo pre") || !strings.Contains(text, "echo custom session-start") {
+	if !strings.Contains(text, "echo keep") || !strings.Contains(text, "echo pre") || !strings.Contains(text, "echo post keep") || !strings.Contains(text, "echo custom session-start") {
 		t.Fatalf("unrelated hooks should be preserved:\n%s", text)
 	}
 }
