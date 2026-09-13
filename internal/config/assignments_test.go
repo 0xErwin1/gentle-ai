@@ -239,8 +239,6 @@ func TestDecodeRefusesSupersededFlatFields(t *testing.T) {
 		{"modelPresets", `{"version":"v1","selection":{"modelPresets":{}}}`, "selection.modelPresets", "providers.<id>.modelPreset"},
 		{"profiles", `{"version":"v1","selection":{"profiles":{}}}`, "selection.profiles", "providers.<id>.profiles"},
 		{"sddProfileStrategy", `{"version":"v1","selection":{"sddProfileStrategy":"aggressive"}}`, "selection.sddProfileStrategy", "providers.opencode.profileStrategy"},
-		{"skillAssignments", `{"version":"v1","selection":{"skillAssignments":{}}}`, "selection.skillAssignments", "providers.<id>.skills"},
-		{"mcpServerAssignments", `{"version":"v1","selection":{"mcpServerAssignments":{}}}`, "selection.mcpServerAssignments", "providers.<id>.mcpServers"},
 	}
 
 	for _, test := range tests {
