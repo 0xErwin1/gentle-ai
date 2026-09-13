@@ -663,6 +663,29 @@ func TestBackwardCompatNoAssignments(t *testing.T) {
 	}
 }
 
+// TestReadIgnoresRetiredSkillExclusionsKey confirms that a state file written
+// by an older binary, before skill_exclusions was retired, still decodes.
+// Read uses a plain (non-strict) json.Unmarshal, so a key InstallState no
+// longer declares is silently dropped rather than rejected.
+func TestReadIgnoresRetiredSkillExclusionsKey(t *testing.T) {
+	home := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(home, stateDir), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	legacy := []byte(`{"installed_agents":["opencode"],"skill_exclusions":["go-testing"]}` + "\n")
+	if err := os.WriteFile(Path(home), legacy, 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	s, err := Read(home)
+	if err != nil {
+		t.Fatalf("Read() error = %v", err)
+	}
+	if !reflect.DeepEqual(s.InstalledAgents, []string{"opencode"}) {
+		t.Errorf("InstalledAgents = %v, want [opencode]", s.InstalledAgents)
+	}
+}
+
 // TestInstallStateCodexRoundTrip verifies that CodexModelAssignments persists
 // with the "codexModelAssignments" JSON key and is omitted when empty.
 func TestInstallStateCodexRoundTrip(t *testing.T) {
