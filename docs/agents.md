@@ -98,13 +98,14 @@ Kiro uses native custom agents in `~/.kiro/agents/`. `gentle-ai` writes phase ag
 - MCP servers configured as plugins in `~/.claude/mcp/`
 - Output styles in `~/.claude/output-styles/`
 - System prompt via markdown sections in `~/.claude/CLAUDE.md`
-- Three managed hooks in `~/.claude/settings.json`: `UserPromptSubmit` refreshes the skill registry, `SessionStart` runs the review stop-hook subcommand to record the session's starting candidate as its baseline, and `Stop` runs that same subcommand to remind only about candidates the session itself produced; uninstall removes all three
+- Managed hooks in `~/.claude/settings.json`: `UserPromptSubmit` refreshes the skill registry; `SessionStart` and `Stop` maintain the review reminder baseline. Claude hook commands do not expose authenticated caller provenance, so Gentle AI installs only a fail-closed `PreToolUse(Agent)` SDD guard: SDD phases must continue inline rather than claiming runtime-backed child authority. Uninstall also removes stale preflight producer hooks from earlier installations.
 
 ### OpenCode
 
 - Full multi-agent overlay with 11 named agents in `opencode.json` (`gentle-orchestrator` plus 10 SDD phase agents)
 - Slash commands for SDD phases (`/sdd-new`, `/sdd-explore`, etc.)
-- Native OpenCode `task` subagents; managed background execution is configured through `gentle-ai install` / `gentle-ai sync` with `--opencode-background-subagents=auto|on|off` or `GENTLE_AI_OPENCODE_BACKGROUND_SUBAGENTS`
+- Native OpenCode `task` subagents; the managed task-result plugin records grouped `question` answers only for root sessions, injects the canonical SDD preflight block into every packaged SDD phase, and refuses missing, forged, child-session, malformed, or expired authority
+- Managed background execution is configured through `gentle-ai install` / `gentle-ai sync` with `--opencode-background-subagents=auto|on|off` or `GENTLE_AI_OPENCODE_BACKGROUND_SUBAGENTS`
 - CLI precedence is flag, non-empty environment, prior managed state, then `auto`; the interactive OpenCode + SDD installer prompts only when that preference is unresolved
 - Managed launchers live under `~/.gentle-ai/bin/` and preserve an explicit `OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=false`; restart OpenCode after enabling them
 - `serve`, `attach`, Desktop, and sessions not launched through the managed launcher use the safe foreground fallback
@@ -121,6 +122,7 @@ Kiro uses native custom agents in `~/.kiro/agents/`. `gentle-ai` writes phase ag
 - **Detection**: gentle-ai detects Kilo Code from `~/.config/kilo` and checks for the `kilo` binary on `PATH`
 - Uses the OpenCode-compatible adapter: `AGENTS.md`, `skills/`, `commands/`, and `opencode.json` live under `~/.config/kilo`
 - Full SDD delegation is provided by the merged multi-agent overlay in `~/.config/kilo/opencode.json`, not by a separate native sub-agent directory
+- Kilo does not expose Gentle AI's managed executable tool interception path; its installed preflight explicitly remains a prompt-level blocking fallback and does not claim runtime-enforced authority
 - MCP servers are merged into `opencode.json`; Engram uses the OpenCode-style local MCP entry with `command` as an array
 - Auto-install is supported via npm: `npm install -g @kilocode/cli`
 
