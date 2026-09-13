@@ -14,23 +14,18 @@ type fakeProvider struct{}
 const fakeSettingsPath = ".config/fake/settings.json"
 
 func (fakeProvider) Render(config.DesiredState, map[string][]byte) ([]ArtifactContent, error) {
-	return []ArtifactContent{{Path: fakeSettingsPath, Contents: []byte(`{"role":{"reviewer":{}}}`)}}, nil
+	return []ArtifactContent{{Path: fakeSettingsPath, Contents: []byte(`{"managed":{"reviewer":{}}}`)}}, nil
 }
 
-func (fakeProvider) Selectors(state config.DesiredState) map[string][]string {
-	selectors := make([]string, 0, len(state.Roles))
-	for _, role := range state.Roles {
-		selectors = append(selectors, "/role/"+string(role.ID))
-	}
-
-	return map[string][]string{fakeSettingsPath: selectors}
+func (fakeProvider) Selectors(config.DesiredState) map[string][]string {
+	return map[string][]string{fakeSettingsPath: {"/managed/reviewer"}}
 }
 
 func TestSelectorsFollowTheDeclaringAdapter(t *testing.T) {
 	stage := t.TempDir()
 
 	snapshot, err := New(fakeProvider{}).Render(Request{
-		State:       config.DesiredState{Version: config.CurrentVersion, Roles: []config.Role{{ID: "reviewer"}}},
+		State:       config.DesiredState{Version: config.CurrentVersion},
 		Destination: t.TempDir(),
 		StageRoot:   stage,
 	})
@@ -38,11 +33,8 @@ func TestSelectorsFollowTheDeclaringAdapter(t *testing.T) {
 		t.Fatalf("render: %v", err)
 	}
 
-	if got := snapshot.ManagedSelectors[fakeSettingsPath]; len(got) != 1 || got[0] != "/role/reviewer" {
-		t.Errorf("selectors for %s = %v, want the declared role", fakeSettingsPath, got)
-	}
-	if got, ok := snapshot.ManagedSelectors[openCodeSettingsPath]; ok {
-		t.Errorf("selectors were attributed to an adapter that rendered nothing: %v", got)
+	if got := snapshot.ManagedSelectors[fakeSettingsPath]; len(got) != 1 || got[0] != "/managed/reviewer" {
+		t.Errorf("selectors for %s = %v, want the declared resource", fakeSettingsPath, got)
 	}
 }
 
@@ -52,7 +44,7 @@ func TestUndecomposedArtifactsAreOwnedWhole(t *testing.T) {
 	stage := t.TempDir()
 
 	snapshot, err := New(fakeProvider{}).Render(Request{
-		State:       config.DesiredState{Version: config.CurrentVersion, Roles: []config.Role{{ID: "reviewer"}}},
+		State:       config.DesiredState{Version: config.CurrentVersion},
 		Destination: t.TempDir(),
 		StageRoot:   stage,
 	})
