@@ -96,10 +96,15 @@ cumulative snapshots. No parent-child links or source IDs exist.
 name (for example `claude`, `gpt`, `gemini`, `deepseek`, `glm`, `qwen`, `llama`,
 `mistral`, `grok`); every host adapter (Claude Code, OpenCode, Codex) and the
 collector apply the same generic family pattern. `model.provider` is a routing
-label, not itself filtered. Only the family leaves the machine, never the
-specific fine-tune, deployment, or vendor alias: an id outside the recognized
-families is replaced with `custom` (or `opencode/custom` for OpenCode when the
-id is private), and empty input becomes `unknown/unknown`.
+label, not itself filtered. An id whose family prefix is public is emitted
+whole, including its version and variant suffixes (`deepseek-v4-flash`,
+`claude-sonnet-5-20260101`): the privacy floor is the family prefix, not suffix
+redaction, so a suffix carried behind a public family does leave the machine.
+Generic English words that are also model brands (`command`, `nova`, `seed`,
+`sonar`, `yi`) are deliberately not in the family list so a private deployment
+named with one of them cannot pass. An id outside the recognized families is
+replaced with `custom` (or `opencode/custom` for OpenCode when the id is
+private), and empty input becomes `unknown/unknown`.
 
 ### Agent class vocabulary
 
