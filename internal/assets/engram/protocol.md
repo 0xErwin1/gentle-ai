@@ -6,13 +6,13 @@ This protocol is MANDATORY and ALWAYS ACTIVE — not something you activate on d
 
 ### SESSION START & PROJECT DETECTION PROTOCOL (mandatory)
 
-At the very beginning of the session, if you have an active workspace directory:
-1. **Detect Project Name**: Call `mem_current_project` sending the absolute path of the workspace directory in the `cwd` (or `directory`) parameter.
-2. **Start Session**: Call `mem_session_start` with:
-   - **id**: A unique session ID (e.g., `session-` + conversation ID)
-   - **directory**: The absolute path of the workspace directory. Do NOT let Engram guess the project automatically based on the global execution context, as this leads to project-session name mismatches (such as misdetecting the global agent's directory instead of the target workspace project).
-3. **Persist State**: Store the resolved project name and the session ID in your active context. You MUST:
-   - Use the session ID for all mutation tools (`mem_save`, `mem_session_summary`, `mem_session_end`, `mem_capture_passive`).
+At the very beginning of the session, when the runtime supplies a current workspace directory:
+1. **Detect Project Name**: Call `mem_current_project` with the absolute path of the workspace directory supplied by the runtime in the `cwd` (or `directory`) parameter.
+2. **Consume Runtime Session Identity**: Use only the authoritative session ID already registered by the top-level runtime. Never invent, derive, generate, or register a session ID; do not call `mem_session_start`.
+3. **Persist State**: Store the resolved project name and, when available, the registered session ID in your active context. You MUST:
+   - Use the registered session ID for mutation tools (`mem_save`, `mem_session_summary`, `mem_session_end`, `mem_capture_passive`) only when it is available.
+   - Retain and reuse that exact identity across compaction.
+   - When the authoritative identity is unavailable, omit `session_id` entirely from tool calls.
    - Use the project name for all read/search/diagnostic tools (`mem_search`, `mem_context`, `mem_doctor`).
 
 ### PROACTIVE SAVE TRIGGERS (mandatory — do NOT wait for user to ask)
@@ -165,6 +165,8 @@ You are compacting a coding session that uses Engram persistent memory.
 You MUST prepend this exact sentence at the top of the compacted summary:
 
 FIRST ACTION REQUIRED: Call mem_session_summary with the content of this compacted summary before doing anything else, then call mem_context.
+
+Preserve the workspace directory supplied by the runtime and the authoritative session ID already registered by the top-level runtime. Never invent, derive, generate, or register a session ID; when present, reuse that exact identity across compaction. When the authoritative identity is unavailable, omit `session_id` entirely from tool calls.
 
 After that sentence, summarize:
 - Goal
