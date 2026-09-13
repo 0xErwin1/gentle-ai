@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -24,8 +25,11 @@ func TestOpenCodeTelemetryRollbackPreservesLateEdits(t *testing.T) {
 			for _, edit := range []string{"plugin", "manifest", "both", "mode", "symlink", "parent-symlink"} {
 				t.Run(fmtRollbackCase(flow, existing, edit), func(t *testing.T) {
 					home := t.TempDir()
-					t.Setenv("HOME", home)
+					setOpenCodeTestHome(t, home)
 					t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+					if edit == "mode" && runtime.GOOS == "windows" {
+						t.Skip("Windows does not preserve POSIX chmod mode mutations")
+					}
 					adapter := opencode.NewAdapter()
 					config := adapter.GlobalConfigDir(home)
 					paths := telemetryruntime.ManagedPaths(config)
@@ -172,9 +176,19 @@ func fmtRollbackCase(flow string, existing bool, edit string) string {
 	return flow + "/fresh/" + edit
 }
 
+// setOpenCodeTestHome keeps XDG resolution bound to the test home on Windows,
+// where os.UserHomeDir reads USERPROFILE rather than HOME.
+func setOpenCodeTestHome(t *testing.T, home string) {
+	t.Helper()
+	t.Setenv("HOME", home)
+	if runtime.GOOS == "windows" {
+		t.Setenv("USERPROFILE", home)
+	}
+}
+
 func TestOpenCodeTelemetryInstallRollbackOutsideHome(t *testing.T) {
 	home := t.TempDir()
-	t.Setenv("HOME", home)
+	setOpenCodeTestHome(t, home)
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	agents := []model.AgentID{model.AgentOpenCode}
 	rt := &installRuntime{homeDir: home, workspaceDir: t.TempDir(), backupRoot: filepath.Join(home, "backups"), scope: ScopeGlobal, selection: model.Selection{Agents: agents}, resolved: planner.ResolvedPlan{Agents: agents}, state: &runtimeState{}}
@@ -209,7 +223,7 @@ func TestOpenCodeTelemetryInstallRollbackOutsideHome(t *testing.T) {
 
 func TestOpenCodeTelemetryInstallRefusesCustomBeforeSnapshot(t *testing.T) {
 	home := t.TempDir()
-	t.Setenv("HOME", home)
+	setOpenCodeTestHome(t, home)
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	agents := []model.AgentID{model.AgentOpenCode}
 	path := telemetryruntime.ManagedPaths(opencode.NewAdapter().GlobalConfigDir(home))[0]
