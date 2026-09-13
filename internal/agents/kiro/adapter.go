@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strings"
 
 	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/capabilitymanifest"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
@@ -150,6 +151,12 @@ func (a *Adapter) MCPConfigPath(homeDir string, _ string) string {
 	return filepath.Join(homeDir, ".kiro", "settings", "mcp.json")
 }
 
+// kiroConfigDir returns the platform-specific Kiro User config directory.
+//
+// Environment overrides (XDG_CONFIG_HOME, APPDATA) are honored only when
+// homeDir is the real user home: a caller that passes a custom installation
+// root (sandboxed installs, staging, tests) must stay contained inside that
+// root, so ambient environment can never redirect a write outside it.
 func (a *Adapter) kiroConfigDir(homeDir string) string {
 	switch runtime.GOOS {
 	case "darwin":
@@ -157,18 +164,16 @@ func (a *Adapter) kiroConfigDir(homeDir string) string {
 		return filepath.Join(homeDir, "Library", "Application Support", "Kiro", "User")
 	case "windows":
 		// Windows: %APPDATA%/kiro/User/
-		appData := os.Getenv("APPDATA")
-		if appData == "" {
-			appData = filepath.Join(homeDir, "AppData", "Roaming")
+		if appData := strings.TrimSpace(os.Getenv("APPDATA")); filepath.IsAbs(appData) && isRealUserHome(homeDir) {
+			return filepath.Join(appData, "kiro", "User")
 		}
-		return filepath.Join(appData, "kiro", "User")
+		return filepath.Join(homeDir, "AppData", "Roaming", "kiro", "User")
 	default:
 		// Linux and others: ~/.config/kiro/user (respects XDG_CONFIG_HOME)
-		xdgConfigHome := os.Getenv("XDG_CONFIG_HOME")
-		if xdgConfigHome == "" {
-			xdgConfigHome = filepath.Join(homeDir, ".config")
+		if xdgConfigHome := strings.TrimSpace(os.Getenv("XDG_CONFIG_HOME")); filepath.IsAbs(xdgConfigHome) && isRealUserHome(homeDir) {
+			return filepath.Join(xdgConfigHome, "kiro", "user")
 		}
-		return filepath.Join(xdgConfigHome, "kiro", "user")
+		return filepath.Join(homeDir, ".config", "kiro", "user")
 	}
 }
 
@@ -200,4 +205,13 @@ func (a *Adapter) SupportsSystemPrompt() bool {
 
 func (a *Adapter) SupportsMCP() bool {
 	return a.CapabilityManifest().Features.MCP
+}
+
+// isRealUserHome reports whether homeDir is the current user's actual home
+// directory — the only case where process-wide environment overrides may
+// legitimately steer config resolution away from homeDir.
+func isRealUserHome(homeDir string) bool {
+	userHome, err := os.UserHomeDir()
+
+	return err == nil && filepath.Clean(homeDir) == filepath.Clean(userHome)
 }

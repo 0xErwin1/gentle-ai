@@ -169,12 +169,15 @@ func TestSettingsPathMultiplatform(t *testing.T) {
 		want    string
 	}{
 		{
-			name: "Linux with custom XDG_CONFIG_HOME",
+			// A custom root never follows ambient XDG_CONFIG_HOME: containment
+			// wins, so a sandboxed install or a staged render cannot be
+			// redirected into the live configuration directory.
+			name: "Linux custom root ignores XDG_CONFIG_HOME",
 			goos: "linux",
 			envVars: map[string]string{
 				"XDG_CONFIG_HOME": "/custom/config",
 			},
-			want: "/custom/config/Windsurf/User/settings.json",
+			want: filepath.Join(home, ".config", "Windsurf", "User", "settings.json"),
 		},
 		{
 			name:    "Linux with default XDG_CONFIG_HOME",
@@ -183,12 +186,12 @@ func TestSettingsPathMultiplatform(t *testing.T) {
 			want:    filepath.Join(home, ".config", "Windsurf", "User", "settings.json"),
 		},
 		{
-			name: "Windows with custom APPDATA",
+			name: "Windows custom root ignores APPDATA",
 			goos: "windows",
 			envVars: map[string]string{
 				"APPDATA": "C:\\CustomAppData",
 			},
-			want: "C:\\CustomAppData\\Windsurf\\User\\settings.json",
+			want: filepath.Join(home, "AppData", "Roaming", "Windsurf", "User", "settings.json"),
 		},
 		{
 			name:    "Windows with default APPDATA",
@@ -203,6 +206,23 @@ func TestSettingsPathMultiplatform(t *testing.T) {
 			want:    filepath.Join(home, "Library", "Application Support", "Windsurf", "User", "settings.json"),
 		},
 	}
+
+	// The real user home is the only root that honors the environment, which is
+	// what keeps an ordinary install landing where the editor actually reads.
+	t.Run("real user home honors XDG_CONFIG_HOME", func(t *testing.T) {
+		if runtime.GOOS != "linux" {
+			t.Skip("XDG_CONFIG_HOME applies to linux")
+		}
+		realHome, err := os.UserHomeDir()
+		if err != nil {
+			t.Fatalf("UserHomeDir() error = %v", err)
+		}
+		t.Setenv("XDG_CONFIG_HOME", "/custom/config")
+
+		if got, want := a.SettingsPath(realHome), "/custom/config/Windsurf/User/settings.json"; got != want {
+			t.Fatalf("SettingsPath(realHome) = %q, want %q", got, want)
+		}
+	})
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

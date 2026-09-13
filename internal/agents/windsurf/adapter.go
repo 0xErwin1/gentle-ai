@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 
 	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/capabilitymanifest"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
@@ -99,22 +100,25 @@ func (a *Adapter) SettingsPath(homeDir string) string {
 // windsurfUserDir returns the platform-specific Windsurf User config directory.
 // Windsurf follows the same platform conventions as VS Code, substituting
 // the application name "Windsurf" for "Code".
+//
+// Environment overrides (XDG_CONFIG_HOME, APPDATA) are honored only when
+// homeDir is the real user home: a caller that passes a custom installation
+// root (sandboxed installs, staging, tests) must stay contained inside that
+// root, so ambient environment can never redirect a write outside it.
 func (a *Adapter) windsurfUserDir(homeDir string) string {
 	switch runtime.GOOS {
 	case "darwin":
 		return filepath.Join(homeDir, "Library", "Application Support", "Windsurf", "User")
 	case "windows":
-		appData := os.Getenv("APPDATA")
-		if appData == "" {
-			appData = filepath.Join(homeDir, "AppData", "Roaming")
+		if appData := strings.TrimSpace(os.Getenv("APPDATA")); filepath.IsAbs(appData) && isRealUserHome(homeDir) {
+			return filepath.Join(appData, "Windsurf", "User")
 		}
-		return filepath.Join(appData, "Windsurf", "User")
+		return filepath.Join(homeDir, "AppData", "Roaming", "Windsurf", "User")
 	default: // linux and others
-		xdgConfigHome := os.Getenv("XDG_CONFIG_HOME")
-		if xdgConfigHome == "" {
-			xdgConfigHome = filepath.Join(homeDir, ".config")
+		if xdgConfigHome := strings.TrimSpace(os.Getenv("XDG_CONFIG_HOME")); filepath.IsAbs(xdgConfigHome) && isRealUserHome(homeDir) {
+			return filepath.Join(xdgConfigHome, "Windsurf", "User")
 		}
-		return filepath.Join(xdgConfigHome, "Windsurf", "User")
+		return filepath.Join(homeDir, ".config", "Windsurf", "User")
 	}
 }
 
@@ -195,4 +199,13 @@ func defaultStat(path string) statResult {
 		return statResult{err: err}
 	}
 	return statResult{isDir: info.IsDir()}
+}
+
+// isRealUserHome reports whether homeDir is the current user's actual home
+// directory — the only case where process-wide environment overrides may
+// legitimately steer config resolution away from homeDir.
+func isRealUserHome(homeDir string) bool {
+	userHome, err := os.UserHomeDir()
+
+	return err == nil && filepath.Clean(homeDir) == filepath.Clean(userHome)
 }
