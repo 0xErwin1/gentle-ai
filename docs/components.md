@@ -8,7 +8,7 @@
 
 | Component | ID | Description |
 |-----------|-----|-------------|
-| Engram | `engram` | Persistent cross-session memory via MCP — auto-detection of project name, full-text search, git sync, project consolidation. See [engram repo](https://github.com/Gentleman-Programming/engram) |
+| Engram™ | `engram` | Persistent cross-session memory via MCP — auto-detection of project name, full-text search, git sync, project consolidation. See [engram repo](https://github.com/Gentleman-Programming/engram) |
 | SDD | `sdd` | Spec-Driven Development workflow (10 phases, including `sdd-onboard`) — the agent handles SDD organically when the task warrants it, or when you ask; you don't need to learn the commands |
 | Skills | `skills` | Curated coding skill library |
 | Context7 | `context7` | MCP server for live framework/library documentation |
@@ -16,6 +16,12 @@
 | Permissions | `permissions` | Security-first defaults and guardrails. Applied to Claude Code and OpenCode (the two adapters with permissions overlay support). Default sensitive-paths deny list: `~/.ssh/*`, `~/.ssh/**/*`, `**/*.pem`, `**/*.key`, `**/.env*`, `~/.credentials/*`, `~/.aws/credentials`, `~/.config/gh/hosts.yml`, `~/Library/Keychains/*`, `**/secrets/*`, `**/*.p12`, `**/*.pfx` |
 | GGA | `gga` | Gentleman Guardian Angel — AI provider switcher |
 | Theme | `theme` | Gentleman Kanagawa theme overlay |
+
+## Primary remote-authorization guidance
+
+Always-installed agent guidance includes a canonical remote-operation boundary, independent of the optional persona, SDD, and permissions components. Local-development access does not authorize remote execution, transfer, or discovery/reuse of ambient SSH agents, ControlMaster sockets, credentials, or sessions. Ask for explicit destination, operation, and credential/session authorization; authorized work remains allowed within stricter user/runtime restrictions.
+
+This first delivery covers the 15 non-Pi primary instruction carriers, not every executor role or named profile. Pi remains owned by `gentle-pi`. The behavioral section provides no sandbox or fresh-human-per-execution guarantee. Separately, OpenCode/Kilocode permission defaults ask for direct ssh/scp/sftp/rsync commands, without silently replacing personal allows or restrictions; existing installs must opt into permission sync. See [sync update instructions and limitations](usage.md#sync). Issue #4324 remains open for the remaining projections and native approvals.
 
 ## GGA Behavior
 

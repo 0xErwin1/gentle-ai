@@ -381,12 +381,13 @@ func injectWithOptions(configHomeDir, promptDir string, adapter agents.Adapter, 
 		files = append(files, mcpPath)
 
 		if adapter.Agent() == model.AgentAntigravity {
-			settingsWrite, settingsErr := ensureJSONFileIfMissing(adapter.SettingsPath(configHomeDir))
+			settingsTarget := adapter.SettingsPath(configHomeDir)
+			settingsWrite, settingsErr := ensureJSONFileIfMissing(settingsTarget)
 			if settingsErr != nil {
 				return InjectionResult{}, fmt.Errorf("ensure Antigravity settings: %w", settingsErr)
 			}
 			changed = changed || settingsWrite.Changed
-			files = append(files, adapter.SettingsPath(configHomeDir))
+			files = append(files, settingsTarget)
 
 			pluginChanged, pluginFiles, pluginErr := installAntigravityEngramPlugin(configHomeDir, engramCommand)
 			if pluginErr != nil {
@@ -422,15 +423,18 @@ func injectWithOptions(configHomeDir, promptDir string, adapter agents.Adapter, 
 		if configPath == "" {
 			break
 		}
-		if err := codex.ValidateGPT56Runtime(); err != nil {
-			return InjectionResult{}, err
+		runtimeErr := codex.ValidateGPT56Runtime()
+		if runtimeErr != nil && !codex.IsGPT56RuntimeUnavailable(runtimeErr) {
+			return InjectionResult{}, runtimeErr
 		}
 
 		// Determine instruction file paths before mutating the config.
-		instructionsPath, compactPath, instrErr := writeCodexInstructionFiles(configHomeDir)
+		instructionsPath, compactPath, instructionsChanged, instructionFiles, instrErr := writeCodexInstructionFiles(configHomeDir)
 		if instrErr != nil {
 			return InjectionResult{}, instrErr
 		}
+		changed = changed || instructionsChanged
+		files = append(files, instructionFiles...)
 
 		// Read existing config and apply all mutations in a single pass.
 		//
@@ -487,18 +491,19 @@ func injectWithOptions(configHomeDir, promptDir string, adapter agents.Adapter, 
 		changed = changed || tomlWrite.Changed
 		files = append(files, configPath)
 
-		// Write gentle-ai SDD model-selection profile files into ~/.codex/.
-		// These use the separate-file mechanism from Codex >= 0.134.0 and are
-		// selected at runtime via `codex --profile <name>`.
-		// codexHomeDir is the ~/.codex directory (the parent of config.toml).
-		codexHomeDir := filepath.Dir(configPath)
-		profileAssignments := resolveProfileAssignments(opts.CodexCarrilModelAssignments, opts.CodexModelAssignments)
-		profilesChanged, profileFiles, profileErr := codex.WriteCodexProfiles(codexHomeDir, profileAssignments)
-		if profileErr != nil {
-			return InjectionResult{}, profileErr
+		// Write gentle-ai SDD model-selection profile files only when Codex is
+		// installed and supports GPT-5.6. Without the executable, shared config
+		// still works, but existing CLI-only profiles must remain untouched.
+		if runtimeErr == nil {
+			codexHomeDir := filepath.Dir(configPath)
+			profileAssignments := resolveProfileAssignments(opts.CodexCarrilModelAssignments, opts.CodexModelAssignments)
+			profilesChanged, profileFiles, profileErr := codex.WriteCodexProfiles(codexHomeDir, profileAssignments)
+			if profileErr != nil {
+				return InjectionResult{}, profileErr
+			}
+			changed = changed || profilesChanged
+			files = append(files, profileFiles...)
 		}
-		changed = changed || profilesChanged
-		files = append(files, profileFiles...)
 	}
 
 	// 2. Inject Engram memory protocol into system prompt (if supported).
@@ -566,6 +571,13 @@ func injectWithOptions(configHomeDir, promptDir string, adapter agents.Adapter, 
 }
 
 func injectClaudeUserConfig(homeDir string, adapter agents.Adapter) (InjectionResult, error) {
+	// The plugin and direct MCP entry expose the same Engram tools. When the
+	// plugin is enabled, suppress direct registration without deleting any
+	// existing entry: matching config shape is not proof that gentle-ai owns it.
+	if claudeEngramPluginEnabled(homeDir) {
+		return InjectionResult{}, nil
+	}
+
 	legacyPath := adapter.MCPConfigPath(homeDir, "engram")
 	command := stableEngramCommandForMergedConfig(claude.UserConfigPath(homeDir), model.AgentClaudeCode)
 	legacyManaged := false
@@ -596,6 +608,22 @@ func injectClaudeUserConfig(homeDir string, adapter agents.Adapter) (InjectionRe
 	result.Changed = true
 	result.Files = append(result.Files, legacyPath)
 	return result, nil
+}
+
+func claudeEngramPluginEnabled(homeDir string) bool {
+	settingsPath := filepath.Join(homeDir, ".claude", "settings.json")
+	raw, err := os.ReadFile(settingsPath)
+	if err != nil {
+		return false
+	}
+
+	var settings struct {
+		EnabledPlugins map[string]bool `json:"enabledPlugins"`
+	}
+	if err := json.Unmarshal(raw, &settings); err != nil {
+		return false
+	}
+	return settings.EnabledPlugins["engram@engram"]
 }
 
 func validateOpenClawWorkspacePath(workspaceDir string, adapter agents.Adapter) error {
@@ -640,8 +668,8 @@ func ensureAntigravitySettings(homeDir string, adapter agents.Adapter) (settings
 }
 
 // writeCodexInstructionFiles writes the Engram memory protocol and compact prompt
-// files to ~/.codex/ and returns their paths.
-func writeCodexInstructionFiles(homeDir string) (instructionsPath, compactPath string, err error) {
+// files to ~/.codex/ and returns their paths and write results.
+func writeCodexInstructionFiles(homeDir string) (instructionsPath, compactPath string, changed bool, files []string, err error) {
 	codexDir := filepath.Join(homeDir, ".codex")
 	instructionsPath = filepath.Join(codexDir, "engram-instructions.md")
 	compactPath = filepath.Join(codexDir, "engram-compact-prompt.md")
@@ -649,18 +677,20 @@ func writeCodexInstructionFiles(homeDir string) (instructionsPath, compactPath s
 	instrContent := codexInstructions()
 	instrWrite, err := filemerge.WriteFileAtomic(instructionsPath, []byte(instrContent), 0o644)
 	if err != nil {
-		return "", "", fmt.Errorf("write codex engram-instructions.md: %w", err)
+		return "", "", false, nil, fmt.Errorf("write codex engram-instructions.md: %w", err)
 	}
-	_ = instrWrite
+	changed = instrWrite.Changed
+	files = append(files, instructionsPath)
 
 	compactContent := codexCompact()
 	compactWrite, err := filemerge.WriteFileAtomic(compactPath, []byte(compactContent), 0o644)
 	if err != nil {
-		return "", "", fmt.Errorf("write codex engram-compact-prompt.md: %w", err)
+		return "", "", false, nil, fmt.Errorf("write codex engram-compact-prompt.md: %w", err)
 	}
-	_ = compactWrite
+	changed = changed || compactWrite.Changed
+	files = append(files, compactPath)
 
-	return instructionsPath, compactPath, nil
+	return instructionsPath, compactPath, changed, files, nil
 }
 
 func mergeJSONFile(path string, overlay []byte) (filemerge.WriteResult, error) {
@@ -669,7 +699,7 @@ func mergeJSONFile(path string, overlay []byte) (filemerge.WriteResult, error) {
 		return filemerge.WriteResult{}, err
 	}
 
-	merged, err := filemerge.MergeJSONObjects(baseJSON, overlay)
+	merged, err := filemerge.MergeJSONObjectsForPath(path, baseJSON, overlay)
 	if err != nil {
 		return filemerge.WriteResult{}, err
 	}

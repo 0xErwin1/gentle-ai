@@ -16,11 +16,10 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v2/internal/system"
 )
 
-func TestComponentPathsSDDIncludesSystemPromptForAllSupportedAgents(t *testing.T) {
+func TestComponentPathsSDDIncludesSystemPromptForPromptFileAdapters(t *testing.T) {
 	home := t.TempDir()
 	adapters := resolveAdapters([]model.AgentID{
 		model.AgentClaudeCode,
-		model.AgentOpenCode,
 		model.AgentGeminiCLI,
 		model.AgentCursor,
 		model.AgentVSCodeCopilot,
@@ -32,6 +31,25 @@ func TestComponentPathsSDDIncludesSystemPromptForAllSupportedAgents(t *testing.T
 		p := adapter.SystemPromptFile(home)
 		if !containsPath(paths, p) {
 			t.Fatalf("componentPaths(sdd) missing system prompt path %q\npaths=%v", p, paths)
+		}
+	}
+}
+
+// TestComponentPathsSDDExcludesSystemPromptForManagedOpenCodeAgents pins issue
+// #3975: the SDD injector scopes the orchestrator to the gentle-orchestrator
+// agent in the settings file for OpenCode and Kilocode in every mode, so SDD
+// must not require, back up, or verify the AGENTS.md it never writes.
+func TestComponentPathsSDDExcludesSystemPromptForManagedOpenCodeAgents(t *testing.T) {
+	home := t.TempDir()
+	adapters := resolveAdapters([]model.AgentID{model.AgentOpenCode, model.AgentKilocode})
+
+	for _, mode := range []model.SDDModeID{"", model.SDDModeSingle, model.SDDModeMulti} {
+		paths := componentPaths(home, model.Selection{SDDMode: mode}, adapters, model.ComponentSDD)
+		for _, adapter := range adapters {
+			p := adapter.SystemPromptFile(home)
+			if containsPath(paths, p) {
+				t.Fatalf("componentPaths(sdd, mode=%q) lists %q, which the SDD injector never writes for %s\npaths=%v", mode, p, adapter.Agent(), paths)
+			}
 		}
 	}
 }
@@ -202,6 +220,31 @@ func TestInstallPiPersonaWritesManagedScopePaths(t *testing.T) {
 			unwanted := filepath.Join(other, ".pi", "gentle-ai", "persona.json")
 			if _, err := os.Stat(unwanted); !os.IsNotExist(err) {
 				t.Fatalf("workspace-scoped Pi persona config %q was written outside scope; stat err = %v", unwanted, err)
+			}
+		})
+	}
+}
+
+// Issue #3219: a home installed with XDG_CONFIG_HOME keeps the legacy plugin
+// under $XDG_CONFIG_HOME/opencode/plugins, and the ~/.config form stays legacy
+// while XDG is set; the classification depends on the path and XDG alone.
+func TestLegacyOpenCodeBackgroundAgentsPluginUnderXDGConfigHome(t *testing.T) {
+	home := t.TempDir()
+	xdg := filepath.Join(t.TempDir(), "xdg")
+	t.Setenv("XDG_CONFIG_HOME", xdg)
+	for _, tt := range []struct {
+		name string
+		path string
+		want bool
+	}{
+		{name: "legacy plugin under XDG opencode config", path: filepath.Join(xdg, "opencode", "plugins", "background-agents.ts"), want: true},
+		{name: "legacy plugin under ~/.config while XDG is set", path: filepath.Join(home, ".config", "opencode", "plugins", "background-agents.ts"), want: true},
+		{name: "same file under unrelated opencode directory", path: filepath.Join(home, "opencode", "plugins", "background-agents.ts"), want: false},
+		{name: "managed replacement plugin under XDG is not legacy", path: filepath.Join(xdg, "opencode", "plugins", "model-variants.ts"), want: false},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := isLegacyOpenCodeBackgroundAgentsPlugin(tt.path); got != tt.want {
+				t.Fatalf("isLegacyOpenCodeBackgroundAgentsPlugin(%q) = %v, want %v", tt.path, got, tt.want)
 			}
 		})
 	}
@@ -514,6 +557,21 @@ func TestComponentPathsEngramCodexIncludesConfigTOML(t *testing.T) {
 	}
 }
 
+func TestComponentPathsSDDCodexIncludesHooksJSONOnlyForCodex(t *testing.T) {
+	home := t.TempDir()
+	adapters := resolveAdapters([]model.AgentID{model.AgentCodex, model.AgentClaudeCode})
+
+	paths := componentPaths(home, model.Selection{}, adapters, model.ComponentSDD)
+	codexHooks := filepath.Join(home, ".codex", "hooks.json")
+	if !containsPath(paths, codexHooks) {
+		t.Fatalf("componentPaths(sdd,codex) missing skill-registry hook %q\npaths=%v", codexHooks, paths)
+	}
+	claudeHooks := filepath.Join(home, ".claude", "hooks.json")
+	if containsPath(paths, claudeHooks) {
+		t.Fatalf("componentPaths(sdd,claude) declared unsupported hooks path %q\npaths=%v", claudeHooks, paths)
+	}
+}
+
 // TestComponentPathsPermissionsCodexContributesNoPaths pins that the
 // Permission component claims nothing under ~/.codex. gentle-ai does not write
 // Codex's permissions config — not a profile, and not the legacy cleanup that
@@ -714,6 +772,45 @@ func openCodeOrchestratorPrompt(t *testing.T, home string) string {
 	return settings.Agent[opencodedefault.ManagedAgent].Prompt
 }
 
+func TestRemoteAuthorizationLeavesPiPackagePromptUntouched(t *testing.T) {
+	home := t.TempDir()
+	path := systemPromptFileFor(t, home, model.AgentPi)
+	const personal = "Package-owned Pi instructions\n"
+	mustWriteFile(t, path, []byte(personal))
+	runInstallInjectionSteps(t, newTestInstallRuntime(t, home, model.Selection{Agents: []model.AgentID{model.AgentPi}}))
+	runSyncInjectionSteps(t, home, model.Selection{Agents: []model.AgentID{model.AgentPi}})
+	if readTextFile(t, path) != personal {
+		t.Fatal("install/sync modified Pi's package-owned primary carrier")
+	}
+}
+
+func TestInstallRoutingCleanupRetiresPiPrompt(t *testing.T) {
+	home := t.TempDir()
+	path := systemPromptFileFor(t, home, model.AgentPi)
+	mustWriteFile(t, path, []byte("user\n<!-- gentle-ai:agent-routing -->\nstale\n<!-- /gentle-ai:agent-routing -->\n"))
+	runInstallInjectionSteps(t, newTestInstallRuntime(t, home, model.Selection{Agents: []model.AgentID{model.AgentPi}}))
+	if got := readTextFile(t, path); strings.Contains(got, "gentle-ai:agent-routing") || !strings.Contains(got, "user") {
+		t.Fatalf("install Pi cleanup = %q", got)
+	}
+}
+
+func TestInstallRemoteAuthorizationIndependentOfComponents(t *testing.T) {
+	for _, persona := range []model.PersonaID{"", model.PersonaCustom} {
+		t.Run(string(persona), func(t *testing.T) {
+			home := t.TempDir()
+			selection := model.Selection{Agents: []model.AgentID{model.AgentClaudeCode}, Persona: persona}
+			if persona != "" {
+				selection.Components = []model.ComponentID{model.ComponentPersona}
+			}
+			runInstallInjectionSteps(t, newTestInstallRuntime(t, home, selection))
+			prompt := readTextFile(t, systemPromptFileFor(t, home, model.AgentClaudeCode))
+			if !strings.Contains(prompt, "<!-- gentle-ai:remote-authorization -->") {
+				t.Fatal("install omitted remote authorization without SDD/default persona")
+			}
+		})
+	}
+}
+
 func TestInstallDeliversRoutingGuidanceWithoutSDDComponent(t *testing.T) {
 	home := t.TempDir()
 
@@ -792,6 +889,9 @@ func TestInstallRoutingGuidanceSurvivesOpenCodeSDDInjection(t *testing.T) {
 	prompt := openCodeOrchestratorPrompt(t, home)
 	if !strings.Contains(prompt, routingOpenMarker) || !strings.Contains(prompt, routingCloseMarker) {
 		t.Fatalf("SDD injection erased the routing guidance from the OpenCode orchestrator prompt:\n%s", prompt)
+	}
+	if !strings.Contains(prompt, "<!-- gentle-ai:remote-authorization -->") {
+		t.Fatal("SDD reinjection erased the nested remote authorization boundary")
 	}
 	if !strings.Contains(prompt, "SDD Orchestrator") {
 		t.Fatalf("preserving routing guidance erased the SDD orchestrator prompt:\n%s", prompt)
@@ -906,6 +1006,37 @@ func TestInstallRoutingGuidanceWorkspaceScopeDeliversOpenCodeToHome(t *testing.T
 	}
 }
 
+// TestAgentRoutingGuidanceStepRetiresPiManagedBlocks covers issue #3508: Pi
+// owns APPEND_SYSTEM.md, so routing never injects a new block but does remove
+// the paired stale block an older gentle-ai release wrote.
+func TestAgentRoutingGuidanceStepRetiresPiManagedBlocks(t *testing.T) {
+	home := t.TempDir()
+	promptPath := systemPromptFileFor(t, home, model.AgentPi)
+	existing := "user text before\n" +
+		"\n" +
+		"<!-- gentle-ai:agent-routing -->\n" +
+		"stale routing body\n" +
+		"<!-- /gentle-ai:agent-routing -->\n" +
+		"\n" +
+		"user text after\n"
+	mustWriteFile(t, promptPath, []byte(existing))
+
+	step := agentRoutingGuidanceStep{
+		id:      "agent-guidance:" + string(model.AgentPi),
+		agent:   model.AgentPi,
+		homeDir: home,
+		scope:   ScopeGlobal,
+	}
+	if err := step.Run(); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+
+	got := readTextFile(t, promptPath)
+	if strings.Contains(got, "gentle-ai:agent-routing") || !strings.Contains(got, "user text before") || !strings.Contains(got, "user text after") {
+		t.Fatalf("Pi routing cleanup = %q, want only user content", got)
+	}
+}
+
 func TestRoutingGuidancePathsWorkspaceScopeReportOrchestratorPromptAgentsAtHome(t *testing.T) {
 	home := t.TempDir()
 	workspace := t.TempDir()
@@ -934,6 +1065,25 @@ func TestRoutingGuidancePathsWorkspaceScopeReportOrchestratorPromptAgentsAtHome(
 	claudePrompt := systemPromptFileFor(t, workspace, model.AgentClaudeCode)
 	if !containsPath(paths, claudePrompt) {
 		t.Fatalf("routingGuidancePaths(workspace) lost the workspace-scoped path %q for prompt-file agents\npaths=%v", claudePrompt, paths)
+	}
+}
+
+// TestRoutingGuidancePathsExcludesAgentsWithoutSystemPrompt covers issue
+// #4063: routing injection does not own Pi's APPEND_SYSTEM.md; cleanup backup
+// coverage is asserted separately.
+func TestRoutingGuidancePathsExcludesAgentsWithoutSystemPrompt(t *testing.T) {
+	home := t.TempDir()
+	adapters := resolveAdapters([]model.AgentID{model.AgentPi, model.AgentClaudeCode})
+
+	paths := routingGuidancePaths(home, "", ScopeGlobal, adapters)
+
+	piPrompt := systemPromptFileFor(t, home, model.AgentPi)
+	if containsPath(paths, piPrompt) {
+		t.Fatalf("routingGuidancePaths() listed Pi's system prompt %q, a file the step no longer writes\npaths=%v", piPrompt, paths)
+	}
+	claudePrompt := systemPromptFileFor(t, home, model.AgentClaudeCode)
+	if !containsPath(paths, claudePrompt) {
+		t.Fatalf("routingGuidancePaths() lost Claude Code's prompt path %q\npaths=%v", claudePrompt, paths)
 	}
 }
 
@@ -989,6 +1139,18 @@ func TestBackupTargetsIncludeRoutingGuidancePathsWithoutAnyComponent(t *testing.
 		if !containsPath(targets, path) {
 			t.Fatalf("backupTargets missing routing guidance path %q\ntargets = %v", path, targets)
 		}
+	}
+}
+
+func TestBackupTargetsIncludePiPromptForRoutingCleanup(t *testing.T) {
+	home := t.TempDir()
+	selection := model.Selection{Agents: []model.AgentID{model.AgentPi}}
+	targets, err := backupTargets(home, "", ScopeGlobal, selection, planner.ResolvedPlan{Agents: selection.Agents})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := systemPromptFileFor(t, home, model.AgentPi); !containsPath(targets, want) {
+		t.Fatalf("backup targets = %v, missing Pi cleanup path %q", targets, want)
 	}
 }
 
@@ -1061,6 +1223,27 @@ func TestBackupTargetsClaudeContext7IncludeCleanupWithoutVerificationRequirement
 				t.Fatalf("backupTargets selected the wrong scope's cleanup path; targets=%v", targets)
 			}
 		})
+	}
+}
+
+func TestComponentPathsVisualThemesMatchSelectedAdapter(t *testing.T) {
+	home := t.TempDir()
+	for _, tt := range []struct {
+		agent model.AgentID
+		want  []string
+	}{
+		{model.AgentClaudeCode, []string{filepath.Join(home, ".claude", "themes", "gentleman.json"), filepath.Join(home, ".claude", "themes", "gentleman-cute.json")}},
+		{model.AgentOpenCode, []string{filepath.Join(home, ".config", "opencode", "themes", "gentleman.json"), filepath.Join(home, ".config", "opencode", "themes", "gentleman-cute.json")}},
+	} {
+		paths := componentPaths(home, model.Selection{}, resolveAdapters([]model.AgentID{tt.agent}), model.ComponentClaudeTheme)
+		if len(paths) != len(tt.want) {
+			t.Fatalf("%q paths = %v, want %v", tt.agent, paths, tt.want)
+		}
+		for i := range tt.want {
+			if paths[i] != tt.want[i] {
+				t.Fatalf("%q paths = %v, want %v", tt.agent, paths, tt.want)
+			}
+		}
 	}
 }
 

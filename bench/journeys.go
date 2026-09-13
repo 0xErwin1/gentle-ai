@@ -13,10 +13,25 @@ import (
 // needs before it will emit next_transition.
 const reviewContract = "gentle-ai.review-integration/v1"
 
+const rejectedRecaptureLineage = "rejected-capture-recapture"
+
 // statusEnvelope is the subset of `review status --next-transition` this
 // benchmark reads. Unknown fields are ignored so older and newer envelopes
 // both parse.
 type statusEnvelope struct {
+	// rawJSON retains the exact STATUS bytes only when a correction closure
+	// executes its provider-owned continuation. Reduced fields below are for
+	// journey assertions and must never be used to reconstruct that binding.
+	rawJSON string
+
+	Schema string `json:"schema"`
+	// EligibleUntrackedInventory is issue #4040's fix: the canonical
+	// untracked-inventory digest published unconditionally at the STATUS
+	// top level (design decision 2), distinct from the same digest embedded
+	// inside NextTransition.Collect.Inputs[].Arguments, which only appears
+	// while a selection is still undeclared.
+	EligibleUntrackedInventory string `json:"eligible_untracked_inventory"`
+
 	Authority struct {
 		LineageID string `json:"lineage_id"`
 		State     string `json:"state"`
@@ -58,6 +73,16 @@ type statusEnvelope struct {
 				Token string `json:"token"`
 			} `json:"arguments"`
 		} `json:"execute"`
+		// Continuation is set only on the one stop reason_code
+		// (managed_assets_outdated) whose stop is itself the
+		// candidate-preserving continuation (#3299, #4170): the exact
+		// `gentle-ai sync` invocation that reconciles the recorded digest.
+		Continuation *struct {
+			Operation   string   `json:"operation"`
+			Command     string   `json:"command"`
+			Agent       string   `json:"agent"`
+			StaleAssets []string `json:"stale_assets"`
+		} `json:"continuation"`
 	} `json:"next_transition"`
 }
 
@@ -82,7 +107,15 @@ func (e statusEnvelope) executeArgument(name string) string {
 	return ""
 }
 
+// paths names the frozen candidate paths a reviewer must inspect. The
+// native-git transport no longer inlines the changed-path manifest on every
+// per-lens capture input (#3922); the published projection carries the same
+// path set for the whole lineage, and the legacy manifest remains a fallback
+// for envelopes that still inline it.
 func (e statusEnvelope) paths() []string {
+	if len(e.Projection.Paths) > 0 {
+		return append([]string{}, e.Projection.Paths...)
+	}
 	if len(e.NextTransition.Collect.Inputs) == 0 {
 		return nil
 	}
@@ -169,27 +202,32 @@ func captureAllLenses(r *journeyRun) error {
 }
 
 func captureAllLensesFor(r *journeyRun, selectors ...string) error {
+	_, err := captureAllLensesWithLastCaptureFor(r, selectors...)
+	return err
+}
+
+// captureAllLensesWithLastCaptureFor preserves the final capture response for
+// callers whose next lifecycle step is provider-owned by that closure.
+func captureAllLensesWithLastCaptureFor(r *journeyRun, selectors ...string) (Observation, error) {
+	var last Observation
 	for round := 0; round < 8; round++ {
 		envelope, err := readStatusFor(r, selectors...)
 		if err != nil {
-			return err
+			return Observation{}, err
 		}
-		if envelope.NextTransition.Kind != "collect" {
-			return nil
-		}
-		if envelope.NextTransition.Collect.Inputs[0].Name != "reviewer_result" {
-			return nil
+		if envelope.NextTransition.Kind != "collect" || envelope.NextTransition.Collect.Inputs[0].Name != "reviewer_result" {
+			return last, nil
 		}
 		result, err := synthesizeReviewerResult(
 			envelope.NextTransition.Collect.Inputs[0].ArtifactSubject.SubjectHash, envelope.paths())
 		if err != nil {
-			return err
+			return Observation{}, err
 		}
 		path, err := writeScratch(r.sandbox, fmt.Sprintf("reviewer-%d.json", round), result)
 		if err != nil {
-			return err
+			return Observation{}, err
 		}
-		r.run([]string{
+		last = r.run([]string{
 			"review", "capture-result", "--cwd", r.sandbox.Repo,
 			"--lineage", envelope.argument("lineage"),
 			"--target", envelope.argument("target"),
@@ -198,8 +236,106 @@ func captureAllLensesFor(r *journeyRun, selectors ...string) error {
 			"--order", envelope.argument("order"),
 			"--input", path,
 		}, true)
+		if last.ExitCode != 0 {
+			return Observation{}, fmt.Errorf("capture reviewer result: %s", firstLine(last.Stderr))
+		}
+		var closure lastEventClosure
+		if json.Unmarshal([]byte(strings.TrimSpace(last.Stdout)), &closure) == nil && closure.State == "correction_required" {
+			return last, nil
+		}
 	}
-	return errors.New("lens capture loop did not converge")
+	return Observation{}, errors.New("lens capture loop did not converge")
+}
+
+const correctionPlanStatusContinuationKeyPrefix = "last-event-correction-plan-status:"
+
+type lastEventClosure struct {
+	LineageID          string `json:"lineage_id"`
+	State              string `json:"state"`
+	StatusContinuation *struct {
+		Operation string `json:"operation"`
+		Arguments []struct {
+			Token string `json:"token"`
+		} `json:"arguments"`
+	} `json:"status_continuation"`
+}
+
+// correctionStatusFromLastEventCapture executes the closure's status
+// continuation as operation plus ordered provider-issued tokens. It never
+// reconstructs selectors from a lineage, fixture, or retained status state.
+func correctionStatusFromLastEventCapture(r *journeyRun, capture Observation) (statusEnvelope, bool, error) {
+	if capture.ExitCode != 0 {
+		return statusEnvelope{}, false, fmt.Errorf("terminal reviewer capture failed: %s", firstLine(capture.Stderr))
+	}
+	var closure lastEventClosure
+	if err := json.Unmarshal([]byte(strings.TrimSpace(capture.Stdout)), &closure); err != nil {
+		return statusEnvelope{}, false, fmt.Errorf("decode last-event closure: %w", err)
+	}
+	if closure.State != "correction_required" {
+		return statusEnvelope{}, false, nil
+	}
+	if closure.LineageID == "" || closure.StatusContinuation == nil || closure.StatusContinuation.Operation != "review.status" {
+		return statusEnvelope{}, false, fmt.Errorf("correction closure omitted its status continuation: %+v", closure)
+	}
+	arguments := []string{"review", "status"}
+	for _, argument := range closure.StatusContinuation.Arguments {
+		if argument.Token == "" {
+			return statusEnvelope{}, false, errors.New("correction status continuation omitted an argument token")
+		}
+		arguments = append(arguments, argument.Token)
+	}
+	statusObservation := r.run(arguments, false)
+	if statusObservation.ExitCode != 0 {
+		return statusEnvelope{}, false, fmt.Errorf("execute correction status continuation: %s", firstLine(statusObservation.Stderr))
+	}
+	var status statusEnvelope
+	if err := json.Unmarshal([]byte(statusObservation.Stdout), &status); err != nil {
+		return statusEnvelope{}, false, fmt.Errorf("decode correction status continuation: %w", err)
+	}
+	status.rawJSON = statusObservation.Stdout
+	if status.Authority.LineageID != closure.LineageID || status.Authority.State != "correction_required" ||
+		status.NextTransition.ReasonCode != "correction_plan_required" {
+		return statusEnvelope{}, false, fmt.Errorf("correction status continuation = authority=%+v transition=%+v, want lineage %q and correction_plan_required", status.Authority, status.NextTransition, closure.LineageID)
+	}
+	return status, true, nil
+}
+
+// rememberCorrectionStatusContinuation retains the exact correction-plan STATUS
+// returned by the provider-owned continuation. Its only destructive consumer is
+// the successful bounded-plan capture in captureCorrectionPlanFor.
+func rememberCorrectionStatusContinuation(r *journeyRun, lineage string, status statusEnvelope) error {
+	if status.rawJSON == "" {
+		return errors.New("correction status continuation omitted raw STATUS JSON")
+	}
+	r.sandbox.Scratch[correctionPlanStatusContinuationKeyPrefix+lineage] = status.rawJSON
+	return nil
+}
+
+func readCorrectionPlanStatusContinuation(r *journeyRun, lineage string) (string, bool, error) {
+	payload, found := r.sandbox.Scratch[correctionPlanStatusContinuationKeyPrefix+lineage]
+	if !found {
+		return "", false, nil
+	}
+	return payload, true, nil
+}
+
+// takeCorrectionStatusContinuation is retained for assertion helpers. Reading a
+// carried correction-plan STATUS is deliberately non-destructive; only the plan
+// consumer clears it after a successful bounded-plan advancement.
+func takeCorrectionStatusContinuation(r *journeyRun, lineage string) (statusEnvelope, bool, error) {
+	payload, found, err := readCorrectionPlanStatusContinuation(r, lineage)
+	if err != nil || !found {
+		return statusEnvelope{}, found, err
+	}
+	var status statusEnvelope
+	if err := json.Unmarshal([]byte(payload), &status); err != nil {
+		return statusEnvelope{}, false, fmt.Errorf("decode carried correction status continuation: %w", err)
+	}
+	return status, true, nil
+}
+
+func clearCorrectionPlanStatusContinuation(r *journeyRun, lineage string) {
+	delete(r.sandbox.Scratch, correctionPlanStatusContinuationKeyPrefix+lineage)
 }
 
 // captureFinalEvidence answers the verification-evidence collect step.
@@ -235,13 +371,14 @@ func captureFinalEvidenceFor(r *journeyRun, selectors ...string) error {
 // refuses (the subject hash does not echo the binding), then spends a second
 // run on the correct one. Both count as model runs: the rejected one really
 // was paid for.
-func rejectedThenRecapture(r *journeyRun) error {
-	envelope, err := readStatus(r)
+func rejectedThenRecaptureFor(r *journeyRun, lineage string) error {
+	envelope, err := readAtomicReviewStatus(r, lineage)
 	if err != nil {
 		return err
 	}
-	if envelope.NextTransition.Kind != "collect" {
-		return errors.New("expected a reviewer-result collect transition")
+	if envelope.Authority.LineageID != lineage || envelope.NextTransition.Kind != "collect" ||
+		len(envelope.NextTransition.Collect.Inputs) == 0 || envelope.NextTransition.Collect.Inputs[0].Name != "reviewer_result" {
+		return errors.New("expected an exact active-lineage reviewer-result collect transition")
 	}
 	bad, err := synthesizeReviewerResult(
 		envelope.NextTransition.Collect.Inputs[0].ArtifactSubject.SubjectHash, nil)
@@ -252,7 +389,7 @@ func rejectedThenRecapture(r *journeyRun) error {
 	if err != nil {
 		return err
 	}
-	r.run([]string{
+	refused := r.run([]string{
 		"review", "capture-result", "--cwd", r.sandbox.Repo,
 		"--lineage", envelope.argument("lineage"),
 		"--target", envelope.argument("target"),
@@ -261,7 +398,21 @@ func rejectedThenRecapture(r *journeyRun) error {
 		"--order", envelope.argument("order"),
 		"--input", badPath,
 	}, true)
-	return captureAllLenses(r)
+	if refused.ExitCode == 0 {
+		return errors.New("incomplete exact active-lineage reviewer inspection was accepted")
+	}
+	return captureExactSelectedReviewerSlots(r, lineage, false)
+}
+
+func finalizeRejectedRecapture(r *journeyRun) error {
+	observation := r.run(productArgsFor(r, "review", "finalize", "--lineage", rejectedRecaptureLineage, "--captured-evidence=true"), false)
+	if observation.ExitCode != 0 {
+		return fmt.Errorf("finalize rejected-recapture evidence: %s", firstLine(observation.Stderr))
+	}
+	if err := requirePendingApproval(rejectedRecaptureLineage)(r.sandbox, observation); err != nil {
+		return err
+	}
+	return requireAtomicLineageAcknowledged(r, rejectedRecaptureLineage)
 }
 
 // executeNextTransitionVerbatim is the guide's flow 11: take the tokens the
@@ -300,14 +451,77 @@ func runNextTransitionVerbatim(r *journeyRun) (Observation, error) {
 // their verbs with hyphens -- so splitting on "." only ever produced a runnable
 // verb by coincidence.
 func runPrintedTransition(r *journeyRun, envelope statusEnvelope) (Observation, error) {
+	args, err := printedTransitionArguments(envelope)
+	if err != nil {
+		return Observation{}, err
+	}
+	return r.run(args, false), nil
+}
+
+// runPrintedTransitionAt preserves the exact rendered command while letting a
+// worktree-isolation journey run it in the worktree that STATUS bound.
+func runPrintedTransitionAt(r *journeyRun, cwd string, envelope statusEnvelope) (Observation, error) {
+	args, err := printedTransitionArguments(envelope)
+	if err != nil {
+		return Observation{}, err
+	}
+	return r.runAt(cwd, args, false), nil
+}
+
+func printedTransitionArguments(envelope statusEnvelope) ([]string, error) {
 	if envelope.NextTransition.Kind != "execute" {
-		return Observation{}, fmt.Errorf("expected an execute transition, got %q", envelope.NextTransition.Kind)
+		return nil, fmt.Errorf("expected an execute transition, got %q", envelope.NextTransition.Kind)
 	}
 	args, err := printedCommandArguments(envelope.NextTransition.Execute.Command)
 	if err != nil {
-		return Observation{}, fmt.Errorf("execute transition for %q %w", envelope.NextTransition.Execute.Operation, err)
+		return nil, fmt.Errorf("execute transition for %q %w", envelope.NextTransition.Execute.Operation, err)
 	}
-	return r.run(args, false), nil
+	return args, nil
+}
+
+// anchoredContinuationArguments validates a printed managed-assets
+// continuation whose executable token is anchored to the driven binary
+// (#4434): the command must name THAT binary -- an unqualified `gentle-ai`
+// could resolve through PATH to a different binary whose sync never
+// reconciles the refusal -- followed by the sync verb and its arguments. It
+// returns the verb and arguments for execution through the same driven
+// binary, mirroring printedCommandArguments' contract for anchored forms.
+func anchoredContinuationArguments(command, binary string) ([]string, error) {
+	if strings.ContainsAny(command, "\r\n") {
+		return nil, fmt.Errorf("printed a multiline continuation command: %q", command)
+	}
+	words, err := splitPrintedCommandWords(command)
+	if err != nil {
+		return nil, err
+	}
+	if len(words) < 3 {
+		return nil, fmt.Errorf("printed a command that names no verb or arguments: %q", command)
+	}
+	if words[1] != "sync" {
+		return nil, fmt.Errorf("printed a command whose verb is %q, not sync: %q", words[1], command)
+	}
+	identity := false
+	for _, candidate := range drivenExecutableIdentities(binary) {
+		if words[0] == candidate {
+			identity = true
+			break
+		}
+	}
+	if !identity {
+		return nil, fmt.Errorf("printed a continuation that starts with %q, not the driven binary %q", words[0], binary)
+	}
+	return words[1:], nil
+}
+
+// drivenExecutableIdentities names the path forms the driven binary can
+// report for itself through os.Executable: the absolute path the runner
+// resolved, and its symlink-resolved real path (macOS invokes can differ).
+func drivenExecutableIdentities(binary string) []string {
+	identities := []string{binary}
+	if resolved, err := filepath.EvalSymlinks(binary); err == nil && resolved != binary {
+		identities = append(identities, resolved)
+	}
+	return identities
 }
 
 // printedCommandArguments turns one printed command line into the argv a POSIX
@@ -643,17 +857,21 @@ func Journeys() []Journey {
 	journeys = append(journeys, sddJourneys()...)
 	journeys = append(journeys, issue2891Journeys()...)
 	journeys = append(journeys, issue2696Journeys()...)
+	journeys = append(journeys, issue4210Journeys()...)
 	journeys = append(journeys, sddChainJourneys()...)
 	journeys = append(journeys, issue3094Journeys()...)
+	journeys = append(journeys, issue3065Journeys()...)
 	journeys = append(journeys, captureEvidenceDescriptorJourneys()...)
 	journeys = append(journeys, scopeChangedFixtureJourneys()...)
 	journeys = append(journeys, waveOneJourneys()...)
 	journeys = append(journeys, waveThreeJourneys()...)
+	journeys = append(journeys, atomicReviewJourneys()...)
 	journeys = append(journeys, waveFiveJourneys()...)
 	journeys = append(journeys, zeroDeltaJourneys()...)
 	journeys = append(journeys, lensContextBudgetJourneys()...)
 	journeys = append(journeys, localGateBaseAdvanceJourneys()...)
 	journeys = append(journeys, intendedUntrackedJourneys()...)
+	journeys = append(journeys, selectedUntrackedSDDJourneys()...)
 	journeys = append(journeys, captureResultDryRunJourneys()...)
 	journeys = append(journeys, issue2031Journeys()...)
 	journeys = append(journeys, findingIDPrefixJourneys()...)
@@ -668,13 +886,32 @@ func Journeys() []Journey {
 	journeys = append(journeys, managedAssetJourneys()...)
 	journeys = append(journeys, issue2906Journeys()...)
 	journeys = append(journeys, issue2138Journeys()...)
+	journeys = append(journeys, issue3336Journeys()...)
+	journeys = append(journeys, issue3500Journeys()...)
 	journeys = append(journeys, issue3043Journeys()...)
+	journeys = append(journeys, issue3557Journeys()...)
+	journeys = append(journeys, issue3561Journeys()...)
 	journeys = append(journeys, repositoryContextJourneys()...)
 	journeys = append(journeys, providerCaptureRetryJourneys()...)
 	journeys = append(journeys, capturedProviderValidatorJourneys()...)
 	journeys = append(journeys, sddSharedScaffoldingJourneys()...)
 	journeys = append(journeys, sddPostReviewVerifyReportJourneys()...)
-	return append(journeys, handoffJourneys()...)
+	journeys = append(journeys, issue3564Journeys()...)
+	journeys = append(journeys, issue3321Journeys()...)
+	journeys = append(journeys, issue3587Journeys()...)
+	journeys = append(journeys, issue3748Journeys()...)
+	journeys = append(journeys, issue3772Journeys()...)
+	journeys = append(journeys, issue3776Journeys()...)
+	journeys = append(journeys, issue3766Journeys()...)
+	journeys = append(journeys, issue4377Journeys()...)
+	journeys = append(journeys, issue4395Journeys()...)
+	journeys = append(journeys, issue3813Journeys()...)
+	journeys = append(journeys, issue3842Journeys()...)
+	journeys = append(journeys, handoffJourneys()...)
+	journeys = append(journeys, stopHookJourneys()...)
+	journeys = append(journeys, untrackedInventoryRecoveryLoopJourneys()...)
+	journeys = removeRetiredAtomicJourneys(journeys)
+	return declareCoreJourneyReviewModes(journeys)
 }
 
 func coreJourneys() []Journey {
@@ -693,23 +930,6 @@ func coreJourneys() []Journey {
 				{Name: "gate pre-commit", Requires: validateCapability, Args: productArgs("review", "validate", "--gate", "pre-commit")},
 				{Name: "fixture: commit", Fixture: commitStaged("docs: intro")},
 				{Name: "gate pre-push", Requires: validateCapability, Args: productArgs("review", "validate", "--gate", "pre-push")},
-			},
-		},
-		{
-			ID:     "j02-high-risk-four-lens",
-			Review: reviewOptedIn,
-			Title:  "High-risk code change: four lenses, evidence, approval",
-			Source: "guide flow 4 + the full native bounded review contract",
-			Steps: []Step{
-				{Name: "fixture: repo", Fixture: baseRepo},
-				{Name: "fixture: stage auth code", Fixture: stageAuthCode},
-				{Name: "review start", Requires: startCapability, Args: productArgs("review", "start"), After: rememberLineage},
-				{Name: "capture every lens", Requires: captureResultCapability, Composite: captureAllLenses},
-				{Name: "finalize with captured results", Requires: finalizeResultsCapability, Args: productArgs("review", "finalize", "--captured-results=true")},
-				{Name: "finalize without evidence", Requires: finalizeCapability, Args: productArgs("review", "finalize")},
-				{Name: "capture final evidence", Requires: captureEvidenceCapability, Composite: captureFinalEvidence},
-				{Name: "finalize with captured evidence", Requires: finalizeEvidenceCapability, Args: productArgs("review", "finalize", "--captured-evidence=true")},
-				{Name: "gate post-apply", Requires: validateCapability, Args: productArgs("review", "validate", "--gate", "post-apply")},
 			},
 		},
 		{
@@ -732,26 +952,29 @@ func coreJourneys() []Journey {
 		{
 			ID:     "j04-size-does-not-escalate",
 			Review: reviewOptedIn,
-			Title:  "1200 lines of prose still reviews as low risk",
-			Source: "guide flow 4 step 3",
+			Title:  "#3417: 1200 lines of prose remain low risk and burn their terminal transaction",
+			Source: "#3417 atomic review keeps risk selection separate from durable delivery authorization",
 			Steps: []Step{
 				{Name: "fixture: repo", Fixture: baseRepo},
 				{Name: "fixture: stage 1200 lines of docs", Fixture: stageLargeDocs},
 				{Name: "review start", Requires: startCapability, Args: productArgs("review", "start"), After: rememberLineage},
-				{Name: "review finalize", Requires: finalizeCapability, Args: productArgs("review", "finalize")},
-				{Name: "gate post-apply", Requires: validateCapability, Args: productArgs("review", "validate", "--gate", "post-apply")},
+				{Name: "low-risk finalization burns the transaction", Requires: finalizeCapability, Args: productArgs("review", "finalize"), After: func(sandbox *Sandbox, observation Observation) error {
+					return requirePendingApproval(sandbox.Lineage)(sandbox, observation)
+				}},
 			},
 		},
 		{
 			ID:     "j05-gate-without-any-review",
 			Review: reviewOptedIn,
-			Title:  "Failure path: lifecycle gate before any review exists",
-			Source: "community failure path: receipt missing",
+			Title:  "#3417: lifecycle validation before review is informational and unmanaged",
+			Source: "#3417 removes ordinary-path receipt gates; delivery remains under repository policy",
 			Steps: []Step{
 				{Name: "fixture: repo", Fixture: baseRepo},
 				{Name: "fixture: stage docs", Fixture: stageDocs("ungated")},
-				{Name: "gate pre-commit with no receipt", Requires: validateCapability,
-					Args: productArgs("review", "validate", "--gate", "pre-commit"), AbortOnBlock: true},
+				{Name: "pre-commit validation is informational without a review", Requires: validateCapability,
+					Args: productArgs("review", "validate", "--gate", "pre-commit"), After: func(_ *Sandbox, observation Observation) error {
+						return requireUnmanagedShippedGate(observation, "pre-commit")
+					}},
 			},
 		},
 		{
@@ -887,16 +1110,18 @@ func coreJourneys() []Journey {
 		{
 			ID:     "j12-rejected-capture-then-recapture",
 			Review: reviewOptedIn,
-			Title:  "Failure path: a reviewer result the product rejects, then a recapture",
-			Source: "#2614: incomplete inspection coverage refuses, then an unordered complete manifest recaptures",
+			Title:  "#3587: an exact active-lineage reviewer result is rejected, then the full selected set recaptures",
+			Source: "#2614 under #3587: incomplete inspection coverage refuses on its exact active lineage, then an unordered complete manifest recaptures",
 			Steps: []Step{
 				{Name: "fixture: repo", Fixture: baseRepo},
 				{Name: "fixture: stage ordinary code", Fixture: stageOrdinaryCode},
-				{Name: "review start", Requires: startCapability, Args: productArgs("review", "start"), After: rememberLineage},
-				{Name: "rejected capture then recapture", Requires: captureResultCapability, Composite: rejectedThenRecapture},
-				{Name: "finalize with captured results", Requires: finalizeResultsCapability, Args: productArgs("review", "finalize", "--captured-results=true")},
-				{Name: "capture final evidence", Requires: captureEvidenceCapability, Composite: captureFinalEvidence},
-				{Name: "finalize with captured evidence", Requires: finalizeEvidenceCapability, Args: productArgs("review", "finalize", "--captured-evidence=true")},
+				{Name: "review start with an exact active lineage", Requires: startNamedCapability, Args: productArgs("review", "start", "--lineage", rejectedRecaptureLineage), After: rememberLineage},
+				{Name: "exact active-lineage rejected capture then full selected-set recapture", Requires: captureResultCapability, Composite: func(r *journeyRun) error {
+					return rejectedThenRecaptureFor(r, rejectedRecaptureLineage)
+				}},
+				{Name: "the final accepted capture exposes acknowledgement before the exact active-lineage transaction burns", Requires: statusCapability, Composite: func(r *journeyRun) error {
+					return requireAtomicLineageAcknowledged(r, rejectedRecaptureLineage)
+				}},
 			},
 		},
 		{
@@ -919,7 +1144,7 @@ func coreJourneys() []Journey {
 			Source: "review abandon contract",
 			Steps: []Step{
 				{Name: "fixture: repo", Fixture: baseRepo},
-				{Name: "fixture: stage docs", Fixture: stageDocs("abandoned")},
+				{Name: "fixture: stage high-risk code", Fixture: stageAuthCode},
 				{Name: "review start", Requires: startCapability, Args: productArgs("review", "start"), After: rememberLineage},
 				{Name: "abandon a non-terminal lineage with its V2 binding", Requires: abandonCapability, Composite: abandonNonTerminalLineage},
 			},
@@ -927,8 +1152,8 @@ func coreJourneys() []Journey {
 		{
 			ID:     "j85-review-parse-refusals-are-preflight",
 			Review: reviewOptedIn,
-			Title:  "START and FINALIZE parser refusals are preflight and non-mutating",
-			Source: "#1956: argv parsing happens before review authority can mutate",
+			Title:  "Historical parser/refusal compatibility: START and FINALIZE remain preflight and non-mutating",
+			Source: "#1956 historical parser/refusal compatibility: argv parsing happens before review authority can mutate",
 			Steps: []Step{
 				{Name: "fixture: repo", Fixture: baseRepo},
 				{Name: "START parser refusals preserve their preflight contract", Requires: startParseRefusalCapability, Composite: func(run *journeyRun) error { return assertReviewParseRefusalsPreflight(run, "start", "committed-only") }},

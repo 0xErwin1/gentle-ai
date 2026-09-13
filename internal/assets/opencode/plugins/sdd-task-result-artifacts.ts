@@ -1,16 +1,22 @@
 import type { Plugin } from "@opencode-ai/plugin"
 
-const TASK_RESULT = /^<task id="[^"\r\n]+" state="completed">\n<task_result>\n([\s\S]*?)\n<\/task_result>\n<\/task>$/
-const TASK_TAG = /<\/?task(?:\s|>)|<\/?task_result>/
+const TASK_RESULT = /^<task id="[^"\r\n]+" state="completed">\n(?:<summary>[^<>\r\n]+<\/summary>\n)?<task_result>\n([\s\S]*?)\n<\/task_result>\n<\/task>$/
+const TASK_TAG = /<\/?(?:task|task_result|summary)(?:\s|>)/
 const SDD_PHASES = ["sdd-init", "sdd-explore", "sdd-propose", "sdd-spec", "sdd-design", "sdd-tasks", "sdd-apply", "sdd-verify", "sdd-archive", "sdd-onboard"]
 const SDD_TASK_FAILURE_PREFIX = "GENTLE_AI_SDD_FAILURE "
 const SDD_TASK_ROUTE_TOKEN = /^[A-Za-z0-9][A-Za-z0-9._:@-]{0,127}$/
+// #2855: host cwd does not identify the coordinator's selected change/store.
+const SDD_TASK_CONTINUATION_GUIDANCE = "Return to the active SDD coordinator and inspect only its retained structured status for the selected change and artifact store. If that status is unavailable, report this terminal failure and ask the user to select the change and artifact store. Do not infer either, run unscoped status discovery, retry, or launch another phase."
 
 type SDDTaskFailure = { phase: string, code: string, handoff: string }
 type SDDTaskFailureError = Error & { sddFailure: SDDTaskFailure }
 
 function isSDDPhase(agent: string): boolean {
   return SDD_PHASES.some((phase) => agent === phase || agent.startsWith(phase + "-"))
+}
+
+function isBackgroundTask(args: unknown): boolean {
+  return !!args && typeof args === "object" && !Array.isArray(args) && (args as Record<string, unknown>).background === true
 }
 
 function taskResult(output: unknown): void {
@@ -27,10 +33,6 @@ function taskResult(output: unknown): void {
   if (TASK_TAG.test(envelope[1])) throw Object.assign(new Error("SDD phase task result contains a nested task envelope"), { sddClass: "malformed_result" })
 }
 
-function shellQuote(value: string): string {
-  return `'${value.replace(/'/g, "'\\''")}'`
-}
-
 function taskRouteModel(metadata: unknown): string | undefined {
   if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) return undefined
   const model = (metadata as Record<string, unknown>).model
@@ -42,7 +44,7 @@ function taskRouteModel(metadata: unknown): string | undefined {
   return `${providerID}/${modelID}`
 }
 
-function sddTaskFailure(phase: string, cwd: string, cause: unknown, metadata?: unknown): SDDTaskFailureError {
+function sddTaskFailure(phase: string, cause: unknown, metadata?: unknown): SDDTaskFailureError {
   const empty = (cause as Record<string, unknown> | null)?.sddClass === "empty_result"
   const code = empty ? "sdd_task_result_empty" : "sdd_task_result_malformed"
   const taskModel = taskRouteModel(metadata)
@@ -60,13 +62,13 @@ function sddTaskFailure(phase: string, cwd: string, cause: unknown, metadata?: u
       phase,
       ...(taskModel === undefined ? {} : { taskModel }),
       summary,
-      continuation: `gentle-ai sdd-status --cwd ${shellQuote(cwd)} --json`,
+      continuation: SDD_TASK_CONTINUATION_GUIDANCE,
     }),
   }
   return Object.assign(new Error(failure.handoff), { sddFailure: failure }) as SDDTaskFailureError
 }
 
-function sddDispatchLatched(requested: string, failure: SDDTaskFailure, cwd: string): Error {
+function sddDispatchLatched(requested: string, failure: SDDTaskFailure): Error {
   return new Error(SDD_TASK_FAILURE_PREFIX + JSON.stringify({
     schemaName: "gentle-ai.sdd-task-result-failure/v1",
     status: "blocked",
@@ -75,14 +77,13 @@ function sddDispatchLatched(requested: string, failure: SDDTaskFailure, cwd: str
     latchedPhase: failure.phase,
     latchedCode: failure.code,
     summary: `${requested} was not dispatched. Earlier in this session ${failure.phase} returned ${failure.code}, and SDD launches stay latched afterwards so a failed phase is never silently retried and no later phase advances on top of it. No provider call, no subagent, and no artifact write happened for this launch, so it produced no new evidence about the original failure.`,
-    continuation: `gentle-ai sdd-status --cwd ${shellQuote(cwd)} --json`,
+    continuation: SDD_TASK_CONTINUATION_GUIDANCE,
     exit: "Inspect the artifact state the original failure left, surface it to the user, and start a new session to launch SDD phases again. Relaunching in this session cannot dispatch.",
   }))
 }
 
-const SDDTaskResultArtifactsPlugin: Plugin = async ({ directory, worktree }) => {
+const SDDTaskResultArtifactsPlugin: Plugin = async () => {
   const failedSDDSessions = new Map<string, SDDTaskFailure>()
-  const cwd = worktree || directory
   return {
     dispose: async () => { failedSDDSessions.clear() },
     event: async ({ event }) => {
@@ -93,16 +94,20 @@ const SDDTaskResultArtifactsPlugin: Plugin = async ({ directory, worktree }) => 
       const subagent = output.args.subagent_type
       if (!isSDDPhase(subagent)) return
       const failure = failedSDDSessions.get(input.sessionID)
-      if (failure) throw sddDispatchLatched(subagent, failure, cwd)
+      if (failure) throw sddDispatchLatched(subagent, failure)
     },
     "tool.execute.after": async (input, output) => {
       if (input.tool !== "task" || typeof input.args?.subagent_type !== "string") return
       const subagent = input.args.subagent_type
       if (!isSDDPhase(subagent)) return
+      // OpenCode invokes this hook for the background launch acknowledgement while
+      // the child is still running. That signal has no terminal task result to
+      // validate; artifact/status ownership observes eventual completion.
+      if (isBackgroundTask(input.args)) return
       try {
         taskResult(output.output)
       } catch (cause) {
-        const failure = sddTaskFailure(subagent, cwd, cause, output.metadata)
+        const failure = sddTaskFailure(subagent, cause, output.metadata)
         failedSDDSessions.set(input.sessionID, failure.sddFailure)
         throw failure
       }

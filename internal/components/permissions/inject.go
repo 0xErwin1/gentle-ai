@@ -70,7 +70,15 @@ var openCodeOverlayJSON = []byte(`{
       "git push": "ask",
       "git push --force *": "ask",
       "git rebase *": "ask",
-      "git reset --hard *": "ask"
+      "git reset --hard *": "ask",
+      "ssh": "ask",
+      "ssh *": "ask",
+      "scp": "ask",
+      "scp *": "ask",
+      "sftp": "ask",
+      "sftp *": "ask",
+      "rsync": "ask",
+      "rsync *": "ask"
     },
     "read": {
       "*": "allow",
@@ -153,7 +161,7 @@ func agentOverlay(id model.AgentID) []byte {
 }
 
 func Inject(homeDir string, adapter agents.Adapter) (InjectionResult, error) {
-	settingsPath := adapter.SettingsPath(homeDir)
+	settingsPath := TargetPath(homeDir, adapter)
 	if settingsPath == "" {
 		return InjectionResult{}, nil
 	}
@@ -163,7 +171,8 @@ func Inject(homeDir string, adapter agents.Adapter) (InjectionResult, error) {
 		return InjectionResult{}, nil
 	}
 
-	writeResult, err := mergeJSONFile(settingsPath, overlay)
+	defaults := adapter.Agent() == model.AgentOpenCode || adapter.Agent() == model.AgentKilocode
+	writeResult, err := mergeJSONFile(settingsPath, overlay, defaults)
 	if err != nil {
 		return InjectionResult{}, err
 	}
@@ -171,13 +180,17 @@ func Inject(homeDir string, adapter agents.Adapter) (InjectionResult, error) {
 	return InjectionResult{Changed: writeResult.Changed, Files: []string{settingsPath}}, nil
 }
 
-func mergeJSONFile(path string, overlay []byte) (filemerge.WriteResult, error) {
+func mergeJSONFile(path string, overlay []byte, defaults bool) (filemerge.WriteResult, error) {
 	baseJSON, err := osReadFile(path)
 	if err != nil {
 		return filemerge.WriteResult{}, err
 	}
 
-	merged, err := filemerge.MergeJSONObjects(baseJSON, overlay)
+	merge := filemerge.MergeJSONObjectsForPath
+	if defaults {
+		merge = filemerge.MergeJSONDefaultsForPath
+	}
+	merged, err := merge(path, baseJSON, overlay)
 	if err != nil {
 		return filemerge.WriteResult{}, err
 	}

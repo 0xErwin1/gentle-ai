@@ -101,6 +101,16 @@ func TestRunSDDAttemptRescopeCarriesHistoryForwardThroughTheCLI(t *testing.T) {
 	}
 }
 
+func TestRunSDDAttemptSupersedeRoutesDistinctSuccessor(t *testing.T) {
+	repo, change := initReviewCLIRepo(t), "cli-supersede"
+	started := runSDDAttemptStatus(t, []string{"begin", "--cwd", repo, "--change", change, "--expected-revision=", "--request-id", "a-begin", "--work-unit", "verify-a", "--evidence-goal", "verify A", "--max-attempts", "2", "--max-changed-lines", "40"})
+	failed := runSDDAttemptStatus(t, []string{"finish", "--cwd", repo, "--change", change, "--expected-revision", started.Revision, "--request-id", "a-finish", "--outcome", "failed", "--evidence-revision", cliAttemptHash('a'), "--diagnosis", "distinct remediation", "--harness-disposition", "reused", "--cleanup-evidence", "unchanged", "--process-evidence", "none"})
+	superseded := runSDDAttemptStatus(t, []string{"supersede", "--cwd", repo, "--change", change, "--expected-revision", failed.Revision, "--request-id", "a-b", "--work-unit", "remediate-b", "--evidence-goal", "repair B", "--max-attempts", "3", "--max-changed-lines", "80", "--reason", "distinct remediation", "--actor", "maintainer"})
+	if superseded.LastSupersede == nil || superseded.Objective.WorkUnit != "remediate-b" || superseded.CumulativeAttempts != 1 {
+		t.Fatalf("CLI supersede = %#v", superseded)
+	}
+}
+
 func TestRunSDDAttemptRejectsMissingOrAmbiguousInputs(t *testing.T) {
 	repo := initReviewCLIRepo(t)
 	tests := []struct {
@@ -108,11 +118,11 @@ func TestRunSDDAttemptRejectsMissingOrAmbiguousInputs(t *testing.T) {
 		args []string
 		want string
 	}{
-		{name: "missing operation", args: nil, want: "requires status, begin, finish, handoff, reset, rescope, repair, acquire, settle, or grant"},
+		{name: "missing operation", args: nil, want: "requires status, begin, finish, handoff, reset, rescope, supersede, repair, acquire, settle, or grant"},
 		// The no-args refusal already enumerates every valid operation; the
 		// unknown-operation refusal must do the same instead of naming only
 		// the bad value with no route to the valid set.
-		{name: "unknown operation", args: []string{"begn"}, want: `unknown sdd-attempt operation "begn"; want one of status, begin, finish, handoff, reset, rescope, repair, acquire, settle, or grant`},
+		{name: "unknown operation", args: []string{"begn"}, want: `unknown sdd-attempt operation "begn"; want one of status, begin, finish, handoff, reset, rescope, supersede, repair, acquire, settle, or grant`},
 		{name: "missing change", args: []string{"status", "--cwd", repo}, want: "--change"},
 		{name: "unknown flag", args: []string{"status", "--cwd", repo, "--change", "thin", "--mystery"}, want: "flag provided but not defined"},
 		{name: "irrelevant flag", args: []string{"status", "--cwd", repo, "--change", "thin", "--outcome", "failed"}, want: "flag provided but not defined"},
@@ -120,7 +130,7 @@ func TestRunSDDAttemptRejectsMissingOrAmbiguousInputs(t *testing.T) {
 		{name: "missing rescope scope", args: []string{"rescope", "--cwd", repo, "--change", "thin", "--expected-revision", cliAttemptHash('e'), "--request-id", "rescope", "--reason", "narrowing", "--actor", "maintainer"}, want: "--work-unit"},
 		{name: "missing finish evidence", args: []string{"finish", "--cwd", repo, "--change", "thin", "--expected-revision", cliAttemptHash('b'), "--request-id", "finish", "--outcome", "failed", "--diagnosis", "diagnosis", "--harness-disposition", "reused", "--cleanup-evidence", "cleanup", "--process-evidence", "process"}, want: "--evidence-revision"},
 		{name: "interrupted malformed evidence", args: []string{"finish", "--cwd", repo, "--change", "thin", "--expected-revision", cliAttemptHash('b'), "--request-id", "finish", "--outcome", "interrupted", "--evidence-revision", "not-a-revision", "--diagnosis", "diagnosis", "--harness-disposition", "reused", "--cleanup-evidence", "cleanup", "--process-evidence", "process"}, want: "empty or a canonical legacy sha256 revision"},
-		{name: "partial remediation successor", args: []string{"finish", "--cwd", repo, "--change", "thin", "--expected-revision", cliAttemptHash('b'), "--request-id", "finish", "--outcome", "passed", "--evidence-revision", cliAttemptHash('c'), "--diagnosis", "diagnosis", "--harness-disposition", "reused", "--cleanup-evidence", "cleanup", "--process-evidence", "process", "--successor-lineage", "review-successor"}, want: "remediation successor requires --expected-binding-revision, --successor-lineage, and --remediates-evidence-revision together"},
+		{name: "retired remediation successor flag", args: []string{"finish", "--cwd", repo, "--change", "thin", "--expected-revision", cliAttemptHash('b'), "--request-id", "finish", "--outcome", "passed", "--evidence-revision", cliAttemptHash('c'), "--diagnosis", "diagnosis", "--harness-disposition", "reused", "--cleanup-evidence", "cleanup", "--process-evidence", "process", "--successor-lineage", "review-successor"}, want: "flag provided but not defined"},
 		{name: "positional argument", args: []string{"status", "--cwd", repo, "--change", "thin", "extra"}, want: "unexpected sdd-attempt argument"},
 		// Grant's missing-flag refusal follows acquire/settle: it enumerates
 		// every missing flag and names the rerunnable continuation.
@@ -169,7 +179,7 @@ func sddAttemptOutcome(args []string) string {
 // all four). Mirrors the reviewIntegrationGatesInOrder /
 // reviewIntegrationGateNames pattern in review_operation_contract.go.
 func TestSDDAttemptOperationsCanonicalSourceEnumeratesConsistently(t *testing.T) {
-	want := []string{"status", "begin", "finish", "handoff", "reset", "rescope", "repair", "acquire", "settle", "grant"}
+	want := []string{"status", "begin", "finish", "handoff", "reset", "rescope", "supersede", "repair", "acquire", "settle", "grant"}
 	if got := sddAttemptOperationNames(); !reflect.DeepEqual(got, want) {
 		t.Fatalf("sddAttemptOperationNames() = %v, want %v", got, want)
 	}
@@ -181,8 +191,8 @@ func TestSDDAttemptOperationsCanonicalSourceEnumeratesConsistently(t *testing.T)
 	if validSDDAttemptOperation("begn") {
 		t.Fatal(`validSDDAttemptOperation("begn") = true, want false`)
 	}
-	if got := joinSDDAttemptOperations(); got != "status, begin, finish, handoff, reset, rescope, repair, acquire, settle, or grant" {
-		t.Fatalf("joinSDDAttemptOperations() = %q, want %q", got, "status, begin, finish, handoff, reset, rescope, repair, acquire, settle, or grant")
+	if got := joinSDDAttemptOperations(); got != "status, begin, finish, handoff, reset, rescope, supersede, repair, acquire, settle, or grant" {
+		t.Fatalf("joinSDDAttemptOperations() = %q, want %q", got, "status, begin, finish, handoff, reset, rescope, supersede, repair, acquire, settle, or grant")
 	}
 }
 
@@ -202,11 +212,20 @@ func TestSDDAttemptOperationsCanonicalSourceEnumeratesConsistently(t *testing.T)
 func TestRunSDDAttemptGrantPersistsAndReplaysThroughTheCLI(t *testing.T) {
 	repo := initReviewCLIRepo(t)
 	change := "cli-grant"
-	instance := "cli-grant-instance-token"
 	sibling, err := filepath.EvalSymlinks(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
+	seedSDDStatusReadyChange(t, repo, change, "- [ ] 1.1 Update `"+filepath.Join(sibling, "main.go")+"`\n")
+	var continued bytes.Buffer
+	if err := RunSDDContinue([]string{change, "--cwd", repo, "--json"}, &continued); err != nil {
+		t.Fatal(err)
+	}
+	marker, err := os.ReadFile(filepath.Join(repo, "openspec", "changes", change, ".gentle-ai-instance"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	instance := strings.TrimSpace(string(marker))
 
 	grantArgs := []string{
 		"grant", "--cwd", repo, "--change", change, "--root", sibling, "--change-instance", instance,
@@ -270,14 +289,15 @@ func TestRunSDDAttemptHelpContractsCoverEveryOperation(t *testing.T) {
 		contracts []string
 	}{
 		{"status", []string{"cwd", "change", "change-instance", "work-unit", "evidence-goal", "max-attempts", "max-changed-lines"}, []string{"optional", "128 bytes"}},
-		{"begin", []string{"cwd", "change", "expected-revision", "request-id", "work-unit", "evidence-goal", "max-attempts", "max-changed-lines"}, []string{"default 2", "default 200", "1..100", "1..1000000"}},
-		{"finish", []string{"cwd", "change", "expected-revision", "request-id", "outcome", "evidence-revision", "diagnosis", "harness-disposition", "cleanup-evidence", "process-evidence", "expected-binding-revision", "successor-lineage", "remediates-evidence-revision"}, []string{"failed, interrupted, or passed", "reused or invalidated", "empty or canonical legacy sha256 revision", "500 bytes"}},
+		{"begin", []string{"cwd", "change", "expected-revision", "request-id", "work-unit", "evidence-goal", "max-attempts", "max-changed-lines", "untracked-scope", "expected-untracked-inventory", "intended-untracked"}, []string{"default 2", "default 200", "1..100", "1..1000000"}},
+		{"finish", []string{"cwd", "change", "expected-revision", "request-id", "outcome", "evidence-revision", "diagnosis", "harness-disposition", "cleanup-evidence", "process-evidence", "remediates-evidence-revision", "untracked-scope", "expected-untracked-inventory", "intended-untracked"}, []string{"failed, interrupted, or passed", "reused or invalidated", "empty or canonical legacy sha256 revision", "500 bytes"}},
 		{"handoff", []string{"cwd", "change", "expected-revision", "request-id", "destination-worktree"}, []string{"registered linked worktree", "Git common directory"}},
-		{"reset", []string{"cwd", "change", "expected-revision", "request-id", "reason", "actor"}, []string{"500 bytes", "128 bytes"}},
-		{"rescope", []string{"cwd", "change", "expected-revision", "request-id", "work-unit", "evidence-goal", "max-attempts", "max-changed-lines", "reason", "actor"}, []string{"explicit limit", "cannot exceed current objective"}},
+		{"reset", []string{"cwd", "change", "expected-revision", "request-id", "reason", "actor", "objective-relation"}, []string{"500 bytes", "128 bytes", "remediation (default)", "independent"}},
+		{"rescope", []string{"cwd", "change", "expected-revision", "request-id", "work-unit", "evidence-goal", "max-attempts", "max-changed-lines", "reason", "actor", "objective-relation", "untracked-scope", "expected-untracked-inventory", "intended-untracked"}, []string{"explicit limit", "cannot exceed current objective", "remediation (default)", "independent"}},
+		{"supersede", []string{"cwd", "change", "expected-revision", "request-id", "work-unit", "evidence-goal", "max-attempts", "max-changed-lines", "reason", "actor", "objective-relation", "untracked-scope", "expected-untracked-inventory", "intended-untracked"}, []string{"distinct terminal zero-drift", "above carried", "remediation (default)", "independent"}},
+		{"acquire", []string{"cwd", "change", "token", "expected-revision", "request-id", "work-unit", "evidence-goal", "max-attempts", "max-changed-lines", "remediates-evidence-revision", "untracked-scope", "expected-untracked-inventory", "intended-untracked"}, []string{"default 2", "default 200", "failed evidence correction"}},
 		{"repair", []string{"cwd", "change", "expected-revision", "request-id", "reason", "actor"}, []string{"unreadable sha256", "500 bytes", "128 bytes"}},
-		{"acquire", []string{"cwd", "change", "token", "request-id", "work-unit", "evidence-goal", "max-attempts", "max-changed-lines", "remediates-evidence-revision"}, []string{"default 2", "default 200", "unmanaged remediation"}},
-		{"settle", []string{"cwd", "change", "token", "request-id", "outcome", "evidence-revision", "diagnosis", "harness-disposition", "cleanup-evidence", "process-evidence", "successor-lineage", "remediates-evidence-revision"}, []string{"opaque token returned by acquire", "required for failed/passed; omit for interrupted"}},
+		{"settle", []string{"cwd", "change", "token", "request-id", "outcome", "evidence-revision", "diagnosis", "harness-disposition", "cleanup-evidence", "process-evidence", "remediates-evidence-revision", "remediation-evidence", "untracked-scope", "expected-untracked-inventory", "intended-untracked"}, []string{"opaque token returned by acquire", "required for failed/passed; omit for interrupted"}},
 		{"grant", []string{"cwd", "change", "expected-revision", "root", "change-instance", "request-id", "actor", "reason"}, []string{"repeatable", "1..32", "4096 bytes"}},
 	}
 
@@ -440,33 +460,20 @@ func TestRunSDDAttemptFinishAcceptsApprovedSelfRemediationSuccessor(t *testing.T
 		t.Fatalf("pre-remediation CLI status = %#v", active)
 	}
 
-	// The bounded correction lands during the attempt on the same lineage.
+	// The bounded correction lands during the attempt. SDD completion is
+	// independent from review receipt authority.
 	writeCLIAttemptFile(t, filepath.Join(changeRoot, "tasks.md"), "- [x] 1.1 Done\n# bounded self remediation\n")
-	lineage := "cli-self-lineage"
-	writeCLIApprovedCompactAuthority(t, repo, lineage)
-	binding, err := sddstatus.BindApprovedReview(context.Background(), repo, change, lineage, "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	postBind := runSDDAttemptStatus(t, []string{"status", "--cwd", repo, "--change", change})
-	if postBind.Binding == nil || postBind.Binding.Revision != binding.Revision {
-		t.Fatalf("post-bind CLI status = %#v", postBind)
-	}
 
 	finishArgs := []string{
-		"finish", "--cwd", repo, "--change", change, "--expected-revision", postBind.Revision, "--request-id", "self-finish-2",
+		"finish", "--cwd", repo, "--change", change, "--expected-revision", active.Revision, "--request-id", "self-finish-2",
 		"--outcome", "passed", "--evidence-revision", cliAttemptHash('b'),
 		"--diagnosis", "bounded self remediation passed corrected verification", "--harness-disposition", "reused",
 		"--cleanup-evidence", "self remediation cleanup completed", "--process-evidence", "self remediation process scan found no descendants",
-		"--expected-binding-revision", binding.Revision, "--successor-lineage", lineage,
 		"--remediates-evidence-revision", failedEvidence,
 	}
 	completed := runSDDAttemptStatus(t, finishArgs)
 	if !completed.Complete || completed.ActiveAttempt != nil || completed.NextAction != sddstatus.RuntimeActionComplete {
 		t.Fatalf("self-remediation CLI completion = %#v", completed)
-	}
-	if completed.Binding == nil || completed.Binding.Lineage != lineage || completed.Binding.Revision != binding.Revision {
-		t.Fatalf("self-remediation CLI binding = %#v", completed.Binding)
 	}
 	last := completed.Attempts[len(completed.Attempts)-1]
 	if last.Outcome != sddstatus.AttemptPassed || last.RemediatesEvidenceRevision != failedEvidence ||
@@ -532,21 +539,10 @@ func writeCLIApprovedCompactAuthority(t *testing.T, repo, lineage string) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	revision, err = store.Replace(revision, "review/complete-review", state)
-	if err != nil {
+	if err := state.CloseCleanReviewOnLastEvent(); err != nil {
 		t.Fatal(err)
 	}
-	if err := state.CompleteVerification([]byte("cli self remediation verification passed\n"), true); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := store.Replace(revision, "review/complete-verification", state); err != nil {
-		t.Fatal(err)
-	}
-	receipt, err := state.Receipt()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := reviewtransaction.WriteCompactReceiptAtomic(store.ReceiptPath(), receipt); err != nil {
+	if _, err := store.Replace(revision, "review/complete-review", state); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -592,5 +588,82 @@ func TestRunSDDAttemptTrimsWhitespaceFromRevisionShapedFlags(t *testing.T) {
 	last := finished.Attempts[len(finished.Attempts)-1]
 	if last.EvidenceRevision != hash {
 		t.Fatalf("finish with a whitespace-padded --evidence-revision = %#v, want trimmed evidence_revision %q", last, hash)
+	}
+}
+
+// TestRunSDDAttemptSettleRemediationEvidenceDropsEvidenceRevisionRequirement
+// is the CLI-level behavioral proof for #2896's flag-requirement carve-out
+// (missingSDDAttemptOperationFlags): --remediation-evidence must let settle
+// actually reach Settle and complete without --evidence-revision, and
+// omitting BOTH flags must still raise the ordinary requirement refusal.
+// Asserted on behavior (the settle call's real outcome), not on the help
+// table.
+func TestRunSDDAttemptSettleRemediationEvidenceDropsEvidenceRevisionRequirement(t *testing.T) {
+	repo := initReviewCLIRepo(t)
+	const change = "cli-remediation-evidence"
+	failedEvidence := cliAttemptHash('a')
+
+	acquired1, _ := runCompactSDDAttempt(t, []string{
+		"acquire", "--cwd", repo, "--change", change, "--request-id", "cli-rem-acquire-1",
+		"--work-unit", "verify", "--evidence-goal", "prove CLI remediation evidence",
+		"--max-attempts", "5", "--max-changed-lines", "800",
+	})
+	failed, _ := runCompactSDDAttempt(t, []string{
+		"settle", "--cwd", repo, "--change", change, "--token", acquired1.Token,
+		"--request-id", "cli-rem-settle-1", "--outcome", "failed", "--evidence-revision", failedEvidence,
+		"--diagnosis", "verification found a correction", "--harness-disposition", "reused",
+		"--cleanup-evidence", "cleanup completed", "--process-evidence", "no descendants",
+	})
+	if failed.State != "proceed" {
+		t.Fatalf("failed settle = %#v", failed)
+	}
+	trackedFile := filepath.Join(repo, "tracked.txt")
+	existing, err := os.ReadFile(trackedFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(trackedFile, append(existing, []byte("corrected\n")...), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	failedStatus := runSDDAttemptStatus(t, []string{"status", "--cwd", repo, "--change", change})
+	reset := runSDDAttemptStatus(t, []string{
+		"reset", "--cwd", repo, "--change", change, "--expected-revision", failedStatus.Revision,
+		"--request-id", "cli-rem-reset", "--reason", "maintainer records the corrected candidate", "--actor", "maintainer",
+	})
+	acquired2, _ := runCompactSDDAttempt(t, []string{
+		"acquire", "--cwd", repo, "--change", change, "--expected-revision", reset.Revision,
+		"--request-id", "cli-rem-acquire-2", "--work-unit", "verify",
+		"--evidence-goal", "prove CLI remediation evidence", "--max-attempts", "5", "--max-changed-lines", "800",
+		"--remediates-evidence-revision", failedEvidence,
+	})
+	evidence := `{"schema":"gentle-ai.remediation-evidence/v1","failed_evidence_revision":"` + failedEvidence + `",` +
+		`"commands":[{"command":"go test ./...","exit_code":0,"result":"293 passed"}],` +
+		`"runtime_harness":{"status":"not_applicable","na_reason":"no runtime harness because this change is test-only"},` +
+		`"rollback":{"boundary":"commit 9ec76eec32","evidence":"git revert 9ec76eec32 restores the prior passing state"}}`
+
+	// (a) --remediation-evidence with no --evidence-revision must reach
+	// Settle and complete, not merely pass flag validation.
+	settled, _ := runCompactSDDAttempt(t, []string{
+		"settle", "--cwd", repo, "--change", change, "--token", acquired2.Token,
+		"--request-id", "cli-rem-settle-2", "--outcome", "passed",
+		"--diagnosis", "correction passed verification", "--harness-disposition", "reused",
+		"--cleanup-evidence", "cleanup completed", "--process-evidence", "no descendants",
+		"--remediates-evidence-revision", failedEvidence, "--remediation-evidence", evidence,
+	})
+	if settled.State != "complete" {
+		t.Fatalf("settle with --remediation-evidence and no --evidence-revision = %#v, want it to complete", settled)
+	}
+
+	// (b) neither flag: the ordinary requirement refusal still fires.
+	var output bytes.Buffer
+	err = RunSDDAttempt([]string{
+		"settle", "--cwd", repo, "--change", change, "--token", cliAttemptHash('f'),
+		"--request-id", "cli-rem-settle-3", "--outcome", "passed",
+		"--diagnosis", "diagnosis", "--harness-disposition", "reused",
+		"--cleanup-evidence", "cleanup", "--process-evidence", "process",
+	}, &output)
+	want := "sdd-attempt settle requires --evidence-revision"
+	if err == nil || !strings.Contains(err.Error(), want) {
+		t.Fatalf("settle with neither flag error = %v, want it to contain %q", err, want)
 	}
 }

@@ -1,26 +1,249 @@
 package sdd
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
 
+	"github.com/gentleman-programming/gentle-ai/v2/internal/assets"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/catalog"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
 )
 
-func TestCanonicalCompositionPreservesHistoricalOrchestratorBytes(t *testing.T) {
+const testGenericFallbackOnlyNativeRoute = "- Native route: This variant has no classified native question UI for this contract; always use the plain chat or terminal fallback below. When the closed domain of a single-select envelope is unrepresentable here, fall through to the Fallback clause below."
+
+const testPiClosedSingleSelectNativeRoute = "- Native route: For every strictly closed single-select envelope, use ask_user_choice only when the interactive Pi TUI can represent its complete one-question 2-4 ordered-option domain. Pass each user-facing label and description with the envelope-owned canonical option token as value. The selector returns exactly one value; map it to the exact envelope-owned choice once, then select any envelope-owned continuation or invocation once where present. It has no custom/free-text or multi-select path. If the native TUI is unavailable or the envelope is not exactly representable, use the complete chat fallback. ask_user_question is the external open/free-text questionnaire and must not be used for a closed domain; open/free-text questionnaires may use ask_user_question when exactly representable. For gentle-ai.review-integration.consent/v3, the chosen continuation is still the exact captured provider-owned choice invocation, used once without synthesis."
+
+// TestCanonicalCompositionAddsOnlyItsKnownSteps proves that composition is
+// bounded-review rendering plus shared-section substitution, cohort preflight,
+// and the Pi route. Non-cohort runtimes retain their historical composition. It deliberately no longer claims to preserve
+// historical bytes: #3817 moved five section bodies into a shared asset, so
+// this test's expected side must apply the same substitution, which means it
+// cannot detect a substitution defect. Byte preservation across that move is
+// proved where it actually lives — the rendered goldens under testdata/golden,
+// none of which changed when the bodies moved.
+func TestCanonicalCompositionAddsOnlyItsKnownSteps(t *testing.T) {
 	for _, agent := range catalog.AllAgents() {
 		t.Run(string(agent.ID), func(t *testing.T) {
 			path := sddOrchestratorAsset(agent.ID)
-			before := renderBoundedReviewAsset(agent.ID, path)
+			// #3817 adds shared-section substitution to the composition. The
+			// invariant is unchanged in spirit: composition is bounded review
+			// plus the shared sections plus the Pi route, and nothing else.
+			content := assets.MustRead(path)
+			if agent.ID == model.AgentVSCodeCopilot || agent.ID == model.AgentCursor || agent.ID == model.AgentGeminiCLI ||
+				agent.ID == model.AgentAntigravity || agent.ID == model.AgentQwenCode || agent.ID == model.AgentHermes || agent.ID == model.AgentKimi || agent.ID == model.AgentKiroIDE || agent.ID == model.AgentCodex || agent.ID == model.AgentWindsurf {
+				assertFallbackSessionPreflight(t, composeOrchestratorPrompt(agent.ID))
+				return
+			}
+			content = substituteSharedOrchestratorSections(content)
+			if agent.ID == model.AgentPi {
+				content = strings.Replace(content, testGenericFallbackOnlyNativeRoute, testPiClosedSingleSelectNativeRoute, 1)
+			}
+			content = replaceOpenCodeConsentV3QuestionRoute(content, agent.ID)
+			before := bindRuntimeAgentIdentity(renderBoundedReviewAssetBodyFromContent(agent.ID, path, content), agent.ID)
 			after := composeOrchestratorPrompt(agent.ID)
 			if after != before {
 				t.Fatalf("canonical composition changed %s orchestrator bytes", agent.ID)
 			}
 		})
+	}
+}
+
+func TestFallbackSessionPreflightRejectsAmbiguousSource(t *testing.T) {
+	for _, agent := range []model.AgentID{model.AgentVSCodeCopilot, model.AgentCursor, model.AgentGeminiCLI, model.AgentAntigravity, model.AgentQwenCode, model.AgentHermes, model.AgentKimi, model.AgentKiroIDE, model.AgentCodex, model.AgentWindsurf} {
+		source := assets.MustRead(sddOrchestratorAsset(agent))
+		initStart := strings.Index(source, "1. Search Engram:")
+		initEnd := strings.Index(source[initStart:], "\n\n") + initStart
+		initLookup := source[initStart:initEnd]
+		policyHeading := "### Artifact Store Policy"
+		if agent == model.AgentCodex {
+			policyHeading = "### Artifact store (engram default)"
+		}
+		for _, heading := range []string{initLookup, policyHeading, "### Commands", "### Execution Mode", "### Artifact Store Mode", "### Delivery Strategy", "### Chain Strategy", "### Native SDD Dispatcher Guard", "### SDD Init Guard (MANDATORY)", "If the user doesn't specify, default to **Automatic**."} {
+			for _, mutation := range []string{"missing", "duplicate"} {
+				t.Run(string(agent)+"/"+mutation+"/"+heading, func(t *testing.T) {
+					defer func() {
+						if recover() == nil {
+							t.Fatal("ambiguous source did not fail closed")
+						}
+					}()
+					mutated := source + "\n" + heading + "\n"
+					if mutation == "missing" {
+						mutated = strings.Replace(source, heading, "drifted source", 1)
+					}
+					composeFallbackSessionPreflight(mutated, agent)
+				})
+			}
+		}
+	}
+	for _, tc := range []struct {
+		agent  model.AgentID
+		clause string
+	}{
+		{model.AgentCursor, "**Interactive** is the default behavior"},
+		{model.AgentVSCodeCopilot, "Artifact store: default `engram` when available."},
+	} {
+		for _, mutation := range []string{"drifted default", tc.clause + "\n" + tc.clause} {
+			t.Run(string(tc.agent)+"/"+mutation, func(t *testing.T) {
+				defer func() {
+					if recover() == nil {
+						t.Fatal("drifted or duplicate replacement clause did not fail closed")
+					}
+				}()
+				source := assets.MustRead(sddOrchestratorAsset(tc.agent))
+				composeFallbackSessionPreflight(strings.Replace(source, tc.clause, mutation, 1), tc.agent)
+			})
+		}
+	}
+}
+
+func TestPiClosedChoiceRouteReplacesTheGenericFallback(t *testing.T) {
+	pi := composeOrchestratorPrompt(model.AgentPi)
+	if got := strings.Count(pi, testGenericFallbackOnlyNativeRoute); got != 0 {
+		t.Fatalf("Pi composition contains %d generic fallback-only route clauses, want 0", got)
+	}
+	if got := strings.Count(pi, testPiClosedSingleSelectNativeRoute); got != 1 {
+		t.Fatalf("Pi composition contains %d closed-choice route clauses, want 1", got)
+	}
+
+	generic := renderBoundedReviewAsset(model.AgentPi, sddOrchestratorAsset(model.AgentPi))
+	if got := strings.Count(generic, testGenericFallbackOnlyNativeRoute); got != 1 {
+		t.Fatalf("generic source contains %d fallback-only route clauses, want 1", got)
+	}
+	if strings.Contains(generic, testPiClosedSingleSelectNativeRoute) {
+		t.Fatal("generic source contains the Pi closed-choice route")
+	}
+
+	if strings.Contains(composeOrchestratorPrompt(model.AgentKilocode), testPiClosedSingleSelectNativeRoute) {
+		t.Fatal("Kilo composition received the Pi closed-choice route")
+	}
+}
+
+func TestPiClosedChoiceRouteFailsClosedWhenGenericSourceClauseIsNotUnique(t *testing.T) {
+	for _, tt := range []struct {
+		name    string
+		content string
+	}{
+		{name: "absent", content: "- Native route: custom runtime route"},
+		{name: "duplicated", content: testGenericFallbackOnlyNativeRoute + "\n" + testGenericFallbackOnlyNativeRoute},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			defer func() {
+				recovered := recover()
+				if recovered == nil || !strings.Contains(fmt.Sprint(recovered), "Pi native route source clause count") {
+					t.Fatalf("replacePiClosedSingleSelectRoute() panic = %v, want source clause count failure", recovered)
+				}
+			}()
+			replacePiClosedSingleSelectRoute(tt.content, model.AgentPi)
+		})
+	}
+}
+
+func TestOpenCodeConsentV3QuestionRouteUsesDisplayLabelsWithoutChangingProviderChoices(t *testing.T) {
+	prompt := composeOrchestratorPrompt(model.AgentOpenCode)
+	if strings.Contains(prompt, openCodeNativeQuestionSourceRoute) {
+		t.Fatal("OpenCode consent/v3 route retained the inherited native-question fallback")
+	}
+	if got := strings.Count(prompt, openCodeConsentV3QuestionRoute); got != 1 {
+		t.Fatalf("OpenCode composition contains %d consent/v3 question routes, want 1", got)
+	}
+
+	for _, want := range []string{
+		"Display labels and provider-owned answer tokens may differ; that difference alone never makes an otherwise complete closed single-select domain unrepresentable.",
+		"Before invocation, inspect the active classified `question` schema.",
+		"For a representable `gentle-ai.review-integration.consent/v3` envelope, invoke `question` exactly once with both `multiple: false` and `custom: false` only if the sole per-question object schema explicitly exposes both settings, both can be set to `false`, and neither field may be omitted.",
+		"Treat absent, unknown, or unhonored controls as unrepresentable. In that case, do not invoke `question`, accept free text, or use a chat-token fallback; surface one actionable compatibility limitation naming the missing closed-domain support and direct the user to a runtime/version that exposes and enforces both controls, then stop.",
+		"Preserve the original option order, labels, descriptions, and effects.",
+		"Map only a returned offered label or ordinal to exactly one provider-owned answer token and invoke only that exact provider-owned invocation once.",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("OpenCode composed consent/v3 route missing %q", want)
+		}
+	}
+}
+
+func TestOpenCodePreservedPromptReplacesManagedConsentQuestionRoute(t *testing.T) {
+	home := t.TempDir()
+	adapter := opencodeAdapter()
+	settingsPath := adapter.SettingsPath(home)
+	if err := os.MkdirAll(filepath.Dir(settingsPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll(settings) error = %v", err)
+	}
+	seed := `{"agent":{"gentle-orchestrator":{"prompt":` + strconv.Quote(openCodeNativeQuestionSourceRoute) + `}}}`
+	if err := os.WriteFile(settingsPath, []byte(seed), 0o644); err != nil {
+		t.Fatalf("WriteFile(settings) error = %v", err)
+	}
+
+	if _, err := Inject(home, adapter, model.SDDModeSingle, InjectOptions{PreserveOpenCodeOrchestratorPrompt: true}); err != nil {
+		t.Fatalf("Inject() error = %v", err)
+	}
+	prompt := agentPrompt(t, readOpenCodeAgents(t, settingsPath), "gentle-orchestrator")
+	if strings.Contains(prompt, openCodeNativeQuestionSourceRoute) {
+		t.Fatal("preserved OpenCode prompt retained the generic native-question route")
+	}
+	if got := strings.Count(prompt, openCodeConsentV3QuestionRoute); got != 1 {
+		t.Fatalf("preserved OpenCode prompt contains %d consent/v3 question routes, want 1", got)
+	}
+	if !strings.Contains(prompt, "invoke `question` exactly once with both `multiple: false` and `custom: false`") {
+		t.Fatal("preserved OpenCode prompt omitted the explicit closed-domain question invocation")
+	}
+}
+
+func TestOpenCodeConsentV3QuestionRouteFailsClosedWhenSharedSourceClauseIsNotUnique(t *testing.T) {
+	for _, tt := range []struct {
+		name    string
+		content string
+	}{
+		{name: "absent", content: "- Native route: custom runtime route"},
+		{name: "duplicated", content: openCodeNativeQuestionSourceRoute + "\n" + openCodeNativeQuestionSourceRoute},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			defer func() {
+				recovered := recover()
+				if recovered == nil || !strings.Contains(fmt.Sprint(recovered), "OpenCode native route source clause count") {
+					t.Fatalf("replaceOpenCodeConsentV3QuestionRoute() panic = %v, want source clause count failure", recovered)
+				}
+			}()
+			replaceOpenCodeConsentV3QuestionRoute(tt.content, model.AgentOpenCode)
+		})
+	}
+}
+
+func TestOpenCodeConsentV3QuestionRouteIsolatedToOpenCode(t *testing.T) {
+	sharedSource := assets.MustRead("opencode/sdd-orchestrator.md")
+	if got := strings.Count(sharedSource, openCodeNativeQuestionSourceRoute); got != 1 {
+		t.Fatalf("shared OpenCode/Kilocode source contains %d native route clauses, want 1", got)
+	}
+	if strings.Contains(sharedSource, openCodeConsentV3QuestionRoute) {
+		t.Fatal("shared OpenCode/Kilocode source contains the OpenCode-only consent/v3 route")
+	}
+
+	kilocode := composeOrchestratorPrompt(model.AgentKilocode)
+	if got := strings.Count(kilocode, openCodeNativeQuestionSourceRoute); got != 1 {
+		t.Fatalf("Kilocode composition contains %d shared native route clauses, want 1", got)
+	}
+	if strings.Contains(kilocode, openCodeConsentV3QuestionRoute) {
+		t.Fatal("Kilocode composition received the OpenCode consent/v3 route")
+	}
+
+	for _, agent := range catalog.AllAgents() {
+		if agent.ID == model.AgentOpenCode {
+			continue
+		}
+		if strings.Contains(composeOrchestratorPrompt(agent.ID), openCodeConsentV3QuestionRoute) {
+			t.Fatalf("%s composition received the OpenCode consent/v3 route", agent.ID)
+		}
+	}
+
+	pi := composeOrchestratorPrompt(model.AgentPi)
+	if !strings.Contains(pi, testPiClosedSingleSelectNativeRoute) {
+		t.Fatal("Pi composition changed its native closed-choice route")
+	}
+	if strings.Contains(pi, "Display labels and provider-owned answer tokens may differ") {
+		t.Fatal("Pi composition received the OpenCode consent/v3 wording")
 	}
 }
 
@@ -113,7 +336,6 @@ func TestCanonicalCompositionFeedsBaseAndNamedProfile(t *testing.T) {
 	for _, marker := range []string{
 		"### Lossless Blocking Prompts (MANDATORY)",
 		"### Native SDD Dispatcher Guard",
-		"### SDD Session Preflight (HARD GATE)",
 		"#### Review Execution Contract",
 	} {
 		if strings.Count(profile, marker) != 1 {
@@ -164,7 +386,7 @@ func TestOpenCodeBackgroundPolicyPreservesPromptBranches(t *testing.T) {
 	}{
 		{
 			name:       "gentle-orchestrator",
-			seed:       `{"agent":{"gentle-orchestrator":{"prompt":"CUSTOM_GENTLE"}}}`,
+			seed:       `{"agent":{"gentle-orchestrator":{"prompt":"CUSTOM_GENTLE\n### SDD Entry Routing (MANDATORY)\n4. **Review**\n### SDD Init Guard (MANDATORY)"}}}`,
 			wantCustom: "CUSTOM_GENTLE",
 		},
 		{
@@ -209,6 +431,9 @@ func TestOpenCodeBackgroundPolicyPreservesPromptBranches(t *testing.T) {
 			}
 			if tt.wantCustom != "" && !strings.Contains(prompt, tt.wantCustom) {
 				t.Fatalf("preserved prompt lost custom content %q", tt.wantCustom)
+			}
+			if tt.name == "gentle-orchestrator" && (strings.Count(prompt, sddSessionPreflightMarker) != 1 || strings.Contains(prompt, "<!-- gentle-ai:sdd-session-preflight-migration -->") || strings.Contains(prompt, "Both -> `both`") || strings.Contains(prompt, "4. Review: 400 lines, 800 lines, Other.")) {
+				t.Fatalf("preserved prompt did not contain exactly one canonical session preflight: %q", prompt)
 			}
 			if tt.wantFallback && strings.Contains(prompt, "CUSTOM_") {
 				t.Fatalf("fallback retained unrecognized custom prompt: %q", prompt)

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"runtime"
 	"time"
 )
 
@@ -17,8 +18,9 @@ const piReviewerWaitDelay = 5 * time.Second
 // PiAdapter invokes a brand-new print-mode pi process with an opaque provider
 // invocation and returns its raw final bytes without interpreting them.
 type PiAdapter struct {
-	LookPath       func(string) (string, error)
-	commandContext func(context.Context, string, ...string) *exec.Cmd
+	Model, Thinking string
+	LookPath        func(string) (string, error)
+	commandContext  func(context.Context, string, ...string) *exec.Cmd
 }
 
 // NewPiAdapter returns an adapter using the pi binary resolved from PATH.
@@ -47,10 +49,18 @@ func (adapter *PiAdapter) Review(ctx context.Context, invocation Invocation) ([]
 	if commandContext == nil {
 		commandContext = exec.CommandContext
 	}
-	command := commandContext(ctx, binary,
+	arguments := []string{
 		"--print", "--mode", "text", "--no-session", "--no-tools", "--no-extensions",
-		"--no-skills", "--no-prompt-templates", "--no-themes", "--no-context-files", "--no-approve")
+		"--no-skills", "--no-prompt-templates", "--no-themes", "--no-context-files", "--no-approve"}
+	if adapter.Model != "" {
+		arguments = append(arguments, "--model", adapter.Model)
+	}
+	if adapter.Thinking != "" {
+		arguments = append(arguments, "--thinking", adapter.Thinking)
+	}
+	command := commandContext(ctx, binary, arguments...)
 	command.Dir = scratch
+	command.Env = piRuntimeEnvironment()
 	command.WaitDelay = piReviewerWaitDelay
 	command.Stdin = bytes.NewReader(invocation.Prompt())
 	var stdout, stderr bytes.Buffer
@@ -60,10 +70,33 @@ func (adapter *PiAdapter) Review(ctx context.Context, invocation Invocation) ([]
 		if ctx.Err() != nil {
 			err = ctx.Err()
 		}
-		return nil, fmt.Errorf("pi reviewer transport failed: %w: %s", err, stderr.String())
+		return nil, fmt.Errorf("pi reviewer transport failed: %w: %s", err, reviewerTransportFailureDetail(stderr.String(), stdout.String()))
 	}
 	if len(bytes.TrimSpace(stdout.Bytes())) == 0 {
 		return nil, errors.New("pi reviewer transport produced no final message")
 	}
 	return stdout.Bytes(), nil
+}
+
+// piRuntimeEnvironment passes only the process locators Pi needs to launch and
+// resolve its local configuration. Credentials remain in Pi's auth file.
+func piRuntimeEnvironment() []string {
+	environment := []string{
+		"PATH=" + os.Getenv("PATH"),
+		"HOME=" + os.Getenv("HOME"),
+	}
+	if runtime.GOOS == "windows" {
+		environment = appendPiRuntimeEnvironmentValue(environment, "SYSTEMROOT")
+		environment = appendPiRuntimeEnvironmentValue(environment, "USERPROFILE")
+		environment = appendPiRuntimeEnvironmentValue(environment, "HOMEDRIVE")
+		environment = appendPiRuntimeEnvironmentValue(environment, "HOMEPATH")
+	}
+	return appendPiRuntimeEnvironmentValue(environment, "PI_CODING_AGENT_DIR")
+}
+
+func appendPiRuntimeEnvironmentValue(environment []string, name string) []string {
+	if value := os.Getenv(name); value != "" {
+		return append(environment, name+"="+value)
+	}
+	return environment
 }
