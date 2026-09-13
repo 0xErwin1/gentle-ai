@@ -188,14 +188,17 @@ func RuntimeEffortAllowed(value string) bool {
 }
 
 // runtimeModelIDPattern recognizes a public model family prefix (Claude, GPT,
-// Gemini, DeepSeek, GLM, and so on) followed by up to eight dash/underscore/
-// dot/colon-separated segments. Any id that does not start with one of these
+// Gemini, DeepSeek, GLM, and so on), an optional attached alphanumeric run
+// (glm5.3, gpt4o), and up to eight segments that each start with a mandatory
+// dash/underscore/dot/colon. Every group begins with a separator the
+// alphanumeric class excludes, so the pattern is unambiguous and cannot
+// backtrack catastrophically in ECMAScript engines that mirror it. Any id that does not start with one of these
 // families is private by definition and never leaves the machine: only the
 // family name is public, not the specific fine-tune, deployment, or vendor
 // alias. Kept as a single Go string constant so contracts/telemetry stays
 // byte-identical to it (see TestRuntimeModelPatternsMatchSchema); RE2 and
 // ECMAScript compatible, no lookarounds.
-const runtimeModelIDPattern = `^(claude|gpt|o[1-9]|codex|gemini|gemma|deepseek|glm|qwen|qwq|kimi|moonshot|llama|codellama|mistral|mixtral|codestral|devstral|magistral|ministral|minimax|grok|phi|nemotron|jamba|hunyuan|doubao|ernie|mimo|granite|olmo|smollm|starcoder|titan)([-_.:]?[a-z0-9]+){0,8}$`
+const runtimeModelIDPattern = `^(claude|gpt|o[1-9]|codex|gemini|gemma|deepseek|glm|qwen|qwq|kimi|moonshot|llama|codellama|mistral|mixtral|codestral|devstral|magistral|ministral|minimax|grok|phi|nemotron|jamba|hunyuan|doubao|ernie|mimo|granite|olmo|smollm|starcoder|titan)[a-z0-9]*([-_.:][a-z0-9]+){0,8}$`
 
 // runtimeModelProviderPattern accepts any short lowercase alphanumeric-dash
 // provider label. The provider itself carries no privacy risk (it is a routing

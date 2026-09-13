@@ -39,7 +39,7 @@
         "id": {"type": "string", "maxLength": 64}
       },
       "anyOf": [
-        {"properties": {"provider": {"pattern": "^[a-z0-9][a-z0-9-]{0,31}$"}, "id": {"pattern": "^(claude|gpt|o[1-9]|codex|gemini|gemma|deepseek|glm|qwen|qwq|kimi|moonshot|llama|codellama|mistral|mixtral|codestral|devstral|magistral|ministral|minimax|grok|phi|nemotron|jamba|hunyuan|doubao|ernie|mimo|granite|olmo|smollm|starcoder|titan)([-_.:]?[a-z0-9]+){0,8}$"}}},
+        {"properties": {"provider": {"pattern": "^[a-z0-9][a-z0-9-]{0,31}$"}, "id": {"pattern": "^(claude|gpt|o[1-9]|codex|gemini|gemma|deepseek|glm|qwen|qwq|kimi|moonshot|llama|codellama|mistral|mixtral|codestral|devstral|magistral|ministral|minimax|grok|phi|nemotron|jamba|hunyuan|doubao|ernie|mimo|granite|olmo|smollm|starcoder|titan)[a-z0-9]*([-_.:][a-z0-9]+){0,8}$"}}},
         {"properties": {"provider": {"const": "unknown"}, "id": {"const": "unknown"}}},
         {"properties": {"provider": {"const": "custom"}, "id": {"const": "custom"}}},
         {"properties": {"provider": {"const": "opencode"}, "id": {"const": "custom"}}}
