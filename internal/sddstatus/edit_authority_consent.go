@@ -51,7 +51,7 @@ func readChangeInstanceMarker(changeRoot string) (string, error) {
 	if !info.Mode().IsRegular() {
 		return "", errors.New("change-instance marker must be a regular file") // refusal:by-design world-action: inspect and recover the change-local marker before continuation
 	}
-	payload, err := os.ReadFile(markerPath)
+	payload, err := readChangeInstanceMarkerFile(markerPath)
 	if errors.Is(err, os.ErrNotExist) {
 		return "", nil
 	}
@@ -145,9 +145,14 @@ func PrepareChangeInstanceConsent(status Status) error {
 	if err != nil || relative == "." || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
 		return fmt.Errorf("change root is outside the selected planning directory") // refusal:by-design human-authority: invoke continue only for the selected OpenSpec change directory
 	}
-	before, err := os.Stat(changeRoot)
+	openedChangeRoot, err := os.Open(changeRoot)
 	if err != nil {
 		return fmt.Errorf("inspect change directory before marker preparation: %w", err)
+	}
+	defer openedChangeRoot.Close()
+	before, err := openedChangeRoot.Stat()
+	if err != nil {
+		return fmt.Errorf("inspect opened change directory before marker preparation: %w", err)
 	}
 	if !before.IsDir() {
 		return fmt.Errorf("selected change root is not a directory") // refusal:by-design human-authority: select an active OpenSpec change directory before continuing
