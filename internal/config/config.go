@@ -39,42 +39,6 @@ type Diagnostic struct {
 	Message  string   `json:"message"`
 }
 
-type RoleID string
-type RoleRef RoleID
-
-// RoleMode is how a client addresses a role: primary is one the operator talks
-// to, subagent is one another role delegates to.
-type RoleMode string
-
-const (
-	RolePrimary  RoleMode = "primary"
-	RoleSubagent RoleMode = "subagent"
-)
-
-type Role struct {
-	ID           RoleID    `json:"id"`
-	RenderedName string    `json:"renderedName,omitempty"`
-	References   []RoleRef `json:"references,omitempty"`
-
-	// Every adapter that expresses roles needs this content, whether it keeps
-	// them as files or as entries in one settings file. Rendering a role
-	// without them would mean inventing a description, a model and a prompt the
-	// document never declared. Model is a pointer so an undeclared one stays
-	// absent from the encoded document.
-	Description string           `json:"description,omitempty"`
-	Prompt      string           `json:"prompt,omitempty"`
-	Tools       []string         `json:"tools,omitempty"`
-	Model       *ModelAssignment `json:"model,omitempty"`
-
-	// Mode and Hidden describe how a client presents the role: whether it is
-	// something the operator addresses directly or something another role
-	// delegates to, and whether it appears in the client's agent list. Adapters
-	// that generate these today decide them from the role's purpose, so a
-	// document that cannot say them can only be rendered by guessing.
-	Mode   RoleMode `json:"mode,omitempty"`
-	Hidden *bool    `json:"hidden,omitempty"`
-}
-
 type Selection struct {
 	Agents     []model.AgentID     `json:"agents,omitempty"`
 	Components []model.ComponentID `json:"components,omitempty"`
@@ -85,10 +49,9 @@ type Selection struct {
 	StrictTDD  bool                `json:"strictTDD,omitempty"`
 
 	// Providers hold every choice that is specific to one client: its own
-	// model vocabulary, the background sub-agent policy it reads, the named
-	// profiles it supports, and the skill/MCP overrides that replace the flat
-	// lists for it. Grouping them here instead of one flat field per provider
-	// per concept keeps a provider's block self-contained.
+	// model vocabulary, the background sub-agent policy it reads, and the
+	// named profiles it supports. Grouping them here instead of one flat field
+	// per provider per concept keeps a provider's block self-contained.
 	Providers map[model.AgentID]ProviderSelection `json:"providers,omitempty"`
 
 	CodexCarrilModelAssignments map[string]string `json:"codexCarrilModelAssignments,omitempty"`
@@ -105,21 +68,6 @@ type Selection struct {
 	Scope   model.InstallScope   `json:"scope,omitempty"`
 	Channel model.InstallChannel `json:"channel,omitempty"`
 
-	// SkillExclusions remove skills from whatever the selection resolves to,
-	// including the full set an omitted Skills list means. Without them the only
-	// way to drop one skill is to restate every other, which makes the document
-	// carry a copy of gentle-ai's catalogue and go stale the moment it grows.
-	SkillExclusions []model.SkillID `json:"skillExclusions,omitempty"`
-
-	// Permissions add to the guardrails gentle-ai ships rather than replacing
-	// them, so declaring an allowance never quietly removes a shipped deny.
-	Permissions *Permissions `json:"permissions,omitempty"`
-
-	// MCPServers are keyed by server name. A local server runs a command; a
-	// remote one is reached at a URL. Declaring both is rejected rather than
-	// silently preferring one.
-	MCPServers map[string]MCPServer `json:"mcpServers,omitempty"`
-
 	// RDDMode governs the global review kill switch only. The clone-local
 	// override stays out of the contract on purpose: it exists so that no
 	// repository can ship or force a review policy onto a clone.
@@ -129,13 +77,11 @@ type Selection struct {
 type Document struct {
 	Version   string    `json:"version"`
 	Selection Selection `json:"selection"`
-	Roles     []Role    `json:"roles,omitempty"`
 }
 
 type DesiredState struct {
 	Version   string    `json:"version"`
 	Selection Selection `json:"selection"`
-	Roles     []Role    `json:"roles,omitempty"`
 }
 
 // supersededSelectionFields maps a pre-2.4.0 flat selection key to the
@@ -155,8 +101,6 @@ var supersededSelectionFields = map[string]string{
 	"modelPresets":           "selection.providers.<id>.modelPreset",
 	"profiles":               "selection.providers.<id>.profiles",
 	"sddProfileStrategy":     "selection.providers.opencode.profileStrategy",
-	"skillAssignments":       "selection.providers.<id>.skills",
-	"mcpServerAssignments":   "selection.providers.<id>.mcpServers",
 }
 
 // supersededFieldDiagnostics detects a pre-2.4.0 flat document before strict
@@ -244,7 +188,6 @@ func Normalize(document Document) (DesiredState, []Diagnostic) {
 	}
 
 	selection := normalizeSelection(document.Selection, &diagnostics)
-	roles := normalizeRoles(document.Roles, &diagnostics)
 	if version == "" {
 		return DesiredState{}, diagnostics
 	}
@@ -252,21 +195,19 @@ func Normalize(document Document) (DesiredState, []Diagnostic) {
 	return DesiredState{
 		Version:   version,
 		Selection: selection,
-		Roles:     roles,
 	}, diagnostics
 }
 
 // Project provides the existing planner and installer semantic selection.
 func Project(state DesiredState) model.Selection {
 	selection := model.Selection{
-		Agents:          append([]model.AgentID(nil), state.Selection.Agents...),
-		Components:      append([]model.ComponentID(nil), state.Selection.Components...),
-		Skills:          append([]model.SkillID(nil), state.Selection.Skills...),
-		SkillExclusions: append([]model.SkillID(nil), state.Selection.SkillExclusions...),
-		Persona:         state.Selection.Persona,
-		Preset:          state.Selection.Preset,
-		SDDMode:         state.Selection.SDDMode,
-		StrictTDD:       state.Selection.StrictTDD,
+		Agents:     append([]model.AgentID(nil), state.Selection.Agents...),
+		Components: append([]model.ComponentID(nil), state.Selection.Components...),
+		Skills:     append([]model.SkillID(nil), state.Selection.Skills...),
+		Persona:    state.Selection.Persona,
+		Preset:     state.Selection.Preset,
+		SDDMode:    state.Selection.SDDMode,
+		StrictTDD:  state.Selection.StrictTDD,
 
 		CodexCarrilModelAssignments: copyMap(state.Selection.CodexCarrilModelAssignments),
 		CodexPhaseModelAssignments:  copyMap(state.Selection.CodexPhaseModelAssignments),
@@ -277,8 +218,6 @@ func Project(state DesiredState) model.Selection {
 		Scope:                       state.Selection.Scope,
 		Channel:                     state.Selection.Channel,
 		RDDMode:                     state.Selection.RDDMode,
-		MCPServers:                  mcpServersToModel(state.Selection.MCPServers),
-		Permissions:                 permissionsToModel(state.Selection.Permissions),
 	}
 
 	projectProviders(state.Selection.Providers, &selection)
@@ -336,8 +275,7 @@ func codexPresetEfforts(preset string) map[string]model.CodexEffort {
 func FromSelection(selection model.Selection) DesiredState {
 	return DesiredState{Version: CurrentVersion, Selection: Selection{
 		Agents: selection.Agents, Components: selection.Components, Skills: selection.Skills,
-		SkillExclusions: selection.SkillExclusions,
-		Persona:         selection.Persona, Preset: selection.Preset, SDDMode: selection.SDDMode,
+		Persona: selection.Persona, Preset: selection.Preset, SDDMode: selection.SDDMode,
 		StrictTDD: selection.StrictTDD,
 
 		Providers: providersFromModel(selection),
@@ -351,8 +289,6 @@ func FromSelection(selection model.Selection) DesiredState {
 		Scope:                       selection.Scope,
 		Channel:                     selection.Channel,
 		RDDMode:                     selection.RDDMode,
-		MCPServers:                  mcpServersFromModel(selection.MCPServers),
-		Permissions:                 permissionsFromModel(selection.Permissions),
 	}}
 }
 
@@ -392,9 +328,6 @@ func NormalizeSelection(selection model.Selection) (model.Selection, []Diagnosti
 	selection.Scope = projected.Scope
 	selection.Channel = projected.Channel
 	selection.RDDMode = projected.RDDMode
-	selection.MCPServers = projected.MCPServers
-	selection.Permissions = projected.Permissions
-	selection.SkillAssignments = projected.SkillAssignments
 	if !preserveUnsetPersona {
 		selection.Persona = projected.Persona
 	}
@@ -423,7 +356,6 @@ func normalizeSelection(selection Selection, diagnostics *[]Diagnostic) Selectio
 		*diagnostics = append(*diagnostics, diagnostic("config.channel.unsupported", "$.selection.channel", fmt.Sprintf("unsupported channel %q; use stable or beta", selection.Channel)))
 	}
 
-	validateMCPServers(selection, diagnostics)
 	validateProviders(selection, diagnostics)
 	validateCodexModelSurfaces(selection, diagnostics)
 	validateStructuredAssignments(selection, diagnostics)
@@ -431,7 +363,6 @@ func normalizeSelection(selection Selection, diagnostics *[]Diagnostic) Selectio
 	selection.Agents = unique(selection.Agents)
 	selection.Components = unique(selection.Components)
 	selection.Skills = unique(selection.Skills)
-	selection.SkillExclusions = unique(selection.SkillExclusions)
 	selection.CommunityTools = unique(selection.CommunityTools)
 	selection.OpenCodePlugins = unique(selection.OpenCodePlugins)
 
@@ -453,14 +384,9 @@ func normalizeSelection(selection Selection, diagnostics *[]Diagnostic) Selectio
 	for _, skill := range catalog.MVPSkills() {
 		known[skill.ID] = struct{}{}
 	}
-	for path, declared := range map[string][]model.SkillID{
-		"$.selection.skills":          selection.Skills,
-		"$.selection.skillExclusions": selection.SkillExclusions,
-	} {
-		for _, skill := range declared {
-			if _, ok := known[skill]; !ok {
-				*diagnostics = append(*diagnostics, diagnostic("config.skill.unsupported", path, fmt.Sprintf("unsupported skill %q", skill)))
-			}
+	for _, skill := range selection.Skills {
+		if _, ok := known[skill]; !ok {
+			*diagnostics = append(*diagnostics, diagnostic("config.skill.unsupported", "$.selection.skills", fmt.Sprintf("unsupported skill %q", skill)))
 		}
 	}
 
@@ -499,37 +425,6 @@ var modelPresetNames = map[model.AgentID][]string{
 		string(model.CodexPresetLowCost), string(model.CodexPresetRecommended),
 		string(model.CodexPresetPowerful),
 	},
-}
-
-func normalizeRoles(roles []Role, diagnostics *[]Diagnostic) []Role {
-	known := make(map[RoleID]struct{}, len(roles))
-	for _, role := range roles {
-		if role.ID == "" {
-			*diagnostics = append(*diagnostics, diagnostic("config.role.invalid", "$.roles", "role id is required"))
-			continue
-		}
-		if _, exists := known[role.ID]; exists {
-			*diagnostics = append(*diagnostics, diagnostic("config.role.duplicate", "$.roles", fmt.Sprintf("duplicate role %q", role.ID)))
-			continue
-		}
-		known[role.ID] = struct{}{}
-	}
-	for _, role := range roles {
-		if role.Model != nil && (role.Model.Provider == "" || role.Model.Model == "") {
-			*diagnostics = append(*diagnostics, diagnostic("config.role.model.incomplete", "$.roles."+string(role.ID)+".model", "a role model requires both provider and model"))
-		}
-		if role.Mode != "" && role.Mode != RolePrimary && role.Mode != RoleSubagent {
-			*diagnostics = append(*diagnostics, diagnostic("config.role.mode.unsupported", "$.roles."+string(role.ID)+".mode", fmt.Sprintf("unsupported role mode %q; use %s or %s", role.Mode, RolePrimary, RoleSubagent)))
-		}
-	}
-	for _, role := range roles {
-		for _, reference := range role.References {
-			if _, ok := known[RoleID(reference)]; !ok {
-				*diagnostics = append(*diagnostics, diagnostic("config.role.reference.unresolved", "$.roles", fmt.Sprintf("unresolved role %q", reference)))
-			}
-		}
-	}
-	return append([]Role(nil), roles...)
 }
 
 func diagnostic(code, path, message string) Diagnostic {
