@@ -332,7 +332,7 @@ func TestConsentFollowUpPrintedPathFlagsRoundTripWindowsNativePaths(t *testing.T
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			command := reviewConsentFollowUpBase(
-				test.cwd, "sha256:target", reviewtransaction.ProjectionWorkspace,
+				test.cwd, "sha256:target", "", reviewtransaction.ProjectionWorkspace,
 				"windows-path-roundtrip", "", test.policy, "reliability", test.trace, false, false,
 				ReviewIntegrationContractV2, "", "", reviewIntendedUntrackedScope{},
 			)

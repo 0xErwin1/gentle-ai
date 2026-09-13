@@ -19,6 +19,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/claude"
 	codexagent "github.com/gentleman-programming/gentle-ai/v2/internal/agents/codex"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/kimi"
+	opencodeagent "github.com/gentleman-programming/gentle-ai/v2/internal/agents/opencode"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/assets"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/backup"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/components/agentguidance"
@@ -33,6 +34,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v2/internal/components/persona"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/components/sdd"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/components/skills"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/components/telemetryruntime"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/components/theme"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/installcmd"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
@@ -668,6 +670,7 @@ type installRuntime struct {
 }
 
 type runtimeState struct {
+	telemetryRollback        func() error
 	manifest                 backup.Manifest
 	rollbackSnapshotDir      string
 	piCodeGraph              *communitytool.PiCodeGraphResult
@@ -759,7 +762,14 @@ func (r *installRuntime) stagePlan() pipeline.StagePlan {
 	}
 
 	apply := make([]pipeline.Step, 0, len(r.resolved.Agents)+len(r.selection.CommunityTools)+len(r.resolved.OrderedComponents)+1)
-	apply = append(apply, rollbackRestoreStep{id: "apply:rollback-restore", state: r.state, homeDir: r.homeDir, workspaceDir: r.workspaceDir})
+	telemetryDir := openCodeTelemetryConfigDir(r.homeDir, r.workspaceDir, r.scope, r.resolved.Agents)
+	if telemetryDir != "" {
+		prepare = append([]pipeline.Step{openCodeTelemetryStep{id: "prepare:opencode-telemetry", configDir: telemetryDir, checkOnly: true}}, prepare...)
+	}
+	apply = append(apply, rollbackRestoreStep{id: "apply:rollback-restore", state: r.state, homeDir: r.homeDir, workspaceDir: r.workspaceDir, telemetryConfigDir: telemetryDir})
+	if telemetryDir != "" {
+		apply = append(apply, openCodeTelemetryStep{id: "opencode:telemetry-runtime", configDir: telemetryDir, state: r.state})
+	}
 	if r.backgroundActivation != nil {
 		apply = append(apply, openCodeBackgroundActivationStep{id: "opencode:background-activation", plan: r.backgroundActivation, state: r.state, ready: &r.runtimeReady})
 	}
@@ -880,10 +890,19 @@ func (s agentRoutingGuidanceStep) Run() error {
 		return fmt.Errorf("create adapter for %q: %w", s.agent, err)
 	}
 
-	// Pi (and any future agent without a managed system prompt) owns its own
-	// prompt delivery outside gentle-ai, so there is nothing to strip or
-	// inject here: skip the step entirely rather than writing routing
-	// guidance into a file gentle-ai does not own (issue #4063).
+	// Pi owns its prompt delivery, but old installs left only allowlisted
+	// Gentle AI sections in APPEND_SYSTEM.md. Retire those before skipping prompt
+	// injection so install and every sync path converge without recreating routing.
+	if adapter.Agent() == model.AgentPi {
+		result, err := sdd.RetirePiSystemPromptBlocks(s.homeDir, adapter)
+		if err != nil {
+			return fmt.Errorf("retire stale Pi system prompt blocks: %w", err)
+		}
+		if s.changedFiles != nil && result.Changed {
+			*s.changedFiles = append(*s.changedFiles, result.Files...)
+		}
+		return nil
+	}
 	if !adapter.SupportsSystemPrompt() {
 		return nil
 	}
@@ -1181,10 +1200,11 @@ func (s prepareBackupStep) Run() error {
 }
 
 type rollbackRestoreStep struct {
-	id           string
-	state        *runtimeState
-	homeDir      string
-	workspaceDir string
+	id                 string
+	state              *runtimeState
+	homeDir            string
+	workspaceDir       string
+	telemetryConfigDir string // Selected adapter authority, potentially outside HOME via XDG.
 }
 
 type openCodeBackgroundActivationStep struct {
@@ -1218,11 +1238,29 @@ func (s rollbackRestoreStep) Run() error {
 
 func (s rollbackRestoreStep) Rollback() error {
 	defer s.state.cleanupRollbackSnapshot()
-	if len(s.state.manifest.Entries) == 0 {
-		return nil
+	manifest := s.state.manifest
+	var telemetryErr error
+	roots := rollbackRoots(s.homeDir, s.workspaceDir)
+	if s.telemetryConfigDir != "" {
+		roots = append(roots, s.telemetryConfigDir)
+		// The retained journals, never the generic backup, own this pair's rollback.
+		// Exclude even when its apply step failed or never ran: restoring an absent
+		// snapshot entry would otherwise delete a concurrent user's new file.
+		protected := telemetryruntime.ManagedPaths(s.telemetryConfigDir)
+		manifest.Entries = nil
+		for _, entry := range s.state.manifest.Entries {
+			if filepath.Clean(entry.OriginalPath) != protected[0] && filepath.Clean(entry.OriginalPath) != protected[1] {
+				manifest.Entries = append(manifest.Entries, entry)
+			}
+		}
+		if s.state.telemetryRollback != nil {
+			telemetryErr = s.state.telemetryRollback()
+		}
 	}
-
-	return backup.RestoreService{Roots: rollbackRoots(s.homeDir, s.workspaceDir)}.Restore(s.state.manifest)
+	if len(manifest.Entries) == 0 {
+		return telemetryErr
+	}
+	return errors.Join(telemetryErr, (backup.RestoreService{Roots: roots}).Restore(manifest))
 }
 
 // rollbackRoots returns the directories this install/sync run could
@@ -1251,6 +1289,37 @@ type agentInstallStep struct {
 	homeDir  string
 	profile  system.PlatformProfile
 	progress pipeline.ProgressFunc
+}
+
+func openCodeTelemetryConfigDir(home, workspace string, scope InstallScope, agentIDs []model.AgentID) string {
+	if !containsAgent(agentIDs, model.AgentOpenCode) {
+		return ""
+	}
+	adapter := opencodeagent.NewAdapter()
+	return adapter.GlobalConfigDir(componentInjectionDirScoped(home, workspace, scope, adapter))
+}
+
+type openCodeTelemetryStep struct {
+	state        *runtimeState
+	id           string
+	configDir    string
+	changedFiles *[]string
+	checkOnly    bool
+}
+
+func (s openCodeTelemetryStep) ID() string { return s.id }
+func (s openCodeTelemetryStep) Run() error {
+	if s.checkOnly {
+		return telemetryruntime.CheckManaged(s.configDir)
+	}
+	changed, rollback, err := telemetryruntime.ReconcileWithRollback(s.configDir)
+	if s.state != nil {
+		s.state.telemetryRollback = rollback
+	}
+	if s.changedFiles != nil {
+		*s.changedFiles = append(*s.changedFiles, changed...)
+	}
+	return err
 }
 
 type openCodePluginInstallStep struct {
@@ -1664,9 +1733,6 @@ func (s componentApplyStep) Run() error {
 					if _, err := persona.InjectPiPersona(rootDir, s.selection.Persona); err != nil {
 						return fmt.Errorf("inject persona for %q: %w", adapter.Agent(), err)
 					}
-				}
-				if _, err := sdd.RetirePiSystemPromptBlocks(s.homeDir, adapter); err != nil {
-					return fmt.Errorf("retire stale Pi system prompt blocks: %w", err)
 				}
 				continue
 			}
@@ -2084,6 +2150,11 @@ func backupTargets(homeDir, workspaceDir string, scope InstallScope, selection m
 	paths := map[string]struct{}{}
 	adapters := resolveAdapters(resolved.Agents)
 	managesSDDPlugins := false
+	if configDir := openCodeTelemetryConfigDir(homeDir, workspaceDir, scope, resolved.Agents); configDir != "" {
+		for _, path := range telemetryruntime.ManagedPaths(configDir) {
+			paths[path] = struct{}{}
+		}
+	}
 
 	for _, component := range resolved.OrderedComponents {
 		managesSDDPlugins = managesSDDPlugins || component == model.ComponentSDD
@@ -2165,6 +2236,11 @@ func backupTargets(homeDir, workspaceDir string, scope InstallScope, selection m
 		}
 	}
 	if containsAgent(resolved.Agents, model.AgentPi) {
+		for _, adapter := range adapters {
+			if adapter.Agent() == model.AgentPi {
+				paths[adapter.SystemPromptFile(homeDir)] = struct{}{}
+			}
+		}
 		for _, path := range communitytool.PiCodeGraphPaths(homeDir, workspaceDir) {
 			paths[path] = struct{}{}
 		}
@@ -2318,9 +2394,13 @@ func componentPathsWithWorkspaceScoped(homeDir, workspaceDir string, scope Insta
 			case model.StrategyTOMLFile:
 				if p := adapter.MCPConfigPath(targetDir, "engram"); p != "" {
 					paths = append(paths, p)
-					// Track the gentle-ai SDD profile files written alongside
-					// the Codex config.toml so they are removed on uninstall.
+					// Track the gentle-ai files written alongside the Codex config.toml
+					// so they are restored on rollback and removed on uninstall.
 					codexHomeDir := filepath.Dir(p)
+					paths = append(paths,
+						filepath.Join(codexHomeDir, "engram-instructions.md"),
+						filepath.Join(codexHomeDir, "engram-compact-prompt.md"),
+					)
 					paths = append(paths, codexagent.SddProfilePaths(codexHomeDir)...)
 				}
 			}

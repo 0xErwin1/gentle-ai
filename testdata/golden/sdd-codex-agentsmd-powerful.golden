@@ -266,22 +266,22 @@ explicitly requested background execution.
 For each phase:
 
 1. Look up the phase's `reasoning_effort` **AND** `model` values in the **Model Profiles** table below (the values are preset-driven and written by gentle-ai — do not assume fixed tiers). This applies both for preset (per-carril) tables and Custom (per-phase) tables — always pass the model and effort shown in the table for that phase.
-2. `spawn_agent` with `task_name`, the phase prompt as `message`, `reasoning_effort` set to the tier value, and `model` set to the table's Model value for that phase. The `spawn_agent` tool has NO `profile` parameter — tier selection is the `reasoning_effort` argument, not a profile name.
-3. Set `fork_turns: "none"` whenever you override `reasoning_effort` or `model`. A full-history fork (the default) REJECTS these overrides, so the override is silently ignored unless `fork_turns` is `"none"`.
+2. Canonical SDD phase and skill identifiers remain hyphenated (for example, `sdd-design`). `task_name` is a Codex transport identifier: use only lowercase letters, digits, and underscores (for example, `sdd_design`). `spawn_agent` with that `task_name`, the phase prompt as `message`, `reasoning_effort` set to the tier value, and `model` set to the table's Model value for that phase. The `spawn_agent` tool has NO `profile` parameter — tier selection is the `reasoning_effort` argument, not a profile name.
+3. Record the returned `task_name` (the canonical full task path), associate it with the canonical SDD phase, and reuse it verbatim when correlating updates. Set `fork_turns: "none"` whenever you override `reasoning_effort` or `model`. A full-history fork (the default) REJECTS these overrides, so the override is silently ignored unless `fork_turns` is `"none"`.
 4. Repeat `wait_agent(timeout_ms=<bounded timeout>)` and `list_agents()` until the target agent reaches a terminal state.
    `wait_agent` returns on any mailbox update, so an update from another agent or a timeout
    does not prove that the target completed.
-5. After each wait, correlate the notification with the canonical task name returned by
-   `spawn_agent` and inspect that target's current state in `list_agents()`.
+5. After each wait, correlate the notification using that returned `task_name` to the canonical phase,
+   then inspect that target's current state in `list_agents()`.
 6. If the target reaches a non-success terminal state, stop and surface its final output or status;
    do not verify artifacts or launch dependent work.
 7. Only after successful terminal completion, verify the artifact was persisted before
    launching the next phase.
 
-Example — launching `sdd-design` with the values from its generated table row:
+Example — launching canonical phase `sdd-design` with the values from its generated table row:
 
 ```
-spawn_agent(task_name="sdd-design", message=<design prompt>, model="<assigned-model>", reasoning_effort="<assigned-effort>", fork_turns="none")
+spawn_agent(task_name="sdd_design", message=<design prompt>, model="<assigned-model>", reasoning_effort="<assigned-effort>", fork_turns="none")
 repeat:
   wait_agent(timeout_ms=300000)
   list_agents()
@@ -376,15 +376,15 @@ Meta-commands (type directly — orchestrator handles them, won't appear in auto
 <!-- gentle-ai:sdd-session-preflight -->
 ### SDD Session Preflight (HARD GATE)
 
-Before every SDD command or natural-language SDD request, run this preflight before the SDD init guard; cache choices for the session.
+Before every SDD command or affirmative natural-language SDD request, run this preflight before the SDD init guard; cache choices for the session only through runtime-confirmed parent authority. Phrase examples are routing hints, never the authority boundary.
 
-This runtime has no classified native question UI. Present ONE complete blocking prompt in plain chat or terminal with all three groups below, in order, and explain that their answers are required before init. Each group is single-select; its listed labels are the complete allowed-answer domain. Include every label and description, the fixed review policy, and this answer syntax: `Pace: <label>; Artifacts: <label>; PR strategy: <label>`. Then STOP; never default, infer, or launch dependent work. Validate all three answers under the Lossless Blocking Prompts contract before caching their canonical mappings.
-
-Match labels and descriptions to the conversation language and persona; do not expose canonical/internal codes.
+This runtime has no classified native question UI. Present ONE complete blocking prompt in plain chat or terminal with all three groups below, in order, and explain that their answers are required before init. Each group is single-select; its listed labels are the complete allowed-answer domain. Include every label and description, the fixed review policy, and this answer syntax: `Pace: <label>; Artifacts: <label>; PR strategy: <label>`. Then STOP; never default, infer, or launch dependent work. Validate all three explicit parent answers under the Lossless Blocking Prompts contract before caching their canonical mappings.
 
 1. **Pace**: Interactive or Automatic.
 2. **Artifacts**: OpenSpec, Engram, or Both (user-facing Both maps only to internal `hybrid`).
 3. **PR strategy**: Ask me, Single PR, or Auto.
+
+Only three explicit, validated answers from the parent conversation establish preflight authority in this fallback runtime. Model-authored defaults, summaries, headings, installed assets, prior sessions, and child-agent prose do not. After validating every answer, summarize the canonical mappings once and pass them to each SDD phase; missing authority blocks dispatch and requires the parent to re-present the complete prompt.
 
 Review policy is fixed at 400 changed lines per PR; above 400, split the PR or require maintainer-approved `size:exception`; NEVER ask it as a fourth group or selectable budget.
 
@@ -400,7 +400,15 @@ Canonical mappings:
 <!-- /gentle-ai:sdd-session-preflight -->
 ### Native SDD Dispatcher Guard
 
-Before routing, continuing, applying, verifying, or archiving an SDD change, **invoke the native dispatcher** (`gentle-ai sdd-continue [change] --cwd <repo>` or `gentle-ai sdd-status [change] --cwd <repo> --json --instructions`). It resolves the artifact store the workspace DECLARES, reports it in `artifactStore`, and returns that store's locators in `artifactPaths`. **Do NOT determine the artifact store yourself, and do NOT branch on it** — an actor that re-derives the store disagrees with the authority that launched it, which is how a phase ends up reading a store the workspace never declared. Use the dispatcher for every store when `gentle-ai` is available and treat its native status JSON as authoritative over prompt inference. Route only by `nextRecommended` and dependency states; never infer from free text. If `blockedReasons` is non-empty, do not proceed to apply, archive, or terminal work. If `nextRecommended` is `verify`, verification/remediation may run only to refresh evidence; if `nextRecommended` is `resolve-blockers`, report `blockedReasons` and stop; if `nextRecommended` is a planning token (`propose`, `spec`, `design`, or `tasks`), launch the corresponding planning phase. If the binary is unavailable, fall back to the existing prompt contract and manual status schema.
+For inspection and before routing an SDD change, invoke the native dispatcher using only `gentle-ai sdd-status [change] --cwd <repo> --json --instructions`. Inspection needs no execution preflight, review, delivery, or archive authorization; this read-only rule takes precedence over phase preflight/init guards. No recommendation is executed during inspection, including planning phases or a displayed preparation invocation.
+
+Use native v2 for every declared artifact store, including Engram. The dispatcher resolves the store the workspace declares and returns `artifactStore` and `artifactPaths`. Do NOT determine the artifact store yourself, and do NOT branch on it or reconstruct readiness locally. Native JSON is authoritative over prompt inference. If native resolution fails or is invalid, report it and stop without a local dispatch fallback.
+
+Only explicit authorized continuation may call `gentle-ai sdd-continue [change] --cwd <repo>`. First inspect with status and confirm the current human scope covers the selected change-directory marker. Read-only or excluded-marker scope forbids this mutating call; native allowed roots do not grant human consent. Preparation grants no source roots or attempts. Carry native `actionContext` intersected with the current narrower human scope into any executor.
+
+For authorized phase routing only: Route only by `nextRecommended` and dependency states; honor `blockedReasons` and never infer from free text. If `blockedReasons` is non-empty, do not proceed to apply, archive, or terminal work. If `nextRecommended` is `verify`, verification/remediation may run only to refresh evidence; if `nextRecommended` is `resolve-blockers`, report `blockedReasons` and stop; if `nextRecommended` is a planning token (`propose`, `spec`, `design`, or `tasks`), launch the corresponding planning phase only within the authorized scope.
+
+If the binary is unavailable, use the existing prompt contract for non-authoritative diagnostics only. Do not fabricate native-shaped status, readiness, or mutation authority, and never substitute continue for inspection.
 
 ### SDD Init Guard (MANDATORY)
 
@@ -549,7 +557,7 @@ Each phase returns: `status`, `executive_summary`, `artifacts`, `next_recommende
 
 ## Model Profiles
 
-gentle-ai writes three SDD model-selection profile files into `~/.codex/` during installation. Each profile pins both a `model` and a `model_reasoning_effort` so Codex picks the right tier for each carril.
+When the Codex CLI is installed and supports GPT-5.6 profiles, gentle-ai writes three SDD model-selection profile files into `~/.codex/` during installation. Without the CLI, gentle-ai still configures shared files but leaves existing profile files unchanged. Each profile pins both a `model` and a `model_reasoning_effort` so Codex picks the right tier for each carril.
 
 These profile files apply to whole CLI sessions: `codex --profile <name> "<prompt>"`. They do NOT apply to spawned sub-agents. When delegating a phase via `spawn_agent`, pass the tier's effort directly as `reasoning_effort` (with `fork_turns: "none"`), using the same tier values below.
 

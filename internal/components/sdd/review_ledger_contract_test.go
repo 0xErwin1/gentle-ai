@@ -505,7 +505,12 @@ func TestKilocodeReviewSettingsMatchCurrentMainBaseline(t *testing.T) {
 	// Kilocode inherits that metadata, not additional native RDD support.
 	// #4324 appends canonical remote authorization to managed executor prompts;
 	// native permissions and the primary orchestrator remain unchanged.
-	const want = "d2f4aad13b3930df018219bd91ea56ef8ddac3bc3978cd0374b1857e2a1c5944"
+	// Task 1.5 separates read-only status from authorized continuation. Same-home
+	// materialization changes only the shared dispatcher guard in the orchestrator prompt.
+	// #4524 makes the shared session preflight explicit about runtime-confirmed parent
+	// authority. Kilocode inherits the prompt-only fallback because it has no managed
+	// executable tool interception surface.
+	const want = "2c7cc7c50ae6d1fc5bbd80974a1a15aee58240b3edd16f7715d9b7bc7f6e04af"
 	if got != want {
 		t.Fatalf("Kilocode settings SHA-256 = %s, want current-main baseline %s", got, want)
 	}

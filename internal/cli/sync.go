@@ -30,6 +30,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v2/internal/components/persona"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/components/sdd"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/components/skills"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/components/telemetryruntime"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/components/theme"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
 	opencodeactivation "github.com/gentleman-programming/gentle-ai/v2/internal/opencode"
@@ -562,8 +563,15 @@ func (r *syncRuntime) stagePlan() pipeline.StagePlan {
 		},
 	}
 
+	telemetryDir := openCodeTelemetryConfigDir(r.homeDir, r.workspaceDir, ScopeGlobal, r.agentIDs)
+	if telemetryDir != "" {
+		prepare = append([]pipeline.Step{openCodeTelemetryStep{id: "prepare:opencode-telemetry", configDir: telemetryDir, checkOnly: true}}, prepare...)
+	}
 	apply := []pipeline.Step{
-		rollbackRestoreStep{id: "apply:rollback-restore", state: r.state, homeDir: r.homeDir, workspaceDir: r.workspaceDir},
+		rollbackRestoreStep{id: "apply:rollback-restore", state: r.state, homeDir: r.homeDir, workspaceDir: r.workspaceDir, telemetryConfigDir: telemetryDir},
+	}
+	if telemetryDir != "" {
+		apply = append(apply, openCodeTelemetryStep{id: "sync:opencode:telemetry-runtime", configDir: telemetryDir, changedFiles: &r.changedFiles, state: r.state})
 	}
 	if r.backgroundActivation != nil {
 		apply = append(apply, openCodeBackgroundActivationStep{id: "sync:opencode:background-activation", plan: r.backgroundActivation, state: r.state, ready: &r.runtimeReady})
@@ -695,6 +703,16 @@ func syncBackupTargets(homeDir, workspaceDir string, selection model.Selection, 
 	// snapshot and could never be rolled back (issue #1794).
 	for _, path := range routingGuidancePaths(homeDir, workspaceDir, ScopeGlobal, adapters) {
 		paths[path] = struct{}{}
+	}
+	for _, adapter := range adapters {
+		if adapter.Agent() == model.AgentPi {
+			paths[adapter.SystemPromptFile(homeDir)] = struct{}{}
+		}
+	}
+	if configDir := openCodeTelemetryConfigDir(homeDir, workspaceDir, ScopeGlobal, selection.Agents); configDir != "" {
+		for _, path := range telemetryruntime.ManagedPaths(configDir) {
+			paths[path] = struct{}{}
+		}
 	}
 	// Managed OpenCode-compatible plugin paths are part of sync's
 	// backup/snapshot contract whenever a plugin-receiving agent (OpenCode,
@@ -1217,11 +1235,6 @@ func (s componentSyncStep) Run() error {
 					return fmt.Errorf("sync persona for %q: %w", adapter.Agent(), err)
 				}
 				s.countChanged(boolToInt(res.Changed), res.Files...)
-				retireRes, err := sdd.RetirePiSystemPromptBlocks(s.homeDir, adapter)
-				if err != nil {
-					return fmt.Errorf("retire stale Pi system prompt blocks: %w", err)
-				}
-				s.countChanged(boolToInt(retireRes.Changed), retireRes.Files...)
 				continue
 			}
 			targetDir := componentInjectionDir(s.homeDir, s.workspaceDir, adapter)

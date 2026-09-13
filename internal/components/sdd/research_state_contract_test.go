@@ -16,6 +16,132 @@ func sharedResearchContract(t *testing.T, name string) string {
 	return content
 }
 
+func TestResearchCollectorAuthorityIsOutputOnly(t *testing.T) {
+	t.Parallel()
+
+	claude, err := assets.Read("claude/agents/sdd-research.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, required := range []string{
+		"tools: WebFetch, WebSearch",
+		"Do not read or mutate repository or Engram state.",
+		"The orchestrator validates and persists this envelope through the selected store route.",
+	} {
+		if !strings.Contains(claude, required) {
+			t.Errorf("Claude research collector missing %q", required)
+		}
+	}
+	for _, forbidden := range []string{"Write", "Edit", "mem_save"} {
+		if strings.Contains(claude, forbidden) {
+			t.Errorf("Claude research collector grants or requires %q", forbidden)
+		}
+	}
+}
+
+func TestRuntimeResearchExecutorsAreOutputOnly(t *testing.T) {
+	t.Parallel()
+
+	const outputOnlyBoundary = "must not retain intent, mutate repository state, save Engram state, select an artifact store, or persist research/preproposal."
+	const orchestratorHandoff = "The orchestrator validates and persists the returned envelope through the preflight-selected store route."
+
+	for _, path := range []string{
+		"cursor/agents/sdd-research.md",
+		"kiro/agents/sdd-research.md",
+		"kimi/agents/sdd-research.md",
+		"claude/commands/gentle-sdd-research.md",
+	} {
+		path := path
+		t.Run(path, func(t *testing.T) {
+			t.Parallel()
+
+			content, err := assets.Read(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, required := range []string{"output-only evidence collector", outputOnlyBoundary, orchestratorHandoff} {
+				if !strings.Contains(content, required) {
+					t.Errorf("%s missing output-only boundary %q", path, required)
+				}
+			}
+			for _, stale := range []string{
+				"Persist intent before source access.",
+				"retain the selected request",
+				"persist a `blocked` outcome",
+				"shared research and persistence contracts",
+			} {
+				if strings.Contains(content, stale) {
+					t.Errorf("%s retains executor persistence instruction %q", path, stale)
+				}
+			}
+		})
+	}
+
+	for _, path := range []string{"cursor/agents/sdd-research.md", "kimi/agents/sdd-research.md"} {
+		content, err := assets.Read(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(content, "readonly: true") {
+			t.Errorf("%s is not structurally read-only", path)
+		}
+	}
+
+	kiro, err := assets.Read("kiro/agents/sdd-research.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, required := range []string{`tools: ["@context7"]`, "documentation=[@context7]"} {
+		if !strings.Contains(kiro, required) {
+			t.Errorf("Kiro research executor missing narrow documentation capability %q", required)
+		}
+	}
+	for _, forbidden := range []string{"@builtin", "@engram"} {
+		if strings.Contains(kiro, forbidden) {
+			t.Errorf("Kiro research executor grants non-evidence capability %q", forbidden)
+		}
+	}
+
+	claudeCommand, err := assets.Read("claude/commands/gentle-sdd-research.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(claudeCommand, "The command actor is the orchestrator.") {
+		t.Error("Claude research command does not identify the command actor as the orchestrator")
+	}
+	if got := strings.Count(claudeCommand, "validates and persists the returned envelope through the preflight-selected store route."); got != 1 {
+		t.Errorf("Claude research command has %d validation/persistence handoffs, want 1", got)
+	}
+	if strings.Contains(claudeCommand, "After the collector returns, validate its envelope and persist it") {
+		t.Error("Claude research command duplicates the validation/persistence handoff")
+	}
+}
+
+func TestResearchSkillLeavesPersistenceToTheOrchestrator(t *testing.T) {
+	t.Parallel()
+
+	skill, err := assets.Read("skills/sdd-research/SKILL.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, required := range []string{
+		"output-only evidence collector",
+		"Do not read local artifacts or call persistence tools.",
+		"The orchestrator validates and persists the returned envelope through the selected store route.",
+	} {
+		if !strings.Contains(skill, required) {
+			t.Errorf("research skill missing collector boundary %q", required)
+		}
+	}
+	for _, forbidden := range []string{
+		"sdd-phase-common.md", "Persist `gentle-ai.sdd-research/v1`", "In hybrid mode, write identical bytes",
+	} {
+		if strings.Contains(skill, forbidden) {
+			t.Errorf("research skill retains child persistence duty %q", forbidden)
+		}
+	}
+}
+
 func TestResearchEvidenceContractIsCompleteAndFailClosed(t *testing.T) {
 	t.Parallel()
 
@@ -41,6 +167,15 @@ func TestSelectedResearchReadinessMatrixFailsClosed(t *testing.T) {
 	t.Parallel()
 
 	content := sharedResearchContract(t, "persistence-contract.md")
+	for _, required := range []string{
+		"The orchestrator validates the returned collector envelope and persists it through the selected store route.",
+		"both writes MUST succeed for the operation to be complete",
+		"failed, missing, unequal, or divergent store",
+	} {
+		if !strings.Contains(content, required) {
+			t.Errorf("persistence-contract.md missing parent-side readiness clause %q", required)
+		}
+	}
 	tests := []struct {
 		name  string
 		state string
@@ -64,6 +199,48 @@ func TestSelectedResearchReadinessMatrixFailsClosed(t *testing.T) {
 				t.Errorf("persistence-contract.md missing readiness row %q", row)
 			}
 		})
+	}
+}
+
+// These assert shipped instructions only, not executed recovery, interviews,
+// once-only prompting, or persistence. Host runtime acceptance belongs to Pi.
+func TestConfirmedProposalHandoffDoesNotInterview(t *testing.T) {
+	t.Parallel()
+
+	lifecycle := sharedResearchContract(t, "research-lifecycle.md")
+	proposer, err := assets.Read("skills/sdd-propose/SKILL.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct{ content, clause string }{
+		{lifecycle, "selected research is `done` or research is unselected"},
+		{lifecycle, "product decisions are `confirmed`, evidence references are valid, and the selected artifact-store state is ready"},
+		{lifecycle, "The proposal handoff carries the state revision, confirmed decisions, and optional evidence references."},
+		{proposer, "Confirmed pre-proposal handoff with state revision, confirmed decisions, and optional exploration/research references"},
+		{proposer, "The proposer MUST NOT interview, infer consent, or repair pending decisions; return `blocked` instead."},
+	} {
+		if !strings.Contains(test.content, test.clause) {
+			t.Errorf("shipped handoff contract missing %q", test.clause)
+		}
+	}
+}
+
+func TestAutomaticUnresolvedChoicesEmitOneGroupedPrompt(t *testing.T) {
+	t.Parallel()
+
+	content := sharedResearchContract(t, "research-lifecycle.md")
+	for _, clause := range []string{
+		"The orchestrator owns product discovery.",
+		"Automatic unresolved choices require one lossless grouped prompt with all context, options, consequences, allowed answers, and exact tokens",
+		"it MUST persist the pending state before prompting, then STOP without invoking `sdd-propose`.",
+		"The proposer receives a confirmed pre-proposal handoff and MUST NOT interview or infer consent.",
+	} {
+		if !strings.Contains(content, clause) {
+			t.Errorf("shipped automatic-choice contract missing %q", clause)
+		}
+	}
+	if got := strings.Count(content, "<!-- research-lifecycle-gate:start -->"); got != 1 {
+		t.Errorf("managed gate count = %d, want exactly one", got)
 	}
 }
 

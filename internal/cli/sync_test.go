@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"runtime"
@@ -31,6 +32,50 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v2/internal/state"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/verify"
 )
+
+func TestSyncOpenCodeTelemetryReconcilesMissingWithoutSDD(t *testing.T) {
+	home := t.TempDir()
+	setOpenCodeTestHome(t, home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, "xdg"))
+	t.Setenv("DO_NOT_TRACK", "1")
+	selection := model.Selection{Agents: []model.AgentID{model.AgentOpenCode}}
+	path := filepath.Join(home, "xdg", "opencode", "plugins", "telemetry-runtime.ts")
+	runSyncInjectionSteps(t, home, selection)
+	data, err := os.ReadFile(path)
+	if err != nil || string(data) != assets.MustRead("opencode/plugins/telemetry-runtime.ts") {
+		t.Fatal("ordinary sync did not reconcile missing runtime", err)
+	}
+	changed := runSyncInjectionSteps(t, home, selection)
+	for _, p := range changed {
+		if p == path {
+			t.Fatal("unchanged runtime reported as changed")
+		}
+	}
+	rt, err := newSyncRuntime(home, selection)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rt.stagePlan()
+	if !containsString(rt.managedPaths, path) {
+		t.Fatal("runtime missing from sync snapshot")
+	}
+	// A user edit to an owned asset is a conflict, never an overwrite.
+	if err := os.WriteFile(path, []byte("user plugin"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	var conflict error
+	for _, step := range rt.stagePlan().Apply {
+		if step.ID() == "sync:opencode:telemetry-runtime" {
+			conflict = step.Run()
+		}
+	}
+	if conflict == nil {
+		t.Fatal("user-modified runtime not reported as conflict")
+	}
+	if data, _ := os.ReadFile(path); string(data) != "user plugin" {
+		t.Fatal("user plugin overwritten")
+	}
+}
 
 // ─── Phase 1: ParseSyncFlags ───────────────────────────────────────────────
 
@@ -664,18 +709,21 @@ func TestComponentSyncStepPreservesSlimEngramProtocol(t *testing.T) {
 
 func TestComponentSyncStepCodexRuntimeGate(t *testing.T) {
 	tests := []struct {
-		name    string
-		version string
-		wantErr bool
+		name             string
+		version          string
+		commandErr       error
+		wantErr          bool
+		preserveProfiles bool
 	}{
-		{name: "old runtime leaves profiles untouched", version: "codex-cli 0.143.9", wantErr: true},
+		{name: "missing CLI writes shared config and leaves profiles untouched", commandErr: exec.ErrNotFound, preserveProfiles: true},
+		{name: "old runtime leaves profiles untouched", version: "codex-cli 0.143.9", wantErr: true, preserveProfiles: true},
 		{name: "exact runtime writes profiles", version: "codex-cli 0.144.0"},
 		{name: "new runtime writes profiles", version: "codex-cli 0.145.1"},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			restore := codex.SetRuntimeVersionCommandForTest(tt.version, nil)
+			restore := codex.SetRuntimeVersionCommandForTest(tt.version, tt.commandErr)
 			t.Cleanup(restore)
 			home := t.TempDir()
 			codexDir := filepath.Join(home, ".codex")
@@ -699,11 +747,17 @@ func TestComponentSyncStepCodexRuntimeGate(t *testing.T) {
 				if readErr != nil {
 					t.Fatal(readErr)
 				}
-				if tt.wantErr && string(content) != "user-content\n" {
-					t.Errorf("old runtime modified %s: %q", name, content)
+				if tt.preserveProfiles && string(content) != "user-content\n" {
+					t.Errorf("runtime should preserve %s: %q", name, content)
 				}
-				if !tt.wantErr && !strings.Contains(string(content), "gpt-5.6-") {
+				if !tt.wantErr && !tt.preserveProfiles && !strings.Contains(string(content), "gpt-5.6-") {
 					t.Errorf("valid runtime did not write GPT-5.6 profile %s: %q", name, content)
+				}
+			}
+			if !tt.wantErr {
+				config, readErr := os.ReadFile(filepath.Join(codexDir, "config.toml"))
+				if readErr != nil || !strings.Contains(string(config), "[mcp_servers.engram]") {
+					t.Fatalf("shared Codex config was not written: got=%q error=%v", config, readErr)
 				}
 			}
 		})
@@ -801,6 +855,7 @@ func TestSyncPersonaPathsAndBackupTargetsTrackOnlyPiWorkspaceConfig(t *testing.T
 	adapters := resolveAdapters(selection.Agents)
 	want := filepath.Join(workspace, ".pi", "gentle-ai", "persona.json")
 	unwanted := filepath.Join(home, ".pi", "gentle-ai", "persona.json")
+	prompt := systemPromptFileFor(t, home, model.AgentPi)
 
 	paths := syncPersonaPathsWithWorkspace(home, workspace, selection, adapters)
 	if !containsPath(paths, want) || containsPath(paths, unwanted) {
@@ -810,13 +865,41 @@ func TestSyncPersonaPathsAndBackupTargetsTrackOnlyPiWorkspaceConfig(t *testing.T
 	if err != nil {
 		t.Fatalf("syncBackupTargets() error = %v", err)
 	}
-	if !containsPath(targets, want) || containsPath(targets, unwanted) {
-		t.Fatalf("sync backup targets = %v, want only workspace Pi config %q", targets, want)
+	if !containsPath(targets, want) || !containsPath(targets, prompt) || containsPath(targets, unwanted) {
+		t.Fatalf("sync backup targets = %v, want workspace Pi config %q and cleanup path %q", targets, want, prompt)
 	}
 
 	selection.Persona = model.PersonaCustom
 	if paths := syncPersonaPathsWithWorkspace(home, workspace, selection, adapters); len(paths) != 0 {
 		t.Fatalf("custom sync persona paths = %v, want none", paths)
+	}
+}
+
+func TestSyncRoutingCleanupReportsPiPromptForNormalAndExplicitSync(t *testing.T) {
+	for _, components := range [][]model.ComponentID{nil, {model.ComponentPersona}} {
+		home := t.TempDir()
+		path := systemPromptFileFor(t, home, model.AgentPi)
+		mustWriteFile(t, path, []byte("user\n<!-- gentle-ai:agent-routing -->\nstale\n<!-- /gentle-ai:agent-routing -->\n"))
+		changed := runSyncInjectionSteps(t, home, model.Selection{Agents: []model.AgentID{model.AgentPi}, Components: components, Persona: model.PersonaNeutral})
+		if !containsPath(changed, path) || strings.Contains(readTextFile(t, path), "gentle-ai:agent-routing") {
+			t.Fatalf("sync components %v changed=%v prompt=%q", components, changed, path)
+		}
+	}
+}
+
+func TestRunSyncExplicitPiRetiresStaleRoutingAndReportsIt(t *testing.T) {
+	home := t.TempDir()
+	previous := osUserHomeDir
+	osUserHomeDir = func() (string, error) { return home, nil }
+	t.Cleanup(func() { osUserHomeDir = previous })
+	path := systemPromptFileFor(t, home, model.AgentPi)
+	mustWriteFile(t, path, []byte("user\n<!-- gentle-ai:agent-routing -->\nstale\n<!-- /gentle-ai:agent-routing -->\n"))
+	result, err := RunSync([]string{"--agent", "pi"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !containsPath(result.ChangedFiles, path) || strings.Contains(readTextFile(t, path), "gentle-ai:agent-routing") {
+		t.Fatalf("explicit sync changed=%v prompt=%q", result.ChangedFiles, path)
 	}
 }
 
@@ -1464,10 +1547,13 @@ func TestRunSyncRefreshesPersistedVisualComponents(t *testing.T) {
 		backup.UserHomeDirFn = restoreBackupHome
 	})
 
+	// Runtime telemetry files are reconciled before persisted visual components.
 	// The last two entries are the routing guidance targets. Guidance is written
 	// for every configured agent regardless of which components are persisted, so
 	// a first sync of a purely visual selection still delivers it (issue #1794).
 	wantFiles := []string{
+		filepath.Join(home, ".config", "opencode", "plugins", "telemetry-runtime.ts"),
+		filepath.Join(home, ".config", "opencode", ".gentle-ai-telemetry-runtime.json"),
 		filepath.Join(home, ".claude", "themes", "gentleman.json"),
 		filepath.Join(home, ".claude", "themes", "gentleman-cute.json"),
 		filepath.Join(home, ".config", "opencode", "themes", "gentleman.json"),
@@ -1675,6 +1761,21 @@ func TestSyncBackupTargetsIncludeClaudeEngramLegacyMigrationSource(t *testing.T)
 	}
 }
 
+func TestSyncBackupTargetsIncludeCodexEngramInstructionFiles(t *testing.T) {
+	home := t.TempDir()
+	selection := model.Selection{Agents: []model.AgentID{model.AgentCodex}, Components: []model.ComponentID{model.ComponentEngram}}
+	targets, err := syncBackupTargets(home, "", selection, resolveAdapters(selection.Agents))
+	if err != nil {
+		t.Fatalf("syncBackupTargets() error = %v", err)
+	}
+	for _, name := range []string{"engram-instructions.md", "engram-compact-prompt.md"} {
+		want := filepath.Join(home, ".codex", name)
+		if !containsPath(targets, want) {
+			t.Fatalf("sync backup targets missing Codex Engram instruction %q: %v", want, targets)
+		}
+	}
+}
+
 func TestSyncBackupTargetsIncludeClaudeContext7CleanupPath(t *testing.T) {
 	home := t.TempDir()
 	selection := model.Selection{
@@ -1769,6 +1870,85 @@ func TestRunSyncRollbackRestoresClaudeEngramMigrationSource(t *testing.T) {
 	}
 	if len(backups) != 1 {
 		t.Fatalf("persistent backup count = %d, want 1 after duplicate transaction", len(backups))
+	}
+}
+
+func TestRunSyncRollbackRestoresCodexEngramInstructionFiles(t *testing.T) {
+	t.Cleanup(codex.SetRuntimeVersionCommandForTest("", exec.ErrNotFound))
+
+	for _, tc := range []struct {
+		name   string
+		exists bool
+	}{
+		{name: "restores existing instruction contents", exists: true},
+		{name: "removes newly created instruction files", exists: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			home := t.TempDir()
+			codexDir := filepath.Join(home, ".codex")
+			if err := os.MkdirAll(codexDir, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(codexDir, "config.toml"), []byte("custom = true\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+
+			setSyncTestHome(t, home)
+
+			instructionFiles := map[string][]byte{
+				"engram-instructions.md":   []byte("original instructions\n"),
+				"engram-compact-prompt.md": []byte("original compact prompt\n"),
+			}
+			if tc.exists {
+				for name, before := range instructionFiles {
+					if err := os.WriteFile(filepath.Join(codexDir, name), before, 0o644); err != nil {
+						t.Fatal(err)
+					}
+				}
+			}
+
+			selection := model.Selection{
+				Agents:     []model.AgentID{model.AgentCodex},
+				Components: []model.ComponentID{model.ComponentEngram},
+			}
+			rt, err := newSyncRuntime(home, selection)
+			if err != nil {
+				t.Fatal(err)
+			}
+			plan := rt.stagePlan()
+			backupStep, ok := plan.Prepare[0].(prepareBackupStep)
+			if !ok {
+				t.Fatalf("prepare step = %T, want prepareBackupStep", plan.Prepare[0])
+			}
+			backupTargets := backupStep.targets[:0]
+			for _, target := range backupStep.targets {
+				rel, err := filepath.Rel(home, target)
+				if err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+					backupTargets = append(backupTargets, target)
+				}
+			}
+			backupStep.targets = backupTargets
+			plan.Prepare[0] = backupStep
+			plan.Apply = append(plan.Apply[:2], failingSyncStep{})
+			result := pipeline.NewOrchestrator(pipeline.DefaultRollbackPolicy()).Execute(plan)
+			if result.Err == nil || !result.Rollback.Success {
+				t.Fatalf("sync rollback success=%t error=%v rollback error=%v", result.Rollback.Success, result.Err, result.Rollback.Err)
+			}
+
+			for name, before := range instructionFiles {
+				path := filepath.Join(codexDir, name)
+				if tc.exists {
+					got, err := os.ReadFile(path)
+					if err != nil || !bytes.Equal(got, before) {
+						t.Fatalf("rollback did not restore %q: got=%q error=%v", path, got, err)
+					}
+					continue
+				}
+				if _, err := os.Stat(path); !os.IsNotExist(err) {
+					t.Fatalf("rollback did not remove newly created %q: stat error=%v", path, err)
+				}
+			}
+		})
 	}
 }
 
@@ -5079,11 +5259,9 @@ func TestRunSyncWithSelectionPiRetiresStaleSystemPromptBlocks(t *testing.T) {
 		t.Fatalf("RunSyncWithSelection() error = %v", err)
 	}
 
-	// Routing guidance is scheduled per agent too, but the step is a no-op for
-	// Pi (issue #4063: gentle-pi owns the Pi system prompt), so nothing writes
-	// an agent-routing block back into the file. Only the leading and trailing
-	// user content must survive, byte-exact.
-	want := "user text before\n\nuser text after\n"
+	// Routing cleanup removes only paired markers; Pi still never receives a
+	// newly injected agent-routing block.
+	want := "user text before\n\n\n\n\n\nuser text after\n"
 	got := readTextFile(t, appendSystemPath)
 	if got != want {
 		t.Fatalf("APPEND_SYSTEM.md = %q, want %q", got, want)
@@ -5126,7 +5304,7 @@ func TestRunSyncWithSelectionPiRoutingGuidanceIsNotRewritten(t *testing.T) {
 	if strings.Contains(got, "gentle-ai:agent-routing") {
 		t.Fatalf("APPEND_SYSTEM.md still carries an agent-routing block: %q", got)
 	}
-	want := "user text before\n\nuser text after\n"
+	want := "user text before\n\n\n\nuser text after\n"
 	if got != want {
 		t.Fatalf("APPEND_SYSTEM.md = %q, want %q", got, want)
 	}
@@ -5155,8 +5333,8 @@ func TestRunSyncWithSelectionPiRetirementDoesNotTouchOtherAgents(t *testing.T) {
 		t.Fatalf("RunSyncWithSelection() error = %v", err)
 	}
 
-	if got := readTextFile(t, appendSystemPath); strings.Contains(got, "sdd-orchestrator") {
-		t.Fatalf("Pi APPEND_SYSTEM.md still carries a stale block: %q", got)
+	if _, err := os.Lstat(appendSystemPath); !os.IsNotExist(err) {
+		t.Fatalf("Pi APPEND_SYSTEM.md remains after owned-only cleanup: %v", err)
 	}
 	if got := readTextFile(t, claudePath); !strings.Contains(got, "KEEP-CLAUDE-SDD") {
 		t.Fatalf("Claude system prompt lost unrelated content: %q", got)

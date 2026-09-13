@@ -1693,6 +1693,18 @@ func snapshotIdentity(kind TargetKind, baseTree, candidateTree, pathsDigest, pro
 	return snapshotIdentityForProjection(kind, "", baseTree, candidateTree, pathsDigest, proof, intended, ledgerIDs)
 }
 
+// IdentityForComponents recomputes the content-addressed snapshot identity
+// from its published components alone (issue #4494): kind, projection,
+// base_tree, candidate_tree, and paths_digest. The untracked-replay proof,
+// the intended untracked list, and ledger IDs are deliberately absent: they
+// never enter the identity hash (maintainer decision D1 on #2471), so a
+// negotiated continuation that carries these five components can prove that
+// its token and its --target identity belong to the same negotiation without
+// any persisted negotiation state.
+func IdentityForComponents(kind TargetKind, projection Projection, baseTree, candidateTree, pathsDigest string) string {
+	return snapshotIdentityForProjection(kind, projection, baseTree, candidateTree, pathsDigest, "", nil, nil)
+}
+
 // snapshotIdentityForProjection mints the purified, content-addressed
 // identity domain (issue #2659, root 21 of #2471): a domain-separation tag
 // for kind/projection, then baseTree, candidateTree, pathsDigest, and
