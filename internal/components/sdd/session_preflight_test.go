@@ -266,6 +266,23 @@ func TestSDDSessionPreflightProjectionCanonicalAndBounded(t *testing.T) {
 			t.Fatalf("canonical block retains retired content %q", retired)
 		}
 	}
+	if !strings.Contains(block, "never collect these answers as typed chat text") {
+		t.Fatal("canonical block must always route the preflight through the question tool")
+	}
+	if strings.Contains(block, "lossless blocking fallback") {
+		t.Fatal("canonical block must not defer to the lossless blocking fallback while the question tool exists")
+	}
+	fallback := sddSessionPreflightBlockWithTool("")
+	if strings.Contains(fallback, "typed chat text") {
+		t.Fatal("fallback-runtime variant must not carry the question-tool-only wording")
+	}
+	if !strings.Contains(fallback, "no classified native question UI") {
+		t.Fatal("fallback-runtime variant must still state it has no classified native question UI")
+	}
+	askUserQuestion := sddSessionPreflightBlockWithTool("AskUserQuestion")
+	if !strings.Contains(askUserQuestion, "Always collect this preflight with the `AskUserQuestion` tool") {
+		t.Fatal("AskUserQuestion variant must always collect the preflight with the AskUserQuestion tool")
+	}
 	for _, newline := range []string{"\n", "\r\n"} {
 		rendered := strings.Join([]string{"before", testSDDSessionPreflightEntryAnchor, testSDDSessionPreflightInitAnchor, "after"}, newline)
 		got, err := projectSDDSessionPreflight(rendered, testSDDSessionPreflightEntryAnchor)

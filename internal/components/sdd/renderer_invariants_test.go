@@ -63,7 +63,7 @@ var currentOpenCodeOrchestratorSections = []orchestratorContractSection{
 		name:   "session preflight",
 		marker: "### SDD Session Preflight (HARD GATE)",
 		sentinels: []string{
-			"all three groups (Pace, Artifacts, and PR strategy)",
+			"never collect these answers as typed chat text",
 			"no sequential wizard and no three separate calls",
 			"cache choices for the session",
 		},
