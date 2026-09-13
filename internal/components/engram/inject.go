@@ -440,11 +440,9 @@ func injectWithOptions(configHomeDir, promptDir string, adapter agents.Adapter, 
 		if configPath == "" {
 			break
 		}
-		// A declarative render must not ask what the host has installed, so the
-		// probe is skipped there and runtimeErr stays nil, which is what lets the
-		// profile files below be written from the document alone. An ordinary
-		// install keeps upstream's check, tolerance for an unavailable runtime
-		// included.
+		// runtimeErr stays nil when the probe is skipped (declarative staging
+		// renders profile files deterministically regardless of what is
+		// installed on the machine doing the render — see SkipRuntimeProbe).
 		var runtimeErr error
 		if !opts.SkipRuntimeProbe {
 			runtimeErr = codex.ValidateGPT56Runtime()
