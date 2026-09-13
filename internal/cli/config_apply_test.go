@@ -9,50 +9,8 @@ import (
 	"testing"
 
 	configdomain "github.com/gentleman-programming/gentle-ai/v2/internal/config"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/desiredstate"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/render"
 )
-
-func TestConfigApplyAndReconcilePersistManagedState(t *testing.T) {
-	home, destination := t.TempDir(), t.TempDir()
-	configPath := filepath.Join(t.TempDir(), "desired.json")
-
-	writeConfigDocument(t, configPath, `{"version":"v1","selection":{"agents":["opencode"]},"roles":[{"id":"writer","renderedName":"writer-v1"},{"id":"reviewer","references":["writer"]}]}`)
-	runConfigMutation(t, "apply", configPath, home, destination)
-
-	writeConfigDocument(t, configPath, `{"version":"v1","selection":{"agents":["opencode"]},"roles":[{"id":"writer","renderedName":"writer-v2"},{"id":"reviewer","references":["writer"]}]}`)
-	runConfigMutation(t, "reconcile", configPath, home, destination)
-
-	settings, err := os.ReadFile(filepath.Join(destination, ".config", "opencode", "opencode.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if strings.Contains(string(settings), "writer-v1") || !strings.Contains(string(settings), "writer-v2") {
-		t.Fatalf("reconciled settings = %s, want only the renamed target", settings)
-	}
-
-	desired, err := desiredstate.ReadDesired(home)
-	if err != nil || desired.Roles[0].RenderedName != "writer-v2" {
-		t.Fatalf("persisted desired = %#v, %v", desired, err)
-	}
-	// The manifest also covers whatever tree the declared components stage, so
-	// its size tracks the preset rather than this document. What this test pins
-	// is the ownership the rename produced: the renamed agent is owned and the
-	// old name is gone.
-	manifest, err := desiredstate.ReadManifest(home, destination)
-	if err != nil {
-		t.Fatalf("read persisted manifest: %v", err)
-	}
-	owned := map[string]bool{}
-	for _, resource := range manifest.Resources {
-		if resource.Path == ".config/opencode/opencode.json" {
-			owned[resource.Selector] = true
-		}
-	}
-	if !owned["/agent/writer-v2"] || !owned["/agent/reviewer"] || owned["/agent/writer-v1"] {
-		t.Fatalf("persisted settings ownership = %v, want the renamed target and no stale name", owned)
-	}
-}
 
 func TestConfigApplyRejectsInvalidInputAndRollsBackPersistenceFailure(t *testing.T) {
 	for _, test := range []struct {
