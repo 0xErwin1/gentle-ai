@@ -15,7 +15,7 @@ func TestApplyRejectsUnsafeAdmission(t *testing.T) {
 		request ApplyRequest
 	}{
 		{"diagnostics", ApplyRequest{Diagnostics: []config.Diagnostic{{Code: "config.invalid"}}}},
-		{"unresolved references", ApplyRequest{Diagnostics: []config.Diagnostic{{Code: "config.role.reference.unresolved"}}}},
+		{"unresolved references", ApplyRequest{Diagnostics: []config.Diagnostic{{Code: "config.model-preset.unsupported"}}}},
 		{"conflict", ApplyRequest{Plan: ReconcilePlan{Operations: []Operation{{Kind: Conflict, Code: "render.ownership.conflict"}}}}},
 		{"stale", ApplyRequest{Plan: ReconcilePlan{Operations: []Operation{{Kind: Conflict, Code: "render.precondition.stale"}}}}},
 	} {
