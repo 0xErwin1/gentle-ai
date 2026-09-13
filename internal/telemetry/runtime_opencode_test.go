@@ -14,12 +14,18 @@ func TestOpenCodeRuntimeSanitizedIdentity(t *testing.T) {
 		provider, model, wantProvider, wantModel, wantEvidence string
 	}{
 		{"opencode", "PRIVATE_MODEL", "opencode", "custom", "response"},
-		{"opencode", "gpt-5.4", "opencode", "custom", "response"},
+		// Under the generic family-pattern normalizer, a publicly recognized id
+		// survives regardless of the literal upstream provider name: this is no
+		// longer folded into "opencode/custom" the way the closed registry did.
+		{"opencode", "gpt-5.4", "opencode", "gpt-5.4", "response"},
 		{"opencode", "custom", "opencode", "custom", "response"},
 		{"OpenCode", "PRIVATE_MODEL", "custom", "custom", "response"},
 		{"PRIVATE_PROVIDER", "PRIVATE_MODEL", "custom", "custom", "response"},
 		{"openai", "PRIVATE_MODEL", "custom", "custom", "response"},
 		{"openai", "gpt-5.4", "openai", "gpt-5.4", "response"},
+		// Previously folded to "custom/custom" by the closed enum; the zai/glm
+		// family now survives through the generic pattern normalizer.
+		{"zai", "glm-5.3", "zai", "glm-5.3", "response"},
 		{"opencode", "", "unknown", "unknown", "unknown"},
 		{"", "PRIVATE_MODEL", "unknown", "unknown", "unknown"},
 	} {

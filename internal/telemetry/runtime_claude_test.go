@@ -148,14 +148,18 @@ func TestClaudeModelAliasesAndUnknownSelectors(t *testing.T) {
 	}
 }
 
-func TestClaudeDatedTranscriptModelUsesRegistryLongestPrefix(t *testing.T) {
+// TestClaudeDatedTranscriptModelPassesThroughGenericPattern replaces the former
+// closed-registry "longest prefix" folding: a dated or revisioned Claude model
+// id now survives unfolded as long as it still matches the generic claude
+// family pattern, instead of being collapsed onto a registered base id.
+func TestClaudeDatedTranscriptModelPassesThroughGenericPattern(t *testing.T) {
 	hook, _ := ParseClaudeHook(strings.NewReader(claudeSubagentHook))
 	for _, tt := range []struct {
 		model string
 		want  string
 	}{
-		{model: "claude-sonnet-5-20260501", want: "claude-sonnet-5"},
-		{model: "claude-opus-5-1", want: "claude-opus-5"},
+		{model: "claude-sonnet-5-20260501", want: "claude-sonnet-5-20260501"},
+		{model: "claude-opus-5-1", want: "claude-opus-5-1"},
 		{model: "claude-haiku-4-5-20251001", want: "claude-haiku-4-5-20251001"},
 	} {
 		t.Run(tt.model, func(t *testing.T) {
