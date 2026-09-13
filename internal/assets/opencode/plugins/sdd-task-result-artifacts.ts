@@ -2,14 +2,17 @@ import type { Plugin } from "@opencode-ai/plugin"
 
 const TASK_RESULT = /^<task id="[^"\r\n]+" state="completed">\n(?:<summary>[^<>\r\n]+<\/summary>\n)?<task_result>\n([\s\S]*?)\n<\/task_result>\n<\/task>$/
 const TASK_TAG = /<\/?(?:task|task_result|summary)(?:\s|>)/
-const SDD_PHASES = ["sdd-init", "sdd-explore", "sdd-propose", "sdd-spec", "sdd-design", "sdd-tasks", "sdd-apply", "sdd-verify", "sdd-archive", "sdd-onboard"]
+const SDD_PHASES = ["sdd-init", "sdd-explore", "sdd-research", "sdd-propose", "sdd-spec", "sdd-design", "sdd-tasks", "sdd-apply", "sdd-verify", "sdd-archive", "sdd-onboard"]
 const SDD_TASK_FAILURE_PREFIX = "GENTLE_AI_SDD_FAILURE "
 const SDD_TASK_ROUTE_TOKEN = /^[A-Za-z0-9][A-Za-z0-9._:@-]{0,127}$/
+const SDD_PREFLIGHT_QUESTION_PREFIX = "Gentle AI SDD preflight "
+const SDD_PREFLIGHT_HEADING = "## SDD Session Preflight"
 // #2855: host cwd does not identify the coordinator's selected change/store.
 const SDD_TASK_CONTINUATION_GUIDANCE = "Return to the active SDD coordinator and inspect only its retained structured status for the selected change and artifact store. If that status is unavailable, report this terminal failure and ask the user to select the change and artifact store. Do not infer either, run unscoped status discovery, retry, or launch another phase."
 
 type SDDTaskFailure = { phase: string, code: string, handoff: string }
 type SDDTaskFailureError = Error & { sddFailure: SDDTaskFailure }
+type SDDPreflightQuestion = { question: string, options: Array<{ label: string }>, multiple?: boolean }
 
 function isSDDPhase(agent: string): boolean {
   return SDD_PHASES.some((phase) => agent === phase || agent.startsWith(phase + "-"))
@@ -17,6 +20,51 @@ function isSDDPhase(agent: string): boolean {
 
 function isBackgroundTask(args: unknown): boolean {
   return !!args && typeof args === "object" && !Array.isArray(args) && (args as Record<string, unknown>).background === true
+}
+
+async function isRootSession(client: any, sessionID: string): Promise<boolean> {
+  try {
+    const result = await client.session.get({ path: { id: sessionID } })
+    const info = result?.data ?? result
+    return !!info && info.id === sessionID && (info.parentID === undefined || info.parentID === null)
+  } catch {
+    return false
+  }
+}
+
+function sddPreflightBlock(args: unknown, metadata: unknown): string | undefined {
+  if (!args || typeof args !== "object" || Array.isArray(args)) return undefined
+  const questions = (args as Record<string, unknown>).questions
+  if (!Array.isArray(questions)) return undefined
+  const recognized = questions.some((question) => !!question && typeof question === "object" && !Array.isArray(question) && typeof (question as Record<string, unknown>).question === "string" && ((question as Record<string, unknown>).question as string).startsWith(SDD_PREFLIGHT_QUESTION_PREFIX))
+  if (!recognized) return undefined
+  if (questions.length !== 3) throw new Error("parent-confirmed SDD preflight requires exactly three questions")
+  const expectedLabels = [["Interactive", "Automatic"], ["OpenSpec", "Engram", "Both"], ["Ask me", "Single PR", "Auto"]]
+  const parsed = questions.map((raw, index) => {
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw new Error(`SDD preflight question ${index + 1} is malformed`)
+    const question = raw as SDDPreflightQuestion
+    if (!question.question.startsWith(`${SDD_PREFLIGHT_QUESTION_PREFIX}${index + 1}/3:`) || question.multiple === true || !Array.isArray(question.options) || question.options.length !== expectedLabels[index].length) throw new Error(`SDD preflight question ${index + 1} is malformed`)
+    if (question.options.some((option, optionIndex) => option?.label !== expectedLabels[index][optionIndex])) throw new Error(`SDD preflight question ${index + 1} changed the canonical option semantics`)
+    return question
+  })
+  if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) throw new Error("SDD preflight response metadata is missing")
+  const answers = (metadata as Record<string, unknown>).answers
+  if (!Array.isArray(answers) || answers.length !== 3) throw new Error("SDD preflight response must contain three answers")
+  const indexes = parsed.map((question, index) => {
+    const answer = answers[index]
+    if (!Array.isArray(answer) || answer.length !== 1 || typeof answer[0] !== "string") throw new Error(`SDD preflight answer ${index + 1} is not single-select`)
+    const matches = question.options.flatMap((option, optionIndex) => option.label === answer[0] ? [optionIndex] : [])
+    if (matches.length !== 1) throw new Error(`SDD preflight answer ${index + 1} is outside the offered domain`)
+    return matches[0]
+  })
+  return [
+    SDD_PREFLIGHT_HEADING,
+    "Parent-confirmed by the runtime; models and child agents cannot create or modify this block.",
+    `- Pace: ${["interactive", "auto"][indexes[0]]}`,
+    `- Artifact store: ${["openspec", "engram", "hybrid"][indexes[1]]}`,
+    `- Delivery strategy: ${["ask-on-risk", "single-pr", "auto-chain"][indexes[2]]}`,
+    "- Review policy: 400 changed lines",
+  ].join("\n")
 }
 
 function taskResult(output: unknown): void {
@@ -82,21 +130,37 @@ function sddDispatchLatched(requested: string, failure: SDDTaskFailure): Error {
   }))
 }
 
-const SDDTaskResultArtifactsPlugin: Plugin = async () => {
+const SDDTaskResultArtifactsPlugin: Plugin = async ({ client }) => {
   const failedSDDSessions = new Map<string, SDDTaskFailure>()
+  const confirmedPreflights = new Map<string, string>()
   return {
-    dispose: async () => { failedSDDSessions.clear() },
+    dispose: async () => { failedSDDSessions.clear(); confirmedPreflights.clear() },
     event: async ({ event }) => {
-      if (event.type === "session.deleted") failedSDDSessions.delete(event.properties.info.id)
+      if (event.type === "session.deleted") {
+        failedSDDSessions.delete(event.properties.info.id)
+        confirmedPreflights.delete(event.properties.info.id)
+      }
     },
     "tool.execute.before": async (input, output) => {
       if (input.tool !== "task" || typeof output.args?.subagent_type !== "string") return
       const subagent = output.args.subagent_type
       if (!isSDDPhase(subagent)) return
+      if (!(await isRootSession(client, input.sessionID))) throw new Error("SDD child dispatch refused: only the interactive root session may carry parent-confirmed SDD preflight authority")
       const failure = failedSDDSessions.get(input.sessionID)
       if (failure) throw sddDispatchLatched(subagent, failure)
+      if (typeof output.args.prompt !== "string") throw new Error("SDD child dispatch refused: task prompt is unavailable")
+      if (output.args.prompt.includes(SDD_PREFLIGHT_HEADING)) throw new Error("SDD child dispatch refused: model-authored preflight text cannot create parent-confirmed authority")
+      const preflight = confirmedPreflights.get(input.sessionID)
+      if (!preflight) throw new Error("SDD child dispatch refused: parent-confirmed SDD preflight is missing; ask the canonical grouped preflight and stop before retrying")
+      output.args.prompt = `${preflight}\n\n${output.args.prompt}`
     },
     "tool.execute.after": async (input, output) => {
+      if (input.tool === "question") {
+        if (!(await isRootSession(client, input.sessionID))) return
+        const block = sddPreflightBlock(input.args, output.metadata)
+        if (block !== undefined) confirmedPreflights.set(input.sessionID, block)
+        return
+      }
       if (input.tool !== "task" || typeof input.args?.subagent_type !== "string") return
       const subagent = input.args.subagent_type
       if (!isSDDPhase(subagent)) return
