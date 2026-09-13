@@ -38,9 +38,47 @@ func TestDecode(t *testing.T) {
 			},
 		},
 		{
-			name:      "reports malformed and unknown input with stable diagnostics",
-			document:  `{"version":"v9","roles":[{"id":"writer","references":["missing"]}]}`,
-			wantCodes: []string{"config.version.unsupported", "config.role.reference.unresolved"},
+			name:      "reports an unsupported version",
+			document:  `{"version":"v9"}`,
+			wantCodes: []string{"config.version.unsupported"},
+		},
+		{
+			// Declaring roles was how a document named the client agents to
+			// render, but the consumer renders them now: the field is not
+			// carried by the contract and must be refused like any other
+			// unknown field rather than silently ignored.
+			name:      "rejects roles, which the contract no longer represents",
+			document:  `{"version":"v1","roles":[{"id":"writer"}]}`,
+			wantCodes: []string{"config.document.unknown-field"},
+		},
+		{
+			// Declaring MCP servers, permission rules and skill scoping were
+			// choices Gentle AI's own imperative path also had a hand in
+			// staging; the consumer now owns every one of them, so a document
+			// still carrying them is refused rather than silently accepted.
+			name:      "rejects mcpServers, which the contract no longer represents",
+			document:  `{"version":"v1","selection":{"agents":["opencode"],"mcpServers":{"atlas":{"command":"atlas"}}}}`,
+			wantCodes: []string{"config.document.unknown-field"},
+		},
+		{
+			name:      "rejects permissions, which the contract no longer represents",
+			document:  `{"version":"v1","selection":{"agents":["claude-code"],"permissions":{"deny":["Bash(rm -rf:*)"]}}}`,
+			wantCodes: []string{"config.document.unknown-field"},
+		},
+		{
+			name:      "rejects skillExclusions, which the contract no longer represents",
+			document:  `{"version":"v1","selection":{"agents":["opencode"],"skillExclusions":["go-testing"]}}`,
+			wantCodes: []string{"config.document.unknown-field"},
+		},
+		{
+			name:      "rejects providers.<id>.mcpServers, which the contract no longer represents",
+			document:  `{"version":"v1","selection":{"agents":["opencode"],"providers":{"opencode":{"mcpServers":{"atlas":{"command":"atlas"}}}}}}`,
+			wantCodes: []string{"config.document.unknown-field"},
+		},
+		{
+			name:      "rejects providers.<id>.skills, which the contract no longer represents",
+			document:  `{"version":"v1","selection":{"agents":["opencode"],"providers":{"opencode":{"skills":["go-testing"]}}}}`,
+			wantCodes: []string{"config.document.unknown-field"},
 		},
 		{
 			name:      "reports malformed json",
@@ -118,15 +156,10 @@ func TestAdmitInvokesActionForValidDocument(t *testing.T) {
 	}
 }
 
-func TestNormalizeRejectsInvalidRolesAndCanonicalizesSelections(t *testing.T) {
+func TestNormalizeCanonicalizesSelections(t *testing.T) {
 	state, diagnostics := Normalize(Document{
 		Version:   CurrentVersion,
 		Selection: Selection{Agents: []model.AgentID{model.AgentOpenCode, model.AgentOpenCode}},
-		Roles: []Role{
-			{ID: "writer", RenderedName: "writer"},
-			{ID: "writer", RenderedName: "writer-2"},
-			{ID: "reviewer", References: []RoleRef{"missing"}},
-		},
 	})
 
 	if state.Version != CurrentVersion {
@@ -135,8 +168,8 @@ func TestNormalizeRejectsInvalidRolesAndCanonicalizesSelections(t *testing.T) {
 	if got := Project(state).Agents; !reflect.DeepEqual(got, []model.AgentID{model.AgentOpenCode}) {
 		t.Fatalf("agents = %v, want one opencode", got)
 	}
-	if got := diagnosticCodes(diagnostics); !slices.Equal(got, []string{"config.role.duplicate", "config.role.reference.unresolved"}) {
-		t.Fatalf("diagnostics = %v", got)
+	if got := diagnosticCodes(diagnostics); len(got) != 0 {
+		t.Fatalf("diagnostics = %v, want none", got)
 	}
 }
 
