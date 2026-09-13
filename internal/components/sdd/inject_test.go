@@ -1096,7 +1096,7 @@ func TestInjectOpenCodeUsesOpenCodeSpecificOrchestratorPrompt(t *testing.T) {
 			for _, wanted := range []string{
 				"Gentle AI",
 				"Read the configured models from `opencode.json`",
-				"Use the `question` tool only when available and all three groups",
+				"Always collect this preflight with the `question` tool",
 				"present the proceed/adjust/stop options through the lossless blocking-prompt route",
 				"### Research and Pre-Proposal Gate (MANDATORY)",
 				"Present the two strategy options through one `question` tool call when the lossless native route is usable",
@@ -1373,7 +1373,7 @@ func TestInjectOpenCodeMigratesPreservedLegacyOrchestratorPromptReferences(t *te
 		"Bind this to the dedicated `gentle-orchestrator` agent only.",
 		"agent.gentle-orchestrator.model",
 		"### SDD Session Preflight (HARD GATE)",
-		"all three groups (Pace, Artifacts, and PR strategy)",
+		"never collect these answers as typed chat text",
 		"3. **PR strategy**: Ask me, Single PR, or Auto.",
 		"fixed at 400 changed lines",
 		"### Research and Pre-Proposal Gate (MANDATORY)",
@@ -1866,7 +1866,7 @@ Map answers to canonical values: A1/Interactive -> interactive.
 	for _, wanted := range []string{
 		"# Custom prompt",
 		"### SDD Session Preflight (HARD GATE)",
-		"all three groups (Pace, Artifacts, and PR strategy)",
+		"never collect these answers as typed chat text",
 		"3. **PR strategy**: Ask me, Single PR, or Auto.",
 		"fixed at 400 changed lines",
 		"### Research and Pre-Proposal Gate (MANDATORY)",
@@ -1961,7 +1961,7 @@ Hard gate rules:
 	for _, wanted := range []string{
 		"# Custom prompt",
 		"### SDD Session Preflight (HARD GATE)",
-		"all three groups (Pace, Artifacts, and PR strategy)",
+		"never collect these answers as typed chat text",
 		"3. **PR strategy**: Ask me, Single PR, or Auto.",
 		"fixed at 400 changed lines",
 		"### Research and Pre-Proposal Gate (MANDATORY)",
