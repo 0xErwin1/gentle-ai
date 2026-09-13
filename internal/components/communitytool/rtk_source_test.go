@@ -90,11 +90,13 @@ func TestRTKCandidateAssetIsNotPlatformAdmission(t *testing.T) {
 	}{
 		{"platform", string(rtkPlatformWindows)},
 		{"name", "rtk-x86_64-pc-windows-msvc.zip"},
+		{"immutable URL", "https://github.com/rtk-ai/rtk/releases/download/v0.49.0/rtk-x86_64-pc-windows-msvc.zip"},
+		{"executable member", "rtk.exe"},
 		{"SHA-256", "cb971046598f0e8bd51f6c27780fcdd2c39a4c459a811bd95b0d77ba8c0d7c9f"},
 		{"checksum-file SHA-256", "a5ff3570fe196a21e09a249c1777665d6ed887630d1c7c66de1154d4340d3ad0"},
 	}
 	asset := rtkCandidateAssets[0]
-	got := []string{string(asset.Platform), asset.Name, asset.SHA256, asset.ChecksumSHA256}
+	got := []string{string(asset.Platform), asset.Name, asset.URL, asset.ExecutableMember, asset.SHA256, asset.ChecksumSHA256}
 	for i, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			if got[i] != tt.want || strings.Contains(strings.ToLower(got[i]), "latest") {
