@@ -207,20 +207,14 @@ func NormalizeClaude(hook ClaudeHook, usage ClaudeUsage, agentDefinition []byte)
 }
 
 func claudeModel(id string) RuntimeModel {
-	if id == "" {
-		return RuntimeModel{Provider: "unknown", ID: "unknown"}
-	}
-	m := RuntimeModel{Provider: "anthropic", ID: id}
-	if strings.HasPrefix(id, "claude-") && runtimeModelOK(m) {
-		return m
-	}
-	return RuntimeModel{Provider: "custom", ID: "custom"}
+	return NormalizeRuntimeModel("anthropic", id)
 }
 
-// Claude Code frontmatter uses sonnet/opus/haiku aliases, while transcripts
-// may append release or revision suffixes to registry IDs. Selectors that defer
-// model choice carry no selected-model evidence. Registry matching uses the
-// longest current Anthropic ID so overlapping registered IDs stay exact.
+// Claude Code frontmatter uses sonnet/opus/haiku aliases; the finite alias
+// table below is the only Claude-specific folding left. Selectors that defer
+// model choice carry no selected-model evidence. Anything else, including a
+// dated or revisioned model id (e.g. "claude-sonnet-5-20260101"), passes
+// through unfolded to the generic family-pattern normalizer.
 func claudeCanonicalModelID(id string) string {
 	id = strings.TrimSpace(id)
 	switch id {
@@ -232,15 +226,6 @@ func claudeCanonicalModelID(id string) string {
 		return "claude-opus-5"
 	case "haiku":
 		return "claude-haiku-4-5"
-	}
-	longest := ""
-	for _, registered := range strings.Split(runtimeAnthropicModels, "|") {
-		if (id == registered || strings.HasPrefix(id, registered+"-")) && len(registered) > len(longest) {
-			longest = registered
-		}
-	}
-	if longest != "" {
-		return longest
 	}
 	return id
 }

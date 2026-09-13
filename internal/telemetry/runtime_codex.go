@@ -225,11 +225,7 @@ func codexModel(value string) RuntimeModel {
 	if value == "" {
 		return RuntimeModel{}
 	}
-	model := RuntimeModel{Provider: "openai-codex", ID: value}
-	if runtimeModelOK(model) {
-		return model
-	}
-	return RuntimeModel{Provider: "custom", ID: "custom"}
+	return NormalizeRuntimeModel("openai-codex", value)
 }
 
 type codexUsage struct {

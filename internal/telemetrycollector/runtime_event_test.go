@@ -63,7 +63,16 @@ func TestRuntimeEventContract(t *testing.T) {
 		{"valid", valid, true},
 		{"opencode sanitized", strings.Replace(valid, `{"provider":"openai","id":"gpt-5.4"}`, `{"provider":"opencode","id":"custom"}`, 1), true},
 		{"opencode raw model", strings.Replace(valid, `{"provider":"openai","id":"gpt-5.4"}`, `{"provider":"opencode","id":"PRIVATE_MODEL"}`, 1), false},
-		{"opencode other registry model", strings.Replace(valid, `{"provider":"openai","id":"gpt-5.4"}`, `{"provider":"opencode","id":"gpt-5.4"}`, 1), false},
+		// The family-pattern registry has no host-specific carve-out: any provider
+		// paired with a publicly recognized model family id is valid on the wire.
+		{"opencode public family model", strings.Replace(valid, `{"provider":"openai","id":"gpt-5.4"}`, `{"provider":"opencode","id":"gpt-5.4"}`, 1), true},
+		// A generic family-pattern provider/id pair outside the former closed
+		// registry (gentle-ai issue #4536): accepted when the id's family is public.
+		{"generic family provider accepted", strings.Replace(valid, `{"provider":"openai","id":"gpt-5.4"}`, `{"provider":"nan","id":"deepseek-v4-flash"}`, 1), true},
+		// A private-looking id embedding a path segment is still rejected: the
+		// wire contract never performs last-segment extraction, only the host
+		// adapter's NormalizeRuntimeModel does that before sending.
+		{"private id with path rejected", strings.Replace(valid, `{"provider":"openai","id":"gpt-5.4"}`, `{"provider":"nan","id":"Acme/Private"}`, 1), false},
 		{"private provider custom", strings.Replace(valid, `{"provider":"openai","id":"gpt-5.4"}`, `{"provider":"PRIVATE_PROVIDER","id":"custom"}`, 1), false},
 		{"opencode case", strings.Replace(valid, `{"provider":"openai","id":"gpt-5.4"}`, `{"provider":"OpenCode","id":"custom"}`, 1), false},
 		{"numeric equivalent", strings.ReplaceAll(valid, `"registry":1`, `"registry":1e0`), true},
