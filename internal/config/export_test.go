@@ -10,7 +10,6 @@ func TestExportPreservesRepresentableState(t *testing.T) {
 	state := DesiredState{
 		Version:   CurrentVersion,
 		Selection: Selection{Agents: []model.AgentID{model.AgentOpenCode}},
-		Roles:     []Role{{ID: "writer"}},
 	}
 
 	result := Export(state)
@@ -18,7 +17,7 @@ func TestExportPreservesRepresentableState(t *testing.T) {
 	if !result.Lossless {
 		t.Fatalf("Export() lossless = false, diagnostics = %v", result.Diagnostics)
 	}
-	if result.Document.Version != CurrentVersion || len(result.Document.Roles) != 1 {
+	if result.Document.Version != CurrentVersion || len(result.Document.Selection.Agents) != 1 {
 		t.Fatalf("document = %#v, want representable state", result.Document)
 	}
 }
