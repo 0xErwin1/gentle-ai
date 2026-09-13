@@ -432,8 +432,12 @@ func injectWithOptions(configHomeDir, promptDir string, adapter agents.Adapter, 
 		if configPath == "" {
 			break
 		}
+		// runtimeErr stays nil when the probe is skipped (declarative staging
+		// renders profile files deterministically regardless of what is
+		// installed on the machine doing the render — see SkipRuntimeProbe).
+		var runtimeErr error
 		if !opts.SkipRuntimeProbe {
-			runtimeErr := codex.ValidateGPT56Runtime()
+			runtimeErr = codex.ValidateGPT56Runtime()
 			if runtimeErr != nil && !codex.IsGPT56RuntimeUnavailable(runtimeErr) {
 				return InjectionResult{}, runtimeErr
 			}
