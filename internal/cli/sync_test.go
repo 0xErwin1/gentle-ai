@@ -35,7 +35,7 @@ import (
 
 func TestSyncOpenCodeTelemetryReconcilesMissingWithoutSDD(t *testing.T) {
 	home := t.TempDir()
-	t.Setenv("HOME", home)
+	setOpenCodeTestHome(t, home)
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, "xdg"))
 	t.Setenv("DO_NOT_TRACK", "1")
 	selection := model.Selection{Agents: []model.AgentID{model.AgentOpenCode}}
