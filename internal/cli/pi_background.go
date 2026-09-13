@@ -122,6 +122,21 @@ func parsePiBackgroundIntent(source, raw string, present bool) (model.PiBackgrou
 	return parsed, nil
 }
 
+// piBackgroundIntentSource selects the explicit invocation-scoped choice. A
+// declarative document and the flag are mutually exclusive, so a declared
+// intent stands in for the flag rather than competing with it, and an omitted
+// declaration leaves the choice to the lower-ranked sources.
+func piBackgroundIntentSource(flagSet bool, flagValue string, selection model.Selection) (bool, string) {
+	if flagSet {
+		return true, flagValue
+	}
+	if selection.PiBackgroundIntent != "" {
+		return true, string(selection.PiBackgroundIntent)
+	}
+
+	return false, ""
+}
+
 func resolvePiBackgroundCLI(set bool, raw string, persisted state.InstallState) (PiBackgroundResolution, error) {
 	envValue, envSet := os.LookupEnv(PiBackgroundSubagentsEnv)
 	return ResolvePiBackground(PiBackgroundResolveInput{

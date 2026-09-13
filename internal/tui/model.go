@@ -27,6 +27,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v2/internal/components/opencodeplugin"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/components/sdd"
 	componentuninstall "github.com/gentleman-programming/gentle-ai/v2/internal/components/uninstall"
+	configdomain "github.com/gentleman-programming/gentle-ai/v2/internal/config"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/opencode"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/pipeline"
@@ -3283,7 +3284,15 @@ func (m Model) startSync(overrides *model.SyncOverrides) tea.Cmd {
 		if syncFn == nil {
 			return SyncDoneMsg{Err: fmt.Errorf("sync function not configured")}
 		}
-		files, err := syncFn(overrides)
+		// Every interactive picker reaches sync through here, so normalising at
+		// this one seam is what makes the TUI a frontend over the shared
+		// desired-state model rather than a second configuration path.
+		normalized, err := normalizeSyncOverrides(overrides)
+		if err != nil {
+			return SyncDoneMsg{Err: err}
+		}
+
+		files, err := syncFn(normalized)
 		return SyncDoneMsg{Files: files, Err: err}
 	}
 }
@@ -4864,6 +4873,14 @@ func (m Model) shouldShowCommunityToolsScreen() bool {
 }
 
 func (m *Model) buildDependencyPlan() {
+	normalized, diagnostics := configdomain.NormalizeSelection(m.Selection)
+	if len(diagnostics) != 0 {
+		m.Err = fmt.Errorf("config validation failed: %s", diagnostics[0].Code)
+		m.DependencyPlan = planner.ResolvedPlan{}
+		return
+	}
+	m.Selection = normalized
+
 	resolved, err := planner.NewResolver(planner.MVPGraph()).Resolve(m.Selection)
 	if err != nil {
 		m.Err = err

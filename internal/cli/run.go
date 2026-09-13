@@ -132,7 +132,7 @@ func RunInstall(args []string, detection system.DetectionResult) (InstallResult,
 		return InstallResult{}, err
 	}
 
-	input, err := NormalizeInstallFlags(flags, detection)
+	input, err := ResolveInstallInput(flags, detection)
 	if err != nil {
 		return InstallResult{}, err
 	}
@@ -153,7 +153,8 @@ func RunInstall(args []string, detection system.DetectionResult) (InstallResult,
 	} else if stateErr != nil {
 		return InstallResult{}, fmt.Errorf("persist install state preflight: %w", stateErr)
 	}
-	background, err := resolveOpenCodeBackgroundCLI(flags.OpenCodeBackgroundSubagentsSet, flags.OpenCodeBackgroundSubagents, persistedState)
+	backgroundSet, backgroundValue := backgroundIntentSource(flags.OpenCodeBackgroundSubagentsSet, flags.OpenCodeBackgroundSubagents, input.Selection)
+	background, err := resolveOpenCodeBackgroundCLI(backgroundSet, backgroundValue, persistedState)
 	if err != nil {
 		return InstallResult{}, err
 	}
@@ -161,7 +162,8 @@ func RunInstall(args []string, detection system.DetectionResult) (InstallResult,
 	if err != nil {
 		return InstallResult{}, fmt.Errorf("prepare OpenCode background activation: %w", err)
 	}
-	piBackground, err := resolvePiBackgroundCLI(flags.PiBackgroundSubagentsSet, flags.PiBackgroundSubagents, persistedState)
+	piSet, piValue := piBackgroundIntentSource(flags.PiBackgroundSubagentsSet, flags.PiBackgroundSubagents, input.Selection)
+	piBackground, err := resolvePiBackgroundCLI(piSet, piValue, persistedState)
 	if err != nil {
 		return InstallResult{}, err
 	}
@@ -285,6 +287,7 @@ func RunInstall(args []string, detection system.DetectionResult) (InstallResult,
 		Persona:                     string(input.Selection.Persona),
 	}
 	newState.SetSelection(input.Selection)
+	newState.RDDMode = string(input.Selection.RDDMode)
 	if background.Persist != "" {
 		newState.BackgroundIntent = background.Persist
 	}
@@ -333,7 +336,14 @@ func persistInstallState(homeDir string, newState state.InstallState, agentIDs [
 func mergeFullInstallState(existing, fresh state.InstallState) state.InstallState {
 	merged := existing
 	merged.InstalledAgents = fresh.InstalledAgents
+
+	// The version stamp describes the assets this run wrote, so carrying the
+	// existing one forward would leave a first install unstamped, and doctor
+	// skips its staleness check entirely on an empty stamp.
+	merged.InstalledBinaryVersion = fresh.InstalledBinaryVersion
+
 	merged.SelectionConfigured, merged.Components, merged.Skills = fresh.SelectionConfigured, fresh.Components, fresh.Skills
+	merged.ModelPresets = fresh.ModelPresets
 	merged.Preset, merged.SDDMode, merged.StrictTDD = fresh.Preset, fresh.SDDMode, fresh.StrictTDD
 	merged.CommunityTools, merged.CommunityToolsConfigured = fresh.CommunityTools, fresh.CommunityToolsConfigured
 	merged.ClaudeModelAssignments, merged.ClaudePhaseAssignments = fresh.ClaudeModelAssignments, fresh.ClaudePhaseAssignments
@@ -2126,8 +2136,8 @@ func executeCommand(name string, args ...string) error {
 	return nil
 }
 
-// selectedSkillIDs returns the skill IDs to install. If the selection
-// has explicit skills, those are used; otherwise skills are derived from the preset.
+// selectedSkillIDs returns the skill IDs to install. If the selection has
+// explicit skills, those are used; otherwise skills are derived from the preset.
 func selectedSkillIDs(selection model.Selection) []model.SkillID {
 	if len(selection.Skills) > 0 {
 		return selection.Skills
@@ -2535,7 +2545,7 @@ func componentPathsWithWorkspaceScoped(homeDir, workspaceDir string, scope Insta
 			paths = append(paths, gga.ConfigPath(homeDir))
 			paths = append(paths, gga.AgentsTemplatePath(homeDir))
 		case model.ComponentTheme:
-			if p := adapter.SettingsPath(homeDir); p != "" {
+			if p := adapter.SettingsPath(homeDir); p != "" && adapter.Agent() != model.AgentPi {
 				paths = append(paths, p)
 			}
 		case model.ComponentClaudeTheme:
