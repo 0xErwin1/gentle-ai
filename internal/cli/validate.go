@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/gentleman-programming/gentle-ai/v2/internal/catalog"
+	configdomain "github.com/gentleman-programming/gentle-ai/v2/internal/config"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/system"
 )
@@ -17,6 +18,35 @@ type InstallInput struct {
 	Scope     InstallScope
 	Channel   InstallChannel
 	DryRun    bool
+}
+
+// ResolveInstallInput produces the complete install input for one invocation.
+// A document replaces the selection the flags resolved, and its declared scope
+// and channel stand in for the flags it is not allowed to be combined with.
+// Resolving them anywhere but here would leave a declared install target
+// validated, persisted and exported while the install still ran against the
+// flag defaults.
+func ResolveInstallInput(flags InstallFlags, detection system.DetectionResult) (InstallInput, error) {
+	input, err := NormalizeInstallFlags(flags, detection)
+	if err != nil {
+		return InstallInput{}, err
+	}
+
+	if flags.Config != "" {
+		selection, err := loadConfigSelection(flags.Config)
+		if err != nil {
+			return InstallInput{}, err
+		}
+		input.Selection = selection
+		input = applyDeclaredInstallTarget(input, selection)
+	}
+
+	input.Selection, err = normalizeConfigSelection(input.Selection)
+	if err != nil {
+		return InstallInput{}, err
+	}
+
+	return input, nil
 }
 
 func NormalizeInstallFlags(flags InstallFlags, detection system.DetectionResult) (InstallInput, error) {
@@ -80,6 +110,15 @@ func NormalizeInstallFlags(flags InstallFlags, detection system.DetectionResult)
 	}
 
 	return InstallInput{Selection: selection, Scope: scope, Channel: channel, DryRun: flags.DryRun}, nil
+}
+
+func normalizeConfigSelection(selection model.Selection) (model.Selection, error) {
+	normalized, diagnostics := configdomain.NormalizeSelection(selection)
+	if len(diagnostics) != 0 {
+		return model.Selection{}, fmt.Errorf("config validation failed: %s; correct the selection and rerun gentle-ai install or gentle-ai sync", diagnostics[0].Code)
+	}
+
+	return normalized, nil
 }
 
 // personaAliasRemapNotice is printed whenever the legacy

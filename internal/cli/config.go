@@ -1,0 +1,509 @@
+package cli
+
+import (
+	"context"
+	"crypto/sha256"
+	"encoding/json"
+	"errors"
+	"flag"
+	"fmt"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/desiredstate"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/system"
+	"io"
+	"os"
+	"path/filepath"
+	"sort"
+
+	configdomain "github.com/gentleman-programming/gentle-ai/v2/internal/config"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/render"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/state"
+)
+
+var writeConfigState = desiredstate.WriteDesiredAndManifest
+
+// decodeDesiredState decodes a document into desired state.
+func decodeDesiredState(document []byte) (configdomain.DesiredState, []configdomain.Diagnostic) {
+	return configdomain.Decode(document)
+}
+
+// reportedDiagnostics writes the machine-readable result and then fails when it
+// carries an error. The diagnostics are the answer, so they still go to stdout
+// for a consumer that parses them; the exit status is for every consumer that
+// does not, where a rejected document reported as success is indistinguishable
+// from a valid one.
+func reportedDiagnostics(stdout io.Writer, result any, diagnostics []configdomain.Diagnostic) error {
+	if err := writeConfigResult(stdout, result); err != nil {
+		return err
+	}
+
+	if rejects(diagnostics) {
+		return fmt.Errorf("configuration rejected: %d diagnostic(s), first is %s at %s; resolve each reported diagnostic, then run gentle-ai config validate --config <path>", len(diagnostics), diagnostics[0].Code, diagnostics[0].Path)
+	}
+
+	return nil
+}
+
+// rejects reports whether any diagnostic is severe enough to stop the
+// operation. A warning is delivered alongside the result rather than instead
+// of it.
+func rejects(diagnostics []configdomain.Diagnostic) bool {
+	for _, diagnostic := range diagnostics {
+		if diagnostic.Severity == configdomain.Error {
+			return true
+		}
+	}
+
+	return false
+}
+
+// RunConfig performs declarative configuration operations.
+func RunConfig(args []string, stdout io.Writer) error {
+	if len(args) == 0 {
+		return fmt.Errorf("usage: gentle-ai config <validate|render|plan|diff|apply|reconcile|adopt|export|presets>")
+	}
+	operation := args[0]
+	if operation == "presets" {
+		return RunConfigPresets(args[1:], stdout)
+	}
+	flags := flag.NewFlagSet("config "+operation, flag.ContinueOnError)
+	flags.SetOutput(io.Discard)
+	configPath := flags.String("config", "", "configuration file")
+	home := flags.String("home", "", "home directory for persisted state")
+	destination := flags.String("destination", "", "live destination to inspect")
+	stage := flags.String("stage", "", "isolated staging root")
+	if err := flags.Parse(args[1:]); err != nil {
+		return err
+	}
+	if flags.NArg() != 0 {
+		return fmt.Errorf("config %s does not accept positional arguments; run gentle-ai config %s --help", operation, operation)
+	}
+	if operation == "export" {
+		return exportConfig(stdout, *configPath, *home)
+	}
+	if operation == "adopt" {
+		return adoptConfig(stdout, *configPath, *home)
+	}
+	if *configPath == "" {
+		return fmt.Errorf("config %s requires --config; run gentle-ai config %s --config <path>", operation, operation)
+	}
+	document, err := os.ReadFile(*configPath)
+	if err != nil {
+		return fmt.Errorf("read config: %w", err)
+	}
+	desired, diagnostics := decodeDesiredState(document)
+	result := map[string]any{"operation": operation, "diagnostics": diagnostics}
+	if rejects(diagnostics) || operation == "validate" {
+		return reportedDiagnostics(stdout, result, diagnostics)
+	}
+	if operation != "render" && operation != "plan" && operation != "diff" && operation != "apply" && operation != "reconcile" {
+		return fmt.Errorf("unknown config operation %q; run gentle-ai config <validate|render|plan|diff|apply|reconcile|adopt> --config <path>", operation)
+	}
+	if *destination == "" || *stage == "" {
+		return fmt.Errorf("config %s requires --destination and --stage; run gentle-ai config %s --config <path> --destination <path> --stage <path>", operation, operation)
+	}
+	if (operation == "apply" || operation == "reconcile") && *home == "" {
+		return fmt.Errorf("config %s requires --home for persisted desired state; run gentle-ai config %s --config <path> --home <path> --destination <path> --stage <path>", operation, operation)
+	}
+
+	live := map[render.ResourceKey]string{}
+	provider, unavailable := selectRenderProvider(desired, *home, *destination)
+	if len(unavailable) > 0 {
+		result["diagnostics"] = unavailable
+		return reportedDiagnostics(stdout, result, unavailable)
+	}
+
+	snapshot, err := render.New(provider).Render(render.Request{State: desired, Destination: *destination, StageRoot: *stage})
+	if err != nil {
+		return err
+	}
+	manifest, err := render.ManifestFor(snapshot)
+	if err != nil {
+		return err
+	}
+	stager := configurationStager{adapters: desired.Selection.Agents, readRoot: *home, destination: *destination}
+	provisioned, err := stager.ProvisionedResources(desired)
+	if err != nil {
+		return err
+	}
+	manifest.Resources = append(manifest.Resources, provisioned...)
+	result["manifest"] = manifest
+	if operation == "render" {
+		return writeConfigResult(stdout, result)
+	}
+	detection, err := system.Detect(context.Background())
+	if err != nil {
+		return fmt.Errorf("detect platform for provisioning check: %w", err)
+	}
+	for key, value := range liveProvisioning(provisioned, ResolveInstallProfile(detection)) {
+		live[key] = value
+	}
+	addLiveFileResources(live, *destination, manifest)
+
+	previousManifest := render.Manifest{}
+	if *home != "" {
+		previousManifest, err = readConfigManifest(*home, *destination)
+		if err != nil {
+			return err
+		}
+		addLiveFileResources(live, *destination, previousManifest)
+	}
+
+	plan := render.Plan(previousManifest, manifest, live)
+	if operation == "apply" || operation == "reconcile" {
+		if err := render.Apply(render.ApplyRequest{
+			Plan: plan, Snapshot: snapshot, Destination: *destination,
+			Persist: func() error { return writeConfigState(*home, *destination, desired, manifest) },
+		}); err != nil {
+			return err
+		}
+	}
+	result["plan"] = plan
+	if pending := render.PendingProvisioning(plan); len(pending) > 0 {
+		result["pendingProvisioning"] = pending
+		result["pendingProvisioningReason"] = fmt.Sprintf(
+			"%d declared component(s) are installed rather than written and were not performed here; run gentle-ai install --config %s to provision them",
+			len(pending), *configPath,
+		)
+	}
+	if pending := render.PendingToolProvisioning(plan); len(pending) > 0 {
+		result["pendingToolProvisioning"] = pending
+		result["pendingToolProvisioningReason"] = fmt.Sprintf(
+			"%d declared community tool(s) wire themselves in through their own CLI and were not wired here; the manifest carries the exact commands, or run gentle-ai install --config %s",
+			len(pending), *configPath,
+		)
+	}
+	if pending := render.PendingAgentProvisioning(plan); len(pending) > 0 {
+		result["pendingAgentProvisioning"] = pending
+		result["pendingAgentProvisioningReason"] = fmt.Sprintf(
+			"%d declared agent(s) install their harness through their own tool and were not provisioned here; the manifest carries the exact commands, or run gentle-ai install --config %s",
+			len(pending), *configPath,
+		)
+	}
+
+	return writeConfigResult(stdout, result)
+}
+
+// selectRenderProvider resolves the renderer for the declared document. It
+// always succeeds: every declared adapter takes the configuration
+// configurationStager renders, and rendering a role a client cannot express is
+// no longer a concept this contract has to reject.
+func selectRenderProvider(desired configdomain.DesiredState, readRoot, destination string) (render.Provider, []configdomain.Diagnostic) {
+	selected := []render.Provider{
+		configurationStager{adapters: desired.Selection.Agents, readRoot: readRoot, destination: destination},
+	}
+
+	owner := map[string]render.Provider{}
+	for _, provider := range selected {
+		declaring, ok := provider.(render.SelectorProvider)
+		if !ok {
+			continue
+		}
+		for path := range declaring.Selectors(desired) {
+			owner[path] = provider
+		}
+	}
+
+	return composedProvider{members: selected, owner: owner}, nil
+}
+
+// composedProvider concatenates the artifacts of every selected adapter and
+// forwards each adapter's optional capabilities for the paths that adapter
+// owns. Dropping them here would silently downgrade a composed artifact to
+// whole-file ownership, which reconciliation then refuses as stale.
+//
+// A document declaring no adapter renders nothing, which is the honest reading
+// of a desired state that names no target.
+type composedProvider struct {
+	members []render.Provider
+	owner   map[string]render.Provider
+}
+
+func (composed composedProvider) Render(state configdomain.DesiredState, baseline map[string][]byte) ([]render.ArtifactContent, error) {
+	artifacts := make([]render.ArtifactContent, 0)
+	for _, provider := range composed.members {
+		rendered, err := provider.Render(state, baseline)
+		if err != nil {
+			return nil, err
+		}
+		artifacts = append(artifacts, rendered...)
+	}
+
+	return artifacts, nil
+}
+
+func (composed composedProvider) Stage(state configdomain.DesiredState, stageRoot string) error {
+	for _, provider := range composed.members {
+		staging, ok := provider.(render.StagingProvider)
+		if !ok {
+			continue
+		}
+		if err := staging.Stage(state, stageRoot); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func (composed composedProvider) Selectors(state configdomain.DesiredState) map[string][]string {
+	selectors := map[string][]string{}
+	for _, provider := range composed.members {
+		declaring, ok := provider.(render.SelectorProvider)
+		if !ok {
+			continue
+		}
+		for path, owned := range declaring.Selectors(state) {
+			selectors[path] = append(selectors[path], owned...)
+		}
+	}
+
+	return selectors
+}
+
+func (composed composedProvider) Resources(path string, contents []byte, selectors []string) ([]render.Resource, error) {
+	decomposer, ok := composed.owner[path].(render.ResourceDecomposer)
+	if !ok {
+		return nil, fmt.Errorf("no adapter can decompose %q; remove the adapter that writes it from the document, then run gentle-ai config render again", path)
+	}
+
+	return decomposer.Resources(path, contents, selectors)
+}
+
+func (composed composedProvider) Merge(operation render.Operation, stagedPath string, target []byte) ([]byte, error) {
+	merger, ok := composed.owner[operation.Path].(render.ResourceMerger)
+	if !ok {
+		return nil, fmt.Errorf("no adapter can merge %q; remove the adapter that writes it from the document, then run gentle-ai config render again", operation.Path)
+	}
+
+	return merger.Merge(operation, stagedPath, target)
+}
+
+func readConfigManifest(home, destination string) (render.Manifest, error) {
+	manifest, err := desiredstate.ReadManifest(home, destination)
+	if os.IsNotExist(err) {
+		return render.Manifest{}, nil
+	}
+	if err != nil {
+		return render.Manifest{}, fmt.Errorf("read managed manifest: %w", err)
+	}
+	return manifest, nil
+}
+
+// addLiveFileResources records what the destination actually holds for every
+// whole-file resource a manifest mentions. Without it the planner sees no live
+// state for a staged tree and reads every managed file as stale, because the
+// baseline reader only ever inspected the one composed settings file.
+func addLiveFileResources(live map[render.ResourceKey]string, destination string, manifest render.Manifest) {
+	for _, resource := range manifest.Resources {
+		if resource.Selector != "file" {
+			continue
+		}
+		key := render.ResourceKey{Path: resource.Path, Selector: resource.Selector}
+		if _, known := live[key]; known {
+			continue
+		}
+		contents, err := os.ReadFile(filepath.Join(destination, filepath.FromSlash(resource.Path)))
+		if err != nil {
+			continue
+		}
+		live[key] = digest(contents)
+	}
+}
+
+func digest(contents []byte) string {
+	sum := sha256.Sum256(contents)
+	return fmt.Sprintf("%x", sum)
+}
+
+func loadConfigSelection(path string) (model.Selection, error) {
+	document, err := os.ReadFile(path)
+	if err != nil {
+		return model.Selection{}, fmt.Errorf("read config: %w", err)
+	}
+	// A warning names a part of the document one adapter could not take; the
+	// rest is still what the operator asked for, so it is delivered and the
+	// warning travels with the result rather than replacing it.
+	state, diagnostics := decodeDesiredState(document)
+	if rejects(diagnostics) {
+		return model.Selection{}, fmt.Errorf("config validation failed: %s; run gentle-ai config validate --config %q", diagnostics[0].Code, path)
+	}
+	for _, diagnostic := range diagnostics {
+		fmt.Fprintf(os.Stderr, "warning: %s at %s: %s\n", diagnostic.Code, diagnostic.Path, diagnostic.Message)
+	}
+	return configdomain.Project(state), nil
+}
+
+// adoptConfig records a document as the installation without writing a single
+// client file.
+//
+// A frontend that renders the tree itself -- a package manager, a
+// configuration system, anything that owns the files -- leaves gentle-ai unable
+// to see its own installation: doctor reads state.json, which only install and
+// sync ever wrote, so it reports an installation that is plainly there as
+// absent and recommends installing it again.
+//
+// The manifest is deliberately not written. It records which bytes gentle-ai
+// owns, and here it owns none of them: claiming them would let reconciliation
+// remove files that belong to whoever rendered them.
+func adoptConfig(stdout io.Writer, configPath, home string) error {
+	if configPath == "" {
+		return fmt.Errorf("config adopt requires --config; run gentle-ai config adopt --config <path> --home <path>")
+	}
+	if home == "" {
+		return fmt.Errorf("config adopt requires --home for persisted state; run gentle-ai config adopt --config <path> --home <path>")
+	}
+
+	document, err := os.ReadFile(configPath)
+	if err != nil {
+		return fmt.Errorf("read config: %w", err)
+	}
+
+	desired, diagnostics := decodeDesiredState(document)
+	result := map[string]any{"operation": "adopt", "diagnostics": diagnostics}
+	if rejects(diagnostics) {
+		return reportedDiagnostics(stdout, result, diagnostics)
+	}
+
+	selection := configdomain.Project(desired)
+	agentIDs := make([]string, 0, len(selection.Agents))
+	for _, agent := range selection.Agents {
+		agentIDs = append(agentIDs, string(agent))
+	}
+
+	if err := withInstallStateLock(home, func() error {
+		existing, err := state.Read(home)
+		if errors.Is(err, os.ErrNotExist) {
+			existing = state.InstallState{}
+		} else if err != nil {
+			return err
+		}
+
+		adopted := existing
+		adopted.InstalledAgents = agentIDs
+		adopted.InstalledBinaryVersion = AppVersion
+		adopted.SetSelection(selection)
+		adopted.RDDMode = string(selection.RDDMode)
+
+		return state.WriteReconciled(home, adopted)
+	}); err != nil {
+		return fmt.Errorf("record adopted installation: %w", err)
+	}
+
+	if err := desiredstate.WriteDesired(home, desired); err != nil {
+		return fmt.Errorf("record adopted desired state: %w", err)
+	}
+
+	result["adopted"] = map[string]any{"agents": agentIDs, "home": home}
+	result["note"] = "the client files are owned by whatever rendered them; gentle-ai records what is installed and claims none of the bytes"
+
+	return writeConfigResult(stdout, result)
+}
+
+func exportConfig(stdout io.Writer, configPath, home string) error {
+	if configPath != "" {
+		document, err := os.ReadFile(configPath)
+		if err != nil {
+			return fmt.Errorf("read config: %w", err)
+		}
+		desired, diagnostics := configdomain.Decode(document)
+		if len(diagnostics) != 0 {
+			return writeConfigResult(stdout, configdomain.ExportResult{Diagnostics: diagnostics})
+		}
+		return writeConfigResult(stdout, configdomain.Export(desired))
+	}
+	if home == "" {
+		var err error
+		home, err = os.UserHomeDir()
+		if err != nil {
+			return fmt.Errorf("resolve user home directory: %w", err)
+		}
+	}
+	desired, err := desiredstate.ReadDesired(home)
+	if err == nil {
+		return writeConfigResult(stdout, configdomain.Export(desired))
+	}
+	legacy, legacyErr := state.Read(home)
+	if legacyErr != nil {
+		return fmt.Errorf("read desired state: %w", err)
+	}
+	result := configdomain.Export(configdomain.FromSelection(model.Selection{
+		Agents:     legacyAgentIDs(legacy.InstalledAgents),
+		Components: legacy.Components,
+		Skills:     legacy.Skills,
+		Persona:    model.PersonaID(legacy.Persona),
+		Preset:     legacy.Preset,
+		SDDMode:    legacy.SDDMode,
+		StrictTDD:  legacy.StrictTDD,
+
+		BackgroundIntent: legacy.BackgroundIntent,
+	}))
+	result.Diagnostics = append(result.Diagnostics, legacyExportDiagnostics(legacy)...)
+	result.Lossless = false
+	return writeConfigResult(stdout, result)
+}
+
+func legacyExportDiagnostics(legacy state.InstallState) []configdomain.Diagnostic {
+	diagnostics := make([]configdomain.Diagnostic, 0, len(legacy.CommunityTools)+len(legacy.ModelAssignments)+4)
+	communityTools := append([]string(nil), legacy.CommunityTools...)
+	sort.Strings(communityTools)
+	for index, tool := range communityTools {
+		diagnostics = append(diagnostics, configdomain.Diagnostic{
+			Code:     "config.export.loss.community-tool",
+			Path:     fmt.Sprintf("$.community_tools[%d]", index),
+			Severity: configdomain.Error,
+			Message:  fmt.Sprintf("legacy community tool %q cannot be represented; rerun gentle-ai install and select %q", tool, tool),
+		})
+	}
+
+	assignmentNames := make([]string, 0, len(legacy.ModelAssignments))
+	for name := range legacy.ModelAssignments {
+		assignmentNames = append(assignmentNames, name)
+	}
+	sort.Strings(assignmentNames)
+	for _, name := range assignmentNames {
+		assignment := legacy.ModelAssignments[name]
+		value := fmt.Sprintf("%s=%s/%s", name, assignment.ProviderID, assignment.ModelID)
+		if assignment.Effort != "" {
+			value += "@" + assignment.Effort
+		}
+		diagnostics = append(diagnostics, configdomain.Diagnostic{
+			Code:     "config.export.loss.model-assignment",
+			Path:     "$.model_assignments." + name,
+			Severity: configdomain.Error,
+			Message:  fmt.Sprintf("legacy model assignment %q cannot be represented; reconfigure it through gentle-ai's model picker", value),
+		})
+	}
+
+	diagnostics = append(diagnostics, configdomain.Diagnostic{
+		Code: "config.export.loss.legacy-operational", Path: "$", Severity: configdomain.Error,
+		Message: "legacy install state omits runtime and provenance fields from desired configuration",
+	})
+	if !legacy.SelectionConfigured {
+		diagnostics = append(diagnostics, configdomain.Diagnostic{
+			Code: "config.export.loss.ambiguous-intent", Path: "$", Severity: configdomain.Error,
+			Message: "legacy install state cannot distinguish inferred defaults from an explicit selection",
+		})
+	}
+	if legacy.RDDMode != "" {
+		diagnostics = append(diagnostics, configdomain.Diagnostic{
+			Code: "config.export.loss.user-owned", Path: "$.rdd_mode", Severity: configdomain.Error,
+			Message: "user-owned review policy remains local and is excluded from desired configuration",
+		})
+	}
+	return diagnostics
+}
+
+func legacyAgentIDs(values []string) []model.AgentID {
+	agents := make([]model.AgentID, len(values))
+	for index, value := range values {
+		agents[index] = model.AgentID(value)
+	}
+	return agents
+}
+
+func writeConfigResult(stdout io.Writer, result any) error {
+	encoder := json.NewEncoder(stdout)
+	encoder.SetIndent("", "  ")
+	return encoder.Encode(result)
+}
