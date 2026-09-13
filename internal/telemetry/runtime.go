@@ -187,39 +187,82 @@ func RuntimeEffortAllowed(value string) bool {
 	return runtimeMember(value, runtimeEfforts)
 }
 
+// runtimeModelIDPattern recognizes a public model family prefix (Claude, GPT,
+// Gemini, DeepSeek, GLM, and so on), an optional attached alphanumeric run
+// (glm5.3, gpt4o), and up to eight segments that each start with a mandatory
+// dash/underscore/dot/colon. Every group begins with a separator the
+// alphanumeric class excludes, so the pattern is unambiguous and cannot
+// backtrack catastrophically in ECMAScript engines that mirror it. Any id that does not start with one of these
+// families is private by definition and never leaves the machine: only the
+// family name is public, not the specific fine-tune, deployment, or vendor
+// alias. Kept as a single Go string constant so contracts/telemetry stays
+// byte-identical to it (see TestRuntimeModelPatternsMatchSchema); RE2 and
+// ECMAScript compatible, no lookarounds.
+const runtimeModelIDPattern = `^(claude|gpt|o[1-9]|codex|gemini|gemma|deepseek|glm|qwen|qwq|kimi|moonshot|llama|codellama|mistral|mixtral|codestral|devstral|magistral|ministral|minimax|grok|phi|nemotron|jamba|hunyuan|doubao|ernie|mimo|granite|olmo|smollm|starcoder|titan)[a-z0-9]*([-_.:][a-z0-9]+){0,8}$`
+
+// runtimeModelProviderPattern accepts any short lowercase alphanumeric-dash
+// provider label. The provider itself carries no privacy risk (it is a routing
+// label, e.g. "nan", "openrouter", "zai"); only the model id is filtered.
+const runtimeModelProviderPattern = `^[a-z0-9][a-z0-9-]{0,31}$`
+
+const runtimeModelIDMaxLen = 64
+const runtimeModelProviderMaxLen = 32
+
+var runtimeModelIDRe = regexp.MustCompile(runtimeModelIDPattern)
+var runtimeModelProviderRe = regexp.MustCompile(runtimeModelProviderPattern)
+
 // NormalizeRuntimeModel keeps model attribution inside the runtime telemetry
-// contract without exposing unregistered provider or model names.
+// contract without exposing unregistered provider or model names. It replaces
+// the former closed exact-id registry with one generic family-pattern
+// normalizer shared by every host adapter (opencode, claude, codex) and the
+// collector: an id is public only when its family is recognized, never a
+// specific vendor catalog entry.
 func NormalizeRuntimeModel(provider, id string) RuntimeModel {
-	m := RuntimeModel{Provider: provider, ID: id}
-	if provider == "" || id == "" {
+	rawProvider := strings.TrimSpace(provider)
+	rawID := strings.TrimSpace(id)
+	if rawProvider == "" || rawID == "" {
 		return RuntimeModel{Provider: "unknown", ID: "unknown"}
 	}
-	if runtimeModelOK(m) {
-		return m
+	// Sentinel pairs are preserved exactly as before, using the untransformed,
+	// case-sensitive raw input (matching legacy behaviour for these literals).
+	if rawProvider == "unknown" && rawID == "unknown" {
+		return RuntimeModel{Provider: "unknown", ID: "unknown"}
 	}
-	m = RuntimeModel{Provider: "custom", ID: "custom"}
-	if provider == "opencode" {
-		m.Provider = "opencode"
+	if rawProvider == "custom" && rawID == "custom" {
+		return RuntimeModel{Provider: "custom", ID: "custom"}
 	}
-	return m
+	normalizedID := rawID
+	if idx := strings.LastIndex(normalizedID, "/"); idx >= 0 {
+		normalizedID = normalizedID[idx+1:]
+	}
+	normalizedID = strings.ToLower(normalizedID)
+	publicID := len(normalizedID) <= runtimeModelIDMaxLen && runtimeModelIDRe.MatchString(normalizedID)
+	if !publicID {
+		if rawProvider == "opencode" {
+			return RuntimeModel{Provider: "opencode", ID: "custom"}
+		}
+		return RuntimeModel{Provider: "custom", ID: "custom"}
+	}
+	lowerProvider := strings.ToLower(rawProvider)
+	if len(lowerProvider) > runtimeModelProviderMaxLen || !runtimeModelProviderRe.MatchString(lowerProvider) {
+		lowerProvider = "custom"
+	}
+	return RuntimeModel{Provider: lowerProvider, ID: normalizedID}
 }
 
-const runtimeAnthropicModels = "claude-opus-5|claude-haiku-4-5|claude-haiku-4-5-20251001|claude-sonnet-5"
-
-// Registry 1: public names verified by the parent against official catalogs.
-// Namespace is a caller assertion, not endpoint/route attestation.
+// runtimeModelOK accepts exactly what NormalizeRuntimeModel can emit: the
+// sentinels, or a provider/id pair that both satisfy their generic family
+// patterns. The collector validates already-normalized wire input; it never
+// re-normalizes free text itself.
 func runtimeModelOK(m RuntimeModel) bool {
-	switch m.Provider {
-	case "anthropic":
-		return runtimeMember(m.ID, runtimeAnthropicModels)
-	case "openai", "openai-codex":
-		return runtimeMember(m.ID, "gpt-6-astra|gpt-5.6-sol|gpt-5.6-terra|gpt-5.6-luna|gpt-5.3-codex-spark|gpt-5.5|gpt-5.4|gpt-5.4-mini|gpt-5.2|gpt-5.3-codex|gpt-5.6")
-	case "opencode":
-		return m.ID == "custom"
-	case "unknown", "custom":
-		return m.ID == m.Provider
+	if m.Provider == "unknown" && m.ID == "unknown" {
+		return true
 	}
-	return false
+	if m.ID == "custom" {
+		return m.Provider == "custom" || m.Provider == "opencode"
+	}
+	return len(m.Provider) <= runtimeModelProviderMaxLen && runtimeModelProviderRe.MatchString(m.Provider) &&
+		len(m.ID) <= runtimeModelIDMaxLen && runtimeModelIDRe.MatchString(m.ID)
 }
 
 var runtimeID = regexp.MustCompile(`^[0-9a-f]{32}$`)

@@ -81,7 +81,7 @@ cumulative snapshots. No parent-child links or source IDs exist.
 | Field | Source rule |
 |---|---|
 | `host` | `pi`, `opencode`, `claude-code`, or `codex`; never a hostname |
-| `model` | Registered public provider/model pair, otherwise the `unknown` or `custom` pair |
+| `model` | Provider/id pair filtered by a generic public model family pattern, otherwise the `unknown` or `custom` pair (see below) |
 | `model_evidence` | `selected`, `response`, or `unknown`; selected model is not proof of response model |
 | `agent_kind`, `agent_class` | Closed broad category and known package class, otherwise `unknown`; no private agent names. See the canonical vocabulary below. |
 | `selected_effort`, `effective_effort` | Independent source evidence; never infer one from the other |
@@ -89,6 +89,22 @@ cumulative snapshots. No parent-child links or source IDs exist.
 | Six token fields | Independent `{reported, unavailable, unsupported, sum}` coverage objects |
 | `duration` | Typed source-reported request or message elapsed time, never inferred latency |
 | `error_category` | `none`, `unknown`, `auth`, `output_length`, `aborted`, `api`, `rate_limit`, or `server`; never error text |
+
+### Model attribution
+
+`model.id` is public only when it starts with a recognized public model family
+name (for example `claude`, `gpt`, `gemini`, `deepseek`, `glm`, `qwen`, `llama`,
+`mistral`, `grok`); every host adapter (Claude Code, OpenCode, Codex) and the
+collector apply the same generic family pattern. `model.provider` is a routing
+label, not itself filtered. An id whose family prefix is public is emitted
+whole, including its version and variant suffixes (`deepseek-v4-flash`,
+`claude-sonnet-5-20260101`): the privacy floor is the family prefix, not suffix
+redaction, so a suffix carried behind a public family does leave the machine.
+Generic English words that are also model brands (`command`, `nova`, `seed`,
+`sonar`, `yi`) are deliberately not in the family list so a private deployment
+named with one of them cannot pass. An id outside the recognized families is
+replaced with `custom` (or `opencode/custom` for OpenCode when the id is
+private), and empty input becomes `unknown/unknown`.
 
 ### Agent class vocabulary
 
@@ -243,10 +259,26 @@ supplies response model plus input, output, cache-read, and cache-creation token
 Reasoning tokens are unsupported and total tokens are unavailable; neither is
 inferred.
 
-`Stop` always becomes an `orchestrator` activity-only launch-style observation.
-It does not read or attribute transcript usage or a response model: without a
-unique response identity or persistent replay state, a repeated final message
-could match an older record when the current transcript row has not been flushed.
+`Stop` reads its own transcript at `transcript_path` the same way `SubagentStop`
+reads `agent_transcript_path`, and reports the newest assistant record's
+response model plus input, output, cache-read, and cache-creation tokens as an
+`orchestrator` observation. `Stop` has no agent definition to read.
+
+`Stop` has no unique response identity by itself: a repeated final message can
+match an older transcript row when the current row has not yet been flushed.
+This is made safe through delivery, not by discarding the evidence. The
+adapter also captures the newest usable assistant record's API message id
+(`message.id`, falling back to the record-level `uuid` when `message.id` is
+absent) and, when one is available, derives the outgoing delivery id as the
+first 16 bytes of `sha256("gentle-ai.telemetry-runtime-claude-stop/v1\x00" +
+message id)`, hex-encoded. The message id itself never leaves the machine;
+only this one-way hash is transmitted. A `Stop` that re-reads a transcript row
+already sent therefore produces the same delivery id, and the collector drops
+it as `duplicate` instead of double-counting it; a turn whose transcript row
+was not flushed in time for one `Stop` is picked up and counted at the next
+`Stop` that observes it. When no transcript evidence or no usable message id
+is available, the observation falls back to a fresh delivery id, exactly like
+`SubagentStop`.
 
 For a known named subagent, at most 64 KiB of
 `~/.claude/agents/<agent_type>.md` supplies selected model and selected effort.

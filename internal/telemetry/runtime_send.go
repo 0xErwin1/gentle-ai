@@ -22,6 +22,16 @@ const RuntimeSendTimeout = 3 * time.Second
 // caller-owned readers. The CLI pre-reads stdin under its own 500 ms deadline;
 // embedded callers must provide bounded readers (for example bytes.Reader).
 func SendRuntime(ctx context.Context, home string, getenv func(string) string, input io.Reader, client *http.Client) string {
+	return SendRuntimeWithDeliveryID(ctx, home, getenv, input, client, "")
+}
+
+// SendRuntimeWithDeliveryID behaves like SendRuntime, except a caller may
+// supply a deterministic delivery id (for example a host's one-way hash of a
+// local message id) so a repeated send of the same observation is deduplicated
+// by the collector instead of becoming a fresh occurrence. The given id is
+// used only when it already matches the collector's 32-lowercase-hex shape;
+// otherwise a fresh random id is generated, exactly as SendRuntime does.
+func SendRuntimeWithDeliveryID(ctx context.Context, home string, getenv func(string) string, input io.Reader, client *http.Client, deliveryID string) string {
 	if !runtimeAllowed(home, getenv) {
 		return "disabled"
 	}
@@ -45,11 +55,14 @@ func SendRuntime(ctx context.Context, home string, getenv func(string) string, i
 	endpoint.RawQuery = ""
 	endpoint.ForceQuery = false
 	endpoint.Fragment = ""
-	var id [16]byte
-	if _, err = rand.Read(id[:]); err != nil {
-		return "discarded"
+	if !runtimeID.MatchString(deliveryID) {
+		var id [16]byte
+		if _, err = rand.Read(id[:]); err != nil {
+			return "discarded"
+		}
+		deliveryID = hex.EncodeToString(id[:])
 	}
-	body, err := json.Marshal(RuntimeEvent{RuntimeEventSchema, batch.Registry, hex.EncodeToString(id[:]), batch.Host, batch.Rows})
+	body, err := json.Marshal(RuntimeEvent{RuntimeEventSchema, batch.Registry, deliveryID, batch.Host, batch.Rows})
 	if err != nil || len(body) > RuntimeMaxBytes {
 		return "discarded"
 	}

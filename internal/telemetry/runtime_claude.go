@@ -3,6 +3,7 @@ package telemetry
 import (
 	"bytes"
 	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io"
@@ -33,14 +34,50 @@ type ClaudeUsage struct {
 	Evidence      bool
 	Correlated    bool
 	Model         string
+	MessageID     string
 	Input         json.RawMessage
 	Output        json.RawMessage
 	CacheRead     json.RawMessage
 	CacheCreation json.RawMessage
 }
 
+// ClaudeObservation carries the normalized runtime row plus, for a Stop event
+// with transcript evidence and a usable message id, a deterministic delivery
+// id that makes re-sending the same unflushed transcript row idempotent at
+// the collector.
 type ClaudeObservation struct {
-	Row RuntimeRow `json:"row"`
+	Row        RuntimeRow `json:"row"`
+	DeliveryID string     `json:"-"`
+}
+
+// claudeStopDeliverySalt domain-separates the Stop delivery-id hash from any
+// other use of the message id, so the hash cannot be reused across contracts.
+const claudeStopDeliverySalt = "gentle-ai.telemetry-runtime-claude-stop/v1\x00"
+
+// claudeStopDeliveryID derives a stable, collector-shaped (32 lowercase hex
+// chars) delivery id from a transcript's API message id. The message id
+// itself never leaves the machine: only this one-way hash is transmitted.
+func claudeStopDeliveryID(messageID string) string {
+	if messageID == "" {
+		return ""
+	}
+	sum := sha256.Sum256([]byte(claudeStopDeliverySalt + messageID))
+	return hex.EncodeToString(sum[:16])
+}
+
+// claudeUsableID keeps a transcript identifier only if it is a short,
+// printable-ASCII token. This bounds both the hash input and any risk of
+// non-identifier content masquerading as a message id.
+func claudeUsableID(id string) string {
+	if len(id) < 1 || len(id) > 128 {
+		return ""
+	}
+	for i := 0; i < len(id); i++ {
+		if id[i] < 0x20 || id[i] > 0x7e {
+			return ""
+		}
+	}
+	return id
 }
 
 // ParseClaudeHook validates one bounded hook object and retains no private
@@ -112,7 +149,9 @@ func ParseClaudeTranscriptTail(data []byte, firstPartial bool, expectedDigest [3
 		}
 		var record struct {
 			Type    string `json:"type"`
+			UUID    string `json:"uuid"`
 			Message struct {
+				ID      string          `json:"id"`
 				Model   string          `json:"model"`
 				Content json.RawMessage `json:"content"`
 				Usage   *struct {
@@ -126,7 +165,17 @@ func ParseClaudeTranscriptTail(data []byte, firstPartial bool, expectedDigest [3
 		if json.Unmarshal(line, &record) != nil || record.Type != "assistant" || record.Message.Usage == nil || len(record.Message.Model) > 256 {
 			continue
 		}
-		u := ClaudeUsage{Evidence: true, Correlated: expectedDigest != ([32]byte{}) && claudeMessageMatches(record.Message.Content, expectedDigest), Model: record.Message.Model, Input: record.Message.Usage.Input, Output: record.Message.Usage.Output, CacheRead: record.Message.Usage.CacheRead, CacheCreation: record.Message.Usage.CacheCreation}
+		// message.id is the primary identity: one API response can be split
+		// across several transcript records sharing the same message.id (and
+		// the same usage), which is why it is preferred over the per-record
+		// uuid. The uuid is only a fallback when message.id is absent.
+		messageID := ""
+		if record.Message.ID != "" {
+			messageID = claudeUsableID(record.Message.ID)
+		} else {
+			messageID = claudeUsableID(record.UUID)
+		}
+		u := ClaudeUsage{Evidence: true, Correlated: expectedDigest != ([32]byte{}) && claudeMessageMatches(record.Message.Content, expectedDigest), Model: record.Message.Model, MessageID: messageID, Input: record.Message.Usage.Input, Output: record.Message.Usage.Output, CacheRead: record.Message.Usage.CacheRead, CacheCreation: record.Message.Usage.CacheCreation}
 		valid := true
 		for _, raw := range []json.RawMessage{u.Input, u.Output, u.CacheRead, u.CacheCreation} {
 			if raw != nil && runtimeNumber(raw) == "" {
@@ -173,9 +222,11 @@ func NormalizeClaude(hook ClaudeHook, usage ClaudeUsage, agentDefinition []byte)
 		return nil
 	}
 	if hook.HookEventName == "Stop" {
-		// Stop has no unique response identity. A repeated final message can match
-		// an older transcript row when the current row has not been flushed.
-		usage, agentDefinition = ClaudeUsage{}, nil
+		// Stop has no agent definition: it is always the orchestrator. Usage
+		// evidence is kept; a repeated final message that matches an older,
+		// not-yet-flushed transcript row is made safe by the deterministic
+		// delivery id derived below, not by discarding the evidence.
+		agentDefinition = nil
 	}
 	r := RuntimeRow{Model: RuntimeModel{Provider: "unknown", ID: "unknown"}, ModelEvidence: "unknown", AgentKind: "custom", AgentClass: "unknown", SelectedEffort: "unavailable", EffectiveEffort: "unavailable", Launches: json.RawMessage("1"), Responses: json.RawMessage("null"), ErrorCategory: "none", Duration: RuntimeDuration{Kind: "unavailable", MeasuredCount: json.RawMessage("0"), SumMS: json.RawMessage("null")}}
 	if hook.HookEventName == "Stop" {
@@ -203,24 +254,22 @@ func NormalizeClaude(hook ClaudeHook, usage ClaudeUsage, agentDefinition []byte)
 	r.ReasoningTokens = json.RawMessage(`"unsupported"`)
 	r.TotalTokens = json.RawMessage("null")
 	r.tokenObservations()
-	return &ClaudeObservation{Row: r}
+	o := &ClaudeObservation{Row: r}
+	if hook.HookEventName == "Stop" && usage.Evidence && usage.MessageID != "" {
+		o.DeliveryID = claudeStopDeliveryID(usage.MessageID)
+	}
+	return o
 }
 
 func claudeModel(id string) RuntimeModel {
-	if id == "" {
-		return RuntimeModel{Provider: "unknown", ID: "unknown"}
-	}
-	m := RuntimeModel{Provider: "anthropic", ID: id}
-	if strings.HasPrefix(id, "claude-") && runtimeModelOK(m) {
-		return m
-	}
-	return RuntimeModel{Provider: "custom", ID: "custom"}
+	return NormalizeRuntimeModel("anthropic", id)
 }
 
-// Claude Code frontmatter uses sonnet/opus/haiku aliases, while transcripts
-// may append release or revision suffixes to registry IDs. Selectors that defer
-// model choice carry no selected-model evidence. Registry matching uses the
-// longest current Anthropic ID so overlapping registered IDs stay exact.
+// Claude Code frontmatter uses sonnet/opus/haiku aliases; the finite alias
+// table below is the only Claude-specific folding left. Selectors that defer
+// model choice carry no selected-model evidence. Anything else, including a
+// dated or revisioned model id (e.g. "claude-sonnet-5-20260101"), passes
+// through unfolded to the generic family-pattern normalizer.
 func claudeCanonicalModelID(id string) string {
 	id = strings.TrimSpace(id)
 	switch id {
@@ -232,15 +281,6 @@ func claudeCanonicalModelID(id string) string {
 		return "claude-opus-5"
 	case "haiku":
 		return "claude-haiku-4-5"
-	}
-	longest := ""
-	for _, registered := range strings.Split(runtimeAnthropicModels, "|") {
-		if (id == registered || strings.HasPrefix(id, registered+"-")) && len(registered) > len(longest) {
-			longest = registered
-		}
-	}
-	if longest != "" {
-		return longest
 	}
 	return id
 }

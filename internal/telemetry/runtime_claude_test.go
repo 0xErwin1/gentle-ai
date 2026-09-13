@@ -2,10 +2,20 @@ package telemetry
 
 import (
 	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"strings"
 	"testing"
 )
+
+// expectedClaudeStopDeliveryID mirrors the documented Stop delivery-id
+// derivation as an independent test oracle: SHA-256 of a fixed
+// domain-separation prefix concatenated with the message id, truncated to
+// the first 16 bytes and hex-encoded.
+func expectedClaudeStopDeliveryID(messageID string) string {
+	sum := sha256.Sum256([]byte("gentle-ai.telemetry-runtime-claude-stop/v1\x00" + messageID))
+	return hex.EncodeToString(sum[:16])
+}
 
 const claudeSubagentHook = `{"session_id":"PRIVATE_SESSION","transcript_path":"PRIVATE_MAIN_PATH","cwd":"PRIVATE_CWD","permission_mode":"default","hook_event_name":"SubagentStop","stop_hook_active":false,"agent_id":"PRIVATE_AGENT_ID","agent_type":"sdd-apply","agent_transcript_path":"PRIVATE_AGENT_PATH","last_assistant_message":"FINAL_MESSAGE"}`
 
@@ -40,6 +50,9 @@ func TestClaudeRuntimeSubagentSelectsLastAssistantUsageBeforeTrailingRecords(t *
 	if string(o.Row.Responses) != "1" || string(o.Row.Launches) != "null" || o.Row.Duration.Kind != "unavailable" || o.Row.ErrorCategory != "none" {
 		t.Fatalf("coverage: %+v", o.Row)
 	}
+	if o.DeliveryID != "" {
+		t.Fatalf("SubagentStop must never derive a hashed delivery id: %q", o.DeliveryID)
+	}
 	out, _ := json.Marshal(o)
 	if strings.Contains(string(out), "PRIVATE") {
 		t.Fatalf("private source leaked: %s", out)
@@ -69,20 +82,87 @@ func TestClaudeRuntimeSubagentUsesUsageWithoutLastMessageCorrelation(t *testing.
 	}
 }
 
-func TestClaudeRuntimeStopNeverAttributesMatchingTranscript(t *testing.T) {
+// TestClaudeRuntimeStopAttributesTranscriptIdempotently replaces the former
+// "Stop never attributes transcript evidence" behavior: Stop now reads its
+// own transcript tail the same way SubagentStop reads a subagent transcript,
+// and delivery is made idempotent through a deterministic hash of the
+// transcript's API message id rather than by discarding the evidence.
+func TestClaudeRuntimeStopAttributesTranscriptIdempotently(t *testing.T) {
 	input := strings.Replace(claudeSubagentHook, `"hook_event_name":"SubagentStop","stop_hook_active":false,"agent_id":"PRIVATE_AGENT_ID","agent_type":"sdd-apply","agent_transcript_path":"PRIVATE_AGENT_PATH"`, `"hook_event_name":"Stop","stop_hook_active":false`, 1)
 	hook, err := ParseClaudeHook(strings.NewReader(input))
 	if err != nil {
 		t.Fatal(err)
 	}
-	repeated := []byte(`{"type":"assistant","message":{"model":"claude-opus-5","content":"FINAL_MESSAGE","usage":{"input_tokens":77,"output_tokens":88}}}` + "\n")
-	usage, ok := ParseClaudeTranscriptTail(repeated, false, hook.LastAssistantDigest)
-	if !ok {
-		t.Fatal("fixture did not produce matching usage")
+	record := func(messageID string) []byte {
+		idField := ""
+		if messageID != "" {
+			idField = `"id":"` + messageID + `",`
+		}
+		return []byte(`{"type":"assistant","uuid":"record-uuid-1","message":{` + idField + `"model":"claude-opus-5","content":"FINAL_MESSAGE","usage":{"input_tokens":77,"output_tokens":88}}}` + "\n")
+	}
+
+	transcript := record("msg_abc123")
+	usage, ok := ParseClaudeTranscriptTail(transcript, false, hook.LastAssistantDigest)
+	if !ok || usage.MessageID != "msg_abc123" {
+		t.Fatalf("message id not captured: %+v %v", usage, ok)
 	}
 	o := NormalizeClaude(hook, usage, nil)
-	if string(o.Row.Launches) != "1" || string(o.Row.Responses) != "null" || o.Row.ModelEvidence != "unknown" || o.Row.Model.ID != "unknown" || string(o.Row.Input) != tokenAbsent || string(o.Row.Output) != tokenAbsent {
-		t.Fatalf("Stop attributed replayable transcript evidence: %+v", o.Row)
+	if o == nil {
+		t.Fatal("observation missing")
+	}
+	if string(o.Row.Launches) != "null" || string(o.Row.Responses) != "1" || o.Row.ModelEvidence != "response" || o.Row.Model.ID != "claude-opus-5" || o.Row.AgentKind != "orchestrator" || o.Row.AgentClass != "orchestrator" || string(o.Row.Input) != tokenReported("77") || string(o.Row.Output) != tokenReported("88") {
+		t.Fatalf("Stop did not attribute transcript evidence: %+v", o.Row)
+	}
+	want := expectedClaudeStopDeliveryID("msg_abc123")
+	if o.DeliveryID != want {
+		t.Fatalf("delivery id = %q, want %q", o.DeliveryID, want)
+	}
+
+	// The same transcript parsed twice yields the same delivery id.
+	usageAgain, ok := ParseClaudeTranscriptTail(transcript, false, hook.LastAssistantDigest)
+	if !ok {
+		t.Fatal("re-parse failed")
+	}
+	if oAgain := NormalizeClaude(hook, usageAgain, nil); oAgain.DeliveryID != want {
+		t.Fatalf("delivery id not stable across re-parse: got %q want %q", oAgain.DeliveryID, want)
+	}
+
+	// A different message id yields a different delivery id.
+	otherUsage, ok := ParseClaudeTranscriptTail(record("msg_other456"), false, hook.LastAssistantDigest)
+	if !ok {
+		t.Fatal("other transcript parse failed")
+	}
+	otherObservation := NormalizeClaude(hook, otherUsage, nil)
+	if otherObservation.DeliveryID == want || otherObservation.DeliveryID != expectedClaudeStopDeliveryID("msg_other456") {
+		t.Fatalf("delivery id did not vary with message id: %q", otherObservation.DeliveryID)
+	}
+
+	// A record without message.id falls back to the record-level uuid.
+	noMessageID := []byte(`{"type":"assistant","uuid":"record-uuid-2","message":{"model":"claude-opus-5","content":"FINAL_MESSAGE","usage":{"input_tokens":1}}}` + "\n")
+	fallbackUsage, ok := ParseClaudeTranscriptTail(noMessageID, false, hook.LastAssistantDigest)
+	if !ok || fallbackUsage.MessageID != "record-uuid-2" {
+		t.Fatalf("uuid fallback not applied: %+v %v", fallbackUsage, ok)
+	}
+	fallbackObservation := NormalizeClaude(hook, fallbackUsage, nil)
+	if fallbackObservation.DeliveryID != expectedClaudeStopDeliveryID("record-uuid-2") {
+		t.Fatalf("delivery id not derived from uuid fallback: %q", fallbackObservation.DeliveryID)
+	}
+
+	// A record with neither id yields an empty delivery id but still carries usage.
+	neither := []byte(`{"type":"assistant","message":{"model":"claude-opus-5","content":"FINAL_MESSAGE","usage":{"input_tokens":5}}}` + "\n")
+	neitherUsage, ok := ParseClaudeTranscriptTail(neither, false, hook.LastAssistantDigest)
+	if !ok || neitherUsage.MessageID != "" || string(neitherUsage.Input) != "5" {
+		t.Fatalf("neither-id usage mishandled: %+v %v", neitherUsage, ok)
+	}
+	neitherObservation := NormalizeClaude(hook, neitherUsage, nil)
+	if neitherObservation.DeliveryID != "" || string(neitherObservation.Row.Input) != tokenReported("5") {
+		t.Fatalf("neither-id observation mishandled: %+v %q", neitherObservation.Row, neitherObservation.DeliveryID)
+	}
+
+	// A Stop hook with no readable transcript stays activity-only with an empty delivery id.
+	noEvidence := NormalizeClaude(hook, ClaudeUsage{}, nil)
+	if string(noEvidence.Row.Launches) != "1" || string(noEvidence.Row.Responses) != "null" || noEvidence.Row.ModelEvidence != "unknown" || noEvidence.Row.Model.ID != "unknown" || noEvidence.DeliveryID != "" {
+		t.Fatalf("no-evidence Stop unexpectedly attributed: %+v", noEvidence.Row)
 	}
 }
 
@@ -148,14 +228,18 @@ func TestClaudeModelAliasesAndUnknownSelectors(t *testing.T) {
 	}
 }
 
-func TestClaudeDatedTranscriptModelUsesRegistryLongestPrefix(t *testing.T) {
+// TestClaudeDatedTranscriptModelPassesThroughGenericPattern replaces the former
+// closed-registry "longest prefix" folding: a dated or revisioned Claude model
+// id now survives unfolded as long as it still matches the generic claude
+// family pattern, instead of being collapsed onto a registered base id.
+func TestClaudeDatedTranscriptModelPassesThroughGenericPattern(t *testing.T) {
 	hook, _ := ParseClaudeHook(strings.NewReader(claudeSubagentHook))
 	for _, tt := range []struct {
 		model string
 		want  string
 	}{
-		{model: "claude-sonnet-5-20260501", want: "claude-sonnet-5"},
-		{model: "claude-opus-5-1", want: "claude-opus-5"},
+		{model: "claude-sonnet-5-20260501", want: "claude-sonnet-5-20260501"},
+		{model: "claude-opus-5-1", want: "claude-opus-5-1"},
 		{model: "claude-haiku-4-5-20251001", want: "claude-haiku-4-5-20251001"},
 	} {
 		t.Run(tt.model, func(t *testing.T) {
@@ -231,6 +315,32 @@ func TestClaudeTranscriptTailBoundsAndMalformedLines(t *testing.T) {
 	usage, ok := ParseClaudeTranscriptTail([]byte("partial\n{bad\n"+strings.Replace(line, `"usage"`, `"content":"MATCH","usage"`, 1)+"\n"), true, sha256.Sum256([]byte("MATCH")))
 	if !ok || string(usage.Input) != "7" {
 		t.Fatalf("usage: %+v %v", usage, ok)
+	}
+}
+
+func TestClaudeTranscriptTailMessageIDBoundsAndFallback(t *testing.T) {
+	oversized := strings.Repeat("a", 129)
+	transcript := []byte(`{"type":"assistant","uuid":"u1","message":{"id":"` + oversized + `","model":"claude-opus-5","usage":{"input_tokens":1}}}` + "\n")
+	usage, ok := ParseClaudeTranscriptTail(transcript, false, [32]byte{})
+	if !ok || usage.MessageID != "" {
+		t.Fatalf("oversized message id not dropped: %+v %v", usage, ok)
+	}
+
+	// "café" contains a byte outside the printable-ASCII range and must be
+	// dropped without falling back to the record uuid, because message.id is
+	// present (not absent).
+	nonPrintable := []byte(`{"type":"assistant","uuid":"u2","message":{"id":"msg_café","model":"claude-opus-5","usage":{"input_tokens":1}}}` + "\n")
+	usage, ok = ParseClaudeTranscriptTail(nonPrintable, false, [32]byte{})
+	if !ok || usage.MessageID != "" {
+		t.Fatalf("non-printable message id not dropped: %+v %v", usage, ok)
+	}
+
+	multiline := []byte(
+		`{"type":"assistant","uuid":"older","message":{"id":"msg_old","model":"claude-opus-5","usage":{"input_tokens":1}}}` + "\n" +
+			`{"type":"assistant","uuid":"newer","message":{"id":"msg_new","model":"claude-opus-5","usage":{"input_tokens":2}}}` + "\n")
+	usage, ok = ParseClaudeTranscriptTail(multiline, false, [32]byte{})
+	if !ok || usage.MessageID != "msg_new" {
+		t.Fatalf("newest record message id not selected: %+v %v", usage, ok)
 	}
 }
 

@@ -152,7 +152,9 @@ func TestRuntimeSchemaParity(t *testing.T) {
 		{"valid", runtimeFixture, true},
 		{"opencode sanitized", strings.Replace(runtimeFixture, `{"provider":"anthropic","id":"claude-opus-5"}`, `{"provider":"opencode","id":"custom"}`, 1), true},
 		{"opencode raw model", strings.Replace(runtimeFixture, `{"provider":"anthropic","id":"claude-opus-5"}`, `{"provider":"opencode","id":"PRIVATE_MODEL"}`, 1), false},
-		{"opencode other registry model", strings.Replace(runtimeFixture, `{"provider":"anthropic","id":"claude-opus-5"}`, `{"provider":"opencode","id":"gpt-5.4"}`, 1), false},
+		// The family-pattern registry has no host-specific carve-out: any provider
+		// paired with a publicly recognized model family id is valid on the wire.
+		{"opencode public family model", strings.Replace(runtimeFixture, `{"provider":"anthropic","id":"claude-opus-5"}`, `{"provider":"opencode","id":"gpt-5.4"}`, 1), true},
 		{"private provider custom", strings.Replace(runtimeFixture, `{"provider":"anthropic","id":"claude-opus-5"}`, `{"provider":"PRIVATE_PROVIDER","id":"custom"}`, 1), false},
 		{"opencode case", strings.Replace(runtimeFixture, `{"provider":"anthropic","id":"claude-opus-5"}`, `{"provider":"OpenCode","id":"custom"}`, 1), false},
 		{"registry canonical", strings.Replace(runtimeFixture, `"registry":1`, `"registry":1.0e0`, 1), true},
@@ -296,5 +298,87 @@ func TestRuntimeSchemaParity(t *testing.T) {
 		if _, err := decodeRuntime([]byte(raw)); err == nil {
 			t.Fatal("duplicate JSON key accepted")
 		}
+	}
+}
+
+// TestNormalizeRuntimeModelFamilyPatterns exercises the generic family-pattern
+// normalizer used by every host adapter and by the collector. It replaces the
+// former closed exact-id registry: any provider/id pair whose lowercased,
+// last-path-segment id starts with a recognized public model family survives
+// unfolded; everything else collapses into the custom sentinel.
+func TestNormalizeRuntimeModelFamilyPatterns(t *testing.T) {
+	for _, tc := range []struct {
+		name, provider, id string
+		want               RuntimeModel
+	}{
+		{"deepseek family", "nan", "deepseek-v4-flash", RuntimeModel{Provider: "nan", ID: "deepseek-v4-flash"}},
+		{"glm attached digits", "nan", "glm5.3", RuntimeModel{Provider: "nan", ID: "glm5.3"}},
+		{"glm attached suffix", "nan", "glm5.3-flash", RuntimeModel{Provider: "nan", ID: "glm5.3-flash"}},
+		{"id with embedded path", "nano-gpt", "TEE/glm-5.3", RuntimeModel{Provider: "nano-gpt", ID: "glm-5.3"}},
+		{"gpt family", "openai", "gpt-5.6-sol", RuntimeModel{Provider: "openai", ID: "gpt-5.6-sol"}},
+		{"dated claude id passes through", "anthropic", "claude-sonnet-5-20260101", RuntimeModel{Provider: "anthropic", ID: "claude-sonnet-5-20260101"}},
+		{"provider path collapses to last segment", "openrouter", "deepseek/deepseek-v4-flash", RuntimeModel{Provider: "openrouter", ID: "deepseek-v4-flash"}},
+		{"uppercase id lowercased", "nan", "DeepSeek-V4-Flash", RuntimeModel{Provider: "nan", ID: "deepseek-v4-flash"}},
+		{"private-looking id becomes custom", "nan", "acme-internal-finetune", RuntimeModel{Provider: "custom", ID: "custom"}},
+		{"suffix behind a public family is emitted whole", "nan", "deepseek-acme-finetune", RuntimeModel{Provider: "nan", ID: "deepseek-acme-finetune"}},
+		{"generic word prefix stays custom", "nan", "command-center-internal", RuntimeModel{Provider: "custom", ID: "custom"}},
+		{"generic brand word stays custom", "nan", "seed-1.6", RuntimeModel{Provider: "custom", ID: "custom"}},
+		{"attached run then separated groups", "nan", "glm5.3-flash:thinking", RuntimeModel{Provider: "nan", ID: "glm5.3-flash:thinking"}},
+		{"long alphanumeric run with trailing invalid char stays custom", "nan", "gpt" + strings.Repeat("a", 60) + "!", RuntimeModel{Provider: "custom", ID: "custom"}},
+		{"more than eight separated segments stays custom", "nan", "gpt-1-2-3-4-5-6-7-8-9", RuntimeModel{Provider: "custom", ID: "custom"}},
+		{"oversized id becomes custom", "nan", "claude-" + strings.Repeat("a", 60), RuntimeModel{Provider: "custom", ID: "custom"}},
+		{"provider with dot becomes custom, id kept", "Nano.GPT", "glm-5.3", RuntimeModel{Provider: "custom", ID: "glm-5.3"}},
+		{"uppercase provider lowered", "OPENAI", "gpt-5.4", RuntimeModel{Provider: "openai", ID: "gpt-5.4"}},
+		{"opencode literal private id becomes opencode/custom", "opencode", "whatever-private", RuntimeModel{Provider: "opencode", ID: "custom"}},
+		{"opencode literal public id passes through", "opencode", "gpt-5.4", RuntimeModel{Provider: "opencode", ID: "gpt-5.4"}},
+		{"empty provider", "", "gpt-5.4", RuntimeModel{Provider: "unknown", ID: "unknown"}},
+		{"empty id", "openai", "", RuntimeModel{Provider: "unknown", ID: "unknown"}},
+		{"empty both", "", "", RuntimeModel{Provider: "unknown", ID: "unknown"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := NormalizeRuntimeModel(tc.provider, tc.id)
+			if got != tc.want {
+				t.Fatalf("NormalizeRuntimeModel(%q, %q) = %+v, want %+v", tc.provider, tc.id, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestRuntimeModelPatternsMatchSchema keeps the Go family-pattern constants and
+// the JSON Schema wire contract as one source of truth: a divergence here would
+// silently let the collector and a host adapter disagree on what is public.
+func TestRuntimeModelPatternsMatchSchema(t *testing.T) {
+	data, err := os.ReadFile("../../contracts/telemetry/runtime/v1/schemas/aggregate.schema.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var document struct {
+		Definitions struct {
+			Model struct {
+				AnyOf []struct {
+					Properties struct {
+						Provider struct {
+							Pattern string `json:"pattern"`
+						} `json:"provider"`
+						ID struct {
+							Pattern string `json:"pattern"`
+						} `json:"id"`
+					} `json:"properties"`
+				} `json:"anyOf"`
+			} `json:"model"`
+		} `json:"$defs"`
+	}
+	if err := json.Unmarshal(data, &document); err != nil {
+		t.Fatal(err)
+	}
+	if len(document.Definitions.Model.AnyOf) == 0 {
+		t.Fatal("schema model definition has no anyOf branches")
+	}
+	generic := document.Definitions.Model.AnyOf[0].Properties
+	if generic.Provider.Pattern != runtimeModelProviderPattern {
+		t.Fatalf("schema provider pattern = %q, want Go constant %q", generic.Provider.Pattern, runtimeModelProviderPattern)
+	}
+	if generic.ID.Pattern != runtimeModelIDPattern {
+		t.Fatalf("schema id pattern = %q, want Go constant %q", generic.ID.Pattern, runtimeModelIDPattern)
 	}
 }
