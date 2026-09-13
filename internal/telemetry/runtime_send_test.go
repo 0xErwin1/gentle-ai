@@ -165,6 +165,38 @@ func TestRuntimeSendFreshIdentity(t *testing.T) {
 	}
 }
 
+func TestRuntimeSendWithDeliveryIDUsesGivenOrFallsBack(t *testing.T) {
+	home := runtimeHome(t)
+	var ids []string
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var ev RuntimeEvent
+		_ = json.NewDecoder(r.Body).Decode(&ev)
+		ids = append(ids, ev.DeliveryID)
+		_, _ = io.WriteString(w, runtimeAck)
+	}))
+	defer server.Close()
+	given := strings.Repeat("a", 32)
+	if got := SendRuntimeWithDeliveryID(context.Background(), home, runtimeEndpoint(server.URL), strings.NewReader(runtimeFixture), server.Client(), given); got != "stored" {
+		t.Fatal(got)
+	}
+	for _, invalid := range []string{"", "not-hex-at-all!!", strings.Repeat("a", 31), strings.Repeat("A", 32), strings.Repeat("a", 33)} {
+		if got := SendRuntimeWithDeliveryID(context.Background(), home, runtimeEndpoint(server.URL), strings.NewReader(runtimeFixture), server.Client(), invalid); got != "stored" {
+			t.Fatal(got)
+		}
+	}
+	if len(ids) != 6 || ids[0] != given {
+		t.Fatalf("given identity not sent verbatim: %+v", ids)
+	}
+	for _, id := range ids[1:] {
+		if id == given || !runtimeID.MatchString(id) {
+			t.Fatalf("invalid delivery id did not fall back to a fresh random one: %+v", ids)
+		}
+	}
+	if ids[1] == ids[2] {
+		t.Fatal("fallback delivery ids were not independent")
+	}
+}
+
 func TestRuntimeSendTimeout(t *testing.T) {
 	for _, phase := range []string{"headers", "body"} {
 		t.Run(phase, func(t *testing.T) {
