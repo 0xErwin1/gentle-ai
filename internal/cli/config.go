@@ -14,7 +14,6 @@ import (
 	"path/filepath"
 	"sort"
 
-	"github.com/gentleman-programming/gentle-ai/v3/internal/components/permissions"
 	configdomain "github.com/gentleman-programming/gentle-ai/v3/internal/config"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/render"
@@ -23,29 +22,9 @@ import (
 
 var writeConfigState = desiredstate.WriteDesiredAndManifest
 
-// decodeDesiredState decodes a document and adds the diagnostics that depend on
-// what an adapter can express. A declared rule the target client has no way to
-// read is not configuration: refusing it names the adapter to drop, where
-// accepting it would write a key that looks configured and does nothing.
+// decodeDesiredState decodes a document into desired state.
 func decodeDesiredState(document []byte) (configdomain.DesiredState, []configdomain.Diagnostic) {
-	desired, diagnostics := configdomain.Decode(document)
-	if rejects(diagnostics) || desired.Selection.Permissions == nil {
-		return desired, diagnostics
-	}
-
-	for _, agent := range desired.Selection.Agents {
-		if permissions.SupportsDeclaredRules(agent) {
-			continue
-		}
-		diagnostics = append(diagnostics, configdomain.Diagnostic{
-			Code:     "config.permissions.unsupported-adapter",
-			Path:     "$.selection.permissions",
-			Severity: configdomain.Warning,
-			Message:  fmt.Sprintf("adapter %q does not express permissions as allow, deny and ask rules and takes none of them; every other declared adapter still does", agent),
-		})
-	}
-
-	return desired, diagnostics
+	return configdomain.Decode(document)
 }
 
 // reportedDiagnostics writes the machine-readable result and then fails when it
@@ -127,28 +106,14 @@ func RunConfig(args []string, stdout io.Writer) error {
 		return fmt.Errorf("config %s requires --home for persisted desired state; run gentle-ai config %s --config <path> --home <path> --destination <path> --stage <path>", operation, operation)
 	}
 
-	// A preview that reads what was already applied differently from the
-	// reconciliation itself is worse than no preview: every managed file the
-	// installation already holds reports as a user-owned conflict, which is the
-	// one distinction plan and diff exist to make.
-	previous := configdomain.DesiredState{}
-	if *home != "" {
-		previous, err = readConfigDesired(*home)
-		if err != nil {
-			return err
-		}
-	}
-	baseline, live, err := configBaseline(*destination, previous)
-	if err != nil {
-		return err
-	}
+	live := map[render.ResourceKey]string{}
 	provider, unavailable := selectRenderProvider(desired, *home, *destination)
 	if len(unavailable) > 0 {
 		result["diagnostics"] = unavailable
 		return reportedDiagnostics(stdout, result, unavailable)
 	}
 
-	snapshot, err := render.New(provider).Render(render.Request{State: desired, Destination: *destination, StageRoot: *stage, Baseline: baseline})
+	snapshot, err := render.New(provider).Render(render.Request{State: desired, Destination: *destination, StageRoot: *stage})
 	if err != nil {
 		return err
 	}
@@ -219,40 +184,14 @@ func RunConfig(args []string, stdout io.Writer) error {
 	return writeConfigResult(stdout, result)
 }
 
-// selectRenderProvider resolves the renderer from the adapters the document
-// declares. Substituting a different adapter's renderer would hand the operator
-// configuration for a client they never named, so an adapter without rendering
-// support is reported instead of quietly replaced.
+// selectRenderProvider resolves the renderer for the declared document. It
+// always succeeds: every declared adapter takes the configuration
+// configurationStager renders, and rendering a role a client cannot express is
+// no longer a concept this contract has to reject.
 func selectRenderProvider(desired configdomain.DesiredState, readRoot, destination string) (render.Provider, []configdomain.Diagnostic) {
-	unavailable := make([]configdomain.Diagnostic, 0)
-	selected := make([]render.Provider, 0, len(desired.Selection.Agents))
-
-	for _, agent := range desired.Selection.Agents {
-		provider, ok := render.ProviderFor(agent)
-		if ok {
-			selected = append(selected, provider)
-			continue
-		}
-
-		// An adapter with no notion of roles still takes everything else the
-		// document declares, so only a declared role is refused. Refusing the
-		// whole render would make one unsupported concept cost the operator the
-		// configuration this adapter can actually hold.
-		if len(desired.Roles) > 0 {
-			unavailable = append(unavailable, configdomain.Diagnostic{
-				Code:     "config.role.unsupported-adapter",
-				Path:     "$.roles",
-				Severity: configdomain.Error,
-				Message:  fmt.Sprintf("adapter %q expresses no agent roles; remove the roles from the document or drop that adapter, then run gentle-ai config render again", agent),
-			})
-		}
+	selected := []render.Provider{
+		configurationStager{adapters: desired.Selection.Agents, readRoot: readRoot, destination: destination},
 	}
-
-	if len(unavailable) > 0 {
-		return nil, unavailable
-	}
-
-	selected = append(selected, configurationStager{adapters: desired.Selection.Agents, readRoot: readRoot, destination: destination})
 
 	owner := map[string]render.Provider{}
 	for _, provider := range selected {
@@ -351,41 +290,6 @@ func readConfigManifest(home, destination string) (render.Manifest, error) {
 	return manifest, nil
 }
 
-func readConfigDesired(home string) (configdomain.DesiredState, error) {
-	desired, err := desiredstate.ReadDesired(home)
-	if os.IsNotExist(err) {
-		return configdomain.DesiredState{}, nil
-	}
-	if err != nil {
-		return configdomain.DesiredState{}, fmt.Errorf("read desired state: %w", err)
-	}
-	return desired, nil
-}
-
-func configBaseline(destination string, previous ...configdomain.DesiredState) (map[string][]byte, map[render.ResourceKey]string, error) {
-	path := filepath.Join(destination, ".config", "opencode", "opencode.json")
-	contents, err := os.ReadFile(path)
-	if os.IsNotExist(err) {
-		return nil, map[render.ResourceKey]string{}, nil
-	}
-	if err != nil {
-		return nil, nil, fmt.Errorf("read destination: %w", err)
-	}
-	live, err := openCodeLiveResources(contents)
-	if err != nil {
-		return nil, nil, err
-	}
-	prior := configdomain.DesiredState{}
-	if len(previous) > 0 {
-		prior = previous[0]
-	}
-	contents, err = withoutPriorRoleNames(contents, prior)
-	if err != nil {
-		return nil, nil, err
-	}
-	return map[string][]byte{renderOpenCodeSettingsPath: contents}, live, nil
-}
-
 // addLiveFileResources records what the destination actually holds for every
 // whole-file resource a manifest mentions. Without it the planner sees no live
 // state for a staged tree and reads every managed file as stale, because the
@@ -405,48 +309,6 @@ func addLiveFileResources(live map[render.ResourceKey]string, destination string
 		}
 		live[key] = digest(contents)
 	}
-}
-
-const renderOpenCodeSettingsPath = ".config/opencode/opencode.json"
-
-func openCodeLiveResources(contents []byte) (map[render.ResourceKey]string, error) {
-	var settings map[string]any
-	if err := json.Unmarshal(contents, &settings); err != nil {
-		return nil, fmt.Errorf("read destination: parse OpenCode settings: %w", err)
-	}
-	agents, _ := settings["agent"].(map[string]any)
-	live := make(map[render.ResourceKey]string, len(agents))
-	for name, agent := range agents {
-		encoded, err := json.Marshal(agent)
-		if err != nil {
-			return nil, fmt.Errorf("read destination: encode OpenCode agent %q: %w", name, err)
-		}
-		live[render.ResourceKey{Path: renderOpenCodeSettingsPath, Selector: "/agent/" + name}] = digest(encoded)
-	}
-	return live, nil
-}
-
-func withoutPriorRoleNames(contents []byte, previous configdomain.DesiredState) ([]byte, error) {
-	if len(previous.Roles) == 0 {
-		return contents, nil
-	}
-	var settings map[string]any
-	if err := json.Unmarshal(contents, &settings); err != nil {
-		return nil, fmt.Errorf("read destination: parse OpenCode settings: %w", err)
-	}
-	agents, _ := settings["agent"].(map[string]any)
-	for _, role := range previous.Roles {
-		name := role.RenderedName
-		if name == "" {
-			name = string(role.ID)
-		}
-		delete(agents, name)
-	}
-	encoded, err := json.Marshal(settings)
-	if err != nil {
-		return nil, fmt.Errorf("read destination: encode OpenCode settings: %w", err)
-	}
-	return encoded, nil
 }
 
 func digest(contents []byte) string {

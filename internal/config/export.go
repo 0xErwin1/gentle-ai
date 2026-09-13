@@ -15,7 +15,6 @@ func Export(state DesiredState) ExportResult {
 		Document: Document{
 			Version:   CurrentVersion,
 			Selection: state.Selection,
-			Roles:     append([]Role(nil), state.Roles...),
 		},
 		Lossless: true,
 	}

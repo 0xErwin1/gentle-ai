@@ -1,6 +1,6 @@
 # Declarative Configuration
 
-A Gentle AI installation can be described in one versioned JSON document and reproduced from it. The document is the desired state: what should be configured, for which clients, with which roles, skills, permissions and MCP servers. Every choice the interactive flags express is expressible here, and the same document drives validation, a non-mutating render, a diff against the live installation, reconciliation, and a lossless export back out.
+A Gentle AI installation can be described in one versioned JSON document and reproduced from it. The document is the desired state: what should be configured and for which clients. Every choice Gentle AI's own imperative path expresses is expressible here, and the same document drives validation, a non-mutating render, a diff against the live installation, reconciliation, and a lossless export back out.
 
 ```console
 gentle-ai config validate --config gentle-ai.json
@@ -42,35 +42,13 @@ gentle-ai install --config gentle-ai.json
     "agents": ["opencode", "claude-code"],
     "components": ["skills", "persona", "permissions", "sdd", "theme"],
     "skills": ["comment-writer", "cognitive-doc-design"],
-    "skillAssignments": { "opencode": ["comment-writer"] },
     "persona": "neutral",
     "preset": "full-gentleman",
     "sddMode": "single",
     "strictTDD": true,
     "scope": "global",
-    "channel": "stable",
-    "permissions": {
-      "allow": ["Bash(git status:*)"],
-      "deny": ["Bash(rm -rf:*)"],
-      "ask": ["Bash(git push:*)"]
-    },
-    "mcpServers": {
-      "example": { "command": "example-mcp", "args": ["serve"] }
-    }
-  },
-  "roles": [
-    {
-      "id": "orchestrator",
-      "renderedName": "gentle-orchestrator",
-      "references": ["apply"],
-      "description": "Coordinates the change",
-      "prompt": "You coordinate work and delegate.",
-      "tools": ["Read", "Grep"],
-      "mode": "primary",
-      "model": { "provider": "anthropic", "model": "claude-opus-5" }
-    },
-    { "id": "apply", "renderedName": "gentle-apply", "mode": "subagent", "hidden": true }
-  ]
+    "channel": "stable"
+  }
 }
 ```
 
@@ -78,27 +56,7 @@ Unknown fields are rejected rather than ignored, so a typo fails validation inst
 
 Every field, what it accepts and what omitting it means is in the [reference](declarative-config-reference.md).
 
-### Logical identity and rendered names
-
-A role's `id` is its logical identity and never appears in generated output. `renderedName` is the name a client sees. `references` always name logical ids.
-
-Renaming is therefore a one-line edit: change `renderedName`, reconcile, and every generated reference follows. The old resource is removed and the new one created in the same plan.
-
-`mode` says whether the operator addresses the role directly (`primary`) or another role delegates to it (`subagent`); `hidden` keeps it out of the client's agent list. Each adapter renders the role in its own form: a file with frontmatter where agents are files, an entry with `mode`, `tools` and a delegation permission where they live in one settings file. An adapter whose format has no equivalent for a field renders the rest.
-
-```console
-gentle-ai config diff --config gentle-ai.json --home ~ --destination ~ --stage /tmp/stage
-```
-
-```json
-{ "kind": "create", "path": ".claude/agents/gentle-implementer.md", "selector": "file" }
-{ "kind": "update", "path": ".config/opencode/opencode.json", "selector": "/agent/gentle-orchestrator" }
-{ "kind": "remove", "path": ".claude/agents/gentle-apply.md", "selector": "file" }
-```
-
-### Per-adapter overrides
-
-`skills` applies to every declared adapter. `skillAssignments` replaces that list for the adapters it names and leaves the rest on the flat list, so a document only names an adapter when it differs.
+`skills` applies to every declared adapter; there is no per-adapter override. MCP servers and permission rules are not part of this document either: they are gentle-ai-nix's to declare, not Gentle AI's own imperative path.
 
 ## Operations
 
@@ -128,7 +86,7 @@ Gentle AI records an ownership manifest of every resource it wrote. Reconciliati
 - A managed resource missing from the document is removed.
 - A managed resource whose content changed is updated.
 - An unmanaged resource occupying a path the document wants is reported as `render.ownership.conflict` and left alone.
-- Unrelated keys in a composed settings file are preserved. Ownership inside `opencode.json` is per agent (`/agent/<name>`), not per file, so hand-written agents survive a reconcile.
+- Unrelated keys in a composed settings file are preserved, so hand-written content in it survives a reconcile.
 
 Components that are installed rather than written — the ones that download a binary or clone a repository — carry no bytes to reconcile. A plan reports them as `pendingProvisioning` with the command that performs them, instead of pretending they were written.
 
@@ -140,8 +98,6 @@ For one invocation, later wins:
 2. The selected preset.
 3. The document.
 4. Existing user-owned client configuration, where the adapter composes rather than replaces.
-
-Declared permission rules are unioned with the shipped guardrails rather than replacing them, so allowing something never silently removes a deny.
 
 `--config` is mutually exclusive with the flags that carry semantic configuration — `--agent`, `--component`, `--skill`, `--persona`, `--preset`, `--sdd-mode` and the background-subagent flags. Combining them is rejected (`config.flags.exclusive`) rather than resolved by a hidden rule. Operational flags stay composable: `--dry-run`, `--destination`, `--stage`, `--home`.
 
@@ -155,13 +111,6 @@ The document describes what Gentle AI should configure. It deliberately excludes
 
 `version` is the schema version and is independent of the binary version. `v1` is current; `v0` is accepted and migrated. An unrecognised version is rejected with `config.version.unsupported` naming the versions this binary understands, so a consumer can decide whether a document is safe to interpret without inspecting the binary.
 
-## Adapter support
-
-Adapters consume the same normalized model and only implement output. Two capabilities vary and are reported rather than silently worked around:
-
-- An adapter that expresses no agent roles refuses a document declaring `roles` (`config.role.unsupported-adapter`) instead of dropping them. Declare the roles for the adapters that hold them, or drop that adapter.
-- An adapter that does not read permissions as allow/deny/ask rule lists refuses a document declaring `permissions` (`config.permissions.unsupported-adapter`). OpenCode, for instance, keys permissions per tool and glob under a different name, so a rule list written there would be a block it never reads.
-
 ## Diagnostics
 
 | Code | Meaning |
@@ -169,11 +118,6 @@ Adapters consume the same normalized model and only implement output. Two capabi
 | `config.document.unknown-field` | The document contains a field the schema does not define. |
 | `config.version.unsupported` | The schema version is not one this binary understands. |
 | `config.agent.unsupported` | A declared adapter does not exist. |
-| `config.role.reference.unresolved` | A `references` entry names a role the document does not declare. |
-| `config.role.mode.unsupported` | A role declares a mode other than `primary` or `subagent`. |
-| `config.role.unsupported-adapter` | A declared adapter expresses no agent roles. |
-| `config.skill-assignment.undeclared-adapter` | A skill assignment names an adapter the document does not declare. |
-| `config.permissions.unsupported-adapter` | A declared adapter does not read permissions as rule lists. |
 | `config.flags.exclusive` | `--config` was combined with a semantic selection flag. |
 | `config.export.loss.*` | Export could not represent a value; the message names what to do instead. |
 | `render.ownership.conflict` | An unmanaged resource occupies a path the document wants. |
@@ -183,5 +127,3 @@ Adapters consume the same normalized model and only implement output. Two capabi
 - [ ] `config validate` returns an empty `diagnostics` array.
 - [ ] `config diff` against the intended machine reports only the changes you expect.
 - [ ] `config export` of the result round-trips to the same document with `"lossless": true`.
-- [ ] Roles referenced by other roles are declared in the same document.
-- [ ] Adapters named by `skillAssignments` also appear in `agents`.

@@ -13,7 +13,6 @@ Two rules run through the whole contract:
 |-------|------|---------|
 | `version` | string | Schema version. `v1` is current; `v0` is accepted and migrated. Anything else is rejected. |
 | `selection` | object | What the installation should be. Every field below lives here. |
-| `roles` | array of [role](#roles) | Logical agent roles. |
 
 ## What to configure
 
@@ -21,9 +20,7 @@ Two rules run through the whole contract:
 |-------|------|---------------|
 | `agents` | array of [provider id](#providers) | Nothing is configured. At least one is required in practice. |
 | `components` | array of [component id](#components) | The preset decides. |
-| `skills` | array of [skill id](#skills) | Every skill the preset carries, which for the default preset is all of them. |
-| `skillExclusions` | array of skill id | Nothing is removed. Applies to whatever `skills` resolved to, so dropping one skill never means restating the rest. |
-| `skillAssignments` | object: provider id → array of skill id | Every provider takes the flat `skills` list. A provider named here takes its own list instead; the others are unaffected. |
+| `skills` | array of [skill id](#skills) | Every skill the preset carries, which for the default preset is all of them. Applies to every declared adapter; there is no per-adapter override. |
 | `persona` | `gentleman` \| `neutral` | The default persona. |
 | `preset` | `full-gentleman` \| `ecosystem-only` \| `minimal` \| `custom` | Treated as full. |
 | `communityTools` | array of `codegraph` | None. |
@@ -32,13 +29,6 @@ Two rules run through the whole contract:
 ### Providers
 
 `claude-code`, `opencode`, `codex`, `kilocode`, `gemini-cli`, `cursor`, `vscode-copilot`, `antigravity`, `windsurf`, `kimi`, `qwen-code`, `kiro-ide`, `openclaw`, `pi`, `trae-ide`, `hermes`.
-
-Providers differ in what they can express. Two differences are reported rather than worked around:
-
-| Capability | Providers | Otherwise |
-|------------|-----------|-----------|
-| Agent roles | any that keeps agents as files, plus `opencode` | `config.role.unsupported-adapter` rejects a document declaring `roles` |
-| Permission rule lists | `claude-code`, `gemini-cli`, `qwen-code`, `vscode-copilot` | `config.permissions.unsupported-adapter` warns; the rules still reach every provider that reads them |
 
 ### Components
 
@@ -114,42 +104,14 @@ Any other provider is rejected with `config.model-preset.unsupported-provider`. 
 | `model` | string, required |
 | `effort` | string, where the provider expresses one |
 
-## Roles
-
-A role's `id` is its logical identity and never appears in generated output. Other roles reference the id, so renaming is a single edit.
-
-| Field | Type | Omitted means |
-|-------|------|---------------|
-| `id` | string, required | — |
-| `renderedName` | string | Rendered under its id. |
-| `references` | array of role id | Delegates to nothing. |
-| `description` | string | The client shows none. |
-| `prompt` | string | The client uses its default. |
-| `tools` | array of string | The client's default toolset. |
-| `model` | [model assignment](#model-assignment) | The client's default model. |
-| `mode` | `primary` \| `subagent` | The client decides. |
-| `hidden` | boolean | The client decides. |
-
-A role whose `renderedName` matches an agent a selected component generates is rejected: two different agents asking for one name.
-
 ## Other
 
 | Field | Type | Omitted means |
 |-------|------|---------------|
-| `permissions` | `{allow, deny, ask}`, each an array of rule strings | No rules beyond the shipped guardrails. Declared rules are unioned with them, never replacing them. |
-| `mcpServers` | object: name → [MCP server](#mcp-server) | Only what the components configure. |
 | `scope` | `global` \| `workspace` | The flag and environment keep their turn. |
 | `channel` | `stable` \| `beta` | The same. |
 
-### MCP server
-
-| Field | Type |
-|-------|------|
-| `command` | string — a local server. Mutually exclusive with `url`. |
-| `args` | array of string |
-| `env` | object: name → value |
-| `url` | string — a remote server. Mutually exclusive with `command`. |
-| `enabled` | boolean |
+MCP servers and permission rules are not part of this document: gentle-ai-nix owns declaring both, not Gentle AI's own imperative path.
 
 ## Adoption
 
@@ -177,17 +139,10 @@ Every diagnostic carries a `code`, the JSON `path` it applies to, a `severity` a
 | `config.version.unsupported` | A schema version this binary cannot interpret. |
 | `config.agent.unsupported` | A provider id that does not exist. |
 | `config.component.unsupported` | A component id that does not exist. |
-| `config.skill.unsupported` | A skill id that does not exist, in `skills` or `skillExclusions`. |
+| `config.skill.unsupported` | A skill id that does not exist, in `skills`. |
 | `config.community-tool.unsupported`, `config.opencode-plugin.unsupported` | The same, for those lists. |
-| `config.role.invalid`, `config.role.duplicate` | A role with no id, or two roles sharing one. |
-| `config.role.reference.unresolved` | A `references` entry naming a role the document does not declare. |
-| `config.role.model.incomplete` | A role model missing its provider or its model. |
-| `config.role.mode.unsupported` | A mode other than `primary` or `subagent`. |
-| `config.role.unsupported-adapter` | A declared provider expresses no agent roles. |
-| `config.skill-assignment.undeclared-adapter` | A skill assignment naming a provider the document does not declare. |
 | `config.model-preset.unsupported-provider` | A provider that offers no named profiles. |
 | `config.model-preset.unsupported` | A profile name that provider does not offer. |
-| `config.permissions.unsupported-adapter` | *Warning.* A provider that does not read permissions as rule lists. |
 | `config.flags.exclusive` | `--config` combined with a semantic selection flag. |
 | `config.export.loss.*` | Export could not represent a value; the message names what to do instead. |
 | `render.ownership.conflict` | An unmanaged resource occupies a path the document wants. |

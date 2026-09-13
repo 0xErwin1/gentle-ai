@@ -140,15 +140,12 @@ func objectKeys(value any, path string) []documentKey {
 // fullyPopulatedDocument is the single fixture both shape guards inspect. It has
 // to exercise every contract field, which the guard below enforces.
 func fullyPopulatedDocument() Document {
-	hidden := true
-
 	return Document{
 		Version: CurrentVersion,
 		Selection: Selection{
 			Agents:          []model.AgentID{model.AgentOpenCode},
 			Components:      []model.ComponentID{model.ComponentEngram},
 			Skills:          []model.SkillID{model.SkillSDDApply},
-			SkillExclusions: []model.SkillID{model.SkillGoTesting},
 			Persona:         model.PersonaGentleman,
 			Preset:          model.PresetFullGentleman,
 			SDDMode:         model.SDDModeSingle,
@@ -170,8 +167,6 @@ func fullyPopulatedDocument() Document {
 							PhaseAssignments: map[string]ModelAssignment{"sdd-apply": {Provider: "anthropic", Model: "claude-sonnet"}},
 						},
 					},
-					Skills:     []model.SkillID{model.SkillSDDApply},
-					MCPServers: map[string]MCPServer{"atlas": {Command: "atlas"}},
 				},
 				model.AgentClaudeCode: {
 					Models: mustRawJSON(map[string]model.ClaudeModelAlias{"sdd-apply": model.ClaudeModelOpus}),
@@ -192,16 +187,7 @@ func fullyPopulatedDocument() Document {
 			CodexPhaseModelAssignments:  map[string]string{"sdd-apply": "gpt-5.6-sol"},
 			ClaudePhaseAssignments:      map[string]ClaudePhaseAssignment{"sdd-apply": {Model: "opus", Effort: "high"}},
 			CodexOrchestrator:           &CodexOrchestratorAssignment{Model: "gpt-5.6-sol", Effort: "medium"},
-			MCPServers:                  map[string]MCPServer{"atlas": {Command: "atlas", Args: []string{"mcp"}, Env: map[string]string{"TOKEN": "x"}, Headers: map[string]string{"Authorization": "Bearer x"}}},
-			Permissions:                 &Permissions{Allow: []string{"Read(*)"}, Deny: []string{"Bash(curl *)"}, Ask: []string{"Edit(*.tf)"}},
 		},
-		Roles: []Role{{
-			ID: "reviewer", RenderedName: "code-reviewer", References: []RoleRef{"reviewer"},
-			Description: "reviews", Prompt: "you review", Tools: []string{"Read"},
-			Model:  &ModelAssignment{Provider: "anthropic", Model: "claude-sonnet"},
-			Mode:   RoleSubagent,
-			Hidden: &hidden,
-		}},
 	}
 }
 
@@ -259,22 +245,6 @@ func TestEveryContractFieldIsPopulated(t *testing.T) {
 		}
 		if !found {
 			t.Errorf("selection.providers.<id>.%s is absent from every provider in the fixture, so no shape guard covers it; populate it", name)
-		}
-	}
-
-	roles, _ := decoded["roles"].([]any)
-	if len(roles) == 0 {
-		t.Fatal("fixture declares no role")
-	}
-	role, _ := roles[0].(map[string]any)
-	for index := 0; index < reflect.TypeOf(Role{}).NumField(); index++ {
-		field := reflect.TypeOf(Role{}).Field(index)
-		name := strings.Split(field.Tag.Get("json"), ",")[0]
-		if name == "" || name == "-" {
-			continue
-		}
-		if _, present := role[name]; !present {
-			t.Errorf("roles[].%s is absent from the fixture, so no shape guard covers it; populate it", name)
 		}
 	}
 }

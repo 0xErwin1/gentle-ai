@@ -38,10 +38,6 @@ func TestSelectionSurvivesTheContractRoundTrip(t *testing.T) {
 		CodexCarrilModelAssignments: map[string]string{"sdd-mid": "gpt-5.6-luna"},
 		CodexPhaseModelAssignments:  map[string]string{"sdd-apply": "gpt-5.6-sol"},
 		Profiles:                    []model.Profile{{Name: "cheap", OrchestratorModel: model.ModelAssignment{ProviderID: "anthropic", ModelID: "claude-haiku"}}},
-
-		MCPServers:       map[string]model.MCPServer{"atlas": {Command: "atlas", Args: []string{"mcp"}, Enabled: true}},
-		Permissions:      &model.Permissions{Deny: []string{"Bash(curl *)"}},
-		SkillAssignments: map[model.AgentID][]model.SkillID{model.AgentOpenCode: {model.SkillGoTesting}},
 	}
 
 	document := FromSelection(original)
