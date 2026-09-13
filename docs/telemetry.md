@@ -259,10 +259,26 @@ supplies response model plus input, output, cache-read, and cache-creation token
 Reasoning tokens are unsupported and total tokens are unavailable; neither is
 inferred.
 
-`Stop` always becomes an `orchestrator` activity-only launch-style observation.
-It does not read or attribute transcript usage or a response model: without a
-unique response identity or persistent replay state, a repeated final message
-could match an older record when the current transcript row has not been flushed.
+`Stop` reads its own transcript at `transcript_path` the same way `SubagentStop`
+reads `agent_transcript_path`, and reports the newest assistant record's
+response model plus input, output, cache-read, and cache-creation tokens as an
+`orchestrator` observation. `Stop` has no agent definition to read.
+
+`Stop` has no unique response identity by itself: a repeated final message can
+match an older transcript row when the current row has not yet been flushed.
+This is made safe through delivery, not by discarding the evidence. The
+adapter also captures the newest usable assistant record's API message id
+(`message.id`, falling back to the record-level `uuid` when `message.id` is
+absent) and, when one is available, derives the outgoing delivery id as the
+first 16 bytes of `sha256("gentle-ai.telemetry-runtime-claude-stop/v1\x00" +
+message id)`, hex-encoded. The message id itself never leaves the machine;
+only this one-way hash is transmitted. A `Stop` that re-reads a transcript row
+already sent therefore produces the same delivery id, and the collector drops
+it as `duplicate` instead of double-counting it; a turn whose transcript row
+was not flushed in time for one `Stop` is picked up and counted at the next
+`Stop` that observes it. When no transcript evidence or no usable message id
+is available, the observation falls back to a fresh delivery id, exactly like
+`SubagentStop`.
 
 For a known named subagent, at most 64 KiB of
 `~/.claude/agents/<agent_type>.md` supplies selected model and selected effort.
