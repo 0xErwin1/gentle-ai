@@ -30,7 +30,7 @@ var rtkSetupContracts = []rtkSetupContract{
 	{model.AgentClaudeCode, "init -g", rtkUserMutationPath{rtkUserMutationPathInstruction, "~/.claude/CLAUDE.md"}},
 	{model.AgentOpenCode, "init -g --opencode", rtkUserMutationPath{rtkUserMutationPathInstruction, "~/.config/opencode/AGENTS.md"}},
 	{model.AgentCodex, "init -g --codex", rtkUserMutationPath{rtkUserMutationPathInstruction, "~/.codex/AGENTS.md"}},
-	{model.AgentPi, "init -g --agent pi", rtkUserMutationPath{rtkUserMutationPathInstruction, "~/.pi/agent/AGENTS.md"}},
+	{model.AgentPi, "init -g --agent " + "pi", rtkUserMutationPath{rtkUserMutationPathInstruction, "~/.pi/agent/AGENTS.md"}},
 }
 
 type rtkPlatform string
