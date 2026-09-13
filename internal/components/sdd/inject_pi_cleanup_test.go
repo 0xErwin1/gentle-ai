@@ -3,6 +3,7 @@ package sdd
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 
 	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/pi"
@@ -177,8 +178,10 @@ func TestRetirePiSystemPromptBlocksSafeguards(t *testing.T) {
 	if got, _ := os.ReadFile(path); string(got) != "user\r\n\r\ntail" {
 		t.Fatalf("unowned bytes changed: %q", got)
 	}
-	if info, _ := os.Stat(path); info.Mode().Perm() != 0o600 {
-		t.Fatalf("mode = %v, want 0600", info.Mode())
+	if runtime.GOOS != "windows" {
+		if info, _ := os.Stat(path); info.Mode().Perm() != 0o600 {
+			t.Fatalf("mode = %v, want 0600", info.Mode())
+		}
 	}
 	if err := os.WriteFile(path, []byte("<!-- gentle-ai:persona -->\nunpaired"), 0o600); err != nil {
 		t.Fatal(err)

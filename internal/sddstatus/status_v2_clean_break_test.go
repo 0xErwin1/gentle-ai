@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -372,7 +373,17 @@ func snapshotStatusReadTree(t *testing.T, root string) string {
 		if err != nil {
 			return err
 		}
+		relative = filepath.ToSlash(relative)
 		if relative == "." {
+			return nil
+		}
+		// Git may update administrative files while status resolves repository
+		// context. The read-only status contract covers planning artifacts and
+		// authority, not Git's platform-specific bookkeeping.
+		if relative == ".git" {
+			if entry.IsDir() {
+				return filepath.SkipDir
+			}
 			return nil
 		}
 		if entry.IsDir() {
@@ -582,7 +593,11 @@ func TestConsentPublicationFailuresEmitNoIdentity(t *testing.T) {
 				case "unreadable-readback":
 					return os.Mkdir(destination, 0755)
 				case "replacement":
-					if err := os.Rename(root, root+"-old"); err != nil {
+					// Move the observed change root out of the active changes tree before
+					// creating its replacement. This keeps the identity-race fixture
+					// independent of Windows' handling of a renamed current-root sibling.
+					movedRoot := filepath.Join(t.TempDir(), "publication-old")
+					if err := os.Rename(root, movedRoot); err != nil {
 						return err
 					}
 					if err := os.Mkdir(root, 0755); err != nil {
@@ -614,6 +629,9 @@ func TestStatusReviewLookupFailureIsAdvisory(t *testing.T) {
 func TestConsentPreparationUnwritableAndUnreadable(t *testing.T) {
 	for _, unreadable := range []bool{false, true} {
 		t.Run(fmt.Sprint(unreadable), func(t *testing.T) {
+			if runtime.GOOS == "windows" {
+				t.Skip("Windows does not enforce POSIX chmod access restrictions")
+			}
 			repo := initRuntimeLedgerRepo(t)
 			outside := t.TempDir()
 			root := seedReadyChange(t, repo, "permissions", "- [ ] Update `"+outside+"/main.go`\n")
