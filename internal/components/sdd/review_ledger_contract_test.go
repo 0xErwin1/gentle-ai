@@ -510,7 +510,12 @@ func TestKilocodeReviewSettingsMatchCurrentMainBaseline(t *testing.T) {
 	// #4524 makes the shared session preflight explicit about runtime-confirmed parent
 	// authority. Kilocode inherits the prompt-only fallback because it has no managed
 	// executable tool interception surface.
-	const want = "2c7cc7c50ae6d1fc5bbd80974a1a15aee58240b3edd16f7715d9b7bc7f6e04af"
+	// The OpenCode preflight now always routes through the `question` tool instead of
+	// falling back to a lossless blocking prompt when all three groups are
+	// representable, so the runtime-owned plugin can canonicalize and tolerantly match
+	// grouped answers instead of losing them to a typed chat reply. Kilocode embeds the
+	// same shared session preflight body, so the hash moved. Deliberate, not drift.
+	const want = "8f388ae4197cfa0fbfdf1f82423a599ea43e43665659da11e0389b670d241bf4"
 	if got != want {
 		t.Fatalf("Kilocode settings SHA-256 = %s, want current-main baseline %s", got, want)
 	}
