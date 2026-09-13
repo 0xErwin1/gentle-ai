@@ -242,7 +242,7 @@ func TestOpenCodeTelemetryManifestStrictness(t *testing.T) {
 			case "schema-null":
 				text = strings.Replace(text, `"schema": "`+ownershipSchema+`"`, `"schema":null`, 1)
 			case "mode-null":
-				text = strings.Replace(text, `"mode": 420`, `"mode":null`, 1)
+				text = string(replaceManagedManifestMode(t, raw, json.RawMessage("null")))
 			case "trailing":
 				text += `{}`
 			case "duplicate":
@@ -252,23 +252,21 @@ func TestOpenCodeTelemetryManifestStrictness(t *testing.T) {
 			case "null":
 				text = strings.Replace(text, `"overlay": false`, `"overlay": null`, 1)
 			case "mode-type":
-				text = strings.Replace(text, `"mode": 420`, `"mode": "420"`, 1)
+				text = string(replaceManagedManifestMode(t, raw, json.RawMessage(`"420"`)))
 			case "mode-value":
-				text = strings.Replace(text, `"mode": 420`, `"mode": 511`, 1)
+				text = string(replaceManagedManifestMode(t, raw, json.RawMessage("511")))
 			case "mode-drift":
-				mode := os.FileMode(0600)
 				if runtime.GOOS == "windows" {
-					mode = 0444
+					t.Skip("Windows does not preserve POSIX chmod mode drift")
 				}
-				if err := os.Chmod(paths[0], mode); err != nil {
+				if err := os.Chmod(paths[0], 0600); err != nil {
 					t.Fatal(err)
 				}
 			case "metadata-mode":
-				mode := os.FileMode(0644)
 				if runtime.GOOS == "windows" {
-					mode = 0444
+					t.Skip("Windows does not support writable metadata after POSIX chmod drift")
 				}
-				if err := os.Chmod(paths[1], mode); err != nil {
+				if err := os.Chmod(paths[1], 0644); err != nil {
 					t.Fatal(err)
 				}
 			case "unknown-pair":
@@ -305,6 +303,31 @@ func TestOpenCodeTelemetryManifestStrictness(t *testing.T) {
 			}
 		})
 	}
+}
+
+// replaceManagedManifestMode targets the parsed field instead of assuming the
+// platform's serialized writable mode (0600 on POSIX, 0666 on Windows).
+func replaceManagedManifestMode(t *testing.T, raw []byte, mode json.RawMessage) []byte {
+	t.Helper()
+	var manifest map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &manifest); err != nil {
+		t.Fatal(err)
+	}
+	var file map[string]json.RawMessage
+	if err := json.Unmarshal(manifest["file"], &file); err != nil {
+		t.Fatal(err)
+	}
+	file["mode"] = mode
+	encodedFile, err := json.Marshal(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest["file"] = encodedFile
+	encoded, err := json.Marshal(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return encoded
 }
 
 func TestOpenCodeTelemetryManifestRecordsActualMode(t *testing.T) {
