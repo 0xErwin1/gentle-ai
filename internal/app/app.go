@@ -112,6 +112,8 @@ func RunArgs(args []string, stdout io.Writer) error {
 			return cli.RunSDDArchiveCompose(args[1:], stdout)
 		case "sdd-task-result":
 			return cli.RunSDDTaskResult(args[1:], stdout)
+		case "sdd-preflight-hook":
+			return cli.RunSDDPreflightHook(args[1:], stdout)
 		case "codegraph":
 			return cli.RunCodeGraph(args[1:], stdout)
 		case "telemetry":

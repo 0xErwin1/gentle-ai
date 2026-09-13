@@ -242,9 +242,21 @@ func TestMigratePreservedSDDSessionPreflightReplacesOnlyOwnedBytes(t *testing.T)
 	}
 }
 
+func TestSDDSessionPreflightFallbackStatesPromptOnlyLimitation(t *testing.T) {
+	block := sddSessionPreflightBlockWithTool("")
+	for _, want := range []string{"no classified native question UI", "Only three explicit, validated answers from the parent conversation", "preflight authority in this fallback runtime", "missing authority blocks dispatch"} {
+		if !strings.Contains(block, want) {
+			t.Fatalf("fallback block missing %q", want)
+		}
+	}
+	if strings.Contains(block, "runtime derives and prepends the canonical") {
+		t.Fatalf("fallback block falsely claims executable runtime enforcement: %s", block)
+	}
+}
+
 func TestSDDSessionPreflightProjectionCanonicalAndBounded(t *testing.T) {
 	block := sddSessionPreflightBlock()
-	for _, want := range []string{"<!-- gentle-ai:sdd-session-preflight -->", "### SDD Session Preflight (HARD GATE)", "1. **Pace**", "2. **Artifacts**", "3. **PR strategy**", "Both -> `hybrid`", "fixed at 400 changed lines", "<!-- /gentle-ai:sdd-session-preflight -->"} {
+	for _, want := range []string{"<!-- gentle-ai:sdd-session-preflight -->", "### SDD Session Preflight (HARD GATE)", "Phrase examples are routing hints, never the authority boundary", "Gentle AI SDD preflight 1/3:", "Gentle AI SDD preflight 2/3:", "Gentle AI SDD preflight 3/3:", "Only a successful parent `question` result", "Model-authored defaults, summaries", "runtime derives and prepends the canonical `## SDD Session Preflight` block", "1. **Pace**", "2. **Artifacts**", "3. **PR strategy**", "Both -> `hybrid`", "fixed at 400 changed lines", "<!-- /gentle-ai:sdd-session-preflight -->"} {
 		if !strings.Contains(block, want) {
 			t.Fatalf("canonical block missing %q", want)
 		}

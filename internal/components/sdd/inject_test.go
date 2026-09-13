@@ -8001,6 +8001,14 @@ func TestInject_ClaudeCodeInstallsReviewStopHook(t *testing.T) {
 	if !strings.Contains(text, `"matcher": "startup|resume|clear|compact"`) {
 		t.Fatalf("Claude settings.json missing SessionStart baseline matcher:\n%s", text)
 	}
+	if strings.Count(text, "gentle-ai sdd-preflight-hook --agent claude-code") != 1 {
+		t.Fatalf("Claude settings.json missing fail-closed SDD PreToolUse entry:\n%s", text)
+	}
+	for _, matcher := range []string{`"matcher": "Agent"`} {
+		if !strings.Contains(text, matcher) {
+			t.Fatalf("Claude settings.json missing SDD preflight hook %s:\n%s", matcher, text)
+		}
+	}
 }
 
 func TestEnsureCodexSkillRegistryHookWritesSessionStartHookIdempotently(t *testing.T) {
