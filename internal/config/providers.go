@@ -46,14 +46,6 @@ type ProviderSelection struct {
 
 	// ProfileStrategy is opencode-only: how sync handles named SDD profiles.
 	ProfileStrategy model.SDDProfileStrategyID `json:"profileStrategy,omitempty"`
-
-	// Skills overrides the flat skill list for this provider. A provider
-	// without this takes the flat list, so the simple form keeps meaning
-	// "every provider" and this is only needed when one must differ.
-	Skills []model.SkillID `json:"skills,omitempty"`
-
-	// MCPServers overrides the flat MCP server set for this provider.
-	MCPServers map[string]MCPServer `json:"mcpServers,omitempty"`
 }
 
 // ProviderProfile is the contract form of one named SDD profile nested under
@@ -103,11 +95,6 @@ func decodeStrict(raw json.RawMessage, target any) error {
 // providers accept, decodes each provider's models vocabulary, and validates
 // the decoded values the same way the flat surfaces used to.
 func validateProviders(selection Selection, diagnostics *[]Diagnostic) {
-	declaredAgents := make(map[model.AgentID]struct{}, len(selection.Agents))
-	for _, agent := range selection.Agents {
-		declaredAgents[agent] = struct{}{}
-	}
-
 	for _, provider := range sortedProviderKeys(selection.Providers) {
 		block := selection.Providers[provider]
 		path := "$.selection.providers." + string(provider)
@@ -116,8 +103,6 @@ func validateProviders(selection Selection, diagnostics *[]Diagnostic) {
 		validateProviderModelPreset(provider, block, path, diagnostics)
 		validateProviderBackgroundIntent(provider, block, path, diagnostics)
 		validateProviderProfiles(provider, block, path, diagnostics)
-		validateProviderSkills(provider, block, path, declaredAgents, diagnostics)
-		validateProviderMCPServers(provider, block, path, declaredAgents, diagnostics)
 	}
 }
 
@@ -241,26 +226,6 @@ func validateProviderProfiles(provider model.AgentID, block ProviderSelection, p
 	}
 }
 
-func validateProviderSkills(provider model.AgentID, block ProviderSelection, path string, declared map[model.AgentID]struct{}, diagnostics *[]Diagnostic) {
-	if len(block.Skills) == 0 {
-		return
-	}
-	if _, ok := declared[provider]; !ok {
-		*diagnostics = append(*diagnostics, diagnostic("config.skill-assignment.undeclared-adapter", path+".skills", fmt.Sprintf("adapter %q takes skill assignments but is not declared; add it to agents or remove the assignment", provider)))
-	}
-}
-
-func validateProviderMCPServers(provider model.AgentID, block ProviderSelection, path string, declared map[model.AgentID]struct{}, diagnostics *[]Diagnostic) {
-	if len(block.MCPServers) == 0 {
-		return
-	}
-	if _, ok := declared[provider]; !ok {
-		*diagnostics = append(*diagnostics, diagnostic("config.mcp-assignment.undeclared-adapter", path+".mcpServers", fmt.Sprintf("adapter %q takes MCP servers but is not declared; add it to agents or remove the assignment", provider)))
-		return
-	}
-	validateMCPServerSet(block.MCPServers, path+".mcpServers", diagnostics)
-}
-
 func sortedProfileNames(profiles map[string]ProviderProfile) []string {
 	names := make([]string, 0, len(profiles))
 	for name := range profiles {
@@ -328,20 +293,6 @@ func projectProviders(providers map[model.AgentID]ProviderSelection, selection *
 
 		case model.AgentPi:
 			selection.PiBackgroundIntent = model.PiBackgroundIntent(block.BackgroundIntent)
-		}
-
-		if len(block.Skills) > 0 {
-			if selection.SkillAssignments == nil {
-				selection.SkillAssignments = map[model.AgentID][]model.SkillID{}
-			}
-			selection.SkillAssignments[provider] = append([]model.SkillID(nil), block.Skills...)
-		}
-
-		if len(block.MCPServers) > 0 {
-			if selection.MCPServerAssignments == nil {
-				selection.MCPServerAssignments = map[model.AgentID]map[string]model.MCPServer{}
-			}
-			selection.MCPServerAssignments[provider] = mcpServersToModel(block.MCPServers)
 		}
 	}
 
@@ -451,18 +402,6 @@ func providersFromModel(selection model.Selection) map[model.AgentID]ProviderSel
 		providers[model.AgentID(provider)] = entry
 	}
 
-	for agent, skills := range selection.SkillAssignments {
-		entry := providers[agent]
-		entry.Skills = append([]model.SkillID(nil), skills...)
-		providers[agent] = entry
-	}
-
-	for agent, servers := range selection.MCPServerAssignments {
-		entry := providers[agent]
-		entry.MCPServers = mcpServersFromModel(servers)
-		providers[agent] = entry
-	}
-
 	if len(providers) == 0 {
 		return nil
 	}
@@ -471,8 +410,7 @@ func providersFromModel(selection model.Selection) map[model.AgentID]ProviderSel
 
 func isZeroProviderSelection(block ProviderSelection) bool {
 	return len(block.Models) == 0 && block.ModelPreset == "" &&
-		block.BackgroundIntent == "" && len(block.Profiles) == 0 && block.ProfileStrategy == "" &&
-		len(block.Skills) == 0 && len(block.MCPServers) == 0
+		block.BackgroundIntent == "" && len(block.Profiles) == 0 && block.ProfileStrategy == ""
 }
 
 func rawFromAssignments(assignments map[string]model.ModelAssignment) json.RawMessage {
