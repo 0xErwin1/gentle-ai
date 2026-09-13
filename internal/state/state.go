@@ -47,6 +47,7 @@ type InstallState struct {
 	SelectionConfigured    bool                `json:"selection_configured,omitempty"`
 	Components             []model.ComponentID `json:"components,omitempty"`
 	Skills                 []model.SkillID     `json:"skills,omitempty"`
+	ModelPresets           map[string]string   `json:"model_presets,omitempty"`
 	Preset                 model.PresetID      `json:"preset,omitempty"`
 	SDDMode                model.SDDModeID     `json:"sdd_mode,omitempty"`
 	StrictTDD              bool                `json:"strict_tdd,omitempty"`
@@ -187,6 +188,7 @@ func (s *InstallState) SetSelection(selection model.Selection) {
 	s.SelectionConfigured = true
 	s.Components = append([]model.ComponentID(nil), selection.Components...)
 	s.Skills = append([]model.SkillID(nil), selection.Skills...)
+	s.ModelPresets = selection.ModelPresets
 	s.Preset, s.SDDMode, s.StrictTDD = selection.Preset, selection.SDDMode, selection.StrictTDD
 }
 
@@ -196,6 +198,7 @@ func (s InstallState) RestoreSelection(selection *model.Selection) {
 	}
 	selection.Components = append([]model.ComponentID(nil), s.Components...)
 	selection.Skills = append([]model.SkillID(nil), s.Skills...)
+	selection.ModelPresets = s.ModelPresets
 	selection.Preset, selection.SDDMode, selection.StrictTDD = s.Preset, s.SDDMode, s.StrictTDD
 }
 
@@ -232,6 +235,7 @@ func MergeAgents(existing InstallState, newAgents []string) InstallState {
 		SelectionConfigured:         existing.SelectionConfigured,
 		Components:                  existing.Components,
 		Skills:                      existing.Skills,
+		ModelPresets:                existing.ModelPresets,
 		Preset:                      existing.Preset,
 		SDDMode:                     existing.SDDMode,
 		StrictTDD:                   existing.StrictTDD,
