@@ -81,6 +81,36 @@ func TestCodexCompactMatchesPreConsolidationCompactPrompt(t *testing.T) {
 	}
 }
 
+func TestRenderedProtocolUsesOnlyRuntimeSessionIdentity(t *testing.T) {
+	tests := []struct {
+		name     string
+		rendered string
+	}{
+		{name: "full", rendered: protocolFull()},
+		{name: "codex instructions", rendered: codexInstructions()},
+		{name: "compact", rendered: codexCompact()},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			for _, required := range []string{
+				"workspace directory supplied by the runtime",
+				"authoritative session ID already registered by the top-level runtime",
+				"Never invent, derive, generate, or register a session ID",
+				"reuse that exact identity across compaction",
+				"omit `session_id` entirely",
+			} {
+				if !strings.Contains(tt.rendered, required) {
+					t.Errorf("rendered protocol missing required session-identity contract %q", required)
+				}
+			}
+			if strings.Contains(tt.rendered, "Call `mem_session_start`") {
+				t.Error("rendered protocol must not direct the model to register a session")
+			}
+		})
+	}
+}
+
 func TestExtractProtocolSectionBoundsAllFourMarkerPairs(t *testing.T) {
 	content := protocolAssetContent()
 
