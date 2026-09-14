@@ -327,6 +327,38 @@ func TestMergeConfiguredCatalogFillsMissingRuntimeURL(t *testing.T) {
 	}
 }
 
+func TestMergeConfiguredCatalogCopiesVariantsDefensively(t *testing.T) {
+	runtimeCatalog := map[string]Provider{
+		"p1": {
+			ID: "p1",
+			Models: map[string]Model{
+				"m1": {ID: "m1", Variants: []string{"low", "high"}},
+			},
+		},
+	}
+	configuredCatalog := map[string]Provider{
+		"p2": {
+			ID: "p2",
+			Models: map[string]Model{
+				"m2": {ID: "m2", Variants: []string{"medium", "max"}},
+			},
+		},
+	}
+
+	merged := MergeConfiguredCatalog(runtimeCatalog, configuredCatalog)
+
+	// Mutating variants in merged catalog must not mutate input catalog slices
+	merged["p1"].Models["m1"].Variants[0] = "mutated"
+	if runtimeCatalog["p1"].Models["m1"].Variants[0] != "low" {
+		t.Fatalf("runtime model variants was mutated via merged copy")
+	}
+
+	merged["p2"].Models["m2"].Variants[0] = "mutated"
+	if configuredCatalog["p2"].Models["m2"].Variants[0] != "medium" {
+		t.Fatalf("configured model variants was mutated via merged copy")
+	}
+}
+
 // TestDiscoverCatalogLiveHostIntegration runs against the real `opencode`
 // binary when it is available and asserts only host-portable invariants: the
 // command exits successfully and yields at least one provider with at least

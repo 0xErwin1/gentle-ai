@@ -113,6 +113,11 @@ func MergeConfiguredCatalog(runtimeCatalog, configuredCatalog map[string]Provide
 		}
 		for modelID, configuredModel := range configuredProvider.Models {
 			if _, exists := runtimeProvider.Models[modelID]; !exists {
+				if len(configuredModel.Variants) > 0 {
+					variants := make([]string, len(configuredModel.Variants))
+					copy(variants, configuredModel.Variants)
+					configuredModel.Variants = variants
+				}
 				runtimeProvider.Models[modelID] = configuredModel
 			}
 		}
@@ -137,6 +142,11 @@ func cloneProvider(provider Provider) Provider {
 func cloneModels(models map[string]Model) map[string]Model {
 	clone := make(map[string]Model, len(models))
 	for id, model := range models {
+		if len(model.Variants) > 0 {
+			variants := make([]string, len(model.Variants))
+			copy(variants, model.Variants)
+			model.Variants = variants
+		}
 		clone[id] = model
 	}
 	return clone
