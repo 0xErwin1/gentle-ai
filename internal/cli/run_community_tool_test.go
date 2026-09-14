@@ -19,6 +19,36 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v2/internal/system"
 )
 
+func TestRTKHomeRunnerSetsIsolatedChildEnvironment(t *testing.T) {
+	home := t.TempDir()
+	environment := rtkHomeEnvironment(home, map[string]string{
+		"HOME":                   "must-not-leak",
+		"XDG_CONFIG_HOME":        "must-not-leak",
+		"RTK_TELEMETRY_DISABLED": "1",
+	})
+	for key, want := range map[string]string{
+		"HOME":                   home,
+		"XDG_CONFIG_HOME":        filepath.Join(home, ".config"),
+		"RTK_TELEMETRY_DISABLED": "1",
+	} {
+		if got := environment[key]; got != want {
+			t.Fatalf("%s = %q, want %q", key, got, want)
+		}
+	}
+}
+
+func TestInstallRuntimeBacksUpRTKManagedPaths(t *testing.T) {
+	home := t.TempDir()
+	selection := model.Selection{CommunityTools: []model.CommunityToolID{model.CommunityToolRTK}}
+	targets, err := backupTargets(home, "", ScopeGlobal, selection, planner.ResolvedPlan{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Contains(targets, filepath.Join(home, ".local", "bin", "rtk")) {
+		t.Fatalf("backup targets = %v, want RTK binary", targets)
+	}
+}
+
 func TestInstallRuntimeStagePlanAddsCommunityToolStepsInSelectionOrder(t *testing.T) {
 	runtime := &installRuntime{
 		homeDir:      t.TempDir(),

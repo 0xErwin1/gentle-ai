@@ -2288,9 +2288,6 @@ func TestStandaloneCommunityToolsLoadsStatusBeforeInstall(t *testing.T) {
 	t.Cleanup(func() { communityToolStatusFn = originalStatus })
 
 	communityToolStatusFn = func(id model.CommunityToolID, homeDir string, detector communitytool.Detector) communitytool.Status {
-		if id != model.CommunityToolCodeGraph {
-			t.Fatalf("status id = %q, want CodeGraph", id)
-		}
 		return communitytool.Status{
 			Tool: id,
 			CLI:  communitytool.AvailabilityAvailable,

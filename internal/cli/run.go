@@ -1404,7 +1404,11 @@ type communityToolInstallStep struct {
 func (s communityToolInstallStep) ID() string { return s.id }
 
 func (s communityToolInstallStep) Run() error {
-	result, err := installCommunityToolWithHome(s.tool, s.workspaceDir, s.homeDir, communitytool.RunnerFunc(runCommand), communitytool.DetectorFunc(cmdLookPath))
+	var runner communitytool.Runner = communitytool.RunnerFunc(runCommand)
+	if s.tool == model.CommunityToolRTK {
+		runner = rtkHomeRunner{homeDir: s.homeDir}
+	}
+	result, err := installCommunityToolWithHome(s.tool, s.workspaceDir, s.homeDir, runner, communitytool.DetectorFunc(cmdLookPath))
 	if err != nil {
 		return fmt.Errorf("install community tool %q: %w", s.tool, err)
 	}
@@ -1412,6 +1416,35 @@ func (s communityToolInstallStep) Run() error {
 		s.state.piCodeGraph = result.PiCodeGraph
 	}
 	return nil
+}
+
+type rtkHomeRunner struct{ homeDir string }
+
+func (r rtkHomeRunner) Run(name string, args ...string) error { return r.run(nil, name, args...) }
+
+func (r rtkHomeRunner) RunWithEnv(environment map[string]string, name string, args ...string) error {
+	return r.run(environment, name, args...)
+}
+
+func (r rtkHomeRunner) run(environment map[string]string, name string, args ...string) error {
+	command := exec.Command(name, args...)
+	system.EnsureCommandDir(command)
+	command.Env = overrideCommandEnvironment(os.Environ(), rtkHomeEnvironment(r.homeDir, environment))
+	output, err := command.CombinedOutput()
+	if err != nil && len(output) > 0 {
+		return fmt.Errorf("%w: %s", err, strings.TrimSpace(string(output)))
+	}
+	return err
+}
+
+func rtkHomeEnvironment(homeDir string, environment map[string]string) map[string]string {
+	overrides := make(map[string]string, len(environment)+2)
+	for key, value := range environment {
+		overrides[key] = value
+	}
+	overrides["HOME"] = homeDir
+	overrides["XDG_CONFIG_HOME"] = filepath.Join(homeDir, ".config")
+	return overrides
 }
 
 func (s componentApplyStep) ID() string {
@@ -2237,6 +2270,11 @@ func backupTargets(homeDir, workspaceDir string, scope InstallScope, selection m
 	}
 	if selection.HasCommunityTool(model.CommunityToolCodeGraph) {
 		for _, path := range communitytool.CodeGraphManagedPaths(homeDir) {
+			paths[path] = struct{}{}
+		}
+	}
+	if selection.HasCommunityTool(model.CommunityToolRTK) {
+		for _, path := range communitytool.RTKManagedPaths(homeDir) {
 			paths[path] = struct{}{}
 		}
 	}

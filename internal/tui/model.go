@@ -3506,7 +3506,7 @@ func (m Model) spinnerTickOpenCodePluginUninstall() Model {
 func (m Model) startCommunityToolInstallation() tea.Cmd {
 	tools := append([]model.CommunityToolID(nil), m.Selection.CommunityTools...)
 	workspaceDir, _ := osGetwdFn()
-	runner := communitytool.RunnerFunc(runCommunityToolCommand)
+	runner := communityToolRuntimeRunner{}
 	return func() tea.Msg {
 		results := make([]communitytool.Result, 0, len(tools))
 		for _, tool := range tools {
@@ -3524,7 +3524,11 @@ func (m Model) startCommunityToolInstallation() tea.Cmd {
 }
 
 func (m Model) startCommunityToolStatusDetection() tea.Cmd {
-	tools := []model.CommunityToolID{model.CommunityToolCodeGraph}
+	definitions := communityToolDefinitions()
+	tools := make([]model.CommunityToolID, 0, len(definitions))
+	for _, definition := range definitions {
+		tools = append(tools, definition.ID)
+	}
 	home := homeDir()
 	detector := communitytool.DetectorFunc(func(name string) (string, error) {
 		path, err := exec.LookPath(name)
@@ -3561,6 +3565,40 @@ func communityToolStatusesFromResults(results []communitytool.Result, fallback [
 
 func hasCommunityToolResultContext(result communitytool.Result) bool {
 	return result.Tool != "" || len(result.CommandsRun) > 0 || len(result.ManualActions) > 0
+}
+
+type communityToolRuntimeRunner struct{}
+
+func (communityToolRuntimeRunner) Run(name string, args ...string) error {
+	return executeExternalCommand(execCommandFn, name, args...)
+}
+
+func (communityToolRuntimeRunner) RunWithEnv(environment map[string]string, name string, args ...string) error {
+	cmd := execCommandFn(name, args...)
+	system.EnsureCommandDir(cmd)
+	cmd.Env = commandEnvironmentWithOverrides(os.Environ(), environment)
+	output, err := cmd.CombinedOutput()
+	if err != nil && len(output) > 0 {
+		return fmt.Errorf("%w\noutput:\n%s", err, strings.TrimSpace(string(output)))
+	}
+	return err
+}
+
+func commandEnvironmentWithOverrides(environment []string, overrides map[string]string) []string {
+	out := make([]string, 0, len(environment)+len(overrides))
+	for _, entry := range environment {
+		key, _, found := strings.Cut(entry, "=")
+		if found {
+			if _, replace := overrides[key]; replace {
+				continue
+			}
+		}
+		out = append(out, entry)
+	}
+	for key, value := range overrides {
+		out = append(out, key+"="+value)
+	}
+	return out
 }
 
 func runCommunityToolCommand(name string, args ...string) error {

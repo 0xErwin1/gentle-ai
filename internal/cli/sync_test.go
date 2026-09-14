@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -32,6 +33,17 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v2/internal/state"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/verify"
 )
+
+func TestSyncPlanIncludesPersistedRTKStep(t *testing.T) {
+	runtime, err := newSyncRuntime(t.TempDir(), model.Selection{CommunityTools: []model.CommunityToolID{model.CommunityToolRTK}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan := runtime.stagePlan()
+	if !slices.ContainsFunc(plan.Apply, func(step pipeline.Step) bool { return step.ID() == "sync:community-tool:rtk" }) {
+		t.Fatalf("sync plan = %#v, want pinned RTK restoration step", plan.Apply)
+	}
+}
 
 func TestSyncOpenCodeTelemetryReconcilesMissingWithoutSDD(t *testing.T) {
 	home := t.TempDir()
@@ -2638,6 +2650,22 @@ func TestRestorePersistedCommunityToolsRequiresInstallerSelection(t *testing.T) 
 				t.Fatalf("CodeGraph selected = %t, want %t", got, test.want)
 			}
 		})
+	}
+}
+
+func TestRestorePersistedCommunityToolsRestoresRTKAndSchedulesSync(t *testing.T) {
+	home := t.TempDir()
+	selection := model.Selection{}
+	restorePersistedCommunityTools(home, &selection, state.InstallState{CommunityToolsConfigured: true, CommunityTools: []string{"rtk", "unknown"}})
+	if !selection.HasCommunityTool(model.CommunityToolRTK) || len(selection.CommunityTools) != 1 {
+		t.Fatalf("restored community tools = %v, want only RTK", selection.CommunityTools)
+	}
+	runtime, err := newSyncRuntime(home, selection)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.ContainsFunc(runtime.stagePlan().Apply, func(step pipeline.Step) bool { return step.ID() == "sync:community-tool:rtk" }) {
+		t.Fatal("persisted RTK selection did not schedule the RTK sync step")
 	}
 }
 
