@@ -31,7 +31,7 @@ var rtkSetupContracts = []rtkSetupContract{
 	{model.AgentClaudeCode, "init -g --auto-patch", rtkUserMutationPath{rtkUserMutationPathInstruction, "~/.claude/CLAUDE.md"}},
 	{model.AgentOpenCode, "init -g --opencode", rtkUserMutationPath{rtkUserMutationPathInstruction, "~/.config/opencode/plugins/rtk.ts"}},
 	{model.AgentCodex, "init -g --codex", rtkUserMutationPath{rtkUserMutationPathInstruction, "~/.codex/AGENTS.md"}},
-	{model.AgentPi, "init -g --agent pi --auto-patch", rtkUserMutationPath{rtkUserMutationPathInstruction, "PI_CODING_AGENT_DIR/extensions/rtk.ts"}},
+	{model.AgentPi, "init -g --agent " + "pi --auto-patch", rtkUserMutationPath{rtkUserMutationPathInstruction, "PI_CODING_AGENT_DIR/extensions/rtk.ts"}},
 }
 
 type rtkPlatform string
