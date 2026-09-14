@@ -238,7 +238,7 @@ func TestMissingEvidenceRevisionPreservesStrictParserReasonWithoutAuthorityCompa
 		"evidence_revision: sha256:"+strings.Repeat("a", 64)+"\n", "",
 	)
 	verify := parseVerifyResult(report, SpecCounts{Requirements: 1, Scenarios: 1})
-	remediation := resolveBoundedRemediation(true, verify, "")
+	remediation := resolveBoundedRemediation(true, verify, "", nil)
 	const want = "verify evidence cannot enter remediation: verification evidence is incomplete: missing evidence_revision in verify result envelope"
 	if remediation.Reason != want {
 		t.Fatalf("missing evidence remediation reason = %q, want %q", remediation.Reason, want)
