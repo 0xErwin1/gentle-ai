@@ -69,7 +69,23 @@ func rtkZIP(t *testing.T, entries []rtkZIPEntry) []byte {
 
 func rtkTestAsset(url string, archive []byte) rtkCandidateAsset {
 	sum := sha256.Sum256(archive)
-	return rtkCandidateAsset{URL: url, ExecutableMember: "rtk.exe", SizeBytes: int64(len(archive)), SHA256: hex.EncodeToString(sum[:])}
+	executableSum := sha256.Sum256([]byte("binary"))
+	return rtkCandidateAsset{URL: url, ExecutableMember: "rtk.exe", SizeBytes: int64(len(archive)), SHA256: hex.EncodeToString(sum[:]), ExecutableSizeBytes: int64(len("binary")), ExecutableSHA256: hex.EncodeToString(executableSum[:])}
+}
+
+func TestRTKAcquireRejectsExtractedExecutableIdentityMismatch(t *testing.T) {
+	archive := rtkZIP(t, []rtkZIPEntry{{name: "rtk.exe", data: "binary"}})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write(archive) }))
+	defer server.Close()
+	asset := rtkTestAsset(server.URL, archive)
+	asset.ExecutableSHA256 = strings.Repeat("0", 64)
+	stage := t.TempDir()
+	if _, err := acquireRTKCandidate(server.Client(), stage, asset); err == nil {
+		t.Fatal("error = nil, want extracted executable identity rejection")
+	}
+	if entries, _ := os.ReadDir(stage); len(entries) != 0 {
+		t.Fatalf("staging residue = %v", entries)
+	}
 }
 
 func TestRTKAcquireRejectsUnsafeArchiveMetadata(t *testing.T) {
@@ -94,6 +110,21 @@ func TestRTKAcquireRejectsUnsafeArchiveMetadata(t *testing.T) {
 				t.Fatalf("requests = %d, staging = %v", requests, entries)
 			}
 		})
+	}
+}
+
+func TestRTKAcquireRejectsTarGzOverTotalDecompressedLimit(t *testing.T) {
+	archive := rtkTarGz(t, "rtk", strings.Repeat("0", int(rtkMaxArchiveSize)+1))
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write(archive) }))
+	defer server.Close()
+	asset := rtkTestAsset(server.URL, archive)
+	asset.Name, asset.ExecutableMember = "rtk-linux.tar.gz", "rtk"
+	stage := t.TempDir()
+	if _, err := acquireRTKCandidate(server.Client(), stage, asset); err == nil {
+		t.Fatal("error = nil, want total decompressed tar.gz limit rejection")
+	}
+	if entries, _ := os.ReadDir(stage); len(entries) != 0 {
+		t.Fatalf("staging residue = %v", entries)
 	}
 }
 
