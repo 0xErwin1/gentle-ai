@@ -1414,6 +1414,10 @@ func renderPreservedOpenCodeOrchestratorPrompt(
 	options ...OrchestratorRenderOptions,
 ) string {
 	migrated := migratePreservedOpenCodeOrchestratorPrompt(prompt)
+	if agent == model.AgentOpenCode {
+		migrated = strings.ReplaceAll(migrated, legacyOpenCodeConsentV3QuestionRoute, openCodeConsentV3QuestionRoute)
+		migrated = strings.ReplaceAll(migrated, openCodeFallbackSourceClause, openCodeConsentV3FallbackClause)
+	}
 	if strings.Contains(migrated, openCodeNativeQuestionSourceRoute) {
 		migrated = replaceOpenCodeConsentV3QuestionRoute(migrated, agent)
 	}
@@ -1990,9 +1994,13 @@ func ensureClaudeSDDPreflightHook(settingsPath string, agentID model.AgentID) (b
 
 	command := fmt.Sprintf("gentle-ai sdd-preflight-hook --agent %s", agentID)
 	changed := false
-	// Claude Code hook commands are callable by model-started processes and do
-	// not carry authenticated caller provenance. Install only the fail-closed
-	// dispatch guard; never install a hook that claims to mint authority.
+	// The guard derives parent-confirmed SDD preflight authority at dispatch
+	// time directly from the session transcript the hook runner supplies on
+	// stdin (transcript_path and session_id). A model-started copy of this
+	// hook command cannot influence the real dispatch, because Claude Code
+	// only honors the output of the hook invocation it started itself, and
+	// that invocation's stdin is runner-supplied. No hook mints or persists
+	// authority; install only this single fail-closed PreToolUse(Agent) entry.
 	for _, hook := range []struct{ key, matcher string }{
 		{key: "PreToolUse", matcher: "Agent"},
 	} {
