@@ -170,7 +170,7 @@ var (
 	// failure and the caller may pass with --remediates-evidence-revision.
 	// It is the ONE place compact Settle and Finish derive this refusal, so
 	// the two layers can never diverge on when it fires or what it says.
-	ErrRuntimeSettleObligationUnmet = errors.New("SDD runtime passing settle is bound to the chain's unremediated failed verification") // refusal:by-design operator-knowledge: every wrap carries runtimeSettleObligation's exact actionable text
+	ErrRuntimeSettleObligationUnmet = errors.New("SDD runtime passing settle is bound to the chain's unremediated attempt") // refusal:by-design operator-knowledge: every wrap carries runtimeSettleObligation's exact actionable text
 
 	runtimeRequestIDPattern    = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,127}$`)
 	runtimeRevisionPattern     = regexp.MustCompile(`^sha256:[a-f0-9]{64}$`)
@@ -1189,8 +1189,8 @@ func (store RuntimeStore) Finish(ctx context.Context, request FinishAttemptReque
 				}
 				return runtimeRecord{}, errors.New("this correction names failed verification " + request.RemediatesEvidenceRevision + ", but the attempt chain records no failed verification at all; run `gentle-ai sdd-attempt status --cwd <repo> --change <change>` to read the chain, then settle without --remediates-evidence-revision if nothing is being repaired")
 			}
-			if chainFailedEvidence != request.RemediatesEvidenceRevision {
-				return runtimeRecord{}, errors.New("this correction names failed verification " + request.RemediatesEvidenceRevision + ", but the chain's unremediated failure is " + chainFailedEvidence + "; settle with --remediates-evidence-revision \"" + chainFailedEvidence + "\", or without the flag if this work unit repairs nothing")
+			if err := runtimeRemediationPointerRefusal(chainFailedEvidence, request.RemediatesEvidenceRevision, "finish"); err != nil {
+				return runtimeRecord{}, err
 			}
 		}
 		// The ONE gate for the force-without-declaration demand (#4024 R3/R4):
@@ -3347,6 +3347,30 @@ func runtimeRevisionShapeObservation(value string) string {
 	return fmt.Sprintf("received length=%d, sha256: prefix=%t, non-lowercase-hex characters=%t", len(value), hasPrefix, nonLowercaseHex)
 }
 
+// runtimeRemediationPointerRefusal decides whether a caller's
+// --remediates-evidence-revision pointer may bind to the chain's
+// unremediated failed evidence (#4527). The pointer names a value the
+// ledger itself already recorded, so equality with that recorded value is
+// the only correct test -- not the pointer's own shape. A pointer that
+// already equals the chain's recorded evidence is accepted regardless of
+// its shape, since the ledger is the one that produced that value in the
+// first place; shape is consulted only to make a genuine MISMATCH legible.
+// Every refusal names the chain's actual value and the same exit, so the
+// finish, settle, and acquire ingresses never diverge on what to run next;
+// verb is the sdd-attempt subcommand the caller should rerun.
+func runtimeRemediationPointerRefusal(chainFailedEvidence, pointer, verb string) error {
+	if pointer == chainFailedEvidence {
+		return nil
+	}
+	if !runtimeRevisionPattern.MatchString(pointer) {
+		if chainFailedEvidence == "" {
+			return fmt.Errorf("remediates_evidence_revision must be sha256:<64-lowercase-hex> (%s); the attempt chain records no unremediated failure; rerun `gentle-ai sdd-attempt %s` without --remediates-evidence-revision if nothing is being repaired", runtimeRevisionShapeObservation(pointer), verb)
+		}
+		return fmt.Errorf("remediates_evidence_revision must be sha256:<64-lowercase-hex> (%s); the chain's unremediated failure is %s; rerun `gentle-ai sdd-attempt %s` with --remediates-evidence-revision %q, or without the flag if this work unit repairs nothing", runtimeRevisionShapeObservation(pointer), chainFailedEvidence, verb, chainFailedEvidence)
+	}
+	return fmt.Errorf("this correction names failed verification %s, but the chain's unremediated failure is %s; rerun `gentle-ai sdd-attempt %s` with --remediates-evidence-revision %q, or without the flag if this work unit repairs nothing", pointer, chainFailedEvidence, verb, chainFailedEvidence)
+}
+
 func normalizeFinishAttemptRequest(request FinishAttemptRequest) (FinishAttemptRequest, error) {
 	if request.ExpectedRevision == "" || !runtimeRevisionPattern.MatchString(request.ExpectedRevision) {
 		return FinishAttemptRequest{}, errors.New("finish requires an exact expected runtime revision")
@@ -3391,19 +3415,12 @@ func normalizeFinishAttemptRequest(request FinishAttemptRequest) (FinishAttemptR
 		}
 		request.IntendedUntracked = &canonical
 	}
-	if request.RemediatesEvidenceRevision != "" {
-		// Every outcome is a truthful settlement of a declared correction
-		// (#3422): passed discharges the failure it names, failed records the
-		// correction's own new failure as the chain's bindable head, and
-		// interrupted discharges nothing. Only the binding shape is validated
-		// here; outcome-specific demands live in Finish and its replay twin.
-		if !runtimeRevisionPattern.MatchString(request.RemediatesEvidenceRevision) {
-			return FinishAttemptRequest{}, fmt.Errorf(
-				"remediates_evidence_revision must be sha256:<64-lowercase-hex> (%s); rerun `gentle-ai sdd-attempt finish` with --remediates-evidence-revision sha256:<64-lowercase-hex>",
-				runtimeRevisionShapeObservation(request.RemediatesEvidenceRevision),
-			)
-		}
-	}
+	// RemediatesEvidenceRevision is a POINTER to a value the chain already
+	// recorded (#4527), not new evidence of its own: its only correct check
+	// is equality with the chain's actual unremediated failed evidence, which
+	// this pure normalizer -- with no ledger access -- cannot decide. Finish
+	// and its replay twin own that equality check; shape is consulted there
+	// only to make a genuine mismatch legible.
 	return request, nil
 }
 
@@ -3775,18 +3792,20 @@ func runtimeResetStructurallyPermitted(status RuntimeStatus) bool {
 }
 
 // runtimeChainFailedEvidence derives the unmanaged-remediation binding from
-// the immutable attempt chain (#1974 slice 2): the most recent settled
-// AttemptFailed attempt's EvidenceRevision, provided no AttemptPassed
-// settlement follows it. Running and interrupted attempts between the failure
-// and its correction are honest audit records, not semantic successors, and
-// audited resets, rescopes, and advances never appear in the chain at all, so
-// none of them sever the binding. The first passed settlement after the
-// failure DOES sever it: that pass is the one correction the failed evidence
-// admits, so a later correction claiming the same revision finds no failed
-// evidence in the chain and is refused -- the same anti-laundering budget the
-// live evidence pointer used to enforce, now immune to that pointer being
-// wiped. Evaluated by RuntimeStore.Finish and applyRuntimeFinishEvent in
-// lockstep, so a committed correction always replays deterministically.
+// the immutable attempt chain (#1974 slice 2): the newest attempt's
+// EvidenceRevision, provided that attempt did not complete the objective --
+// an AttemptFailed settlement, or an AttemptPassed one that exceeded
+// max_changed_lines (#4542). Running and interrupted attempts between that
+// attempt and its correction are honest audit records, not semantic
+// successors, and audited resets, rescopes, and advances never appear in the
+// chain at all, so none of them sever the binding. The first COMPLETING
+// passed settlement after it DOES sever the binding: that pass is the one
+// correction the unremediated evidence admits, so a later correction claiming
+// the same revision finds no unremediated evidence in the chain and is
+// refused -- the same anti-laundering budget the live evidence pointer used
+// to enforce, now immune to that pointer being wiped. Evaluated by
+// RuntimeStore.Finish and applyRuntimeFinishEvent in lockstep, so a committed
+// correction always replays deterministically.
 func runtimeChainFailedEvidence(attempts []RuntimeAttempt) (string, bool) {
 	failed, ok := runtimeChainFailedAttempt(attempts)
 	if !ok {
@@ -3800,10 +3819,26 @@ func runtimeChainFailedEvidence(attempts []RuntimeAttempt) (string, bool) {
 // #2621 also has to answer "which objective was that failure recorded under",
 // so the authority a reset carries can be matched against the exact failure it
 // terminated rather than against any failure that happens to precede it.
+//
+// The chain's "unremediated failure" is the newest attempt that did NOT
+// complete the objective (#4542). An AttemptPassed settlement only clears the
+// chain when it actually completed: applyRuntimeFinishEvent (and every other
+// consumer of ChangedLineBudgetExceeded) treats a pass that exceeded
+// max_changed_lines exactly like a failure -- it forces DecisionRequired and
+// RuntimeActionReset instead of completing the objective. Stopping at that
+// pass' Outcome alone hid it (and any real failure beneath it) from the chain
+// a correction remediates, so a maintainer-authorized reset over that exact
+// evidence could never re-acquire: this predicate answered "no failed
+// evidence" while every other surface already knew the objective was not
+// done. A budget-exceeded pass is therefore returned exactly like a failure,
+// carrying the evidence revision the maintainer was told to reset over.
 func runtimeChainFailedAttempt(attempts []RuntimeAttempt) (RuntimeAttempt, bool) {
 	for index := len(attempts) - 1; index >= 0; index-- {
 		switch attempts[index].Outcome {
 		case AttemptPassed:
+			if attempts[index].ChangedLineBudgetExceeded {
+				return attempts[index], true
+			}
 			return RuntimeAttempt{}, false
 		case AttemptFailed:
 			return attempts[index], true
@@ -3847,6 +3882,52 @@ func runtimeFailedAttemptInObjectiveLineage(status RuntimeStatus, failed Runtime
 		return false, "declared_independent"
 	}
 	return true, ""
+}
+
+// runtimeChainFailedEvidenceForVerify resolves the canonical failed-evidence
+// revision that remediation must name for a given verify-report evidence
+// revision (#4481). Status used to report the verify-report's own revision
+// while Finish's --remediates-evidence-revision check (above) already binds
+// to runtimeChainFailedAttempt's answer; once a remediation attempt against
+// that failure itself failed and recorded new evidence, the two disagreed
+// forever.
+//
+// The chain's newest unremediated failure only speaks for verifyEvidence when
+// it IS that evidence, or a correction chain of it: walking
+// RemediatesEvidenceRevision links back from the failure reaches
+// verifyEvidence. runtimeFailedAttemptInObjectiveLineage bounds that failure
+// exactly as Finish and the settle_obligation notice already do, so a failure
+// declared independent of the current objective never lends its evidence to
+// an unrelated verify report. Any other chain -- no ledger, no failed
+// attempt, an unrelated failure, or one outside that lineage -- returns false
+// so the caller keeps the file-backed verifyEvidence unchanged.
+func runtimeChainFailedEvidenceForVerify(status RuntimeStatus, verifyEvidence string) (string, bool) {
+	failed, ok := runtimeChainFailedAttempt(status.Attempts)
+	if !ok {
+		return "", false
+	}
+	if inLineage, _ := runtimeFailedAttemptInObjectiveLineage(status, failed); !inLineage {
+		return "", false
+	}
+	revision, visited := failed.EvidenceRevision, map[string]bool{}
+	for revision != "" {
+		if revision == verifyEvidence {
+			return failed.EvidenceRevision, true
+		}
+		if visited[revision] {
+			break
+		}
+		visited[revision] = true
+		next := ""
+		for _, attempt := range status.Attempts {
+			if attempt.EvidenceRevision == revision {
+				next = attempt.RemediatesEvidenceRevision
+				break
+			}
+		}
+		revision = next
+	}
+	return "", false
 }
 
 // runtimeEvidenceOnlyRetryAuthorized reports whether an audited reset or rescope

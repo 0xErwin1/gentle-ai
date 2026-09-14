@@ -249,9 +249,10 @@ func (store RuntimeStore) Acquire(ctx context.Context, request CompactAcquireReq
 	if err != nil {
 		return CompactAttemptResult{}, err
 	}
-	if request.RemediatesEvidenceRevision != "" && !runtimeRevisionPattern.MatchString(request.RemediatesEvidenceRevision) {
-		return CompactAttemptResult{}, errors.New("remediates_evidence_revision must be sha256; rerun `gentle-ai sdd-attempt acquire` with --remediates-evidence-revision sha256:<64-lowercase-hex>")
-	}
+	// RemediatesEvidenceRevision's shape is not checked here: it is a POINTER
+	// to a value the ledger already recorded (#4527), so its only correct
+	// check is equality with the chain's actual unremediated failed evidence,
+	// decided below once the ledger has been read.
 	// #4160: a caller naming both the ownership-continuation proof and the CAS
 	// input must not name two different ledger states at once. A matching
 	// token already identifies the exact revision it continues, so this is a
@@ -307,6 +308,19 @@ func (store RuntimeStore) Acquire(ctx context.Context, request CompactAcquireReq
 	// predicate here captures the exact candidate it would record without opening
 	// an attempt or issuing a token.
 	if request.RemediatesEvidenceRevision != "" {
+		// Equality-first (#4527): a pointer that already equals the chain's
+		// recorded failed evidence proceeds regardless of its own shape, since
+		// the ledger is the one that produced that value in the first place.
+		// Shape is checked, and refused, only once equality has already
+		// failed -- so a genuine mismatch stays legible without ever blocking
+		// the one caller naming exactly what the chain holds.
+		// A well-formed mismatch stays the typed remediation_unsatisfiable
+		// block below; only a malformed mismatch is refused here, through the
+		// same helper Finish uses, so both ingresses name the chain's value.
+		if chainEvidence, _ := runtimeChainFailedEvidence(replay.Status.Attempts); request.RemediatesEvidenceRevision != chainEvidence &&
+			!runtimeRevisionPattern.MatchString(request.RemediatesEvidenceRevision) {
+			return CompactAttemptResult{}, runtimeRemediationPointerRefusal(chainEvidence, request.RemediatesEvidenceRevision, "acquire")
+		}
 		if !failedEvidenceRemediationSettleable(replay.Status, request.RemediatesEvidenceRevision) {
 			return compactBlocked(CompactBlockRemediationUnsatisfiable, ""), nil
 		}
@@ -497,9 +511,10 @@ func normalizeCompactSettleRequest(request CompactSettleRequest) error {
 	if err != nil {
 		return err
 	}
-	if request.RemediatesEvidenceRevision != "" && !runtimeRevisionPattern.MatchString(request.RemediatesEvidenceRevision) {
-		return errors.New("remediates_evidence_revision must be sha256; rerun `gentle-ai sdd-attempt settle` with --remediates-evidence-revision sha256:<64-lowercase-hex>")
-	}
+	// RemediatesEvidenceRevision is not shape-checked in any pure normalizer:
+	// it is a pointer to a value the chain already recorded (#4527), so its
+	// only correct check is equality with that value, which needs the ledger
+	// Finish reads. Finish owns that check and the legible refusal.
 	return nil
 }
 
@@ -785,10 +800,10 @@ func runtimeSettleObligation(status RuntimeStatus) (string, *SuppressedObligatio
 	if inLineage, reason := runtimeFailedAttemptInObjectiveLineage(status, failed); !inLineage {
 		return "", &SuppressedObligation{EvidenceRevision: failed.EvidenceRevision, ObjectiveID: failed.ObjectiveID, Reason: reason}
 	}
-	return "this attempt's passing settle is already bound to the chain's unremediated failed verification " +
+	return "this attempt's passing settle is already bound to the chain's unremediated attempt's evidence " +
 		failed.EvidenceRevision + ": settle it passed with `--remediates-evidence-revision \"" + failed.EvidenceRevision +
-		"\"`, and with verification evidence distinct from it, over a correction candidate that no longer matches the state that failed. " +
-		"An audited reset or an interrupted settlement between that failure and this correction does not release the " +
+		"\"`, and with verification evidence distinct from it, over a correction candidate that no longer matches that attempt's candidate. " +
+		"An audited reset or an interrupted settlement between that attempt and this correction does not release the " +
 		"binding — only a passing settlement that names it does.", nil
 }
 

@@ -57,7 +57,7 @@ func fullyPopulatedInstallState() InstallState {
 		Preset:                   model.PresetCustom,
 		SDDMode:                  model.SDDModeMulti,
 		StrictTDD:                true,
-		CommunityTools:           []string{"codegraph", "jq"},
+		CommunityTools:           []string{"codegraph", "rtk"},
 		CommunityToolsConfigured: true,
 		ClaudeModelAssignments:   map[string]string{"sdd-explore": "sonnet"},
 		ClaudePhaseAssignments: map[string]ClaudePhaseAssignmentState{

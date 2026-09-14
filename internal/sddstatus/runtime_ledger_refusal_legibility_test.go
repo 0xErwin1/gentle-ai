@@ -31,10 +31,15 @@ func TestNormalizeFinishAttemptRequestRevisionRefusalsAreSelfDiagnosing(t *testi
 		assertSelfDiagnosingRevisionRefusal(t, err, uppercaseHex, "--evidence-revision")
 	})
 
+	// #4527 moved this refusal out of normalizeFinishAttemptRequest (a pure
+	// function with no ledger access) into runtimeRemediationPointerRefusal,
+	// which Finish calls once it knows the chain's actual unremediated
+	// failed evidence: RemediatesEvidenceRevision is a pointer to a value
+	// the ledger already recorded, so equality with that value must win
+	// regardless of shape, and only Finish can decide that equality. The
+	// wording asserted here is unchanged; only the site moved.
 	t.Run("remediates_evidence_revision", func(t *testing.T) {
-		request := base()
-		request.RemediatesEvidenceRevision = uppercaseHex
-		_, err := normalizeFinishAttemptRequest(request)
+		err := runtimeRemediationPointerRefusal(runtimeTestHash('9'), uppercaseHex, "finish")
 		assertSelfDiagnosingRevisionRefusal(t, err, uppercaseHex, "--remediates-evidence-revision")
 	})
 }
@@ -50,7 +55,7 @@ func TestNormalizeFinishAttemptRequestRevisionRefusalsAreSelfDiagnosing(t *testi
 func assertSelfDiagnosingRevisionRefusal(t *testing.T, err error, rawValue, wantFlag string) {
 	t.Helper()
 	if err == nil {
-		t.Fatal("normalizeFinishAttemptRequest = nil error, want a refusal")
+		t.Fatal("revision refusal = nil error, want a refusal")
 	}
 	message := err.Error()
 	if !strings.Contains(message, "sha256:<64-lowercase-hex>") {

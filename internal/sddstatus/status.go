@@ -687,6 +687,7 @@ func resolveByPreferenceOrder(options ResolveOptions) (Status, error) {
 		remediationRequired,
 		verifyResult,
 		readText(firstPath(artifactPaths.ApplyProgress)),
+		runtimeStatus,
 	)
 	dependencies := resolveDependencies(artifacts, taskProgress, applyState, coreReady, verifyReportCurrent, verifyResult.Passing, remediationState.Complete)
 	nextRecommended := resolveNextRecommended(dependencies, applyState, verifyReportCurrent, remediationState)
@@ -974,6 +975,7 @@ func resolveEngramStatus(workspaceRoot string, requestedChange string, includeIn
 		remediationRequired,
 		verifyResult,
 		artifactsByType["apply-progress"].Content,
+		runtimeStatus,
 	)
 	if remediationState.Reason != "" {
 		blockedReasons.genuine = append(blockedReasons.genuine, remediationState.Reason)
@@ -2051,11 +2053,22 @@ func nativeRuntimeInstructions(status Status, change string) []string {
 		"After a terminal attempt's candidate drifts, run `gentle-ai sdd-attempt status` to obtain the current revision, then have a maintainer record that drift with an audited `gentle-ai sdd-attempt reset --expected-revision <the revision that status prints> --request-id \"<unique-request-id>\" --reason \"<why-the-candidate-drifted>\" --actor \"<actor>\"` before reacquire. Use `sdd-attempt rescope` only when its narrower-successor contract applies.",
 	}
 	if status.RemediationState.Required && status.RuntimeStatus != nil && status.RuntimeStatus.Objective != nil {
-		evidence, found := runtimeChainFailedEvidence(status.RuntimeStatus.Attempts)
-		if found {
+		// RemediationState.FailedEvidenceRevision is already the canonical
+		// answer remediationFailedEvidenceRevision resolved for this status
+		// (#4481): the chain's own evidence when the ledger holds an
+		// unremediated attempt, otherwise the verify-report's. The guard below
+		// stays keyed on the raw chain lookup, not that resolved value, so this
+		// acquire example still renders only when the ledger genuinely has an
+		// unremediated attempt to bind -- printing --remediates-evidence-revision
+		// against an empty chain is a recipe Finish always refuses. That
+		// unremediated attempt may be a genuine failure or a passed settlement
+		// that exceeded max_changed_lines (#4542); either way it did not
+		// complete the objective, so the wording below stays evidence-neutral.
+		if _, found := runtimeChainFailedAttempt(status.RuntimeStatus.Attempts); found {
+			evidence := status.RemediationState.FailedEvidenceRevision
 			objective := status.RuntimeStatus.Objective
 			instructions = append(instructions,
-				fmt.Sprintf("For failed SDD evidence %s, run `gentle-ai sdd-attempt acquire --cwd %s --change %q --request-id \"<unique-request-id>\" --work-unit %q --evidence-goal %q --max-attempts %d --max-changed-lines %d --remediates-evidence-revision %s`.", evidence, pathquote.Quote(workspace), change, objective.WorkUnit, objective.EvidenceGoal, objective.MaxAttempts, objective.MaxChangedLines, evidence),
+				fmt.Sprintf("For unremediated SDD evidence %s, run `gentle-ai sdd-attempt acquire --cwd %s --change %q --request-id \"<unique-request-id>\" --work-unit %q --evidence-goal %q --max-attempts %d --max-changed-lines %d --remediates-evidence-revision %s`.", evidence, pathquote.Quote(workspace), change, objective.WorkUnit, objective.EvidenceGoal, objective.MaxAttempts, objective.MaxChangedLines, evidence),
 				fmt.Sprintf("Correct the candidate before acquire. After a terminal candidate drift, run status and then the audited reset above before reissuing this acquire; use rescope only when its narrower-successor contract applies. After the candidate changes, settle that token with `--remediates-evidence-revision %s`; fresh independent verification is required before archive.", evidence),
 			)
 		}

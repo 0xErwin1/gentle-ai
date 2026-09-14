@@ -2288,9 +2288,6 @@ func TestStandaloneCommunityToolsLoadsStatusBeforeInstall(t *testing.T) {
 	t.Cleanup(func() { communityToolStatusFn = originalStatus })
 
 	communityToolStatusFn = func(id model.CommunityToolID, homeDir string, detector communitytool.Detector) communitytool.Status {
-		if id != model.CommunityToolCodeGraph {
-			t.Fatalf("status id = %q, want CodeGraph", id)
-		}
 		return communitytool.Status{
 			Tool: id,
 			CLI:  communitytool.AvailabilityAvailable,
@@ -2379,11 +2376,9 @@ func TestStandaloneCommunityToolsShowsResultAfterCompletion(t *testing.T) {
 }
 
 func TestCommunityToolInstallationPreservesPartialResultOnError(t *testing.T) {
-	originalInstall := communityToolInstallFn
-	originalGetwd := osGetwdFn
+	originalInstall, originalScoped, originalGetwd := communityToolInstallFn, communityToolInstallScopedFn, osGetwdFn
 	t.Cleanup(func() {
-		communityToolInstallFn = originalInstall
-		osGetwdFn = originalGetwd
+		communityToolInstallFn, communityToolInstallScopedFn, osGetwdFn = originalInstall, originalScoped, originalGetwd
 	})
 
 	osGetwdFn = func() (string, error) { return "/work/project", nil }
@@ -2425,6 +2420,16 @@ func TestCommunityToolInstallationPreservesPartialResultOnError(t *testing.T) {
 	}
 	if len(state.CommunityToolResults) != 1 || len(state.CommunityToolResults[0].CommandsRun) != 1 {
 		t.Fatalf("state results = %#v, want preserved partial result", state.CommunityToolResults)
+	}
+	var got []model.AgentID
+	communityToolInstallScopedFn = func(_ model.CommunityToolID, _ string, agents []model.AgentID, _ communitytool.Runner) (communitytool.Result, error) {
+		got = agents
+		return communitytool.Result{Tool: model.CommunityToolRTK}, nil
+	}
+	m.Selection.Agents, m.Selection.CommunityTools = []model.AgentID{model.AgentOpenCode}, []model.CommunityToolID{model.CommunityToolRTK}
+	_ = m.startCommunityToolInstallation()()
+	if !reflect.DeepEqual(got, []model.AgentID{model.AgentOpenCode}) {
+		t.Fatalf("agents = %v", got)
 	}
 }
 
