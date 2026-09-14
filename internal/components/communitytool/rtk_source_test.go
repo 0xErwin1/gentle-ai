@@ -1,6 +1,7 @@
 package communitytool
 
 import (
+	"slices"
 	"strings"
 	"testing"
 
@@ -20,11 +21,20 @@ func TestRTKSourceContractPinsVerifiedFacts(t *testing.T) {
 	if rtkDocumentedKillSwitch != "RTK_DISABLED=1" {
 		t.Fatalf("documented kill switch = %q", rtkDocumentedKillSwitch)
 	}
-	if len(rtkCandidateAssets) != 1 {
-		t.Fatalf("candidate assets = %d, want 1", len(rtkCandidateAssets))
+	if len(rtkCandidateAssets) != 5 {
+		t.Fatalf("candidate assets = %d, want Windows plus four Unix assets", len(rtkCandidateAssets))
 	}
-	if len(rtkEnabledPlatforms) != 0 {
-		t.Fatalf("enabled platforms = %v, want none", rtkEnabledPlatforms)
+	if len(rtkEnabledPlatforms) != 4 {
+		t.Fatalf("enabled platforms = %v, want four non-Windows platforms", rtkEnabledPlatforms)
+	}
+}
+
+func TestRTKUnixAssetsAreAdmittedForThePinnedRelease(t *testing.T) {
+	if len(rtkCandidateAssets) != 5 {
+		t.Fatalf("candidate assets = %d, want Windows plus four Unix assets", len(rtkCandidateAssets))
+	}
+	if len(rtkEnabledPlatforms) != 4 {
+		t.Fatalf("enabled platforms = %v, want four non-Windows platforms", rtkEnabledPlatforms)
 	}
 }
 
@@ -52,10 +62,10 @@ func TestRTKSetupContractsAreUniqueAndExact(t *testing.T) {
 		invocation string
 		path       string
 	}{
-		{"Claude Code", model.AgentClaudeCode, "init -g", "~/.claude/CLAUDE.md"},
-		{"OpenCode", model.AgentOpenCode, "init -g --opencode", "~/.config/opencode/AGENTS.md"},
+		{"Claude Code", model.AgentClaudeCode, "init -g --auto-patch", "~/.claude/CLAUDE.md"},
+		{"OpenCode", model.AgentOpenCode, "init -g --opencode", "~/.config/opencode/plugins/rtk.ts"},
 		{"Codex CLI", model.AgentCodex, "init -g --codex", "~/.codex/AGENTS.md"},
-		{"Pi", model.AgentPi, "init -g --agent pi", "~/.pi/agent/AGENTS.md"},
+		{"Pi", model.AgentPi, "init -g --agent pi --auto-patch", "PI_CODING_AGENT_DIR/extensions/rtk.ts"},
 	}
 	if len(rtkSetupContracts) != len(tests) {
 		t.Fatalf("setup contracts = %d, want %d", len(rtkSetupContracts), len(tests))
@@ -84,30 +94,40 @@ func TestRTKSetupContractsAreUniqueAndExact(t *testing.T) {
 	}
 }
 
-func TestRTKCandidateAssetIsNotPlatformAdmission(t *testing.T) {
-	tests := []struct {
-		name, want string
+func TestRTKAdmittedAssetsPinExecutableIdentity(t *testing.T) {
+	want := map[rtkPlatform]struct {
+		size   int64
+		digest string
 	}{
-		{"platform", string(rtkPlatformWindows)},
-		{"name", "rtk-x86_64-pc-windows-msvc.zip"},
-		{"immutable URL", "https://github.com/rtk-ai/rtk/releases/download/v0.49.0/rtk-x86_64-pc-windows-msvc.zip"},
-		{"executable member", "rtk.exe"},
-		{"SHA-256", "cb971046598f0e8bd51f6c27780fcdd2c39a4c459a811bd95b0d77ba8c0d7c9f"},
-		{"checksum-file SHA-256", "a5ff3570fe196a21e09a249c1777665d6ed887630d1c7c66de1154d4340d3ad0"},
+		rtkPlatformDarwinARM64: {8_342_080, "055ef1cd1aa0afb96c854bddf43d24af10dcac5a6288ed44519cb1cc10b093a9"},
+		rtkPlatformLinuxARM64:  {9_202_032, "4fa443857061b1226a21a8503112adba078a5c7ca3f7fd5919782afacf5566ca"},
+		rtkPlatformDarwinAMD64: {9_721_224, "1a28052aa71b4d865c3346de6e20216a791ad7e011845ced078b2f70745ce983"},
+		rtkPlatformLinuxAMD64:  {10_888_832, "a051b22361c7cfa36022bc3f06bb41cdc88e58a07263dc340d8bd3468c41befe"},
 	}
-	asset := rtkCandidateAssets[0]
-	got := []string{string(asset.Platform), asset.Name, asset.URL, asset.ExecutableMember, asset.SHA256, asset.ChecksumSHA256}
-	for i, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got[i] != tt.want || strings.Contains(strings.ToLower(got[i]), "latest") {
-				t.Fatalf("candidate %s = %q, want %q", tt.name, got[i], tt.want)
+	for _, asset := range rtkCandidateAssets {
+		identity, admitted := want[asset.Platform]
+		if !admitted {
+			if asset.Platform == rtkPlatformWindows && (asset.ExecutableSizeBytes != 0 || asset.ExecutableSHA256 != "") {
+				t.Fatalf("Windows executable identity must remain unset: %#v", asset)
 			}
-		})
+			continue
+		}
+		if asset.ExecutableSizeBytes != identity.size || asset.ExecutableSHA256 != identity.digest || len(asset.ExecutableSHA256) != 64 {
+			t.Fatalf("asset %s executable identity = (%d, %q), want (%d, %q)", asset.Platform, asset.ExecutableSizeBytes, asset.ExecutableSHA256, identity.size, identity.digest)
+		}
 	}
-	if asset.SizeBytes != 4_448_627 {
-		t.Fatalf("candidate size = %d, want 4448627", asset.SizeBytes)
+}
+
+func TestRTKCandidateAssetsRemainPinnedAndWindowsDisabled(t *testing.T) {
+	if rtkChecksumsSHA256 != "a5ff3570fe196a21e09a249c1777665d6ed887630d1c7c66de1154d4340d3ad0" {
+		t.Fatalf("checksums digest = %q", rtkChecksumsSHA256)
 	}
-	if len(rtkEnabledPlatforms) != 0 {
-		t.Fatalf("enabled platforms = %v, want none", rtkEnabledPlatforms)
+	for _, asset := range rtkCandidateAssets {
+		if strings.Contains(strings.ToLower(asset.URL), "latest") || asset.ChecksumSHA256 != rtkChecksumsSHA256 {
+			t.Fatalf("asset is not pinned: %#v", asset)
+		}
+	}
+	if slices.Contains(rtkEnabledPlatforms, rtkPlatformWindows) {
+		t.Fatalf("Windows was admitted: %v", rtkEnabledPlatforms)
 	}
 }
