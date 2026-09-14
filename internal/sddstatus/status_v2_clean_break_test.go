@@ -306,7 +306,7 @@ func TestResolveBoundedRemediationCompletesAuthorityFreeEvidence(t *testing.T) {
 	remediation := resolveBoundedRemediation(true, verifyResultEvaluation{
 		EvidenceRevision: failedEvidenceRevision,
 		Reason:           "verification failed",
-	}, remediationResultEvidence(failedEvidenceRevision))
+	}, remediationResultEvidence(failedEvidenceRevision), nil)
 	if !remediation.Complete || remediation.Required || remediation.Reason != "" {
 		t.Fatalf("authority-free remediation = %#v, want completed evidence", remediation)
 	}
