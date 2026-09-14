@@ -785,10 +785,10 @@ func runtimeSettleObligation(status RuntimeStatus) (string, *SuppressedObligatio
 	if inLineage, reason := runtimeFailedAttemptInObjectiveLineage(status, failed); !inLineage {
 		return "", &SuppressedObligation{EvidenceRevision: failed.EvidenceRevision, ObjectiveID: failed.ObjectiveID, Reason: reason}
 	}
-	return "this attempt's passing settle is already bound to the chain's unremediated failed verification " +
+	return "this attempt's passing settle is already bound to the chain's unremediated attempt's evidence " +
 		failed.EvidenceRevision + ": settle it passed with `--remediates-evidence-revision \"" + failed.EvidenceRevision +
-		"\"`, and with verification evidence distinct from it, over a correction candidate that no longer matches the state that failed. " +
-		"An audited reset or an interrupted settlement between that failure and this correction does not release the " +
+		"\"`, and with verification evidence distinct from it, over a correction candidate that no longer matches that attempt's candidate. " +
+		"An audited reset or an interrupted settlement between that attempt and this correction does not release the " +
 		"binding — only a passing settlement that names it does.", nil
 }
 

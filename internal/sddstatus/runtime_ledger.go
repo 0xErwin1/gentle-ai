@@ -170,7 +170,7 @@ var (
 	// failure and the caller may pass with --remediates-evidence-revision.
 	// It is the ONE place compact Settle and Finish derive this refusal, so
 	// the two layers can never diverge on when it fires or what it says.
-	ErrRuntimeSettleObligationUnmet = errors.New("SDD runtime passing settle is bound to the chain's unremediated failed verification") // refusal:by-design operator-knowledge: every wrap carries runtimeSettleObligation's exact actionable text
+	ErrRuntimeSettleObligationUnmet = errors.New("SDD runtime passing settle is bound to the chain's unremediated attempt") // refusal:by-design operator-knowledge: every wrap carries runtimeSettleObligation's exact actionable text
 
 	runtimeRequestIDPattern    = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,127}$`)
 	runtimeRevisionPattern     = regexp.MustCompile(`^sha256:[a-f0-9]{64}$`)
@@ -3775,18 +3775,20 @@ func runtimeResetStructurallyPermitted(status RuntimeStatus) bool {
 }
 
 // runtimeChainFailedEvidence derives the unmanaged-remediation binding from
-// the immutable attempt chain (#1974 slice 2): the most recent settled
-// AttemptFailed attempt's EvidenceRevision, provided no AttemptPassed
-// settlement follows it. Running and interrupted attempts between the failure
-// and its correction are honest audit records, not semantic successors, and
-// audited resets, rescopes, and advances never appear in the chain at all, so
-// none of them sever the binding. The first passed settlement after the
-// failure DOES sever it: that pass is the one correction the failed evidence
-// admits, so a later correction claiming the same revision finds no failed
-// evidence in the chain and is refused -- the same anti-laundering budget the
-// live evidence pointer used to enforce, now immune to that pointer being
-// wiped. Evaluated by RuntimeStore.Finish and applyRuntimeFinishEvent in
-// lockstep, so a committed correction always replays deterministically.
+// the immutable attempt chain (#1974 slice 2): the newest attempt's
+// EvidenceRevision, provided that attempt did not complete the objective --
+// an AttemptFailed settlement, or an AttemptPassed one that exceeded
+// max_changed_lines (#4542). Running and interrupted attempts between that
+// attempt and its correction are honest audit records, not semantic
+// successors, and audited resets, rescopes, and advances never appear in the
+// chain at all, so none of them sever the binding. The first COMPLETING
+// passed settlement after it DOES sever the binding: that pass is the one
+// correction the unremediated evidence admits, so a later correction claiming
+// the same revision finds no unremediated evidence in the chain and is
+// refused -- the same anti-laundering budget the live evidence pointer used
+// to enforce, now immune to that pointer being wiped. Evaluated by
+// RuntimeStore.Finish and applyRuntimeFinishEvent in lockstep, so a committed
+// correction always replays deterministically.
 func runtimeChainFailedEvidence(attempts []RuntimeAttempt) (string, bool) {
 	failed, ok := runtimeChainFailedAttempt(attempts)
 	if !ok {
@@ -3800,10 +3802,26 @@ func runtimeChainFailedEvidence(attempts []RuntimeAttempt) (string, bool) {
 // #2621 also has to answer "which objective was that failure recorded under",
 // so the authority a reset carries can be matched against the exact failure it
 // terminated rather than against any failure that happens to precede it.
+//
+// The chain's "unremediated failure" is the newest attempt that did NOT
+// complete the objective (#4542). An AttemptPassed settlement only clears the
+// chain when it actually completed: applyRuntimeFinishEvent (and every other
+// consumer of ChangedLineBudgetExceeded) treats a pass that exceeded
+// max_changed_lines exactly like a failure -- it forces DecisionRequired and
+// RuntimeActionReset instead of completing the objective. Stopping at that
+// pass' Outcome alone hid it (and any real failure beneath it) from the chain
+// a correction remediates, so a maintainer-authorized reset over that exact
+// evidence could never re-acquire: this predicate answered "no failed
+// evidence" while every other surface already knew the objective was not
+// done. A budget-exceeded pass is therefore returned exactly like a failure,
+// carrying the evidence revision the maintainer was told to reset over.
 func runtimeChainFailedAttempt(attempts []RuntimeAttempt) (RuntimeAttempt, bool) {
 	for index := len(attempts) - 1; index >= 0; index-- {
 		switch attempts[index].Outcome {
 		case AttemptPassed:
+			if attempts[index].ChangedLineBudgetExceeded {
+				return attempts[index], true
+			}
 			return RuntimeAttempt{}, false
 		case AttemptFailed:
 			return attempts[index], true
