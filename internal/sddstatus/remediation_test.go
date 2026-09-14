@@ -37,7 +37,7 @@ func TestResolveBoundedRemediationRejectsHistoricalTransactionFields(t *testing.
 			remediation := resolveBoundedRemediation(true, verifyResultEvaluation{
 				EvidenceRevision: failedRevision,
 				Reason:           "verification failed",
-			}, test.applyProgress)
+			}, test.applyProgress, nil)
 			if remediation.Complete || !remediation.Required || remediation.Reason == "" {
 				t.Fatalf("historical transaction field completed authority-free remediation: %#v", remediation)
 			}
