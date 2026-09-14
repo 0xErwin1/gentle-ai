@@ -3610,10 +3610,6 @@ func commandEnvironmentWithOverrides(environment []string, overrides map[string]
 	return out
 }
 
-func runCommunityToolCommand(name string, args ...string) error {
-	return executeExternalCommand(execCommandFn, name, args...)
-}
-
 func executeExternalCommand(commandFn func(string, ...string) *exec.Cmd, name string, args ...string) error {
 	cmd := commandFn(name, args...)
 	system.EnsureCommandDir(cmd)
