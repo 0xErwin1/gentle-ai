@@ -129,6 +129,13 @@ func Install(id model.CommunityToolID, workspaceDir string, runner Runner) (Resu
 	return InstallWithHome(id, workspaceDir, defaultHomeDir(), runner, DetectorFunc(exec.LookPath))
 }
 
+func InstallWithHomeAndAgents(id model.CommunityToolID, workspaceDir, homeDir string, selectedAgents []model.AgentID, runner Runner, detector Detector) (Result, error) {
+	if id == model.CommunityToolRTK {
+		return installRTKForAgents(homeDir, runner, detector, selectedAgents, true)
+	}
+	return InstallWithHome(id, workspaceDir, homeDir, runner, detector)
+}
+
 func InstallWithHome(id model.CommunityToolID, workspaceDir string, homeDir string, runner Runner, detector Detector) (Result, error) {
 	if runner == nil {
 		return Result{}, fmt.Errorf("community tool runner is not configured")
@@ -138,7 +145,7 @@ func InstallWithHome(id model.CommunityToolID, workspaceDir string, homeDir stri
 		return Result{}, fmt.Errorf("unknown community tool %q", id)
 	}
 	if def.ID == model.CommunityToolRTK {
-		return installRTK(homeDir, runner, detector)
+		return installRTKForAgents(homeDir, runner, detector, nil, false)
 	}
 	if def.ID != model.CommunityToolCodeGraph {
 		return Result{}, fmt.Errorf("community tool %q is not supported", id)

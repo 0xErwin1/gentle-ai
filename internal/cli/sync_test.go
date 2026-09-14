@@ -2655,7 +2655,7 @@ func TestRestorePersistedCommunityToolsRequiresInstallerSelection(t *testing.T) 
 
 func TestRestorePersistedCommunityToolsRestoresRTKAndSchedulesSync(t *testing.T) {
 	home := t.TempDir()
-	selection := model.Selection{}
+	selection := model.Selection{Agents: []model.AgentID{model.AgentOpenCode}}
 	restorePersistedCommunityTools(home, &selection, state.InstallState{CommunityToolsConfigured: true, CommunityTools: []string{"rtk", "unknown"}})
 	if !selection.HasCommunityTool(model.CommunityToolRTK) || len(selection.CommunityTools) != 1 {
 		t.Fatalf("restored community tools = %v, want only RTK", selection.CommunityTools)
@@ -2664,9 +2664,14 @@ func TestRestorePersistedCommunityToolsRestoresRTKAndSchedulesSync(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !slices.ContainsFunc(runtime.stagePlan().Apply, func(step pipeline.Step) bool { return step.ID() == "sync:community-tool:rtk" }) {
-		t.Fatal("persisted RTK selection did not schedule the RTK sync step")
+	for _, step := range runtime.stagePlan().Apply {
+		if step.ID() == "sync:community-tool:rtk" {
+			if got := step.(rtkSyncStep).agents; reflect.DeepEqual(got, []model.AgentID{model.AgentOpenCode}) {
+				return
+			}
+		}
 	}
+	t.Fatal("persisted RTK selection did not schedule the scoped RTK sync step")
 }
 
 func TestRestorePersistedCommunityToolsDoesNotAdoptExternalWiring(t *testing.T) {
