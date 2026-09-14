@@ -3849,6 +3849,52 @@ func runtimeFailedAttemptInObjectiveLineage(status RuntimeStatus, failed Runtime
 	return true, ""
 }
 
+// runtimeChainFailedEvidenceForVerify resolves the canonical failed-evidence
+// revision that remediation must name for a given verify-report evidence
+// revision (#4481). Status used to report the verify-report's own revision
+// while Finish's --remediates-evidence-revision check (above) already binds
+// to runtimeChainFailedAttempt's answer; once a remediation attempt against
+// that failure itself failed and recorded new evidence, the two disagreed
+// forever.
+//
+// The chain's newest unremediated failure only speaks for verifyEvidence when
+// it IS that evidence, or a correction chain of it: walking
+// RemediatesEvidenceRevision links back from the failure reaches
+// verifyEvidence. runtimeFailedAttemptInObjectiveLineage bounds that failure
+// exactly as Finish and the settle_obligation notice already do, so a failure
+// declared independent of the current objective never lends its evidence to
+// an unrelated verify report. Any other chain -- no ledger, no failed
+// attempt, an unrelated failure, or one outside that lineage -- returns false
+// so the caller keeps the file-backed verifyEvidence unchanged.
+func runtimeChainFailedEvidenceForVerify(status RuntimeStatus, verifyEvidence string) (string, bool) {
+	failed, ok := runtimeChainFailedAttempt(status.Attempts)
+	if !ok {
+		return "", false
+	}
+	if inLineage, _ := runtimeFailedAttemptInObjectiveLineage(status, failed); !inLineage {
+		return "", false
+	}
+	revision, visited := failed.EvidenceRevision, map[string]bool{}
+	for revision != "" {
+		if revision == verifyEvidence {
+			return failed.EvidenceRevision, true
+		}
+		if visited[revision] {
+			break
+		}
+		visited[revision] = true
+		next := ""
+		for _, attempt := range status.Attempts {
+			if attempt.EvidenceRevision == revision {
+				next = attempt.RemediatesEvidenceRevision
+				break
+			}
+		}
+		revision = next
+	}
+	return "", false
+}
+
 // runtimeEvidenceOnlyRetryAuthorized reports whether an audited reset or rescope
 // already authorized one evidence-only correction of this exact candidate (#2621).
 //
