@@ -39,13 +39,25 @@ func TestRTKHomeRunnerSetsIsolatedChildEnvironment(t *testing.T) {
 
 func TestInstallRuntimeBacksUpRTKManagedPaths(t *testing.T) {
 	home := t.TempDir()
+	for _, dir := range []string{filepath.Join(home, ".claude"), filepath.Join(home, ".config", "opencode")} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
 	selection := model.Selection{CommunityTools: []model.CommunityToolID{model.CommunityToolRTK}}
-	targets, err := backupTargets(home, "", ScopeGlobal, selection, planner.ResolvedPlan{})
+	targets, err := backupTargets(home, "", ScopeGlobal, selection, planner.ResolvedPlan{Agents: []model.AgentID{model.AgentOpenCode}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !slices.Contains(targets, filepath.Join(home, ".local", "bin", "rtk")) {
-		t.Fatalf("backup targets = %v, want RTK binary", targets)
+	if !slices.Contains(targets, filepath.Join(home, ".local", "bin", "rtk")) || !slices.Contains(targets, filepath.Join(home, ".config", "opencode", "plugins", "rtk.ts")) || slices.Contains(targets, filepath.Join(home, ".claude", "RTK.md")) {
+		t.Fatalf("backup targets = %v, want only selected OpenCode RTK paths", targets)
+	}
+}
+
+func TestRTKInstallStepForwardsResolvedAgents(t *testing.T) {
+	plan := (&installRuntime{selection: model.Selection{CommunityTools: []model.CommunityToolID{model.CommunityToolRTK}}, resolved: planner.ResolvedPlan{Agents: []model.AgentID{model.AgentOpenCode}}, state: &runtimeState{}}).stagePlan()
+	if got := plan.Apply[len(plan.Apply)-2].(communityToolInstallStep).agents; !reflect.DeepEqual(got, []model.AgentID{model.AgentOpenCode}) {
+		t.Fatalf("agents = %v", got)
 	}
 }
 

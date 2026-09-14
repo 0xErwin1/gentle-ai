@@ -64,17 +64,18 @@ type InstallResult struct {
 }
 
 var (
-	osUserHomeDir                = os.UserHomeDir
-	osSetenv                     = os.Setenv
-	osStat                       = os.Stat
-	runCommand                   = executeCommand
-	cmdLookPath                  = exec.LookPath
-	streamCommandOutput          = true
-	goEnv                        = defaultGoEnv
-	installCommunityTool         = communitytool.Install
-	installCommunityToolWithHome = communitytool.InstallWithHome
-	injectSDD                    = sdd.Inject
-	pathEnvEntries               = func(profile system.PlatformProfile) []string {
+	osUserHomeDir                         = os.UserHomeDir
+	osSetenv                              = os.Setenv
+	osStat                                = os.Stat
+	runCommand                            = executeCommand
+	cmdLookPath                           = exec.LookPath
+	streamCommandOutput                   = true
+	goEnv                                 = defaultGoEnv
+	installCommunityTool                  = communitytool.Install
+	installCommunityToolWithHome          = communitytool.InstallWithHome
+	installCommunityToolWithHomeAndAgents = communitytool.InstallWithHomeAndAgents
+	injectSDD                             = sdd.Inject
+	pathEnvEntries                        = func(profile system.PlatformProfile) []string {
 		return splitPathForOS(os.Getenv("PATH"), profile.OS)
 	}
 	addUserPath          = system.AddToUserPath
@@ -786,7 +787,7 @@ func (r *installRuntime) stagePlan() pipeline.StagePlan {
 	}
 
 	for _, tool := range r.selection.CommunityTools {
-		apply = append(apply, communityToolInstallStep{id: "community-tool:" + string(tool), tool: tool, workspaceDir: r.workspaceDir, homeDir: r.homeDir, state: r.state})
+		apply = append(apply, communityToolInstallStep{id: "community-tool:" + string(tool), tool: tool, workspaceDir: r.workspaceDir, homeDir: r.homeDir, agents: r.resolved.Agents, state: r.state})
 	}
 
 	if containsAgent(r.resolved.Agents, model.AgentOpenCode) {
@@ -1398,6 +1399,7 @@ type communityToolInstallStep struct {
 	tool         model.CommunityToolID
 	workspaceDir string
 	homeDir      string
+	agents       []model.AgentID
 	state        *runtimeState
 }
 
@@ -1408,7 +1410,13 @@ func (s communityToolInstallStep) Run() error {
 	if s.tool == model.CommunityToolRTK {
 		runner = rtkHomeRunner{homeDir: s.homeDir}
 	}
-	result, err := installCommunityToolWithHome(s.tool, s.workspaceDir, s.homeDir, runner, communitytool.DetectorFunc(cmdLookPath))
+	var result communitytool.Result
+	var err error
+	if s.tool == model.CommunityToolRTK {
+		result, err = installCommunityToolWithHomeAndAgents(s.tool, s.workspaceDir, s.homeDir, s.agents, runner, communitytool.DetectorFunc(cmdLookPath))
+	} else {
+		result, err = installCommunityToolWithHome(s.tool, s.workspaceDir, s.homeDir, runner, communitytool.DetectorFunc(cmdLookPath))
+	}
 	if err != nil {
 		return fmt.Errorf("install community tool %q: %w", s.tool, err)
 	}
@@ -2274,7 +2282,7 @@ func backupTargets(homeDir, workspaceDir string, scope InstallScope, selection m
 		}
 	}
 	if selection.HasCommunityTool(model.CommunityToolRTK) {
-		for _, path := range communitytool.RTKManagedPaths(homeDir) {
+		for _, path := range communitytool.RTKManagedPathsForAgents(homeDir, resolved.Agents) {
 			paths[path] = struct{}{}
 		}
 	}

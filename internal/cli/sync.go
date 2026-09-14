@@ -628,7 +628,7 @@ func (r *syncRuntime) stagePlan() pipeline.StagePlan {
 		apply = append(apply, piCodeGraphSyncStep{id: "sync:community-tool:pi-codegraph", homeDir: r.homeDir, workspaceDir: r.workspaceDir, changedFiles: &r.changedFiles})
 	}
 	if r.selection.HasCommunityTool(model.CommunityToolRTK) {
-		apply = append(apply, rtkSyncStep{id: "sync:community-tool:rtk", homeDir: r.homeDir, workspaceDir: r.workspaceDir, changedFiles: &r.changedFiles})
+		apply = append(apply, rtkSyncStep{id: "sync:community-tool:rtk", homeDir: r.homeDir, workspaceDir: r.workspaceDir, agents: r.agentIDs, changedFiles: &r.changedFiles})
 	}
 
 	return pipeline.StagePlan{Prepare: prepare, Apply: apply}
@@ -740,7 +740,7 @@ func syncBackupTargets(homeDir, workspaceDir string, selection model.Selection, 
 		}
 	}
 	if selection.HasCommunityTool(model.CommunityToolRTK) {
-		for _, path := range communitytool.RTKManagedPaths(homeDir) {
+		for _, path := range communitytool.RTKManagedPathsForAgents(homeDir, selection.Agents) {
 			paths[path] = struct{}{}
 		}
 	}
@@ -894,18 +894,19 @@ type piCodeGraphSyncStep struct {
 
 type rtkSyncStep struct {
 	id, homeDir, workspaceDir string
+	agents                    []model.AgentID
 	changedFiles              *[]string
 }
 
 func (s rtkSyncStep) ID() string { return s.id }
 
 func (s rtkSyncStep) Run() error {
-	paths := communitytool.RTKManagedPaths(s.homeDir)
+	paths := communitytool.RTKManagedPathsForAgents(s.homeDir, s.agents)
 	before, err := snapshotSyncFiles(paths)
 	if err != nil {
 		return fmt.Errorf("snapshot RTK files: %w", err)
 	}
-	_, err = installCommunityToolWithHome(model.CommunityToolRTK, s.workspaceDir, s.homeDir, rtkHomeRunner{homeDir: s.homeDir}, communitytool.DetectorFunc(cmdLookPath))
+	_, err = installCommunityToolWithHomeAndAgents(model.CommunityToolRTK, s.workspaceDir, s.homeDir, s.agents, rtkHomeRunner{homeDir: s.homeDir}, communitytool.DetectorFunc(cmdLookPath))
 	if err != nil {
 		return errors.Join(fmt.Errorf("sync RTK: %w", err), restoreSyncFiles(before))
 	}

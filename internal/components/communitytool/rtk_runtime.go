@@ -64,8 +64,16 @@ func rtkPiAgentDir(homeDir string) string {
 }
 
 func RTKManagedPaths(homeDir string) []string {
+	return rtkManagedPaths(homeDir, rtkDetectedAgents(homeDir))
+}
+
+func RTKManagedPathsForAgents(homeDir string, selected []model.AgentID) []string {
+	return rtkManagedPaths(homeDir, rtkScopedDetectedAgents(homeDir, selected))
+}
+
+func rtkManagedPaths(homeDir string, agents []model.AgentID) []string {
 	paths := []string{rtkInstallPath(homeDir)}
-	for _, agent := range rtkDetectedAgents(homeDir) {
+	for _, agent := range agents {
 		switch agent {
 		case model.AgentClaudeCode:
 			paths = append(paths, filepath.Join(homeDir, ".claude", "RTK.md"), filepath.Join(homeDir, ".claude", "CLAUDE.md"), filepath.Join(homeDir, ".claude", "settings.json"))
@@ -116,6 +124,16 @@ func rtkDetectedAgents(homeDir string) []model.AgentID {
 	return out
 }
 
+func rtkScopedDetectedAgents(homeDir string, selected []model.AgentID) []model.AgentID {
+	out := make([]model.AgentID, 0, len(selected))
+	for _, agent := range rtkDetectedAgents(homeDir) {
+		if slices.Contains(selected, agent) {
+			out = append(out, agent)
+		}
+	}
+	return out
+}
+
 func rtkSetupArgs(agent model.AgentID) ([]string, bool) {
 	for _, contract := range rtkSetupContracts {
 		if contract.Agent == agent {
@@ -125,8 +143,15 @@ func rtkSetupArgs(agent model.AgentID) ([]string, bool) {
 	return nil, false
 }
 
-func installRTK(homeDir string, runner Runner, detector Detector) (Result, error) {
+func installRTKForAgents(homeDir string, runner Runner, detector Detector, selected []model.AgentID, scoped bool) (Result, error) {
 	result := Result{Tool: model.CommunityToolRTK}
+	targets := rtkDetectedAgents(homeDir)
+	if scoped {
+		targets = rtkScopedDetectedAgents(homeDir, selected)
+		if len(targets) == 0 {
+			return result, fmt.Errorf("RTK has no selected supported detected agents; select an installed supported agent before setup")
+		}
+	}
 	asset, admitted := rtkAssetForRuntime()
 	if !admitted {
 		return result, fmt.Errorf("RTK is unavailable on %s/%s; Windows and unsupported platforms are not admitted", rtkGOOS, rtkGOARCH)
@@ -139,7 +164,11 @@ func installRTK(homeDir string, runner Runner, detector Detector) (Result, error
 	}
 	before := detectRTKStatus(homeDir, detector)
 	result.StatusBefore = &before
-	snapshots, err := snapshotCodeGraphPaths(RTKManagedPaths(homeDir))
+	managedPaths := RTKManagedPaths(homeDir)
+	if scoped {
+		managedPaths = RTKManagedPathsForAgents(homeDir, selected)
+	}
+	snapshots, err := snapshotCodeGraphPaths(managedPaths)
 	if err != nil {
 		return result, err
 	}
@@ -188,7 +217,7 @@ func installRTK(homeDir string, runner Runner, detector Detector) (Result, error
 		return rollback(err)
 	}
 
-	for _, agent := range rtkDetectedAgents(homeDir) {
+	for _, agent := range targets {
 		args, ok := rtkSetupArgs(agent)
 		if !ok {
 			continue

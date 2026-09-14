@@ -140,6 +140,39 @@ func TestRTKInstallUsesAndReusesAttestedDestinationInsteadOfPATH(t *testing.T) {
 	}
 }
 
+func TestRTKScopedInstallConfiguresOnlySelectedDetectedAgent(t *testing.T) {
+	home := t.TempDir()
+	for _, dir := range []string{filepath.Join(home, ".claude"), filepath.Join(home, ".config", "opencode"), filepath.Join(home, ".codex"), filepath.Join(home, ".pi", "agent")} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	archive := rtkTarGz(t, "rtk", "binary")
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write(archive) }))
+	t.Cleanup(server.Close)
+	restoreRTKInstallTestHooks(t, server.URL, archive)
+	available := false
+	runner := &rtkRecordingRunner{home: home, available: &available}
+	_, err := InstallWithHomeAndAgents(model.CommunityToolRTK, "", home, []model.AgentID{model.AgentOpenCode}, runner, DetectorFunc(func(string) (string, error) {
+		if available {
+			return rtkInstallPath(home), nil
+		}
+		return "", errors.New("not found")
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(runner.commands, []string{rtkInstallPath(home) + " init -g --opencode"}) {
+		t.Fatalf("commands = %v, want only selected OpenCode", runner.commands)
+	}
+	if paths := RTKManagedPathsForAgents(home, []model.AgentID{model.AgentOpenCode}); slices.Contains(paths, filepath.Join(home, ".claude", "RTK.md")) || !slices.Contains(paths, filepath.Join(home, ".config", "opencode", "plugins", "rtk.ts")) {
+		t.Fatalf("scoped paths = %v", paths)
+	}
+	if _, err = InstallWithHomeAndAgents(model.CommunityToolRTK, "", t.TempDir(), []model.AgentID{}, &rtkRecordingRunner{available: new(bool)}, DetectorFunc(func(string) (string, error) { return "", errors.New("not found") })); err == nil || !strings.Contains(err.Error(), "no selected supported detected agents") {
+		t.Fatalf("empty scope error = %v", err)
+	}
+}
+
 func TestRTKInstallRollsBackTheBinaryAndAgentFilesOnSetupFailure(t *testing.T) {
 	home := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(home, ".claude"), 0o755); err != nil {
