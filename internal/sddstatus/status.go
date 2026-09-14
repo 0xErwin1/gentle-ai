@@ -2056,16 +2056,19 @@ func nativeRuntimeInstructions(status Status, change string) []string {
 		// RemediationState.FailedEvidenceRevision is already the canonical
 		// answer remediationFailedEvidenceRevision resolved for this status
 		// (#4481): the chain's own evidence when the ledger holds an
-		// unremediated failure, otherwise the verify-report's. The guard below
+		// unremediated attempt, otherwise the verify-report's. The guard below
 		// stays keyed on the raw chain lookup, not that resolved value, so this
-		// acquire example still renders only when the ledger genuinely has a
-		// failed attempt to bind -- printing --remediates-evidence-revision
-		// against an empty chain is a recipe Finish always refuses.
+		// acquire example still renders only when the ledger genuinely has an
+		// unremediated attempt to bind -- printing --remediates-evidence-revision
+		// against an empty chain is a recipe Finish always refuses. That
+		// unremediated attempt may be a genuine failure or a passed settlement
+		// that exceeded max_changed_lines (#4542); either way it did not
+		// complete the objective, so the wording below stays evidence-neutral.
 		if _, found := runtimeChainFailedAttempt(status.RuntimeStatus.Attempts); found {
 			evidence := status.RemediationState.FailedEvidenceRevision
 			objective := status.RuntimeStatus.Objective
 			instructions = append(instructions,
-				fmt.Sprintf("For failed SDD evidence %s, run `gentle-ai sdd-attempt acquire --cwd %s --change %q --request-id \"<unique-request-id>\" --work-unit %q --evidence-goal %q --max-attempts %d --max-changed-lines %d --remediates-evidence-revision %s`.", evidence, pathquote.Quote(workspace), change, objective.WorkUnit, objective.EvidenceGoal, objective.MaxAttempts, objective.MaxChangedLines, evidence),
+				fmt.Sprintf("For unremediated SDD evidence %s, run `gentle-ai sdd-attempt acquire --cwd %s --change %q --request-id \"<unique-request-id>\" --work-unit %q --evidence-goal %q --max-attempts %d --max-changed-lines %d --remediates-evidence-revision %s`.", evidence, pathquote.Quote(workspace), change, objective.WorkUnit, objective.EvidenceGoal, objective.MaxAttempts, objective.MaxChangedLines, evidence),
 				fmt.Sprintf("Correct the candidate before acquire. After a terminal candidate drift, run status and then the audited reset above before reissuing this acquire; use rescope only when its narrower-successor contract applies. After the candidate changes, settle that token with `--remediates-evidence-revision %s`; fresh independent verification is required before archive.", evidence),
 			)
 		}
