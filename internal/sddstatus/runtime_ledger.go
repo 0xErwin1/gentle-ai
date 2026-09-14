@@ -1189,8 +1189,8 @@ func (store RuntimeStore) Finish(ctx context.Context, request FinishAttemptReque
 				}
 				return runtimeRecord{}, errors.New("this correction names failed verification " + request.RemediatesEvidenceRevision + ", but the attempt chain records no failed verification at all; run `gentle-ai sdd-attempt status --cwd <repo> --change <change>` to read the chain, then settle without --remediates-evidence-revision if nothing is being repaired")
 			}
-			if chainFailedEvidence != request.RemediatesEvidenceRevision {
-				return runtimeRecord{}, errors.New("this correction names failed verification " + request.RemediatesEvidenceRevision + ", but the chain's unremediated failure is " + chainFailedEvidence + "; settle with --remediates-evidence-revision \"" + chainFailedEvidence + "\", or without the flag if this work unit repairs nothing")
+			if err := runtimeRemediationPointerRefusal(chainFailedEvidence, request.RemediatesEvidenceRevision, "finish"); err != nil {
+				return runtimeRecord{}, err
 			}
 		}
 		// The ONE gate for the force-without-declaration demand (#4024 R3/R4):
@@ -3347,6 +3347,30 @@ func runtimeRevisionShapeObservation(value string) string {
 	return fmt.Sprintf("received length=%d, sha256: prefix=%t, non-lowercase-hex characters=%t", len(value), hasPrefix, nonLowercaseHex)
 }
 
+// runtimeRemediationPointerRefusal decides whether a caller's
+// --remediates-evidence-revision pointer may bind to the chain's
+// unremediated failed evidence (#4527). The pointer names a value the
+// ledger itself already recorded, so equality with that recorded value is
+// the only correct test -- not the pointer's own shape. A pointer that
+// already equals the chain's recorded evidence is accepted regardless of
+// its shape, since the ledger is the one that produced that value in the
+// first place; shape is consulted only to make a genuine MISMATCH legible.
+// Every refusal names the chain's actual value and the same exit, so the
+// finish, settle, and acquire ingresses never diverge on what to run next;
+// verb is the sdd-attempt subcommand the caller should rerun.
+func runtimeRemediationPointerRefusal(chainFailedEvidence, pointer, verb string) error {
+	if pointer == chainFailedEvidence {
+		return nil
+	}
+	if !runtimeRevisionPattern.MatchString(pointer) {
+		if chainFailedEvidence == "" {
+			return fmt.Errorf("remediates_evidence_revision must be sha256:<64-lowercase-hex> (%s); the attempt chain records no unremediated failure; rerun `gentle-ai sdd-attempt %s` without --remediates-evidence-revision if nothing is being repaired", runtimeRevisionShapeObservation(pointer), verb)
+		}
+		return fmt.Errorf("remediates_evidence_revision must be sha256:<64-lowercase-hex> (%s); the chain's unremediated failure is %s; rerun `gentle-ai sdd-attempt %s` with --remediates-evidence-revision %q, or without the flag if this work unit repairs nothing", runtimeRevisionShapeObservation(pointer), chainFailedEvidence, verb, chainFailedEvidence)
+	}
+	return fmt.Errorf("this correction names failed verification %s, but the chain's unremediated failure is %s; rerun `gentle-ai sdd-attempt %s` with --remediates-evidence-revision %q, or without the flag if this work unit repairs nothing", pointer, chainFailedEvidence, verb, chainFailedEvidence)
+}
+
 func normalizeFinishAttemptRequest(request FinishAttemptRequest) (FinishAttemptRequest, error) {
 	if request.ExpectedRevision == "" || !runtimeRevisionPattern.MatchString(request.ExpectedRevision) {
 		return FinishAttemptRequest{}, errors.New("finish requires an exact expected runtime revision")
@@ -3391,19 +3415,12 @@ func normalizeFinishAttemptRequest(request FinishAttemptRequest) (FinishAttemptR
 		}
 		request.IntendedUntracked = &canonical
 	}
-	if request.RemediatesEvidenceRevision != "" {
-		// Every outcome is a truthful settlement of a declared correction
-		// (#3422): passed discharges the failure it names, failed records the
-		// correction's own new failure as the chain's bindable head, and
-		// interrupted discharges nothing. Only the binding shape is validated
-		// here; outcome-specific demands live in Finish and its replay twin.
-		if !runtimeRevisionPattern.MatchString(request.RemediatesEvidenceRevision) {
-			return FinishAttemptRequest{}, fmt.Errorf(
-				"remediates_evidence_revision must be sha256:<64-lowercase-hex> (%s); rerun `gentle-ai sdd-attempt finish` with --remediates-evidence-revision sha256:<64-lowercase-hex>",
-				runtimeRevisionShapeObservation(request.RemediatesEvidenceRevision),
-			)
-		}
-	}
+	// RemediatesEvidenceRevision is a POINTER to a value the chain already
+	// recorded (#4527), not new evidence of its own: its only correct check
+	// is equality with the chain's actual unremediated failed evidence, which
+	// this pure normalizer -- with no ledger access -- cannot decide. Finish
+	// and its replay twin own that equality check; shape is consulted there
+	// only to make a genuine mismatch legible.
 	return request, nil
 }
 
