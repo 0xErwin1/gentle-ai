@@ -4,6 +4,75 @@
 
 ---
 
+## Organic Driven Development (ODD)
+
+ODD keeps the existing explore → implement → proportionate checks flow. For substantial, authorized implementation, the agent automatically creates one feature document after exploration; you do not need to request task tracking or choose a storage mode. Small, understood work creates no durable task artifacts. Explanation, investigation, and proposal-only requests remain read-only.
+
+- **One feature document:** `odd/tasks/<feature-name>.md` holds objective, problem, why, scope, constraints, an actionable checklist with stable IDs and acceptance criteria, verification evidence, progress, and next step. Keep concise rationale for meaningful accepted changes here, not a separate plan or exhaustive decision journal. Project-scoped Engram topic `odd/<feature-name>/tasks` mirrors the full current document and file locator.
+- **Task size:** about 400 authored changed lines (additions plus deletions) per task is only a planning heuristic, not a task acceptance criterion, hard cap, counter-trigger, automatic stop, forced split, or RDD trigger. Keep the smallest coherent behavior with its tests and docs. If the correct, clear solution naturally exceeds it, briefly explain why and continue without size-only rework loops. Never delete spaces, blank lines, or comments for cosmetic savings, omit tests, minify, add gratuitous abstractions, or split artificially. Forward the same advisory-only instruction to delegated subagents. Existing repository policy and separate PR size gates remain unchanged.
+- **Changes:** accepted user, review, or verification changes update affected intent and tasks together, preserve valid completed and unrelated work, and add new tasks or reopen invalidated tasks with a reason. Findings alone do not authorize expansion or automatic acceptance; routine corrections stay with their tasks. Checkoffs require observed outcomes and applicable proof; they are not approval or a review receipt. New business scope still needs your authorization.
+- **TDD:** resolve on/off from existing project/session configuration or explicit user choice, retaining source and exact runner in the feature document when present; tests existing does not enable it. Forward mode/source/runner to every implementation worker and refresh on resume. Enabled means observed RED before implementation → GREEN → REFACTOR; disabled still runs ordinary functional checks. Unknown/conflicting mode or a missing runner needs only the clarification affecting the next action—never invented precedence, commands, or `sdd-init`.
+- **Checking:** run applicable functional checks per task; a TODO checkbox does not trigger an RDD cycle. Coordinate native review at the applicable deliverable candidate boundary using existing risk, consent, and authority. Never skip an existing delivery gate.
+- **RDD consent:** when enabled, native candidate risk assessment comes first: passive/low stays silent with structural checks, no reviewer, and no consent ceremony; medium/high presents existing candidate consent and runs the native review plan only on grant. Declining uses ordinary policy. Disabled RDD never starts or prompts; ordinary checks remain. This is prospective change risk, not defect severity or a model-selected threshold. Failed assessment never implies low risk; existing native continuations and authority still apply.
+- **Resume:** before implementation or resume, the parent reads the full feature-specific Engram observation and actual task file, reconciles current code and evidence, and passes the locator and relevant context; the worker reads the document before edits. Read back both writes: they are not atomic. If Engram is unavailable, keep local progress and report the pending mirror; preserve conflicting versions rather than silently overwriting one.
+- **Uncertainty:** research is optional, and a concise proposal is useful only for a real decision. A high-consequence unproven assumption can receive one independent read-only challenge—even in a small security-critical change. Deterministic failures need fixes, not debate; native RDD claims stay with its own refuter.
+
+### Research depth without a new phase
+
+ODD research establishes the problem, intended outcome, constraints, and current evidence, then inspects relevant code. Depth adapts to uncertainty and consequence: no fixed questionnaire or mandatory rounds. Only real unresolved product decisions prompt a focused user question, one at a time with a stop/wait; delegated workers return gaps to the parent rather than assume choices.
+
+Questions needing external evidence use available authorized documentation/web tools, preferably primary sources. Findings attribute material claims to URLs or code locations and distinguish verified facts, assumptions, contradictions, freshness, and gaps. The concise handoff includes a recommendation, tradeoffs, open questions, and implementation implications. A proposal is needed only for a real decision; unavailable tools are disclosed, never invented, and only unsafe decisions dependent on missing evidence pause.
+
+When delegated, these instructions go to an existing fresh general exploration/research worker—not a new specialized agent or `sdd-research`. Research stays read-only and introduces no SDD request/grant schema, persistence gate, readiness state, or new runtime command.
+
+```mermaid
+flowchart TD
+    A[Request] --> B{Implementation authorized?}
+    B -->|No| C[Explore or explain without task artifacts]
+    B -->|Yes| D[Explore existing code]
+    D --> E{Research useful and selected?}
+    E -->|Yes| F[Scoped research]
+    E -->|No| G[Resolve real scope decisions only]
+    F --> G
+    G --> H{High-consequence unproven premise?}
+    H -->|Yes| I[One independent assumption challenge]
+    H -->|No| J{Substantial implementation?}
+    I --> J
+    J -->|Yes| K[One feature document and full Engram mirror]
+    J -->|No| L[Small work without durable task artifacts]
+    K --> TT[Resolve configured TDD, source and runner]
+    L --> TT
+    TT --> M[Implement next authorized task]
+    M --> N[Applicable proportionate checks]
+    N --> Q[Record truthful results]
+    Q --> R{Tracked feature?}
+    R -->|No| O{RDD user-enabled at deliverable boundary?}
+    R -->|Yes| T[Update intent, tasks and full mirror]
+    T --> U{Work remains or requirements changed?}
+    U -->|Yes| V[Revise affected tasks within authorized scope]
+    V --> M
+    U -->|No| O
+    O -->|Yes| P{Native candidate risk assessment}
+    O -->|No| AB[Ordinary checks and policy]
+    P -->|Passive or low| AC[Silent structural checks; no reviewer or prompt]
+    P -->|Medium or high| AD{Existing candidate consent}
+    P -->|Unavailable| AE[Follow native continuation; never assume low]
+    AD -->|Granted| AF[Native review plan and authority]
+    AD -->|Declined| AB
+    AC --> Y[Existing native authority and delivery gates]
+    AF --> Y
+    AB --> Y
+    Y --> S[Deliver]
+    W[Resume interrupted feature] --> X[Read full memory and task file; reconcile evidence]
+    X --> TT
+```
+
+ODD adds shared agent guidance, not a new CLI, state engine, or mandatory planning phase. Existing risk-based functional checks and the user-owned RDD switch are unchanged; ODD never enables RDD. Explicitly selected SDD remains a separate workflow.
+
+Gentle-Pi owns its prompt delivery and needs its separate ODD companion change. Updating Gentle AI's shared renderer does **not** establish Pi parity; parity requires observing the same file, memory, update, and resume behavior in Pi, not merely matching prompt text.
+
+---
+
 ## Persona Modes
 
 | Persona   | ID          | Description                                                                       |
