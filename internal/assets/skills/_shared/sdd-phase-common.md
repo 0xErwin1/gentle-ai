@@ -68,7 +68,7 @@ File was already written during the phase's main step. No additional action need
 
 ### Hybrid mode
 
-Do BOTH: write the file to the filesystem AND call `mem_save` as above.
+Attempt BOTH declared writes and read back each successful write. Hybrid writes are not atomic: preserve successful writes and report partial persistence with the outstanding locator. Do not claim a successful mirror, silently substitute another store, or roll back valid progress.
 
 ### None mode
 
