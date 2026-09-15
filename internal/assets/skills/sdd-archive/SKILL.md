@@ -324,9 +324,9 @@ Return to the orchestrator:
 | {domain} | Created/Updated | {N added, M modified, K removed requirements} |
 
 ### Archive Contents
-- proposal.md ✅
-- specs/ ✅
-- design.md ✅
+- proposal.md: {observed present/missing; do not infer completion}
+- specs/: {observed present/missing; do not infer completion}
+- design.md: {observed present/missing; do not infer completion}
 - tasks.md: {present/missing}, {completed}/{total} tasks complete; {pending} unfinished
 
 ### Source of Truth Updated

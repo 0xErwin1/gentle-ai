@@ -67,7 +67,7 @@ Available subagents (all installed in `~/.cursor/agents/`):
 | `sdd-verify` | `sdd-verify.md` | Validate implementation against specs |
 | `sdd-archive` | `sdd-archive.md` | Sync delta specs and archive completed change |
 
-Each subagent runs in its own context window and returns a **structured result**. Collect the result, update DAG state, and present the summary to the user before triggering the next phase.
+Each subagent runs in its own context window and returns a **structured result**. Collect the result, read back persisted artifacts, and present the summary to the user before triggering the next phase.
 
 ### Language Domain Contract
 
