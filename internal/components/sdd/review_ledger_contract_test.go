@@ -520,7 +520,8 @@ func TestKilocodeReviewSettingsMatchCurrentMainBaseline(t *testing.T) {
 	// #4612 also removes the shared mandatory SDD attempt protocol.
 	// Root3 makes verification optional in the shared dispatcher/dependency graph.
 	// Root4b replaces shared research admission prose; Kilocode permissions stay unchanged.
-	const want = "24dea1be88c984f7e41dac6edf47600b03881db61246e7d2f5d807a6200d672f"
+	// Root4c scopes research above the generic gate; Kilocode inherits only that shared prose.
+	const want = "ae091fe35f761c47b97167ebac7df9cedeabf0807cec99931adb742eb37d104e"
 	if got != want {
 		t.Fatalf("Kilocode settings SHA-256 = %s, want current-main baseline %s", got, want)
 	}
