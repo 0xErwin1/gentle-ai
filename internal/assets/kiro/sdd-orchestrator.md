@@ -463,7 +463,7 @@ Retrieve full content via two steps:
 
 Convention files under the global skills directory (global) or `.agent/skills/_shared/` (workspace): `engram-convention.md`, `persistence-contract.md`, `openspec-convention.md`.
 
-DAG state is tracked in Engram under `sdd/{change-name}/state`. Update it after each phase completes so `/sdd-continue` knows which phase to run next.
+Existing state snapshots are optional recovery hints; use native status and actual artifacts for continuation.
 
 ## Recovery Rule
 

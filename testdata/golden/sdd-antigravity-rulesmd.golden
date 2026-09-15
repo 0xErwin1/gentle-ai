@@ -467,11 +467,11 @@ Retrieve full content via two steps:
 
 Convention files under `~/.gemini/antigravity-cli/skills/_shared/` (global), `.agents/skills/_shared/` (workspace), or legacy `.agent/skills/_shared/` (workspace fallback): `engram-convention.md`, `persistence-contract.md`, `openspec-convention.md`.
 
-DAG state is tracked in Engram under `sdd/{change-name}/state`. Update it after each phase completes so `/sdd-continue` knows which phase to run next.
+Existing state snapshots are optional recovery hints; use native status and actual artifacts for continuation.
 
 ## Recovery Rule
 
-- `engram` → `mem_search(...)` → `mem_get_observation(...)`
-- `openspec` → read `openspec/changes/*/state.yaml`
-- `none` → state not persisted — explain to user
+Recover from native status and the actual artifacts identified by `artifactStore` and `artifactPaths`, not a locally reconstructed DAG. In `openspec`, read resolved file paths; in `engram`, use project-scoped `mem_search` followed by full `mem_get_observation`; in `hybrid`, follow each resolved locator without substituting the other store. In `none`, use available conversation context and disclose what cannot be recovered.
+
+Existing `state.yaml` and `sdd/{change-name}/state` snapshots are optional recovery hints, never required per-phase writes or a second authority. Preserve historical snapshots and `dependsOn` metadata; check progress and archive closure against actual artifacts. Missing or stale hints do not block recovery or establish active work.
 <!-- /gentle-ai:sdd-orchestrator -->

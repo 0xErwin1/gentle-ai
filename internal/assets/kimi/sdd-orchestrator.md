@@ -334,6 +334,4 @@ Convention files live under `~/.config/agents/skills/_shared/` (global) or `.age
 
 ### Recovery Rule
 
-- `engram` → `mem_search(...)` → `mem_get_observation(...)`
-- `openspec` → read `openspec/changes/*/state.yaml`
-- `none` → state not persisted — explain to the user
+{{GENTLE_AI_SDD_SECTION:Recovery Rule}}

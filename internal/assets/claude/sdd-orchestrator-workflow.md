@@ -225,6 +225,4 @@ Convention files live under the agent's global skills directory, including `engr
 
 ### Recovery
 
-- `engram` → `mem_search(...)` → `mem_get_observation(...)`.
-- `openspec` → read `openspec/changes/*/state.yaml` and artifacts.
-- `none` → state is not persisted; explain the limitation.
+{{GENTLE_AI_SDD_SECTION:Recovery Rule}}

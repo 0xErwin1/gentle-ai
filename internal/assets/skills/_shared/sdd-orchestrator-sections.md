@@ -38,9 +38,9 @@ Verification is opt-in and may inspect partial work. Completed implementation no
 <!-- sdd-orchestrator-section:Dependency Graph:end -->
 
 <!-- sdd-orchestrator-section:Recovery Rule:start -->
-- `engram` → `mem_search(...)` → `mem_get_observation(...)`
-- `openspec` → read `openspec/changes/*/state.yaml`
-- `none` → state not persisted — explain to user
+Recover from native status and the actual artifacts identified by `artifactStore` and `artifactPaths`, not a locally reconstructed DAG. In `openspec`, read resolved file paths; in `engram`, use project-scoped `mem_search` followed by full `mem_get_observation`; in `hybrid`, follow each resolved locator without substituting the other store. In `none`, use available conversation context and disclose what cannot be recovered.
+
+Existing `state.yaml` and `sdd/{change-name}/state` snapshots are optional recovery hints, never required per-phase writes or a second authority. Preserve historical snapshots and `dependsOn` metadata; check progress and archive closure against actual artifacts. Missing or stale hints do not block recovery or establish active work.
 <!-- sdd-orchestrator-section:Recovery Rule:end -->
 
 <!-- sdd-orchestrator-section:Delegated Verification Gate (MANDATORY):start -->
