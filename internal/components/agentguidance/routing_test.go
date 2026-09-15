@@ -92,6 +92,165 @@ func TestRenderRoutingSucceedsForEverySupportedAgent(t *testing.T) {
 	}
 }
 
+// These tests prove the delivered instruction contract, not model compliance.
+// The existing injector tests separately read back this complete rendered block.
+func TestRenderRoutingOrganicTaskContinuity(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		clauses []string
+	}{
+		{"authorized substantial work", []string{
+			"Explore the existing code and requirements first",
+			"For substantial authorized implementation, automatically create",
+			"without a task or storage permission prompt",
+			"Small, understood work creates no durable task artifacts",
+		}},
+		{"optional research without implicit SDD", []string{
+			"Recommend optional research only for a named uncertainty",
+			"If declined, continue within authorized scope only where safe without the missing evidence",
+			"disclose unresolved uncertainty and pause affected unsafe decisions",
+			"Neither research nor a proposal is mandatory",
+			"Do not recommend SDD merely to resolve ambiguity",
+		}},
+		{"adaptive research and product questions", []string{
+			"Establish the problem, intended outcome, constraints, and current evidence; inspect relevant code",
+			"Adapt depth to uncertainty and consequence, not a fixed questionnaire or mandatory rounds",
+			"The parent owns product decisions",
+			"ask one focused user question only for a real unresolved product decision, then stop and wait",
+			"Workers return gaps to the parent rather than assuming choices",
+			"forward these research instructions to a fresh general exploration/research worker through existing delegation",
+			"do not create a specialized agent or invoke sdd-research",
+		}},
+		{"external evidence and useful research handoff", []string{
+			"use available authorized documentation/web tools and prefer primary sources",
+			"Attribute material claims to source URLs or code locations",
+			"distinguish verified facts, assumptions, contradictions, freshness, and gaps",
+			"Return concise findings, recommendation, tradeoffs, open questions, and implementation implications",
+			"If tools are unavailable, disclose limitations without inventing access or evidence",
+			"pause only unsafe decisions dependent on missing evidence",
+		}},
+		{"durable feature identity", []string{
+			"odd/tasks/<feature-name>.md",
+			"odd/<feature-name>/tasks",
+			"current project",
+			"full current document and repository-relative file locator",
+			"stable task IDs, authorized scope, acceptance criteria, and applicable checks",
+			"Reuse the same feature identity; never overwrite another feature",
+		}},
+		{"unified intent and implementation handoff", []string{
+			"one feature document, not a separate plan file or topic",
+			"objective, problem, why, scope, constraints",
+			"progress, verification evidence, and next step",
+			"concise rationale for meaningful accepted changes",
+			"Routine corrections stay with their tasks; no exhaustive decision journal",
+			"Accepted user, review, or verification changes",
+			"add genuinely new tasks or reopen invalidated items with a reason",
+			"Findings alone never authorize scope expansion or automatic acceptance",
+			"Before implementation or resume, the parent reads both the actual file and full observation",
+			"passes the locator and relevant context; workers read the document before edits",
+		}},
+		{"configured TDD without implicit enablement", []string{
+			"Resolve effective TDD on/off from existing project/session configuration or explicit user choice",
+			"retain its source and exact test runner",
+			"Record resolved mode, source, and runner in the feature document when present",
+			"Tests or frameworks being present does not enable TDD",
+			"Forward mode, source, and runner on every implementation delegation; refresh on resume",
+			"When enabled, require observed RED before implementation, GREEN, then REFACTOR",
+			"When disabled, run ordinary functional checks, not no checks",
+			"If mode is unknown/conflicting or the runner is missing",
+			"resolve only the ambiguity affecting the next action",
+			"never invent precedence or a command, and never invoke sdd-init to determine ODD TDD",
+		}},
+		{"updates require proof", []string{
+			"automatically update affected intent and TODOs",
+			"preserve valid completed and unrelated work",
+			"reopen invalidated items",
+			"Business scope changes still require user authorization",
+			"Check off only observed outcomes with applicable proof",
+			"failed, unavailable, skipped, or pending checks",
+			"Checkboxes grant no approval or receipt",
+		}},
+		{"advisory coherent task size", []string{
+			"Use about 400 authored changed lines per ODD task only as a planning heuristic, counting additions plus deletions",
+			"smallest coherent behavior with its tests and docs",
+			"not a task acceptance criterion, hard cap, counter-trigger, automatic stop, forced split, or RDD trigger",
+			"naturally exceeds it, briefly explain why and continue without size-only rework loops",
+			"Never delete spaces, blank lines, or comments for cosmetic line savings",
+			"omit tests, minify, add gratuitous abstractions, or split artificially to fit the heuristic",
+			"Forward this same advisory-only instruction when delegating tasks to subagents",
+			"Existing PR size gates remain unchanged",
+		}},
+		{"recover the right feature", []string{
+			"mem_context",
+			"mem_search",
+			"mem_get_observation",
+			"read the actual task file",
+			"Do not infer active work from the newest global memory",
+			"Reconcile current requirements, code, and proof before resuming",
+		}},
+		{"partial persistence and conflict", []string{
+			"Read back both writes; they are not atomic",
+			"Engram is unavailable, preserve local progress and explicitly mark the mirror pending",
+			"do not claim success or block unrelated safe work",
+			"Preserve both versions on irreconcilable edits and ask only about the real conflict",
+		}},
+		{"selective independent challenge", []string{
+			"at most one scoped independent read-only assumption challenge",
+			"high-consequence unproven premise, even in a small security-critical change",
+			"Deterministic failures need fixes, not model debate",
+			"The native RDD refuter owns native review claims; never duplicate or bypass it",
+		}},
+		{"existing checks and ownership", []string{
+			"Preserve existing native risk selection and applicable functional verification",
+			"Run applicable functional checks per task, not an RDD cycle per TODO checkbox",
+			"native review at the applicable deliverable candidate boundary",
+			"existing risk, consent, and authority",
+			"Never skip an existing delivery gate",
+			"A task list or assumption challenge never enables RDD",
+			"Never enable receipt-driven development on the user's behalf",
+		}},
+		{"native risk before candidate consent", []string{
+			"When RDD is enabled, first use the existing native candidate risk assessment",
+			"gentle-ai review assess --cwd <repo> --json",
+			"Passive/low uses silent structural checks with no reviewer or consent ceremony",
+			"Medium/high relays the existing candidate consent",
+			"native review runs only on grant",
+			"a decline continues under ordinary policy",
+			"Do not substitute model judgment, task size, or defect severity for prospective candidate risk",
+			"never infer low risk from a failed assessment",
+			"When RDD is disabled, do not start or prompt for RDD; ordinary checks remain",
+		}},
+	}
+	for _, agent := range catalog.AllAgents() {
+		t.Run(string(agent.ID), func(t *testing.T) {
+			t.Parallel()
+			rendered, err := RenderRouting(agent.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			guard := strings.Index(rendered, "First establish whether the requested outcome explicitly authorizes a change.")
+			organic := strings.Index(rendered, "### Organic Driven Development")
+			if guard < 0 || organic <= guard {
+				t.Fatal("ODD must follow the mutation-authorization guard")
+			}
+			for _, tt := range tests {
+				t.Run(tt.name, func(t *testing.T) {
+					for _, clause := range tt.clauses {
+						if !strings.Contains(rendered, clause) {
+							t.Errorf("missing organic instruction %q", clause)
+						}
+					}
+				})
+			}
+			if strings.Contains(rendered, "propose SDD only when durable proposal") {
+				t.Error("organic uncertainty still proactively recommends SDD")
+			}
+		})
+	}
+}
+
 func TestRenderRoutingKeepsSDDSelectionExplicit(t *testing.T) {
 	t.Parallel()
 
@@ -282,6 +441,69 @@ func TestRenderRoutingIsDeterministic(t *testing.T) {
 		if first != second {
 			t.Fatalf("RenderRouting(%q) is not deterministic", agent.ID)
 		}
+	}
+}
+
+// TestRenderRoutingOpensWithTheODDProtocol pins Organic Driven Development
+// (ODD) as the orchestrator's predefined, mandatory default workflow: the
+// ordered protocol must render before topology selection, in step order, for
+// every supported agent, and the reference detail section must still follow
+// it rather than duplicate or replace it.
+func TestRenderRoutingOpensWithTheODDProtocol(t *testing.T) {
+	t.Parallel()
+
+	for _, agent := range catalog.AllAgents() {
+		t.Run(string(agent.ID), func(t *testing.T) {
+			t.Parallel()
+
+			rendered, err := RenderRouting(agent.ID)
+			if err != nil {
+				t.Fatalf("RenderRouting(%q) error = %v", agent.ID, err)
+			}
+
+			orderedSubstrings := []string{
+				"Organic Driven Development (ODD) is the predefined workflow of this orchestrator",
+				"### ODD protocol (MANDATORY, in this order, on every request)",
+				"1. **Authorize.** First establish whether the requested outcome explicitly authorizes a change.",
+				"2. **Explore.**",
+				"3. **Resolve uncertainty.**",
+				"4. **Classify.**",
+				"5. **Track before the first write.**",
+				"6. **Implement task by task.**",
+				"7. **Close.**",
+				"**Direct inline:**",
+			}
+			previous := -1
+			for _, want := range orderedSubstrings {
+				at := strings.Index(rendered, want)
+				if at < 0 {
+					t.Fatalf("RenderRouting(%q) is missing %q:\n%s", agent.ID, want, rendered)
+				}
+				if at <= previous {
+					t.Fatalf("RenderRouting(%q) has %q out of order (at %d, previous %d):\n%s", agent.ID, want, at, previous, rendered)
+				}
+				previous = at
+			}
+
+			for _, want := range []string{
+				"two or more meaningful implementation steps",
+				"before the first source write",
+				"Tell the user in one line which feature document was created and how many tasks it holds",
+				"Never describe this workflow only when asked about it: run it.",
+				"SDD is a branch inside ODD",
+				"Resume an interrupted feature with `mem_context`",
+			} {
+				if !strings.Contains(rendered, want) {
+					t.Fatalf("RenderRouting(%q) is missing ODD default-workflow clause %q:\n%s", agent.ID, want, rendered)
+				}
+			}
+
+			protocolHeading := strings.Index(rendered, "### ODD protocol")
+			detailHeading := strings.Index(rendered, "### Organic Driven Development")
+			if protocolHeading < 0 || detailHeading < 0 || protocolHeading >= detailHeading {
+				t.Fatalf("RenderRouting(%q) must render the ODD protocol heading before the detail section:\n%s", agent.ID, rendered)
+			}
+		})
 	}
 }
 
