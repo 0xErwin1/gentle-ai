@@ -521,7 +521,11 @@ func TestKilocodeReviewSettingsMatchCurrentMainBaseline(t *testing.T) {
 	// Root3 makes verification optional in the shared dispatcher/dependency graph.
 	// Root4b replaces shared research admission prose; Kilocode permissions stay unchanged.
 	// Root4c scopes research above the generic gate; Kilocode inherits only that shared prose.
-	const want = "ae091fe35f761c47b97167ebac7df9cedeabf0807cec99931adb742eb37d104e"
+	// ODD default workflow: every runtime orchestrator asset now opens with the
+	// "Organic Driven Development Is The Default Workflow (MANDATORY)" shared
+	// section before any SDD-specific instruction. Kilo renders that section
+	// through the OpenCode orchestrator asset, so the baseline is rederived.
+	const want = "10c086f0e8205ed96c55713f03ac1ae98e17f95d91d902ea0ce7cc94398382bf"
 	if got != want {
 		t.Fatalf("Kilocode settings SHA-256 = %s, want current-main baseline %s", got, want)
 	}
