@@ -137,105 +137,51 @@ func TestSDDStatusV2CleanBreak(t *testing.T) {
 		}
 	})
 
-	t.Run("fresh enabled offer is lineage-free and disabled status omits it without changing archive", func(t *testing.T) {
+	t.Run("verified archive excludes review state and status reads preserve history", func(t *testing.T) {
 		reviewEnabledHome(t)
 		repo := initRuntimeLedgerRepo(t)
 		changeRoot := seedReadyChange(t, repo, "thin", "- [x] 1.1 Work\n")
 		write(t, filepath.Join(changeRoot, "verify-report.md"), testVerifyEnvelope("pass", 0, 0, "1/1", "1/1", 0, 0))
 		write(t, filepath.Join(changeRoot, "reviews", "transaction.json"), "{\"retired\":true}\n")
-
-		enabled, err := Resolve(ResolveOptions{CWD: repo, ChangeName: "thin"})
-		if err != nil {
-			t.Fatal(err)
-		}
-		if enabled.Dependencies.Archive != DependencyReady || enabled.NextRecommended != "archive" {
-			t.Fatalf("enabled archive = %q next = %q, want ready/archive", enabled.Dependencies.Archive, enabled.NextRecommended)
-		}
-		enabledProjection, err := ProjectStatusV2(enabled)
-		if err != nil {
-			t.Fatal(err)
-		}
-		enabledPayload, err := json.Marshal(enabledProjection)
-		if err != nil {
-			t.Fatal(err)
-		}
-		var enabledDocument map[string]json.RawMessage
-		if err := json.Unmarshal(enabledPayload, &enabledDocument); err != nil {
-			t.Fatal(err)
-		}
-		offerPayload, ok := enabledDocument["reviewOffer"]
-		if !ok {
-			t.Fatalf("enabled post-verify status omitted reviewOffer: %s", enabledPayload)
-		}
-		var offer struct {
-			Available  bool   `json:"available"`
-			Invocation string `json:"invocation"`
-		}
-		if err := json.Unmarshal(offerPayload, &offer); err != nil {
-			t.Fatal(err)
-		}
-		var offerKeys map[string]json.RawMessage
-		if err := json.Unmarshal(offerPayload, &offerKeys); err != nil {
-			t.Fatal(err)
-		}
-		assertExactJSONKeys(t, offerKeys, []string{"available", "invocation"})
-		if !offer.Available || offer.Invocation == "" {
-			t.Fatalf("enabled v2 reviewOffer = %#v, want an available actionable offer", offer)
-		}
-		for _, forbidden := range []string{"reviewGate", "reviewTransaction", "reVerify", "runtimeStatus"} {
-			if _, present := enabledDocument[forbidden]; present {
-				t.Fatalf("enabled offer retained review authority key %q: %s", forbidden, enabledPayload)
+		before := snapshotStatusReadTree(t, repo)
+		for range 2 {
+			status, err := Resolve(ResolveOptions{CWD: repo, ChangeName: "thin"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if status.Dependencies.Archive != DependencyReady || status.NextRecommended != "archive" {
+				t.Fatalf("archive=%q next=%q, want ready/archive", status.Dependencies.Archive, status.NextRecommended)
+			}
+			projection, err := ProjectStatusV2(status)
+			if err != nil {
+				t.Fatal(err)
+			}
+			payload, err := json.Marshal(projection)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, key := range []string{"reviewOffer", "reviewGate", "reviewTransaction", "reVerify", "runtimeStatus"} {
+				if strings.Contains(string(payload), `"`+key+`"`) {
+					t.Errorf("SDD projection retained %q", key)
+				}
 			}
 		}
-
-		disabled, err := Resolve(ResolveOptions{CWD: repo, ChangeName: "thin", ReviewDisabled: true})
-		if err != nil {
-			t.Fatal(err)
-		}
-		if disabled.Dependencies.Archive != DependencyReady || disabled.NextRecommended != "archive" {
-			t.Fatalf("disabled archive = %q next = %q, want ready/archive", disabled.Dependencies.Archive, disabled.NextRecommended)
-		}
-		disabledProjection, err := ProjectStatusV2(disabled)
-		if err != nil {
-			t.Fatal(err)
-		}
-		disabledPayload, err := json.Marshal(disabledProjection)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if strings.Contains(string(disabledPayload), "reviewOffer") {
-			t.Fatalf("disabled status retained reviewOffer: %s", disabledPayload)
-		}
-
-		beforeRepeatedRead := snapshotStatusReadTree(t, repo)
-		repeated, err := Resolve(ResolveOptions{CWD: repo, ChangeName: "thin"})
-		if err != nil {
-			t.Fatal(err)
-		}
-		if repeated.ReviewOffer == nil || !repeated.ReviewOffer.Available {
-			t.Fatalf("existing retired authority suppressed the fresh offer: %#v", repeated.ReviewOffer)
-		}
-		if repeated.Dependencies.Archive != DependencyReady || repeated.NextRecommended != "archive" {
-			t.Fatalf("repeated enabled archive = %q next = %q, want ready/archive", repeated.Dependencies.Archive, repeated.NextRecommended)
-		}
-		if afterRepeatedRead := snapshotStatusReadTree(t, repo); afterRepeatedRead != beforeRepeatedRead {
-			t.Fatal("reading a fresh offer persisted status state")
+		if after := snapshotStatusReadTree(t, repo); after != before {
+			t.Fatal("status reads changed existing artifacts or authority")
 		}
 	})
 
-	t.Run("unfinished tasks block archive independently of review mode", func(t *testing.T) {
+	t.Run("unfinished tasks still block archive in this slice", func(t *testing.T) {
 		repo := initRuntimeLedgerRepo(t)
 		changeRoot := seedReadyChange(t, repo, "thin", "- [x] 1.1 Work\n- [ ] 1.2 Remaining\n")
 		write(t, filepath.Join(changeRoot, "verify-report.md"), testVerifyEnvelope("pass", 0, 0, "1/1", "1/1", 0, 0))
 
-		for _, reviewDisabled := range []bool{false, true} {
-			status, err := Resolve(ResolveOptions{CWD: repo, ChangeName: "thin", ReviewDisabled: reviewDisabled})
-			if err != nil {
-				t.Fatal(err)
-			}
-			if status.Dependencies.Archive != DependencyBlocked || status.NextRecommended == "archive" {
-				t.Fatalf("reviewDisabled=%t archive=%q next=%q, want unfinished tasks to block archive", reviewDisabled, status.Dependencies.Archive, status.NextRecommended)
-			}
+		status, err := Resolve(ResolveOptions{CWD: repo, ChangeName: "thin"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if status.Dependencies.Archive != DependencyBlocked || status.NextRecommended == "archive" {
+			t.Fatalf("archive=%q next=%q, want unfinished tasks to block archive", status.Dependencies.Archive, status.NextRecommended)
 		}
 	})
 
@@ -293,9 +239,6 @@ func TestResolveRuntimeAuthorityFailureBlocksFinalRoutingBeforeOfferingReview(t 
 			}
 			if status.Dependencies.Verify != DependencyBlocked || status.Dependencies.Archive != DependencyBlocked || status.NextRecommended != "resolve-blockers" {
 				t.Fatalf("runtime authority failure routing = verify %q archive %q next %q, want blocked/blocked/resolve-blockers", status.Dependencies.Verify, status.Dependencies.Archive, status.NextRecommended)
-			}
-			if status.ReviewOffer != nil {
-				t.Fatalf("runtime authority failure published reviewOffer after blocking final routing: %#v", status.ReviewOffer)
 			}
 		})
 	}
@@ -614,15 +557,6 @@ func TestConsentPublicationFailuresEmitNoIdentity(t *testing.T) {
 				t.Fatal("failure emitted consent")
 			}
 		})
-	}
-}
-
-func TestStatusReviewLookupFailureIsAdvisory(t *testing.T) {
-	repo := initRuntimeLedgerRepo(t)
-	seedReadyChange(t, repo, "advisory", "- [ ] Work\n")
-	status, err := Resolve(ResolveOptions{CWD: repo, ChangeName: "advisory", ReviewDisabledForWorkspace: func(string) (bool, error) { return false, errors.New("review configuration unavailable") }})
-	if err != nil || status.ApplyState != ApplyReady || status.ReviewOffer != nil {
-		t.Fatalf("inspection gated by review lookup: %#v %v", status, err)
 	}
 }
 

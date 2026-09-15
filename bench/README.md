@@ -559,8 +559,8 @@ and compatibility journeys:
 |---|---|---|
 | `j40-sdd-attempt-reset-after-drift` | terminal attempt, drifted candidate: begin refuses and reset is the only way on | shape 2 (a recoverable objective read as terminal) + shape 4 |
 | `j41-kill-switch-versus-sdd-pre-verify` | pre-verify: RDD supervises nothing, on or off, before verify runs | shape 5 (the kill switch and the pre-verify router) + Wave 4's removal of pre-verify review supervision |
-| `j42-kill-switch-versus-sdd-archive` | the offer is an invitation, never a gate: archive proceeds with reviews on or off | shape 5 (a shipped agent contract and the product disagreeing about the same fact) + corrective verify cycle 4 BLOCKER-1 |
-| `j63-disabled-failed-verification-unmanaged-remediation` | failed verification gets one evidence-bound correction; re-enabled review context remains informational | #3417: failed, unknown, and pending review evidence remains visible but never gates completed SDD archive routing |
+| `j42-kill-switch-versus-sdd-archive` | SDD archive never offers review, whether RDD is on or off | #4612: SDD has no review offer or review authority dependency |
+| `j63-disabled-failed-verification-unmanaged-remediation` | failed verification gets one evidence-bound correction; re-enabling RDD never adds an SDD review offer | #3417 correction evidence remains required; #4612 removes SDD review offers regardless of RDD mode |
 | `j44-sdd-historical-requirement-stale-pass` | historical change-local requirement heading: stale PASS restarts verification instead of failed remediation | issue #2137 (historical OpenSpec requirement compatibility and stale verification routing) |
 
 Two of them measure something no test could: `j41` and `j42` each take one item

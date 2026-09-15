@@ -9,29 +9,16 @@ import (
 	"testing"
 )
 
-func TestResolveSharesOneNormalizedWorkspaceWithReviewMode(t *testing.T) {
+func TestResolvePreservesNormalizedWorkspace(t *testing.T) {
 	root := t.TempDir()
 	mkdir(t, filepath.Join(root, "openspec", "changes"))
 	t.Chdir(root)
-
-	modeLookups := 0
-	status, err := Resolve(ResolveOptions{
-		ReviewDisabledForWorkspace: func(workspaceRoot string) (bool, error) {
-			modeLookups++
-			if workspaceRoot != root {
-				t.Fatalf("review mode workspace = %q, want %q", workspaceRoot, root)
-			}
-			return true, nil
-		},
-	})
+	status, err := Resolve(ResolveOptions{})
 	if err != nil {
-		t.Fatalf("Resolve() error = %v", err)
-	}
-	if modeLookups != 1 {
-		t.Fatalf("review mode lookups = %d, want 1", modeLookups)
+		t.Fatal(err)
 	}
 	if status.ActionContext.WorkspaceRoot != root {
-		t.Fatalf("status workspace = %q, want shared root %q", status.ActionContext.WorkspaceRoot, root)
+		t.Fatalf("status workspace = %q, want %q", status.ActionContext.WorkspaceRoot, root)
 	}
 }
 

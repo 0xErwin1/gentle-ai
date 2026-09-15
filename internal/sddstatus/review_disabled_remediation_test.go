@@ -21,7 +21,7 @@ func TestDisabledReviewAdmitsUnmanagedRemediationForAdmittedFailure(t *testing.T
 	changeRoot := seedReadyChange(t, root, "thin", "- [x] 1.1 Work\n")
 	write(t, filepath.Join(changeRoot, "verify-report.md"), testVerifyEnvelope("fail", 1, 0, "1/1", "1/1", 0, 0))
 
-	status, err := Resolve(ResolveOptions{CWD: root, ChangeName: "thin", ReviewDisabled: true})
+	status, err := Resolve(ResolveOptions{CWD: root, ChangeName: "thin"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -72,7 +72,7 @@ func TestDisabledStatusWithoutAnUnmanagedCorrectionDoesNotBlockAfterReenable(t *
 	changeRoot := seedReadyChange(t, repo, "thin", "- [x] 1.1 Work\n")
 	write(t, filepath.Join(changeRoot, "verify-report.md"), testVerifyEnvelope("pass", 0, 0, "1/1", "1/1", 0, 0))
 
-	if _, err := Resolve(ResolveOptions{CWD: repo, ChangeName: "thin", ReviewDisabled: true}); err != nil {
+	if _, err := Resolve(ResolveOptions{CWD: repo, ChangeName: "thin"}); err != nil {
 		t.Fatal(err)
 	}
 	reenabled, err := Resolve(ResolveOptions{CWD: repo, ChangeName: "thin"})

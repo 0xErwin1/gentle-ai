@@ -70,7 +70,7 @@ func TestUnsafeDisabledRARModeKeepsStatusReadOnlyAndValidationRefused(t *testing
 			wantRepair := (&reviewModeUnsafePathError{Path: privateRARDir, Directory: true}).repairCommand()
 			if command.name == "sdd-status" {
 				var status sddstatus.Status
-				if err != nil || json.Unmarshal(output.Bytes(), &status) != nil || status.SchemaName != sddstatus.SchemaName || status.SchemaVersion != 2 || status.ReviewOffer != nil || strings.Contains(output.String(), wantRepair) {
+				if err != nil || json.Unmarshal(output.Bytes(), &status) != nil || status.SchemaName != sddstatus.SchemaName || status.SchemaVersion != 2 || strings.Contains(output.String(), wantRepair) {
 					t.Fatalf("read-only status fabricated review authority or repair: %v %s", err, output.String())
 				}
 			} else if err == nil || !strings.Contains(err.Error(), wantRepair) || output.Len() != 0 {

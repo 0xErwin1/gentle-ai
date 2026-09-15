@@ -114,11 +114,8 @@ type sddStatusV2 struct {
 		Verify  string `json:"verify"`
 		Archive string `json:"archive"`
 	} `json:"dependencies"`
-	ReviewOffer *struct {
-		Available  bool   `json:"available"`
-		Invocation string `json:"invocation"`
-	} `json:"reviewOffer"`
-	BlockedReasons    []string `json:"blockedReasons"`
+	ReviewOffer       json.RawMessage `json:"reviewOffer"`
+	BlockedReasons    []string        `json:"blockedReasons"`
 	PhaseInstructions struct {
 		Verify    []string `json:"verify"`
 		Remediate []string `json:"remediate"`
@@ -1407,27 +1404,11 @@ func sddJourneys() []Journey {
 		{
 			ID:     "j42-kill-switch-versus-sdd-archive",
 			Review: reviewOptedIn,
-			Title:  "The offer is an invitation, never a gate: archive proceeds with reviews on or off",
-			Source: "shape 5 (a shipped agent contract and the product disagreeing about the same fact) + corrective verify cycle 4 BLOCKER-1",
-			// Corrective verify cycle 4, BLOCKER-1 (rdd-post-verify-review-offer's
-			// "Decline Proceeds to Unmanaged Ordinary Archive"): a genuinely
-			// missing receipt is decline-by-absence-of-action, not a blocker, on
-			// EITHER side of the switch. Superseded expectation (documented, not
-			// silently dropped): this journey previously required
-			// dependencies.archive = "blocked" with reviews on, treating an
-			// unacted-on offer as a hard gate.
-			//
-			// Rewritten to pin the ratified "invitation, never a gate" shape: with
-			// reviews on, verify passed, and no receipt, archive is READY and
-			// reviewOffer is present (the invitation the user may act on or not --
-			// declining simply means archiving). With reviews off, archive is
-			// READY and reviewOffer is structurally ABSENT (corrective verify
-			// cycle CRITICAL-1/CRITICAL-3, rdd-post-verify-review-offer's
-			// "Kill-Switch-Off Is Structural Absence" requirement — no offer and
-			// no status review authority). The one distinction is exactly the
-			// offer itself, never whether archive proceeds.
-			//
-			// The shipped sdd-archive skill states the same non-gating rule.
+			Title:  "SDD archive never offers review, whether RDD is on or off",
+			Source: "#4612: SDD has no review offer or review authority dependency",
+			// The same verified change stays archive-ready on either side of the
+			// switch. No reviewOffer field is permitted, including explicit null;
+			// the switch controls standalone RDD, not the SDD lifecycle.
 			Steps: []Step{
 				{Name: "fixture: change complete with an independent verification", Fixture: sddPlanningArtifacts(sddVerifyReport)},
 				{Name: "sdd-status with reviews on", Requires: sddStatusCapability,
@@ -1436,8 +1417,8 @@ func sddJourneys() []Journey {
 						if status.Dependencies.Archive != "ready" || status.NextRecommended != "archive" {
 							return fmt.Errorf("dependencies.archive = %q next = %q, want ready/archive", status.Dependencies.Archive, status.NextRecommended)
 						}
-						if status.ReviewOffer == nil || !status.ReviewOffer.Available {
-							return fmt.Errorf("reviewOffer = %+v, want an available invitation", status.ReviewOffer)
+						if status.ReviewOffer != nil {
+							return fmt.Errorf("reviewOffer = %s, want structural absence while RDD is on", status.ReviewOffer)
 						}
 						return nil
 					})},
@@ -1445,9 +1426,8 @@ func sddJourneys() []Journey {
 				{Name: "sdd-status with reviews off", Requires: sddStatusCapability,
 					Args: productArgs("sdd-status", sddChange, "--json"),
 					After: sddStatusAssertion("archive routing with reviews off", func(status sddStatusV2) error {
-						if status.Dependencies.Archive == "blocked" {
-							return fmt.Errorf("dependencies.archive = %q, want unblocked; blocked reasons = %v",
-								status.Dependencies.Archive, status.BlockedReasons)
+						if status.Dependencies.Archive != "ready" || status.NextRecommended != "archive" {
+							return fmt.Errorf("dependencies.archive = %q next = %q, want ready/archive", status.Dependencies.Archive, status.NextRecommended)
 						}
 						if status.ReviewOffer != nil {
 							return fmt.Errorf("reviewOffer = %+v, want structural absence while the kill switch is off", status.ReviewOffer)
@@ -1459,8 +1439,8 @@ func sddJourneys() []Journey {
 		{
 			ID:     "j63-disabled-failed-verification-unmanaged-remediation",
 			Review: reviewOptedIn,
-			Title:  "Failed verification gets one evidence-bound correction; re-enabled review context remains informational",
-			Source: "#3417: failed, unknown, and pending review evidence remains visible but never gates completed SDD archive routing",
+			Title:  "Failed verification gets one evidence-bound correction; re-enabling RDD never adds an SDD review offer",
+			Source: "#3417 correction evidence remains required; #4612 removes SDD review offers regardless of RDD mode",
 			Steps: []Step{
 				{Name: "fixture: completed change with admitted failed verification", Fixture: sddPlanningArtifacts(sddFailedVerifyReport)},
 				{Name: "enabled failed verification records missing remediation authority", Requires: sddStatusCapability,
@@ -1512,8 +1492,8 @@ func sddJourneys() []Journey {
 						if status.Dependencies.Verify != "all_done" || status.Dependencies.Archive != "ready" || status.NextRecommended != "archive" {
 							return fmt.Errorf("re-enabled archive = verify %q archive %q next %q; want all_done/ready/archive", status.Dependencies.Verify, status.Dependencies.Archive, status.NextRecommended)
 						}
-						if status.ReviewOffer == nil || !status.ReviewOffer.Available || !strings.Contains(status.ReviewOffer.Invocation, "review start") {
-							return fmt.Errorf("re-enabled archive omitted its optional fresh-review offer: %+v", status.ReviewOffer)
+						if status.ReviewOffer != nil {
+							return fmt.Errorf("re-enabled SDD archive exposed a review offer: %s", status.ReviewOffer)
 						}
 						return nil
 					})},

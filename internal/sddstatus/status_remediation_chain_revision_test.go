@@ -90,7 +90,7 @@ func TestStatusKeepsFileBackedRevisionWithoutRuntimeLedger(t *testing.T) {
 	write(t, changeRoot+"/verify-report.md", testVerifyEnvelope("fail", 0, 0, "1/1", "1/1", 0, 0))
 
 	fileEvidence := "sha256:" + strings.Repeat("a", 64)
-	status, err := Resolve(ResolveOptions{CWD: root, ChangeName: "no-ledger-advice", ReviewDisabled: true, IncludeInstructions: true})
+	status, err := Resolve(ResolveOptions{CWD: root, ChangeName: "no-ledger-advice", IncludeInstructions: true})
 	if err != nil {
 		t.Fatal(err)
 	}
