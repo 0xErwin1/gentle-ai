@@ -56,50 +56,6 @@ const (
 // Envelopes
 // ---------------------------------------------------------------------------
 
-// sddRuntimeStatus is the subset of `sdd-attempt status` these journeys read.
-// Unknown fields are ignored so an older or newer envelope still parses.
-type sddRuntimeStatus struct {
-	Change        string `json:"change"`
-	Revision      string `json:"revision"`
-	ActiveAttempt *struct {
-		Ordinal            int    `json:"ordinal"`
-		BeginCandidateTree string `json:"begin_candidate_tree"`
-		Outcome            string `json:"outcome"`
-	} `json:"active_attempt"`
-	Attempts []struct {
-		Ordinal                    int    `json:"ordinal"`
-		ObjectiveID                string `json:"objective_id"`
-		ObjectiveGeneration        int    `json:"objective_generation"`
-		BeginCandidateTree         string `json:"begin_candidate_tree"`
-		FinishCandidateTree        string `json:"finish_candidate_tree"`
-		AttestedVerifyReportDigest string `json:"attested_verify_report_digest"`
-		Outcome                    string `json:"outcome"`
-		EvidenceRevision           string `json:"evidence_revision"`
-		RemediatesEvidenceRevision string `json:"remediates_evidence_revision"`
-	} `json:"attempts"`
-	EvidenceRevision string `json:"evidence_revision"`
-	BindingRevision  string `json:"binding_revision"`
-	Binding          *struct {
-		Change  string `json:"change"`
-		Lineage string `json:"lineage"`
-	} `json:"binding"`
-	LastReset *struct {
-		Revision           string `json:"revision"`
-		ResetCandidateTree string `json:"reset_candidate_tree"`
-		Reason             string `json:"reason"`
-		Actor              string `json:"actor"`
-	} `json:"last_reset"`
-	LastRescope *struct {
-		PreviousObjectiveID  string `json:"previous_objective_id"`
-		PreviousGeneration   int    `json:"previous_generation"`
-		RescopeCandidateTree string `json:"rescope_candidate_tree"`
-		Reason               string `json:"reason"`
-		Actor                string `json:"actor"`
-	} `json:"last_rescope"`
-	NextAction string `json:"next_action"`
-	Complete   bool   `json:"complete"`
-}
-
 type sddCompactAttemptResult struct {
 	State  string `json:"state"`
 	Reason string `json:"reason"`
@@ -152,13 +108,6 @@ func proveJSON(sandbox *Sandbox, target any, args ...string) error {
 	return nil
 }
 
-// proveRuntime reads the SDD runtime authority back out of the product.
-func proveRuntime(sandbox *Sandbox) (sddRuntimeStatus, error) {
-	var status sddRuntimeStatus
-	err := proveJSON(sandbox, &status, "sdd-attempt", "status", "--cwd", sandbox.Repo, "--change", sddChange)
-	return status, err
-}
-
 // proveAuthorities reads every review lineage back out of the product.
 func proveAuthorities(sandbox *Sandbox) (authorityHead, error) {
 	var head authorityHead
@@ -176,48 +125,6 @@ func provePostApplyAllows(sandbox *Sandbox) bool {
 		return false
 	}
 	return result.Allowed && result.Result == "allow"
-}
-
-// proveActiveAttempt asserts the runtime really is where a journey says it is.
-func proveActiveAttempt(sandbox *Sandbox, ordinal int, evidenceRevision string) error {
-	status, err := proveRuntime(sandbox)
-	if err != nil {
-		return err
-	}
-	if status.Change != sddChange {
-		return fmt.Errorf("runtime authority reports change %q, want %q", status.Change, sddChange)
-	}
-	if status.ActiveAttempt == nil {
-		return fmt.Errorf("fixture claims an active attempt on ordinal %d but the runtime has none", ordinal)
-	}
-	if status.ActiveAttempt.Ordinal != ordinal || status.ActiveAttempt.Outcome != "running" {
-		return fmt.Errorf("fixture claims a running ordinal %d but the runtime reports ordinal %d, outcome %q",
-			ordinal, status.ActiveAttempt.Ordinal, status.ActiveAttempt.Outcome)
-	}
-	if status.EvidenceRevision != evidenceRevision {
-		return fmt.Errorf("fixture claims the failed evidence %q but the runtime carries %q",
-			evidenceRevision, status.EvidenceRevision)
-	}
-	return nil
-}
-
-// proveActiveResetRemediationAttempt verifies the chain-bound failed evidence
-// after Reset. Reset deliberately clears the status-level evidence projection,
-// so the immutable failed attempt is the authoritative location for that fact.
-func proveActiveResetRemediationAttempt(sandbox *Sandbox, ordinal int, evidenceRevision string) error {
-	status, err := proveRuntime(sandbox)
-	if err != nil {
-		return err
-	}
-	if status.ActiveAttempt == nil || status.ActiveAttempt.Ordinal != ordinal || status.ActiveAttempt.Outcome != "running" {
-		return fmt.Errorf("fixture claims a running remediation ordinal %d but runtime reports active=%#v", ordinal, status.ActiveAttempt)
-	}
-	for _, attempt := range status.Attempts {
-		if attempt.Outcome == "failed" && attempt.EvidenceRevision == evidenceRevision {
-			return nil
-		}
-	}
-	return fmt.Errorf("fixture claims preserved failed evidence %q but runtime attempts are %#v", evidenceRevision, status.Attempts)
 }
 
 // ---------------------------------------------------------------------------
@@ -274,14 +181,7 @@ func sddRuntimeRepo(sandbox *Sandbox) error {
 	if staged != "docs/attempt.md" {
 		return fmt.Errorf("fixture claims one staged prose file but the staged diff is %q", staged)
 	}
-	status, err := proveRuntime(sandbox)
-	if err != nil {
-		return err
-	}
-	if status.Change != sddChange || status.NextAction != "begin" || len(status.Attempts) != 0 {
-		return fmt.Errorf("fixture claims a fresh runtime authority but the product reports change=%q next_action=%q attempts=%d",
-			status.Change, status.NextAction, len(status.Attempts))
-	}
+
 	return nil
 }
 
@@ -770,19 +670,6 @@ func sddHistoricalStalePass(sandbox *Sandbox) error {
 // Counted operator work
 // ---------------------------------------------------------------------------
 
-// readRuntimeStatus issues one COUNTED `sdd-attempt status`. Every mutation of
-// the runtime ledger needs the exact current revision, and the remediation exit
-// needs three more values, all of which the product publishes only here — so an
-// agent driving this flow really does have to spend the invocation.
-func readRuntimeStatus(r *journeyRun) (sddRuntimeStatus, error) {
-	observation := r.run([]string{"sdd-attempt", "status", "--cwd", r.sandbox.Repo, "--change", sddChange}, false)
-	var status sddRuntimeStatus
-	if err := json.Unmarshal([]byte(strings.TrimSpace(observation.Stdout)), &status); err != nil {
-		return status, fmt.Errorf("parse sdd-attempt status: %w (stderr: %s)", err, firstLine(observation.Stderr))
-	}
-	return status, nil
-}
-
 // selectedReviewArgs keeps a multi-lineage journey on the authority its fixture
 // selected. Without the selector, lifecycle discovery may choose stale history.
 func selectedReviewArgs(parts ...string) func(*Sandbox) ([]string, error) {
@@ -795,287 +682,10 @@ func selectedReviewArgs(parts ...string) func(*Sandbox) ([]string, error) {
 	}
 }
 
-// sddAttemptArgs assembles one runtime mutation. The objective parameters must
-// be byte-identical on every begin of the same objective or the ledger reports a
-// changed objective, so they live in one place.
-func sddAttemptArgs(r *journeyRun, operation, revision, requestID string, extra ...string) []string {
-	args := []string{
-		"sdd-attempt", operation, "--cwd", r.sandbox.Repo, "--change", sddChange,
-		"--expected-revision", revision, "--request-id", requestID,
-	}
-	return append(args, extra...)
-}
-
-var sddObjective = []string{
-	"--work-unit", "bench runtime objective",
-	"--evidence-goal", "bench proves the corrected candidate",
-	"--max-attempts", "6", "--max-changed-lines", "600",
-}
-
-var sddUnmanagedObjective = []string{
-	"--work-unit", "bench unmanaged correction",
-	"--evidence-goal", "repair admitted verification failure",
-	"--max-attempts", "2", "--max-changed-lines", "20",
-}
-
 // sddTerminalEvidence is the bounded evidence every finish must carry.
-var sddTerminalEvidence = []string{
-	"--diagnosis", "the benchmark drove this attempt to a terminal outcome",
-	"--harness-disposition", "reused",
-	"--cleanup-evidence", "workspace clean",
-	"--process-evidence", "no stray processes",
-}
-
-// sddBeginFailBegin drives the runtime to the state every remediation journey
-// starts from: a failed attempt with recorded evidence, and a second attempt
-// running against the same objective.
-func sddBeginFailBegin(r *journeyRun) error {
-	status, err := readRuntimeStatus(r)
-	if err != nil {
-		return err
-	}
-	r.run(sddAttemptArgs(r, "begin", status.Revision, "bench-begin-one", sddObjective...), false)
-
-	if status, err = readRuntimeStatus(r); err != nil {
-		return err
-	}
-	r.run(sddAttemptArgs(r, "finish", status.Revision, "bench-finish-one",
-		append([]string{"--outcome", "failed", "--evidence-revision", sddFailedEvidence}, sddTerminalEvidence...)...), false)
-
-	if status, err = readRuntimeStatus(r); err != nil {
-		return err
-	}
-	r.run(sddAttemptArgs(r, "begin", status.Revision, "bench-begin-two", sddObjective...), false)
-
-	return proveActiveAttempt(r.sandbox, 2, sddFailedEvidence)
-}
-
-func sddBeginFailedUnmanagedVerification(r *journeyRun) error {
-	status, err := readRuntimeStatus(r)
-	if err != nil {
-		return err
-	}
-	r.run(sddAttemptArgs(r, "begin", status.Revision, "bench-unmanaged-begin-verification", sddUnmanagedObjective...), false)
-	if status, err = readRuntimeStatus(r); err != nil {
-		return err
-	}
-	r.run(sddAttemptArgs(r, "finish", status.Revision, "bench-unmanaged-finish-verification",
-		append([]string{"--outcome", "failed", "--evidence-revision", sddFailedEvidence}, sddTerminalEvidence...)...), false)
-	status, err = proveRuntime(r.sandbox)
-	if err != nil {
-		return err
-	}
-	if status.ActiveAttempt != nil || len(status.Attempts) != 1 || status.Attempts[0].Outcome != "failed" || status.NextAction != "begin" {
-		return fmt.Errorf("failed verification did not leave exactly one bounded successor: %#v", status)
-	}
-	return nil
-}
-
-// sddUnmanagedUnchangedAcquireIsRejected proves #4415 at the public runtime
-// boundary: declaring failed evidence against the unchanged failed candidate is
-// refused before Begin, without minting a token or mutating the attempt chain.
-func sddUnmanagedUnchangedAcquireIsRejected(r *journeyRun) error {
-	before, err := proveRuntime(r.sandbox)
-	if err != nil {
-		return err
-	}
-	observation := r.run(append([]string{
-		"sdd-attempt", "acquire", "--cwd", r.sandbox.Repo, "--change", sddChange,
-		"--request-id", "bench-unmanaged-acquire-unchanged", "--remediates-evidence-revision", sddFailedEvidence,
-	}, sddUnmanagedObjective...), false)
-	var result sddCompactAttemptResult
-	if err := json.Unmarshal([]byte(strings.TrimSpace(observation.Stdout)), &result); err != nil {
-		return fmt.Errorf("parse unchanged remediation acquire: %w (stderr: %s)", err, firstLine(observation.Stderr))
-	}
-	if result.State != "blocked" || result.Reason != "remediation_unsatisfiable" || result.Token != "" {
-		return fmt.Errorf("unchanged remediation acquire = %#v exit=%d, want blocked/remediation_unsatisfiable without token", result, observation.ExitCode)
-	}
-	after, err := proveRuntime(r.sandbox)
-	if err != nil {
-		return err
-	}
-	if after.Revision != before.Revision || after.ActiveAttempt != nil || len(after.Attempts) != len(before.Attempts) {
-		return fmt.Errorf("unchanged remediation acquire mutated runtime: before=%#v after=%#v", before, after)
-	}
-	return nil
-}
-
-// sddUnmanagedResetChangedCandidate records the terminal candidate drift before
-// it opens a successor correction attempt. Reset is a maintainer operation: its
-// current CAS revision, reason, and actor must become durable LastReset evidence.
-func sddUnmanagedResetChangedCandidate(r *journeyRun) error {
-	before, err := readRuntimeStatus(r)
-	if err != nil {
-		return err
-	}
-	const reason = "the correction changed the terminal verification candidate"
-	const actor = "bench-maintainer"
-	r.run(sddAttemptArgs(r, "reset", before.Revision, "bench-unmanaged-reset-changed-candidate",
-		"--reason", reason, "--actor", actor), false)
-
-	after, err := readRuntimeStatus(r)
-	if err != nil {
-		return err
-	}
-	if after.Revision == before.Revision || after.LastReset == nil ||
-		after.LastReset.Revision != after.Revision || after.LastReset.ResetCandidateTree == "" ||
-		after.LastReset.Reason != reason || after.LastReset.Actor != actor || after.NextAction != "begin" {
-		return fmt.Errorf("audited correction reset did not publish the changed candidate and audit context: before=%#v after=%#v", before, after)
-	}
-	return nil
-}
-
-func sddUnmanagedAcquireCorrection(r *journeyRun) error {
-	observation := r.run(append([]string{
-		"sdd-attempt", "acquire", "--cwd", r.sandbox.Repo, "--change", sddChange,
-		"--request-id", "bench-unmanaged-acquire", "--remediates-evidence-revision", sddFailedEvidence,
-	}, sddUnmanagedObjective...), false)
-	var result sddCompactAttemptResult
-	if err := json.Unmarshal([]byte(strings.TrimSpace(observation.Stdout)), &result); err != nil {
-		return fmt.Errorf("parse unmanaged correction acquire: %w (stderr: %s)", err, firstLine(observation.Stderr))
-	}
-	if observation.ExitCode != 0 || result.State != "proceed" || result.Token == "" {
-		return fmt.Errorf("unmanaged correction acquire = %#v exit=%d", result, observation.ExitCode)
-	}
-	r.sandbox.Scratch["unmanaged-token"] = result.Token
-	return nil
-}
-
-func sddUnmanagedSettle(r *journeyRun, requestID, failedEvidence string, wantSuccess bool) error {
-	token := r.sandbox.Scratch["unmanaged-token"]
-	observation := r.run(append([]string{
-		"sdd-attempt", "settle", "--cwd", r.sandbox.Repo, "--change", sddChange, "--token", token,
-		"--request-id", requestID, "--outcome", "passed", "--evidence-revision", sddCorrectedEvidence,
-		"--remediates-evidence-revision", failedEvidence,
-	}, sddTerminalEvidence...), false)
-	var result sddCompactAttemptResult
-	if err := json.Unmarshal([]byte(strings.TrimSpace(observation.Stdout)), &result); err != nil {
-		return fmt.Errorf("parse unmanaged correction settle: %w (stderr: %s)", err, firstLine(observation.Stderr))
-	}
-	if wantSuccess && (observation.ExitCode != 0 || result.State != "complete") {
-		if result.State == "blocked" && result.Reason == "invalid_continuation" {
-			if err := proveActiveAttempt(r.sandbox, 2, sddFailedEvidence); err != nil {
-				return fmt.Errorf("invalid continuation did not leave the remediation attempt running: %w", err)
-			}
-			return fmt.Errorf("bounded unmanaged correction was blocked as invalid_continuation and left its remediation attempt running")
-		}
-		return fmt.Errorf("bounded unmanaged correction did not settle: %#v exit=%d", result, observation.ExitCode)
-	}
-	if !wantSuccess && result.State != "blocked" {
-		return fmt.Errorf("invalid unmanaged correction = %#v, want blocked", result)
-	}
-	return nil
-}
-
-func sddUnmanagedCorrectionRemainsBounded(r *journeyRun) error {
-	if err := sddUnmanagedSettle(r, "bench-unmanaged-unchanged", sddFailedEvidence, false); err != nil {
-		return err
-	}
-	return proveActiveResetRemediationAttempt(r.sandbox, 2, sddFailedEvidence)
-}
-
-func sddUnmanagedWrongEvidenceIsRejected(r *journeyRun) error {
-	if err := sddUnmanagedSettle(r, "bench-unmanaged-wrong-evidence", sddWrongEvidence, false); err != nil {
-		return err
-	}
-	return proveActiveResetRemediationAttempt(r.sandbox, 2, sddFailedEvidence)
-}
-
-func sddUnmanagedCorrectionCompletes(r *journeyRun) error {
-	if err := sddUnmanagedSettle(r, "bench-unmanaged-correct", sddFailedEvidence, true); err != nil {
-		return err
-	}
-	status, err := proveRuntime(r.sandbox)
-	if err != nil {
-		return err
-	}
-	if status.Binding != nil || status.BindingRevision != "" || len(status.Attempts) != 2 ||
-		status.Attempts[1].RemediatesEvidenceRevision != sddFailedEvidence {
-		return fmt.Errorf("unmanaged correction invented review authority or lost failed evidence: %#v", status)
-	}
-	return nil
-}
-
-func sddUnmanagedReplayIsComplete(r *journeyRun) error {
-	observation := r.run(append([]string{"sdd-attempt", "acquire", "--cwd", r.sandbox.Repo, "--change", sddChange, "--request-id", "bench-unmanaged-replay"}, sddUnmanagedObjective...), false)
-	var result sddCompactAttemptResult
-	if err := json.Unmarshal([]byte(strings.TrimSpace(observation.Stdout)), &result); err != nil {
-		return fmt.Errorf("parse unmanaged correction replay: %w", err)
-	}
-	if observation.ExitCode != 0 || result.State != "complete" {
-		return fmt.Errorf("unmanaged correction replay = %#v exit=%d", result, observation.ExitCode)
-	}
-	return nil
-}
 
 func sddReplaceFailedVerifyReport(sandbox *Sandbox) error {
 	return sandbox.write(filepath.Join(sddChangeRoot(sandbox), "verify-report.md"), sddVerifyReport)
-}
-
-// sddBeginThenInterrupt closes the first attempt as interrupted with budget to
-// spare, which is the terminal shape the reset dead end lived on.
-func sddBeginThenInterrupt(r *journeyRun) error {
-	status, err := readRuntimeStatus(r)
-	if err != nil {
-		return err
-	}
-	r.run(sddAttemptArgs(r, "begin", status.Revision, "bench-begin-one", sddObjective...), false)
-
-	if status, err = readRuntimeStatus(r); err != nil {
-		return err
-	}
-	r.run(sddAttemptArgs(r, "finish", status.Revision, "bench-finish-one",
-		append([]string{"--outcome", "interrupted"}, sddTerminalEvidence...)...), false)
-
-	final, err := proveRuntime(r.sandbox)
-	if err != nil {
-		return err
-	}
-	if final.ActiveAttempt != nil {
-		return errors.New("fixture claims a terminal attempt but the runtime still has an active one")
-	}
-	if len(final.Attempts) != 1 || final.Attempts[0].Outcome != "interrupted" {
-		return fmt.Errorf("fixture claims one interrupted attempt but the runtime reports %+v", final.Attempts)
-	}
-	if final.Complete {
-		return errors.New("fixture claims budget remaining but the runtime reports the objective complete")
-	}
-	return nil
-}
-
-// sddBeginAfterDrift issues the begin the drift refuses, then the reset, then the
-// begin again. The middle command is the one that used to have no way out.
-func sddBeginAfterDrift(r *journeyRun) error {
-	status, err := readRuntimeStatus(r)
-	if err != nil {
-		return err
-	}
-	observation := r.run(sddAttemptArgs(r, "begin", status.Revision, "bench-begin-drifted", sddObjective...), false)
-	if observation.ExitCode == 0 {
-		return errors.New("begin after candidate drift was accepted: the journey's premise no longer holds")
-	}
-	return nil
-}
-
-// sddResetThenBegin takes the exit the refusal asks for without naming, and
-// proves the objective really reopened.
-func sddResetThenBegin(r *journeyRun) error {
-	status, err := readRuntimeStatus(r)
-	if err != nil {
-		return err
-	}
-	r.run(sddAttemptArgs(r, "reset", status.Revision, "bench-reset-one",
-		"--reason", "the candidate drifted after the interrupted attempt",
-		"--actor", "bench"), false)
-
-	if status, err = readRuntimeStatus(r); err != nil {
-		return err
-	}
-	if status.NextAction != "begin" {
-		return fmt.Errorf("reset ran but the runtime next action is %q, want begin", status.NextAction)
-	}
-	r.run(sddAttemptArgs(r, "begin", status.Revision, "bench-begin-three", sddObjective...), false)
-	return proveActiveAttempt(r.sandbox, 2, "")
 }
 
 // sddWalkIntoRecoveryGuardRails issues the three refusals an operator reaches
@@ -1255,27 +865,6 @@ func sddProveSelectedBurned(r *journeyRun) error {
 // Capabilities
 // ---------------------------------------------------------------------------
 
-var sddAttemptStatusCapability = &Capability{
-	Verb:  []string{"sdd-attempt", "status"},
-	Probe: []string{"sdd-attempt", "status"},
-}
-var sddAttemptBeginCapability = &Capability{
-	Verb:  []string{"sdd-attempt", "begin"},
-	Probe: []string{"sdd-attempt", "begin", "--work-unit=probe", "--evidence-goal=probe", "--max-attempts=1", "--max-changed-lines=1"},
-}
-var sddAttemptFinishCapability = &Capability{
-	Verb:  []string{"sdd-attempt", "finish"},
-	Probe: []string{"sdd-attempt", "finish", "--outcome=passed", "--evidence-revision=probe", "--harness-disposition=reused", "--cleanup-evidence=probe", "--process-evidence=probe"},
-}
-var sddAttemptRemediationCapability = &Capability{
-	Verb:  []string{"sdd-attempt", "finish"},
-	Probe: []string{"sdd-attempt", "finish", "--remediates-evidence-revision=probe"},
-}
-var sddAttemptResetCapability = &Capability{
-	Verb:  []string{"sdd-attempt", "reset"},
-	Probe: []string{"sdd-attempt", "reset", "--reason=probe", "--actor=probe"},
-}
-
 // sdd-status parses its own arguments too, so it gets a probe rather than a
 // help read. The argv is a real read-only status call.
 var sddStatusCapability = &Capability{
@@ -1307,25 +896,6 @@ var invalidateCapability = &Capability{
 // reached, and these exercise active SDD lifecycle surfaces.
 func sddJourneys() []Journey {
 	return []Journey{
-		{
-			ID:     "j40-sdd-attempt-reset-after-drift",
-			Review: reviewOptedIn,
-			Title:  "Terminal attempt, drifted candidate: begin refuses and reset is the only way on",
-			Source: "shape 2 (a recoverable objective read as terminal) + shape 4",
-			// Expected: begin refuses because the objective's candidate moved, and
-			// reset — which used to refuse this exact shape, leaving no way on at
-			// all — now admits it. What the journey measures is whether the begin
-			// refusal names the reset that clears it. It does not: it says the
-			// objective changed "without an explicit reset" and prints no command,
-			// so this block is out_of_band and is reported as such.
-			Steps: []Step{
-				{Name: "fixture: repository with a committed OpenSpec change", Fixture: sddRuntimeRepo},
-				{Name: "begin, then close the attempt as interrupted", Requires: sddAttemptBeginCapability, Composite: sddBeginThenInterrupt},
-				{Name: "fixture: the candidate drifts after the attempt closed", Fixture: sddDrift},
-				{Name: "begin against the drifted candidate", Requires: sddAttemptBeginCapability, Composite: sddBeginAfterDrift},
-				{Name: "reset the objective, then begin again", Requires: sddAttemptResetCapability, Composite: sddResetThenBegin},
-			},
-		},
 
 		// -------------------------------------------------- kill switch and SDD
 		{
@@ -1439,8 +1009,8 @@ func sddJourneys() []Journey {
 		{
 			ID:     "j63-disabled-failed-verification-unmanaged-remediation",
 			Review: reviewOptedIn,
-			Title:  "Failed verification gets one evidence-bound correction; re-enabling RDD never adds an SDD review offer",
-			Source: "#3417 correction evidence remains required; #4612 removes SDD review offers regardless of RDD mode",
+			Title:  "Failed verification needs remediation, not attempt governance; re-enabling RDD adds no review offer",
+			Source: "#4612: preserve verification truth while removing SDD attempt governance and review offers",
 			Steps: []Step{
 				{Name: "fixture: completed change with admitted failed verification", Fixture: sddPlanningArtifacts(sddFailedVerifyReport)},
 				{Name: "enabled failed verification records missing remediation authority", Requires: sddStatusCapability,
@@ -1451,30 +1021,13 @@ func sddJourneys() []Journey {
 						return nil
 					})},
 				{Name: "mode disable", Requires: modeCapability, Args: productArgs("review", "mode", "disable", "--json")},
-				{Name: "failed verification enters unmanaged remediation", Requires: sddAttemptBeginCapability, Composite: sddBeginFailedUnmanagedVerification},
-				{Name: "disabled status names remediation without review authority", Requires: sddStatusCapability,
-					Args: productArgs("sdd-status", sddChange, "--json", "--instructions"), After: sddStatusAssertion("disabled remediation", func(status sddStatusV2) error {
+				{Name: "disabled failure remains ordinary remediation without attempts", Requires: sddStatusCapability,
+					Args: productArgs("sdd-status", sddChange, "--json", "--instructions"), After: sddStatusAssertion("ordinary remediation", func(status sddStatusV2) error {
 						if status.NextRecommended != "remediate" {
-							return fmt.Errorf("disabled failed verification = next %q, want remediate", status.NextRecommended)
+							return fmt.Errorf("failed report routes to %q, want remediate", status.NextRecommended)
 						}
-						instructions := strings.Join(status.PhaseInstructions.Remediate, "\n")
-						if !strings.Contains(instructions, "gentle-ai sdd-attempt acquire") ||
-							!strings.Contains(instructions, "--remediates-evidence-revision "+sddFailedEvidence) {
-							return fmt.Errorf("disabled remediation emitted no executable evidence-bound continuation: %s", instructions)
-						}
-						return nil
-					})},
-				{Name: "unchanged candidate cannot acquire correction", Requires: sddAttemptRemediationCapability, Composite: sddUnmanagedUnchangedAcquireIsRejected},
-				{Name: "fixture: correction changes the candidate", Fixture: sddBoundedCorrection},
-				{Name: "audited reset records the changed correction candidate", Requires: sddAttemptResetCapability, Composite: sddUnmanagedResetChangedCandidate},
-				{Name: "acquire the one bounded correction after the audited reset", Requires: sddAttemptRemediationCapability, Composite: sddUnmanagedAcquireCorrection},
-				{Name: "wrong failed evidence cannot satisfy correction", Requires: sddAttemptRemediationCapability, Composite: sddUnmanagedWrongEvidenceIsRejected},
-				{Name: "settle the evidence-bound correction", Requires: sddAttemptRemediationCapability, Composite: sddUnmanagedCorrectionCompletes},
-				{Name: "replay cannot acquire another correction", Requires: sddAttemptRemediationCapability, Composite: sddUnmanagedReplayIsComplete},
-				{Name: "fresh verification is required before archive", Requires: sddStatusCapability,
-					Args: productArgs("sdd-status", sddChange, "--json"), After: sddStatusAssertion("fresh verification", func(status sddStatusV2) error {
-						if status.Dependencies.Verify != "ready" || status.Dependencies.Archive != "blocked" || status.NextRecommended != "verify" {
-							return fmt.Errorf("post-correction status = verify %q archive %q next %q", status.Dependencies.Verify, status.Dependencies.Archive, status.NextRecommended)
+						if strings.Contains(strings.Join(status.PhaseInstructions.Remediate, "\n"), "sdd-attempt") {
+							return errors.New("remediation still requires attempt governance")
 						}
 						return nil
 					})},

@@ -517,7 +517,8 @@ func TestKilocodeReviewSettingsMatchCurrentMainBaseline(t *testing.T) {
 	// same shared session preflight body, so the hash moved. Deliberate, not drift.
 	// #4612 excludes SDD from the shared RDD gate and removes its command offer.
 	// Kilocode inherits those OpenCode prompt changes, not native RDD capability.
-	const want = "7af39c09190086fbdb816073fbba5a9d8fae826b7f58b3f37ef6f59c354632e9"
+	// #4612 also removes the shared mandatory SDD attempt protocol.
+	const want = "0a04082b81c3083332cc422bd94b39398b3d8ed4335e919f3b11b39472abcc47"
 	if got != want {
 		t.Fatalf("Kilocode settings SHA-256 = %s, want current-main baseline %s", got, want)
 	}

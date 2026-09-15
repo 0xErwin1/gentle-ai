@@ -164,7 +164,6 @@ internal/reviewtransaction/transaction.go	CanonicalLensResult
 internal/reviewtransaction/transaction.go	NewLineage
 internal/reviewtransaction/transaction.go	NewTransaction
 internal/reviewtransaction/transaction.go	Transaction.addFixFinding
-internal/reviewtransaction/tree_blob.go	RestoreTreeBlob
 internal/reviewtransaction/verification_contract.go	AggregateVerificationCost
 internal/reviewtransaction/verification_contract.go	BuildCorrectionImpactClosure
 internal/reviewtransaction/verification_contract.go	BuildVerificationPlan
@@ -214,8 +213,6 @@ internal/reviewtransaction/verification_contract.go	verificationSVGIsPassive
 internal/reviewtransaction/verification_convergence.go	ResnapshotVerificationSubject
 internal/reviewtransaction/verification_convergence.go	VerificationSubjectMutationError.Error
 internal/reviewtransaction/verification_convergence.go	VerificationSubjectMutationError.Unwrap
-internal/sddstatus/review_door.go	resetReviewEntryHookCallCountForTest
-internal/sddstatus/review_door.go	reviewEntryHookCallCountForTest
 internal/sddstatus/status.go	RenderNativePhasePrompt
 internal/sddstatus/status.go	blockerReasons.forRoute
 internal/sddstatus/status.go	dependencyForPhase
