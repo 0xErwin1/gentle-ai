@@ -15,7 +15,7 @@ Commands that select, continue, apply, verify, or archive an SDD change MUST fir
 
 ## Native Engine
 
-Native `gentle-ai.sdd-status/v2` is the sole status contract. A request for v1 or another prior contract fails read-only with one instruction: start a fresh implementation state and rerun `gentle-ai sdd-status --contract gentle-ai.sdd-status/v2`. When status recommends `propose`, the orchestrator-owned pre-proposal gate separately requires confirmed decisions, valid evidence references, and matching hybrid state; selected research must be `done`.
+Native `gentle-ai.sdd-status/v2` is the sole status contract. A request for v1 or another prior contract fails read-only with one instruction: start a fresh implementation state and rerun `gentle-ai sdd-status --contract gentle-ai.sdd-status/v2`. Research is optional and does not add a proposal-admission gate. Ask about real unresolved product decisions; pause only dependent work.
 
 - When the `gentle-ai` binary is available, prefer `gentle-ai sdd-status [change] --cwd <repo> --json --instructions` for read-only status and `gentle-ai sdd-continue [change] --cwd <repo>` only for explicit authorized continuation. This holds for every artifact store: the dispatcher resolves the declared store itself.
 - The native dispatcher resolves the artifact store the workspace DECLARES in `openspec/config.yaml` and reports it in `artifactStore`. A declared store is authoritative in both directions: it selects the resolver, and an empty declared store reports as empty rather than silently serving the other store's artifacts. Never re-resolve artifact status yourself, and never branch on the store: read the locators the dispatcher returned in `artifactPaths`.

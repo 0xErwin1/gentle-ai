@@ -97,14 +97,11 @@ func boundedReviewRequiredClausesFor(agent model.AgentID) []string {
 		"Approval awaits acknowledgement in B; exact acknowledgement burns B only, and A remains untouched",
 		"review lifecycle stops",
 		"Unsupported runtimes remain unavailable",
-		"### Research and Pre-Proposal Gate (MANDATORY)",
-		"immediately after `sdd-explore`",
-		"selected research is `done` or research is unselected",
-		"product decisions are `confirmed`",
-		"evidence references are valid",
-		"one lossless grouped prompt",
-		"persist the pending state before prompting",
-		"STOP without invoking `sdd-propose`",
+		"### Optional Research and Product Discovery",
+		"Research remains optional, including after selection.",
+		"Ask one focused product question at a time and wait for the answer",
+		"Missing, partial, unavailable or divergent research metadata does not block proposal work.",
+		"Pause only work dependent on an unresolved product decision or unsafe missing evidence",
 	}...)
 }
 

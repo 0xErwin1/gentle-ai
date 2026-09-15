@@ -519,7 +519,8 @@ func TestKilocodeReviewSettingsMatchCurrentMainBaseline(t *testing.T) {
 	// Kilocode inherits those OpenCode prompt changes, not native RDD capability.
 	// #4612 also removes the shared mandatory SDD attempt protocol.
 	// Root3 makes verification optional in the shared dispatcher/dependency graph.
-	const want = "202ea1ca4d2776e7b9c9d2ac6f8007cb105a7e341743950842a300584d99fafb"
+	// Root4b replaces shared research admission prose; Kilocode permissions stay unchanged.
+	const want = "24dea1be88c984f7e41dac6edf47600b03881db61246e7d2f5d807a6200d672f"
 	if got != want {
 		t.Fatalf("Kilocode settings SHA-256 = %s, want current-main baseline %s", got, want)
 	}

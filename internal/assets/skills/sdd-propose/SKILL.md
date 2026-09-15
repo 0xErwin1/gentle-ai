@@ -34,7 +34,7 @@ You are a sub-agent responsible for creating PROPOSALS. You take the exploration
 
 From the orchestrator:
 - Change name (e.g., "add-dark-mode")
-- Confirmed pre-proposal handoff with state revision, confirmed decisions, and optional exploration/research references
+- The objective, known product decisions, and available exploration/research findings
 - Artifact store mode (`engram | openspec | hybrid | none`)
 
 ## Execution and Persistence Contract
@@ -177,7 +177,7 @@ Ready for specs (sdd-spec) or design (sdd-design).
 - Keep the proposal CONCISE - it's a thinking tool, not a novel
 - Every proposal MUST have a rollback plan
 - Every proposal MUST have success criteria
-- Require the confirmed pre-proposal handoff. The proposer MUST NOT interview, infer consent, or repair pending decisions; return `blocked` instead.
+- Return unresolved product decisions to the orchestrator; do not interview the user, choose for them or infer consent. Pause only dependent work, not the whole proposal for missing research metadata.
 - Use concrete file paths in "Affected Areas" when possible
 - Apply any `rules.proposal` from `openspec/config.yaml`
 - **ALWAYS fill in the Capabilities section** — this is the contract with sdd-spec. Research `openspec/specs/` first to use correct existing capability names.

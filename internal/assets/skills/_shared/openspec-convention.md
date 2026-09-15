@@ -13,7 +13,7 @@ openspec/
     └── {change-name}/       <- Active change folder
         ├── state.yaml       <- DAG state (survives compaction)
         ├── exploration.md   <- (optional) from sdd-explore
-        ├── research.md      <- (optional until selected) source-backed evidence
+        ├── research.md      <- (optional) source-backed research notes
         ├── proposal.md      <- from sdd-propose
         ├── specs/           <- from sdd-spec
         │   └── {domain}/
@@ -30,7 +30,7 @@ openspec/
 | orchestrator | Creates/Updates | `openspec/changes/{change-name}/state.yaml` |
 | sdd-init | Creates | `openspec/config.yaml`, `openspec/specs/`, `openspec/changes/`, `openspec/changes/archive/` |
 | sdd-explore | Creates (optional) | `openspec/changes/{change-name}/exploration.md` |
-| sdd-research | Creates (when selected) | `openspec/changes/{change-name}/research.md` |
+| orchestrator | Creates optional research notes | `openspec/changes/{change-name}/research.md` |
 | sdd-propose | Creates | `openspec/changes/{change-name}/proposal.md` |
 | sdd-spec | Creates | `openspec/changes/{change-name}/specs/{domain}/spec.md` |
 | sdd-design | Creates | `openspec/changes/{change-name}/design.md` |
@@ -52,7 +52,7 @@ Config:     openspec/config.yaml
 Main specs: openspec/specs/{domain}/spec.md
 ```
 
-`research.md` contains exact `gentle-ai.sdd-research/v1` bytes. Hybrid pre-proposal state uses `gentle-ai.sdd-preproposal/v1`; compare its revision and bytes with Engram before readiness and never prefer one store after mismatch.
+`research.md` stores optional source-backed notes. Preserve historical research and preproposal files; no schema, revision or equality with Engram is required to propose.
 
 ## Writing Rules
 
