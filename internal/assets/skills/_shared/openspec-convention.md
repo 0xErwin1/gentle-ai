@@ -11,7 +11,7 @@ openspec/
 └── changes/                 <- Active changes
     ├── archive/             <- Completed changes (YYYY-MM-DD-{change-name}/)
     └── {change-name}/       <- Active change folder
-        ├── state.yaml       <- DAG state (survives compaction)
+        ├── state.yaml       <- optional recovery hint; may contain dependsOn
         ├── exploration.md   <- (optional) from sdd-explore
         ├── research.md      <- (optional) source-backed research notes
         ├── proposal.md      <- from sdd-propose
@@ -27,7 +27,7 @@ openspec/
 
 | Skill | Creates / Reads | Path |
 |-------|----------------|------|
-| orchestrator | Creates/Updates | `openspec/changes/{change-name}/state.yaml` |
+| orchestrator | Optional recovery hint | `openspec/changes/{change-name}/state.yaml` |
 | sdd-init | Creates | `openspec/config.yaml`, `openspec/specs/`, `openspec/changes/`, `openspec/changes/archive/` |
 | sdd-explore | Creates (optional) | `openspec/changes/{change-name}/exploration.md` |
 | orchestrator | Creates optional research notes | `openspec/changes/{change-name}/research.md` |
