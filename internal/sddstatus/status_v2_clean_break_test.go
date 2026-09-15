@@ -2,7 +2,6 @@ package sddstatus
 
 import (
 	"bytes"
-	"context"
 	"crypto/sha256"
 	"encoding/json"
 	"errors"
@@ -199,57 +198,12 @@ func TestSDDStatusV2CleanBreak(t *testing.T) {
 	})
 }
 
-func TestResolveRuntimeAuthorityFailureBlocksFinalRoutingBeforeOfferingReview(t *testing.T) {
-	for _, store := range []ArtifactStore{ArtifactStoreOpenSpec, ArtifactStoreEngram} {
-		t.Run(string(store), func(t *testing.T) {
-			repo := initRuntimeLedgerRepo(t)
-			const change = "runtime-routing"
-			if store == ArtifactStoreOpenSpec {
-				changeRoot := seedReadyChange(t, repo, change, "- [x] 1.1 Work\n")
-				write(t, filepath.Join(changeRoot, "verify-report.md"), testVerifyEnvelope("pass", 0, 0, "1/1", "1/1", 0, 0))
-			} else {
-				if err := os.MkdirAll(filepath.Join(repo, ".engram"), 0o755); err != nil {
-					t.Fatal(err)
-				}
-				runRuntimeLedgerGit(t, repo, "remote", "add", "origin", "git@github.com:Gentleman-Programming/gentle-ai.git")
-				restore := stubEngramExport(t, []engramObservation{
-					{Title: "sdd/" + change + "/proposal", Content: "# Proposal\n", Project: "gentle-ai", Scope: "project"},
-					{Title: "sdd/" + change + "/spec", Content: "### Requirement: Runtime\n#### Scenario: Routing\n", Project: "gentle-ai", Scope: "project"},
-					{Title: "sdd/" + change + "/design", Content: "# Design\n", Project: "gentle-ai", Scope: "project"},
-					{Title: "sdd/" + change + "/tasks", Content: "- [x] 1.1 Work\n", Project: "gentle-ai", Scope: "project"},
-					{Title: "sdd/" + change + "/verify-report", Content: testVerifyEnvelope("pass", 0, 0, "1/1", "1/1", 0, 0), Project: "gentle-ai", Scope: "project"},
-				})
-				t.Cleanup(restore)
-			}
-
-			runtimeStore := mustRuntimeStore(t, repo, change)
-			if _, err := runtimeStore.Begin(context.Background(), BeginAttemptRequest{
-				RequestID: "begin-corrupt-runtime", WorkUnit: "verify", EvidenceGoal: "prove final routing",
-				MaxAttempts: 1, MaxChangedLines: DefaultRuntimeChangedLines,
-			}); err != nil {
-				t.Fatal(err)
-			}
-			if err := os.WriteFile(filepath.Join(runtimeStore.Dir, "HEAD"), []byte("corrupt\n"), 0o644); err != nil {
-				t.Fatal(err)
-			}
-
-			status, err := Resolve(ResolveOptions{CWD: repo, ChangeName: change})
-			if err != nil {
-				t.Fatal(err)
-			}
-			if status.Dependencies.Verify != DependencyBlocked || status.Dependencies.Archive != DependencyBlocked || status.NextRecommended != "resolve-blockers" {
-				t.Fatalf("runtime authority failure routing = verify %q archive %q next %q, want blocked/blocked/resolve-blockers", status.Dependencies.Verify, status.Dependencies.Archive, status.NextRecommended)
-			}
-		})
-	}
-}
-
 func TestResolveBoundedRemediationCompletesAuthorityFreeEvidence(t *testing.T) {
 	failedEvidenceRevision := "sha256:" + strings.Repeat("d", 64)
 	remediation := resolveBoundedRemediation(true, verifyResultEvaluation{
 		EvidenceRevision: failedEvidenceRevision,
 		Reason:           "verification failed",
-	}, remediationResultEvidence(failedEvidenceRevision), nil)
+	}, remediationResultEvidence(failedEvidenceRevision))
 	if !remediation.Complete || remediation.Required || remediation.Reason != "" {
 		t.Fatalf("authority-free remediation = %#v, want completed evidence", remediation)
 	}
@@ -501,7 +455,7 @@ func TestConsentPreparationConcurrentWinnerAndReadOnlySnapshots(t *testing.T) {
 	}
 	store := mustRuntimeStore(t, repo, "winner")
 	ledger, err := store.Status()
-	if err != nil || ledger.Revision != "" || len(ledger.Attempts) != 0 || len(ledger.GrantedRoots) != 0 {
+	if err != nil || ledger.Revision != "" || len(ledger.GrantedRoots) != 0 {
 		t.Fatalf("preparation changed authority: %#v %v", ledger, err)
 	}
 }

@@ -2283,78 +2283,16 @@ func TestOrchestratorsRequireAutomaticGatekeeper(t *testing.T) {
 	}
 }
 
-func TestSDDOrchestratorsUseNativeRuntimeAttemptAuthority(t *testing.T) {
-	const causalFailureDisclosure = "On any failed external command (test command or non-test external command) before a later native block, disclose in this order: **Primary failure:** identify the command in a privacy-safe form, its failed/cancelled/non-zero outcome, and only bounded relevant error evidence; never persist or print secrets, private values, raw environment, or unbounded output. **Verification consequence:** state that the current SDD phase/verification did not pass. **Attempt settlement:** when the native contract requires it, settle the current token with the correct failed/interrupted outcome and diagnosis, and disclose the settlement result before any later acquire/refusal. **Secondary governance block:** label a later objective-change/acquire refusal as secondary, never as the cause of the external command failure, and preserve the exact provider-owned runnable continuation unchanged. Never imply Gentle AI or the native ledger caused the independent consumer command failure."
-
-	paths := []string{
-		"antigravity/sdd-orchestrator.md",
-		"claude/sdd-orchestrator.md",
-		"codex/sdd-orchestrator.md",
-		"cursor/sdd-orchestrator.md",
-		"gemini/sdd-orchestrator.md",
-		"generic/sdd-orchestrator.md",
-		"hermes/sdd-orchestrator.md",
-		"kimi/sdd-orchestrator.md",
-		"kiro/sdd-orchestrator.md",
-		"opencode/sdd-orchestrator.md",
-		"qwen/sdd-orchestrator.md",
-		"windsurf/sdd-orchestrator.md",
-	}
-	required := []string{
-		"Native Runtime Attempt Authority",
-		"gentle-ai sdd-attempt acquire",
-		"gentle-ai sdd-attempt settle",
-		"state: proceed",
-		"opaque `token`",
-		"--request-id <settle-id>", "distinct from the acquire operation's request ID", "idempotent replay",
-		// #3696: the settle invocation is spelled out with every flag the CLI
-		// requires; an elided `...` sent orchestrators into a flag-by-flag
-		// refusal loop, and `--successor-lineage` never existed on settle.
-		"--outcome <passed|failed>", "--evidence-revision <sha256>", "--diagnosis \"<proven-diagnosis>\"",
-		"--harness-disposition <reused|invalidated>", "--cleanup-evidence \"<evidence>\"", "--process-evidence \"<evidence>\"",
-		"--outcome interrupted", "omit `--evidence-revision`", "--remediates-evidence-revision <sha256>",
-		"status|begin|finish|reset",
-		"never automatic",
-		causalFailureDisclosure,
-	}
+func TestSDDOrchestratorsDoNotRequireRuntimeAttempts(t *testing.T) {
+	paths := append(allSDDOrchestratorAssetPaths(t), "skills/_shared/sdd-orchestrator-sections.md", "skills/_shared/sdd-status-contract.md")
 	for _, path := range paths {
-		content := resolveSharedOrchestratorSections(MustRead(path))
-		if path == "claude/sdd-orchestrator.md" {
-			content += "\n" + MustRead("claude/sdd-orchestrator-workflow.md")
+		content, err := Read(path)
+		if err != nil {
+			t.Fatal(err)
 		}
-		section := markdownSection(content, "### Native Runtime Attempt Authority")
-		for _, want := range required {
-			if !strings.Contains(section, want) {
-				t.Fatalf("%s missing native runtime-attempt authority wording %q", path, want)
-			}
-		}
-		if strings.Contains(section, "--successor-lineage") {
-			t.Fatalf("%s names --successor-lineage, which gentle-ai sdd-attempt settle does not define", path)
-		}
-		last := -1
-		for _, label := range []string{
-			"**Primary failure:**",
-			"**Verification consequence:**",
-			"**Attempt settlement:**",
-			"**Secondary governance block:**",
-		} {
-			index := strings.Index(section, label)
-			if index < 0 || index <= last {
-				t.Fatalf("%s must order causal failure disclosure label %q after the preceding label", path, label)
-			}
-			last = index
-		}
-		for _, forbidden := range []string{
-			"gentle-ai.sdd-attempt-ledger/v1",
-			"attempt-ledger-{work-unit}.json",
-			"sdd/{change-name}/attempt-ledger",
-			"gentle-ai sdd-attempt status",
-			"gentle-ai sdd-attempt begin",
-			"gentle-ai sdd-attempt finish",
-			"gentle-ai sdd-attempt reset",
-		} {
-			if strings.Contains(section, forbidden) {
-				t.Fatalf("%s still delegates native authority to mutable artifact %q", path, forbidden)
+		for _, retired := range []string{"sdd-attempt acquire", "sdd-attempt settle", "Native Runtime Attempt Authority"} {
+			if strings.Contains(string(content), retired) {
+				t.Errorf("%s retains %q", path, retired)
 			}
 		}
 	}
