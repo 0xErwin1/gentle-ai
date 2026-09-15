@@ -124,7 +124,7 @@ func assertArbitraryWorkUnitArchiveRoute(t *testing.T, repo, change string, stor
 		t.Fatalf("arbitrary work-unit unexpectedly carried an attestation: %q", final.AttestedVerifyReportDigest)
 	}
 
-	resolved, err := Resolve(ResolveOptions{CWD: repo, ChangeName: change, ReviewDisabled: true, IncludeInstructions: true})
+	resolved, err := Resolve(ResolveOptions{CWD: repo, ChangeName: change, IncludeInstructions: true})
 	if err != nil {
 		t.Fatal(err)
 	}

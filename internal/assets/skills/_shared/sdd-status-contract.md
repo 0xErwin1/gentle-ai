@@ -91,9 +91,6 @@ remediationState:
   complete: false
   failedEvidenceRevision: ""
   reason: ""
-reviewOffer:
-  available: true
-  invocation: <fresh review start command>
 consent: <optional exact gentle-ai.sdd-integration.consent/v1 envelope>
 phaseInstructions:
   apply: [<instruction strings>]
@@ -105,7 +102,7 @@ blockedReasons: []
 notes: []
 ```
 
-`reviewOffer` is optional and appears only after strict independent verification passes while review mode is enabled. It is a fresh mode-only offer with exactly `available` and `invocation`; it carries no lineage, receipt, binding, successor, gate, transaction, or previous review result. Disabled review mode is structural absence. Repeated status reads may present the same fresh offer and no offered, declined, burned, or historical authority changes archive readiness.
+SDD status never reads review mode, offers RDD, or exposes review state. After successful verification, proceed directly toward archive; standalone non-SDD review remains separate.
 
 `phaseInstructions` is optional and appears only when instructions are requested. It carries execution-phase keys (`apply`, `verify`, `remediate`, `archive`); planning-phase instructions (`propose`, `spec`, `design`, `tasks`) are surfaced in dispatcher markdown. `consent` requires an OpenSpec-backed native status reporting `blocked(edit_authority_missing)` with a valid persisted marker; never reconstruct it. Empty path fields MUST be arrays, not null. `blockedReasons` and `notes` are always arrays as well, both `[]` rather than null when empty. `changeName` and `changeRoot` are nullable; all other non-optional sections are required in native output.
 
@@ -119,13 +116,13 @@ notes: []
 
 - `proposal`, `specs`, `design`, and `tasks` report whether prerequisite artifacts are blocked, ready, or all done.
 - `apply` is `ready` only when specs, design, and tasks are available and task progress is not all done.
-- `verify` is `ready` only when every implementation task is complete and required planning/apply evidence is available. Review presence, absence, or non-allow state is informational: it never routes status to `review`, suppresses test/build execution, or blocks verification. Apply-progress and focused work-unit checks support implementation evidence but never replace the independent final SDD verification.
+- `verify` is `ready` only when every implementation task is complete and required planning/apply evidence is available. SDD does not consume review state or route status to `review`; review never suppresses test/build execution or blocks verification. Apply-progress and focused work-unit checks support implementation evidence but never replace the independent final SDD verification.
 - Verify routing parses only the strict leading `gentle-ai.verify-result/v1` envelope. It compares measured requirement/scenario totals with actual specs and requires current test/build commands, zero passing exit codes, and output hashes. Human prose never controls readiness.
 - Failed evidence may route to `remediate` only through ordinary SDD failed-evidence accounting for the same failed evidence revision. Remediation completion requires concrete focused-test, runtime-harness (or justified N/A), and rollback evidence; a bare envelope never passes.
-- `archive` is `ready` only when tasks are complete and strict SDD verification passes. A `reviewOffer` never authorizes, blocks, or governs archive or delivery.
+- `archive` is `ready` only when tasks are complete and strict SDD verification passes. SDD does not invoke RDD before archive or delivery.
 - A passing remediation settlement requires a fresh verification report before archive. The historical failed report is preserved and never erased, no PASS is fabricated, and archive stays blocked until a current passing report exists.
 - Before a runtime-bearing continuation, call compact `sdd-attempt acquire` with `<acquire-id>` and launch only for `state: proceed`; retain its opaque token and call compact `sdd-attempt settle` after the external run with a distinct `<settle-id>`. Reuse each operation's own request ID only for its idempotent replay. `blocked` or `complete` stops the launch, and settle's three states alone control whether another bounded acquire is allowed. When acquire returns `settle_obligation`, RELAY IT TO THE HUMAN VERBATIM BEFORE LAUNCHING THE WORK UNIT, and carry it into the settle. It is never a block — the token is real and the launch proceeds. Reset remains an explicit maintainer scope decision and never occurs automatically.
-- Planning and apply phases never auto-launch ordinary 4R or Judgment Day. Only after independent SDD verification passes may status present the optional review offer. Pre-commit, pre-push, pre-PR, and release follow ordinary repository policy; review outcomes never create a delivery gate or a new review budget.
+- No SDD phase offers or launches RDD, ordinary 4R, or Judgment Day. Successful independent verification proceeds directly toward archive. Pre-commit, pre-push, pre-PR, and release follow ordinary repository policy; review outcomes never create a delivery gate or a new review budget.
 
 ## Action Context Guard
 

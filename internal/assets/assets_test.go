@@ -535,7 +535,7 @@ func TestSDDVerificationAndArchiveContractsIgnoreReviewContext(t *testing.T) {
 	statusContract := MustRead("skills/_shared/sdd-status-contract.md")
 	for _, want := range []string{
 		"`verify` is `ready` only when every implementation task is complete and required planning/apply evidence is available.",
-		"Review presence, absence, or non-allow state is informational: it never routes status to `review`, suppresses test/build execution, or blocks verification.",
+		"SDD does not consume review state or route status to `review`; review never suppresses test/build execution or blocks verification.",
 		"`archive` is `ready` only when tasks are complete and strict SDD verification passes.",
 	} {
 		if !strings.Contains(statusContract, want) {
@@ -557,7 +557,7 @@ func TestSDDVerificationAndArchiveContractsIgnoreReviewContext(t *testing.T) {
 	} {
 		content := MustRead(path)
 		for _, want := range []string{
-			"Review state is informational and never a verification prerequisite.",
+			"SDD never offers, launches, or consumes RDD; verification uses SDD requirements and functional evidence.",
 			"A missing, pending, invalid, or non-allow review state never suppresses tests or builds.",
 			"Exit `125` is reserved for an actual verification prerequisite or unavailable verification tooling, never missing review authority.",
 		} {
@@ -574,7 +574,7 @@ func TestSDDVerificationAndArchiveContractsIgnoreReviewContext(t *testing.T) {
 
 	verifySkill := MustRead("skills/sdd-verify/SKILL.md")
 	for _, want := range []string{
-		"Review state is informational and never a verification prerequisite.",
+		"SDD never offers, launches, or consumes RDD; verification uses SDD requirements and functional evidence.",
 		"A missing, pending, invalid, or non-allow review state never suppresses tests or builds.",
 		"Exit `125` is reserved for an actual verification prerequisite or unavailable verification tooling, never missing review authority.",
 	} {
@@ -586,7 +586,7 @@ func TestSDDVerificationAndArchiveContractsIgnoreReviewContext(t *testing.T) {
 	archiveSkill := MustRead("skills/sdd-archive/SKILL.md")
 	for _, want := range []string{
 		"CRITICAL issues in `verify-report` still block archive with no prompt override",
-		"reviewOffer` is an invitation only and is never read as archive state",
+		"SDD never offers or launches RDD; review mode is not archive state",
 		"The Task Completion Gate and strict independent verification decide whether archive can proceed",
 	} {
 		if !strings.Contains(archiveSkill, want) {
@@ -2007,9 +2007,6 @@ func TestSDDStatusContractPreservesFrozenExternalV2Projection(t *testing.T) {
 		"sameDomainActiveChanges: []",
 		"remediationState:",
 		"failedEvidenceRevision:",
-		"reviewOffer:",
-		"available: true",
-		"invocation: <fresh review start command>",
 		"phaseInstructions:",
 		"apply: [<instruction strings>]",
 		"verify: [<instruction strings>]",

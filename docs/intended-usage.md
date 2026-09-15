@@ -196,27 +196,10 @@ flowchart TD
     H --> Q["Verify<br/>independent verification against<br/>spec · design · tasks"]
     Q -->|"passes"| R["Archive<br/>merge delta-specs · close the cycle"]
     Q -->|"fails"| H
-    Q -.->|"optional, informational"| I["RDD review offer"]
-
-    subgraph RDD["RDD — same machine as the organic route"]
-        I --> J{"Risk"}
-        J -->|"low"| K["Structural readback"]
-        J -->|"medium / high"| L["1 lens or 4R + consent"]
-        L --> M{"Severe findings?"}
-        M -->|"yes"| N["One bounded correction<br/>+ fix validator"]
-        M -->|"no"| O["Review outcome: approved<br/>(informational)"]
-        K --> O
-        N -->|"validates"| O
-        N -->|"fails"| P["Escalated → recover"]
-        O --> AK["review.acknowledge-approved<br/>only the exact acknowledgement<br/>burns/closes the lineage"]
-    end
-
     R --> S["Ordinary repository policy"]
     S --> T["Commit → Push → PR"]
 
-    style O fill:#2D4F67,color:#fff
-    style P fill:#B8860B,color:#fff
     style T fill:#2D4F67,color:#fff
 ```
 
-SDD status v2 runtime state is independent from review. No review binding, receipt or gate controls SDD Archive or delivery; ordinary repository policy remains authoritative.
+SDD never offers, launches, or consumes RDD. Successful verification proceeds directly to archive; standalone organic RDD remains separate. No review binding, receipt or gate controls SDD Archive or delivery; ordinary repository policy remains authoritative.

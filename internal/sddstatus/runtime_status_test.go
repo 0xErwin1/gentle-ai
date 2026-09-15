@@ -171,7 +171,7 @@ func TestResolveExplainsFreshVerificationAfterEvidenceOnlyRuntimeRemediation(t *
 				t.Fatalf("remediation changed the candidate: %#v", last)
 			}
 
-			status, err := Resolve(ResolveOptions{CWD: fixture.repo, ChangeName: fixture.change, ReviewDisabled: true, IncludeInstructions: true})
+			status, err := Resolve(ResolveOptions{CWD: fixture.repo, ChangeName: fixture.change, IncludeInstructions: true})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -202,7 +202,7 @@ func TestResolveVerifyInstructionsDoNotMislabelOtherRoutes(t *testing.T) {
 		repo := t.TempDir()
 		seedReadyChange(t, repo, "first-verify", "- [x] 1.1 Work\n")
 
-		status, err := Resolve(ResolveOptions{CWD: repo, ChangeName: "first-verify", ReviewDisabled: true, IncludeInstructions: true})
+		status, err := Resolve(ResolveOptions{CWD: repo, ChangeName: "first-verify", IncludeInstructions: true})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -219,7 +219,7 @@ func TestResolveVerifyInstructionsDoNotMislabelOtherRoutes(t *testing.T) {
 		changeRoot := seedReadyChange(t, repo, "fresh-verify", "- [x] 1.1 Work\n")
 		write(t, filepath.Join(changeRoot, "verify-report.md"), testVerifyEnvelope("pass_with_warnings", 0, 0, "1/1", "1/1", 0, 0))
 
-		status, err := Resolve(ResolveOptions{CWD: repo, ChangeName: "fresh-verify", ReviewDisabled: true, IncludeInstructions: true})
+		status, err := Resolve(ResolveOptions{CWD: repo, ChangeName: "fresh-verify", IncludeInstructions: true})
 		if err != nil {
 			t.Fatal(err)
 		}

@@ -52,11 +52,11 @@ The orchestrator should provide structured status from `skills/_shared/sdd-statu
 - Record current test/build commands, exit codes, and `test_output_hash` / `build_output_hash` values in the strict envelope.
 - Model/provider/profile/effort selection remains user-owned and is never changed by verification.
 - This is the one independent requirements/runtime final verification. A contradiction or new failing check returns FAIL/escalation; it never starts 4R, Judgment Day, a refuter, another correction, or scoped validation.
-- Review state is informational and never a verification prerequisite.
+- SDD never offers, launches, or consumes RDD; verification uses SDD requirements and functional evidence.
 - A missing, pending, invalid, or non-allow review state never suppresses tests or builds.
-- Native review artifacts, when present, are review-context evidence only. Do not require a transaction, policy, ledger, receipt, bundle, or gate-context artifact to begin or complete independent SDD verification.
+- Do not consume RDD artifacts. Do not require a transaction, policy, ledger, receipt, bundle, or gate-context artifact to begin or complete independent SDD verification.
 - Exit `125` is reserved for an actual verification prerequisite or unavailable verification tooling, never missing review authority.
-- Return ordinary verification evidence with the result. Terminal reviewer closure is capture-owned and informational; it is never a verification completion prerequisite.
+- Return ordinary verification evidence with the result.
 
 ## Decision Gates
 
@@ -143,11 +143,11 @@ You are a VERIFY sub-agent. Your job: check implemented changes match spec accep
 - Preserve user-owned model/provider/profile/effort selection; do not prescribe or override it.
 - Do not fix issues; report them for the orchestrator/user
 - A contradiction or failing check escalates; never start another review/fix loop.
-- Review state is informational and never a verification prerequisite.
+- SDD never offers, launches, or consumes RDD; verification uses SDD requirements and functional evidence.
 - A missing, pending, invalid, or non-allow review state never suppresses tests or builds.
 - Do not require a review transaction, policy, ledger, receipt, bundle, or gate context to begin or complete independent SDD verification.
 - Exit `125` is reserved for an actual verification prerequisite or unavailable verification tooling, never missing review authority.
-- Return ordinary verification evidence with the result. Terminal reviewer closure remains capture-owned and informational.
+- Return ordinary verification evidence with the result.
 - Build the complete report as exact candidate bytes, then run `gentle-ai sdd-verify-validate` with authoritative spec counts before any OpenSpec or Engram write. If the validator is unavailable or denies admission, make zero writes and leave the prior report untouched; otherwise persist the same bytes, including a valid `fail`.
 - For the final OpenSpec `verify` work unit, persist the canonical passing `openspec/changes/{change}/verify-report.md` before settlement. Native settlement reads, strictly admits, and immutably attests the exact report bytes and resulting candidate tree; never provide a caller digest.
 - Apply any `rules.verify` from `openspec/config.yaml`
