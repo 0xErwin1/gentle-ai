@@ -216,14 +216,6 @@ internal/reviewtransaction/verification_convergence.go	VerificationSubjectMutati
 internal/sddstatus/status.go	RenderNativePhasePrompt
 internal/sddstatus/status.go	blockerReasons.forRoute
 internal/sddstatus/status.go	dependencyForPhase
-internal/sddstatus/status.go	normalizeReportToken
-internal/sddstatus/status.go	reportField
-internal/sddstatus/status.go	reportIsClearlyPassing
-internal/sddstatus/status.go	reportLineHasBlocker
-internal/sddstatus/status.go	reportLineHasPassSignal
-internal/sddstatus/status.go	reportTextIsClearlyPassing
-internal/sddstatus/status.go	reportValueIsBenign
-internal/sddstatus/status.go	stripMarkdownSignal
 internal/storage/bytes.go	FormatBytes
 internal/system/install_deps.go	InstallCommandsForDep
 internal/system/install_deps.go	installCommandsBrew

@@ -202,4 +202,4 @@ flowchart TD
     style T fill:#2D4F67,color:#fff
 ```
 
-SDD never offers, launches, or consumes RDD. Successful verification proceeds directly to archive; standalone organic RDD remains separate. No review binding, receipt or gate controls SDD Archive or delivery; ordinary repository policy remains authoritative.
+SDD never offers, launches, or consumes RDD. Completed implementation proceeds directly to archive; verification is optional; standalone organic RDD remains separate. No review binding, receipt or gate controls SDD Archive or delivery; ordinary repository policy remains authoritative.

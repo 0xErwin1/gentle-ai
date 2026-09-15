@@ -518,7 +518,8 @@ func TestKilocodeReviewSettingsMatchCurrentMainBaseline(t *testing.T) {
 	// #4612 excludes SDD from the shared RDD gate and removes its command offer.
 	// Kilocode inherits those OpenCode prompt changes, not native RDD capability.
 	// #4612 also removes the shared mandatory SDD attempt protocol.
-	const want = "0a04082b81c3083332cc422bd94b39398b3d8ed4335e919f3b11b39472abcc47"
+	// Root3 makes verification optional in the shared dispatcher/dependency graph.
+	const want = "202ea1ca4d2776e7b9c9d2ac6f8007cb105a7e341743950842a300584d99fafb"
 	if got != want {
 		t.Fatalf("Kilocode settings SHA-256 = %s, want current-main baseline %s", got, want)
 	}
