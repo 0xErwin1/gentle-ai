@@ -532,66 +532,25 @@ func TestSDDInitRequiresBoundedWorkspaceProjectDiscovery(t *testing.T) {
 }
 
 func TestSDDVerificationAndArchiveContractsIgnoreReviewContext(t *testing.T) {
-	statusContract := MustRead("skills/_shared/sdd-status-contract.md")
-	for _, want := range []string{
-		"`verify` is `ready` only when every implementation task is complete and required planning/apply evidence is available.",
-		"SDD does not consume review state or route status to `review`; review never suppresses test/build execution or blocks verification.",
-		"`archive` is `ready` only when tasks are complete and strict SDD verification passes.",
-	} {
-		if !strings.Contains(statusContract, want) {
-			t.Fatalf("sdd-status-contract missing independent SDD verification rule %q", want)
-		}
-	}
-	for _, forbidden := range []string{
-		"persisted bounded transaction reaches `ready_final_verification`",
-		"Missing or active review state routes to `review`",
-	} {
-		if strings.Contains(statusContract, forbidden) {
-			t.Fatalf("sdd-status-contract retains pre-verify review dependency %q", forbidden)
-		}
-	}
-
-	for _, path := range []string{
-		"skills/sdd-verify/SKILL.md",
-		"skills/sdd-verify/references/report-format.md",
-	} {
+	for _, path := range []string{"skills/sdd-verify/SKILL.md", "skills/_shared/sdd-status-contract.md", "skills/sdd-archive/SKILL.md"} {
 		content := MustRead(path)
-		for _, want := range []string{
-			"SDD never offers, launches, or consumes RDD; verification uses SDD requirements and functional evidence.",
-			"A missing, pending, invalid, or non-allow review state never suppresses tests or builds.",
-			"Exit `125` is reserved for an actual verification prerequisite or unavailable verification tooling, never missing review authority.",
-		} {
-			if !strings.Contains(content, want) {
-				t.Fatalf("%s missing independent verification rule %q", path, want)
-			}
-		}
-		for _, forbidden := range []string{"missing_review_authority", "authority_only_failure"} {
+		for _, forbidden := range []string{"sdd-verify-validate", "gentle-ai.verify-result/v1", "Task Completion Gate", "remediationState:", "before settlement"} {
 			if strings.Contains(content, forbidden) {
-				t.Fatalf("%s retains missing-review preflight denial %q", path, forbidden)
+				t.Errorf("%s retains %q", path, forbidden)
 			}
 		}
-	}
-
-	verifySkill := MustRead("skills/sdd-verify/SKILL.md")
-	for _, want := range []string{
-		"SDD never offers, launches, or consumes RDD; verification uses SDD requirements and functional evidence.",
-		"A missing, pending, invalid, or non-allow review state never suppresses tests or builds.",
-		"Exit `125` is reserved for an actual verification prerequisite or unavailable verification tooling, never missing review authority.",
-	} {
-		if got := strings.Count(verifySkill, want); got != 2 {
-			t.Fatalf("sdd-verify must state independent verification in both model sections: %q occurs %d times", want, got)
+		if !strings.Contains(content, "RDD") || !strings.Contains(content, "optional") {
+			t.Errorf("%s omits optional verification/RDD boundary", path)
 		}
 	}
-
-	archiveSkill := MustRead("skills/sdd-archive/SKILL.md")
-	for _, want := range []string{
-		"CRITICAL issues in `verify-report` still block archive with no prompt override",
-		"SDD never offers or launches RDD; review mode is not archive state",
-		"The Task Completion Gate and strict independent verification decide whether archive can proceed",
-	} {
-		if !strings.Contains(archiveSkill, want) {
-			t.Fatalf("sdd-archive missing independent archive prerequisite %q", want)
+	skill := MustRead("skills/sdd-verify/SKILL.md")
+	for _, want := range []string{"including partial work", "strict_tdd", "strict-tdd-verify.md", "never fabricate historical RED or GREEN", "command results and limitations", "do not fix code or tasks", "model/provider/profile/effort", "Findings do not start automatic review", "do not gate archive"} {
+		if !strings.Contains(skill, want) {
+			t.Errorf("verify skill missing %q", want)
 		}
+	}
+	if strings.Count(skill, "name: sdd-verify") != 1 {
+		t.Fatal("verify must have one shared contract, not concatenated model documents")
 	}
 }
 
@@ -608,7 +567,7 @@ func TestSDDVerifyAndArchiveCommandsRouteOnlyFromRefreshedStatus(t *testing.T) {
 		})
 	}
 
-	const archiveRoute = "Archive only when refreshed native SDD status reports `dependencies.archive: ready` and `nextRecommended: archive`."
+	const archiveRoute = "an explicit archive request may close unfinished work without a verification certificate."
 	for _, path := range []string{
 		"claude/commands/gentle-sdd-archive.md",
 		"opencode/commands/sdd-archive.md",
@@ -622,28 +581,16 @@ func TestSDDVerifyAndArchiveCommandsRouteOnlyFromRefreshedStatus(t *testing.T) {
 	}
 }
 
-func TestSDDVerifyAdmissionPrecedesPersistence(t *testing.T) {
+func TestSDDOptionalReportsNeedNoAdmissionCertificate(t *testing.T) {
 	for _, path := range []string{"skills/sdd-verify/SKILL.md", "skills/sdd-verify/references/report-format.md", "skills/_shared/sdd-phase-common.md", "skills/_shared/persistence-contract.md"} {
 		content := MustRead(path)
-		for _, want := range []string{"sdd-verify-validate", "exact candidate bytes", "before any OpenSpec or Engram write", "validator is unavailable", "valid `fail`"} {
-			if !strings.Contains(content, want) {
-				t.Fatalf("%s missing admission contract %q", path, want)
+		for _, forbidden := range []string{"sdd-verify-validate", "gentle-ai.verify-result/v1", "same admitted bytes", "before settlement"} {
+			if strings.Contains(content, forbidden) {
+				t.Errorf("%s retains admission %q", path, forbidden)
 			}
 		}
-	}
-	contract := MustRead("skills/_shared/persistence-contract.md")
-	for _, want := range []string{"Do not create, truncate, delete, or overwrite any prior `verify-report`", "A valid `fail` report must be persisted", "validator is unavailable"} {
-		if !strings.Contains(contract, want) {
-			t.Fatalf("persistence contract missing %q", want)
-		}
-	}
-	if count := strings.Count(MustRead("skills/sdd-verify/SKILL.md"), "sdd-verify-validate"); count < 2 {
-		t.Fatalf("both sdd-verify model sections require admission, got %d occurrences", count)
-	}
-	for _, path := range []string{"claude/agents/sdd-verify.md", "claude/commands/gentle-sdd-verify.md", "cursor/agents/sdd-verify.md", "kimi/agents/sdd-verify.md", "kiro/agents/sdd-verify.md"} {
-		content := MustRead(path)
-		if skill, save := strings.Index(content, "sdd-verify/SKILL.md"), strings.LastIndex(content, "mem_save"); skill < 0 || save < 0 || skill > save {
-			t.Fatalf("%s must load the shared verify contract before persistence", path)
+		if !strings.Contains(strings.ToLower(content), "historical") {
+			t.Errorf("%s omits historical report preservation", path)
 		}
 	}
 }
@@ -2005,14 +1952,11 @@ func TestSDDStatusContractPreservesFrozenExternalV2Projection(t *testing.T) {
 		"amends: []",
 		"conflictsWith: []",
 		"sameDomainActiveChanges: []",
-		"remediationState:",
-		"failedEvidenceRevision:",
 		"phaseInstructions:",
 		"apply: [<instruction strings>]",
 		"verify: [<instruction strings>]",
-		"remediate: [<instruction strings>]",
 		"archive: [<instruction strings>]",
-		"nextRecommended: propose | spec | design | tasks | apply | verify | remediate | archive | sdd-new | select-change | resolve-blockers",
+		"nextRecommended: propose | spec | design | tasks | apply | verify | archive | sdd-new | select-change | resolve-blockers",
 		"blockedReasons: []",
 		// #4372: the non-blocking diagnostics channel that keeps blockedReasons a pure gate.
 		"notes: []",
@@ -2438,7 +2382,7 @@ func TestSDDArchiveFinalStateAuthorityContract(t *testing.T) {
 		"Never resolve it silently",
 		"at verification time",
 		"record the failure as undiagnosed",
-		"requires re-running `sdd-verify`",
+		"unfinished tasks do not block archive",
 	} {
 		if !strings.Contains(skill, required) {
 			t.Fatalf("skills/sdd-archive/SKILL.md missing final-state authority wording %q", required)
@@ -2979,4 +2923,44 @@ func TestSDDSpecAndProposeNameTheChangeLocalSpecLocation(t *testing.T) {
 			t.Fatalf("skills/sdd-propose/SKILL.md still states the spec-phase location as the archive outcome: %q", forbidden)
 		}
 	}
+}
+
+// Native task-progress routing must not be overridden by a stale executor brief.
+func TestSDDOptionalVerificationConsumersPreserveDiagnosticSemantics(t *testing.T) {
+	t.Run("apply has no retired remediation obligations", func(t *testing.T) {
+		content := MustRead("skills/sdd-apply/SKILL.md")
+		for _, forbidden := range []string{"failed_evidence_revision", "exhausted attempt budget", "Focused remediation is the sole"} {
+			if strings.Contains(content, forbidden) {
+				t.Errorf("apply retains retired obligation %q", forbidden)
+			}
+		}
+	})
+	for _, runtime := range []string{"cursor", "kimi", "kiro"} {
+		t.Run(runtime, func(t *testing.T) {
+			content := MustRead(runtime + "/agents/sdd-verify.md")
+			for _, want := range []string{"Read design artifact (when available)", "Missing inputs limit conclusions", "never invent passing checks or completed tasks", "refreshed native task-progress routing", "independent of diagnostic findings"} {
+				if !strings.Contains(content, want) {
+					t.Errorf("%s verify missing %q", runtime, want)
+				}
+			}
+			for _, forbidden := range []string{"(if PASS)", "(if FAIL/blockers found)", "Read design artifact:"} {
+				if strings.Contains(content, forbidden) {
+					t.Errorf("%s verify retains %q", runtime, forbidden)
+				}
+			}
+		})
+	}
+	t.Run("Claude command retrieves only available artifacts", func(t *testing.T) {
+		content := MustRead("claude/commands/gentle-sdd-verify.md")
+		for _, want := range []string{"Missing inputs limit conclusions", "never invent passing checks or completed tasks", "if spec_id exists:", "if design_id exists:", "if tasks_id exists:"} {
+			if !strings.Contains(content, want) {
+				t.Errorf("Claude verify missing %q", want)
+			}
+		}
+		for _, forbidden := range []string{"Continue only when tasks and implementation evidence exist", "for EVERY artifact", "\n  mem_get_observation(id:"} {
+			if strings.Contains(content, forbidden) {
+				t.Errorf("Claude verify retains prerequisite %q", forbidden)
+			}
+		}
+	})
 }

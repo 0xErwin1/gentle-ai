@@ -17,7 +17,7 @@ Two ownership columns are recorded per the design's "Inventory records observed 
 | more than 1 | finding: `split-ownership` |
 | target not derivable from the design's Ownership boundaries table | finding: `undesignated-target` |
 
-Target owner is drawn from the design's closed set: `ReviewCore`, `AuthorityStore`, `CandidateResolver`, `ReviewAdapter`, `ReviewContext`, `SDD`. `ReviewContext` reports receipt and candidate-identity facts for review lifecycle only; ordinary repository policy owns delivery and SDD verification owns archive readiness. Target disposition reuses the design's control-reduction verbs: `KEEP`, `MERGE`, `DERIVE`, `DOWNGRADE`, `REMOVE`, `FAIL-CLOSED ONLY`.
+Target owner is drawn from the design's closed set: `ReviewCore`, `AuthorityStore`, `CandidateResolver`, `ReviewAdapter`, `ReviewContext`, `SDD`. `ReviewContext` reports receipt and candidate-identity facts for review lifecycle only; ordinary repository policy owns delivery and SDD archive records actual state without a verification certificate. Target disposition reuses the design's control-reduction verbs: `KEEP`, `MERGE`, `DERIVE`, `DOWNGRADE`, `REMOVE`, `FAIL-CLOSED ONLY`.
 
 **Row schema:** `ID | Surface | Kind | Current owner(s) | Target owner | Consumers | Evidence | Target disposition`
 
