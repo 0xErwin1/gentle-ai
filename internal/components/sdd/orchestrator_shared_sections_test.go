@@ -91,7 +91,6 @@ func TestRegisteredAgentsRenderStatusContinuationContract(t *testing.T) {
 
 var sharedOrchestratorSectionNames = []string{
 	"Native SDD Dispatcher Guard",
-	"Native Runtime Attempt Authority (MANDATORY)",
 	"Language Domain Contract",
 	"Dependency Graph",
 	"Recovery Rule",

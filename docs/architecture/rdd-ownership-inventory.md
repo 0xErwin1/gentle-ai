@@ -86,6 +86,8 @@ Unowned, split-ownership, and undesignated-target rows, left unresolved per the 
 - **CON-12 / out-of-repo host runtimes.** The actual execution of reviewer subprocesses inside the OpenCode, Pi, and Claude host applications is outside this repository. Only the in-repo dispatch surfaces (CON-09, CON-10, CON-11) were enumerated with evidence; the host-runtime behavior itself is recorded as `evidence: out-of-repo` and is not traced further in Wave 0.
 - **No dropped rows.** Every row above carries at least one `path:line@ece470da` or contract-directory evidence reference; none were dropped for lack of an anchor in this pass.
 
-## SDD attempt-ledger ownership (Decision 9)
+## Historical SDD attempt-ledger ownership (Decision 9)
 
 CON-08's target owner cell names `RuntimeObjective` unconditionally, per decision 9's maintainer-confirmed ratification (2026-08-02): the evidence condition (durable, cumulative, CAS-like properties in SDD's own store — `previous_revision` chaining, CAS `expected_revision`, `request_digest` replay identity) is already met, so the prior conditional "only if" wording no longer applies. `AuthorityStore` (native authority) does not own SDD's work-unit attempts.
+
+SDD simplification #4612 supersedes CON-08 and Decision 9: attempt/budget governance and its runtime objective are retired. The existing authenticated store remains only for scoped edit grants and read-only compatibility with old mixed history; no attempt state is projected or enforced. Historical evidence above records the earlier design, not current launch policy.
