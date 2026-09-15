@@ -192,7 +192,7 @@ flowchart TD
     D -->|"yes"| E["Spec<br/>requirements + scenarios"]
     E --> F["Design<br/>architecture decisions"]
     F --> G["Tasks<br/>ordered deliverable checklist"]
-    G --> H["Apply<br/>sub-agent implements against specs<br/>(sdd-attempt acquire/settle · CAS · budgets)"]
+    G --> H["Apply<br/>sub-agent implements against specs"]
     H --> Q["Verify<br/>independent verification against<br/>spec · design · tasks"]
     Q -->|"passes"| R["Archive<br/>merge delta-specs · close the cycle"]
     Q -->|"fails"| H

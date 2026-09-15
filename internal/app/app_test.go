@@ -338,18 +338,12 @@ func TestRunArgsSDDAttemptIsDispatchedBeforePlatformValidation(t *testing.T) {
 	t.Cleanup(func() { ensureCurrentOSSupported = origEnsure })
 	ensureCurrentOSSupported = func() error { return fmt.Errorf("unsupported platform") }
 
-	root := t.TempDir()
-	command := exec.Command("git", "init", "-q", root)
-	if output, err := command.CombinedOutput(); err != nil {
-		t.Fatalf("git init: %v: %s", err, output)
+	var output bytes.Buffer
+	err := RunArgs([]string{"sdd-attempt", "grant"}, &output)
+	if err == nil || !strings.Contains(err.Error(), "sdd-attempt grant requires") || strings.Contains(err.Error(), "unsupported platform") {
+		t.Fatalf("grant was not dispatched before platform validation: %v", err)
 	}
-	var buf bytes.Buffer
-	if err := RunArgs([]string{"sdd-attempt", "status", "--cwd", root, "--change", "app-attempt"}, &buf); err != nil {
-		t.Fatalf("RunArgs(sdd-attempt) error = %v", err)
-	}
-	if !strings.Contains(buf.String(), `"schema": "gentle-ai.sdd-runtime-status/v1"`) || !strings.Contains(buf.String(), `"change": "app-attempt"`) {
-		t.Fatalf("sdd-attempt output missing native status:\n%s", buf.String())
-	}
+
 }
 
 func TestRunArgsSDDAttemptHelpBypassesPlatformAndRepositoryValidation(t *testing.T) {
@@ -362,7 +356,7 @@ func TestRunArgsSDDAttemptHelpBypassesPlatformAndRepositoryValidation(t *testing
 	if err != nil {
 		t.Fatalf("RunArgs(sdd-attempt grant --help): %v", err)
 	}
-	for _, want := range []string{"Usage: gentle-ai sdd-attempt grant [flags]", "--root <path>...", "repeatable"} {
+	for _, want := range []string{"Usage: gentle-ai sdd-attempt grant [flags]", "-root value", "repeatable"} {
 		if !strings.Contains(output.String(), want) {
 			t.Fatalf("sdd-attempt grant help missing %q:\n%s", want, output.String())
 		}
@@ -379,7 +373,7 @@ func TestRunArgsSDDAttemptParentHelpDoesNotSelectChangeValueAsOperation(t *testi
 	if err != nil {
 		t.Fatalf("RunArgs(sdd-attempt --help --cwd /definitely/not/a/repository --change begin): %v", err)
 	}
-	if !strings.Contains(output.String(), "Usage: gentle-ai sdd-attempt <") || strings.Contains(output.String(), "Usage: gentle-ai sdd-attempt begin [flags]") {
+	if !strings.Contains(output.String(), "Usage: gentle-ai sdd-attempt grant [flags]") || strings.Contains(output.String(), "Usage: gentle-ai sdd-attempt begin [flags]") {
 		t.Fatalf("sdd-attempt parent help =\n%s", output.String())
 	}
 }
