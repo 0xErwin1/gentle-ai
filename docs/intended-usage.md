@@ -184,7 +184,7 @@ You never need this diagram to use SDD -- the agent drives the phases. It is her
 flowchart TD
     A["User: sdd-new / sdd-explore<br/>(gentle-sdd-* in Claude Code)"] --> B["Explore<br/>investigate codebase and approaches"]
     B --> BR{"External research<br/>selected?"}
-    BR -->|"yes"| BX["Research<br/>auditable external evidence<br/>exact grant · source mappings"]
+    BR -->|"yes"| BX["Research<br/>optional source-backed findings<br/>authorized tools · honest limitations"]
     BR -->|"no"| C["Propose<br/>intent · scope · approach"]
     BX --> C
     C --> D{"User approves<br/>the proposal?"}
@@ -193,9 +193,12 @@ flowchart TD
     E --> F["Design<br/>architecture decisions"]
     F --> G["Tasks<br/>ordered deliverable checklist"]
     G --> H["Apply<br/>sub-agent implements against specs"]
-    H --> Q["Verify<br/>independent verification against<br/>spec · design · tasks"]
-    Q -->|"passes"| R["Archive<br/>merge delta-specs · close the cycle"]
-    Q -->|"fails"| H
+    H --> V{"Optional verification<br/>requested?"}
+    V -->|"yes"| Q["Verify<br/>report findings and missing evidence honestly"]
+    V -->|"no"| W{"Implementation complete?"}
+    Q --> W
+    W -->|"no"| H
+    W -->|"yes"| R["Archive<br/>preserve task truth · safe spec merge"]
     R --> S["Ordinary repository policy"]
     S --> T["Commit → Push → PR"]
 
