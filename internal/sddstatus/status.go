@@ -680,15 +680,6 @@ func verifyReportRefreshReason(verify verifyResultEvaluation) string {
 	return ""
 }
 
-// appendMissingReason appends reason unless the list already carries it, so a
-// route that is explained from two sites never repeats itself.
-func appendMissingReason(reasons []string, reason string) []string {
-	if contains(reasons, reason) {
-		return reasons
-	}
-	return append(reasons, reason)
-}
-
 func resolveEngramStatus(workspaceRoot string, requestedChange string, includeInstructions bool) (Status, bool, error) {
 	if !shouldTryEngram(workspaceRoot) {
 		return Status{}, false, nil

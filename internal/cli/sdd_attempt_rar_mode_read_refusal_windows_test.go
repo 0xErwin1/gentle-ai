@@ -3,14 +3,10 @@
 package cli
 
 import (
-	"context"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"reflect"
 	"testing"
-
-	"github.com/gentleman-programming/gentle-ai/v2/internal/sddstatus"
 )
 
 func TestReviewModeUnsafeFileRepairCommandRunsOnWindowsPowerShell(t *testing.T) {

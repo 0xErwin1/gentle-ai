@@ -3,6 +3,7 @@ package sddstatus
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sync"
@@ -21,13 +22,12 @@ func grantTestStore(t *testing.T) (RuntimeStore, GrantRootsRequest) {
 
 func TestEditGrantCASAndLockPermitOnlyOneConcurrentWriter(t *testing.T) {
 	store, request := grantTestStore(t)
-	if err := store.ensureDirectories(); err != nil {
-		t.Fatal(err)
-	}
+	// Keep the #1850 first-use population: do not pre-create the store or lock.
+	const writers = 24
 	start := make(chan struct{})
-	outcomes := make(chan error, 2)
+	outcomes := make(chan error, writers)
 	var workers sync.WaitGroup
-	for _, id := range []string{"grant-one", "grant-two"} {
+	for index := 0; index < writers; index++ {
 		workers.Add(1)
 		go func(id string) {
 			defer workers.Done()
@@ -36,7 +36,7 @@ func TestEditGrantCASAndLockPermitOnlyOneConcurrentWriter(t *testing.T) {
 			attempt.RequestID = id
 			_, err := store.Grant(context.Background(), attempt)
 			outcomes <- err
-		}(id)
+		}(fmt.Sprintf("grant-%d", index))
 	}
 	close(start)
 	workers.Wait()
