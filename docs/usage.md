@@ -377,3 +377,30 @@ Homebrew's Linux sandbox for that command.
 - **Platform-aware hints**: suggests `brew install`, `apt install`, `pacman -S`, `dnf install`, or `winget install` depending on your OS
 - **Node LTS alignment**: on apt/dnf systems, Node.js hints use NodeSource LTS bootstrap before package install
 - **Dependency-first approach**: detects what's installed, calculates what's needed, shows the full dependency tree before installing anything, then verifies each dependency after installation
+
+### Optional SDD verification and honest archive
+
+SDD normally continues from completed implementation directly to archive. Request
+`/sdd-verify` when practical diagnostics are useful; it can inspect partial work,
+run applicable checks, and report real results and limitations. Configured Strict
+TDD still applies to implementation and to assessment of available TDD evidence.
+
+A missing, stale, malformed, or failed verification report is not an archive gate.
+An explicit archive may close unfinished work, preserving task/report history and
+reporting unresolved findings without inventing PASS or completing checkboxes.
+Edit permissions, mechanical copy/move and collision checks, and native delta-spec
+composition still apply. SDD does not invoke RDD; ordinary delivery policy remains.
+
+```mermaid
+flowchart LR
+  A[Implement with configured TDD] --> B{Tasks complete?}
+  B -->|No| A
+  B -->|Yes| C[Archive actual state]
+  A -. Optional diagnostics .-> V[Run practical checks and report findings]
+  V --> B
+  A -. Explicit partial archive .-> C
+  C --> D[Preserve history and safe spec composition]
+```
+
+The retired `sdd-verify-validate` command is no longer required or available;
+reports are diagnostics, not certificates. Gentle Pi companion work is separate.

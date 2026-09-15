@@ -90,7 +90,7 @@ func TestSDDStatusV2CleanBreak(t *testing.T) {
 		assertExactJSONKeys(t, document, []string{
 			"schemaName", "schemaVersion", "changeName", "artifactStore", "planningHome", "changeRoot",
 			"artifactPaths", "contextFiles", "artifacts", "taskProgress", "dependencies", "applyState",
-			"actionContext", "relationships", "remediationState", "nextRecommended", "blockedReasons",
+			"actionContext", "relationships", "nextRecommended", "blockedReasons",
 			// notes is #4372's deliberate additive extension: the non-blocking
 			// diagnostics channel that keeps `blockedReasons` a pure gate.
 			"notes",
@@ -98,15 +98,14 @@ func TestSDDStatusV2CleanBreak(t *testing.T) {
 		assertJSONNestedKeys(t, document, "artifactPaths", []string{"proposal", "specs", "design", "tasks", "applyProgress", "verifyReport"})
 		assertJSONNestedKeys(t, document, "contextFiles", []string{"proposal", "specs", "design", "tasks", "applyProgress", "verifyReport"})
 		assertJSONNestedKeys(t, document, "artifacts", []string{"proposal", "specs", "design", "tasks", "applyProgress", "verifyReport"})
-		assertJSONNestedKeys(t, document, "remediationState", []string{"required", "complete", "failedEvidenceRevision", "reason"})
-		for _, forbidden := range []string{"reviewGate", "reviewTransaction", "reVerify", "runtimeStatus", "reviewPolicy", "reviewLedger", "reviewReceipt", "reviewBundle", "reviewContext", "reviewState", "lineageId", "generation", "fixBatch", "correctionBudget"} {
+		for _, forbidden := range []string{"remediationState", "reviewGate", "reviewTransaction", "reVerify", "runtimeStatus", "reviewPolicy", "reviewLedger", "reviewReceipt", "reviewBundle", "reviewContext", "reviewState", "lineageId", "generation", "fixBatch", "correctionBudget"} {
 			if strings.Contains(string(payload), forbidden) {
 				t.Fatalf("v2 projection retained authority key %q: %s", forbidden, payload)
 			}
 		}
 	})
 
-	t.Run("v2 preserves seven dependencies, four instruction groups, and opaque consent", func(t *testing.T) {
+	t.Run("v2 preserves seven dependencies, three instruction groups, and opaque consent", func(t *testing.T) {
 		change := "thin"
 		status := baseStatus(ArtifactStoreOpenSpec, "/repo", nil, &change, nil, "apply", nil)
 		instructions := renderPhaseInstructions(status)
@@ -127,7 +126,7 @@ func TestSDDStatusV2CleanBreak(t *testing.T) {
 			t.Fatal(err)
 		}
 		assertJSONNestedKeys(t, document, "dependencies", []string{"proposal", "specs", "design", "tasks", "apply", "verify", "archive"})
-		assertJSONNestedKeys(t, document, "phaseInstructions", []string{"apply", "verify", "remediate", "archive"})
+		assertJSONNestedKeys(t, document, "phaseInstructions", []string{"apply", "verify", "archive"})
 		if !bytes.Contains(payload, []byte("sdd-opaque")) {
 			t.Fatalf("v2 projection lost the present opaque consent marker: %s", payload)
 		}
@@ -159,7 +158,7 @@ func TestSDDStatusV2CleanBreak(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			for _, key := range []string{"reviewOffer", "reviewGate", "reviewTransaction", "reVerify", "runtimeStatus"} {
+			for _, key := range []string{"reviewOffer", "remediationState", "reviewGate", "reviewTransaction", "reVerify", "runtimeStatus"} {
 				if strings.Contains(string(payload), `"`+key+`"`) {
 					t.Errorf("SDD projection retained %q", key)
 				}
@@ -170,7 +169,7 @@ func TestSDDStatusV2CleanBreak(t *testing.T) {
 		}
 	})
 
-	t.Run("unfinished tasks still block archive in this slice", func(t *testing.T) {
+	t.Run("unfinished tasks remain visible when explicit archive is available", func(t *testing.T) {
 		repo := initRuntimeLedgerRepo(t)
 		changeRoot := seedReadyChange(t, repo, "thin", "- [x] 1.1 Work\n- [ ] 1.2 Remaining\n")
 		write(t, filepath.Join(changeRoot, "verify-report.md"), testVerifyEnvelope("pass", 0, 0, "1/1", "1/1", 0, 0))
@@ -179,8 +178,8 @@ func TestSDDStatusV2CleanBreak(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if status.Dependencies.Archive != DependencyBlocked || status.NextRecommended == "archive" {
-			t.Fatalf("archive=%q next=%q, want unfinished tasks to block archive", status.Dependencies.Archive, status.NextRecommended)
+		if status.Dependencies.Archive != DependencyReady || status.NextRecommended != "apply" || status.TaskProgress.AllComplete {
+			t.Fatalf("archive=%q next=%q, want optional archive while unfinished tasks still recommend apply", status.Dependencies.Archive, status.NextRecommended)
 		}
 	})
 
@@ -196,17 +195,6 @@ func TestSDDStatusV2CleanBreak(t *testing.T) {
 			t.Fatal("generated status golden still pins v1")
 		}
 	})
-}
-
-func TestResolveBoundedRemediationCompletesAuthorityFreeEvidence(t *testing.T) {
-	failedEvidenceRevision := "sha256:" + strings.Repeat("d", 64)
-	remediation := resolveBoundedRemediation(true, verifyResultEvaluation{
-		EvidenceRevision: failedEvidenceRevision,
-		Reason:           "verification failed",
-	}, remediationResultEvidence(failedEvidenceRevision))
-	if !remediation.Complete || remediation.Required || remediation.Reason != "" {
-		t.Fatalf("authority-free remediation = %#v, want completed evidence", remediation)
-	}
 }
 
 func taggedStatusTestFiles() ([]string, error) {

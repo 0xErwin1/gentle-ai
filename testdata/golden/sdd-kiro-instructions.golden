@@ -263,7 +263,7 @@ Use native v2 for every declared artifact store, including Engram. The dispatche
 
 Only explicit authorized continuation may call `gentle-ai sdd-continue [change] --cwd <repo>`. First inspect with status and confirm the current human scope covers the selected change-directory marker. Read-only or excluded-marker scope forbids this mutating call; native allowed roots do not grant human consent. Preparation grants no source roots or attempts. Carry native `actionContext` intersected with the current narrower human scope into any executor.
 
-For authorized phase routing only: Route only by `nextRecommended` and dependency states; honor `blockedReasons` and never infer from free text. If `blockedReasons` is non-empty, do not proceed to apply, archive, or terminal work. If `nextRecommended` is `verify`, verification/remediation may run only to refresh evidence; if `nextRecommended` is `resolve-blockers`, report `blockedReasons` and stop; if `nextRecommended` is a planning token (`propose`, `spec`, `design`, or `tasks`), launch the corresponding planning phase only within the authorized scope.
+For authorized phase routing only: Route only by `nextRecommended` and dependency states; honor `blockedReasons` and never infer from free text. If `blockedReasons` is non-empty, do not proceed to apply, archive, or terminal work. If `nextRecommended` is `resolve-blockers`, report `blockedReasons` and stop; if `nextRecommended` is a planning token (`propose`, `spec`, `design`, or `tasks`), launch the corresponding planning phase only within the authorized scope.
 
 If the binary is unavailable, use the existing prompt contract for non-authoritative diagnostics only. Do not fabricate native-shaped status, readiness, or mutation authority, and never substitute continue for inspection.
 
@@ -372,11 +372,13 @@ The Kiro phase result must prove that persistence contract. Refresh prior progre
 ### Dependency Graph
 
 ```
-proposal -> specs --> tasks -> apply -> verify -> archive
+proposal -> specs --> tasks -> apply -> archive
+                                 \-> verify (optional diagnostics)
              ^
              |
            design
 ```
+Verification is opt-in and may inspect partial work. Completed implementation normally goes directly to archive. Optional diagnostic failures, absent reports, and unfinished tasks are not archive certificates or admission gates; preserve actual findings and permissions. Do not run the automatic gatekeeper retry loop for diagnostic findings. An explicitly requested archive may close unfinished work honestly even while status recommends apply.
 
 ### Result Contract
 
