@@ -93,6 +93,8 @@ These are parent-orchestrator routing boundaries. Use the smallest useful topolo
 
 #### Delegated Verification Gate (Reduced Form)
 
+SDD never offers or launches RDD, regardless of review mode. For SDD work, run the applicable functional checks and configured TDD, report actual results, and follow the SDD phase instructions; do not assess review risk or invoke review from this gate. The rules below apply only to non-SDD work.
+
 This runtime has no subagent delegation mechanism, so there is no separate writer or verifier to gate: the orchestrator itself performs the bounded action and its own verification. The native risk tier from `gentle-ai review assess --cwd <repo> --json` (`gentle-ai.review-assessment/v1`, `risk` one of `passive`, `medium`, `high`; any failure or an unrecognized verb is treated as `high`) still decides whether verification commands run at all:
 
 - **Passive**: structural readback only; do not run the `## Verification` commands.

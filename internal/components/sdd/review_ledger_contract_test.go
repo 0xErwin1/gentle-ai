@@ -515,7 +515,9 @@ func TestKilocodeReviewSettingsMatchCurrentMainBaseline(t *testing.T) {
 	// representable, so the runtime-owned plugin can canonicalize and tolerantly match
 	// grouped answers instead of losing them to a typed chat reply. Kilocode embeds the
 	// same shared session preflight body, so the hash moved. Deliberate, not drift.
-	const want = "8f388ae4197cfa0fbfdf1f82423a599ea43e43665659da11e0389b670d241bf4"
+	// #4612 excludes SDD from the shared RDD gate and removes its command offer.
+	// Kilocode inherits those OpenCode prompt changes, not native RDD capability.
+	const want = "7af39c09190086fbdb816073fbba5a9d8fae826b7f58b3f37ef6f59c354632e9"
 	if got != want {
 		t.Fatalf("Kilocode settings SHA-256 = %s, want current-main baseline %s", got, want)
 	}

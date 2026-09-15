@@ -26,7 +26,6 @@ type StatusV2Projection struct {
 	ActionContext     actionContextV2              `json:"actionContext"`
 	Relationships     relationshipsV2              `json:"relationships"`
 	RemediationState  remediationStateV2           `json:"remediationState"`
-	ReviewOffer       *ReviewOfferBlock            `json:"reviewOffer,omitempty"`
 	Consent           *SDDIntegrationConsentResult `json:"consent,omitempty"`
 	Archived          *ArchivedProjection          `json:"archived,omitempty"`
 	PhaseInstructions *phaseInstructionsV2         `json:"phaseInstructions,omitempty"`
@@ -136,7 +135,6 @@ func ProjectStatusV2(status Status) (StatusV2Projection, error) {
 			FailedEvidenceRevision: status.RemediationState.FailedEvidenceRevision,
 			Reason:                 status.RemediationState.Reason,
 		},
-		ReviewOffer:     status.ReviewOffer,
 		Consent:         status.Consent,
 		Archived:        status.Archived,
 		NextRecommended: status.NextRecommended,

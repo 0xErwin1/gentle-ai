@@ -86,7 +86,7 @@ Before persistence, hold the complete report as exact candidate bytes and run `g
 
 ## Review Context and Verification Availability
 
-Review state is informational and never a verification prerequisite. A missing, pending, invalid, or non-allow review state never suppresses tests or builds. Exit `125` is reserved for an actual verification prerequisite or unavailable verification tooling, never missing review authority.
+SDD never offers, launches, or consumes RDD; verification uses SDD requirements and functional evidence. A missing, pending, invalid, or non-allow review state never suppresses tests or builds. Exit `125` is reserved for an actual verification prerequisite or unavailable verification tooling, never missing review authority.
 
 When a genuine prerequisite for the declared verification command is unavailable, record that condition using the established verification-result schema and preserve the command/output evidence it permits. Do not invent review-authority fields or treat review state as a command preflight. Substantive verification failures and executed command failures remain ordinary `fail` evidence.
 
