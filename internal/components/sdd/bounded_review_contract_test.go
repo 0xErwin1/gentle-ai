@@ -730,7 +730,7 @@ func TestOpenCodeAndClaudeArchiveInstructionsDoNotGateOnReviewAuthority(t *testi
 		t.Run(path, func(t *testing.T) {
 			content := assets.MustRead(path)
 			for _, required := range []string{
-				"`reviewOffer` is optional and never an archive or delivery gate",
+				"SDD never offers or launches RDD.",
 				"Archive reads only task completion and independent verification",
 			} {
 				if !strings.Contains(content, required) {
@@ -778,4 +778,18 @@ func parseAuthorityFirstRows(t *testing.T, content string) []authorityFirstRow {
 		})
 	}
 	return rows
+}
+
+func TestSDDPhaseCommandsNeverInviteReview(t *testing.T) {
+	for _, path := range []string{
+		"opencode/commands/sdd-apply.md", "opencode/commands/sdd-verify.md", "opencode/commands/sdd-archive.md",
+		"claude/commands/gentle-sdd-apply.md", "claude/commands/gentle-sdd-verify.md", "claude/commands/gentle-sdd-archive.md",
+	} {
+		content := assets.MustRead(path)
+		for _, forbidden := range []string{"reviewOffer", "gentle-ai review start", "may present and run"} {
+			if strings.Contains(content, forbidden) {
+				t.Errorf("%s retains review invitation %q", path, forbidden)
+			}
+		}
+	}
 }

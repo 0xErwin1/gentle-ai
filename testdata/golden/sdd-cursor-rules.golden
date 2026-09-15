@@ -111,6 +111,8 @@ These are parent-orchestrator routing boundaries. Use the smallest useful topolo
 
 #### Delegated Verification Gate (MANDATORY)
 
+SDD never offers or launches RDD, regardless of review mode. For SDD work, run the applicable functional checks and configured TDD, report actual results, and follow the SDD phase instructions; do not assess review risk or invoke review from this gate. The rules below apply only to non-SDD work.
+
 Verification of a delegated writer's work is decided by two inputs the parent reads deterministically: the receipt-driven development (RDD) state for the repository (`on`, `off`, or `unknown`), and the native risk tier from `gentle-ai review assess --cwd <repo> --json` (`gentle-ai.review-assessment/v1`, `risk` one of `passive`, `medium`, `high`). A runtime that already renders an RDD status line reads it from there; otherwise read `gentle-ai review mode status` (read-only) and treat a failure as `unknown`. Any assessment failure or an unrecognized verb is treated as `high`.
 
 The `on` branch below holds only while the native review reaches a terminal outcome for this candidate. When the human declines the consent envelope for this candidate (candidate-scoped; never the kill switch), when receipt-driven development is disabled for the clone after this status was read, or when START or STATUS refuses, the parent follows the RDD off path instead: run `gentle-ai review assess --cwd <repo> --json` over the writer's diff and apply the tier table below. An unknown outcome is treated as not closed, never as terminal.

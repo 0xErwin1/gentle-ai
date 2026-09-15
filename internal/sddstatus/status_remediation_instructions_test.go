@@ -27,7 +27,7 @@ func seedUnmanagedFailedVerification(t *testing.T, repo, change string, maxAttem
 
 func resolveDisabledRemediationInstructions(t *testing.T, repo, change string) (Status, string) {
 	t.Helper()
-	status, err := Resolve(ResolveOptions{CWD: repo, ChangeName: change, ReviewDisabled: true, IncludeInstructions: true})
+	status, err := Resolve(ResolveOptions{CWD: repo, ChangeName: change, IncludeInstructions: true})
 	if err != nil {
 		t.Fatal(err)
 	}

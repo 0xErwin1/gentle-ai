@@ -179,20 +179,15 @@ type Status struct {
 	// RuntimeStatus is internal execution bookkeeping. ProjectStatusV2 is the
 	// only public serializer and deliberately omits it.
 	RuntimeStatus *RuntimeStatus `json:"runtimeStatus,omitempty"`
-	// ReviewOffer is a fresh post-verification invitation. It contains no
-	// candidate identity or persisted review authority and never affects archive.
-	ReviewOffer *ReviewOfferBlock `json:"reviewOffer,omitempty"`
 	// Consent is #2563's (S4b of #2540) edit-authority consent question:
 	// present exactly when the status reports blocked(edit_authority_missing),
 	// carrying the typed gentle-ai.sdd-integration.consent/v1 envelope whose
 	// granted choice names the exact runnable grant invocation. Structural
-	// absence (nil, omitempty) everywhere else — the same optional-block
-	// discipline ReviewOffer established.
+	// absence (nil, omitempty) everywhere else.
 	Consent *SDDIntegrationConsentResult `json:"consent,omitempty"`
 	// Archived is #4002's positive terminal projection: present exactly when
 	// the named change is already archived, so closure stops answering through
-	// the blocked channel. Structural absence (nil, omitempty) everywhere else
-	// — the same optional-block discipline ReviewOffer established.
+	// the blocked channel. Structural absence (nil, omitempty) everywhere else.
 	Archived          *ArchivedProjection `json:"archived,omitempty"`
 	PhaseInstructions *PhaseInstructions  `json:"phaseInstructions,omitempty"`
 	NextRecommended   string              `json:"nextRecommended"`
@@ -216,14 +211,6 @@ type Status struct {
 	verifyRefreshReason  string
 }
 
-// ReviewOfferBlock contains the complete optional review boundary: current
-// mode availability and the command that starts a new review. It intentionally
-// has no lineage, receipt, binding, successor, transaction, or gate field.
-type ReviewOfferBlock struct {
-	Available  bool   `json:"available"`
-	Invocation string `json:"invocation"`
-}
-
 // ArchivedProjection is the positive terminal projection for a change that is
 // already archived. Path names the location fact the resolving store can
 // expose: the repo-relative archive folder for OpenSpec
@@ -235,38 +222,11 @@ type ArchivedProjection struct {
 	Path string `json:"path"`
 }
 
-// applyReviewOfferRouting is status's one review edge. It runs only after strict
-// independent verification succeeds and never reads or persists review runtime
-// authority.
-func applyReviewOfferRouting(ctx context.Context, status *Status, workspaceRoot string, reviewDisabled bool) {
-	if reviewDisabled || status.Dependencies.Verify != DependencyAllDone {
-		return
-	}
-	offer, err := reviewOfferForVerify(ctx, workspaceRoot)
-	if err != nil {
-		return
-	}
-	status.ReviewOffer = &ReviewOfferBlock{
-		Available:  offer.Available,
-		Invocation: fmt.Sprintf("gentle-ai review start --cwd %s", pathquote.Quote(workspaceRoot)),
-	}
-}
-
 type ResolveOptions struct {
 	CWD                 string
 	WorkspaceRoot       string
 	ChangeName          string
 	IncludeInstructions bool
-	// ReviewDisabled records that the user's receipt-driven-development kill
-	// switch is off for this clone. Disabled status skips review discovery and
-	// leaves review context structurally absent; it never fabricates approval.
-	// When enabled, review context remains informational and cannot decide
-	// archive readiness or routing. The CLI owns the switch's source of truth.
-	ReviewDisabled bool
-	// ReviewDisabledForWorkspace lets the composition root resolve the switch
-	// against the exact workspace normalized by Resolve. When set, it is called
-	// once and its result replaces ReviewDisabled for the whole status decision.
-	ReviewDisabledForWorkspace func(workspaceRoot string) (bool, error)
 }
 
 type CommandArgs struct {
@@ -496,11 +456,7 @@ func Resolve(options ResolveOptions) (Status, error) {
 	declared, declaredOK := declaredArtifactStore(workspaceRoot)
 
 	if declaredOK && declared == ArtifactStoreEngram {
-		reviewDisabled, err := resolveReviewDisabled(options, workspaceRoot)
-		if err != nil {
-			return Status{}, err
-		}
-		status, resolved, err := resolveEngramStatus(workspaceRoot, strings.TrimSpace(options.ChangeName), options.IncludeInstructions, reviewDisabled)
+		status, resolved, err := resolveEngramStatus(workspaceRoot, strings.TrimSpace(options.ChangeName), options.IncludeInstructions)
 		if err != nil {
 			return Status{}, err
 		}
@@ -547,22 +503,11 @@ func Resolve(options ResolveOptions) (Status, error) {
 	return status, nil
 }
 
-// resolveReviewDisabled applies the caller's per-workspace review-mode hook
-// exactly once, shared by both resolution routes.
-func resolveReviewDisabled(options ResolveOptions, workspaceRoot string) (bool, error) {
-	if options.ReviewDisabledForWorkspace == nil {
-		return options.ReviewDisabled, nil
-	}
-	disabled, err := options.ReviewDisabledForWorkspace(workspaceRoot)
-	return disabled || err != nil, nil
-}
-
 func resolveByPreferenceOrder(options ResolveOptions) (Status, error) {
 	workspaceRoot, err := resolveWorkspaceRoot(options)
 	if err != nil {
 		return Status{}, err
 	}
-	reviewDisabled, _ := resolveReviewDisabled(options, workspaceRoot)
 	planningHome := filepath.Join(workspaceRoot, "openspec")
 	changesDir := filepath.Join(planningHome, "changes")
 	activeChanges, err := listActiveOpenSpecChanges(workspaceRoot)
@@ -588,7 +533,7 @@ func resolveByPreferenceOrder(options ResolveOptions) (Status, error) {
 					),
 				}, options.IncludeInstructions), nil
 			}
-			if status, ok, err := resolveEngramStatus(workspaceRoot, changeName, options.IncludeInstructions, reviewDisabled); ok || err != nil {
+			if status, ok, err := resolveEngramStatus(workspaceRoot, changeName, options.IncludeInstructions); ok || err != nil {
 				return status, err
 			}
 			return blockedStatus(ArtifactStoreOpenSpec, workspaceRoot, nil, nil, "sdd-new", []string{"No active OpenSpec changes found under openspec/changes."}, options.IncludeInstructions), nil
@@ -600,7 +545,7 @@ func resolveByPreferenceOrder(options ResolveOptions) (Status, error) {
 	}
 
 	if !contains(activeChanges, changeName) {
-		if status, ok, err := resolveEngramStatus(workspaceRoot, changeName, options.IncludeInstructions, reviewDisabled); ok || err != nil {
+		if status, ok, err := resolveEngramStatus(workspaceRoot, changeName, options.IncludeInstructions); ok || err != nil {
 			return status, err
 		}
 		// #4002: an absent active folder may mean the change was archived, and
@@ -724,7 +669,6 @@ func resolveByPreferenceOrder(options ResolveOptions) (Status, error) {
 	} else {
 		applyNativeRuntimeRouting(&status)
 	}
-	applyReviewOfferRouting(context.Background(), &status, workspaceRoot, reviewDisabled)
 	status.BlockedReasons = blockedReasons.finalize(status.NextRecommended, status.BlockedReasons)
 	status.Notes = append(status.Notes, blockedReasons.notes...)
 	if runtimeRemediationComplete && status.Dependencies.Verify == DependencyReady && status.Dependencies.Archive == DependencyBlocked && status.NextRecommended == string(PhaseVerify) {
@@ -910,7 +854,7 @@ func applyNativeRuntimeRouting(status *Status) {
 	}
 }
 
-func resolveEngramStatus(workspaceRoot string, requestedChange string, includeInstructions, reviewDisabled bool) (Status, bool, error) {
+func resolveEngramStatus(workspaceRoot string, requestedChange string, includeInstructions bool) (Status, bool, error) {
 	if !shouldTryEngram(workspaceRoot) {
 		return Status{}, false, nil
 	}
@@ -1010,7 +954,6 @@ func resolveEngramStatus(workspaceRoot string, requestedChange string, includeIn
 	} else {
 		applyNativeRuntimeRouting(&status)
 	}
-	applyReviewOfferRouting(context.Background(), &status, workspaceRoot, reviewDisabled)
 	if _, archived := artifactsByType["archive-report"]; archived {
 		// The archive phase wrote the archive report, so the change is closed.
 		// Discovery already skips it (#3008); naming it must not send an

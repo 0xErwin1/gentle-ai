@@ -41,18 +41,19 @@ func TestReviewFoundationSkillsCarryThreatAndWorkUnitEvidence(t *testing.T) {
 	}
 
 	statusContract := assets.MustRead("skills/_shared/sdd-status-contract.md")
-	for _, want := range []string{"gentle-ai.sdd-status/v2", "fresh mode-only offer", "ordinary SDD failed-evidence accounting", "a bare envelope never passes"} {
+	for _, want := range []string{"gentle-ai.sdd-status/v2", "SDD status never reads review mode", "ordinary SDD failed-evidence accounting", "a bare envelope never passes"} {
 		if !strings.Contains(statusContract, want) {
 			t.Errorf("status contract missing %q", want)
 		}
 	}
 }
 
-func TestSDDApplyRoutesToIndependentVerifyBeforeOptionalReview(t *testing.T) {
+func TestSDDApplyRoutesToIndependentVerifyWithoutReview(t *testing.T) {
 	content := assets.MustRead("skills/sdd-apply/SKILL.md")
 	for _, want := range []string{
 		"After all implementation work units finish, return control to the parent orchestrator for independent SDD verification.",
 		"Do not launch or recommend review directly after apply.",
+		"neither executor nor parent offers or launches RDD within SDD.",
 	} {
 		if !strings.Contains(content, want) {
 			t.Fatalf("sdd-apply missing ordering rule %q", want)
@@ -66,11 +67,11 @@ func TestSDDApplyRoutesToIndependentVerifyBeforeOptionalReview(t *testing.T) {
 func TestSDDVerifyRunsWithoutReviewArtifacts(t *testing.T) {
 	content := assets.MustRead("skills/sdd-verify/SKILL.md")
 	for _, want := range []string{
-		"Review state is informational and never a verification prerequisite.",
+		"SDD never offers, launches, or consumes RDD; verification uses SDD requirements and functional evidence.",
 		"A missing, pending, invalid, or non-allow review state never suppresses tests or builds.",
 		"Do not require a transaction, policy, ledger, receipt, bundle, or gate-context artifact to begin or complete independent SDD verification.",
 		"Return ordinary verification evidence with the result.",
-		"Terminal reviewer closure is capture-owned and informational",
+		"Do not consume RDD artifacts.",
 	} {
 		if !strings.Contains(content, want) {
 			t.Fatalf("sdd-verify missing independent verification clause %q", want)
