@@ -897,17 +897,17 @@ func TestSDDResearchRuntimeAssetsDeclareExactEvidenceGrants(t *testing.T) {
 		required    []string
 	}{
 		{
-			path: "claude/agents/sdd-research.md", declaration: "Evidence grants: documentation=[WebFetch]; open-web=[WebSearch,WebFetch].",
+			path: "claude/agents/sdd-research.md", declaration: "Use only actually available and authorized external tools",
 			toolLine: "tools:", toolsExact: "tools: WebFetch, WebSearch", evidence: []string{"WebFetch", "WebSearch"},
 			forbidden: []string{"Read", "Edit", "Write", "mcp__plugin_engram_engram__"},
-			required:  []string{"already-persisted intent", "Do not read or mutate repository or Engram state", "bounded evidence envelope", "The orchestrator validates and persists this envelope"},
+			required:  []string{"Do not read or mutate repository or Engram state", "The orchestrator supplies relevant context and handles any authorized persistence", "never invent access or unsupported claims"},
 		},
 		{
-			path: "kiro/agents/sdd-research.md", declaration: "Evidence grants: documentation=[@context7]; open-web=[].",
+			path: "kiro/agents/sdd-research.md", declaration: "Use only actually available and authorized external tools",
 			toolLine: "tools:", evidence: []string{"@context7"},
 		},
-		{path: "cursor/agents/sdd-research.md", declaration: "Evidence grants: documentation=[]; open-web=[]."},
-		{path: "kimi/agents/sdd-research.md", declaration: "Evidence grants: documentation=[]; open-web=[]."},
+		{path: "cursor/agents/sdd-research.md", declaration: "Use only actually available and authorized external tools"},
+		{path: "kimi/agents/sdd-research.md", declaration: "Use only actually available and authorized external tools"},
 	}
 
 	for _, tt := range tests {
@@ -915,8 +915,8 @@ func TestSDDResearchRuntimeAssetsDeclareExactEvidenceGrants(t *testing.T) {
 			content := MustRead(tt.path)
 			for _, required := range []string{
 				tt.declaration,
-				"Persistence tools are not evidence grants.",
-				"Unsupported or undeclared classes deny admission and emit no claims.",
+				"never bypass configured permissions.",
+				"Missing request IDs, revisions or store metadata are not admission barriers.",
 			} {
 				if !strings.Contains(content, required) {
 					t.Fatalf("%s missing %q", tt.path, required)
@@ -1295,6 +1295,12 @@ func TestOpenCodeSDDCommandsAreOrchestratorGuarded(t *testing.T) {
 			requiredGuards = []string{"command is read-only", "Inspection needs no execution preflight", "without executing any recommendation"}
 			if strings.Contains(content, "SDD Session Preflight must already be complete") {
 				t.Fatal("read-only status requires mutation preflight")
+			}
+		}
+		if entry.Name() == "sdd-research.md" {
+			requiredGuards = []string{"Research remains optional, including after selection.", "actually available and authorized external tools", "wait; never answer for the user"}
+			if strings.Contains(content, "SDD Session Preflight must already be complete") {
+				t.Fatal("optional research requires administrative preflight")
 			}
 		}
 		for _, required := range requiredGuards {

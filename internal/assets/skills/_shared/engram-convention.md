@@ -33,7 +33,7 @@ Set `capture_prompt: false` when the Engram tool schema supports it; if an older
 
 ### Research artifacts
 
-Use `sdd/{change-name}/research` for exact `gentle-ai.sdd-research/v1` bytes and `sdd/{change-name}/preproposal` for exact `gentle-ai.sdd-preproposal/v1` bytes. In hybrid mode, neither topic is authoritative alone: compare its revision and bytes with OpenSpec before proposal admission.
+Use `sdd/{change-name}/research` for optional source-backed notes when persistence is requested. Preserve historical research and preproposal observations. Their schema, revision or agreement with files is not proposal admission authority.
 
 
 
