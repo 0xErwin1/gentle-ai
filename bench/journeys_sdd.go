@@ -73,17 +73,15 @@ type sddStatusV2 struct {
 	ReviewOffer       json.RawMessage `json:"reviewOffer"`
 	BlockedReasons    []string        `json:"blockedReasons"`
 	PhaseInstructions struct {
-		Verify    []string `json:"verify"`
-		Remediate []string `json:"remediate"`
+		Verify  []string `json:"verify"`
+		Archive []string `json:"archive"`
 	} `json:"phaseInstructions"`
 	TaskProgress struct {
 		Total       int  `json:"total"`
 		Completed   int  `json:"completed"`
 		AllComplete bool `json:"allComplete"`
 	} `json:"taskProgress"`
-	RemediationState struct {
-		Required bool `json:"required"`
-	} `json:"remediationState"`
+	RemediationState json.RawMessage `json:"remediationState"`
 }
 
 // gateResult is the subset of a lifecycle gate envelope the proofs read.
@@ -811,8 +809,8 @@ func sddStatusAssertion(name string, check func(sddStatusV2) error) func(*Sandbo
 // j41 already established for the sibling pre-verify-routing case.
 func sddStatusIgnoresCorruptCompactAuthorityPreVerify(_ string) func(*Sandbox, Observation) error {
 	return sddStatusAssertion("corrupt compact authority is not consulted pre-verify", func(status sddStatusV2) error {
-		if status.Dependencies.Verify != "ready" || status.NextRecommended != "verify" {
-			return fmt.Errorf("verify=%q nextRecommended=%q, want ready/verify (pre-verify review consultation was removed in Wave 4); blocked reasons=%v",
+		if status.Dependencies.Verify != "ready" || status.NextRecommended != "archive" {
+			return fmt.Errorf("verify=%q nextRecommended=%q, want ready/archive without mandatory verification; blocked reasons=%v",
 				status.Dependencies.Verify, status.NextRecommended, status.BlockedReasons)
 		}
 		if len(status.BlockedReasons) != 0 {
@@ -901,36 +899,16 @@ func sddJourneys() []Journey {
 		{
 			ID:     "j41-kill-switch-versus-sdd-pre-verify",
 			Review: reviewOptedIn,
-			Title:  "Pre-verify: RDD supervises nothing, on or off, before verify runs",
+			Title:  "Completed implementation archives without verification or RDD, on either side of the switch",
 			Source: "shape 5 (the kill switch and the pre-verify router) + Wave 4's own removal of pre-verify review supervision",
-			// Corrective verify cycle 3 (CRITICAL-C): this journey pinned a
-			// PRE-Wave-4 shape -- a pre-verify review gate that blocked
-			// Dependencies.Verify and routed nextRecommended to "review" while
-			// reviews were on, stepping aside only when the switch was off. Wave
-			// 4 commit 21dfc0fe ("remove pre-verify review supervision, add offer
-			// absence guard", S3) deliberately removed that gate entirely --
-			// ratified by rdd-post-verify-review-offer's "Offer Occurs Strictly
-			// Post-Verify, Pre-Archive" requirement: SDD MUST NOT consult, block
-			// on, or offer RDD review before or during apply, full stop, on
-			// either side of the switch. This journey was never updated when
-			// that landed, so it pinned dead behavior and could never again
-			// observe a real regression in the code path it named.
-			//
-			// Rewritten to pin the CURRENT, ratified shape: with planning
-			// complete and no verify report yet, nextRecommended is "verify" and
-			// Dependencies.Verify is "ready" -- identically, byte-for-byte in
-			// the fields that matter -- whether the switch is on or off, because
-			// there is no pre-verify review supervision left to differ. The
-			// switch toggling is kept in the journey (rather than deleted
-			// outright) specifically to prove that absence: on, off, and back on
-			// all produce the same pre-verify routing.
+			// Completed implementation needs no report, regardless of the RDD switch.
 			Steps: []Step{
 				{Name: "fixture: change with planning complete and no verification yet", Fixture: sddPlanningArtifacts("")},
 				{Name: "sdd-status with reviews on", Requires: sddStatusCapability,
 					Args: productArgs("sdd-status", sddChange, "--json"),
 					After: sddStatusAssertion("pre-verify routing with reviews on", func(status sddStatusV2) error {
-						if status.NextRecommended != "verify" {
-							return fmt.Errorf("nextRecommended = %q, want verify: pre-verify review supervision was removed in Wave 4", status.NextRecommended)
+						if status.NextRecommended != "archive" {
+							return fmt.Errorf("nextRecommended = %q, want archive without mandatory verification", status.NextRecommended)
 						}
 						if status.Dependencies.Verify != "ready" {
 							return fmt.Errorf("dependencies.verify = %q, want ready; blocked reasons = %v",
@@ -945,8 +923,8 @@ func sddJourneys() []Journey {
 				{Name: "sdd-status with reviews off", Requires: sddStatusCapability,
 					Args: productArgs("sdd-status", sddChange, "--json"),
 					After: sddStatusAssertion("pre-verify routing with reviews off", func(status sddStatusV2) error {
-						if status.NextRecommended != "verify" {
-							return fmt.Errorf("nextRecommended = %q, want verify", status.NextRecommended)
+						if status.NextRecommended != "archive" {
+							return fmt.Errorf("nextRecommended = %q, want archive", status.NextRecommended)
 						}
 						if status.Dependencies.Verify != "ready" {
 							return fmt.Errorf("dependencies.verify = %q, want ready; blocked reasons = %v",
@@ -961,8 +939,8 @@ func sddJourneys() []Journey {
 				{Name: "sdd-status with reviews back on", Requires: sddStatusCapability,
 					Args: productArgs("sdd-status", sddChange, "--json"),
 					After: sddStatusAssertion("pre-verify routing is unchanged once the switch returns", func(status sddStatusV2) error {
-						if status.NextRecommended != "verify" {
-							return fmt.Errorf("nextRecommended = %q, want verify: re-enabling must not resurrect pre-verify supervision", status.NextRecommended)
+						if status.NextRecommended != "archive" {
+							return fmt.Errorf("nextRecommended = %q, want archive: re-enabling must not resurrect verification governance", status.NextRecommended)
 						}
 						if status.Dependencies.Verify != "ready" {
 							return fmt.Errorf("dependencies.verify = %q, want ready", status.Dependencies.Verify)
@@ -1009,25 +987,25 @@ func sddJourneys() []Journey {
 		{
 			ID:     "j63-disabled-failed-verification-unmanaged-remediation",
 			Review: reviewOptedIn,
-			Title:  "Failed verification needs remediation, not attempt governance; re-enabling RDD adds no review offer",
+			Title:  "Failed optional verification does not gate archive or acquire RDD authority",
 			Source: "#4612: preserve verification truth while removing SDD attempt governance and review offers",
 			Steps: []Step{
 				{Name: "fixture: completed change with admitted failed verification", Fixture: sddPlanningArtifacts(sddFailedVerifyReport)},
-				{Name: "enabled failed verification records missing remediation authority", Requires: sddStatusCapability,
+				{Name: "enabled failed verification remains archive-ready", Requires: sddStatusCapability,
 					Args: productArgs("sdd-status", sddChange, "--json"), After: sddStatusAssertion("enabled remediation", func(status sddStatusV2) error {
-						if !strings.Contains(strings.Join(status.BlockedReasons, "\n"), "verify evidence requires independent SDD remediation") {
-							return fmt.Errorf("enabled remediation omitted its independent remediation context: %v", status.BlockedReasons)
+						if status.NextRecommended != "archive" || status.Dependencies.Archive != "ready" || len(status.BlockedReasons) != 0 || status.RemediationState != nil {
+							return fmt.Errorf("optional failed report gated archive: %+v", status)
 						}
 						return nil
 					})},
 				{Name: "mode disable", Requires: modeCapability, Args: productArgs("review", "mode", "disable", "--json")},
-				{Name: "disabled failure remains ordinary remediation without attempts", Requires: sddStatusCapability,
+				{Name: "disabled failed verification remains archive-ready", Requires: sddStatusCapability,
 					Args: productArgs("sdd-status", sddChange, "--json", "--instructions"), After: sddStatusAssertion("ordinary remediation", func(status sddStatusV2) error {
-						if status.NextRecommended != "remediate" {
-							return fmt.Errorf("failed report routes to %q, want remediate", status.NextRecommended)
+						if status.NextRecommended != "archive" {
+							return fmt.Errorf("failed report routes to %q, want archive", status.NextRecommended)
 						}
-						if strings.Contains(strings.Join(status.PhaseInstructions.Remediate, "\n"), "sdd-attempt") {
-							return errors.New("remediation still requires attempt governance")
+						if status.RemediationState != nil {
+							return errors.New("retired remediation state is present")
 						}
 						return nil
 					})},
@@ -1039,11 +1017,11 @@ func sddJourneys() []Journey {
 						}
 						return nil
 					})},
-				{Name: "mode enable after unmanaged correction", Requires: modeCapability, Args: productArgs("review", "mode", "enable", "--json")},
+				{Name: "mode enable after optional report update", Requires: modeCapability, Args: productArgs("review", "mode", "enable", "--json")},
 				{Name: "re-enabled ordinary delivery remains archive-ready", Requires: sddStatusCapability,
 					Args: productArgs("sdd-status", sddChange, "--json"), After: sddStatusAssertion("re-enabled unmanaged correction", func(status sddStatusV2) error {
-						if status.Dependencies.Verify != "all_done" || status.Dependencies.Archive != "ready" || status.NextRecommended != "archive" {
-							return fmt.Errorf("re-enabled archive = verify %q archive %q next %q; want all_done/ready/archive", status.Dependencies.Verify, status.Dependencies.Archive, status.NextRecommended)
+						if status.Dependencies.Verify != "ready" || status.Dependencies.Archive != "ready" || status.NextRecommended != "archive" {
+							return fmt.Errorf("re-enabled archive = verify %q archive %q next %q; want ready/ready/archive", status.Dependencies.Verify, status.Dependencies.Archive, status.NextRecommended)
 						}
 						if status.ReviewOffer != nil {
 							return fmt.Errorf("re-enabled SDD archive exposed a review offer: %s", status.ReviewOffer)
@@ -1066,7 +1044,7 @@ func sddJourneys() []Journey {
 				{Name: "sdd-status selects the approved candidate", Requires: sddStatusCapability,
 					Args: productArgs("sdd-status", sddChange, "--json"),
 					After: sddStatusAssertion("stale authority does not shadow the approved candidate", func(status sddStatusV2) error {
-						if status.NextRecommended != "verify" {
+						if status.NextRecommended != "archive" {
 							return fmt.Errorf("nextRecommended = %q, want verify; blocked reasons = %v", status.NextRecommended, status.BlockedReasons)
 						}
 						if status.Dependencies.Verify != "ready" {
@@ -1187,22 +1165,17 @@ func sddJourneys() []Journey {
 		{
 			ID:     "j44-sdd-historical-requirement-stale-pass",
 			Review: reviewOptedIn,
-			Title:  "Historical change-local requirement heading: stale PASS restarts verification instead of failed remediation",
+			Title:  "Historical change-local requirement heading: stale PASS remains history, not an archive gate",
 			Source: "issue #2137 (historical OpenSpec requirement compatibility and stale verification routing)",
 			Steps: []Step{
 				{Name: "fixture: first-time component with historical requirement evidence", Fixture: sddHistoricalStalePass},
-				// Wave 4 S3 removed pre-verify review supervision: this fixture
-				// carries no review artifacts anywhere, so absent authority is
-				// decline-by-absence and the stale PASS re-enters verification
-				// directly (never review, never remediation). Archive stays
-				// blocked until that fresh verification lands. Mirrors
-				// TestEnabledStaleEvidenceWithNoReceiptRestartsVerification.
-				{Name: "sdd-status routes stale PASS to fresh verification", Requires: sddStatusCapability,
+				// Preserve the stale report and original requirement heading without certification.
+				{Name: "sdd-status archives without certifying stale PASS", Requires: sddStatusCapability,
 					Args: productArgs("sdd-status", sddChange, "--json"), After: sddStatusAssertion("historical stale PASS routing", func(status sddStatusV2) error {
-						if status.NextRecommended != "verify" || status.Dependencies.Verify != "ready" || status.Dependencies.Archive != "blocked" {
-							return fmt.Errorf("nextRecommended=%q verify=%q archive=%q, want fresh verification before archive", status.NextRecommended, status.Dependencies.Verify, status.Dependencies.Archive)
+						if status.NextRecommended != "archive" || status.Dependencies.Verify != "ready" || status.Dependencies.Archive != "ready" {
+							return fmt.Errorf("nextRecommended=%q verify=%q archive=%q, want optional verification and ungated archive", status.NextRecommended, status.Dependencies.Verify, status.Dependencies.Archive)
 						}
-						if status.RemediationState.Required {
+						if status.RemediationState != nil {
 							return errors.New("stale PASS entered failed-verification remediation")
 						}
 						for _, reason := range status.BlockedReasons {

@@ -63,14 +63,13 @@ const (
 type Phase string
 
 const (
-	PhasePropose   Phase = "propose"
-	PhaseSpec      Phase = "spec"
-	PhaseDesign    Phase = "design"
-	PhaseTasks     Phase = "tasks"
-	PhaseApply     Phase = "apply"
-	PhaseVerify    Phase = "verify"
-	PhaseRemediate Phase = "remediate"
-	PhaseArchive   Phase = "archive"
+	PhasePropose Phase = "propose"
+	PhaseSpec    Phase = "spec"
+	PhaseDesign  Phase = "design"
+	PhaseTasks   Phase = "tasks"
+	PhaseApply   Phase = "apply"
+	PhaseVerify  Phase = "verify"
+	PhaseArchive Phase = "archive"
 )
 
 type ArtifactPaths struct {
@@ -144,37 +143,26 @@ type Relationships struct {
 }
 
 type PhaseInstructions struct {
-	Apply     []string `json:"apply"`
-	Verify    []string `json:"verify"`
-	Remediate []string `json:"remediate"`
-	Archive   []string `json:"archive"`
-}
-
-// RemediationState describes only failed independent SDD verification
-// evidence. It carries no review authority, lifecycle, or budget vocabulary.
-type RemediationState struct {
-	Required               bool   `json:"required"`
-	Complete               bool   `json:"complete"`
-	FailedEvidenceRevision string `json:"failedEvidenceRevision"`
-	Reason                 string `json:"reason"`
+	Apply   []string `json:"apply"`
+	Verify  []string `json:"verify"`
+	Archive []string `json:"archive"`
 }
 
 type Status struct {
-	SchemaName       string                   `json:"schemaName"`
-	SchemaVersion    int                      `json:"schemaVersion"`
-	ChangeName       *string                  `json:"changeName"`
-	ArtifactStore    ArtifactStore            `json:"artifactStore"`
-	PlanningHome     PlanningHome             `json:"planningHome"`
-	ChangeRoot       *string                  `json:"changeRoot"`
-	ArtifactPaths    ArtifactPaths            `json:"artifactPaths"`
-	ContextFiles     ArtifactPaths            `json:"contextFiles"`
-	Artifacts        map[string]ArtifactState `json:"artifacts"`
-	TaskProgress     TaskProgress             `json:"taskProgress"`
-	Dependencies     Dependencies             `json:"dependencies"`
-	ApplyState       ApplyState               `json:"applyState"`
-	ActionContext    ActionContext            `json:"actionContext"`
-	Relationships    Relationships            `json:"relationships"`
-	RemediationState RemediationState         `json:"remediationState"`
+	SchemaName    string                   `json:"schemaName"`
+	SchemaVersion int                      `json:"schemaVersion"`
+	ChangeName    *string                  `json:"changeName"`
+	ArtifactStore ArtifactStore            `json:"artifactStore"`
+	PlanningHome  PlanningHome             `json:"planningHome"`
+	ChangeRoot    *string                  `json:"changeRoot"`
+	ArtifactPaths ArtifactPaths            `json:"artifactPaths"`
+	ContextFiles  ArtifactPaths            `json:"contextFiles"`
+	Artifacts     map[string]ArtifactState `json:"artifacts"`
+	TaskProgress  TaskProgress             `json:"taskProgress"`
+	Dependencies  Dependencies             `json:"dependencies"`
+	ApplyState    ApplyState               `json:"applyState"`
+	ActionContext ActionContext            `json:"actionContext"`
+	Relationships Relationships            `json:"relationships"`
 	// Consent is #2563's (S4b of #2540) edit-authority consent question:
 	// present exactly when the status reports blocked(edit_authority_missing),
 	// carrying the typed gentle-ai.sdd-integration.consent/v1 envelope whose
@@ -197,7 +185,6 @@ type Status struct {
 	// continuation command. It is deliberately internal: status reports why
 	// preparation is needed but never gains authority to perform it.
 	consentPreparationRoots []string
-	verifyRefreshReason     string
 }
 
 // ArchivedProjection is the positive terminal projection for a change that is
@@ -352,7 +339,8 @@ func archivedOpenSpecStatus(workspaceRoot, changeName, archiveEntry string, incl
 }
 
 // allDoneDependencies is the terminal dependency vector an archived change
-// reports: no phase remains, so every phase answers all_done.
+// reports: no phase remains, so every phase answers all_done. This records
+// lifecycle closure, not passing verification or completed implementation.
 func allDoneDependencies() Dependencies {
 	return Dependencies{
 		Proposal: DependencyAllDone,
@@ -563,14 +551,6 @@ func resolveByPreferenceOrder(options ResolveOptions) (Status, error) {
 		return Status{}, err
 	}
 
-	specCounts, err := readSpecCounts(artifactPaths.Specs)
-	if err != nil {
-		return Status{}, err
-	}
-	verifyResult, err := readVerifyResult(firstPath(artifactPaths.VerifyReport), specCounts)
-	if err != nil {
-		return Status{}, err
-	}
 	// The change-instance identity (#2563, S4b of #2540) binds the runtime
 	// read so persisted grants project only for THIS instance of the change
 	// name; without a marker the replay conservatively projects no granted
@@ -593,12 +573,6 @@ func resolveByPreferenceOrder(options ResolveOptions) (Status, error) {
 	if artifacts["specs"] == ArtifactPartial {
 		blockedReasons.genuine = append(blockedReasons.genuine, openSpecSpecsLayoutReason(changeName))
 	}
-	verifyRefreshReason := verifyReportRefreshReason(verifyResult)
-	if artifacts["verifyReport"] == ArtifactDone && taskProgress.AllComplete {
-		if reason := verifyRefreshReason; reason != "" {
-			blockedReasons.genuine = append(blockedReasons.genuine, reason)
-		}
-	}
 	applyState, unauthorizedRoots := applyEditAuthorityBlock(applyState, &blockedReasons, readText(firstPath(artifactPaths.Tasks)), workspaceRoot, append([]string{workspaceRoot}, grantedRoots...))
 	var consent *SDDIntegrationConsentResult
 	if len(unauthorizedRoots) != 0 {
@@ -616,19 +590,8 @@ func resolveByPreferenceOrder(options ResolveOptions) (Status, error) {
 			consent = &envelope
 		}
 	}
-	// Stale or incomplete evidence always re-enters independent SDD verification.
-	verifyReportCurrent := artifacts["verifyReport"] == ArtifactDone && !verifyResult.Stale && !verifyResult.Incomplete
-	remediationRequired := verifyReportCurrent && !verifyResult.Passing && applyState == ApplyAllDone
-	remediationState := resolveBoundedRemediation(
-		remediationRequired,
-		verifyResult,
-		readText(firstPath(artifactPaths.ApplyProgress)),
-	)
-	dependencies := resolveDependencies(artifacts, taskProgress, applyState, coreReady, verifyReportCurrent, verifyResult.Passing, remediationState.Complete)
-	nextRecommended := resolveNextRecommended(dependencies, applyState, verifyReportCurrent, remediationState)
-	if remediationState.Reason != "" {
-		blockedReasons.genuine = append(blockedReasons.genuine, remediationState.Reason)
-	}
+	dependencies := resolveDependencies(artifacts, applyState, coreReady)
+	nextRecommended := resolveNextRecommended(dependencies, applyState)
 	status := baseStatus(ArtifactStoreOpenSpec, workspaceRoot, grantedRoots, &changeName, &changeRoot, nextRecommended, append([]string{}, blockedReasons.genuine...))
 	status.Consent = consent
 	status.ArtifactPaths = artifactPaths
@@ -637,11 +600,7 @@ func resolveByPreferenceOrder(options ResolveOptions) (Status, error) {
 	status.TaskProgress = taskProgress
 	status.Dependencies = dependencies
 	status.ApplyState = applyState
-	status.RemediationState = remediationState
 	status.consentPreparationRoots = append([]string{}, unauthorizedRoots...)
-	// Historical verification remains visible in verify instructions, but cannot
-	// block unfinished implementation before final verification is applicable.
-	status.verifyRefreshReason = verifyRefreshReason
 	status.BlockedReasons = blockedReasons.finalize(status.NextRecommended, status.BlockedReasons)
 	status.Notes = append(status.Notes, blockedReasons.notes...)
 	if options.IncludeInstructions {
@@ -663,21 +622,6 @@ func workspaceHasGitMetadata(workspaceRoot string) bool {
 		}
 		current = parent
 	}
-}
-
-// verifyReportRefreshReason names why a persisted verification report cannot
-// stand as final evidence. A report that exists yet leaves verify at ready
-// must never project a silent tuple (#3538): the stale reason carries the
-// exact native totals the report has to match, so the agent re-verifies
-// against the current specs instead of re-validating the same envelope.
-func verifyReportRefreshReason(verify verifyResultEvaluation) string {
-	switch {
-	case verify.Incomplete:
-		return verify.Reason
-	case verify.Stale:
-		return "persisted verification report is stale: " + verify.Reason + "; rerun SDD verification and persist a report whose totals match the current specs before archive"
-	}
-	return ""
 }
 
 func resolveEngramStatus(workspaceRoot string, requestedChange string, includeInstructions bool) (Status, bool, error) {
@@ -717,8 +661,6 @@ func resolveEngramStatus(workspaceRoot string, requestedChange string, includeIn
 		VerifyReport:  engramArtifactState(artifactsByType["verify-report"]),
 	}.statesFor(ArtifactStoreEngram)
 	taskProgress := countTaskProgressText(artifactsByType["tasks"].Content)
-	specCounts := countSpecRequirementsAndScenarios([]string{artifactsByType["spec"].Content})
-	verifyResult := parseVerifyResult(artifactsByType["verify-report"].Content, specCounts)
 	// The Engram store keeps the change's SDD state in Engram, not in a
 	// change directory the archive flow moves, so the status layer has no
 	// archive-coupled home for a change-instance marker there: persisting one
@@ -730,26 +672,9 @@ func resolveEngramStatus(workspaceRoot string, requestedChange string, includeIn
 	coreReady := artifacts["proposal"] == ArtifactDone && artifacts["specs"] == ArtifactDone && artifacts["design"] == ArtifactDone && artifacts["tasks"] == ArtifactDone && taskProgress.Total > 0
 	applyState := resolveApplyState(coreReady, taskProgress)
 	blockedReasons := artifactBlockedReasons(artifacts, taskProgress, changeName)
-	verifyRefreshReason := verifyReportRefreshReason(verifyResult)
-	if artifacts["verifyReport"] == ArtifactDone && taskProgress.AllComplete {
-		if reason := verifyRefreshReason; reason != "" {
-			blockedReasons.genuine = append(blockedReasons.genuine, reason)
-		}
-	}
 	applyState, _ = applyEditAuthorityBlock(applyState, &blockedReasons, artifactsByType["tasks"].Content, workspaceRoot, []string{workspaceRoot})
-	// Stale or incomplete evidence always re-enters independent SDD verification.
-	verifyReportCurrent := artifacts["verifyReport"] == ArtifactDone && !verifyResult.Stale && !verifyResult.Incomplete
-	remediationRequired := verifyReportCurrent && !verifyResult.Passing && applyState == ApplyAllDone
-	remediationState := resolveBoundedRemediation(
-		remediationRequired,
-		verifyResult,
-		artifactsByType["apply-progress"].Content,
-	)
-	if remediationState.Reason != "" {
-		blockedReasons.genuine = append(blockedReasons.genuine, remediationState.Reason)
-	}
-	dependencies := resolveDependencies(artifacts, taskProgress, applyState, coreReady, verifyReportCurrent, verifyResult.Passing, remediationState.Complete)
-	nextRecommended := resolveNextRecommended(dependencies, applyState, verifyReportCurrent, remediationState)
+	dependencies := resolveDependencies(artifacts, applyState, coreReady)
+	nextRecommended := resolveNextRecommended(dependencies, applyState)
 	changeRoot := fmt.Sprintf("engram:sdd/%s", changeName)
 	status := baseStatus(ArtifactStoreEngram, workspaceRoot, nil, &changeName, &changeRoot, nextRecommended, append([]string{}, blockedReasons.genuine...))
 	status.PlanningHome = PlanningHome{Mode: ActionModeRepoLocal, Path: "engram:sdd"}
@@ -759,8 +684,6 @@ func resolveEngramStatus(workspaceRoot string, requestedChange string, includeIn
 	status.TaskProgress = taskProgress
 	status.Dependencies = dependencies
 	status.ApplyState = applyState
-	status.RemediationState = remediationState
-	status.verifyRefreshReason = verifyRefreshReason
 	if _, archived := artifactsByType["archive-report"]; archived {
 		// The archive phase wrote the archive report, so the change is closed.
 		// Discovery already skips it (#3008); naming it must not send an
@@ -775,7 +698,6 @@ func resolveEngramStatus(workspaceRoot string, requestedChange string, includeIn
 		status.Archived = &ArchivedProjection{Path: fmt.Sprintf("sdd/%s/archive-report", changeName)}
 		status.BlockedReasons = []string{}
 		status.Notes = []string{}
-		status.RemediationState = RemediationState{}
 	} else {
 		status.BlockedReasons = blockedReasons.finalize(status.NextRecommended, status.BlockedReasons)
 		status.Notes = append(status.Notes, blockedReasons.notes...)
@@ -1033,23 +955,6 @@ func engramArtifactState(observation engramObservation) ArtifactState {
 		return ArtifactPartial
 	}
 	return ArtifactDone
-}
-
-func reportTextIsClearlyPassing(text string) bool {
-	if strings.TrimSpace(text) == "" {
-		return false
-	}
-	hasPassSignal := false
-	for _, line := range strings.Split(text, "\n") {
-		line = strings.TrimSpace(line)
-		if reportLineHasBlocker(line) {
-			return false
-		}
-		if reportLineHasPassSignal(line) {
-			hasPassSignal = true
-		}
-	}
-	return hasPassSignal
 }
 
 func RenderMarkdown(status Status) string {
@@ -1412,129 +1317,7 @@ func hasContent(path string) bool {
 	return err == nil && strings.TrimSpace(string(content)) != ""
 }
 
-func reportIsClearlyPassing(path string) (bool, error) {
-	if path == "" {
-		return false, nil
-	}
-	content, err := os.ReadFile(path)
-	if err != nil {
-		return false, err
-	}
-	text := string(content)
-	if strings.TrimSpace(text) == "" {
-		return false, nil
-	}
-	hasPassSignal := false
-	for _, line := range strings.Split(text, "\n") {
-		line = strings.TrimSpace(line)
-		if reportLineHasBlocker(line) {
-			return false, nil
-		}
-		if reportLineHasPassSignal(line) {
-			hasPassSignal = true
-		}
-	}
-	return hasPassSignal, nil
-}
-
 var taskCheckbox = regexp.MustCompile(`^\s*(?:[-*]|\d+[.)])\s+\[([ xX])\]`)
-
-var reportFieldPattern = regexp.MustCompile(`^\s*(?:[-*]\s+)?(?:\*\*)?([A-Za-z][A-Za-z\s-]*?)(?:\*\*)?\s*:\s*(.*)$`)
-
-var reportFailedCountPatterns = []*regexp.Regexp{
-	regexp.MustCompile(`(?i)\bfailed\s*:\s*(\d+)\b`),
-	regexp.MustCompile(`(?i)\b(\d+)\s+failed\b`),
-}
-
-var reportPassValuePattern = regexp.MustCompile(`(?i)^(?:PASS|PASSED|PASS\s+WITH\s+WARNINGS|SUCCESS|SUCCESSFUL)$`)
-var reportFailValuePattern = regexp.MustCompile(`(?i)^(?:FAIL|FAILED|FAILING|FAILURE|BLOCKED|UNTESTED)$`)
-var reportCriticalGlyphStatusPattern = regexp.MustCompile(`(?i)❌\s*(?:FAIL|FAILED|FAILING|FAILURE|BLOCKED|UNTESTED)\b`)
-var reportPassNegationPattern = regexp.MustCompile(`(?i)\bnot\s+(?:pass|passed|passing|successful|complete|completed)\b|\b(?:pass|passed|success|successful|complete|completed)\s*:\s*no\b`)
-var reportPendingPattern = regexp.MustCompile(`(?i)\b(?:TODO|PENDING)\b`)
-var reportBenignValuePattern = regexp.MustCompile(`(?i)^(?:none|no|n/a|not\s+applicable|0\s+(?:failed|blockers?|critical|issues?))\.?$`)
-
-func reportLineHasBlocker(line string) bool {
-	if line == "" {
-		return false
-	}
-	if reportPassNegationPattern.MatchString(line) || reportPendingPattern.MatchString(line) {
-		return true
-	}
-	if reportCriticalGlyphStatusPattern.MatchString(line) {
-		return true
-	}
-	for _, pattern := range reportFailedCountPatterns {
-		matches := pattern.FindStringSubmatch(line)
-		if len(matches) == 2 && matches[1] != "0" {
-			return true
-		}
-	}
-	label, value, hasField := reportField(line)
-	if hasField {
-		normalizedLabel := normalizeReportToken(label)
-		trimmedValue := strings.TrimSpace(value)
-		switch normalizedLabel {
-		case "critical", "blocker", "blockers", "verificationblocker", "verificationblockers", "failure", "fail", "failed":
-			return !reportValueIsBenign(trimmedValue)
-		case "verdict", "status", "result", "verification", "finalverdict", "build", "tests":
-			if reportFailValuePattern.MatchString(stripMarkdownSignal(trimmedValue)) {
-				return true
-			}
-		}
-	}
-	trimmed := stripMarkdownSignal(line)
-	return reportFailValuePattern.MatchString(trimmed)
-}
-
-func reportLineHasPassSignal(line string) bool {
-	if line == "" {
-		return false
-	}
-	_, value, hasField := reportField(line)
-	if hasField && reportPassValuePattern.MatchString(stripMarkdownSignal(value)) {
-		return true
-	}
-	trimmed := stripMarkdownSignal(line)
-	return reportPassValuePattern.MatchString(trimmed) || strings.EqualFold(trimmed, "all checks passed") || strings.EqualFold(trimmed, "all checks passed.") || strings.EqualFold(trimmed, "ready for archive") || strings.EqualFold(trimmed, "ready for archive.")
-}
-
-func reportField(line string) (string, string, bool) {
-	matches := reportFieldPattern.FindStringSubmatch(line)
-	if len(matches) != 3 {
-		return "", "", false
-	}
-	return matches[1], matches[2], true
-}
-
-func reportValueIsBenign(value string) bool {
-	value = strings.TrimSpace(stripMarkdownSignal(value))
-	if value == "" || value == "0" {
-		return true
-	}
-	return reportBenignValuePattern.MatchString(value) || strings.EqualFold(value, "no blockers")
-}
-
-func stripMarkdownSignal(value string) string {
-	value = strings.TrimSpace(value)
-	value = strings.Trim(value, "*`_")
-	value = strings.TrimSpace(value)
-	for _, prefix := range []string{"✅", "❌", "⚠️", "⚠"} {
-		if strings.HasPrefix(value, prefix) {
-			value = strings.TrimSpace(strings.TrimPrefix(value, prefix))
-		}
-	}
-	return strings.TrimSpace(value)
-}
-
-func normalizeReportToken(value string) string {
-	var builder strings.Builder
-	for _, r := range strings.ToLower(value) {
-		if r >= 'a' && r <= 'z' {
-			builder.WriteRune(r)
-		}
-	}
-	return builder.String()
-}
 
 func countTaskProgress(tasksPath string) (TaskProgress, error) {
 	if tasksPath == "" {
@@ -1641,28 +1424,23 @@ func resolveApplyState(coreReady bool, taskProgress TaskProgress) ApplyState {
 	return ApplyReady
 }
 
-func resolveDependencies(artifacts map[string]ArtifactState, taskProgress TaskProgress, applyState ApplyState, coreReady, verifyReportCurrent, verifyReportPassing, remediationComplete bool) Dependencies {
+func resolveDependencies(artifacts map[string]ArtifactState, applyState ApplyState, coreReady bool) Dependencies {
 	dependencies := Dependencies{
-		Proposal: artifactDependency(artifacts["proposal"]),
-		Specs:    artifactDependency(artifacts["specs"]),
-		Design:   artifactDependency(artifacts["design"]),
-		Tasks:    artifactDependency(artifacts["tasks"]),
-		Apply:    DependencyBlocked,
-		Verify:   DependencyBlocked,
-		Archive:  DependencyBlocked,
+		Proposal: artifactDependency(artifacts["proposal"]), Specs: artifactDependency(artifacts["specs"]),
+		Design: artifactDependency(artifacts["design"]), Tasks: artifactDependency(artifacts["tasks"]),
+		Apply: DependencyBlocked, Verify: DependencyBlocked, Archive: DependencyBlocked,
 	}
 	if applyState == ApplyReady {
 		dependencies.Apply = DependencyReady
 	} else if applyState == ApplyAllDone {
 		dependencies.Apply = DependencyAllDone
 	}
-
-	if verifyReportCurrent && coreReady && taskProgress.AllComplete && verifyReportPassing {
-		dependencies.Verify = DependencyAllDone
-	} else if coreReady && applyState == ApplyAllDone && (!verifyReportCurrent || remediationComplete) {
+	// Verification is an optional diagnostic, not an archive certificate. Explicit
+	// archive may record incomplete work, but neither phase grants edit authority.
+	if coreReady {
 		dependencies.Verify = DependencyReady
 	}
-	if dependencies.Verify == DependencyAllDone && taskProgress.AllComplete {
+	if coreReady && applyState != ApplyBlocked {
 		dependencies.Archive = DependencyReady
 	}
 	return dependencies
@@ -1675,21 +1453,11 @@ func artifactDependency(state ArtifactState) DependencyState {
 	return DependencyBlocked
 }
 
-func resolveNextRecommended(dependencies Dependencies, applyState ApplyState, verifyReportDone bool, remediation RemediationState) string {
-	// Prefer apply over verify when there is still remaining implementation work.
+func resolveNextRecommended(dependencies Dependencies, applyState ApplyState) string {
 	if dependencies.Apply == DependencyReady {
 		return string(PhaseApply)
 	}
-	if remediation.Required {
-		return "remediate"
-	}
-	if dependencies.Verify == DependencyReady {
-		return string(PhaseVerify)
-	}
-	if applyState == ApplyAllDone && verifyReportDone && dependencies.Verify != DependencyAllDone {
-		return string(PhaseVerify)
-	}
-	if dependencies.Verify == DependencyAllDone && applyState == ApplyAllDone {
+	if applyState == ApplyAllDone && dependencies.Archive == DependencyReady {
 		return string(PhaseArchive)
 	}
 
@@ -1758,30 +1526,20 @@ func renderPhaseInstructions(status Status) PhaseInstructions {
 		"Resume from the apply-progress locator when it resolves; implement only unchecked tasks and mark each complete at the tasks locator as work completes.",
 	}
 	verifyInstructions := []string{
-		fmt.Sprintf("Change: %s", change),
-		fmt.Sprintf("State: %s", status.Dependencies.Verify),
-		"Verify implementation against proposal, specs, design, and task completion.",
-		"Run final verification only after every task is complete; apply-progress never makes final verification ready.",
-	}
-	if status.verifyRefreshReason != "" {
-		verifyInstructions = append(verifyInstructions, status.verifyRefreshReason)
-	}
-	remediateInstructions := []string{
-		fmt.Sprintf("Change: %s", change),
-		"Remediation follows ordinary SDD failed-evidence accounting.",
-		"Bind focused tests, runtime harness evidence, and rollback evidence to the exact failed evidence revision.",
-		"A bare remediation envelope or stale failed revision never completes remediation.",
-		"A passing remediation requires fresh independent verification before archive.",
+		fmt.Sprintf("Change: %s", change), fmt.Sprintf("State: %s", status.Dependencies.Verify),
+		"Verification is optional: when requested, inspect the implementation, including partial work, against the proposal, specs, design, and tasks.",
+		"Run applicable practical checks; report actual results, unfinished tasks, findings, and unavailable checks without inventing a pass.",
+		"A missing, stale, malformed, or failed report does not block archive. Verification grants no edit authority.",
 	}
 	return PhaseInstructions{
-		Apply:     applyInstructions,
-		Verify:    verifyInstructions,
-		Remediate: remediateInstructions,
+		Apply:  applyInstructions,
+		Verify: verifyInstructions,
 		Archive: []string{
 			fmt.Sprintf("Change: %s", change),
 			fmt.Sprintf("State: %s", status.Dependencies.Archive),
 			fmt.Sprintf("Verify-report locator: %s", artifactLocator(status.ArtifactPaths.VerifyReport)),
-			fmt.Sprintf("Archive only when a verify report resolves at that locator (%s) and every task is complete.", artifactReadVerb(status.ArtifactStore)),
+			"Archive records the actual task state and any available verification findings; neither a report nor task completion is an admission requirement.",
+			"Preserve historical report and task bytes. Retain edit permissions, safe copy/move and collision checks, and native delta-spec validation.",
 		},
 	}
 }
@@ -1817,7 +1575,7 @@ func nonPhaseRoutingInstructions(status Status) ([]string, bool) {
 
 func nextRecommendedPhase(next string) (Phase, bool) {
 	switch Phase(next) {
-	case PhasePropose, PhaseSpec, PhaseDesign, PhaseTasks, PhaseApply, PhaseVerify, PhaseRemediate, PhaseArchive:
+	case PhasePropose, PhaseSpec, PhaseDesign, PhaseTasks, PhaseApply, PhaseVerify, PhaseArchive:
 		return Phase(next), true
 	default:
 		return "", false
@@ -1837,8 +1595,6 @@ func dependencyForPhase(status Status, phase Phase) DependencyState {
 	case PhaseApply:
 		return status.Dependencies.Apply
 	case PhaseVerify:
-		return status.Dependencies.Verify
-	case PhaseRemediate:
 		return status.Dependencies.Verify
 	case PhaseArchive:
 		return status.Dependencies.Archive
@@ -1861,8 +1617,6 @@ func instructionsForPhase(status Status, phase Phase) []string {
 		return instructions.Apply
 	case PhaseVerify:
 		return instructions.Verify
-	case PhaseRemediate:
-		return instructions.Remediate
 	case PhaseArchive:
 		return instructions.Archive
 	default:

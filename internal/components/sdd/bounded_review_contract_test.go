@@ -731,7 +731,7 @@ func TestOpenCodeAndClaudeArchiveInstructionsDoNotGateOnReviewAuthority(t *testi
 			content := assets.MustRead(path)
 			for _, required := range []string{
 				"SDD never offers or launches RDD.",
-				"Archive reads only task completion and independent verification",
+				"an explicit archive request may close unfinished work without a verification certificate",
 			} {
 				if !strings.Contains(content, required) {
 					t.Errorf("%s missing archive non-gate rule %q", path, required)

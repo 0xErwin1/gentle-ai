@@ -44,7 +44,7 @@ Every artifact-producing phase other than the output-only `sdd-research` collect
 
 Persist to the store the orchestrator reported, using that artifact's locator. As in section B, the store is told to you; do not detect it. The write mechanisms below differ because writing a file and saving an observation are genuinely different operations, not because the agent gets to choose between them.
 
-For `verify-report`, first build exact candidate bytes and run `gentle-ai sdd-verify-validate` with authoritative requirement/scenario counts before any OpenSpec or Engram write. If the validator is unavailable or denies admission, make zero writes and leave the prior report untouched; otherwise persist only the same admitted bytes, including a valid `fail`.
+Verification reports are optional diagnostics. Persist honest results without a validator or certificate; preserve historical findings and never fabricate a pass to enable archive.
 
 ### Engram mode
 

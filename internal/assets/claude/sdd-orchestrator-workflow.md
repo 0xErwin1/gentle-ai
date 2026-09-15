@@ -122,10 +122,13 @@ When chained PRs are selected, treat `chained-pr` (registry skill `gentle-ai-cha
 
 Pass it as `chain_strategy` to `sdd-tasks` and `sdd-apply` prompts alongside `delivery_strategy`.
 
-### Dependency Graph
+#Verification is optional and may inspect partial work. Diagnostic findings never trigger the gatekeeper retry loop or gate archive. Archive records actual unfinished tasks and findings, not synthetic completion.
+
+## Dependency Graph
 
 ```text
-proposal -> specs --> tasks -> apply -> verify -> archive
+proposal -> specs --> tasks -> apply -> archive
+                                 \-> verify (optional diagnostics)
              ^
              |
            design

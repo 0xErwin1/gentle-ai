@@ -24,7 +24,6 @@ COMMANDS
                Print native SDD dispatcher routing output
   sdd-attempt grant --cwd <repo> --change <change>
                Record explicitly authorized edit roots for one change instance
-  sdd-verify-validate --input <path|-> --requirements <n> --scenarios <n>
                Validate exact verification-report bytes without persistence
   review start [--cwd <repo>] [--base-ref <ref>] [--focus <risk|resilience|readability|reliability>] [--locale <en|es>]
   review capture-result --lineage <id> --target <id> --lens <lens> --order <n> --input <review.json>
