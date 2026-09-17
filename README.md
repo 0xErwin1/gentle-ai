@@ -107,23 +107,21 @@ The cost of a fresh session is not the tokens — it is you, re-explaining the s
 
 ---
 
-### ODD — The everyday workflow
+### ODD — Keep small work small
 
-**Organic Driven Development (ODD)** is the recommended path for everyday work: explore the existing code, clarify real decisions, implement authorized changes, and run proportionate checks. Ask for an outcome, for example: "Add CSV export using the existing report filters." Small changes stay lightweight; substantial work keeps one recoverable feature document, not a mandatory phase pipeline.
+<img width="100%" src="docs/assets/diagrams/odd-cycle.svg" alt="ODD authorizes and understands a request. Read-only work ends separately; authorized work stays lightweight when small or keeps a recoverable record when substantial, then is implemented, checked, and closed. SDD remains an explicit choice." />
 
-That document, `odd/tasks/<feature-name>.md`, combines intent, scope, checklist, evidence, next step, and concise rationale for meaningful accepted changes. Engram mirrors the full document under project-scoped `odd/<feature-name>/tasks`; accepted changes revise affected tasks while preserving valid completed work. TDD follows configured mode and runner, not the mere presence of tests. RDD is a separate, user-owned review choice.
+Small changes should not need a planning pipeline, and larger work should not lose its context between sessions. **Organic Driven Development (ODD)** keeps understood changes lightweight and gives substantial, authorized work one recoverable feature document. The agent explores before changing code, checks the results, and keeps progress current so work can resume without rebuilding the plan. Formal SDD phases remain an explicit choice.
 
-**Why not SDD every day?** Its proposal/spec/design/tasks artifacts and phase handoffs add coordination that ordinary work often does not need. Choose SDD explicitly when you want those formal artifacts; size, ambiguity, and risk alone do not select it. SDD remains supported, not deprecated.
-
-**[ODD details and recovery →](docs/usage.md#organic-driven-development-odd)**
+**[Docs →](docs/usage.md#organic-driven-development-odd)**
 
 ---
 
 ### SDD — Formal phases when you choose them
 
-<img width="100%" src="docs/assets/diagrams/sdd-cycle.svg" alt="The SDD cycle in three bands. Understand: Explore, then optional Research. Plan: Proposal, Spec, Design and Tasks, each writing its own markdown file. Build: Apply writes code and tests, Verify checks the evidence against the spec, Archive merges the specs and closes the cycle." />
+<img width="100%" src="docs/assets/diagrams/sdd-cycle.svg" alt="The SDD cycle is selected only by explicit request or accepted proposal. Explore can use optional Research; Proposal, Spec, Design and Tasks create formal planning artifacts; Apply uses configured TDD. Optional Verify reports practical diagnostics, including for partial work, but does not gate Archive: a separate path leads from Apply straight to Archive when Verify is skipped. Archive records actual state and history, including unfinished work when explicitly archived. It is not shipping, approval, or RDD." />
 
-When you explicitly choose Spec-Driven Development, proposal, specification, design, and task artifacts make the plan reviewable before implementation. File-backed storage keeps them on disk; Engram-backed storage keeps them in memory. Apply follows the configured TDD mode, and Verify checks implementation evidence against the specification. TDD is also available in ODD; it does not require an SDD phase.
+When you explicitly choose Spec-Driven Development, proposal, specification, design, and task artifacts make the plan reviewable before implementation. File-backed storage keeps them on disk; Engram-backed storage keeps them in memory. Apply follows the configured TDD mode. Research and Verify are optional: Verify can diagnose partial work and report practical findings, but it is not an archive gate. Archive records the actual state and history, including unfinished work when you explicitly archive it; it does not ship or approve the change, and SDD does not invoke RDD. TDD is also available in ODD; it does not require an SDD phase.
 
 **[Docs →](docs/intended-usage.md)**
 
