@@ -119,9 +119,9 @@ Small changes should not need a planning pipeline, and larger work should not lo
 
 ### SDD — Formal phases when you choose them
 
-<img width="100%" src="docs/assets/diagrams/sdd-cycle.svg" alt="The SDD cycle in three bands. Understand: Explore, then optional Research. Plan: Proposal, Spec, Design and Tasks, each writing its own markdown file. Build: Apply writes code and tests, Verify checks the evidence against the spec, Archive merges the specs and closes the cycle." />
+<img width="100%" src="docs/assets/diagrams/sdd-cycle.svg" alt="The SDD cycle is selected only by explicit request or accepted proposal. Explore can use optional Research; Proposal, Spec, Design and Tasks create formal planning artifacts; Apply uses configured TDD. Optional Verify reports practical diagnostics, including for partial work, but does not gate Archive: a separate path leads from Apply straight to Archive when Verify is skipped. Archive records actual state and history, including unfinished work when explicitly archived. It is not shipping, approval, or RDD." />
 
-When you explicitly choose Spec-Driven Development, proposal, specification, design, and task artifacts make the plan reviewable before implementation. File-backed storage keeps them on disk; Engram-backed storage keeps them in memory. Apply follows the configured TDD mode, and Verify checks implementation evidence against the specification. TDD is also available in ODD; it does not require an SDD phase.
+When you explicitly choose Spec-Driven Development, proposal, specification, design, and task artifacts make the plan reviewable before implementation. File-backed storage keeps them on disk; Engram-backed storage keeps them in memory. Apply follows the configured TDD mode. Research and Verify are optional: Verify can diagnose partial work and report practical findings, but it is not an archive gate. Archive records the actual state and history, including unfinished work when you explicitly archive it; it does not ship or approve the change, and SDD does not invoke RDD. TDD is also available in ODD; it does not require an SDD phase.
 
 **[Docs →](docs/intended-usage.md)**
 
