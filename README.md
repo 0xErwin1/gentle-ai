@@ -107,15 +107,13 @@ The cost of a fresh session is not the tokens — it is you, re-explaining the s
 
 ---
 
-### ODD — The everyday workflow
+### ODD — Keep small work small
 
-**Organic Driven Development (ODD)** is the recommended path for everyday work: explore the existing code, clarify real decisions, implement authorized changes, and run proportionate checks. Ask for an outcome, for example: "Add CSV export using the existing report filters." Small changes stay lightweight; substantial work keeps one recoverable feature document, not a mandatory phase pipeline.
+<img width="100%" src="docs/assets/diagrams/odd-cycle.svg" alt="ODD authorizes and understands a request. Read-only work ends separately; authorized work stays lightweight when small or keeps a recoverable record when substantial, then is implemented, checked, and closed. SDD remains an explicit choice." />
 
-That document, `odd/tasks/<feature-name>.md`, combines intent, scope, checklist, evidence, next step, and concise rationale for meaningful accepted changes. Engram mirrors the full document under project-scoped `odd/<feature-name>/tasks`; accepted changes revise affected tasks while preserving valid completed work. TDD follows configured mode and runner, not the mere presence of tests. RDD is a separate, user-owned review choice.
+Small changes should not need a planning pipeline, and larger work should not lose its context between sessions. **Organic Driven Development (ODD)** keeps understood changes lightweight and gives substantial, authorized work one recoverable feature document. The agent explores before changing code, checks the results, and keeps progress current so work can resume without rebuilding the plan. Formal SDD phases remain an explicit choice.
 
-**Why not SDD every day?** Its proposal/spec/design/tasks artifacts and phase handoffs add coordination that ordinary work often does not need. Choose SDD explicitly when you want those formal artifacts; size, ambiguity, and risk alone do not select it. SDD remains supported, not deprecated.
-
-**[ODD details and recovery →](docs/usage.md#organic-driven-development-odd)**
+**[Docs →](docs/usage.md#organic-driven-development-odd)**
 
 ---
 
