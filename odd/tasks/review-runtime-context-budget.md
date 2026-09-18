@@ -108,5 +108,50 @@ Delivery: the user explicitly authorized the push on 2026-09-18, and 85cbeed3
 is pushed to fix/4680-start-runtime-context-budget (PR #4755, still draft). No
 merge and no auto-merge were performed; marking the PR ready and merging remain
 entirely the user's decision under ordinary repository policy.
+## Cortex adversarial QA (2026-09-18, after 795fd972)
+
+Two roles run against the branch tip. CI at the time: 17/17 green.
+
+FALSIFIED — "a recovered over-budget lineage keeps `review invalidate` as its
+exit" was written as an invariant and is only true on arrival. Two independent
+breaks, both proven by execution:
+
+- `RunReviewCaptureResult` is dispatched straight from runReviewCommand and
+  never consults the budget guard, whose only production call site is STATUS
+  (review_facade.go:1287). A hand-built `--input` result admits on an
+  over-budget candidate; the admitted result makes compactPristineReviewing
+  false and invalidate then refuses with "only a pristine reviewing compact
+  authority may be invalidated". That is the #4680 dead-end, on a recovered
+  lineage.
+- `review invalidate` also runs rebuildCurrentSnapshotEvidence
+  (compact_store.go:1691), so a pristine zero-result lineage whose worktree
+  drifted cannot be invalidated at all. An over-budget candidate is a large
+  change its author keeps editing, so drift is the ordinary case.
+
+Fixed in this branch: the doc comment and the test name no longer promise an
+invariant, and both now name the two conditions that lose the exit. The test is
+TestRecoveredOverBudgetLineageStopsTypedAndArrivesWithItsExitIntact.
+
+FALSIFIED, follow-up (NOT fixed here, separate surface): the START role-envelope
+floor probes synthetic minimal shapes, while the real targeted validator
+materializes evidence from the CORRECTED snapshot
+(review_provider_roles.go:307, `correction` not `snapshot`) and adds
+FixFindings/FixClassifications bounded only by ResultLimit 4<<20 against a
+200 KiB budget. Executed: the floor shape is admitted at 110408 bytes while the
+real shape is refused with lens_context_budget_exceeded. Since validator and
+refuter run only after lens results are persisted, that path reaches a
+non-pristine, un-invalidatable lineage — the #4680 dead-end relocated to the
+correction path rather than closed there. The code deliberately declares the
+refuter-Claims omission; the corrected-evidence and FixFindings gap is
+undeclared.
+
+SURVIVES: no additional unguarded authority creator beyond recover
+(reopen-results reuses the frozen snapshot, lenses and target, so it cannot
+introduce a larger candidate; repair/reclaim mint nothing). Recovery
+inheritance does not break the pristine predicate. Generation 3 still
+invalidates. snapshotsEqual holds right after recover. RuntimeContextBudget
+cannot fail open — both branches return the same constant, which also makes its
+"fails closed" comment vacuous until a per-runtime cap exists.
+
 Open follow-up, tracked separately from this issue: instrument the Pi-side assertion at gentle-pi/extensions/gentle-ai.ts:3595 read-only to identify the exact drifting projection field. Do not repair the harness from inside this source change and do not disable RDD as a workaround.
 Pre-existing environment failure TestEngramPathGuidanceDefault is a separate concern; it reproduces on untouched main.
