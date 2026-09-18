@@ -94,7 +94,7 @@ A complete retirement is safer and easier to understand than a partially disable
 - [x] **T-07 — Publish the RTK retirement pull request**
   - Route: branch/PR workflow with the accepted single-PR `size:exception` strategy.
   - Outcome: commit final progress evidence, push HEAD to fork ref `refactor/retire-rtk`, and open a PR to `Gentleman-Programming/gentle-ai:main` linked with `Closes #4763` and declared `type:breaking-change`.
-  - Checks: exact issue approval readback; no existing remote branch/PR; Conventional Commit; no co-author trailer; full PR template; documented 1,809-line size-exception rationale; target-host PR readback.
+  - Checks: exact issue approval readback; no existing remote branch/PR; Conventional Commit; no co-author trailer; full PR template; documented 1,843-line size-exception rationale; target-host PR readback.
   - Evidence: issue #4763 is OPEN with `status:approved`. The user explicitly authorized the exact evidence commit, push, and PR creation. Commit `34372216373ab6ca9ef3e59d1af62f442a0dd809` passed independent docs-only verification; exact two-commit HEAD passed four-lens native review and acknowledgement. Fork ref `refactor/retire-rtk` was pushed and matched HEAD. PR #4764 was created and exact target-host readback returned `confirmed`: https://github.com/Gentleman-Programming/gentle-ai/pull/4764 is OPEN, targets `main`, has 22 files with 175 additions and 1,668 deletions, and its body is exact. It currently has no labels.
 
 - [x] **T-08 — Apply required PR labels**
@@ -168,8 +168,8 @@ A complete retirement is safer and easier to understand than a partially disable
 
 ## Rollback Boundary
 
-Revert the atomic candidate paths listed by `git diff --name-status` plus this feature progress document. Do not alter unrelated Community Tools or CodeGraph changes.
+Use commit `110f1371b39ae24bf8207782a9bff7acb5c6ae75` as the exact rollback boundary for the product changes, and delete `odd/tasks/retire-rtk.md` to remove the progress record and its later documentation-only updates. Do not alter unrelated Community Tools or CodeGraph changes.
 
 ## Next Step
 
-Monitor CI and reviewer feedback on PR #4766. Do not merge. The only local uncommitted change is this final progress-evidence update; committing or pushing it requires separate authorization.
+Monitor CI and reviewer feedback on PR #4766. Do not merge. The worktree is clean, and all published progress evidence through the latest reviewer corrections is committed to the PR branch.
