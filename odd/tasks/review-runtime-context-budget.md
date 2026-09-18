@@ -153,5 +153,58 @@ invalidates. snapshotsEqual holds right after recover. RuntimeContextBudget
 cannot fail open — both branches return the same constant, which also makes its
 "fails closed" comment vacuous until a per-runtime cap exists.
 
+## Correction-stage dead-end closed (2026-09-18)
+
+Reviewer ruled the corrected-validator path the SAME failure class as #4680, not
+a separate concern, and required it closed before the PR leaves draft. Agreed:
+the class is defined by the end state -- admitted authority that can neither
+complete nor be invalidated -- not by which file produces it.
+
+Remedy chosen: NOT a START-time bound. Corrections are capped in LINES
+(MaxCorrectionChangedLines = 200, MaxCompactCorrectionAttempts = 1) but nothing
+caps bytes per line, and findings (Finding.Claim, ProofRefs,
+FindingEvidence.Proof) are unbounded free text carried whole into the validator
+request. A sound worst case is not derivable from existing constants; inventing
+caps would refuse candidates that fit, which is the reasoning the code already
+records for refuter Claims.
+
+Instead the refusal is classified and the existing exit is named. `review
+abandon` already accepts every non-terminal state including correction_required
+and validating (compactAbandonTerminalState, compact_abandon.go:158). The exit
+existed; it was never surfaced at the point of refusal.
+
+Shipped:
+- internal/cli/review_correction_context.go (new): read-only tri-state probe
+  that assembles the REAL validator request. Only the typed refusal yields
+  over-budget; every other failure is UNPROVEN, so an inconclusive probe never
+  strands a healthy lineage.
+- STATUS runs it in the correction/validating branch and emits a typed stop,
+  reason code `correction_context_budget_exceeded` -- deliberately NOT the lens
+  code, whose narration says no authority needs abandoning, which is the
+  opposite of this case.
+- Narration names `gentle-ai review abandon` with concrete values from
+  InspectCompactPristineAbandonment, and says so honestly when eligibility says
+  no instead of printing a command that would be refused.
+- Capture-time errors wrap through reviewPreflightRefusal so the typed code
+  survives instead of flattening to reason == nil.
+- Contract rows added to docs/review-integration.md and both shipped ledger
+  contracts; stop classification entry added (Terminal: false).
+
+Tests (all run by the parent, not just reported): OverBudgetCorrection{PlanRefusalIsClassifiedAsNotStarted,
+StopsTypedInsteadOfReofferingTargetedValidation, NamesAbandonAndTheLineageIsActuallyAbandonable,
+KeepsInvalidateRefusing} and CorrectionWithinBudgetStillOffersTargetedValidation.
+The abandon test executes the real operation rather than asserting on the
+message, and the within-budget test guards against the probe refusing healthy
+candidates.
+
+One existing test changed: internal/components/sdd/review_ledger_contract_test.go
+cost baselines, +233 chars/row for the new shipped contract row. Both the value
+and the ceiling moved by the same amount, so each row's absolute margin (3 and
+1,533) is preserved. No assertion weakened.
+
+Still NOT closed and still tracked separately: `review capture-result --input`
+never consults any budget guard, so a hand-built result still admits on an
+over-budget candidate; and `review invalidate` refuses under worktree drift.
+
 Open follow-up, tracked separately from this issue: instrument the Pi-side assertion at gentle-pi/extensions/gentle-ai.ts:3595 read-only to identify the exact drifting projection field. Do not repair the harness from inside this source change and do not disable RDD as a workaround.
 Pre-existing environment failure TestEngramPathGuidanceDefault is a separate concern; it reproduces on untouched main.
