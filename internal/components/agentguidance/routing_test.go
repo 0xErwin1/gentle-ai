@@ -588,6 +588,51 @@ func TestRenderRoutingOpensWithTheODDProtocol(t *testing.T) {
 	}
 }
 
+// TestRenderRoutingMakesDelegationMandatory pins the ODD delegation contract
+// as behavioral, not advisory: the rendered block must carry a mandatory
+// trigger table (mapping, writer, preparation, long-session backstop), a
+// per-task route declaration recorded in the feature document, and the
+// explicit statement that executing past a fired trigger inline is a routing
+// defect. Without this, the permissive "smallest useful topology" framing
+// wins and the orchestrator executes everything inline.
+func TestRenderRoutingMakesDelegationMandatory(t *testing.T) {
+	t.Parallel()
+
+	routing := capabilitymanifest.CanonicalImplementationRouting()
+
+	for _, agent := range catalog.AllAgents() {
+		t.Run(string(agent.ID), func(t *testing.T) {
+			t.Parallel()
+
+			rendered, err := RenderRouting(agent.ID)
+			if err != nil {
+				t.Fatalf("RenderRouting(%q) error = %v", agent.ID, err)
+			}
+
+			for _, want := range []string{
+				"### Mandatory Delegation Triggers",
+				"These triggers are mandatory, not advisory",
+				"stop and delegate through the runtime's subagent mechanism",
+				"executing past a fired trigger inline is a routing defect",
+				fmt.Sprintf("**Mapping trigger:** when understanding the work requires %d or more files", routing.DelegatedDirect.MappingMinUnderstandingFiles),
+				fmt.Sprintf("**Writer trigger:** when implementation touches %d or more non-trivial files", routing.DelegatedDirect.WriterMinNonTrivialFiles),
+				"**Preparation trigger:**",
+				"**Long-session backstop:**",
+				"pause and delegate the next bounded unit of work",
+				"**Route declaration:**",
+				"record the chosen route per task",
+				"so skipped delegation is observable instead of silent",
+				"These triggers never select SDD and never create SDD artifacts",
+				"honoring its mandatory delegation triggers",
+			} {
+				if !strings.Contains(rendered, want) {
+					t.Fatalf("RenderRouting(%q) is missing mandatory delegation clause %q:\n%s", agent.ID, want, rendered)
+				}
+			}
+		})
+	}
+}
+
 func TestRenderRoutingRejectsUnregisteredAgent(t *testing.T) {
 	t.Parallel()
 
