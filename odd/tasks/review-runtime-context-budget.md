@@ -83,7 +83,30 @@ The store-lock ENOTDIR flake did not recur in this run.
 
 ## Remaining/next
 Feature branch tip is now 73767522 (A 6f502172, B 0cfc423f, C1 6c09bb1f, C2 b6b11687, D 35cb42ed, E 700facc2, F af5a4c8f, G aab601c3, H 73767522 over baseline 712ebdc7). All four Cortex defects across both passes are fixed and verified.
-Still open, tracked separately: the store-lock ENOTDIR flake above, and the cosmetic RuntimeContextBudget dead branch.
-Delivery is NOT performed here: no push, no pull request, no merge, no auto-merge. Publication remains entirely the user's decision under ordinary repository policy.
+Rebased since that line was written, so the letter-keyed hashes above no longer
+resolve; the branch tip is now 85cbeed3. Commits added after it:
+
+- 812d152a fix(review): measure the role envelope START admits a candidate under
+- bf969778 fix(review): charge the frozen policy in the role envelope floor
+- 85cbeed3 test(review): prove recover keeps a non-destructive exit for
+  over-budget lineages
+
+Still open, tracked separately: the store-lock ENOTDIR failures above, the
+cosmetic RuntimeContextBudget dead branch, and the empty RuntimeAgent on a
+recovered lineage (inert today because the budget fails closed, but it means a
+recovered lineage's cap is not selected by the frozen identity).
+
+The store-lock ENOTDIR failures are not a flake and not an environment defect:
+`store_test.go` hands raw `t.TempDir()` to the root-anchored O_NOFOLLOW lock
+walk, which refuses a symlinked ancestor by design, and on Darwin $TMPDIR sits
+under /var -> /private/var. Production is unaffected because every store
+constructor resolves its directory through filepath.EvalSymlinks first. The
+remedy already exists as `canonicalTempDir(t)` in canonical_temp_dir_test.go;
+store_test.go has 20 raw call sites that never adopted it. Reproduces
+identically on untouched main.
+Delivery: the user explicitly authorized the push on 2026-09-18, and 85cbeed3
+is pushed to fix/4680-start-runtime-context-budget (PR #4755, still draft). No
+merge and no auto-merge were performed; marking the PR ready and merging remain
+entirely the user's decision under ordinary repository policy.
 Open follow-up, tracked separately from this issue: instrument the Pi-side assertion at gentle-pi/extensions/gentle-ai.ts:3595 read-only to identify the exact drifting projection field. Do not repair the harness from inside this source change and do not disable RDD as a workaround.
 Pre-existing environment failure TestEngramPathGuidanceDefault is a separate concern; it reproduces on untouched main.
