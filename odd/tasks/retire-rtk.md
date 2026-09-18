@@ -91,15 +91,33 @@ A complete retirement is safer and easier to understand than a partially disable
   - Checks: direct exact user authorization; authenticated actor identity; target-host `MAINTAIN` or `ADMIN`; existing-label discovery; exact pre-read; one atomic mutation; exact post-read.
   - Evidence: the user authorized the exact protected-label action. Authenticated actor `dnlrsls` had `MAINTAIN`. One atomic mutation returned `confirmed`; issue #4763 remains OPEN with labels `enhancement` and `status:approved`.
 
-- [ ] **T-07 — Publish the RTK retirement pull request**
+- [x] **T-07 — Publish the RTK retirement pull request**
   - Route: branch/PR workflow with the accepted single-PR `size:exception` strategy.
   - Outcome: commit final progress evidence, push HEAD to fork ref `refactor/retire-rtk`, and open a PR to `Gentleman-Programming/gentle-ai:main` linked with `Closes #4763` and declared `type:breaking-change`.
   - Checks: exact issue approval readback; no existing remote branch/PR; Conventional Commit; no co-author trailer; full PR template; documented 1,809-line size-exception rationale; target-host PR readback.
-  - Evidence: issue #4763 is OPEN with `status:approved`; no fork branch or matching PR exists. The user explicitly authorized the exact evidence commit, push, and PR creation. PR label mutations remain separately gated until the PR number exists.
+  - Evidence: issue #4763 is OPEN with `status:approved`. The user explicitly authorized the exact evidence commit, push, and PR creation. Commit `34372216373ab6ca9ef3e59d1af62f442a0dd809` passed independent docs-only verification; exact two-commit HEAD passed four-lens native review and acknowledgement. Fork ref `refactor/retire-rtk` was pushed and matched HEAD. PR #4764 was created and exact target-host readback returned `confirmed`: https://github.com/Gentleman-Programming/gentle-ai/pull/4764 is OPEN, targets `main`, has 22 files with 175 additions and 1,668 deletions, and its body is exact. It currently has no labels.
+
+- [x] **T-08 — Apply required PR labels**
+  - Route: exact-target delegated workflow actions on `github.com/Gentleman-Programming/gentle-ai#4764`.
+  - Outcome: apply exactly one ordinary type label, `type:breaking-change`, and protected `size:exception` with the documented 1,843-line atomic-retirement rationale.
+  - Checks: separate direct user authorization for each label; current target-host permission; exact pre-state and post-state; one bounded mutation per authorized action; preserve all unrelated labels/state.
+  - Evidence: the user authorized both exact actions. One ordinary mutation added `type:breaking-change` and readback returned `confirmed`. A separate protected-label mutation revalidated actor `dnlrsls` with `MAINTAIN`, added `size:exception`, and readback returned `confirmed`. PR #4764 remains OPEN with exactly those two labels.
+
+- [x] **T-09 — Rebase the conflicting PR branch**
+  - Route: authorized history maintenance on fork branch `refactor/retire-rtk` only.
+  - Outcome: rebase the two RTK retirement commits onto current upstream `main` and update the fork branch with `--force-with-lease`, without merging.
+  - Checks: explicit user authorization for rebase and force-with-lease; fetch exact upstream main; conflict diagnosis; rerun applicable focused verification; fresh native review for the rebased candidate; remote SHA readback.
+  - Evidence: the user authorized rebase and `--force-with-lease`. Rebase onto `5b82c00dce937bae079ac50c3891bf41724bd012` found four RTK-only modify/delete conflicts and one upstream stale `CommunityToolRTK` test reference. The four files were deleted, `TestOpenClawConfigDoesNotRedirectProjectToolRuntimeCwd` was corrected for CodeGraph-only selection, focused verification passed, and rebase completed as commits `110f1371…` and `c9e3bdaf…`. The runtime blocked force-with-lease twice despite explicit authorization, so the user selected the safe replacement-PR route instead.
+
+- [x] **T-10 — Publish the rebased replacement PR**
+  - Route: non-destructive replacement delivery without force-push.
+  - Outcome: push rebased HEAD to a new fork ref, open a replacement PR, close superseded PR #4764, and apply required labels to the replacement.
+  - Checks: exact rebased verification; fresh four-lens native review; remote SHA readback; exact PR body; direct authorization for close and labels; target-host post-readbacks.
+  - Evidence: fork ref `refactor/retire-rtk-rebased` points to exact HEAD `c9e3bdafc255df7bc05cc96e9814a140a04892eb`. Replacement PR #4766 is OPEN and MERGEABLE: https://github.com/Gentleman-Programming/gentle-ai/pull/4766. It targets `main`, contains 23 files with 178 additions and 1,671 deletions, and has `type:breaking-change` plus protected `size:exception`. Superseded PR #4764 is CLOSED and was never merged. Required CI remains in progress; historical pre-label failures are followed by successful label/cognitive-load checks.
 
 ## Acceptance Criteria
 
-- No active tracked or untracked repository code, test, fixture, or documentation references RTK.
+- No active product code, test, fixture, or documentation references RTK; `odd/tasks/retire-rtk.md` is intentionally excluded as progress evidence.
 - No RTK Community Tool identity, definition, UI option, installation path, synchronization path, status path, source/acquisition code, or runtime code remains.
 - Generic Community Tools infrastructure and CodeGraph behavior remain present and verified.
 - All selected focused checks pass; every skipped or unavailable check is recorded explicitly.
@@ -122,8 +140,10 @@ A complete retirement is safer and easier to understand than a partially disable
 - T-04 is complete. The user then authorized creation of a new retirement issue as the PR prerequisite.
 - T-05 and T-05A are complete: issue #4763 exists with the confirmed form body.
 - T-06 is complete: issue #4763 is OPEN with `enhancement` and protected label `status:approved`.
-- T-07 PR publication is in progress under the user's exact commit/push/create authorization.
-- No pushes, PRs, or merges have been performed yet in this resumed session.
+- T-07 is complete: fork branch `refactor/retire-rtk` matches HEAD and PR #4764 is OPEN with exact body and range.
+- T-08 is complete: PR #4764 has exactly `type:breaking-change` and `size:exception`.
+- T-09 is complete: rebase conflicts were resolved, focused and full candidate verification passed, and fresh native review approved the rebased range.
+- T-10 is complete: replacement PR #4766 is OPEN and MERGEABLE with required labels; superseded PR #4764 is CLOSED without merge.
 
 ## Verification Evidence
 
@@ -142,6 +162,9 @@ A complete retirement is safer and easier to understand than a partially disable
 - Native assessment: high risk due to the `internal/cli/run.go` process boundary; independent post-commit verifier required.
 - Independent post-commit verifier: `PASS-WITH-LIMITATION`; all 14 commands passed, HEAD and the 22-path committed range matched exactly, RTK scan was clean, and only `odd/tasks/retire-rtk.md` was modified afterward.
 - Native committed-range review: approved by risk, resilience, readability, and reliability lenses; acknowledgement consumed for lineage `review-a7f645c28ac89f24`. Informational findings `R2-dead-agent-scope` and `R4-orphaned-rtk-upgrade` did not open corrections.
+- Rebased candidate verification: `PASS-WITH-LIMITATION`; all 14 commands passed on HEAD `c9e3bdafc255df7bc05cc96e9814a140a04892eb`, 23 committed paths, no active RTK references, and only this task document modified locally. Parent readback counted 178 additions and 1,671 deletions.
+- Rebased native review: all four lenses approved lineage `review-f50b3daf09d2f0bc`; acknowledgement consumed at revision `sha256:88adf8761dbadc4e1891abb86d5d1313084c8264fe64d98995146b9fa938a330`. Informational findings did not open corrections.
+- Replacement delivery: PR #4766 exact head/base/body/range readback confirmed; `type:breaking-change` and protected `size:exception` were separately authorized and confirmed. PR #4764 closure was separately authorized and confirmed without merge.
 
 ## Rollback Boundary
 
@@ -149,4 +172,4 @@ Revert the atomic candidate paths listed by `git diff --name-status` plus this f
 
 ## Next Step
 
-Create the authorized final progress-evidence commit, push HEAD to fork ref `refactor/retire-rtk`, and open the upstream PR linked with `Closes #4763`. After exact PR readback, request separate authorization for `type:breaking-change` and protected `size:exception`; never merge.
+Monitor CI and reviewer feedback on PR #4766. Do not merge. The only local uncommitted change is this final progress-evidence update; committing or pushing it requires separate authorization.
