@@ -2,7 +2,9 @@ package cli
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -310,6 +312,65 @@ func TestReviewCaptureValidationInputSubmitsHostRunResultAndCloses(t *testing.T)
 		t.Fatalf("validation --input closure = %#v", closure)
 	}
 	assertApprovedCompactAuthorityBurned(t, store, lineage)
+}
+
+// TestReviewCaptureRefuterMaterializeRefusesCompletePromptOverRuntimeBudget
+// pins the complete-prompt half of the approved runtime input policy: the
+// evidence loop bounds raw patch bytes, but serializing the request into the
+// role prompt JSON-escapes every content byte (one raw quote character
+// doubles) and adds the instruction and result schema wrappers, so a request
+// whose raw evidence fits the budget can still produce a complete prompt over
+// the same approved cap. Materialization must refuse with the typed budget
+// refusal before any adapter is invoked, and the refusal must name the
+// split-candidate resolution.
+func TestReviewCaptureRefuterMaterializeRefusesCompletePromptOverRuntimeBudget(t *testing.T) {
+	reviewEnabledHome(t)
+	repo := initReviewCLIRepo(t)
+	// Raw patch bytes stay under the evidence budget; JSON escaping doubles
+	// every quote character, so the serialized prompt cannot fit.
+	writeReviewStartCandidate(t, repo, "runtime-budget-quotes.txt", strings.Repeat(`"`, 180_000)+"\n", 0o644)
+	started := startFacadeReview(t, repo)
+	store, err := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, started.LineageID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	record, err := store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	lens := record.State.SelectedLenses[0]
+	result := admittedReviewerResultForTest(t, repo, record, lens, 0)
+	result.Findings = []facadeFinding{{
+		ID: "R3-001", Location: "runtime-budget-quotes.txt:1", Severity: "CRITICAL", Claim: "candidate failure",
+		ProofRefs: []string{"runtime-budget-quotes.txt:1 candidate-specific proof"}, EvidenceClass: reviewtransaction.EvidenceInferential,
+		CausalDisposition: reviewtransaction.CausalBehaviorActivated,
+	}}
+	input := filepath.Join(t.TempDir(), "result.json")
+	writeReviewCLIJSON(t, input, result)
+	captureErr := RunReviewCaptureResult([]string{
+		"--cwd", repo, "--lineage", started.LineageID, "--target", record.State.InitialSnapshot.Identity,
+		"--lens", lens, "--order", "0", "--input", input,
+	}, &bytes.Buffer{})
+	var captureRefusal *reviewLensContextError
+	if captureErr != nil && (!errors.As(captureErr, &captureRefusal) || captureRefusal.Code != "lens_context_budget_exceeded") {
+		t.Fatal(captureErr)
+	}
+	updated, loadErr := store.Load()
+	if loadErr != nil {
+		t.Fatal(loadErr)
+	}
+	record = updated
+	// The closure that renders the refuter collect input materializes the
+	// refuter request too, so the capture step may already carry the refusal;
+	// the explicit materialization call must carry it regardless.
+	_, err = reviewProviderNewRefuterRequest(t.Context(), repo, store.Dir, record.State, record.State.CapturePhaseRevision)
+	var refusal *reviewLensContextError
+	if !errors.As(err, &refusal) || refusal.Code != "lens_context_budget_exceeded" {
+		t.Fatalf("complete refuter prompt over the approved runtime cap materialized without the typed budget refusal: %v", err)
+	}
+	if !strings.Contains(refusal.Error(), "split the candidate") {
+		t.Fatalf("budget refusal does not name the split-candidate resolution: %v", refusal)
+	}
 }
 
 func TestReviewCaptureRefuterRefusals(t *testing.T) {
@@ -861,5 +922,49 @@ func TestRefuterRequestCarriesTheFindingClaimText(t *testing.T) {
 	}
 	if !strings.Contains(prompt.String(), `"finding_id":"R3-001"`) || !strings.Contains(prompt.String(), `"claim":"candidate failure"`) {
 		t.Fatalf("refuter request omits the finding's claim text; the refuter can only return inconclusive:\n%s", prompt.String())
+	}
+}
+
+// START admits a candidate by proving the lens block assembles, and the lens
+// block summarizes generated paths. The refuter and the targeted validator
+// answer only findings a lens issued, and a lens is told that anything it
+// cannot see is not evidence, so no lens finding can ever cite generated
+// content. Materializing that content for them would let START admit a
+// candidate whose refuter evidence no runtime can hold: the unexecutable
+// lineage #3367 closed and #4680 reopened by a different door.
+func TestReviewProviderMaterializeEvidenceSummarizesGeneratedPaths(t *testing.T) {
+	reviewEnabledHome(t)
+	repo := initReviewCLIRepo(t)
+	writeGeneratedSummaryCandidateFixture(t, repo)
+	snapshot, err := (reviewtransaction.SnapshotBuilder{Repo: repo}).Build(context.Background(), reviewtransaction.Target{
+		Kind: reviewtransaction.TargetCurrentChanges, IntendedUntracked: []string{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	evidence, err := reviewProviderMaterializeEvidence(context.Background(), repo, "claude-code", snapshot)
+	if err != nil {
+		t.Fatalf("materialize evidence: %v", err)
+	}
+	byPath := make(map[string]string, len(evidence))
+	for _, item := range evidence {
+		byPath[item.Path] = item.Content
+	}
+	for _, generated := range []string{"go.sum", "web/package-lock.json", "internal/render/testdata/golden/rendered.golden"} {
+		content, ok := byPath[generated]
+		if !ok {
+			t.Fatalf("generated path %q is missing from refuter evidence", generated)
+		}
+		var summary map[string]any
+		if err := json.Unmarshal([]byte(content), &summary); err != nil {
+			t.Fatalf("generated path %q carries content hunks instead of a metadata summary: %v\n%s", generated, err, content)
+		}
+		if summary["generated"] != true || summary["content_omitted"] != true {
+			t.Fatalf("generated path %q summary is not marked generated and omitted: %s", generated, content)
+		}
+	}
+	authored, ok := byPath["internal/auth/token.go"]
+	if !ok || !strings.Contains(authored, "+func Token() string") {
+		t.Fatalf("authored path lost its complete patch: %q", authored)
 	}
 }
