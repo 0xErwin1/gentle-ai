@@ -518,6 +518,87 @@ func main() {
 	}
 }
 
+// TestRunCatalogCommandDeadlineNotBlockedByEscapedDescendant verifies that when
+// a descendant escapes the child's Unix process group (via its own pgid) and
+// inherits stdout, cancellation of the direct child still bounds discovery
+// within the context deadline instead of blocking indefinitely on the escaped
+// descendant's open pipe.
+func TestRunCatalogCommandDeadlineNotBlockedByEscapedDescendant(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("requires POSIX process groups to test escaping the group")
+	}
+	dir := t.TempDir()
+	helper := filepath.Join(dir, "escaped-descendant-helper")
+	source := filepath.Join(dir, "main.go")
+	src := `package main
+
+import (
+	"fmt"
+	"os"
+	"os/exec"
+	"syscall"
+	"time"
+)
+
+func main() {
+	descendant := exec.Command("sleep", "5")
+	descendant.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	descendant.Stdout = os.Stdout
+	descendant.Stderr = os.Stderr
+	_ = descendant.Start()
+	fmt.Println("custom/model")
+	fmt.Println("{\"id\":\"model\",\"name\":\"Model\",\"capabilities\":{\"toolcall\":true}}")
+	time.Sleep(25 * time.Millisecond)
+}
+`
+	if err := os.WriteFile(source, []byte(src), 0o600); err != nil {
+		t.Fatalf("write helper: %v", err)
+	}
+	if err := exec.Command("go", "build", "-o", helper, source).Run(); err != nil {
+		t.Fatalf("build helper: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+	r, err := runCatalogCommand(ctx, Command{Path: helper})
+	if err != nil {
+		t.Fatalf("runCatalogCommand() error = %v", err)
+	}
+	started := time.Now()
+	_, _ = io.ReadAll(r)
+	if closer, ok := r.(io.Closer); ok {
+		_ = closer.Close()
+	}
+	if elapsed := time.Since(started); elapsed > 2*time.Second {
+		t.Fatalf("discovery stayed blocked for %v; want bounded by the 300ms deadline", elapsed)
+	}
+}
+
+func TestBoundedPipeBufferPreservesNonEOFReadFailure(t *testing.T) {
+	buf := newBoundedPipeBuffer(1024, nil)
+	buf.append([]byte("hello world"))
+	simulatedErr := errors.New("simulated pipe read failure")
+	buf.finish(simulatedErr)
+
+	chunk := make([]byte, 5)
+	n, err := buf.Read(chunk)
+	if err != nil || n != 5 || string(chunk[:n]) != "hello" {
+		t.Fatalf("Read chunk 1 = (%d, %v, %q), want (5, nil, %q)", n, err, string(chunk[:n]), "hello")
+	}
+
+	rest := make([]byte, 100)
+	n, err = buf.Read(rest)
+	if err != nil || n != 6 || string(rest[:n]) != " world" {
+		t.Fatalf("Read chunk 2 = (%d, %v, %q), want (6, nil, %q)", n, err, string(rest[:n]), " world")
+	}
+
+	// Buffer drained; next read must return the non-EOF readErr.
+	n, err = buf.Read(rest)
+	if !errors.Is(err, simulatedErr) {
+		t.Fatalf("Read after drain err = %v, want %v", err, simulatedErr)
+	}
+}
+
 // TestProcessStreamReaderWaitErrorJoinsStdoutDrain pins the os/exec pipe
 // lifecycle contract: when parsing fails early while the child is still alive
 // and writing, WaitError must join the stdout drain before reaping the child

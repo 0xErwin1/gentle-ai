@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"io/fs"
 	"os"
 	"os/exec"
 	"sort"
@@ -16,15 +17,20 @@ import (
 
 const (
 	catalogTimeout   = 15 * time.Second
+	catalogWaitDelay = 250 * time.Millisecond
 	maxCatalogOutput = 16 << 20
 )
 
 // Command describes the bounded OpenCode command used for runtime discovery.
 type Command struct {
-	Path string
-	Args []string
-	Dir  string
+	Path        string
+	Args        []string
+	Dir         string
+	OutputLimit int
+	Env         []string
 }
+
+type CommandOutput struct{ Stdout, Stderr []byte }
 
 type CommandRunner func(context.Context, Command) (io.Reader, error)
 
@@ -433,6 +439,7 @@ func runCatalogCommand(ctx context.Context, command Command) (io.Reader, error) 
 	ctx, cancel := context.WithCancel(ctx)
 	cmd := exec.CommandContext(ctx, command.Path, command.Args...)
 	cmd.Dir = command.Dir
+	cmd.WaitDelay = catalogWaitDelay
 	afterStart, release := configureProcessGroup(cmd)
 
 	stdoutPipe, err := cmd.StdoutPipe()
@@ -466,12 +473,13 @@ func runCatalogCommand(ctx context.Context, command Command) (io.Reader, error) 
 
 	// Drain stdout at full speed into the bounded buffer. The drain owns
 	// stdoutDone: it is closed after the read loop ends so closeAndReap can
-	// join the drain before calling cmd.Wait (os/exec forbids Wait while a
-	// pipe read is in flight). The deferred close also runs on the overflow
-	// path, where cancel drives the pipe to EOF and the loop exits.
+	// join the drain after cmd.Wait reaps the process and closes descriptors.
+	// The deferred close also runs on the overflow path, where cancel drives
+	// the pipe to EOF and the loop exits.
 	go func() {
 		defer close(stdoutDone)
 		var chunk [8192]byte
+		var drainErr error
 		for {
 			n, readErr := stdoutPipe.Read(chunk[:])
 			if n > 0 {
@@ -481,10 +489,11 @@ func runCatalogCommand(ctx context.Context, command Command) (io.Reader, error) 
 				}
 			}
 			if readErr != nil {
+				drainErr = readErr
 				break
 			}
 		}
-		stream.finish()
+		stream.finish(drainErr)
 	}()
 
 	// Drain stderr concurrently so a chatty child can never fill its pipe and
@@ -495,9 +504,25 @@ func runCatalogCommand(ctx context.Context, command Command) (io.Reader, error) 
 		close(stderrDone)
 	}()
 
+	// Monitor context cancellation. When the context is done (e.g. deadline
+	// exceeded), give the dying child a brief bounded window to flush, then
+	// close the pipe descriptors so an escaped descendant holding stdout/stderr
+	// cannot keep discovery blocked indefinitely.
+	go func() {
+		select {
+		case <-ctx.Done():
+			time.Sleep(catalogWaitDelay)
+			_ = stdoutPipe.Close()
+			_ = stderrPipe.Close()
+		case <-stdoutDone:
+		}
+	}()
+
 	return &processStreamReader{
 		cmd:        cmd,
 		stream:     stream,
+		stdoutPipe: stdoutPipe,
+		stderrPipe: stderrPipe,
 		stderrDone: stderrDone,
 		stdoutDone: stdoutDone,
 		release:    release,
@@ -517,6 +542,7 @@ type boundedPipeBuffer struct {
 	overflow bool
 	limit    int64
 	cancel   context.CancelFunc
+	readErr  error
 }
 
 func newBoundedPipeBuffer(limit int64, cancel context.CancelFunc) *boundedPipeBuffer {
@@ -543,10 +569,14 @@ func (b *boundedPipeBuffer) append(data []byte) bool {
 	return false
 }
 
-// finish marks the drain as complete so blocked readers observe EOF.
-func (b *boundedPipeBuffer) finish() {
+// finish marks the drain as complete and records any non-EOF read error that
+// terminated the drain, so blocked and future readers observe it.
+func (b *boundedPipeBuffer) finish(readErr error) {
 	b.mu.Lock()
 	b.finished = true
+	if readErr != nil && !errors.Is(readErr, io.EOF) && !errors.Is(readErr, fs.ErrClosed) && !errors.Is(readErr, io.ErrClosedPipe) {
+		b.readErr = readErr
+	}
 	b.cond.Broadcast()
 	b.mu.Unlock()
 }
@@ -568,6 +598,12 @@ func (b *boundedPipeBuffer) Read(p []byte) (int, error) {
 	n := copy(p, b.buf[b.pos:])
 	b.pos += int64(n)
 	if b.pos == int64(len(b.buf)) && b.finished {
+		if b.readErr != nil {
+			if n > 0 {
+				return n, nil
+			}
+			return 0, b.readErr
+		}
 		if n == 0 {
 			return 0, io.EOF
 		}
@@ -582,6 +618,8 @@ func (b *boundedPipeBuffer) Read(p []byte) (int, error) {
 type processStreamReader struct {
 	cmd        *exec.Cmd
 	stream     *boundedPipeBuffer
+	stdoutPipe io.Closer
+	stderrPipe io.Closer
 	stderrDone chan struct{}
 	stdoutDone chan struct{}
 	// release frees platform process-tree state (the Windows Job Object
@@ -629,38 +667,32 @@ func (p *processStreamReader) WaitError() error {
 	return p.waitErr
 }
 
-// closeAndReap performs the idempotent shutdown sequence: join the stdout
-// drain, reap the child, and only afterwards wait for the stderr drain.
-// Joining stdoutDone before cmd.Wait honors the os/exec contract — "Wait will
-// close the pipe after seeing the command exit, so it is incorrect to call
-// Wait before all reads from the pipe have completed" — which an early parse
-// failure (DiscoverCatalogWithRunner → WaitError) would otherwise violate by
-// reaping while the drain is still blocked in Read. Cancellation is not
-// called here: the context that owns the child (Close or the deadline) drives
-// it, and cancelling before Wait would make Wait report context cancellation
-// instead of the child's real exit status.
+// closeAndReap performs the idempotent shutdown sequence: reap the child with
+// cmd.Wait, which closes the parent's pipe file descriptors once the direct
+// child exits (bounded by cmd.WaitDelay), thereby unblocking any background
+// pipe drains even if an escaped descendant retained inherited pipes. Then it
+// joins stdoutDone and stderrDone and releases platform job/group state.
 //
-// Concurrency note: the consumer side (Read, Close, WaitError) is expected to
-// run on a single goroutine, as DiscoverCatalogWithRunner does. The stdout
-// and stderr drain goroutines synchronize through boundedPipeBuffer's lock
-// and stdoutDone/stderrDone; they never touch p.closed or p.waitErr.
-//
-// Deadlock note: closeAndReap is only reachable on a reader whose stdout
-// drain goroutine was started (runCatalogCommand always starts it after a
-// successful Start), and that goroutine always closes stdoutDone — on natural
-// EOF, on read error, and on overflow (where cancel drives the pipe to EOF).
-// Waiting here is therefore bounded by the child's lifetime, exactly like the
-// cmd.Wait below it. Nil channels are skipped defensively so a zero-value
-// reader fails closed instead of hanging.
+// Concurrency note: the consumer side (Read, Close, WaitError) runs on a single
+// goroutine. The stdout and stderr drain goroutines synchronize through
+// boundedPipeBuffer's lock and stdoutDone/stderrDone; they never touch p.closed
+// or p.waitErr. Nil channels are skipped defensively so a zero-value reader
+// fails closed instead of hanging.
 func (p *processStreamReader) closeAndReap() {
 	if p.closed {
 		return
 	}
 	p.closed = true
+	if p.stdoutPipe != nil {
+		_ = p.stdoutPipe.Close()
+	}
+	if p.stderrPipe != nil {
+		_ = p.stderrPipe.Close()
+	}
+	p.waitErr = p.cmd.Wait()
 	if p.stdoutDone != nil {
 		<-p.stdoutDone
 	}
-	p.waitErr = p.cmd.Wait()
 	if p.stderrDone != nil {
 		<-p.stderrDone
 	}

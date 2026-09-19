@@ -5,7 +5,6 @@ package opencode
 import (
 	"os/exec"
 	"sync"
-	"time"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
@@ -28,8 +27,11 @@ import (
 // cancellation degrades to killing the direct child. cmd.WaitDelay stays set
 // regardless, so Wait cannot hang indefinitely on inherited pipe handles even
 // if a descendant escapes the job.
+var testHookCreateJobObject = windows.CreateJobObject
+
 func configureProcessGroup(cmd *exec.Cmd) (afterStart func(), release func()) {
-	job, err := windows.CreateJobObject(nil, nil)
+	cmd.WaitDelay = catalogWaitDelay
+	job, err := testHookCreateJobObject(nil, nil)
 	if err != nil {
 		return nil, nil
 	}
@@ -39,8 +41,6 @@ func configureProcessGroup(cmd *exec.Cmd) (afterStart func(), release func()) {
 		_ = windows.CloseHandle(job)
 		return nil, nil
 	}
-
-	cmd.WaitDelay = 5 * time.Second
 	cmd.Cancel = func() error {
 		_ = windows.TerminateJobObject(job, 1)
 		if cmd.Process != nil {
