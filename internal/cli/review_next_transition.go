@@ -36,7 +36,7 @@ type ReviewNextTransition struct {
 	Execute           *ReviewTransitionExecution               `json:"execute,omitempty"`
 	Collect           *ReviewTransitionCollection              `json:"collect,omitempty"`
 	CorrectionRequest *reviewtransaction.CorrectionPlanRequest `json:"correction_request,omitempty"`
-	Continuation      *ReviewManagedAssetsContinuation         `json:"continuation,omitempty"`
+	Continuation      *ReviewStopContinuation                  `json:"continuation,omitempty"`
 	// UnachievableLensSlots is a pointer-to-slice, exactly like
 	// ReviewTransitionExecution.SelectorArguments, so ReviewNextTransition
 	// stays a comparable struct (== / != against a zero value) for the
@@ -309,6 +309,20 @@ func resolveReviewNextTransition(status ReviewTargetStatusResult, selectedLenses
 			return reviewStopTransition("corrupted_or_unverifiable_authority")
 		}
 		return ReviewNextTransition{Kind: reviewNextTransitionExecute, ReasonCode: "approved_acknowledgement_required", Execute: reviewApprovedAcknowledgementTransition(status.repositoryRoot, acknowledgement)}
+	}
+	// The correction-stage gate follows the captured_artifacts_unverifiable
+	// precedent below, which already extends past reviewing with
+	// `|| input.ValidationRequest != nil`, and it is deliberately ordered
+	// AHEAD of it. The same deterministic budget refusal also surfaces as an
+	// unreadable validator slot on this path, and reporting it as unverifiable
+	// captured evidence would send the operator to inspect a store that is
+	// perfectly intact. The refusal is about what cannot be assembled, and its
+	// continuation is a release rather than a smaller candidate, so it carries
+	// its own code (#4680).
+	if input.CorrectionContextBudgetExceeded &&
+		(status.Authority.State == reviewtransaction.StateCorrectionRequired ||
+			status.Authority.State == reviewtransaction.StateValidating || input.ValidationRequest != nil) {
+		return reviewCorrectionContextBudgetStopTransition(status.repositoryRoot, input.RuntimeAgent, input.CorrectionReleaseEligibility)
 	}
 	if artifactErr != nil && (status.Authority.State == reviewtransaction.StateReviewing || input.ValidationRequest != nil) {
 		return reviewStopTransition("captured_artifacts_unverifiable")
@@ -819,6 +833,13 @@ type reviewNextTransitionInput struct {
 	RDDMode                                        reviewtransaction.RDDModeStatus
 	RDDModeResolved                                bool
 	LensContextBudgetExceeded                      bool
+	CorrectionContextBudgetExceeded                bool
+	// CorrectionReleaseEligibility is the read-only abandonment prediction
+	// taken beside the correction budget probe, so the stop it produces can
+	// name the release concretely instead of leaving a caller to recover it
+	// from prose. Nil means the prediction was never taken or failed, and the
+	// stop then names nothing rather than a command that may be refused.
+	CorrectionReleaseEligibility *reviewtransaction.CompactAbandonEligibility
 	// UnachievableLensAttempts carries every bound host declaration the
 	// active reviewing phase currently holds (issue #3442), so
 	// reviewMissingCaptureTransition can stop re-offering a slot a host
@@ -1360,6 +1381,20 @@ func reviewManagedAssetsStopTransition(agent model.AgentID, staleAssets []string
 	return transition
 }
 
+// reviewCorrectionContextBudgetStopTransition follows the managed-assets
+// precedent above for the one other stop that has a runnable follow-up: the
+// release this refusal requires travels with the stop, because the shipped Pi
+// ledger row points at the stop's continuation and the Pi facade contract may
+// not name the raw `gentle-ai review ` route itself.
+func reviewCorrectionContextBudgetStopTransition(repo string, agent model.AgentID, eligibility *reviewtransaction.CompactAbandonEligibility) ReviewNextTransition {
+	// The literal mirrors reviewManagedAssetsStopTransition: the shipped
+	// stop-reason registries are proven against the codes this file emits
+	// literally.
+	transition := reviewStopTransition("correction_context_budget_exceeded")
+	transition.Continuation = reviewCorrectionReleaseContinuation(repo, string(agent), eligibility)
+	return transition
+}
+
 func reviewReasonDescription(reason string) string {
 	switch reason {
 	case "fresh_target_ready":
@@ -1384,6 +1419,8 @@ func reviewReasonDescription(reason string) string {
 		return "Committed base-diff has no paths; empty-root bootstrap is required"
 	case "lens_context_budget_exceeded":
 		return "Frozen reviewer context exceeds the native evidence budget"
+	case reviewCorrectionContextBudgetCode:
+		return "Correction evidence and findings exceed the native context budget"
 	case "corrupted_or_unverifiable_authority":
 		return "Review authority is corrupted or unverifiable"
 	case "missing_authority_binding":

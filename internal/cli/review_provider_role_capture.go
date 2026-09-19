@@ -199,7 +199,7 @@ func RunReviewCaptureRefuter(args []string, stdout io.Writer) error {
 	}
 	request, err := reviewProviderNewRefuterRequest(ctx, binding.root, store.Dir, state, state.CapturePhaseRevision)
 	if err != nil {
-		return reviewPreflightError(err)
+		return reviewProviderCaptureBudgetRefusal(err)
 	}
 	if binding.materialize {
 		// Raw bytes: no JSON envelope, no trailing newline, nothing captured.
@@ -273,7 +273,7 @@ func RunReviewCaptureValidation(args []string, stdout io.Writer) error {
 	}
 	request, err := reviewProviderNewTargetedValidatorRequest(ctx, binding.root, state, state.CapturePhaseRevision, correction)
 	if err != nil {
-		return reviewPreflightError(err)
+		return reviewCorrectionContextBudgetRefusal(ctx, binding.root, state.LineageID, err)
 	}
 	if request.ValidationRequest.CorrectionTargetIdentity != binding.target {
 		return reviewPreflightRefusal(reviewPreflightCaptureBindingMismatchReason, errors.New("review capture-validation target does not match the frozen correction target identity; refresh the binding with gentle-ai review status --cwd <repo> --contract gentle-ai.review-integration/v2 --next-transition"))
@@ -342,7 +342,7 @@ func reviewProviderCaptureRefuterWithOneCorrection(ctx context.Context, binding 
 	}
 	continuation := func() string { return reviewProviderCaptureContinuation(binding.runtime, state.LineageID) }
 
-	captured, raw, err := reviewProviderCaptureRetry(ctx, adapter, request.Invocation, admit, preserve, continuation, nil)
+	captured, raw, err := reviewProviderCaptureRetry(ctx, adapter, request.Invocation, state.RuntimeAgent, admit, preserve, continuation, nil)
 	if err != nil {
 		var refused *reviewProviderCaptureRefusedError
 		if errors.As(err, &refused) {
@@ -385,7 +385,7 @@ func reviewProviderCaptureValidationWithOneCorrection(ctx context.Context, bindi
 	continuation := func() string { return reviewProviderCaptureContinuation(binding.runtime, state.LineageID) }
 	retryable := func(err error) bool { return !errors.Is(err, errReviewTargetedValidationInconclusive) }
 
-	captured, raw, err := reviewProviderCaptureRetry(ctx, adapter, request.Invocation, admit, preserve, continuation, retryable)
+	captured, raw, err := reviewProviderCaptureRetry(ctx, adapter, request.Invocation, state.RuntimeAgent, admit, preserve, continuation, retryable)
 	if err != nil {
 		if errors.Is(err, errReviewTargetedValidationInconclusive) {
 			if _, ledgerErr := store.RecordInconclusiveTargetedValidatorAttempt(ctx, request.ValidationRequest, facadePayloadHash(raw)); ledgerErr != nil {
