@@ -7,6 +7,7 @@ import (
 	"io"
 	"strings"
 
+	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/reviewtransaction"
 )
 
@@ -31,25 +32,67 @@ type ReviewAssessmentReason struct {
 
 // ReviewAssessmentCandidate names the exact candidate the assessment was
 // computed over, so a caller can tell a current-changes candidate from a named
-// base comparison without re-deriving it.
+// base comparison without re-deriving it. Consumed reports whether this exact
+// candidate's terminal review authority was already acknowledged -- the same
+// evidence STATUS itself consults (reviewtransaction.CompactTargetConsumed)
+// before ever offering a fresh START for the identical identity -- so a host
+// never re-derives review_due from a tier that a burned lineage has already
+// settled.
 type ReviewAssessmentCandidate struct {
-	Kind    string `json:"kind"`
-	BaseRef string `json:"base_ref,omitempty"`
+	Kind     string `json:"kind"`
+	BaseRef  string `json:"base_ref,omitempty"`
+	Consumed bool   `json:"consumed"`
 }
+
+// ReviewAssessmentNextTransition is the exact, literally runnable
+// `gentle-ai review status ... --next-transition` preflight continuation for
+// a review_due=true candidate, rendered with the same ReviewTransitionArgument
+// rows and builder conventions review_next_transition.go uses for every other
+// negotiated continuation this product emits. Command is "gentle-ai " plus
+// every argument's token joined by single spaces, so a caller never
+// hand-assembles the invocation from prose (issue: orchestrators skipped the
+// RDD preflight after a slice closed because the ODD rule was prose only).
+type ReviewAssessmentNextTransition struct {
+	Operation string                     `json:"operation"`
+	Command   string                     `json:"command"`
+	Arguments []ReviewTransitionArgument `json:"arguments"`
+}
+
+// Public review_due_reason vocabulary. Exactly one of these accompanies every
+// review_due value, in the precedence order reviewAssessDue evaluates: a
+// consumed candidate always reports already_reviewed regardless of its risk
+// tier, high risk always reports true, a medium candidate reports true only
+// once its changed_lines reaches the same reviewtransaction.LargeChangeLines
+// slice boundary the ODD delivery-budget rule already names, and passive
+// never needs review at all.
+const (
+	reviewAssessDueReasonHighRisk           = "high_risk"
+	reviewAssessDueReasonSliceBudgetReached = "slice_budget_reached"
+	reviewAssessDueReasonPassive            = "passive"
+	reviewAssessDueReasonUnderBudget        = "under_budget"
+	reviewAssessDueReasonAlreadyReviewed    = "already_reviewed"
+)
 
 // ReviewAssessmentResult is the complete gentle-ai.review-assessment/v1
 // envelope. Risk is the public vocabulary: "passive" is exactly the tier
 // reviewtransaction.RiskLow names -- the same zero-lens, structural-readback
 // tier START selects for it -- and "medium"/"high" are unchanged so this
 // projection can never disagree with START's own classification of the same
-// candidate.
+// candidate. ReviewDue and ReviewDueReason turn that tier into the one
+// consequence orchestrators actually need (issue: the ~400-line ODD slice
+// rule was prose only, and it was skipped in practice); NextTransition is the
+// literal preflight command to run when ReviewDue is true, and is absent
+// otherwise.
 type ReviewAssessmentResult struct {
-	Schema       string                    `json:"schema"`
-	Risk         string                    `json:"risk"`
-	Reasons      []ReviewAssessmentReason  `json:"reasons"`
-	ChangedPaths int                       `json:"changed_paths"`
-	ChangedLines int                       `json:"changed_lines"`
-	Candidate    ReviewAssessmentCandidate `json:"candidate"`
+	Schema          string                          `json:"schema"`
+	Risk            string                          `json:"risk"`
+	Reasons         []ReviewAssessmentReason        `json:"reasons"`
+	ChangedPaths    int                             `json:"changed_paths"`
+	ChangedLines    int                             `json:"changed_lines"`
+	Candidate       ReviewAssessmentCandidate       `json:"candidate"`
+	ReviewDue       bool                            `json:"review_due"`
+	ReviewDueReason string                          `json:"review_due_reason"`
+	NextTransition  *ReviewAssessmentNextTransition `json:"next_transition,omitempty"`
 }
 
 // reviewAssessPublicRisk maps the internal risk tier to the public
@@ -91,6 +134,63 @@ func reviewAssessmentReasons(reasons []reviewtransaction.RiskReason) []ReviewAss
 	return public
 }
 
+// reviewAssessDue derives review_due and its reason from the same evidence
+// START itself never disagrees with: whether this exact candidate identity
+// was already acknowledged, and the public risk tier reviewAssessPublicRisk
+// already computed. Order matters and is deliberate: a consumed candidate
+// reports already_reviewed even when its content would otherwise classify as
+// high or over-budget medium, because the terminal authority already settled
+// it and a fresh START for the identical identity would only replay the same
+// acknowledgement STATUS itself would offer.
+func reviewAssessDue(consumed bool, publicRisk string, changedLines int) (bool, string) {
+	switch {
+	case consumed:
+		return false, reviewAssessDueReasonAlreadyReviewed
+	case publicRisk == "high":
+		return true, reviewAssessDueReasonHighRisk
+	case publicRisk == "medium" && changedLines >= reviewtransaction.LargeChangeLines:
+		return true, reviewAssessDueReasonSliceBudgetReached
+	case publicRisk == "medium":
+		return false, reviewAssessDueReasonUnderBudget
+	default:
+		return false, reviewAssessDueReasonPassive
+	}
+}
+
+// reviewAssessNextTransitionFor renders the exact `review status
+// --next-transition` preflight continuation for a review_due=true candidate.
+// Argument order is fixed: --cwd, --contract, the optional --agent the caller
+// declared, --next-transition, and -- only for a named base comparison -- the
+// caller's own --base-ref echoed verbatim plus --committed-only. A
+// current-changes candidate (no --base-ref) omits the selector pair entirely;
+// the preflight STATUS this continuation runs collects the current-changes
+// scope itself. root is the absolute repository root review assess already
+// resolved (reviewtransaction.PrepareReviewRepositoryRoot), never the raw
+// --cwd the caller passed, so the printed command runs unchanged from any
+// working directory.
+func reviewAssessNextTransitionFor(root string, runtime model.AgentID, baseRef string) *ReviewAssessmentNextTransition {
+	arguments := []ReviewTransitionArgument{
+		{Name: "cwd", Value: root},
+		{Name: "contract", Value: ReviewIntegrationContractV2},
+	}
+	if runtime != "" {
+		arguments = append(arguments, ReviewTransitionArgument{Name: "agent", Value: string(runtime)})
+	}
+	arguments = append(arguments, ReviewTransitionArgument{Name: "next-transition", Value: "true"})
+	if baseRef != "" {
+		arguments = append(arguments,
+			ReviewTransitionArgument{Name: "base-ref", Value: baseRef},
+			ReviewTransitionArgument{Name: "committed-only", Value: "true"},
+		)
+	}
+	tokenized := reviewTokenizedTransitionArguments(arguments)
+	return &ReviewAssessmentNextTransition{
+		Operation: "review.status",
+		Command:   reviewTransitionCommandLine("review.status", tokenized),
+		Arguments: tokenized,
+	}
+}
+
 // RunReviewAssess is the read-only `gentle-ai review assess` command. It
 // builds the exact same candidate review start would (current changes, or a
 // named --base-ref comparison), runs the shared risk assessment, and prints
@@ -111,6 +211,7 @@ func RunReviewAssess(args []string, stdout io.Writer) error {
 	cwd := flags.String("cwd", ".", "repository path")
 	baseRef := flags.String("base-ref", "", "optional base revision for an immutable base-to-HEAD assessment")
 	committedOnly := flags.Bool("committed-only", false, "acknowledge that --base-ref excludes dirty tracked changes")
+	agent := flags.String("agent", "", "optional generated active runtime identity to carry on the next_transition preflight")
 	jsonOutput := flags.Bool("json", false, "print the gentle-ai.review-assessment/v1 envelope as JSON instead of human-readable text")
 	untrackedScope := reviewSingleValueFlag{}
 	intendedUntracked := reviewRepeatedPathFlag{}
@@ -126,6 +227,20 @@ func RunReviewAssess(args []string, stdout io.Writer) error {
 	}
 	if flags.NArg() != 0 {
 		return reviewPreflightError(fmt.Errorf("unexpected review assess argument %q; run `gentle-ai review assess --help` for the closed command form", flags.Arg(0)))
+	}
+
+	// The declared runtime identity is validated exactly as `review status`
+	// validates its own --agent (reviewRuntimeWithImmutableTransport), so an
+	// unsupported transport refuses the same way here before any repository
+	// work: assess is read-only, but the runtime it will hand to
+	// next_transition must still be one review status itself would accept.
+	var runtimeAgent model.AgentID
+	if strings.TrimSpace(*agent) != "" {
+		var runtimeErr error
+		runtimeAgent, runtimeErr = reviewRuntimeWithImmutableTransport(*agent)
+		if runtimeErr != nil {
+			return reviewPreflightRefusal(reviewImmutableTransportUnsupportedReason, runtimeErr)
+		}
 	}
 
 	root, err := reviewtransaction.PrepareReviewRepositoryRoot(ctx, *cwd)
@@ -181,10 +296,27 @@ func RunReviewAssess(args []string, stdout io.Writer) error {
 		return err
 	}
 
+	// Computed the same way STATUS itself computes it, so a lineage STATUS
+	// would already report consumed can never disagree with what assess
+	// reports here (reviewtransaction.CompactTargetConsumed never inverts a
+	// tombstone; it matches by identity re-derivation only).
+	consumed, err := reviewtransaction.CompactTargetConsumed(ctx, root, snapshot.Identity)
+	if err != nil {
+		return fmt.Errorf("review assess could not read terminal consumption evidence; retry with `gentle-ai review assess --help`: %w", err)
+	}
+	reviewDue, reviewDueReason := reviewAssessDue(consumed, publicRisk, assessment.ChangedLines)
+	var nextTransition *ReviewAssessmentNextTransition
+	if reviewDue {
+		nextTransition = reviewAssessNextTransitionFor(root, runtimeAgent, trimmedBaseRef)
+	}
+
 	result := ReviewAssessmentResult{
 		Schema: ReviewAssessmentSchema, Risk: publicRisk, Reasons: reviewAssessmentReasons(assessment.Reasons),
 		ChangedPaths: len(snapshot.Paths), ChangedLines: assessment.ChangedLines,
-		Candidate: ReviewAssessmentCandidate{Kind: string(snapshot.Kind), BaseRef: trimmedBaseRef},
+		Candidate:       ReviewAssessmentCandidate{Kind: string(snapshot.Kind), BaseRef: trimmedBaseRef, Consumed: consumed},
+		ReviewDue:       reviewDue,
+		ReviewDueReason: reviewDueReason,
+		NextTransition:  nextTransition,
 	}
 
 	if *jsonOutput {
@@ -202,6 +334,17 @@ func writeReviewAssessmentHuman(stdout io.Writer, result ReviewAssessmentResult)
 	}
 	if _, err := fmt.Fprintf(stdout, "Risk: %s\nCandidate: %s\nChanged paths: %d\nChanged lines: %d\n",
 		result.Risk, candidate, result.ChangedPaths, result.ChangedLines); err != nil {
+		return err
+	}
+	due := "no"
+	if result.ReviewDue {
+		due = "yes"
+	}
+	dueLine := fmt.Sprintf("review due: %s (%s)", due, result.ReviewDueReason)
+	if result.NextTransition != nil {
+		dueLine += " -> " + result.NextTransition.Command
+	}
+	if _, err := fmt.Fprintln(stdout, dueLine); err != nil {
 		return err
 	}
 	if len(result.Reasons) == 0 {
