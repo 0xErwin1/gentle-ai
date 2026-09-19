@@ -282,20 +282,22 @@ func TestRenderRoutingClosesEachTaskWithAWorkUnitCommitAndReviewsIt(t *testing.T
 		}},
 		{"assess each commit against the last reviewed boundary", []string{
 			"Run applicable functional checks per task, not a review cycle per TODO checkbox",
-			"run `gentle-ai review assess --cwd <repo> --base-ref <last reviewed boundary> --committed-only --json` on that commit",
-			"Passive or low: silent structural checks, and the boundary advances",
+			"run `gentle-ai review assess --cwd <repo> --agent <runtime> --base-ref <last reviewed boundary> --committed-only --json` on that commit and read `review_due` and `review_due_reason`",
 		}},
-		{"high or unavailable assessment reviews the commit immediately", []string{
-			"High, or an unavailable or failed assessment: the commit itself is the candidate",
-			"run the native preflight STATUS with `--base-ref <last reviewed boundary> --committed-only` right away",
+		{"a due assessment hands over the exact preflight transition", []string{
+			"When `review_due` is true (`high_risk`, or `slice_budget_reached` for a medium range that reached the delivery budget of about 400 authored changed lines), execute the returned `next_transition.command` verbatim",
+			"it is the exact preflight STATUS for the same `--base-ref`/`--committed-only` selectors",
+			"the reviewed boundary advances to this commit once that review is acknowledged",
 		}},
-		{"medium defers to the PR slice bounded by the delivery budget", []string{
-			"Medium: defer; the candidate is the PR slice, the commits accumulated since the last reviewed boundary, bounded by the delivery budget of about 400 authored changed lines",
-			"at slice close, when the budget is reached or the feature ends, run the preflight STATUS with `--base-ref <last reviewed boundary> --committed-only`",
+		{"a non-due assessment records its reason and continues", []string{
+			"When `review_due` is false, record `review_due_reason` and continue: `passive` needs no review and the boundary advances",
+			"`under_budget` stays pending in the slice until a later commit reaches the budget",
+			"`already_reviewed` means this exact range is already covered by terminal authority",
 		}},
 		{"boundaries advance and outcomes are recorded per task", []string{
 			"The first boundary is the branch point, and every reviewed boundary becomes the next base",
-			"Record per task the assessed tier and outcome: granted, declined, passive, deferred to slice, or unavailable",
+			"Record per task the assessed tier and outcome: granted, declined, passive, under budget, already reviewed, or unavailable",
+			"An unavailable or failed assessment never lowers the tier: treat the commit as due and run the preflight STATUS with `--base-ref <last reviewed boundary> --committed-only`",
 			"Never infer low risk from a failed assessment",
 		}},
 		{"delivery strategy vocabulary and skill resolution", []string{
