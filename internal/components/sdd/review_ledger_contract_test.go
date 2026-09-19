@@ -11,9 +11,9 @@ import (
 	"testing"
 	"unicode/utf8"
 
-	"github.com/gentleman-programming/gentle-ai/v2/internal/assets"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/opencode"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/assets"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/opencode"
 )
 
 // requiredLedgerClauses is the OpenCode binding of the shared clause set: the
@@ -515,7 +515,17 @@ func TestKilocodeReviewSettingsMatchCurrentMainBaseline(t *testing.T) {
 	// representable, so the runtime-owned plugin can canonicalize and tolerantly match
 	// grouped answers instead of losing them to a typed chat reply. Kilocode embeds the
 	// same shared session preflight body, so the hash moved. Deliberate, not drift.
-	const want = "8f388ae4197cfa0fbfdf1f82423a599ea43e43665659da11e0389b670d241bf4"
+	// #4612 excludes SDD from the shared RDD gate and removes its command offer.
+	// Kilocode inherits those OpenCode prompt changes, not native RDD capability.
+	// #4612 also removes the shared mandatory SDD attempt protocol.
+	// Root3 makes verification optional in the shared dispatcher/dependency graph.
+	// Root4b replaces shared research admission prose; Kilocode permissions stay unchanged.
+	// Root4c scopes research above the generic gate; Kilocode inherits only that shared prose.
+	// ODD default workflow: every runtime orchestrator asset now opens with the
+	// "Organic Driven Development Is The Default Workflow (MANDATORY)" shared
+	// section before any SDD-specific instruction. Kilo renders that section
+	// through the OpenCode orchestrator asset, so the baseline is rederived.
+	const want = "10c086f0e8205ed96c55713f03ac1ae98e17f95d91d902ea0ce7cc94398382bf"
 	if got != want {
 		t.Fatalf("Kilocode settings SHA-256 = %s, want current-main baseline %s", got, want)
 	}
@@ -805,8 +815,17 @@ func TestOpenCodeRenderedReviewProtocolCost(t *testing.T) {
 		// headroom each row already had.
 		// #4324 adds 1,354 canonical remote-authorization characters per reviewer.
 		// Preserve the existing absolute ceiling margins (3 and 1,533 characters).
-		{name: "standard", agents: []string{"review-reliability"}, beforeChars: 42_301, wantChars: 18_718, maxCharacters: 18_721},
-		{name: "full-4R", agents: []string{"review-risk", "review-resilience", "review-readability", "review-reliability"}, beforeChars: 106_998, wantChars: 35_125, maxCharacters: 36_658},
+		// #4405 adds the target_already_acknowledged terminal continuation (+390
+		// characters per row). Preserve the existing absolute ceiling margins.
+		// ORPT-2 removes host-side binding assembly from the OpenCode contract,
+		// reducing the shared installed surface by 230 characters per case.
+		// #4680 then adds the correction_context_budget_exceeded continuation row
+		// (+233 characters per row): the correction stage has a stop of its own
+		// whose exit is releasing the authority, not a smaller candidate, and the
+		// shipped contract has to name it. Both are deliberate, not drift, and the
+		// ceilings carry each row's existing absolute margin over the net change.
+		{name: "standard", agents: []string{"review-reliability"}, beforeChars: 42_301, wantChars: 19_111, maxCharacters: 19_114},
+		{name: "full-4R", agents: []string{"review-risk", "review-resilience", "review-readability", "review-reliability"}, beforeChars: 106_998, wantChars: 35_518, maxCharacters: 37_051},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

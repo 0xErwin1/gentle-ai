@@ -14,22 +14,22 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/backup"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/cli"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/components/communitytool"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/components/opencodeplugin"
-	componentuninstall "github.com/gentleman-programming/gentle-ai/v2/internal/components/uninstall"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/opencode"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/pipeline"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/planner"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/state"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/system"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/tui/screens"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/tui/styles"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/update"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/update/upgrade"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/backup"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/cli"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/components/communitytool"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/components/opencodeplugin"
+	componentuninstall "github.com/gentleman-programming/gentle-ai/v3/internal/components/uninstall"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/opencode"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/pipeline"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/planner"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/reviewtransaction"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/state"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/system"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/tui/screens"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/tui/styles"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/update"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/update/upgrade"
 	"github.com/muesli/termenv"
 )
 
@@ -2376,9 +2376,9 @@ func TestStandaloneCommunityToolsShowsResultAfterCompletion(t *testing.T) {
 }
 
 func TestCommunityToolInstallationPreservesPartialResultOnError(t *testing.T) {
-	originalInstall, originalScoped, originalGetwd := communityToolInstallFn, communityToolInstallScopedFn, osGetwdFn
+	originalInstall, originalGetwd := communityToolInstallFn, osGetwdFn
 	t.Cleanup(func() {
-		communityToolInstallFn, communityToolInstallScopedFn, osGetwdFn = originalInstall, originalScoped, originalGetwd
+		communityToolInstallFn, osGetwdFn = originalInstall, originalGetwd
 	})
 
 	osGetwdFn = func() (string, error) { return "/work/project", nil }
@@ -2421,19 +2421,14 @@ func TestCommunityToolInstallationPreservesPartialResultOnError(t *testing.T) {
 	if len(state.CommunityToolResults) != 1 || len(state.CommunityToolResults[0].CommandsRun) != 1 {
 		t.Fatalf("state results = %#v, want preserved partial result", state.CommunityToolResults)
 	}
-	var got []model.AgentID
-	communityToolInstallScopedFn = func(_ model.CommunityToolID, _ string, agents []model.AgentID, _ communitytool.Runner) (communitytool.Result, error) {
-		got = agents
-		return communitytool.Result{Tool: model.CommunityToolRTK}, nil
-	}
-	m.Selection.Agents, m.Selection.CommunityTools = []model.AgentID{model.AgentOpenCode}, []model.CommunityToolID{model.CommunityToolRTK}
-	_ = m.startCommunityToolInstallation()()
-	if !reflect.DeepEqual(got, []model.AgentID{model.AgentOpenCode}) {
-		t.Fatalf("agents = %v", got)
-	}
 }
 
 func TestStandaloneOpenCodePluginsContinueRegistersSelectedPlugins(t *testing.T) {
+	oldVersionRunner := opencode.VersionRunnerOverride
+	t.Cleanup(func() { opencode.VersionRunnerOverride = oldVersionRunner })
+	opencode.VersionRunnerOverride = func(context.Context, opencode.Command) (opencode.CommandOutput, error) {
+		return opencode.CommandOutput{Stdout: []byte("1.18.30")}, nil
+	}
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home)

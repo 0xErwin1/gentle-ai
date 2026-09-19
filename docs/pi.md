@@ -2,7 +2,7 @@
 
 ← [Back to README](../README.md)
 
-Pi support installs the Gentleman harness as Pi packages, then lets Pi own its own persona, models, SDD agents, chains, and memory wiring.
+Pi support installs the Gentleman harness as Pi packages, then lets Pi own its persona, models, ODD guidance, optional SDD agents/chains, and memory wiring. Use [ODD](usage.md#organic-driven-development-odd) for everyday work; explicitly choose SDD when its formal phase artifacts are wanted.
 
 ## Quick Start
 
@@ -37,7 +37,7 @@ pi install npm:pi-btw
 
 | Package                                                  | What it adds                                                                                                              |
 | -------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
-| [`gentle-pi`](https://www.npmjs.com/package/gentle-pi)   | Gentleman persona, SDD/OpenSpec workflow, strict TDD support, safety policy, skills, prompts, SDD agents, and SDD chains. |
+| [`gentle-pi`](https://www.npmjs.com/package/gentle-pi)   | Gentleman persona, ODD and optional SDD/OpenSpec, configured TDD support, safety policy, skills, prompts, SDD agents, and SDD chains. |
 | [`gentle-engram`](https://pi.dev/packages/gentle-engram) | Pi integration for Engram session memory and MCP tools. It is not the Engram binary itself.                               |
 | `pi-mcp-adapter`                                         | Lets Pi expose MCP servers, including Engram, through Pi's MCP runtime.                                                   |
 | `pi-engram init`                                         | Initializes the Pi Engram MCP config shape owned by `gentle-engram`.                                                      |
@@ -61,29 +61,11 @@ Files updated by Gentle AI's Engram provisioning:
 
 `gentle-engram` owns the MCP schema itself. The installer runs `pi-engram init`, which initializes Pi's Engram MCP config under the Pi agent config directory instead of having Gentle AI hand-write that file.
 
-## SDD Research Capability
+## SDD Research Ownership
 
-Gentle AI declares Pi's canonical research capability under
-`gentle-ai.sdd-research-capability/v1`. Admission requires **all grants** for the
-requested class, with exact lowercase names:
+Gentle AI no longer provides the unused internal research-capability admission schema. Its shared SDD guidance treats research as optional and uses actual tool availability and authorization rather than a capability certificate.
 
-| Class | Required grants |
-| --- | --- |
-| `documentation` | `fetch_content` |
-| `open-web` | `web_search`, `source_check`, `fetch_content`, `get_search_content` |
-
-The observed grants must match the class exactly. Order does not matter; missing,
-renamed, duplicate, or unexpected grants deny admission. None of the four
-open-web grants is optional. Unknown classes or schemas also deny admission,
-returning no verified grants and no claims. Bash, generic MCP access, package
-installation, and inherited tools are not substitutes for observed grants.
-Admission verifies tool grants only; it does not create source-backed claims.
-
-Downstream [`gentle-pi`](https://github.com/Gentleman-Programming/gentle-pi) owns
-runtime tool observation, child tool projection, and research execution. This
-upstream declaration neither installs new tools nor proves that a live Pi child
-can use them. A separate downstream runtime probe is still required to establish
-live research evidence.
+Downstream [`gentle-pi`](https://github.com/Gentleman-Programming/gentle-pi) owns runtime tool observation, child tool projection and research execution. Gentle Pi's SDD policy alignment is a separate companion delivery; this upstream change neither updates that runtime nor installs or grants new tools. Live research evidence still requires an actually available, authorized tool and an observed source-backed result.
 
 ## Optional CodeGraph
 
@@ -99,12 +81,6 @@ Select CodeGraph during Gentle AI installation to add its read-only MCP server t
 | Removal | Uninstall removes only manifest-owned MCP and child blocks. Drifted child files are preserved and reported for manual review. |
 
 Package-owned child files are never edited. Gentle AI creates a same-name overlay in Pi's agent directory when needed. A parent `APPEND_SYSTEM.md` CodeGraph marker is not considered proof that any child has CodeGraph tools or guidance.
-
-## Optional RTK
-
-When you explicitly select RTK in Gentle AI’s Community Tools screen on a supported macOS/Linux architecture, Gentle AI installs the pinned RTK binary at `~/.local/bin/rtk` and runs `rtk init -g --agent pi --auto-patch` for a detected selected Pi installation. RTK owns the generated extension at `PI_CODING_AGENT_DIR/extensions/rtk.ts` (default `~/.pi/agent/extensions/rtk.ts`); Gentle AI only detects its documented rewrite marker. RTK telemetry is disabled for that child process. Windows remains intentionally unavailable.
-
-Gentle AI does not add `~/.local/bin` to your shell profile. If needed, add it yourself with `export PATH="$HOME/.local/bin:$PATH"`. Remove RTK through its upstream manual workflow; Gentle AI does not automate its uninstall.
 
 ## Pi Commands
 

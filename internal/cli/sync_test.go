@@ -9,41 +9,29 @@ import (
 	"path/filepath"
 	"reflect"
 	"runtime"
-	"slices"
 	"strconv"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/gentleman-programming/gentle-ai/v2/internal/agents"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/claude"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/codex"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/assets"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/backup"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/components/agentguidance"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/components/communitytool"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/components/engram"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/components/filemerge"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/components/persona"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/components/sdd"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
-	opencodeconfig "github.com/gentleman-programming/gentle-ai/v2/internal/opencode"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/pipeline"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/planner"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/state"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/verify"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/agents"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/agents/claude"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/agents/codex"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/assets"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/backup"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/components/agentguidance"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/components/communitytool"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/components/engram"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/components/filemerge"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/components/persona"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/components/sdd"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
+	opencodeconfig "github.com/gentleman-programming/gentle-ai/v3/internal/opencode"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/pipeline"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/planner"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/state"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/verify"
 )
-
-func TestSyncPlanIncludesPersistedRTKStep(t *testing.T) {
-	runtime, err := newSyncRuntime(t.TempDir(), model.Selection{CommunityTools: []model.CommunityToolID{model.CommunityToolRTK}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	plan := runtime.stagePlan()
-	if !slices.ContainsFunc(plan.Apply, func(step pipeline.Step) bool { return step.ID() == "sync:community-tool:rtk" }) {
-		t.Fatalf("sync plan = %#v, want pinned RTK restoration step", plan.Apply)
-	}
-}
 
 func TestSyncOpenCodeTelemetryReconcilesMissingWithoutSDD(t *testing.T) {
 	home := t.TempDir()
@@ -819,10 +807,10 @@ func TestComponentSyncStepRunsPersonaInjectForSync(t *testing.T) {
 	}
 }
 
-func TestComponentSyncStepWritesPiPersonaToWorkspaceAndReportsChangedFile(t *testing.T) {
+func TestComponentSyncStepWritesPiPersonaToHomeAndReportsChangedFile(t *testing.T) {
 	home := t.TempDir()
 	workspace := t.TempDir()
-	path := filepath.Join(workspace, ".pi", "gentle-ai", "persona.json")
+	path := filepath.Join(home, ".pi", "gentle-ai", "persona.json")
 	var changed []string
 	step := componentSyncStep{
 		id:           "sync:persona",
@@ -840,8 +828,8 @@ func TestComponentSyncStepWritesPiPersonaToWorkspaceAndReportsChangedFile(t *tes
 	if !containsPath(changed, path) {
 		t.Fatalf("first Pi persona sync changed files = %v, missing %q", changed, path)
 	}
-	if _, err := os.Stat(filepath.Join(home, ".pi", "gentle-ai", "persona.json")); !os.IsNotExist(err) {
-		t.Fatalf("Pi sync wrote a home-scoped persona config; stat err = %v", err)
+	if _, err := os.Stat(filepath.Join(workspace, ".pi", "gentle-ai", "persona.json")); !os.IsNotExist(err) {
+		t.Fatalf("Pi sync wrote a workspace persona config; stat err = %v", err)
 	}
 	if got := readTextFile(t, path); got != "{\n  \"mode\": \"neutral\"\n}\n" {
 		t.Fatalf("Pi persona config = %q, want neutral mode", got)
@@ -856,7 +844,7 @@ func TestComponentSyncStepWritesPiPersonaToWorkspaceAndReportsChangedFile(t *tes
 	}
 }
 
-func TestSyncPersonaPathsAndBackupTargetsTrackOnlyPiWorkspaceConfig(t *testing.T) {
+func TestSyncPersonaPathsAndBackupTargetsTrackOnlyPiGlobalConfig(t *testing.T) {
 	home := t.TempDir()
 	workspace := t.TempDir()
 	selection := model.Selection{
@@ -865,20 +853,20 @@ func TestSyncPersonaPathsAndBackupTargetsTrackOnlyPiWorkspaceConfig(t *testing.T
 		Persona:    model.PersonaNeutral,
 	}
 	adapters := resolveAdapters(selection.Agents)
-	want := filepath.Join(workspace, ".pi", "gentle-ai", "persona.json")
-	unwanted := filepath.Join(home, ".pi", "gentle-ai", "persona.json")
+	want := filepath.Join(home, ".pi", "gentle-ai", "persona.json")
+	unwanted := filepath.Join(workspace, ".pi", "gentle-ai", "persona.json")
 	prompt := systemPromptFileFor(t, home, model.AgentPi)
 
 	paths := syncPersonaPathsWithWorkspace(home, workspace, selection, adapters)
 	if !containsPath(paths, want) || containsPath(paths, unwanted) {
-		t.Fatalf("sync persona paths = %v, want only workspace Pi config %q", paths, want)
+		t.Fatalf("sync persona paths = %v, want only global Pi config %q", paths, want)
 	}
 	targets, err := syncBackupTargets(home, workspace, selection, adapters)
 	if err != nil {
 		t.Fatalf("syncBackupTargets() error = %v", err)
 	}
 	if !containsPath(targets, want) || !containsPath(targets, prompt) || containsPath(targets, unwanted) {
-		t.Fatalf("sync backup targets = %v, want workspace Pi config %q and cleanup path %q", targets, want, prompt)
+		t.Fatalf("sync backup targets = %v, want global Pi config %q and cleanup path %q", targets, want, prompt)
 	}
 
 	selection.Persona = model.PersonaCustom
@@ -915,10 +903,10 @@ func TestRunSyncExplicitPiRetiresStaleRoutingAndReportsIt(t *testing.T) {
 	}
 }
 
-func TestPiPersonaSyncSnapshotRestoresWorkspaceConfig(t *testing.T) {
+func TestPiPersonaSyncSnapshotRestoresGlobalConfig(t *testing.T) {
 	home := t.TempDir()
 	workspace := t.TempDir()
-	path := filepath.Join(workspace, ".pi", "gentle-ai", "persona.json")
+	path := filepath.Join(home, ".pi", "gentle-ai", "persona.json")
 	mustWriteFile(t, path, []byte("{\n  \"mode\": \"gentleman\"\n}\n"))
 
 	selection := model.Selection{
@@ -945,7 +933,7 @@ func TestPiPersonaSyncSnapshotRestoresWorkspaceConfig(t *testing.T) {
 		t.Fatalf("Pi persona sync error = %v", err)
 	}
 	if got := readTextFile(t, path); got == "{\n  \"mode\": \"gentleman\"\n}\n" {
-		t.Fatal("Pi persona sync did not change the workspace config before rollback")
+		t.Fatal("Pi persona sync did not change the global config before rollback")
 	}
 	if err := restoreSyncFiles(before); err != nil {
 		t.Fatalf("restoreSyncFiles() error = %v", err)
@@ -1598,6 +1586,48 @@ func TestRunSyncRefreshesPersistedVisualComponents(t *testing.T) {
 	}
 }
 
+// TestRunSyncSkipsOpenCodeGentleLogoWhenOpenCodeNotSelected ensures that when
+// ComponentOpenCodeGentleLogo is in state, but OpenCode is not selected (e.g. only
+// Claude Code is selected), sync does not touch OpenCode directories or fail (issue #1212).
+func TestRunSyncSkipsOpenCodeGentleLogoWhenOpenCodeNotSelected(t *testing.T) {
+	home := t.TempDir()
+	if err := state.Write(home, state.InstallState{
+		InstalledAgents:     []string{"claude-code"},
+		SelectionConfigured: true,
+		Components: []model.ComponentID{
+			model.ComponentOpenCodeGentleLogo,
+		},
+		Persona: "neutral",
+	}); err != nil {
+		t.Fatalf("state.Write() error = %v", err)
+	}
+
+	restoreHome := osUserHomeDir
+	restoreBackupHome := backup.UserHomeDirFn
+	osUserHomeDir = func() (string, error) { return home, nil }
+	backup.UserHomeDirFn = func() (string, error) { return home, nil }
+	t.Cleanup(func() {
+		osUserHomeDir = restoreHome
+		backup.UserHomeDirFn = restoreBackupHome
+	})
+
+	result, err := RunSync([]string{"--agents", "claude-code"})
+	if err != nil {
+		t.Fatalf("RunSync() error = %v", err)
+	}
+
+	opencodeDir := filepath.Join(home, ".config", "opencode")
+	if _, err := os.Stat(opencodeDir); !os.IsNotExist(err) {
+		t.Fatalf("expected OpenCode config dir %q to not exist, err: %v", opencodeDir, err)
+	}
+
+	for _, p := range result.ChangedFiles {
+		if strings.Contains(p, "opencode") {
+			t.Fatalf("unexpected opencode path in ChangedFiles: %s", p)
+		}
+	}
+}
+
 // TestRunSyncRefreshesInstalledOpenCodeReviewPluginWithoutSDDComponent
 // reproduces issue #1440: when the persisted selection lacks the SDD component
 // but managed OpenCode plugins are already installed on disk, `gentle-ai sync`
@@ -1996,7 +2026,7 @@ func TestSyncRollbackRestoresLegacyOpenCodePluginAndRemovesReplacement(t *testin
 	}
 }
 
-func TestSyncSkillBackupRollsBackOpenClawWorkspaceSkills(t *testing.T) {
+func TestSyncSkillBackupRollsBackOpenClawGlobalSkills(t *testing.T) {
 	home := t.TempDir()
 	workspace := t.TempDir()
 	currentProject := t.TempDir()
@@ -2010,10 +2040,10 @@ func TestSyncSkillBackupRollsBackOpenClawWorkspaceSkills(t *testing.T) {
 
 	openClawGlobalSkills := filepath.Join(home, ".openclaw", "skills")
 	openClawWorkspaceSkills := filepath.Join(workspace, ".openclaw", "skills")
-	workspaceSkill := filepath.Join(openClawWorkspaceSkills, "go-testing", "SKILL.md")
-	workspaceReference := filepath.Join(openClawWorkspaceSkills, "go-testing", "references", "examples.md")
-	writeStale(t, workspaceSkill)
-	writeStale(t, workspaceReference)
+	globalSkill := filepath.Join(openClawGlobalSkills, "go-testing", "SKILL.md")
+	globalReference := filepath.Join(openClawGlobalSkills, "go-testing", "references", "examples.md")
+	writeStale(t, globalSkill)
+	writeStale(t, globalReference)
 
 	runtime, err := newSyncRuntime(home, selection)
 	if err != nil {
@@ -2025,23 +2055,23 @@ func TestSyncSkillBackupRollsBackOpenClawWorkspaceSkills(t *testing.T) {
 	if result.Err == nil {
 		t.Fatal("injected later failure did not trigger sync rollback")
 	}
-	for _, path := range []string{workspaceSkill, workspaceReference} {
+	for _, path := range []string{globalSkill, globalReference} {
 		content, readErr := os.ReadFile(path)
 		if readErr != nil || string(content) != "stale" {
 			t.Errorf("sync rollback did not restore %q: content=%q error=%v", path, content, readErr)
 		}
 	}
 	for _, path := range []string{
-		filepath.Join(openClawGlobalSkills, "go-testing", "SKILL.md"),
-		filepath.Join(openClawGlobalSkills, "go-testing", "references", "examples.md"),
+		filepath.Join(openClawWorkspaceSkills, "go-testing", "SKILL.md"),
+		filepath.Join(openClawWorkspaceSkills, "go-testing", "references", "examples.md"),
 	} {
 		if _, statErr := os.Stat(path); !os.IsNotExist(statErr) {
-			t.Errorf("OpenClaw sync must not write global skill path %q: %v", path, statErr)
+			t.Errorf("OpenClaw sync must not write configured workspace skill path %q: %v", path, statErr)
 		}
 	}
 }
 
-func TestSyncBackupTargetsOpenClawSkillsUseConfiguredWorkspace(t *testing.T) {
+func TestSyncBackupTargetsOpenClawSkillsUseGlobalRoot(t *testing.T) {
 	home := t.TempDir()
 	workspace := t.TempDir()
 	selection := model.Selection{
@@ -2056,13 +2086,13 @@ func TestSyncBackupTargetsOpenClawSkillsUseConfiguredWorkspace(t *testing.T) {
 	}
 
 	workspaceReference := filepath.Join(workspace, ".openclaw", "skills", "go-testing", "references", "examples.md")
-	if !containsPath(targets, workspaceReference) {
-		t.Errorf("sync backup targets missing OpenClaw workspace skill path %q\ntargets = %v", workspaceReference, targets)
+	if containsPath(targets, workspaceReference) {
+		t.Errorf("sync backup targets include OpenClaw workspace skill path %q\ntargets = %v", workspaceReference, targets)
 	}
 
 	homeReference := filepath.Join(home, ".openclaw", "skills", "go-testing", "references", "examples.md")
-	if containsPath(targets, homeReference) {
-		t.Errorf("sync backup targets must not include OpenClaw home-root skill path %q\ntargets = %v", homeReference, targets)
+	if !containsPath(targets, homeReference) {
+		t.Errorf("sync backup targets missing OpenClaw home-root skill path %q\ntargets = %v", homeReference, targets)
 	}
 }
 
@@ -2639,7 +2669,7 @@ func TestRestorePersistedCommunityToolsRequiresInstallerSelection(t *testing.T) 
 		want      bool
 	}{
 		{name: "explicit selected", persisted: state.InstallState{CommunityToolsConfigured: true, CommunityTools: []string{"codegraph"}}, want: true},
-		{name: "explicit none", persisted: state.InstallState{CommunityToolsConfigured: true}},
+		{name: "unknown persisted value", persisted: state.InstallState{CommunityToolsConfigured: true, CommunityTools: []string{"unknown"}}},
 		{name: "legacy managed marker", persisted: state.InstallState{}, want: true},
 	}
 	for _, test := range tests {
@@ -2649,29 +2679,11 @@ func TestRestorePersistedCommunityToolsRequiresInstallerSelection(t *testing.T) 
 			if got := selection.HasCommunityTool(model.CommunityToolCodeGraph); got != test.want {
 				t.Fatalf("CodeGraph selected = %t, want %t", got, test.want)
 			}
+			if !test.want && len(selection.CommunityTools) != 0 {
+				t.Fatalf("community tools = %v, want unknown values ignored", selection.CommunityTools)
+			}
 		})
 	}
-}
-
-func TestRestorePersistedCommunityToolsRestoresRTKAndSchedulesSync(t *testing.T) {
-	home := t.TempDir()
-	selection := model.Selection{Agents: []model.AgentID{model.AgentOpenCode}}
-	restorePersistedCommunityTools(home, &selection, state.InstallState{CommunityToolsConfigured: true, CommunityTools: []string{"rtk", "unknown"}})
-	if !selection.HasCommunityTool(model.CommunityToolRTK) || len(selection.CommunityTools) != 1 {
-		t.Fatalf("restored community tools = %v, want only RTK", selection.CommunityTools)
-	}
-	runtime, err := newSyncRuntime(home, selection)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, step := range runtime.stagePlan().Apply {
-		if step.ID() == "sync:community-tool:rtk" {
-			if got := step.(rtkSyncStep).agents; reflect.DeepEqual(got, []model.AgentID{model.AgentOpenCode}) {
-				return
-			}
-		}
-	}
-	t.Fatal("persisted RTK selection did not schedule the scoped RTK sync step")
 }
 
 func TestRestorePersistedCommunityToolsDoesNotAdoptExternalWiring(t *testing.T) {
@@ -3855,10 +3867,10 @@ func TestRunSyncWithSelection_WritesExpectedFiles(t *testing.T) {
 		}
 	}
 
-	// post-apply leaves review to the parent after independent verification. It
+	// post-apply returns to SDD verification without offering review. It
 	// must not negotiate canonical STATUS or retain review authority itself.
 	for _, required := range []string{
-		"fresh `reviewOffer` block",
+		"SDD never offers or launches RDD",
 		"SDD does not retain, read, or persist review lineage, receipt, binding, successor, gate, transaction, or prior authority",
 	} {
 		if !strings.Contains(postApply, required) {
@@ -5157,8 +5169,12 @@ func TestRunSyncWithSelectionPiUsesNeutralForMissingPersonaField(t *testing.T) {
 	if got, want := result.Selection.Persona, model.PersonaNeutral; got != want {
 		t.Fatalf("Selection.Persona = %q, want %q", got, want)
 	}
-	if got, want := readTextFile(t, piPath), "{\n  \"mode\": \"neutral\"\n}\n"; got != want {
-		t.Fatalf("Pi persona config = %q, want %q", got, want)
+	homePiPath := filepath.Join(home, ".pi", "gentle-ai", "persona.json")
+	if got, want := readTextFile(t, homePiPath), "{\n  \"mode\": \"neutral\"\n}\n"; got != want {
+		t.Fatalf("global Pi persona config = %q, want %q", got, want)
+	}
+	if got, want := readTextFile(t, piPath), "{\n  \"mode\": \"gentleman\"\n}\n"; got != want {
+		t.Fatalf("workspace Pi persona config changed = %q, want %q", got, want)
 	}
 }
 

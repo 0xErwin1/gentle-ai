@@ -18,25 +18,25 @@ import (
 
 	"github.com/charmbracelet/bubbles/textarea"
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/agentbuilder"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/agents"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/backup"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/catalog"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/cli"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/components/communitytool"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/components/opencodeplugin"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/components/sdd"
-	componentuninstall "github.com/gentleman-programming/gentle-ai/v2/internal/components/uninstall"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/opencode"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/pipeline"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/planner"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/state"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/system"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/tui/screens"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/update"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/update/upgrade"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/agentbuilder"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/agents"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/backup"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/catalog"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/cli"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/components/communitytool"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/components/opencodeplugin"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/components/sdd"
+	componentuninstall "github.com/gentleman-programming/gentle-ai/v3/internal/components/uninstall"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/opencode"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/pipeline"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/planner"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/reviewtransaction"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/state"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/system"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/tui/screens"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/update"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/update/upgrade"
 )
 
 // tuiNowFn returns the current time for the update-check cooldown gate.
@@ -105,9 +105,6 @@ var osExecutableFn = os.Executable
 var osRemoveFn = os.Remove
 var execCommandFn = exec.Command
 var communityToolInstallFn = communitytool.Install
-var communityToolInstallScopedFn = func(id model.CommunityToolID, workspace string, agents []model.AgentID, runner communitytool.Runner) (communitytool.Result, error) {
-	return communitytool.InstallWithHomeAndAgents(id, workspace, homeDir(), agents, runner, communitytool.DetectorFunc(exec.LookPath))
-}
 var communityToolStatusFn = communitytool.DetectStatus
 
 // readCurrentAssignmentsFn is a package-level variable so tests can override
@@ -576,13 +573,14 @@ const (
 )
 
 type Model struct {
-	Screen         Screen
-	PreviousScreen Screen
-	Width          int
-	Height         int
-	Cursor         int
-	Version        string
-	SpinnerFrame   int
+	openCodePresentationMajor opencode.RuntimeMajor
+	Screen                    Screen
+	PreviousScreen            Screen
+	Width                     int
+	Height                    int
+	Cursor                    int
+	Version                   string
+	SpinnerFrame              int
 
 	Selection                      model.Selection
 	Detection                      system.DetectionResult
@@ -1013,11 +1011,14 @@ func (m Model) Init() tea.Cmd {
 		return AdvisoryMsg{Advisory: a}
 	}
 
-	return tea.Batch(updateCmd, advisoryCmd)
+	return tea.Batch(updateCmd, advisoryCmd, openCodePresentationCommand())
 }
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
+	case openCodePresentationMsg:
+		m.openCodePresentationMajor = msg.major
+		return m, nil
 	case tea.WindowSizeMsg:
 		m.Width = msg.Width
 		m.Height = msg.Height
@@ -1372,6 +1373,13 @@ func (m Model) handleStepProgress(msg StepProgressMsg) (tea.Model, tea.Cmd) {
 	case pipeline.StepStatusSucceeded:
 		m.Progress.Mark(idx, string(pipeline.StepStatusSucceeded))
 		m.Progress.AppendLog("done: %s", msg.StepID)
+	case pipeline.StepStatusSkipped:
+		m.Progress.Mark(idx, string(pipeline.StepStatusSkipped))
+		reason := "unsupported"
+		if msg.Err != nil {
+			reason = msg.Err.Error()
+		}
+		m.Progress.AppendLog("skipped: %s — %s", msg.StepID, reason)
 	case pipeline.StepStatusFailed:
 		m.Progress.Mark(idx, string(pipeline.StepStatusFailed))
 		errMsg := "unknown error"
@@ -1517,7 +1525,7 @@ func (m Model) View() string {
 	case ScreenDetection:
 		return screens.RenderDetection(m.Detection, m.Cursor)
 	case ScreenAgents:
-		return screens.RenderAgents(m.Selection.Agents, m.Cursor)
+		return screens.RenderAgents(m.Selection.Agents, m.Cursor, m.openCodePresentationMajor)
 	case ScreenPersona:
 		return screens.RenderPersona(m.Selection.Persona, m.Cursor)
 	case ScreenPreset:
@@ -3515,11 +3523,7 @@ func (m Model) startCommunityToolInstallation() tea.Cmd {
 		for _, tool := range tools {
 			var result communitytool.Result
 			var err error
-			if tool == model.CommunityToolRTK {
-				result, err = communityToolInstallScopedFn(tool, workspaceDir, m.Selection.Agents, runner)
-			} else {
-				result, err = communityToolInstallFn(tool, workspaceDir, runner)
-			}
+			result, err = communityToolInstallFn(tool, workspaceDir, runner)
 			if err != nil {
 				if hasCommunityToolResultContext(result) {
 					results = append(results, result)
