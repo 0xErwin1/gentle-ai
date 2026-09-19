@@ -208,3 +208,71 @@ over-budget candidate; and `review invalidate` refuses under worktree drift.
 
 Open follow-up, tracked separately from this issue: instrument the Pi-side assertion at gentle-pi/extensions/gentle-ai.ts:3595 read-only to identify the exact drifting projection field. Do not repair the harness from inside this source change and do not disable RDD as a workaround.
 Pre-existing environment failure TestEngramPathGuidanceDefault is a separate concern; it reproduces on untouched main.
+
+## Post-review corrections (CodeRabbit on tip 2a47684d)
+
+CodeRabbit posted three findings. One is not new: `capture-result --input`
+without a budget guard is #4777, already declared as a known limit. The other
+two are real and are the work units below. Delivery strategy stays
+`ask-on-risk`; both are corrections on the existing branch, no new slice.
+
+TDD: enabled. Source: existing branch practice, every work unit here observed
+RED before GREEN. Runner: `go test ./internal/...` with `env -u
+OPENCODE_CONFIG_DIR` and a canonical `TMPDIR`.
+
+- [x] **T-C1 — Pi cannot release an over-budget corrected lineage.**
+  Route: delegated writer (writer trigger: stop constructor + shipped Pi
+  ledger + tests).
+  The `correction_context_budget_exceeded` row in
+  `internal/assets/skills/_shared/review-ledger-contract-pi.md:46` tells the
+  maintainer to run "the release command the stop's `continuation` names".
+  `reviewStopTransition` (`review_next_transition.go:1299`) sets only Kind and
+  ReasonCode, so Continuation is nil and is omitted from the serialized
+  response; only `reviewManagedAssetsStopTransition` populates it. The Pi
+  contract never mentions `abandon` at all, and `validPiFacadeLifecycle`
+  (`providercontractbundle/bundle.go:202`) forbids the raw `gentle-ai review `
+  route, so Pi is told to release authority with no way to do it. Introduced by
+  93c4c607 while making the row satisfy the facade-only contract.
+  Fix: populate the stop's continuation following the managed-assets
+  precedent, so the row points at something that exists.
+  NOT the fix CodeRabbit proposed: writing `gentle-ai review abandon` into the
+  Pi ledger fails `validPiFacadeLifecycle` and reintroduces the build failure
+  93c4c607 closed.
+  Acceptance: Pi obtains the exact release command from the stop; the bundle
+  still builds; a test proves the command is reachable, not merely that the
+  contract compiles.
+  Risk: the stop constructor is shared, so goldens and the ledger cost
+  baselines may move. Re-measure, never hand-compute.
+  Done. `ReviewManagedAssetsContinuation` is now `ReviewStopContinuation`,
+  carrying a `detail` field, and a second stop populates it:
+  `reviewCorrectionContextBudgetStopTransition` follows
+  `reviewManagedAssetsStopTransition` exactly. The command is the FLAGLESS
+  `<executable> review abandon --cwd <repo>`, which runs as printed and
+  refuses with the binding template; the full release needs an actor and an
+  eight-line binding no producer may invent. Eligibility is the read-only
+  `InspectCompactPristineAbandonment` prediction taken beside the budget probe
+  in the facade; where it says the authority is not releasable the stop carries
+  no continuation at all, preserving the narration's honesty property.
+  `validateCorrectionReleaseContinuation` guards the shape as strictly as the
+  sync one, and the Pi ledger row now covers both branches.
+  Observed: RED `the correction budget stop carries no continuation` ->
+  GREEN on TestOverBudgetCorrectionStopCarriesTheReleaseContinuation and
+  TestCorrectionBudgetStopOmitsTheContinuationWhenReleaseIsRefused.
+  Checks: `go test ./internal/cli/ -run 'Correction|Budget|Stop|Transition'`,
+  `./internal/providercontractbundle/`, `./internal/components/sdd/`,
+  `./internal/assets/`, gofmtcheck and `go vet ./internal/...` all pass. No
+  golden and no ledger cost baseline moved: the baselines measure
+  review-ledger-contract.md, which this change does not touch.
+
+- [ ] **T-C2 — The block terminator is written outside the budget.**
+  Route: direct inline (one mechanical file, already understood).
+  `reviewLensContextBlock` sets `budget := reviewLensContextRuntimeBudget(runtime) - block.Len()`
+  and decrements per section, then writes `reviewLensContextTerminator + "\n"`
+  (`review_lens_context.go:711`) without charging it. Fixed 29-byte overshoot of
+  `ApprovedRuntimeContextBudget` (204800). No dead end: the admission probe and
+  materialization share this function, so they agree. The defect is that the
+  comment claims to bound "the whole delivered block" and does not.
+  Acceptance: the terminator is reserved before sections are consumed; a test
+  pins that a block landing exactly on the cap stays within it.
+
+Checked off only on observed outcome. Neither is started yet.
