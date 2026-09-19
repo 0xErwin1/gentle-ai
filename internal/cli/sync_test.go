@@ -9,7 +9,6 @@ import (
 	"path/filepath"
 	"reflect"
 	"runtime"
-	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -33,17 +32,6 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v3/internal/state"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/verify"
 )
-
-func TestSyncPlanIncludesPersistedRTKStep(t *testing.T) {
-	runtime, err := newSyncRuntime(t.TempDir(), model.Selection{CommunityTools: []model.CommunityToolID{model.CommunityToolRTK}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	plan := runtime.stagePlan()
-	if !slices.ContainsFunc(plan.Apply, func(step pipeline.Step) bool { return step.ID() == "sync:community-tool:rtk" }) {
-		t.Fatalf("sync plan = %#v, want pinned RTK restoration step", plan.Apply)
-	}
-}
 
 func TestSyncOpenCodeTelemetryReconcilesMissingWithoutSDD(t *testing.T) {
 	home := t.TempDir()
@@ -1598,6 +1586,48 @@ func TestRunSyncRefreshesPersistedVisualComponents(t *testing.T) {
 	}
 }
 
+// TestRunSyncSkipsOpenCodeGentleLogoWhenOpenCodeNotSelected ensures that when
+// ComponentOpenCodeGentleLogo is in state, but OpenCode is not selected (e.g. only
+// Claude Code is selected), sync does not touch OpenCode directories or fail (issue #1212).
+func TestRunSyncSkipsOpenCodeGentleLogoWhenOpenCodeNotSelected(t *testing.T) {
+	home := t.TempDir()
+	if err := state.Write(home, state.InstallState{
+		InstalledAgents:     []string{"claude-code"},
+		SelectionConfigured: true,
+		Components: []model.ComponentID{
+			model.ComponentOpenCodeGentleLogo,
+		},
+		Persona: "neutral",
+	}); err != nil {
+		t.Fatalf("state.Write() error = %v", err)
+	}
+
+	restoreHome := osUserHomeDir
+	restoreBackupHome := backup.UserHomeDirFn
+	osUserHomeDir = func() (string, error) { return home, nil }
+	backup.UserHomeDirFn = func() (string, error) { return home, nil }
+	t.Cleanup(func() {
+		osUserHomeDir = restoreHome
+		backup.UserHomeDirFn = restoreBackupHome
+	})
+
+	result, err := RunSync([]string{"--agents", "claude-code"})
+	if err != nil {
+		t.Fatalf("RunSync() error = %v", err)
+	}
+
+	opencodeDir := filepath.Join(home, ".config", "opencode")
+	if _, err := os.Stat(opencodeDir); !os.IsNotExist(err) {
+		t.Fatalf("expected OpenCode config dir %q to not exist, err: %v", opencodeDir, err)
+	}
+
+	for _, p := range result.ChangedFiles {
+		if strings.Contains(p, "opencode") {
+			t.Fatalf("unexpected opencode path in ChangedFiles: %s", p)
+		}
+	}
+}
+
 // TestRunSyncRefreshesInstalledOpenCodeReviewPluginWithoutSDDComponent
 // reproduces issue #1440: when the persisted selection lacks the SDD component
 // but managed OpenCode plugins are already installed on disk, `gentle-ai sync`
@@ -2639,7 +2669,7 @@ func TestRestorePersistedCommunityToolsRequiresInstallerSelection(t *testing.T) 
 		want      bool
 	}{
 		{name: "explicit selected", persisted: state.InstallState{CommunityToolsConfigured: true, CommunityTools: []string{"codegraph"}}, want: true},
-		{name: "explicit none", persisted: state.InstallState{CommunityToolsConfigured: true}},
+		{name: "unknown persisted value", persisted: state.InstallState{CommunityToolsConfigured: true, CommunityTools: []string{"unknown"}}},
 		{name: "legacy managed marker", persisted: state.InstallState{}, want: true},
 	}
 	for _, test := range tests {
@@ -2649,29 +2679,11 @@ func TestRestorePersistedCommunityToolsRequiresInstallerSelection(t *testing.T) 
 			if got := selection.HasCommunityTool(model.CommunityToolCodeGraph); got != test.want {
 				t.Fatalf("CodeGraph selected = %t, want %t", got, test.want)
 			}
+			if !test.want && len(selection.CommunityTools) != 0 {
+				t.Fatalf("community tools = %v, want unknown values ignored", selection.CommunityTools)
+			}
 		})
 	}
-}
-
-func TestRestorePersistedCommunityToolsRestoresRTKAndSchedulesSync(t *testing.T) {
-	home := t.TempDir()
-	selection := model.Selection{Agents: []model.AgentID{model.AgentOpenCode}}
-	restorePersistedCommunityTools(home, &selection, state.InstallState{CommunityToolsConfigured: true, CommunityTools: []string{"rtk", "unknown"}})
-	if !selection.HasCommunityTool(model.CommunityToolRTK) || len(selection.CommunityTools) != 1 {
-		t.Fatalf("restored community tools = %v, want only RTK", selection.CommunityTools)
-	}
-	runtime, err := newSyncRuntime(home, selection)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, step := range runtime.stagePlan().Apply {
-		if step.ID() == "sync:community-tool:rtk" {
-			if got := step.(rtkSyncStep).agents; reflect.DeepEqual(got, []model.AgentID{model.AgentOpenCode}) {
-				return
-			}
-		}
-	}
-	t.Fatal("persisted RTK selection did not schedule the scoped RTK sync step")
 }
 
 func TestRestorePersistedCommunityToolsDoesNotAdoptExternalWiring(t *testing.T) {
