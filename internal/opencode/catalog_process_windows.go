@@ -27,7 +27,10 @@ import (
 // cancellation degrades to killing the direct child. cmd.WaitDelay stays set
 // regardless, so Wait cannot hang indefinitely on inherited pipe handles even
 // if a descendant escapes the job.
-var testHookCreateJobObject = windows.CreateJobObject
+var (
+	testHookCreateJobObject          = windows.CreateJobObject
+	testHookAssignProcessToJobObject = windows.AssignProcessToJobObject
+)
 
 func configureProcessGroup(cmd *exec.Cmd) (afterStart func(), release func()) {
 	cmd.WaitDelay = catalogWaitDelay
@@ -65,7 +68,7 @@ func configureProcessGroup(cmd *exec.Cmd) (afterStart func(), release func()) {
 			return
 		}
 		defer windows.CloseHandle(h)
-		_ = windows.AssignProcessToJobObject(job, h)
+		_ = testHookAssignProcessToJobObject(job, h)
 	}
 	return afterStart, release
 }

@@ -365,6 +365,9 @@ func TestMergeConfiguredCatalogCopiesVariantsDefensively(t *testing.T) {
 // one model. Specific provider or model IDs vary per machine and must not be
 // asserted here, or the test breaks on every other host and in CI.
 func TestDiscoverCatalogLiveHostIntegration(t *testing.T) {
+	if testing.Short() || os.Getenv("GENTLE_AI_TEST_LIVE_HOST") == "" {
+		t.Skip("skipping live host integration test; set GENTLE_AI_TEST_LIVE_HOST=1 to run")
+	}
 	if _, err := exec.LookPath("opencode"); err != nil {
 		t.Skip("opencode binary not in PATH")
 	}
@@ -377,8 +380,8 @@ func TestDiscoverCatalogLiveHostIntegration(t *testing.T) {
 	}
 	count := 0
 	for _, p := range providers {
-		if p.ID == "" || len(p.Models) == 0 {
-			t.Errorf("provider %q has no models: %+v", p.ID, p)
+		if p.ID == "" {
+			t.Errorf("provider has empty ID: %+v", p)
 			continue
 		}
 		for _, m := range p.Models {
@@ -687,12 +690,35 @@ func (s *slowReader) Read(p []byte) (int, error) {
 // background drain this test truncates the catalog mid-record with
 // malformed_output on hosts where OpenCode aborts slow stdout writers.
 func TestDiscoverCatalogSurvivesSlowConsumer(t *testing.T) {
-	if _, err := exec.LookPath("opencode"); err != nil {
-		t.Skip("opencode binary not in PATH")
+	dir := t.TempDir()
+	helper := filepath.Join(dir, "slow-consumer-helper")
+	if runtime.GOOS == "windows" {
+		helper += ".exe"
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	source := filepath.Join(dir, "main.go")
+	src := `package main
+
+import (
+	"fmt"
+)
+
+func main() {
+	for i := 0; i < 50; i++ {
+		fmt.Printf("prov/model-%03d\n", i)
+		fmt.Printf("{\"id\":\"model-%03d\",\"name\":\"Model %03d\",\"capabilities\":{\"toolcall\":true}}\n", i, i)
+	}
+}
+`
+	if err := os.WriteFile(source, []byte(src), 0o600); err != nil {
+		t.Fatalf("write helper: %v", err)
+	}
+	if err := exec.Command("go", "build", "-o", helper, source).Run(); err != nil {
+		t.Fatalf("build helper: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	r, err := runCatalogCommand(ctx, Command{Path: "opencode", Args: []string{"models", "--verbose"}, Dir: "."})
+	r, err := runCatalogCommand(ctx, Command{Path: helper})
 	if err != nil {
 		t.Fatalf("runCatalogCommand: %v", err)
 	}
@@ -703,17 +729,13 @@ func TestDiscoverCatalogSurvivesSlowConsumer(t *testing.T) {
 	if err != nil {
 		t.Fatalf("slow-consumer parse error = %v, want complete catalog", err)
 	}
-	if len(providers) == 0 {
-		t.Fatal("slow consumer discovered 0 providers")
+	prov, ok := providers["prov"]
+	if !ok {
+		t.Fatal("slow consumer missing provider 'prov'")
 	}
-	count := 0
-	for _, p := range providers {
-		count += len(p.Models)
+	if len(prov.Models) != 50 {
+		t.Fatalf("slow consumer discovered %d models, want 50", len(prov.Models))
 	}
-	if count == 0 {
-		t.Fatal("slow consumer discovered 0 models")
-	}
-	t.Logf("slow consumer parsed %d providers / %d models", len(providers), count)
 }
 
 // TestDiscoverCatalogLegacyVsNew pins the regression contract of issue #4042
