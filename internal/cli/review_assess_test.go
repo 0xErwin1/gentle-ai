@@ -3,11 +3,14 @@ package cli
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"os"
 	"strings"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/reviewtransaction"
 )
 
 // TestReviewAssessPassiveDocumentationCandidate proves review assess reports
@@ -36,6 +39,15 @@ func TestReviewAssessPassiveDocumentationCandidate(t *testing.T) {
 	if len(result.Reasons) != 1 || result.Reasons[0].Code != string(reviewtransaction.RiskReasonNonExecutableOnly) {
 		t.Fatalf("passive review assess reasons = %#v", result.Reasons)
 	}
+	if result.Candidate.Consumed {
+		t.Fatalf("fresh passive candidate reported consumed: %#v", result.Candidate)
+	}
+	if result.ReviewDue || result.ReviewDueReason != "passive" {
+		t.Fatalf("passive review assess review_due = %v/%q, want false/passive", result.ReviewDue, result.ReviewDueReason)
+	}
+	if result.NextTransition != nil {
+		t.Fatalf("passive review assess published a next_transition it must not offer: %#v", result.NextTransition)
+	}
 }
 
 // TestReviewAssessExecutableChangeCandidate proves an ordinary but
@@ -60,6 +72,15 @@ func TestReviewAssessExecutableChangeCandidate(t *testing.T) {
 	if len(result.Reasons) != 1 || result.Reasons[0].Code != string(reviewtransaction.RiskReasonExecutableChange) ||
 		result.Reasons[0].Path != "notes/scratch.txt" {
 		t.Fatalf("executable-change review assess reasons = %#v", result.Reasons)
+	}
+	if result.ChangedLines >= reviewtransaction.LargeChangeLines {
+		t.Fatalf("executable-change fixture changed_lines = %d, want under the %d-line slice budget", result.ChangedLines, reviewtransaction.LargeChangeLines)
+	}
+	if result.ReviewDue || result.ReviewDueReason != "under_budget" {
+		t.Fatalf("under-budget medium review assess review_due = %v/%q, want false/under_budget", result.ReviewDue, result.ReviewDueReason)
+	}
+	if result.NextTransition != nil {
+		t.Fatalf("under-budget medium review assess published a next_transition it must not offer: %#v", result.NextTransition)
 	}
 }
 
@@ -89,6 +110,75 @@ func TestReviewAssessProcessBoundaryCandidate(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("auth-path review assess reasons missing hot_path/auth evidence: %#v", result.Reasons)
+	}
+	if !result.ReviewDue || result.ReviewDueReason != "high_risk" {
+		t.Fatalf("high-risk review assess review_due = %v/%q, want true/high_risk", result.ReviewDue, result.ReviewDueReason)
+	}
+	assertReviewAssessNextTransition(t, result.NextTransition, repo, "", "")
+}
+
+// assertReviewAssessNextTransition asserts the shared next_transition
+// invariant every review_due=true envelope must publish: a literal,
+// executable `review status` continuation whose tokens are exactly its
+// arguments, in the exact order review assess documents (cwd, contract,
+// optional agent, next-transition, optional base-ref/committed-only pair).
+// agent and baseRef are empty when the caller omitted --agent/--base-ref.
+func assertReviewAssessNextTransition(t *testing.T, transition *ReviewAssessmentNextTransition, repo, agent, baseRef string) {
+	t.Helper()
+	if transition == nil {
+		t.Fatal("review_due=true result published no next_transition")
+	}
+	if transition.Operation != "review.status" {
+		t.Fatalf("next_transition operation = %q, want review.status", transition.Operation)
+	}
+	wantNames := []string{"cwd", "contract"}
+	if agent != "" {
+		wantNames = append(wantNames, "agent")
+	}
+	wantNames = append(wantNames, "next-transition")
+	if baseRef != "" {
+		wantNames = append(wantNames, "base-ref", "committed-only")
+	}
+	if len(transition.Arguments) != len(wantNames) {
+		t.Fatalf("next_transition arguments = %#v, want names %v", transition.Arguments, wantNames)
+	}
+	tokens := make([]string, 0, len(transition.Arguments)+2)
+	tokens = append(tokens, "review", "status")
+	for index, argument := range transition.Arguments {
+		if argument.Name != wantNames[index] {
+			t.Fatalf("next_transition argument[%d] name = %q, want %q (order = %#v)", index, argument.Name, wantNames[index], transition.Arguments)
+		}
+		if argument.Token != "--"+argument.Name+"="+argument.Value {
+			t.Fatalf("next_transition argument %#v is not its literal --name=value token", argument)
+		}
+		tokens = append(tokens, reviewTransitionShellWord(argument.Token))
+	}
+	if want := "gentle-ai " + strings.Join(tokens, " "); transition.Command != want {
+		t.Fatalf("next_transition command = %q, want %q", transition.Command, want)
+	}
+	byName := map[string]string{}
+	for _, argument := range transition.Arguments {
+		byName[argument.Name] = argument.Value
+	}
+	if byName["cwd"] != repo {
+		t.Fatalf("next_transition cwd = %q, want repository root %q", byName["cwd"], repo)
+	}
+	if byName["contract"] != ReviewIntegrationContractV2 {
+		t.Fatalf("next_transition contract = %q, want %q", byName["contract"], ReviewIntegrationContractV2)
+	}
+	if byName["next-transition"] != "true" {
+		t.Fatalf("next_transition next-transition selector = %q, want true", byName["next-transition"])
+	}
+	if agent != "" && byName["agent"] != agent {
+		t.Fatalf("next_transition agent = %q, want %q", byName["agent"], agent)
+	}
+	if baseRef != "" {
+		if byName["base-ref"] != baseRef {
+			t.Fatalf("next_transition base-ref = %q, want the caller's --base-ref verbatim %q", byName["base-ref"], baseRef)
+		}
+		if byName["committed-only"] != "true" {
+			t.Fatalf("next_transition committed-only = %q, want true", byName["committed-only"])
+		}
 	}
 }
 
@@ -189,6 +279,140 @@ func TestReviewAssessHumanReadableOutputOmitsJSON(t *testing.T) {
 	rendered := output.String()
 	if strings.Contains(rendered, "{") || !strings.Contains(rendered, "Risk: passive") || !strings.Contains(rendered, "Candidate: current-changes") {
 		t.Fatalf("human-readable review assess output = %q", rendered)
+	}
+	if !strings.Contains(rendered, "review due: no (passive)") {
+		t.Fatalf("human-readable review assess output missing the review-due line: %q", rendered)
+	}
+}
+
+// TestReviewAssessHumanReadableOutputNamesDueTransition proves the
+// human-readable line for a review_due=true candidate also prints the exact
+// runnable `gentle-ai review status ...` continuation, so an orchestrator
+// reading plain text (not --json) still gets the literal command rather than
+// having to re-derive it from the ODD prose rule.
+func TestReviewAssessHumanReadableOutputNamesDueTransition(t *testing.T) {
+	repo := initReviewCLIRepo(t)
+	writeReviewStartCandidate(t, repo, "internal/auth/login.go", "package auth\n", 0o644)
+
+	var output bytes.Buffer
+	if err := RunReview([]string{"assess", "--cwd", repo}, &output); err != nil {
+		t.Fatalf("review assess: %v\n%s", err, output.String())
+	}
+	rendered := output.String()
+	wantLine := fmt.Sprintf("review due: yes (high_risk) -> gentle-ai review status %s --contract=%s --next-transition=true", reviewTransitionShellWord("--cwd="+repo), ReviewIntegrationContractV2)
+	if !strings.Contains(rendered, wantLine) {
+		t.Fatalf("human-readable review assess output = %q, want it to contain %q", rendered, wantLine)
+	}
+}
+
+// TestReviewAssessMediumAtBudgetReviewDueSliceBudgetReached proves the ODD
+// slice-budget rule directly: a medium-risk candidate whose changed_lines
+// reaches reviewtransaction.LargeChangeLines is review_due=true with reason
+// slice_budget_reached, and its next_transition carries the exact tokens
+// review status --next-transition needs, with --base-ref echoed verbatim and
+// --agent present only when the caller supplied one.
+func TestReviewAssessMediumAtBudgetReviewDueSliceBudgetReached(t *testing.T) {
+	reviewEnabledHome(t)
+	repo := initReviewCLIRepo(t)
+	baseRef := strings.TrimSpace(runReviewCLIGit(t, repo, "rev-parse", "HEAD"))
+	lines := make([]string, reviewtransaction.LargeChangeLines)
+	for index := range lines {
+		lines[index] = fmt.Sprintf("scratch change line %03d", index+1)
+	}
+	writeReviewStartCandidate(t, repo, "notes/scratch-large.txt", strings.Join(lines, "\n")+"\n", 0o644)
+	runReviewCLIGit(t, repo, "commit", "-qm", "add large scratch file")
+
+	for _, test := range []struct {
+		name  string
+		agent string
+	}{
+		{name: "without agent"},
+		{name: "with agent", agent: string(model.AgentClaudeCode)},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			args := []string{"assess", "--cwd", repo, "--base-ref", baseRef, "--committed-only", "--json"}
+			if test.agent != "" {
+				args = append(args, "--agent", test.agent)
+			}
+			var output bytes.Buffer
+			if err := RunReview(args, &output); err != nil {
+				t.Fatalf("review assess: %v\n%s", err, output.String())
+			}
+			var result ReviewAssessmentResult
+			if err := json.Unmarshal(output.Bytes(), &result); err != nil {
+				t.Fatalf("decode review assess envelope: %v\n%s", err, output.String())
+			}
+			if result.Risk != "medium" {
+				t.Fatalf("medium-at-budget review assess risk = %q, want medium: %#v", result.Risk, result)
+			}
+			if result.ChangedLines < reviewtransaction.LargeChangeLines {
+				t.Fatalf("medium-at-budget review assess changed_lines = %d, want >= %d", result.ChangedLines, reviewtransaction.LargeChangeLines)
+			}
+			if !result.ReviewDue || result.ReviewDueReason != "slice_budget_reached" {
+				t.Fatalf("medium-at-budget review_due = %v/%q, want true/slice_budget_reached", result.ReviewDue, result.ReviewDueReason)
+			}
+			if result.Candidate.Consumed {
+				t.Fatalf("fresh medium-at-budget candidate reported consumed: %#v", result.Candidate)
+			}
+			assertReviewAssessNextTransition(t, result.NextTransition, repo, test.agent, baseRef)
+		})
+	}
+}
+
+// TestReviewAssessConsumedCandidateReportsAlreadyReviewed proves consumed
+// takes precedence over every risk tier: once a candidate's exact terminal
+// review authority is acknowledged, re-assessing the identical scope reports
+// review_due=false/already_reviewed and candidate.consumed=true, never the
+// tier-derived reason the same content would otherwise carry.
+func TestReviewAssessConsumedCandidateReportsAlreadyReviewed(t *testing.T) {
+	reviewEnabledHome(t)
+	repo := initReviewCLIRepo(t)
+	lineage := startLowRiskFacadeReview(t, repo)
+	store, err := reviewtransaction.CompactAuthoritativeStore(t.Context(), repo, lineage)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertApprovedCompactAuthorityBurned(t, store, lineage)
+
+	var output bytes.Buffer
+	if err := RunReview([]string{"assess", "--cwd", repo, "--json"}, &output); err != nil {
+		t.Fatalf("review assess: %v\n%s", err, output.String())
+	}
+	var result ReviewAssessmentResult
+	if err := json.Unmarshal(output.Bytes(), &result); err != nil {
+		t.Fatalf("decode review assess envelope: %v\n%s", err, output.String())
+	}
+	if !result.Candidate.Consumed {
+		t.Fatalf("review assess over an acknowledged candidate reported consumed=false: %#v", result.Candidate)
+	}
+	if result.ReviewDue || result.ReviewDueReason != "already_reviewed" {
+		t.Fatalf("consumed candidate review_due = %v/%q, want false/already_reviewed", result.ReviewDue, result.ReviewDueReason)
+	}
+	if result.NextTransition != nil {
+		t.Fatalf("consumed candidate published a next_transition it must not offer: %#v", result.NextTransition)
+	}
+}
+
+// TestReviewAssessInvalidAgentRefusesTyped proves an unsupported --agent
+// value fails the same typed classification review status already uses
+// (reviewImmutableTransportUnsupportedReason), rather than a bare generic
+// error, so a caller can branch on it exactly as it would branch on the
+// equivalent review status refusal.
+func TestReviewAssessInvalidAgentRefusesTyped(t *testing.T) {
+	repo := initReviewCLIRepo(t)
+	writeReviewStartCandidate(t, repo, "docs/guide.md", "ordinary documentation prose.\n", 0o644)
+
+	var output bytes.Buffer
+	err := RunReview([]string{"assess", "--cwd", repo, "--agent", "unknown-runtime"}, &output)
+	if err == nil {
+		t.Fatalf("review assess with an unsupported --agent unexpectedly succeeded: %s", output.String())
+	}
+	var typed *reviewIntegrationPreflightError
+	if !errors.As(err, &typed) {
+		t.Fatalf("review assess invalid --agent error = %#v (%T), want a *reviewIntegrationPreflightError", err, err)
+	}
+	if classification := typed.classification(); classification.Code != reviewImmutableTransportUnsupportedCode {
+		t.Fatalf("review assess invalid --agent classification = %#v, want code %q", classification, reviewImmutableTransportUnsupportedCode)
 	}
 }
 

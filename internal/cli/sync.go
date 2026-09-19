@@ -17,28 +17,28 @@ import (
 	"strings"
 	"time"
 
-	"github.com/gentleman-programming/gentle-ai/v2/internal/agents"
-	opencodeagent "github.com/gentleman-programming/gentle-ai/v2/internal/agents/opencode"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/backup"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/components/communitytool"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/components/engram"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/components/filemerge"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/components/gga"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/components/mcp"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/components/opencodeplugin"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/components/permissions"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/components/persona"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/components/sdd"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/components/skills"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/components/telemetryruntime"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/components/theme"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
-	opencodeactivation "github.com/gentleman-programming/gentle-ai/v2/internal/opencode"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/pipeline"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/state"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/system"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/telemetry"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/verify"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/agents"
+	opencodeagent "github.com/gentleman-programming/gentle-ai/v3/internal/agents/opencode"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/backup"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/components/communitytool"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/components/engram"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/components/filemerge"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/components/gga"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/components/mcp"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/components/opencodeplugin"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/components/permissions"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/components/persona"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/components/sdd"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/components/skills"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/components/telemetryruntime"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/components/theme"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
+	opencodeactivation "github.com/gentleman-programming/gentle-ai/v3/internal/opencode"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/pipeline"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/state"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/system"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/telemetry"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/verify"
 )
 
 // SyncFlags holds parsed CLI flags for the sync command.
@@ -508,7 +508,6 @@ type syncRuntime struct {
 func newSyncRuntime(homeDir string, selection model.Selection) (*syncRuntime, error) {
 	backupRoot := filepath.Join(homeDir, ".gentle-ai", "backups")
 	workspaceDir, _ := os.Getwd()
-	workspaceDir = resolveOpenClawWorkspaceDir(homeDir, workspaceDir, selection.Agents)
 	compatibilityTransaction, err := newCompatibilityRefreshTransaction(homeDir, selection.Components, selection)
 	if err != nil {
 		return nil, err
@@ -627,9 +626,6 @@ func (r *syncRuntime) stagePlan() pipeline.StagePlan {
 		})
 		apply = append(apply, piCodeGraphSyncStep{id: "sync:community-tool:pi-codegraph", homeDir: r.homeDir, workspaceDir: r.workspaceDir, changedFiles: &r.changedFiles})
 	}
-	if r.selection.HasCommunityTool(model.CommunityToolRTK) {
-		apply = append(apply, rtkSyncStep{id: "sync:community-tool:rtk", homeDir: r.homeDir, workspaceDir: r.workspaceDir, agents: r.agentIDs, changedFiles: &r.changedFiles})
-	}
 
 	return pipeline.StagePlan{Prepare: prepare, Apply: apply}
 }
@@ -739,11 +735,6 @@ func syncBackupTargets(homeDir, workspaceDir string, selection model.Selection, 
 			paths[path] = struct{}{}
 		}
 	}
-	if selection.HasCommunityTool(model.CommunityToolRTK) {
-		for _, path := range communitytool.RTKManagedPathsForAgents(homeDir, selection.Agents) {
-			paths[path] = struct{}{}
-		}
-	}
 	for _, path := range communitytool.PiCodeGraphPaths(homeDir, workspaceDir) {
 		paths[path] = struct{}{}
 	}
@@ -815,7 +806,7 @@ func syncComponentPathsWithWorkspace(homeDir, workspaceDir string, selection mod
 //   - Step 1: SystemPromptFile (the marker-bound markdown block — CLAUDE.md /
 //     AGENTS.md / equivalent).
 //   - Step 3: managed output-style overlay (only when the agent supports it).
-//   - Pi: the project-local gentle-pi persona state file.
+//   - Pi: the home-level gentle-pi persona state file.
 //
 // Step 2 does not merge OpenCode/Kilocode persona definitions during sync. A
 // narrow stale-state cleanup is tracked separately as a backup-only target.
@@ -830,11 +821,7 @@ func syncPersonaPathsWithWorkspace(homeDir, workspaceDir string, selection model
 	paths := []string{}
 	for _, adapter := range adapters {
 		if adapter.Agent() == model.AgentPi {
-			rootDir := workspaceDir
-			if strings.TrimSpace(rootDir) == "" {
-				rootDir = homeDir
-			}
-			paths = append(paths, persona.PiPersonaConfigPath(rootDir))
+			paths = append(paths, persona.PiPersonaConfigPath(homeDir))
 			continue
 		}
 		targetDir := componentInjectionDir(homeDir, workspaceDir, adapter)
@@ -890,34 +877,6 @@ type codeGraphGuidanceSyncStep struct {
 type piCodeGraphSyncStep struct {
 	id, homeDir, workspaceDir string
 	changedFiles              *[]string
-}
-
-type rtkSyncStep struct {
-	id, homeDir, workspaceDir string
-	agents                    []model.AgentID
-	changedFiles              *[]string
-}
-
-func (s rtkSyncStep) ID() string { return s.id }
-
-func (s rtkSyncStep) Run() error {
-	paths := communitytool.RTKManagedPathsForAgents(s.homeDir, s.agents)
-	before, err := snapshotSyncFiles(paths)
-	if err != nil {
-		return fmt.Errorf("snapshot RTK files: %w", err)
-	}
-	_, err = installCommunityToolWithHomeAndAgents(model.CommunityToolRTK, s.workspaceDir, s.homeDir, s.agents, rtkHomeRunner{homeDir: s.homeDir}, communitytool.DetectorFunc(cmdLookPath))
-	if err != nil {
-		return errors.Join(fmt.Errorf("sync RTK: %w", err), restoreSyncFiles(before))
-	}
-	changed, err := changedSyncFiles(paths, before)
-	if err != nil {
-		return fmt.Errorf("compare RTK sync files: %w", err)
-	}
-	if s.changedFiles != nil {
-		*s.changedFiles = append(*s.changedFiles, changed...)
-	}
-	return nil
 }
 
 // openCodePluginRefreshSyncStep refreshes already-installed managed
@@ -1095,7 +1054,7 @@ func (s componentSyncStep) Run() error {
 			var res engram.InjectionResult
 			var err error
 			if adapter.Agent() == model.AgentOpenClaw {
-				res, err = engram.InjectWithPromptDir(s.homeDir, s.workspaceDir, adapter)
+				res, err = engram.InjectWithPromptDir(s.homeDir, componentInjectionDir(s.homeDir, s.workspaceDir, adapter), adapter)
 			} else {
 				targetDir := componentInjectionDir(s.homeDir, s.workspaceDir, adapter)
 				res, err = engram.InjectWithOptions(targetDir, adapter, engramOpts)
@@ -1164,7 +1123,6 @@ func (s componentSyncStep) Run() error {
 				CodexModelAssignments:              s.selection.CodexModelAssignments,
 				CodexCarrilModelAssignments:        s.selection.CodexCarrilModelAssignments,
 				CodexPhaseModelAssignments:         s.selection.CodexPhaseModelAssignments,
-				WorkspaceDir:                       s.workspaceDir,
 				StrictTDD:                          s.selection.StrictTDD,
 				PreserveOpenCodeOrchestratorPrompt: profileStrategy == model.SDDProfileStrategyExternalSingleActive,
 				Profiles:                           profiles,
@@ -1244,11 +1202,7 @@ func (s componentSyncStep) Run() error {
 		// remains an install-only concern.
 		for _, adapter := range adapters {
 			if adapter.Agent() == model.AgentPi {
-				rootDir := s.workspaceDir
-				if strings.TrimSpace(rootDir) == "" {
-					rootDir = s.homeDir
-				}
-				res, err := persona.InjectPiPersona(rootDir, s.selection.Persona)
+				res, err := persona.InjectPiPersona(s.homeDir, s.selection.Persona)
 				if err != nil {
 					return fmt.Errorf("sync persona for %q: %w", adapter.Agent(), err)
 				}
@@ -1286,6 +1240,9 @@ func (s componentSyncStep) Run() error {
 		return nil
 
 	case model.ComponentOpenCodeGentleLogo:
+		if !containsAgent(s.agents, model.AgentOpenCode) {
+			return nil
+		}
 		res, err := opencodeplugin.Install(s.homeDir, model.OpenCodePluginGentleLogo)
 		if err != nil {
 			return fmt.Errorf("sync OpenCode Gentle Logo plugin: %w", err)
@@ -2016,8 +1973,6 @@ func restorePersistedCommunityTools(homeDir string, selection *model.Selection, 
 			switch model.CommunityToolID(tool) {
 			case model.CommunityToolCodeGraph:
 				selection.CommunityTools = append(selection.CommunityTools, model.CommunityToolCodeGraph)
-			case model.CommunityToolRTK:
-				selection.CommunityTools = append(selection.CommunityTools, model.CommunityToolRTK)
 			}
 		}
 		return
