@@ -16,6 +16,7 @@ import (
 // call site: both are nil here because the group is fully configured before
 // Start and there is no handle to release.
 func configureProcessGroup(cmd *exec.Cmd) (afterStart func(), release func()) {
+	cmd.WaitDelay = catalogWaitDelay
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	cmd.Cancel = func() error {
 		if cmd.Process != nil {

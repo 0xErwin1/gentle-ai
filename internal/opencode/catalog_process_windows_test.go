@@ -4,12 +4,15 @@ package opencode
 
 import (
 	"context"
+	"errors"
 	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"testing"
 	"time"
+
+	"golang.org/x/sys/windows"
 )
 
 // TestRunCatalogCommandDeadlineNotBlockedByInheritingDescendantWindows is the
@@ -65,5 +68,64 @@ func main() {
 	}
 	if elapsed := time.Since(started); elapsed > 10*time.Second {
 		t.Fatalf("discovery stayed blocked for %v; want bounded by the 300ms deadline", elapsed)
+	}
+}
+
+// TestRunCatalogCommandDeadlineNotBlockedByInheritingDescendantWindowsFallback verifies
+// that when Job Object creation fails, cmd.WaitDelay is still configured and bounds
+// discovery shutdown even though the grandchild cannot be assigned to a Job Object.
+func TestRunCatalogCommandDeadlineNotBlockedByInheritingDescendantWindowsFallback(t *testing.T) {
+	oldHook := testHookCreateJobObject
+	t.Cleanup(func() { testHookCreateJobObject = oldHook })
+	testHookCreateJobObject = func(*windows.SecurityAttributes, *uint16) (windows.Handle, error) {
+		return 0, errors.New("simulated job object creation failure")
+	}
+
+	dir := t.TempDir()
+	helper := filepath.Join(dir, "descendant-fallback-helper.exe")
+	source := filepath.Join(dir, "main.go")
+	src := `package main
+
+import (
+	"fmt"
+	"os"
+	"os/exec"
+	"time"
+)
+
+func main() {
+	if len(os.Args) > 1 && os.Args[1] == "grandchild" {
+		time.Sleep(30 * time.Second)
+		return
+	}
+	grandchild := exec.Command(os.Args[0], "grandchild")
+	grandchild.Stdout = os.Stdout
+	grandchild.Stderr = os.Stderr
+	_ = grandchild.Start()
+	fmt.Println("custom/model")
+	fmt.Println("{\"id\":\"model\",\"name\":\"Model\",\"capabilities\":{\"toolcall\":true}}")
+	time.Sleep(25 * time.Millisecond)
+}
+`
+	if err := os.WriteFile(source, []byte(src), 0o600); err != nil {
+		t.Fatalf("write helper: %v", err)
+	}
+	if err := exec.Command("go", "build", "-o", helper, source).Run(); err != nil {
+		t.Fatalf("build helper: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+	r, err := runCatalogCommand(ctx, Command{Path: helper})
+	if err != nil {
+		t.Fatalf("runCatalogCommand() error = %v", err)
+	}
+	started := time.Now()
+	_, _ = io.ReadAll(r)
+	if closer, ok := r.(io.Closer); ok {
+		_ = closer.Close()
+	}
+	if elapsed := time.Since(started); elapsed > 10*time.Second {
+		t.Fatalf("discovery stayed blocked for %v; want bounded by the 300ms deadline + WaitDelay fallback", elapsed)
 	}
 }
