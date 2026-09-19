@@ -264,7 +264,7 @@ OPENCODE_CONFIG_DIR` and a canonical `TMPDIR`.
   golden and no ledger cost baseline moved: the baselines measure
   review-ledger-contract.md, which this change does not touch.
 
-- [ ] **T-C2 — The block terminator is written outside the budget.**
+- [x] **T-C2 — The block terminator is written outside the budget.**
   Route: direct inline (one mechanical file, already understood).
   `reviewLensContextBlock` sets `budget := reviewLensContextRuntimeBudget(runtime) - block.Len()`
   and decrements per section, then writes `reviewLensContextTerminator + "\n"`
@@ -274,5 +274,22 @@ OPENCODE_CONFIG_DIR` and a canonical `TMPDIR`.
   comment claims to bound "the whole delivered block" and does not.
   Acceptance: the terminator is reserved before sections are consumed; a test
   pins that a block landing exactly on the cap stays within it.
+  Done. `reviewLensContextBlock` now deducts `len(reviewLensContextTerminator
+  + "\n")` alongside the existing `- block.Len()`, before the first `consume`,
+  and writes that same reserved string at the end. Zero and negative budget
+  handling is untouched: `consume` still refuses on the first negative result.
+  The comment now states exactly what is reserved and why, and records that
+  this was never a dead end -- the admission probe and the materialization
+  share this function, so they always agreed.
+  Observed: RED `a block landing exactly on the cap was delivered at 204829
+  bytes, 29 over the 204800 byte runtime budget` -> GREEN on
+  TestLensContextBlockOnTheCapStaysWithinTheCap, which binary-searches the
+  largest admitted patch through the real function and derives the overshoot
+  from reviewLensContextTerminator rather than spelling 29.
+  Checks: `go test ./internal/cli/ -run 'Lens|Budget|Context'` ok (103s),
+  gofmtcheck and `go vet ./internal/...` clean. No existing boundary
+  assertion moved: the only exact-budget assertions live in
+  internal/reviewerprovider/capture_runtimes_test.go and pin the constant
+  itself, which this change does not touch.
 
 Checked off only on observed outcome. Neither is started yet.
