@@ -56,3 +56,18 @@ The 2026-09-20 edition was generated ad hoc from a local content JSON. Nothing i
   - Two findings fixed in commit `7e2ba04f`: the README claimed a rebuild is byte-for-byte (false — PDF build metadata changes the hash; page count and text do match), and nothing linked to the archive, so the community could not find it. Added a `Novedades` entry to the README nav.
 - 2026-09-20 T3: shipped `assets/examples/novedades-plantilla.json` in the global `gentle-docs` skill and referenced it from SKILL.md; `pytest` -> 26 passed (the new example is covered by the parametrized build test).
 - Status: all tasks done. Branch `docs/novedades-archive` has 2 commits, not pushed. Push and PR remain the user's decision.
+- 2026-09-20 (correction): fixed the commit range in `annex.note` — it read `Rango: 82a6de96..upstream/main`, which is unreproducible (`upstream/main` is a moving ref) and unanchored (nothing named the release the base hash corresponds to). Verified `82a6de96` is exactly the `v3.4.0` tag and `f0782af2` is the current `upstream/main` tip.
+  - Route: delegated direct (writer trigger: 2+ non-trivial files touched — `novedades.json`, `plantilla.json`, `README.md`, both PDFs).
+  - Edits:
+    - `docs/novedades/2026-09-20/novedades.json` (`annex.note`, line 334): `Rango: 82a6de96..upstream/main` -> `Rango: v3.4.0 (82a6de96)..f0782af2`.
+    - `docs/novedades/plantilla.json` (line 173): `Rango: <hash-base>..<hash-head>` -> `Rango: <tag-release-anterior> (<hash-base>)..<hash-head>`.
+    - `docs/novedades/README.md`: "Reproducibility" section now states the anchoring rule (base = latest release tag + resolved hash, head = fixed commit hash, never a moving ref). "Producing a new edition" step 1 rewritten to resolve the base via `git describe --tags --abbrev=0 main` (or newest `v*` ancestor tag) resolved to its hash, and the head via `git log -1 --format=%H main`; step 2 now also gives `git rev-list --count --no-merges <base>..<head>` for the non-merge commit count (19 total / 17 non-merge for this edition). Index table "Commit range" column now shows `` `v3.4.0..f0782af2` `` (compare URL unchanged, still uses the raw hashes).
+  - Rebuilt both PDFs from the corrected JSON and overwrote the archived copies.
+  - Verification (all commands run in the foreground from the worktree):
+    - `build.py docs/novedades/2026-09-20/novedades.json --out <scratchpad>/rebuild --theme both`: exit 0, both PDFs produced.
+    - `build.py docs/novedades/plantilla.json --out <scratchpad>/rebuild-template --theme both`: exit 0, both PDFs produced (template still valid after the placeholder edit).
+    - Page counts via pypdfium2: rebuilt dark 12 / light 12 (matches the archived count).
+    - `scripts/contrast.py`: "all 25 token pairs pass >= 4.5:1 in every theme", exit 0.
+    - Text extraction of the rebuilt dark PDF (pypdfium2): `v3.4.0` present, `f0782af2` present, `upstream/main` absent from the annex range line.
+    - `scripts/preview.py` contact sheet rendered and visually reviewed: annex page (page 11 of 12) shows "Rango: v3.4.0 (82a6de96)..f0782af2" cleanly, no layout breakage.
+  - Deviation: none.

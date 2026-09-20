@@ -331,7 +331,7 @@
   "annex": {
     "title": "Anexo",
     "heading": "Los 17 commits",
-    "note": "Agrupados por sección, con el mensaje original del historial (en inglés). Rango: 82a6de96..upstream/main, rama main de Gentleman-Programming/gentle-ai.",
+    "note": "Agrupados por sección, con el mensaje original del historial (en inglés). Rango: v3.4.0 (82a6de96)..f0782af2, rama main de Gentleman-Programming/gentle-ai.",
     "groups": [
       {
         "title": "01 · La revisión viene activada",
