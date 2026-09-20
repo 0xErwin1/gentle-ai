@@ -10,7 +10,9 @@ underneath for anyone who wants the exact detail (PR numbers, field names, commi
 not a marketing document and it does not replace the commit history — it explains it.
 
 Each edition is a self-contained folder with its source data and both rendered PDFs, so any past
-edition can be re-read, re-verified, or rebuilt byte-for-byte from what's committed here.
+edition can be re-read, re-verified, or rebuilt from what's committed here. A rebuild reproduces
+the same document, not the same bytes: PDF output carries build-time metadata, so hashes differ
+while pages and text match.
 
 ## Structure every edition follows
 
@@ -53,7 +55,8 @@ Every edition's `novedades.json` records its commit range in `annex.note` (`<bas
 the exact set of commits it describes is always recoverable from git, and the document itself can
 always be rebuilt. The visual design (fonts, colors, layout, contrast rules) lives entirely in the
 global `gentle-docs` skill, not in this repository — rebuilding from an archived JSON with a
-current copy of the skill reproduces the same document.
+current copy of the skill reproduces the same document. Compare a rebuild by page count and text,
+never by file hash.
 
 To rebuild an edition (replace the date below):
 
