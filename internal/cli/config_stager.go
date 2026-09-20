@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 
 	"github.com/gentleman-programming/gentle-ai/v3/internal/agents"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/components/agentguidance"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/components/communitytool"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/components/engram"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/components/gga"
@@ -81,11 +82,58 @@ func (stager configurationStager) Stage(state configdomain.DesiredState, stageRo
 		}
 	}
 
+	// Guidance runs outside the component loop, exactly where the installer
+	// schedules it: it is installed for every agent that can hold it, never
+	// because a component was selected. An agent without it has no way to
+	// choose between direct, delegated and proposed work, and skipping it was
+	// how a declaratively rendered home lost the mandatory ODD protocol while
+	// the installer kept writing it.
+	if err := stageRoutingGuidance(stageRoot, adapters); err != nil {
+		return err
+	}
+
 	if err := stagePiBackgroundPolicy(stageRoot, selection, adapters); err != nil {
 		return err
 	}
 
 	return stager.rebaseStagedPaths(stageRoot)
+}
+
+// stageRoutingGuidance mirrors the installer's routing step against the staging
+// root, so a rendered home carries the same always-on guidance an install would
+// write. The injector owns every path decision -- the adapter resolves the file
+// it writes, and the injector reserves a Jinja adapter's router template before
+// its module -- so this only has to hand each agent the root that stands in for
+// its installation directory.
+//
+// Pi is skipped, matching the installer: gentle-pi owns the Pi parent's
+// guidance, and the installer only retires legacy sections from it, so staging
+// one would describe an installation that does not exist.
+//
+// The OpenCode family is the one case where the installer and a render can
+// legitimately disagree about the file: install resolves the effective layered
+// project-over-global settings path from the working directory, and a render
+// must not depend on where it happens to run. Leaving the option empty keeps the
+// adapter's global fallback, which is the same choice staged SDD makes for the
+// same reason.
+func stageRoutingGuidance(stageRoot string, adapters []agents.Adapter) error {
+	for _, adapter := range adapters {
+		agent := adapter.Agent()
+		if agent == model.AgentPi || !adapter.SupportsSystemPrompt() {
+			continue
+		}
+
+		target := componentInjectionDirScoped(stageRoot, "", ScopeGlobal, adapter)
+		if agentguidance.DeliversThroughOrchestratorPrompt(agent) {
+			target = stageRoot
+		}
+
+		if _, err := agentguidance.InjectRouting(target, agent); err != nil {
+			return fmt.Errorf("stage routing guidance for %q: %w", agent, err)
+		}
+	}
+
+	return nil
 }
 
 // rebaseStagedPaths retargets the staging root recorded inside staged content
