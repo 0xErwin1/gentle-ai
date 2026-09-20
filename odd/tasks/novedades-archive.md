@@ -31,8 +31,8 @@ The 2026-09-20 edition was generated ad hoc from a local content JSON. Nothing i
 
 ## Tasks
 - [x] T1 `docs/novedades/` skeleton: README (structure, convention, index, how to produce), plantilla.json, first edition folder with source JSON and both PDFs; commit.
-- [ ] T2 Parent verification: rebuild the PDFs from the archived JSON, compare page counts, review a preview image, confirm the README index matches the files on disk.
-- [ ] T3 (outside this repo) `gentle-docs` skill: ship the novedades template as a preset so future editions start from it.
+- [x] T2 Parent verification: rebuild the PDFs from the archived JSON, compare page counts, review a preview image, confirm the README index matches the files on disk.
+- [x] T3 (outside this repo) `gentle-docs` skill: ship the novedades template as a preset so future editions start from it.
 
 ## Acceptance criteria
 - A reader can open `docs/novedades/README.md` and understand what the publication is, how to read it, and which editions exist.
@@ -52,3 +52,7 @@ The 2026-09-20 edition was generated ad hoc from a local content JSON. Nothing i
     - Every link/path in the README index (`README.md`, both PDFs, `plantilla.json`, `novedades.json`) confirmed to exist on disk.
   - Commit: see git log on `docs/novedades-archive` for the T1 commit hash and subject.
   - Deviation: none. Open question: none for T1 (T2 parent verification and T3 skill-side preset remain open, as scoped).
+- 2026-09-20 T2 (parent, inline): rebuilt both PDFs from the archived `novedades.json` -> 12/12 pages, extracted text identical to the archived copies; `contrast.py` exit 0; preview rendered and reviewed; README index links resolve.
+  - Two findings fixed in commit `7e2ba04f`: the README claimed a rebuild is byte-for-byte (false — PDF build metadata changes the hash; page count and text do match), and nothing linked to the archive, so the community could not find it. Added a `Novedades` entry to the README nav.
+- 2026-09-20 T3: shipped `assets/examples/novedades-plantilla.json` in the global `gentle-docs` skill and referenced it from SKILL.md; `pytest` -> 26 passed (the new example is covered by the parametrized build test).
+- Status: all tasks done. Branch `docs/novedades-archive` has 2 commits, not pushed. Push and PR remain the user's decision.
