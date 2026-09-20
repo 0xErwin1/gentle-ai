@@ -73,6 +73,8 @@ Every field, what it accepts and what omitting it means is in the [reference](de
 
 `render`, `plan`, `diff`, `apply` and `reconcile` take `--destination` (the root being configured) and `--stage` (an isolated staging root). `apply` and `reconcile` also require `--home`, where the desired state and the ownership manifest are persisted.
 
+A staged tree carries everything an install writes for the same document, including the injections that no component owns. The routing guidance is the one to know about: ODD is installed for every selected agent that reads a system prompt, whether or not the SDD component is selected, so it is staged too. Pi is the exception on both paths, because `gentle-pi` owns the Pi parent's instructions and an install only retires legacy blocks from them.
+
 Read-only operations always emit JSON on stdout.
 
 ### Determinism
