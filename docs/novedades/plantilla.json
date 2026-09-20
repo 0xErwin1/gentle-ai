@@ -170,7 +170,7 @@
   "annex": {
     "title": "Anexo",
     "heading": "Los <N> commits",
-    "note": "Agrupados por sección, con el mensaje original del historial (en inglés). Rango: <hash-base>..<hash-head>, rama main de Gentleman-Programming/gentle-ai.",
+    "note": "Agrupados por sección, con el mensaje original del historial (en inglés). Rango: <tag-release-anterior> (<hash-base>)..<hash-head>, rama main de Gentleman-Programming/gentle-ai.",
     "groups": [
       {
         "title": "01 · <título corto, igual al de la sección s1>",
