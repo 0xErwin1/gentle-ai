@@ -1,0 +1,197 @@
+{
+  "title": "Lo nuevo en<br><em>Gentle AI</em>",
+  "subtitle": "Novedades en main · <día> de <mes> de <año>",
+  "kicker": "Gentle AI <span>·</span> Novedades en main",
+  "lang": "es",
+  "footer": "Gentle AI · Novedades en main",
+  "output": "gentle-ai-novedades-YYYY-MM-DD",
+  "cover": {
+    "stats": [
+      {
+        "value": "<número de commits en el rango>",
+        "label": "cambios"
+      },
+      {
+        "value": "<número de archivos tocados>",
+        "label": "archivos"
+      },
+      {
+        "value": "+<líneas agregadas>",
+        "label": "líneas nuevas"
+      },
+      {
+        "value": "-<líneas quitadas>",
+        "label": "líneas quitadas"
+      }
+    ],
+    "note": "Una o dos frases: qué es este documento y por qué se puede leer sin saber programar."
+  },
+  "intro": {
+    "eyebrow": "En 30 segundos",
+    "lead": "Un párrafo breve que resume la entrega completa: qué es Gentle AI en una frase, y qué trae esta entrega (lo que se va a notar y lo que no).",
+    "highlights": [
+      {
+        "title": "<título corto del cambio 1 — el más visible primero>",
+        "text": "Una frase: qué cambió, en el lenguaje del lector."
+      },
+      {
+        "title": "<título corto del cambio 2>",
+        "text": "Una frase."
+      },
+      {
+        "title": "<título corto del cambio 3>",
+        "text": "Una frase."
+      },
+      {
+        "title": "<título corto del cambio 4 — puede ser interno>",
+        "text": "Una frase."
+      }
+    ]
+  },
+  "audience": {
+    "title": "¿Te afecta?",
+    "heading": "Busca tu caso",
+    "text": "Si no aparece, no tienes que hacer nada: todo se actualiza por dentro.",
+    "items": [
+      {
+        "who": "<perfil de usuario que le toca la sección 1, ej. 'Usas X'>",
+        "what": "Qué cambia para ese perfil, en una frase.",
+        "section": "s1"
+      },
+      {
+        "who": "<perfil de usuario que le toca la sección 2>",
+        "what": "Qué cambia para ese perfil, en una frase.",
+        "section": "s2"
+      }
+    ],
+    "howto": {
+      "title": "Cómo leer este documento",
+      "text": "Cada sección empieza con una etiqueta que te dice si te toca: <span class=\"tag tag-you\">Te afecta si...</span> <span class=\"tag tag-muted\">Solo cambia por dentro</span>. Y cierra con unas <b>notas técnicas</b> para quien quiera los detalles exactos. Si no las necesitas, sáltalas: el texto principal se entiende solo."
+    }
+  },
+  "sections": [
+    {
+      "id": "s1",
+      "title": "<título de la sección, en lenguaje de lector no técnico>",
+      "tag": {
+        "text": "Te afecta si <condición> (o 'Solo cambia por dentro' si no aplica)",
+        "kind": "you"
+      },
+      "lead": "Una frase que resume la sección completa; aparece también junto al número en el índice.",
+      "blocks": [
+        {
+          "type": "p",
+          "text": "Párrafo de contexto: qué pasaba antes, en lenguaje llano. Se permite <b>negrita</b>, <i>cursiva</i> y <code>código</code> inline."
+        },
+        {
+          "type": "p",
+          "text": "Segundo párrafo: qué cambia ahora, y por qué le sirve al lector."
+        },
+        {
+          "type": "keybox",
+          "label": "<etiqueta corta, ej. 'Si no lo quieres'>",
+          "text": "Un dato puntual y accionable, ej. el comando exacto para revertir el cambio: <code>comando --flag</code>."
+        },
+        {
+          "type": "analogy",
+          "text": "Opcional: una analogía cotidiana que aterrice el concepto técnico sin tecnicismos."
+        },
+        {
+          "type": "tech",
+          "pairs": [
+            [
+              "<etiqueta técnica, ej. 'Cambio'>",
+              "Detalle exacto para quien quiere el nivel técnico, con <code>identificadores</code> reales."
+            ],
+            [
+              "PR",
+              "#<número>"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "id": "s2",
+      "title": "<título de la segunda sección>",
+      "tag": {
+        "text": "Solo cambia por dentro",
+        "kind": "muted"
+      },
+      "lead": "Una frase que resume esta sección.",
+      "blocks": [
+        {
+          "type": "p",
+          "text": "Párrafo de contexto."
+        },
+        {
+          "type": "bullets",
+          "items": [
+            "<b>Punto uno.</b> Detalle.",
+            "<b>Punto dos.</b> Detalle."
+          ]
+        },
+        {
+          "type": "h2",
+          "text": "Subtítulo opcional dentro de la sección, texto plano"
+        },
+        {
+          "type": "p",
+          "text": "Párrafo adicional si la sección necesita un segundo bloque de tema."
+        },
+        {
+          "type": "tech",
+          "pairs": [
+            [
+              "<etiqueta técnica>",
+              "Detalle técnico."
+            ],
+            [
+              "Issues",
+              "#<número>, #<número>"
+            ]
+          ]
+        }
+      ]
+    }
+  ],
+  "glossary_title": "Glosario",
+  "glossary_heading": "Las palabras raras, en simple",
+  "glossary": [
+    {
+      "term": "<término técnico usado en el documento>",
+      "def": "Definición de una línea, en lenguaje llano."
+    }
+  ],
+  "closing": {
+    "quote": "Frase de cierre que resume el espíritu de la entrega, puede usar <em>énfasis</em>.",
+    "sign": "Así se construye."
+  },
+  "annex": {
+    "title": "Anexo",
+    "heading": "Los <N> commits",
+    "note": "Agrupados por sección, con el mensaje original del historial (en inglés). Rango: <hash-base>..<hash-head>, rama main de Gentleman-Programming/gentle-ai.",
+    "groups": [
+      {
+        "title": "01 · <título corto, igual al de la sección s1>",
+        "section": "s1",
+        "rows": [
+          [
+            "<hash corto>",
+            "<mensaje de commit real, tal como aparece en git log>"
+          ]
+        ]
+      },
+      {
+        "title": "02 · <título corto, igual al de la sección s2>",
+        "section": "s2",
+        "rows": [
+          [
+            "<hash corto>",
+            "<mensaje de commit real>"
+          ]
+        ]
+      }
+    ]
+  }
+}

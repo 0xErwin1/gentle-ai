@@ -1,0 +1,430 @@
+{
+  "title": "Lo nuevo en<br><em>Gentle AI</em>",
+  "subtitle": "Novedades en main · 20 de septiembre de 2026",
+  "kicker": "Gentle AI <span>·</span> Novedades en main",
+  "lang": "es",
+  "footer": "Gentle AI · Novedades en main",
+  "output": "gentle-ai-novedades-2026-09-20",
+  "cover": {
+    "stats": [
+      {
+        "value": "17",
+        "label": "cambios"
+      },
+      {
+        "value": "58",
+        "label": "archivos"
+      },
+      {
+        "value": "+2,351",
+        "label": "líneas nuevas"
+      },
+      {
+        "value": "-365",
+        "label": "líneas quitadas"
+      }
+    ],
+    "note": "Este documento cuenta lo que cambió desde la entrega anterior. No necesitas saber programar para entenderlo: si entiendes cómo funciona una obra en construcción, ya tienes todo lo que hace falta."
+  },
+  "intro": {
+    "eyebrow": "En 30 segundos",
+    "lead": "Gentle AI es el <b>jefe de obra</b> de tus asistentes de inteligencia artificial. Esta entrega trae <b>un cambio que vas a notar</b> y tres arreglos que te evitan dolores de cabeza.",
+    "highlights": [
+      {
+        "title": "La revisión viene activada",
+        "text": "Antes había que encenderla a mano. Ahora viene lista, y se puede apagar."
+      },
+      {
+        "title": "El selector de modelos de OpenCode",
+        "text": "Ya no se queda esperando ni se traba, y te dice qué salió mal."
+      },
+      {
+        "title": "Instalar es más seguro",
+        "text": "Si algo falla a mitad, no te quedas sin el programa."
+      },
+      {
+        "title": "Queda registrada la sincronización",
+        "text": "Ahora se guarda la fecha de la última vez que salió bien."
+      }
+    ]
+  },
+  "audience": {
+    "title": "¿Te afecta?",
+    "heading": "Busca tu caso",
+    "text": "Si no aparece, no tienes que hacer nada: todo se actualiza por dentro.",
+    "items": [
+      {
+        "who": "Usas Gentle AI para revisar tu código",
+        "what": "La revisión ahora viene activada. Si no la quieres, se apaga con un comando.",
+        "section": "s1"
+      },
+      {
+        "who": "Usas OpenCode y eliges modelos",
+        "what": "El selector responde mejor y te explica los errores.",
+        "section": "s2"
+      },
+      {
+        "who": "Trabajas en Windows",
+        "what": "Al cancelar, ya no quedan programas colgados en segundo plano.",
+        "section": "s2"
+      },
+      {
+        "who": "Vas a instalar o actualizar Gentle AI",
+        "what": "La instalación ya no puede dejarte a medias.",
+        "section": "s3"
+      },
+      {
+        "who": "Revisas cuándo se actualizó tu configuración",
+        "what": "Ahora queda registrada la fecha de la última sincronización.",
+        "section": "s4"
+      }
+    ],
+    "howto": {
+      "title": "Cómo leer este documento",
+      "text": "Cada sección empieza con una etiqueta que te dice si te toca: <span class=\"tag tag-you\">Te afecta si usas la revisión</span> <span class=\"tag tag-muted\">Solo cambia por dentro</span>. Y cierra con unas <b>notas técnicas</b> para quien quiera los detalles exactos. Si no las necesitas, sáltalas: el texto principal se entiende solo."
+    }
+  },
+  "sections": [
+    {
+      "id": "s1",
+      "title": "La revisión ahora viene activada",
+      "tag": {
+        "text": "Te afecta si usas la revisión",
+        "kind": "you"
+      },
+      "lead": "El sistema de revisión pasa a estar encendido de fábrica, y ahora se apaga en vez de encenderse.",
+      "blocks": [
+        {
+          "type": "p",
+          "text": "Gentle AI tiene un sistema de revisión llamado <b>RDD</b>. Funciona como un inspector de obra: congela el trabajo terminado, lo revisa y te dice qué encontró."
+        },
+        {
+          "type": "p",
+          "text": "Hasta ayer venía apagado y había que encenderlo a mano, así que mucha gente nunca lo usó. Ahora <b>viene activado</b> desde el principio."
+        },
+        {
+          "type": "keybox",
+          "label": "Si no lo quieres",
+          "text": "Se apaga con un comando: <code>gentle-ai review mode disable</code>. Y si ya lo habías apagado antes, se respeta tu decisión: no se vuelve a encender solo."
+        },
+        {
+          "type": "p",
+          "text": "Durante la instalación también puedes elegir. La opción viene marcada como activada, y puedes cambiarla antes de confirmar."
+        },
+        {
+          "type": "analogy",
+          "text": "Un sistema de seguridad que viene apagado de fábrica protege a muy poca gente. No porque no sirva, sino porque nadie se acuerda de encenderlo."
+        },
+        {
+          "type": "p",
+          "text": "Una aclaración importante: la revisión <b>informa, no manda</b>. Hacer commit, subir cambios o publicar una versión siguen siendo decisiones tuyas."
+        },
+        {
+          "type": "tech",
+          "pairs": [
+            [
+              "Cambio",
+              "RDD pasa a on por defecto; el switch es ahora opt-out."
+            ],
+            [
+              "Apagar",
+              "<code>gentle-ai review mode disable</code> (scope global o clone)."
+            ],
+            [
+              "Respeta",
+              "Un OFF explícito, global o local al clon, se mantiene."
+            ],
+            [
+              "Instalador",
+              "La selección viene en ON cuando no hay preferencia global previa."
+            ],
+            [
+              "PR",
+              "#4803"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "id": "s2",
+      "title": "El selector de modelos de OpenCode",
+      "tag": {
+        "text": "Te afecta si usas OpenCode",
+        "kind": "you"
+      },
+      "lead": "La lista de modelos ya no se traba, aparece antes y te explica qué salió mal.",
+      "blocks": [
+        {
+          "type": "p",
+          "text": "Cuando eliges un modelo en OpenCode, Gentle AI le pregunta a tu equipo qué modelos tienes disponibles. Esa lista puede ser enorme, y ahí estaban los problemas."
+        },
+        {
+          "type": "bullets",
+          "items": [
+            "<b>La lista se lee de a poco.</b> Antes había que esperar a tenerla completa; ahora se procesa mientras llega.",
+            "<b>Los errores se explican.</b> Si la lista no se puede leer, el selector te dice el motivo en vez de quedarse vacío.",
+            "<b>Ya se ve el costo.</b> El precio y las variantes de cada modelo configurado aparecen en la lista.",
+            "<b>El límite dejó de castigar a los justos.</b> Una lista de exactamente 16 MB se rechazaba por error; ahora solo falla la que se pasa."
+          ]
+        },
+        {
+          "type": "h2",
+          "text": "Procesos que ya no se quedan colgados"
+        },
+        {
+          "type": "p",
+          "text": "El otro grupo de arreglos es menos visible, pero evita esperas eternas. Cuando Gentle AI pregunta por los modelos, abre un programa aparte. A veces ese programa dejaba hijos sueltos que seguían corriendo."
+        },
+        {
+          "type": "bullets",
+          "items": [
+            "<b>En Windows</b>, al cancelar se cierra el programa y todos los que abrió.",
+            "<b>Si algo se escapa</b>, la espera tiene un tope: la búsqueda ya no se queda esperando para siempre.",
+            "<b>Si el programa falla</b>, se informa el error real en vez de culpar al formato de la lista."
+          ]
+        },
+        {
+          "type": "tech",
+          "pairs": [
+            [
+              "Streaming",
+              "El catálogo se parsea en streaming; el picker conserva el <code>CatalogError</code> para el diagnóstico."
+            ],
+            [
+              "Límite",
+              "<code>countingLimitReader</code> admite un stream que termina justo en 16 MiB; solo el exceso falla."
+            ],
+            [
+              "Exit status",
+              "Un exit distinto de cero gana sobre la clasificación de parseo (<code>command_failed</code>)."
+            ],
+            [
+              "Windows",
+              "Se mata el árbol de descendientes al cancelar; <code>WaitDelay</code> acota el apagado."
+            ],
+            [
+              "Regresiones",
+              "Tests deterministas para exit no-cero, descendientes escapados y consumidor lento."
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "id": "s3",
+      "title": "Instalar ya no puede dejarte a medias",
+      "tag": {
+        "text": "Te afecta si instalas o actualizas",
+        "kind": "you"
+      },
+      "lead": "El programa se reemplaza de un solo golpe: o está el viejo completo, o el nuevo completo.",
+      "blocks": [
+        {
+          "type": "p",
+          "text": "Al actualizar, el programa nuevo se copiaba encima del viejo. Si la copia se cortaba a la mitad, te quedabas con un archivo roto que ya no servía."
+        },
+        {
+          "type": "p",
+          "text": "Ahora el archivo nuevo se prepara al lado y, cuando está completo, se pone en su lugar en un solo paso. Nunca hay un momento en que el programa esté a medias."
+        },
+        {
+          "type": "analogy",
+          "text": "Es la diferencia entre cambiar una viga mientras el techo está apoyado en ella, o dejar la nueva lista al lado y hacer el cambio de una sola vez."
+        },
+        {
+          "type": "tech",
+          "pairs": [
+            [
+              "Método",
+              "Archivo temporal en el mismo directorio y <code>rename</code> POSIX, que es atómico."
+            ],
+            [
+              "Permisos",
+              "Las rutas se pasan como argumentos a un shell fijo, así el shell del usuario no reevalúa sustituciones."
+            ],
+            [
+              "Issues",
+              "#1728, #3629"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "id": "s4",
+      "title": "Queda registrada la última sincronización",
+      "tag": {
+        "text": "Solo cambia por dentro",
+        "kind": "muted"
+      },
+      "lead": "Gentle AI ahora guarda la fecha de la última sincronización que terminó bien.",
+      "blocks": [
+        {
+          "type": "p",
+          "text": "Cada vez que Gentle AI actualiza la configuración de tus asistentes, ese momento queda anotado. Antes no quedaba registro, así que no había forma de saber cuándo fue la última vez."
+        },
+        {
+          "type": "p",
+          "text": "Sirve para responder una pregunta simple: <b>¿esto está al día?</b>"
+        },
+        {
+          "type": "tech",
+          "pairs": [
+            [
+              "Campo",
+              "<code>LastSyncedAt</code> en <code>InstallState</code>."
+            ],
+            [
+              "Cuándo",
+              "Se escribe dentro del guardado con bloqueo, solo si la sincronización terminó bien."
+            ],
+            [
+              "Issues",
+              "#1273, PR #3906"
+            ]
+          ]
+        }
+      ]
+    }
+  ],
+  "glossary_title": "Glosario",
+  "glossary_heading": "Las palabras raras, en simple",
+  "glossary": [
+    {
+      "term": "RDD",
+      "def": "El sistema de revisión de Gentle AI: congela el trabajo y lo revisa."
+    },
+    {
+      "term": "main",
+      "def": "La versión principal y oficial del proyecto."
+    },
+    {
+      "term": "Commit",
+      "def": "Un cambio guardado en el historial, con una nota de qué se hizo."
+    },
+    {
+      "term": "PR",
+      "def": "La propuesta de un cambio, para que otros la revisen antes de aceptarla."
+    },
+    {
+      "term": "Catálogo de modelos",
+      "def": "La lista de modelos de IA disponibles para elegir."
+    },
+    {
+      "term": "Binario",
+      "def": "El archivo del programa que tu computadora ejecuta."
+    },
+    {
+      "term": "Atómico",
+      "def": "Algo que pasa de un solo golpe: o se hizo completo, o no se hizo."
+    },
+    {
+      "term": "Sincronizar",
+      "def": "Poner al día la configuración de tus asistentes."
+    }
+  ],
+  "closing": {
+    "quote": "Diecisiete cambios. Uno lo vas a notar el primer día; los otros dieciséis existen para que <em>no</em> notes nada.",
+    "sign": "Así se construye."
+  },
+  "annex": {
+    "title": "Anexo",
+    "heading": "Los 17 commits",
+    "note": "Agrupados por sección, con el mensaje original del historial (en inglés). Rango: 82a6de96..upstream/main, rama main de Gentleman-Programming/gentle-ai.",
+    "groups": [
+      {
+        "title": "01 · La revisión viene activada",
+        "section": "s1",
+        "rows": [
+          [
+            "95edf9ff",
+            "feat(review): turn receipt-driven development on by default (#4803)"
+          ]
+        ]
+      },
+      {
+        "title": "02 · El selector de modelos de OpenCode",
+        "section": "s2",
+        "rows": [
+          [
+            "de1d6a79",
+            "fix(opencode): stream runtime model catalog and clarify picker errors"
+          ],
+          [
+            "a5d4038c",
+            "fix(opencode): allow catalogs ending exactly at the 16 MiB ceiling"
+          ],
+          [
+            "9425db70",
+            "fix(opencode): surface child exit status and bound stdout drain"
+          ],
+          [
+            "94cd39aa",
+            "test(opencode): pin maintainer-reported catalog regressions"
+          ],
+          [
+            "0a42dc15",
+            "test(opencode): make catalog regression tests host-portable"
+          ],
+          [
+            "13bdf477",
+            "test(opencode): reuse catalog fixture generator and skip empty live hosts"
+          ],
+          [
+            "6c69d4b3",
+            "fix(opencode): honor Read exit-status contract and drop diagnostic leftover"
+          ],
+          [
+            "a40d772b",
+            "test(opencode): drop unused helper setup in exit-status test"
+          ],
+          [
+            "08842faa",
+            "fix(opencode): join stdout drain before reaping child process"
+          ],
+          [
+            "45bc5ce5",
+            "fix(opencode): kill descendant process tree on windows cancellation"
+          ],
+          [
+            "38ca12f6",
+            "fix(opencode): extract cost and variants in configured models"
+          ],
+          [
+            "93288f6c",
+            "fix(opencode): bound discovery shutdown against escaped descendants and preserve read errors"
+          ],
+          [
+            "197dd9f0",
+            "test(opencode): isolate live host tests and test windows assignment fallback"
+          ],
+          [
+            "76959056",
+            "docs(tui): document catalog error diagnostics and picker lifecycle"
+          ]
+        ]
+      },
+      {
+        "title": "03 · Instalación más segura",
+        "section": "s3",
+        "rows": [
+          [
+            "b2ed7201",
+            "fix(install): replace the Unix binary atomically (#1728) (#3629)"
+          ]
+        ]
+      },
+      {
+        "title": "04 · Registro de sincronización",
+        "section": "s4",
+        "rows": [
+          [
+            "f0782af2",
+            "feat(state): record last_synced_at after successful sync (#3906)"
+          ]
+        ]
+      }
+    ]
+  }
+}
