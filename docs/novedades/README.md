@@ -83,58 +83,25 @@ The 2026-09-20 edition is the first one, so its base falls back to the latest re
 the index and the annex). Every edition after it chains from the previous edition's head hash
 instead of re-resolving a release tag.
 
-## Producing a daily edition
+## How an edition is produced
 
-1. **Resolve the range.**
-   - Find the previous edition's head hash: the most recent `docs/novedades/YYYY-MM-DD.md`'s
-     `range` front-matter field, taking the hash after `..`.
-   - If there is no previous edition, resolve base = the latest release tag reachable from `main`
-     (`git describe --tags --abbrev=0 main`, or the newest `v*` tag that is an ancestor of `main`),
-     resolved to its hash with `git log -1 --format=%H <tag>`.
-   - head = the current `main` tip, captured as a fixed commit hash (`git log -1 --format=%H main`)
-     — never recorded as `upstream/main` or `main`.
-2. **Verify subjects with git.** Don't trust remembered commit messages — read the real ones:
-   `git log --no-merges --format='%h %s' <base>..<head>` for the list. Every hash and subject in
-   the Markdown annex must come from that output, not from memory.
-3. **Count commits.** `git rev-list --count --no-merges <base>..<head>` gives the non-merge count
-   that belongs in the front matter, the summary line, and the annex heading;
-   `git rev-list --count <base>..<head>` gives the total (including merges) for the front matter.
-4. **Write the Markdown** from `plantilla.md`, following the fixed structure above. Reader-facing
-   content stays in neutral Latin American Spanish; headings and structure mirror the template.
-5. **Add the file and update the index below.** Commit `docs/novedades/YYYY-MM-DD.md` on its own.
+Editions are written by the maintainers. Everything a reader might want to check — the range, the
+commit counts, the annex rows — comes straight out of `git`, so an edition can be verified from a
+clone with no special tooling:
 
-## Producing the per-release consolidated PDF
+```bash
+git log --no-merges --format='%h %s' <base>..<head>   # the rows that belong in the annex
+git rev-list --count --no-merges <base>..<head>       # the count in the front matter and the index
+git rev-list --count <base>..<head>                   # the total, including merges
+```
 
-The PDF generator, `~/.claude/skills/gentle-docs/assets/build.py`, takes a **JSON content model
-only** — it cannot build a PDF from Markdown directly. So the per-release PDF is produced by
-authoring a consolidation JSON from the window's daily Markdown editions, not by feeding Markdown
-into the generator:
+`plantilla.md` holds the shape a new edition starts from. Hashes and subjects are always read back
+from `git`, never from memory.
 
-1. **Pick the window.** The daily editions published since the previous release's consolidated PDF,
-   up to and including the release being cut.
-2. **Author the consolidation JSON** from those editions' content, following
-   `~/.claude/skills/gentle-docs/assets/examples/novedades-plantilla.json` in the `gentle-docs`
-   skill as the fixed template — do not duplicate that template in this repository; it is the
-   canonical source for the JSON shape (cover stats, intro highlights, audience cards, numbered
-   sections, glossary, annex).
-3. **Build both themes:**
-   ```bash
-   # one-time setup
-   bash ~/.claude/skills/gentle-docs/scripts/setup.sh
-
-   ~/.cache/gentle-docs/venv/bin/python ~/.claude/skills/gentle-docs/assets/build.py \
-     <consolidation.json> --out /tmp/novedades-release --theme both
-   ```
-4. **Check contrast and preview:**
-   ```bash
-   ~/.cache/gentle-docs/venv/bin/python ~/.claude/skills/gentle-docs/scripts/contrast.py
-   ~/.cache/gentle-docs/venv/bin/python ~/.claude/skills/gentle-docs/scripts/preview.py /tmp/novedades-release/<file>.pdf
-   ```
-5. **Attach both PDFs (dark + light) to the release's GitHub release page as release assets.** They
-   are never committed to this repository — the visual design lives entirely in the global
-   `gentle-docs` skill, not here, so any past window can be rebuilt from its daily Markdown editions
-   plus a current copy of the skill. A rebuild reproduces the same document, not the same bytes: PDF
-   output carries build-time metadata, so hashes differ while pages and text match.
+The per-release PDF is rendered from these Markdown editions with an internal documentation tool
+that is not part of this repository, so it cannot be rebuilt from a clone. That is deliberate: the
+Markdown editions are the public record and the thing worth reviewing, and the PDF is a formatted
+copy of them for distribution. Download it from the release it belongs to.
 
 ## Index of editions
 
