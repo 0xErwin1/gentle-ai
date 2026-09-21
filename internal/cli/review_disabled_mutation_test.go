@@ -21,9 +21,9 @@ import (
 // hand reproduction hit: authority that already exists, and a switch that is
 // now off.
 //
-// Reaching that shape needs both halves of the switch in order. Receipt-driven
-// development is opt-in, so the START that creates the authority to freeze only
-// runs for a user who explicitly turned reviews on -- hence the enabled home.
+// Reaching that shape needs both halves of the switch in order. The enabled
+// home gives START an explicit global ON precondition, independent of the
+// product's ON default.
 // The clone-local disable that follows is what the tests here are actually
 // about, and it still wins over that explicit global "on".
 func disabledReviewRepo(t *testing.T, lineage string) (repo string, started ReviewFacadeStartResult) {
@@ -61,8 +61,8 @@ func TestDisabledReviewRefusesEveryAuthorityProgressingVerb(t *testing.T) {
 		{verb: "start"},
 		{verb: "capture-result", args: []string{"--lineage", "review-disabled-sweep", "--target", digest, "--lens", "review-risk", "--order", "0", "--input", input}},
 		{verb: "capture-correction-plan", args: []string{"--lineage", "review-disabled-sweep", "--target", digest, "--expected-revision", digest, "--request-hash", digest, "--correction-lines", "1"}},
-		{verb: "capture-refuter", args: []string{"--lineage", "review-disabled-sweep", "--target", digest, "--expected-revision", digest, "--agent", "pi", "--execute"}},
-		{verb: "capture-validation", args: []string{"--lineage", "review-disabled-sweep", "--target", digest, "--expected-revision", digest, "--request-hash", digest, "--agent", "pi", "--execute"}},
+		{verb: "capture-refuter", args: []string{"--lineage", "review-disabled-sweep", "--target", digest, "--expected-revision", digest, "--agent", "pi", "--input", input}},
+		{verb: "capture-validation", args: []string{"--lineage", "review-disabled-sweep", "--target", digest, "--expected-revision", digest, "--request-hash", digest, "--agent", "pi", "--input", input}},
 		{verb: "repair", args: []string{"--contract", ReviewIntegrationContractV1}},
 		{verb: "invalidate", args: []string{"--lineage", "review-disabled-sweep", "--expected-revision", digest}},
 		{verb: "recover", args: []string{"--predecessor-lineage", "review-disabled-sweep", "--expected-predecessor-revision", digest, "--successor-lineage", "review-disabled-successor", "--disposition", "scope_changed"}},

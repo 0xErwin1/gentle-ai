@@ -326,15 +326,16 @@ func TestSelectorlessCommittedCorrectionClosesOnTargetedValidation(t *testing.T)
 				t.Fatalf("post-commit correction status = %#v", status)
 			}
 			request := status.ValidationRequest
-			previous := reviewProviderRoleHostAdapter
-			reviewProviderRoleHostAdapter = func(reviewerprovider.Role, string) (reviewerprovider.Adapter, error) {
-				return providerTestAdapterFunc(func(context.Context, reviewerprovider.Invocation) ([]byte, error) {
-					return providerTargetedValidationPayload(t, *request), nil
-				}), nil
+			// The pi host relay submits its own raw result through --input
+			// (#4611): Go never spawns anything for this capture.
+			submission := status.NextTransition.Collect.Inputs[0].Submission
+			resultFile := writeReviewCLIRawInput(t, providerTargetedValidationPayload(t, *request))
+			submit := append([]string{"--cwd", repo}, submission.ArgumentTokens...)
+			for index := range submit {
+				submit[index] = strings.ReplaceAll(submit[index], reviewSubmissionValuePlaceholder, resultFile)
 			}
-			t.Cleanup(func() { reviewProviderRoleHostAdapter = previous })
 			var terminalOutput bytes.Buffer
-			if err := RunReviewCaptureValidation(reviewTransitionInputTokens(t, repo, status.NextTransition.Collect.Inputs[0]), &terminalOutput); err != nil {
+			if err := RunReviewCaptureValidation(submit, &terminalOutput); err != nil {
 				t.Fatalf("capture selector-less targeted validation: %v\n%s", err, terminalOutput.String())
 			}
 			var terminal reviewLastEventClosureResult
@@ -388,15 +389,16 @@ func TestStagedCorrectionClosesOnTargetedValidation(t *testing.T) {
 		t.Fatalf("staged correction status = %#v", status)
 	}
 	request := status.ValidationRequest
-	previous := reviewProviderRoleHostAdapter
-	reviewProviderRoleHostAdapter = func(reviewerprovider.Role, string) (reviewerprovider.Adapter, error) {
-		return providerTestAdapterFunc(func(context.Context, reviewerprovider.Invocation) ([]byte, error) {
-			return providerTargetedValidationPayload(t, *request), nil
-		}), nil
+	// The pi host relay submits its own raw result through --input (#4611):
+	// Go never spawns anything for this capture.
+	submission := status.NextTransition.Collect.Inputs[0].Submission
+	resultFile := writeReviewCLIRawInput(t, providerTargetedValidationPayload(t, *request))
+	submit := append([]string{"--cwd", repo}, submission.ArgumentTokens...)
+	for index := range submit {
+		submit[index] = strings.ReplaceAll(submit[index], reviewSubmissionValuePlaceholder, resultFile)
 	}
-	t.Cleanup(func() { reviewProviderRoleHostAdapter = previous })
 	var terminalOutput bytes.Buffer
-	if err := RunReviewCaptureValidation(reviewTransitionInputTokens(t, repo, status.NextTransition.Collect.Inputs[0]), &terminalOutput); err != nil {
+	if err := RunReviewCaptureValidation(submit, &terminalOutput); err != nil {
 		t.Fatalf("capture staged targeted validation: %v\n%s", err, terminalOutput.String())
 	}
 	var terminal reviewLastEventClosureResult
@@ -556,9 +558,9 @@ func startCommittedCorrectionFixture(t *testing.T, repo, lineage, baseRef string
 
 // forecastCommittedCorrection drives a real lineage from START through a
 // blocking finding to an open correction budget. Every caller continues that
-// lifecycle through the native CLI, so the fixture opts in the way a real user
-// does: receipt-driven development is off until someone enables it, and none of
-// these transitions exist for a clone that never did.
+// lifecycle through the native CLI. RDD defaults to ON, but the fixture explicitly
+// enables it to keep its lifecycle precondition independent of the default;
+// explicit OFF still prevents these transitions.
 func forecastCommittedCorrection(t *testing.T) (string, string, string) {
 	t.Helper()
 	reviewEnabledHome(t)

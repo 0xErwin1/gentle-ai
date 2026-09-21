@@ -105,9 +105,6 @@ var osExecutableFn = os.Executable
 var osRemoveFn = os.Remove
 var execCommandFn = exec.Command
 var communityToolInstallFn = communitytool.Install
-var communityToolInstallScopedFn = func(id model.CommunityToolID, workspace string, agents []model.AgentID, runner communitytool.Runner) (communitytool.Result, error) {
-	return communitytool.InstallWithHomeAndAgents(id, workspace, homeDir(), agents, runner, communitytool.DetectorFunc(exec.LookPath))
-}
 var communityToolStatusFn = communitytool.DetectStatus
 
 // readCurrentAssignmentsFn is a package-level variable so tests can override
@@ -1161,9 +1158,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.InstallReviewModeStatus = msg.Status
 		m.InstallReviewModeLoadErr = msg.Err
 		if msg.Err == nil {
-			m.Cursor = 1 // RDD OFF is the opt-in default for unset and off global modes.
-			if msg.Status.Global == reviewtransaction.RDDModeOn {
-				m.Cursor = 0
+			m.Cursor = 0 // Unset defaults to ON; preserve an explicit global OFF choice.
+			if msg.Status.Global == reviewtransaction.RDDModeOff {
+				m.Cursor = 1
 			}
 		}
 		return m, nil
@@ -3526,11 +3523,7 @@ func (m Model) startCommunityToolInstallation() tea.Cmd {
 		for _, tool := range tools {
 			var result communitytool.Result
 			var err error
-			if tool == model.CommunityToolRTK {
-				result, err = communityToolInstallScopedFn(tool, workspaceDir, m.Selection.Agents, runner)
-			} else {
-				result, err = communityToolInstallFn(tool, workspaceDir, runner)
-			}
+			result, err = communityToolInstallFn(tool, workspaceDir, runner)
 			if err != nil {
 				if hasCommunityToolResultContext(result) {
 					results = append(results, result)

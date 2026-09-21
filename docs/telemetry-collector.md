@@ -142,10 +142,21 @@ downstream by `increase()`/`rate()`), all carrying `host`:
 
 A label value is sanitized for the exposition format (`\`, `"`, and newline
 escaped) and an empty value renders as `unknown`; in practice every label
-already comes from a closed wire-contract vocabulary (see
+already comes from the wire contract (see
 [Runtime observations](#runtime-observations)), so this only matters if
 `RuntimeMetrics.Observe` is ever called from something other than a parsed,
 validated `telemetry.RuntimeEvent`.
+
+**Exposition size**: the registry is in memory and never evicts a series,
+so `/metrics` grows with every distinct `host`/`agent_kind`/`agent_class`/
+`provider`/`model`/`selected_effort` combination observed since the last
+collector restart. `provider` is any short lowercase label and `model` is
+any id matching the public family pattern (`NormalizeRuntimeModel`), so
+this vocabulary is bounded by convention, not by an enum: on 2026-09-18
+production reached 155 providers, 255 model ids and roughly 90,000
+exposition lines (17.5 MB), which is above VictoriaMetrics' default
+16 MiB scrape cap. The shipped unit therefore sets
+`-promscrape.maxScrapeSize=64MiB` (see [VictoriaMetrics](#victoriametrics)).
 
 **Cutover**: the default stays `sqlite` until the VictoriaMetrics deploy
 (`deploy/telemetry/`, not yet built — see the feature's task list) is
@@ -230,7 +241,31 @@ the process last restarted:
 
 1. Rolls up **yesterday**'s events into `rollups_daily` (idempotent — safe
    to re-run after a crash or restart).
-2. Purges raw `events` rows older than `--retention-days` (default 90).
+2. Purges raw `events` rows and whole sqlite-mode runtime deliveries older
+   than `--retention-days` (default 90).
+3. Purges runtime delivery identities (`runtime_delivery_ids`, the
+   `--runtime-store=metrics` dedup table) older than `--runtime-dedup-days`
+   (default 2, never longer than `--retention-days`), in batches of 50,000
+   rows in short transactions so the purge never holds the single writer
+   for seconds. An identity only has to outlive the moments in which a
+   replay of its delivery can arrive; clients never retry, and the table
+   grows by every accepted delivery (about a million rows a day in
+   production), so ninety days of it would be a hundred million rows.
+4. Compacts the file: a `PRAGMA wal_checkpoint(PASSIVE)` every run (it
+   never waits on a reader), followed by a `TRUNCATE` when every frame was
+   backfilled so the sidecar returns to zero bytes, and `VACUUM` only when
+   at least 25% of a file of at least 1,024 pages is free AND the live data
+   is at most 131,072 pages (512 MiB): the rewrite holds the single writer
+   and runtime clients never retry, so a larger one is never started
+   unattended. Logged as `database compacted` with `page_count`,
+   `free_pages`, `wal_frames`, `vacuumed`, `vacuum_deferred` (live data
+   over the cap) and `busy` (an outside reader held the WAL; truncation
+   waits for the next run).
+
+When `vacuum_deferred=true` shows up in the journal, vacuum offline once:
+stop `gentle-telemetry.service`, run `sqlite3 <db> 'PRAGMA wal_checkpoint(TRUNCATE); VACUUM;'`,
+start the unit. `--runtime-dedup-days` is refused below 1 and clamped to
+`--retention-days` with a startup warning.
 
 `rollups_daily` itself is never purged: it is the durable historical record
 once the raw rows behind it age out.
@@ -337,6 +372,7 @@ address"`, with the header's value itself never logged.
 --db /var/lib/gentle-telemetry/events.sqlite              # SQLite file
 --summary-token-file <path>                               # bearer token for /v1/summary (local runs; systemd uses LoadCredential, see Token rotation)
 --retention-days 90                                        # raw event retention
+--runtime-dedup-days 2                                     # runtime delivery id retention (replay rejection), never longer than --retention-days
 --rate-limit-per-minute 60                                 # per-address budget on /v1/events
 --runtime-rate-limit-per-minute 600                         # per-address budget on /v1/runtime-events
 --runtime-store sqlite                                      # sqlite (default) | metrics | both — see Runtime metrics for VictoriaMetrics
@@ -587,6 +623,17 @@ restart (an in-memory registry — see
 [Runtime metrics for VictoriaMetrics](#runtime-metrics-for-victoriametrics)),
 so every PromQL query against this data uses `increase()`/`rate()`, never
 the raw counter value, and a restart never shows up as a drop.
+
+**Scrape size cap**: the unit passes `-promscrape.maxScrapeSize=64MiB`
+because the collector's exposition exceeds VictoriaMetrics' default
+16 MiB cap once enough label combinations accumulate (see
+[Runtime metrics for VictoriaMetrics](#runtime-metrics-for-victoriametrics)).
+When a scrape is refused, `journalctl -u victoria-metrics` logs
+`the response from "http://127.0.0.1:18181/metrics" exceeds
+-promscrape.maxScrapeSize`, `GET /api/v1/targets` reports the target
+`down`, and every `increase()`-based panel reads 0 while the collector
+keeps accepting deliveries. Compare `curl -s http://127.0.0.1:18181/metrics | wc -c`
+against the flag before raising it further.
 
 **Backup**: `gentle-telemetry-backup` skips the VictoriaMetrics step
 silently when `victoria-metrics.service` is not installed/active. When it

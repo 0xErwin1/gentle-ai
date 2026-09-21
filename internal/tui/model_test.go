@@ -905,6 +905,28 @@ func TestReviewToInstallingInitializesProgress(t *testing.T) {
 	}
 }
 
+func TestInstallReviewModeSelectionPreservesExplicitOff(t *testing.T) {
+	for _, tt := range []struct {
+		name   string
+		global reviewtransaction.RDDMode
+		cursor int
+	}{
+		{"unset", reviewtransaction.RDDModeUnset, 0},
+		{"on", reviewtransaction.RDDModeOn, 0},
+		{"off", reviewtransaction.RDDModeOff, 1},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			m := NewModel(system.DetectionResult{}, "dev")
+			m.Screen = ScreenInstallReviewMode
+			updated, cmd := m.Update(InstallReviewModeLoadedMsg{Status: reviewtransaction.RDDModeStatus{Global: tt.global}})
+			state := updated.(Model)
+			if state.Cursor != tt.cursor || state.InstallReviewModeChoiceSet || cmd != nil {
+				t.Fatalf("loading must select %d without choosing or persisting: cursor=%d choice=%t command=%t", tt.cursor, state.Cursor, state.InstallReviewModeChoiceSet, cmd != nil)
+			}
+		})
+	}
+}
+
 func TestInstallReviewModeChoicePrecedesReviewAndPersistsOnlyAfterSuccess(t *testing.T) {
 	m := NewModel(system.DetectionResult{}, "dev")
 	m.Screen = ScreenDependencyTree
@@ -929,10 +951,10 @@ func TestInstallReviewModeChoicePrecedesReviewAndPersistsOnlyAfterSuccess(t *tes
 	}
 	updated, _ = state.Update(load())
 	state = updated.(Model)
-	if state.Cursor != 1 {
-		t.Fatalf("fresh global RDD cursor = %d, want RDD OFF at 1", state.Cursor)
+	if state.Cursor != 0 {
+		t.Fatalf("fresh global RDD cursor = %d, want RDD ON at 0", state.Cursor)
 	}
-	state.Cursor = 0 // RDD ON
+	// Confirm the default selection explicitly before installation.
 	updated, _ = state.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	state = updated.(Model)
 	if state.Screen != ScreenReview || !state.InstallReviewModeChoiceSet || !state.InstallReviewModeEnabled {
@@ -2376,9 +2398,9 @@ func TestStandaloneCommunityToolsShowsResultAfterCompletion(t *testing.T) {
 }
 
 func TestCommunityToolInstallationPreservesPartialResultOnError(t *testing.T) {
-	originalInstall, originalScoped, originalGetwd := communityToolInstallFn, communityToolInstallScopedFn, osGetwdFn
+	originalInstall, originalGetwd := communityToolInstallFn, osGetwdFn
 	t.Cleanup(func() {
-		communityToolInstallFn, communityToolInstallScopedFn, osGetwdFn = originalInstall, originalScoped, originalGetwd
+		communityToolInstallFn, osGetwdFn = originalInstall, originalGetwd
 	})
 
 	osGetwdFn = func() (string, error) { return "/work/project", nil }
@@ -2420,16 +2442,6 @@ func TestCommunityToolInstallationPreservesPartialResultOnError(t *testing.T) {
 	}
 	if len(state.CommunityToolResults) != 1 || len(state.CommunityToolResults[0].CommandsRun) != 1 {
 		t.Fatalf("state results = %#v, want preserved partial result", state.CommunityToolResults)
-	}
-	var got []model.AgentID
-	communityToolInstallScopedFn = func(_ model.CommunityToolID, _ string, agents []model.AgentID, _ communitytool.Runner) (communitytool.Result, error) {
-		got = agents
-		return communitytool.Result{Tool: model.CommunityToolRTK}, nil
-	}
-	m.Selection.Agents, m.Selection.CommunityTools = []model.AgentID{model.AgentOpenCode}, []model.CommunityToolID{model.CommunityToolRTK}
-	_ = m.startCommunityToolInstallation()()
-	if !reflect.DeepEqual(got, []model.AgentID{model.AgentOpenCode}) {
-		t.Fatalf("agents = %v", got)
 	}
 }
 
@@ -8518,7 +8530,7 @@ func TestStrictTDDForward(t *testing.T) {
 				}
 				updated, _ = got.Update(cmd())
 				got = updated.(Model)
-				got.Cursor = 1 // Explicitly keep the default RDD OFF selection.
+				got.Cursor = 1 // Explicitly choose OFF instead of the ON default.
 				updated, _ = got.Update(tea.KeyMsg{Type: tea.KeyEnter})
 				got = updated.(Model)
 			}

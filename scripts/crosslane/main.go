@@ -5,7 +5,7 @@
 //
 //   - opencode lane: the REAL OpenCode transport plugin bytes
 //     (internal/assets/opencode/plugins/opencode-review-transport.ts) driven
-//     through a fresh Node Task-hook process with HOST-assembled binding frames,
+//     through a fresh Node Task-hook process with exact provider-owned tasks,
 //     against an immutable base tree and committed candidate. Covers the lens
 //     frame, correction closure re-entry, and validator role frame.
 //   - claude lane: one low-risk lifecycle ending in exact acknowledgement then authority burn and five
@@ -20,10 +20,8 @@
 //     against the published schemas in contracts/review-integration/.
 //     Any emitter/schema divergence fails the battery.
 //
-// The battery is intentionally honest: known-red checks (host binding frames
-// pending fix/opencode-host-binding, schema gaps) FAIL and are annotated,
-// because red at the exact seam where field defects escaped is the battery
-// proving its worth.
+// The battery is intentionally honest: a failure at a runtime or schema seam is
+// reported as FAIL rather than converted into a fallback pass.
 package main
 
 import (
@@ -92,11 +90,9 @@ func run() int {
 		fmt.Fprintf(os.Stderr, "crosslane: %v\n", err)
 		return 2
 	}
-	// Receipt-driven development is opt-in, so the battery opts in for its own
-	// sandbox. The lifecycle lanes exist to exercise reviews; leaving the switch
-	// at its shipped default would make every one of them a refusal rather than
-	// a test. This runs through the real `review mode enable` so the battery
-	// depends on the same resolution path a user does.
+	// Explicitly enable review in the sandbox so lifecycle lanes do not depend
+	// on default ON or ambient user choices. Use the real product command to
+	// exercise the same resolution path as an operator.
 	if _, stderr, code := b.run(b.sandboxHome, "review", "mode", "enable", "--scope", "global", "--cwd", repoRoot); code != 0 {
 		fmt.Fprintf(os.Stderr, "crosslane: enable sandbox review mode: %s\n", firstLine(stderr))
 		return 2
