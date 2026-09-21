@@ -88,12 +88,36 @@ every ~1.4 days while editions ship daily. Instead, ranges **chain** from editio
 - **base** = the head commit hash of the *previous* daily edition.
 - **If there is no previous edition** (the very first one), base = the latest release tag reachable
   from `main`, recorded together with the hash it resolves to.
-- **head** = the `main` tip at publication time, always a fixed commit hash — never `main` or
-  `upstream/main`, since those pointers keep moving after the edition ships.
+- **head** = the last commit on `main`'s first-parent line before the edition's day closes
+  (see below), always a fixed commit hash — never `main` or `upstream/main`, since those pointers
+  keep moving after the edition ships.
 - **Commit count excludes merges:** `git rev-list --count --no-merges <base>..<head>`.
 
+### The day is a fixed UTC window
+
+An edition dated `D` covers what reached `main` during the UTC day `D` — from `D 00:00:00Z` up to,
+but not including, `D+1 00:00:00Z`. Its head is resolved against that cutoff, not against the
+moment someone happens to run the command:
+
+```bash
+git rev-list -1 --first-parent --before='<D+1>T00:00:00Z' upstream/main
+```
+
+The edition is written the day after, once its window has closed. Two things follow from that:
+
+- **It does not depend on the author's clock.** Whoever writes it, from whatever time zone, at
+  whatever hour, resolves the same head. Deriving the date from a local clock is what made an
+  edition land under the wrong day.
+- **It is idempotent.** Running the command twice, or a week later, returns the same hash, so any
+  reader can re-derive the range from a clone.
+
+`--first-parent` follows `main`'s own line of history, so a pull request counts on the day it was
+merged, not on the day its commits were authored.
+
+### The first edition
+
 The 2026-09-20 edition is the first one, so its base falls back to the latest release tag:
-`v3.4.0 (82a6de96)..f0782af2`, 17 non-merge commits of 19 total in the range
+`v3.4.0 (82a6de96)..2336d09a`, 24 non-merge commits of 27 total in the range
 (`git rev-list --count <base>..<head>` for the total, `--no-merges` for the count that appears in
 the index and the annex). Every edition after it chains from the previous edition's head hash
 instead of re-resolving a release tag.
@@ -105,6 +129,7 @@ commit counts, the annex rows — comes straight out of `git`, so an edition can
 clone with no special tooling:
 
 ```bash
+git rev-list -1 --first-parent --before='<D+1>T00:00:00Z' upstream/main   # the head for day D
 git log --no-merges --format='%h %s' <base>..<head>   # the rows that belong in the annex
 git rev-list --count --no-merges <base>..<head>       # the count in the front matter and the index
 git rev-list --count <base>..<head>                   # the total, including merges
@@ -122,4 +147,4 @@ record and the thing worth reviewing; the PDFs are formatted copies of them for 
 
 | Date | Commit range | Commits (no-merge) | Files | Lines |
 |---|---|---|---|---|
-| [2026-09-20](2026-09-20.md) | [`v3.4.0..f0782af2`](https://github.com/Gentleman-Programming/gentle-ai/compare/82a6de96...f0782af2) | 17 | 58 | +2,351 / -365 |
+| [2026-09-20](2026-09-20.md) | [`v3.4.0..2336d09a`](https://github.com/Gentleman-Programming/gentle-ai/compare/82a6de96...2336d09a) | 24 | 62 | +2,861 / -365 |

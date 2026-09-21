@@ -1,5 +1,5 @@
 ---
-date: <YYYY-MM-DD>
+date: <YYYY-MM-DD>   # UTC day; the head is the last main commit before the next 00:00Z
 range: <base-hash-or-tag>..<head-hash>
 commits_no_merge: <N>
 commits_total: <N total>
