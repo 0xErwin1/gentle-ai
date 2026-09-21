@@ -210,12 +210,20 @@ func installGentleLogo(homeDir string) (Result, error) {
 	pluginPath := filepath.Join(opencodeDir, "tui-plugins", gentleLogoPluginFile)
 	tuiPath := filepath.Join(opencodeDir, "tui.json")
 
+	prior, err := capturePriorFile(pluginPath)
+	if err != nil {
+		return Result{}, fmt.Errorf("capture prior Gentle Logo TUI plugin state: %w", err)
+	}
+
 	pluginWrite, err := filemerge.WriteFileAtomic(pluginPath, []byte(gentleLogoPluginSource), 0o644)
 	if err != nil {
 		return Result{}, fmt.Errorf("write Gentle Logo TUI plugin: %w", err)
 	}
 	tuiChanged, err := ensureTUIPlugin(tuiPath, pluginPath)
 	if err != nil {
+		if restoreErr := prior.restore(pluginPath); restoreErr != nil {
+			return Result{}, fmt.Errorf("roll back Gentle Logo TUI plugin after failed registration (%v): %w", restoreErr, err)
+		}
 		return Result{}, err
 	}
 
@@ -223,6 +231,46 @@ func installGentleLogo(homeDir string) (Result, error) {
 		Changed: pluginWrite.Changed || tuiChanged,
 		Files:   []string{pluginPath, tuiPath},
 	}, nil
+}
+
+// priorFile captures the prior on-disk state of a file so a multi-step install
+// can compensate as one recoverable operation (#1678): a newly created file is
+// removed and a pre-existing file is restored byte-exactly, including its mode.
+type priorFile struct {
+	existed bool
+	data    []byte
+	mode    os.FileMode
+}
+
+func capturePriorFile(path string) (priorFile, error) {
+	info, err := os.Stat(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return priorFile{}, nil
+		}
+		return priorFile{}, err
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return priorFile{}, err
+	}
+	return priorFile{existed: true, data: data, mode: info.Mode()}, nil
+}
+
+// restore puts back the captured bytes through the same durable write path used
+// by installs, or removes the file when it did not previously exist. Removing an
+// already-absent file is not an error.
+func (p priorFile) restore(path string) error {
+	if !p.existed {
+		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+			return err
+		}
+		return nil
+	}
+	if _, err := filemerge.WriteFileAtomic(path, p.data, p.mode.Perm()); err != nil {
+		return err
+	}
+	return nil
 }
 
 func ensureTUIPlugin(path, pkg string) (bool, error) {
