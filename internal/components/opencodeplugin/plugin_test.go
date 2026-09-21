@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -82,6 +83,96 @@ func TestInstallPreservesExistingTUIPluginsAndIsIdempotent(t *testing.T) {
 		if root.Plugin[i] != want[i] {
 			t.Fatalf("plugin list = %#v, want %#v", root.Plugin, want)
 		}
+	}
+}
+
+func TestInstallGentleLogoRollsBackSourceWhenRegistrationFails(t *testing.T) {
+	home := t.TempDir()
+	configDir := filepath.Join(home, ".config", "opencode")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	malformed := []byte("{ not json")
+	if err := os.WriteFile(filepath.Join(configDir, "tui.json"), malformed, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := Install(home, model.OpenCodePluginGentleLogo); err == nil {
+		t.Fatal("Install() error = nil, want registration failure")
+	}
+
+	pluginPath := filepath.Join(configDir, "tui-plugins", "gentle-logo.tsx")
+	if _, err := os.Stat(pluginPath); !os.IsNotExist(err) {
+		t.Fatalf("plugin source should not exist after failed registration; stat err = %v", err)
+	}
+	data, err := os.ReadFile(filepath.Join(configDir, "tui.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != string(malformed) {
+		t.Fatalf("tui.json = %q, want unchanged %q", data, malformed)
+	}
+}
+
+func TestInstallGentleLogoRestoresPreExistingSourceWhenRegistrationFails(t *testing.T) {
+	home := t.TempDir()
+	configDir := filepath.Join(home, ".config", "opencode")
+	pluginDir := filepath.Join(configDir, "tui-plugins")
+	if err := os.MkdirAll(pluginDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	pluginPath := filepath.Join(pluginDir, "gentle-logo.tsx")
+	original := []byte("// pre-existing gentle logo plugin\nexport default {}\n")
+	if err := os.WriteFile(pluginPath, original, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(configDir, "tui.json"), []byte("{ not json"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := Install(home, model.OpenCodePluginGentleLogo); err == nil {
+		t.Fatal("Install() error = nil, want registration failure")
+	}
+
+	data, err := os.ReadFile(pluginPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != string(original) {
+		t.Fatalf("plugin source = %q, want restored %q", data, original)
+	}
+	info, err := os.Stat(pluginPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := info.Mode().Perm(); got != 0o600 {
+		t.Fatalf("plugin source mode = %o, want 600", got)
+	}
+}
+
+func TestPriorFileRestoreReportsRemovalFailure(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("directory permissions do not deny file removal on windows")
+	}
+	if os.Geteuid() == 0 {
+		t.Skip("root bypasses directory permissions")
+	}
+
+	dir := t.TempDir()
+	target := filepath.Join(dir, "gentle-logo.tsx")
+	if err := os.WriteFile(target, []byte("created by a failed install"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(dir, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = os.Chmod(dir, 0o755)
+	})
+
+	prior := priorFile{}
+	if err := prior.restore(target); err == nil {
+		t.Fatal("restore() error = nil, want removal failure")
 	}
 }
 
