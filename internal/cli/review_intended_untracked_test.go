@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"io"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -174,7 +175,7 @@ func TestIntendedUntrackedSelectionSubmissionExecutesSelectedStatusThenPrintedSt
 	}
 	var selected ReviewTargetStatusResult
 	decodeStrictReviewJSON(t, output.Bytes(), &selected)
-	if selected.Schema != ReviewIntegrationStatusSchemaV7 || selected.NextTransition == nil || selected.NextTransition.Execute == nil || selected.NextTransition.Execute.Operation != "review.start" {
+	if selected.Schema != ReviewIntegrationStatusSchemaV9 || selected.NextTransition == nil || selected.NextTransition.Execute == nil || selected.NextTransition.Execute.Operation != "review.start" {
 		t.Fatalf("selected STATUS = %#v", selected)
 	}
 	started := decodeNegotiatedReviewStart(t, executePrintedReview(t, repo, selected.NextTransition.Execute.Command))
@@ -448,6 +449,9 @@ func TestEligibleUntrackedInventoryPublishedUnconditionally(t *testing.T) {
 			case "rdd_disabled":
 				reviewModeHome(t)
 				repo = initReviewCLIRepo(t)
+				if err := RunReviewMode([]string{"disable", "--cwd", repo}, io.Discard); err != nil {
+					t.Fatal(err)
+				}
 				if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("changed\n"), 0o644); err != nil {
 					t.Fatal(err)
 				}

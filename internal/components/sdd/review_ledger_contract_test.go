@@ -817,8 +817,15 @@ func TestOpenCodeRenderedReviewProtocolCost(t *testing.T) {
 		// Preserve the existing absolute ceiling margins (3 and 1,533 characters).
 		// #4405 adds the target_already_acknowledged terminal continuation (+390
 		// characters per row). Preserve the existing absolute ceiling margins.
-		{name: "standard", agents: []string{"review-reliability"}, beforeChars: 42_301, wantChars: 19_108, maxCharacters: 19_111},
-		{name: "full-4R", agents: []string{"review-risk", "review-resilience", "review-readability", "review-reliability"}, beforeChars: 106_998, wantChars: 35_515, maxCharacters: 37_048},
+		// ORPT-2 removes host-side binding assembly from the OpenCode contract,
+		// reducing the shared installed surface by 230 characters per case.
+		// #4680 then adds the correction_context_budget_exceeded continuation row
+		// (+233 characters per row): the correction stage has a stop of its own
+		// whose exit is releasing the authority, not a smaller candidate, and the
+		// shipped contract has to name it. Both are deliberate, not drift, and the
+		// ceilings carry each row's existing absolute margin over the net change.
+		{name: "standard", agents: []string{"review-reliability"}, beforeChars: 42_301, wantChars: 19_111, maxCharacters: 19_114},
+		{name: "full-4R", agents: []string{"review-risk", "review-resilience", "review-readability", "review-reliability"}, beforeChars: 106_998, wantChars: 35_518, maxCharacters: 37_051},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

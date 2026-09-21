@@ -1,8 +1,10 @@
 package opencode
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"os/exec"
 	"regexp"
 	"strings"
 	"time"
@@ -30,9 +32,50 @@ func ParseRuntimeMajor(version string) RuntimeMajor {
 	return RuntimeV1
 }
 
+type VersionCommandRunner func(context.Context, Command) (CommandOutput, error)
+
 // VersionRunnerOverride is a process seam for isolated tests, like adapter
 // LookPathOverride. Production probes only --version with bounded output/time.
-var VersionRunnerOverride CommandRunner = runCatalogCommand
+var VersionRunnerOverride VersionCommandRunner = runVersionCommand
+
+func runVersionCommand(ctx context.Context, command Command) (CommandOutput, error) {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, command.Path, command.Args...)
+	cmd.Dir = command.Dir
+	if command.Env != nil {
+		cmd.Env = command.Env
+	}
+	stdout, stderr := &limitedBuffer{limit: command.OutputLimit, cancel: cancel}, &limitedBuffer{limit: command.OutputLimit, cancel: cancel}
+	cmd.Stdout, cmd.Stderr = stdout, stderr
+	err := cmd.Run()
+	if stdout.overflow || stderr.overflow {
+		return CommandOutput{Stdout: stdout.Bytes(), Stderr: stderr.Bytes()}, &CatalogError{Kind: CatalogErrorOutputTooLarge}
+	}
+	return CommandOutput{Stdout: stdout.Bytes(), Stderr: stderr.Bytes()}, err
+}
+
+type limitedBuffer struct {
+	buffer   bytes.Buffer
+	limit    int
+	overflow bool
+	cancel   context.CancelFunc
+}
+
+func (b *limitedBuffer) Write(data []byte) (int, error) {
+	remaining := b.limit - b.buffer.Len()
+	if len(data) > remaining {
+		if remaining > 0 {
+			_, _ = b.buffer.Write(data[:remaining])
+		}
+		b.overflow = true
+		b.cancel()
+		return len(data), nil
+	}
+	return b.buffer.Write(data)
+}
+
+func (b *limitedBuffer) Bytes() []byte { return b.buffer.Bytes() }
 
 func DetectRuntimeMajor(ctx context.Context) (RuntimeMajor, error) {
 	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)

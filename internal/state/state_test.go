@@ -57,7 +57,7 @@ func fullyPopulatedInstallState() InstallState {
 		Preset:                   model.PresetCustom,
 		SDDMode:                  model.SDDModeMulti,
 		StrictTDD:                true,
-		CommunityTools:           []string{"codegraph", "rtk"},
+		CommunityTools:           []string{"codegraph"},
 		CommunityToolsConfigured: true,
 		ClaudeModelAssignments:   map[string]string{"sdd-explore": "sonnet"},
 		ClaudePhaseAssignments: map[string]ClaudePhaseAssignmentState{
@@ -1133,6 +1133,74 @@ func TestMergeAgents_PreservesRDDMode(t *testing.T) {
 	merged := MergeAgents(existing, []string{"opencode"})
 	if merged.RDDMode != "off" || merged.RDDModeRecordedAt == nil || !merged.RDDModeRecordedAt.Equal(recorded) {
 		t.Errorf("MergeAgents dropped the global mode: %q/%v", merged.RDDMode, merged.RDDModeRecordedAt)
+	}
+}
+
+// ─── LastSyncedAt round-trip and backward-compat ─────────────────────────
+
+func TestLastSyncedAt_RoundTrip(t *testing.T) {
+	home := t.TempDir()
+	ts := time.Date(2026, 8, 30, 12, 0, 0, 0, time.UTC)
+	s := InstallState{InstalledAgents: []string{"codex"}, LastSyncedAt: &ts}
+	if err := Write(home, s); err != nil {
+		t.Fatalf("Write() error = %v", err)
+	}
+	got, err := Read(home)
+	if err != nil {
+		t.Fatalf("Read() error = %v", err)
+	}
+	if got.LastSyncedAt == nil || !got.LastSyncedAt.Equal(ts) {
+		t.Errorf("LastSyncedAt = %v, want %v", got.LastSyncedAt, ts)
+	}
+	data, err := os.ReadFile(Path(home))
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+	if !contains(string(data), "last_synced_at") {
+		t.Errorf("JSON must contain key last_synced_at; got:\n%s", data)
+	}
+}
+
+func TestLastSyncedAt_OmitWhenZero(t *testing.T) {
+	home := t.TempDir()
+	s := InstallState{InstalledAgents: []string{"codex"}}
+	if err := Write(home, s); err != nil {
+		t.Fatalf("Write() error = %v", err)
+	}
+	data, err := os.ReadFile(Path(home))
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+	if contains(string(data), "last_synced_at") {
+		t.Error("JSON must not contain last_synced_at when zero")
+	}
+}
+
+func TestLastSyncedAt_BackwardCompat(t *testing.T) {
+	home := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(home, stateDir), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	legacy := `{"installed_agents":["codex"]}` + "\n"
+	if err := os.WriteFile(Path(home), []byte(legacy), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	s, err := Read(home)
+	if err != nil {
+		t.Fatalf("Read() error = %v", err)
+	}
+	if s.LastSyncedAt != nil {
+		t.Errorf("LastSyncedAt = %v, want nil for legacy state", s.LastSyncedAt)
+	}
+}
+
+func TestMergeAgents_PreservesLastSyncedAt(t *testing.T) {
+	ts := time.Date(2026, 8, 30, 10, 0, 0, 0, time.UTC)
+	existing := InstallState{InstalledAgents: []string{"codex"}, LastSyncedAt: &ts}
+	merged := MergeAgents(existing, []string{"opencode"})
+	if merged.LastSyncedAt == nil || !merged.LastSyncedAt.Equal(ts) {
+		t.Errorf("MergeAgents did not preserve LastSyncedAt: got %v, want %v",
+			merged.LastSyncedAt, ts)
 	}
 }
 
