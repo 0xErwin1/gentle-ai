@@ -130,6 +130,12 @@ func TestInstallGentleLogoRestoresPreExistingSourceWhenRegistrationFails(t *test
 	if err := os.WriteFile(pluginPath, original, 0o600); err != nil {
 		t.Fatal(err)
 	}
+	// Record the pre-existing mode so the restore can be compared against it
+	// on Windows, where os reports 0666 for every regular file (#4843).
+	originalInfo, err := os.Stat(pluginPath)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if err := os.WriteFile(filepath.Join(configDir, "tui.json"), []byte("{ not json"), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -145,13 +151,7 @@ func TestInstallGentleLogoRestoresPreExistingSourceWhenRegistrationFails(t *test
 	if string(data) != string(original) {
 		t.Fatalf("plugin source = %q, want restored %q", data, original)
 	}
-	info, err := os.Stat(pluginPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got := info.Mode().Perm(); got != 0o600 {
-		t.Fatalf("plugin source mode = %o, want 600", got)
-	}
+	assertRestoredSourceMode(t, pluginPath, originalInfo.Mode())
 }
 
 func TestPriorFileRestoreReportsRemovalFailure(t *testing.T) {
@@ -188,6 +188,28 @@ func TestInstallDoesNotRunPackageManager(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(home, ".config", "opencode", "node_modules")); !os.IsNotExist(err) {
 		t.Fatalf("Install() should not create node_modules; stat err = %v", err)
+	}
+}
+
+// assertRestoredSourceMode verifies the rollback preserved the plugin source
+// mode. Go's os package reports 0666 for every regular file on Windows — there
+// are no Unix permission bits to enforce — so on Windows it asserts the restore
+// kept the mode recorded before the install instead of the Unix-only 0600
+// (#4843).
+func assertRestoredSourceMode(t *testing.T, path string, original os.FileMode) {
+	t.Helper()
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if runtime.GOOS == "windows" {
+		if got := info.Mode().Perm(); got != original.Perm() {
+			t.Fatalf("plugin source mode = %o, want preserved %o", got, original.Perm())
+		}
+		return
+	}
+	if got := info.Mode().Perm(); got != 0o600 {
+		t.Fatalf("plugin source mode = %o, want 600", got)
 	}
 }
 
@@ -247,12 +269,18 @@ func TestInstallGentleLogoRollsBackSourceWhenItsWriteLandsWithError(t *testing.T
 		if err := os.WriteFile(pluginPath, original, 0o600); err != nil {
 			t.Fatal(err)
 		}
+		// Record the pre-existing mode so the restore can be compared against
+		// it on Windows, where os reports 0666 for every regular file (#4843).
+		originalInfo, err := os.Stat(pluginPath)
+		if err != nil {
+			t.Fatal(err)
+		}
 
 		origWrite := writeFileAtomicFn
 		t.Cleanup(func() { writeFileAtomicFn = origWrite })
 		writeFileAtomicFn = landPluginSourceWrite
 
-		_, err := Install(home, model.OpenCodePluginGentleLogo)
+		_, err = Install(home, model.OpenCodePluginGentleLogo)
 		if err == nil {
 			t.Fatal("Install() error = nil, want the injected source-write failure")
 		}
@@ -267,13 +295,7 @@ func TestInstallGentleLogoRollsBackSourceWhenItsWriteLandsWithError(t *testing.T
 		if !bytes.Equal(data, original) {
 			t.Fatalf("plugin source = %q, want restored %q", data, original)
 		}
-		info, err := os.Stat(pluginPath)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if got := info.Mode().Perm(); got != 0o600 {
-			t.Fatalf("plugin source mode = %o, want 600", got)
-		}
+		assertRestoredSourceMode(t, pluginPath, originalInfo.Mode())
 	})
 }
 
