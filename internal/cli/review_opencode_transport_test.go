@@ -1070,6 +1070,11 @@ func TestOpenCodeTransportCaptureRefusalCause(t *testing.T) {
 		want string
 	}{
 		{name: "inconclusive verdict keeps its retry ladder", err: fmt.Errorf("wrapped: %w", errReviewTargetedValidationInconclusive), want: "targeted_validation_inconclusive"},
+		// Production nesting: reviewProviderCloseTargetedValidatorRaw records the
+		// inconclusive attempt and then wraps the sentinel in the admission
+		// marker, so the classifier's errors.Is-before-errors.As order is
+		// load-bearing, not merely defensive.
+		{name: "admission-wrapped inconclusive still classifies inconclusive", err: &reviewProviderAdmissionError{err: fmt.Errorf("wrapped: %w", errReviewTargetedValidationInconclusive)}, want: "targeted_validation_inconclusive"},
 		{name: "admission contract refusal", err: &reviewProviderAdmissionError{err: errors.New("provider targeted validator result requires passed checks and an explicit follow_ups array")}, want: "validator_result_not_admissible"},
 		{name: "store layer failure", err: errors.New("compact store write failed"), want: "role_capture_failed"},
 	} {
