@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -214,17 +215,33 @@ func installGentleLogo(homeDir string) (Result, error) {
 	if err != nil {
 		return Result{}, fmt.Errorf("capture prior Gentle Logo TUI plugin state: %w", err)
 	}
+	tuiPrior, err := capturePriorFile(tuiPath)
+	if err != nil {
+		return Result{}, fmt.Errorf("capture prior OpenCode TUI config state: %w", err)
+	}
 
 	pluginWrite, err := filemerge.WriteFileAtomic(pluginPath, []byte(gentleLogoPluginSource), 0o644)
 	if err != nil {
 		return Result{}, fmt.Errorf("write Gentle Logo TUI plugin: %w", err)
 	}
-	tuiChanged, err := ensureTUIPlugin(tuiPath, pluginPath)
+	tuiChanged, err := ensureTUIPluginFn(tuiPath, pluginPath)
 	if err != nil {
-		if restoreErr := prior.restore(pluginPath); restoreErr != nil {
-			return Result{}, fmt.Errorf("roll back Gentle Logo TUI plugin after failed registration (%v): %w", restoreErr, err)
+		// WriteFileAtomic can report the replacement as landed even when it
+		// returns an error (#1676), so compensate both files unconditionally;
+		// restoring a tui.json write that never landed is a no-op.
+		restoreErr := prior.restore(pluginPath)
+		tuiRestoreErr := tuiPrior.restore(tuiPath)
+		if restoreErr != nil || tuiRestoreErr != nil {
+			joined := []error{fmt.Errorf("register Gentle Logo TUI plugin: %w", err)}
+			if restoreErr != nil {
+				joined = append(joined, fmt.Errorf("roll back Gentle Logo TUI plugin, the previous state could not be restored: %w", restoreErr))
+			}
+			if tuiRestoreErr != nil {
+				joined = append(joined, fmt.Errorf("roll back OpenCode TUI config, the previous state could not be restored: %w", tuiRestoreErr))
+			}
+			return Result{}, errors.Join(joined...)
 		}
-		return Result{}, err
+		return Result{}, fmt.Errorf("register Gentle Logo TUI plugin: %w", err)
 	}
 
 	return Result{
@@ -232,6 +249,10 @@ func installGentleLogo(homeDir string) (Result, error) {
 		Files:   []string{pluginPath, tuiPath},
 	}, nil
 }
+
+// ensureTUIPluginFn is a package-level seam so tests can inject a failing
+// registration, mirroring the syncDirFn/renameFn seams in filemerge.
+var ensureTUIPluginFn = ensureTUIPlugin
 
 // priorFile captures the prior on-disk state of a file so a multi-step install
 // can compensate as one recoverable operation (#1678): a newly created file is
@@ -299,7 +320,10 @@ func ensureTUIPlugin(path, pkg string) (bool, error) {
 	out = append(out, '\n')
 	wr, err := filemerge.WriteFileAtomic(path, out, 0o644)
 	if err != nil {
-		return false, err
+		// WriteFileAtomic can publish the replacement and still return an error
+		// (#1676), so report wr.Changed truthfully alongside the error instead
+		// of pretending nothing happened.
+		return wr.Changed, err
 	}
 	return wr.Changed, nil
 }
