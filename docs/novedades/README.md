@@ -10,28 +10,43 @@ detail (PR numbers, field names, commit hashes). It is not a marketing document 
 replace the commit history — it explains it.
 
 `main` moves fast — roughly 19 non-merge commits a day — so the publication follows it **near-daily**
-rather than waiting for a release. That cadence shapes the two rules below: how often an edition
-ships, and where its output lives.
+rather than waiting for a release. That is the whole point: a reader who checks in once a day never
+has to catch up on a backlog. Everything below follows from that cadence.
 
-## Daily Markdown, per-release PDF
+## Three artifacts, one publication
 
-| Cadence | Artifact | Where it lives |
-|---|---|---|
-| Daily | one Markdown edition | committed in `docs/novedades/` |
-| Per release | one consolidated PDF | attached as a GitHub release asset, never committed |
+| Artifact | Cadence | Where it goes | Cost to the repo |
+|---|---|---|---|
+| Markdown edition | daily | committed in `docs/novedades/` | ~10 KB a day |
+| PDF of that edition | daily | posted to the community Discord | none |
+| Consolidated PDF | per release | release asset (optional) | none |
 
-A daily edition is a plain Markdown file, `docs/novedades/YYYY-MM-DD.md` — no per-edition folder,
-no generated PDF committed alongside it. Two reasons:
+The point of the daily cadence is that nobody has to catch up. `main` takes ~19 non-merge commits
+a day; batching that into one document every few days produces exactly the wall of text a reader
+skips. One small document a day is the product.
 
-- **The repo stays light.** At a release every ~1.4 days, committing a pair of ~76 KB PDFs per
-  daily edition would add tens of megabytes a year to a repository that is currently under 100 MB.
-  Markdown text does not carry that cost.
-- **Daily editions stay reviewable in a diff.** A Markdown file reviews like any other doc change.
-  A binary PDF does not.
+**The Markdown is the record.** It is committed, it reviews in a diff like any other doc change,
+and it is what a reader — or an agent — can verify from a clone with nothing but `git`.
 
-The polished, branded PDF still exists — just not one per day, and not committed. Once per release,
-the daily Markdown editions published since the previous release are consolidated into a single PDF
-(dark + light themes) and attached to that release's GitHub release page as a release asset.
+**The daily PDF is the delivery.** The same edition, rendered, published where the community
+already is. It is deliberately not committed. Storing a pair of ~76 KB PDFs a day would add tens of
+megabytes a year to a repository currently under 100 MB, and a binary does not review in a diff.
+Publishing one costs the repository nothing, because it never enters git — those are two different
+costs, and only the first is a reason to keep a file out.
+
+**The consolidated PDF is optional.** When a release goes out, the daily editions since the
+previous release can be consolidated into a single PDF and attached to it, for readers who install
+versions rather than following `main`. Nothing breaks if a release ships without one: its editions
+were already published daily, and they remain in this directory.
+
+If you do want it on the release, attach it while publishing. Releases here are **immutable**, so
+their assets freeze on publication and a later upload is refused:
+
+```
+HTTP 422: Cannot upload assets to an immutable release.
+```
+
+There is no way to add it afterwards. A release published without its PDF simply stays without one.
 
 ## Structure every edition follows
 
@@ -98,10 +113,10 @@ git rev-list --count <base>..<head>                   # the total, including mer
 `plantilla.md` holds the shape a new edition starts from. Hashes and subjects are always read back
 from `git`, never from memory.
 
-The per-release PDF is rendered from these Markdown editions with an internal documentation tool
-that is not part of this repository, so it cannot be rebuilt from a clone. That is deliberate: the
-Markdown editions are the public record and the thing worth reviewing, and the PDF is a formatted
-copy of them for distribution. Download it from the release it belongs to.
+Both PDFs — the daily one and the optional per-release consolidation — are rendered from these
+Markdown editions with an internal documentation tool that is not part of this repository, so
+neither can be rebuilt from a clone. That is deliberate: the Markdown editions are the public
+record and the thing worth reviewing; the PDFs are formatted copies of them for distribution.
 
 ## Index of editions
 
