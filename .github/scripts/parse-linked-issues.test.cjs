@@ -5,7 +5,7 @@ const { resolve } = require('node:path');
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 
-const { bindRenderedBody, parseLinkedIssues } = require('./parse-linked-issues.cjs');
+const { parseLinkedIssues } = require('./parse-linked-issues.cjs');
 
 const closing = (number) => ({ number, kind: 'closing' });
 const nonClosing = (number) => ({ number, kind: 'non-closing' });
@@ -24,44 +24,15 @@ test('references inside HTML comments are ignored; an unclosed comment hides the
   }
 });
 
-test('bindRenderedBody returns the authoritative rendered body when unrelated activity updates the PR', () => {
-  const eventPR = { number: 42, updated_at: '2026-03-10T12:00:00Z', body: 'Closes #42' };
-  const currentPR = { number: 42, updated_at: '2026-03-10T12:00:01Z', body: 'Closes #42', body_text: 'Reviewer-visible text' };
-
-  assert.equal(bindRenderedBody(eventPR, currentPR), currentPR.body_text);
-});
-
-test('bindRenderedBody rejects unmatched or unusable PR snapshots', () => {
-  const eventPR = { number: 42, updated_at: '2026-03-10T12:00:00Z', body: null };
-  const currentPR = { number: 42, updated_at: '2026-03-10T12:00:00Z', body: null, body_text: '' };
-  const cases = [
-    ['missing event PR', null, currentPR, /event pull request/i],
-    ['missing fetched PR', eventPR, null, /fetched pull request/i],
-    ['number mismatch', eventPR, { ...currentPR, number: 43 }, /numbers do not match/i],
-    ['coerced event number', { ...eventPR, number: true }, { ...currentPR, number: 1 }, /numbers do not match/i],
-    ['raw body mismatch', eventPR, { ...currentPR, body: 'Closes #42' }, /raw bodies do not match/i],
-    ['matching invalid raw bodies', { ...eventPR, body: true }, { ...currentPR, body: true }, /raw bodies do not match/i],
-    ['missing body_text', eventPR, { ...currentPR, body_text: undefined }, /body_text.*string/i],
-    ['null body_text', eventPR, { ...currentPR, body_text: null }, /body_text.*string/i],
-    ['non-string body_text', eventPR, { ...currentPR, body_text: 42 }, /body_text.*string/i],
-  ];
-
-  for (const [, event, current, error] of cases) {
-    assert.throws(() => bindRenderedBody(event, current), error);
-  }
-});
-
-test('the workflow binds and parses GitHub rendered text rather than the event body', () => {
+test('the workflow parses the event body directly and never fetches the PR body', () => {
   const workflow = readFileSync(resolve(__dirname, '../workflows/pr-check.yml'), 'utf8');
 
   assert.match(workflow, /pull-requests: read/);
   assert.match(workflow, /issues: read/);
-  assert.match(workflow, /GET \/repos\/\{owner\}\/\{repo\}\/pulls\/\{pull_number\}/);
-  assert.match(workflow, /accept:\s*'application\/vnd\.github\.full\+json'/);
-  assert.match(workflow, /bindRenderedBody\(context\.payload\.pull_request, currentPR\)/);
-  assert.match(workflow, /parseLinkedIssues\(bodyText\)/);
-  assert.equal((workflow.match(/parseLinkedIssues\(/g) || []).length, 1);
-  assert.doesNotMatch(workflow, /parseLinkedIssues\(context\.payload\.pull_request\.body\)/);
+  assert.match(workflow, /parseLinkedIssues\(context\.payload\.pull_request\.body \|\| ''\)/);
+  assert.doesNotMatch(workflow, /github\.request\(/);
+  assert.doesNotMatch(workflow, /GET \/repos\/\{owner\}\/\{repo\}\/pulls\/\{pull_number\}/);
+  assert.doesNotMatch(workflow, /bindRenderedBody/);
 });
 
 test('closing and non-closing references are kind-tagged, in order of appearance', () => {
@@ -78,10 +49,6 @@ test('closing and non-closing references are kind-tagged, in order of appearance
 });
 
 test('an empty or missing body yields no references and no errors', () => {
-  const eventPR = { number: 42, body: null };
-  const currentPR = { number: 42, body: null, body_text: '' };
-  assert.equal(bindRenderedBody(eventPR, currentPR), '');
-
   for (const body of ['', null, undefined]) {
     assert.deepEqual(parseLinkedIssues(body), ok());
   }

@@ -70,34 +70,15 @@ jobs:
         uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b  # v7.1.0
         with:
           script: |
-            const { bindRenderedBody, parseLinkedIssues } = require(
+            const { parseLinkedIssues } = require(
               `${process.env.GITHUB_WORKSPACE}/.github/scripts/parse-linked-issues.cjs`
             );
 
-            let bodyText;
-            try {
-              const { data: currentPR } = await github.request(
-                'GET /repos/{owner}/{repo}/pulls/{pull_number}',
-                {
-                  owner: context.repo.owner,
-                  repo: context.repo.repo,
-                  pull_number: context.payload.pull_request.number,
-                  headers: {
-                    accept: 'application/vnd.github.full+json',
-                  },
-                }
-              );
-              bodyText = bindRenderedBody(context.payload.pull_request, currentPR);
-            } catch {
-              core.setFailed(
-                '❌ Could not retrieve and validate the current rendered PR body. Retry the check; if it persists, update the PR body and retry.'
-              );
-              return;
-            }
-
-            // Parse only GitHub's bound reviewer-visible rendered text. The
-            // approval gate reuses this exact kind-tagged result.
-            const { references, errors } = parseLinkedIssues(bodyText);
+            // Parse the event body directly. The PR description is rewritten
+            // by tooling (e.g. CodeRabbit) after the event fires, so a freshly
+            // fetched body would never match the event payload and comparing
+            // the two would fail closed on every PR.
+            const { references, errors } = parseLinkedIssues(context.payload.pull_request.body || '');
             core.setOutput('references', JSON.stringify(references));
             core.setOutput('errors', JSON.stringify(errors));
 
