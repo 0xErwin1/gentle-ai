@@ -3,7 +3,7 @@
 
 <div align="center">
 
-<img width="100%" alt="Gentle-AI neon rose banner" src="docs/assets/brand/gentle-ai-banner.png" />
+<img width="100%" alt="Gentle-AI neon rose banner: the rose blooms in, the GENTLE-AI wordmark is written on, and the tagline Ecosystem, Framework, Workflows appears" src="docs/assets/brand/gentle-ai-banner.gif" />
 
 <h1>Gentle-AI™</h1>
 
