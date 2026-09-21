@@ -27,7 +27,9 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v3/internal/components/telemetryruntime"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
 	opencodeactivation "github.com/gentleman-programming/gentle-ai/v3/internal/opencode"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/reviewtransaction"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/state"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/statecoord"
 )
 
 func TestUninstallOpenCodeTelemetryOwnershipAndScope(t *testing.T) {
@@ -2020,5 +2022,59 @@ func TestComponentOperationsSDD_OpenCodeRemovesManagedPluginsUnderXDGConfigHome(
 	}
 	if _, err := os.Stat(filepath.Join(homeDir, ".config", "opencode")); !os.IsNotExist(err) {
 		t.Fatalf("uninstall touched ~/.config/opencode although XDG_CONFIG_HOME is set (stat err = %v)", err)
+	}
+}
+
+// TestUpdateStateAfterUninstallReReadsLatestStateAfterLockContention is the
+// #1809 preservation proof for updateStateAfterUninstall: the whole
+// read-modify-write must run inside the canonical install-state lock, so a
+// concurrent writer's RDDMode survives the agent removal. A contended lock
+// must fail fast without writing anything.
+func TestUpdateStateAfterUninstallReReadsLatestStateAfterLockContention(t *testing.T) {
+	home := t.TempDir()
+	lockPath, err := statecoord.LockPath(home)
+	if err != nil {
+		t.Fatalf("install state lock path: %v", err)
+	}
+	held, err := reviewtransaction.AcquireAuthorityFileLock(lockPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := state.Write(home, state.InstallState{
+		InstalledAgents: []string{string(model.AgentOpenCode), "claude-code"},
+		RDDMode:         string(reviewtransaction.RDDModeOn),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := updateStateAfterUninstall(home, []model.AgentID{model.AgentOpenCode}); err == nil || !strings.Contains(err.Error(), "acquire install state lock") {
+		t.Fatalf("contended uninstall state update error = %v", err)
+	}
+	contended, err := state.Read(home)
+	if err != nil || len(contended.InstalledAgents) != 2 || contended.RDDMode != string(reviewtransaction.RDDModeOn) {
+		t.Fatalf("state after contended run = %#v, err = %v", contended, err)
+	}
+	if err := held.Release(); err != nil {
+		t.Fatal(err)
+	}
+
+	removed, err := updateStateAfterUninstall(home, []model.AgentID{model.AgentOpenCode})
+	if err != nil {
+		t.Fatalf("updateStateAfterUninstall() error = %v", err)
+	}
+	if len(removed) != 1 || removed[0] != model.AgentOpenCode {
+		t.Fatalf("removed = %v, want [opencode]", removed)
+	}
+	got, err := state.Read(home)
+	if err != nil {
+		t.Fatalf("re-read state: %v", err)
+	}
+	if len(got.InstalledAgents) != 1 || got.InstalledAgents[0] != "claude-code" {
+		t.Fatalf("InstalledAgents = %v, want [claude-code]", got.InstalledAgents)
+	}
+	if got.RDDMode != string(reviewtransaction.RDDModeOn) {
+		t.Fatalf("concurrent RDDMode clobbered: got %q, want %q", got.RDDMode, reviewtransaction.RDDModeOn)
+	}
+	if got.BackgroundIntent != "" {
+		t.Fatalf("BackgroundIntent = %q, want cleared after opencode removal", got.BackgroundIntent)
 	}
 }

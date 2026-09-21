@@ -29,6 +29,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
 	opencodeactivation "github.com/gentleman-programming/gentle-ai/v3/internal/opencode"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/state"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/statecoord"
 )
 
 type Manager interface {
@@ -1796,39 +1797,51 @@ func updateStateAfterUninstall(homeDir string, toRemove []model.AgentID) ([]mode
 		return nil, nil
 	}
 
-	current, err := state.Read(homeDir)
+	// removed must be declared outside the closure so it survives the lock;
+	// it is only assigned once the corresponding write has succeeded.
+	var removed []model.AgentID
+	err := statecoord.WithLock(homeDir, func() error {
+		// Re-read the latest state inside the lock so a concurrent writer's
+		// change is not clobbered by a stale snapshot taken before the lock.
+		current, err := state.Read(homeDir)
+		if err != nil {
+			if os.IsNotExist(err) {
+				return nil
+			}
+			return fmt.Errorf("read install state: %w", err)
+		}
+
+		removeSet := make(map[string]struct{}, len(toRemove))
+		for _, agentID := range toRemove {
+			removeSet[string(agentID)] = struct{}{}
+		}
+
+		kept := make([]string, 0, len(current.InstalledAgents))
+		removedHere := make([]model.AgentID, 0, len(toRemove))
+		for _, installed := range current.InstalledAgents {
+			if _, ok := removeSet[installed]; ok {
+				removedHere = append(removedHere, model.AgentID(installed))
+				continue
+			}
+			kept = append(kept, installed)
+		}
+		if len(removedHere) == 0 {
+			return nil
+		}
+
+		updated := current
+		updated.InstalledAgents = kept
+		if slices.Contains(toRemove, model.AgentOpenCode) {
+			updated.BackgroundIntent = ""
+		}
+		if err := state.Write(homeDir, updated); err != nil {
+			return fmt.Errorf("write install state: %w", err)
+		}
+		removed = removedHere
+		return nil
+	})
 	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, nil
-		}
-		return nil, fmt.Errorf("read install state: %w", err)
-	}
-
-	removeSet := make(map[string]struct{}, len(toRemove))
-	for _, agentID := range toRemove {
-		removeSet[string(agentID)] = struct{}{}
-	}
-
-	kept := make([]string, 0, len(current.InstalledAgents))
-	removed := make([]model.AgentID, 0, len(toRemove))
-	for _, installed := range current.InstalledAgents {
-		if _, ok := removeSet[installed]; ok {
-			removed = append(removed, model.AgentID(installed))
-			continue
-		}
-		kept = append(kept, installed)
-	}
-	if len(removed) == 0 {
-		return nil, nil
-	}
-
-	updated := current
-	updated.InstalledAgents = kept
-	if slices.Contains(toRemove, model.AgentOpenCode) {
-		updated.BackgroundIntent = ""
-	}
-	if err := state.Write(homeDir, updated); err != nil {
-		return nil, fmt.Errorf("write install state: %w", err)
+		return nil, err
 	}
 	return removed, nil
 }
