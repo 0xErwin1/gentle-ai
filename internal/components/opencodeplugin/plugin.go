@@ -220,8 +220,18 @@ func installGentleLogo(homeDir string) (Result, error) {
 		return Result{}, fmt.Errorf("capture prior OpenCode TUI config state: %w", err)
 	}
 
-	pluginWrite, err := filemerge.WriteFileAtomic(pluginPath, []byte(gentleLogoPluginSource), 0o644)
+	pluginWrite, err := writeFileAtomicFn(pluginPath, []byte(gentleLogoPluginSource), 0o644)
 	if err != nil {
+		// WriteFileAtomic can publish the replacement and still return an
+		// error (#1676), so compensate the source before returning;
+		// tui.json has not been touched at this point.
+		restoreErr := prior.restore(pluginPath)
+		if restoreErr != nil {
+			return Result{}, errors.Join(
+				fmt.Errorf("write Gentle Logo TUI plugin: %w", err),
+				fmt.Errorf("roll back Gentle Logo TUI plugin, the previous state could not be restored: %w", restoreErr),
+			)
+		}
 		return Result{}, fmt.Errorf("write Gentle Logo TUI plugin: %w", err)
 	}
 	tuiChanged, err := ensureTUIPluginFn(tuiPath, pluginPath)
@@ -253,6 +263,10 @@ func installGentleLogo(homeDir string) (Result, error) {
 // ensureTUIPluginFn is a package-level seam so tests can inject a failing
 // registration, mirroring the syncDirFn/renameFn seams in filemerge.
 var ensureTUIPluginFn = ensureTUIPlugin
+
+// writeFileAtomicFn is the source-write seam for installGentleLogo, so tests
+// can exercise the landed-with-error window of WriteFileAtomic (#1676).
+var writeFileAtomicFn = filemerge.WriteFileAtomic
 
 // priorFile captures the prior on-disk state of a file so a multi-step install
 // can compensate as one recoverable operation (#1678): a newly created file is
