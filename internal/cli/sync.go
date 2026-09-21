@@ -1490,17 +1490,43 @@ func applyResolvedPersona(selection *model.Selection, persisted string) {
 // gentleman-neutral-artifacts persona to neutral, printing the remap notice
 // once. State that predates persona persistence, explicit gentleman state,
 // and unreadable state are untouched.
+//
+// The persisted parameter is only an advisory snapshot: the rewrite re-reads
+// the latest state inside the canonical install-state lock and re-checks the
+// alias there, so a concurrent writer's change between the advisory read and
+// the write is never clobbered.
 func migratePersistedPersonaAlias(homeDir string, persisted *state.InstallState, persistedErr error) error {
 	if persistedErr != nil || persisted == nil || persisted.Persona != string(model.PersonaGentlemanNeutralArtifacts) {
 		return nil
 	}
-	persisted.Persona = string(model.PersonaNeutral)
-	if err := state.Write(homeDir, *persisted); err != nil {
-		return fmt.Errorf("persist remapped persona: %w", err)
+	remapped := false
+	if err := withInstallStateLock(homeDir, func() error {
+		latest, readErr := state.Read(homeDir)
+		if readErr != nil {
+			// The advisory caller read succeeded, so a missing file now means a
+			// concurrent delete removed the state: nothing is left to migrate.
+			if os.IsNotExist(readErr) {
+				return nil
+			}
+			return fmt.Errorf("read persisted installation state: %w", readErr)
+		}
+		if latest.Persona != string(model.PersonaGentlemanNeutralArtifacts) {
+			return nil
+		}
+		latest.Persona = string(model.PersonaNeutral)
+		if err := state.Write(homeDir, latest); err != nil {
+			return fmt.Errorf("persist remapped persona: %w", err)
+		}
+		remapped = true
+		return nil
+	}); err != nil {
+		return err
 	}
 	// Notice only after the rewrite is durably persisted: a failed write must
 	// not tell the user the remap happened.
-	fmt.Fprintln(personaNoticeWriter, personaAliasRemapNotice)
+	if remapped {
+		fmt.Fprintln(personaNoticeWriter, personaAliasRemapNotice)
+	}
 	return nil
 }
 

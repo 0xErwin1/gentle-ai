@@ -33,6 +33,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v3/internal/planner"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/reviewtransaction"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/state"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/statecoord"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/system"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/tui/screens"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/update"
@@ -3757,13 +3758,7 @@ func (m Model) startUpgradeSync() tea.Cmd {
 			// present — skip writing to avoid dropping installed_agents, model
 			// assignments, and other persisted fields.
 			if h := homeDir(); h != "" {
-				s, readErr := state.Read(h)
-				if readErr != nil && !errors.Is(readErr, os.ErrNotExist) {
-					// File exists but unreadable/corrupt — skip to avoid clobber.
-				} else {
-					s.PendingSync = true
-					_ = state.Write(h, s)
-				}
+				markPendingSyncUnderLock(h)
 			}
 			return SyncDoneMsg{}
 		}
@@ -3778,6 +3773,23 @@ func (m Model) startUpgradeSync() tea.Cmd {
 	}
 
 	return tea.Sequence(upgradeCmd, syncCmd)
+}
+
+// markPendingSyncUnderLock flags PendingSync under the canonical install-state
+// lock. It re-reads the latest state inside the lock so a concurrent writer's
+// change is not clobbered, and preserves the no-clobber guard: when the read
+// fails with anything other than os.ErrNotExist, nothing is written. Lock and
+// write failures stay non-fatal, as before this helper existed.
+func markPendingSyncUnderLock(h string) {
+	_ = statecoord.WithLock(h, func() error {
+		s, readErr := state.Read(h)
+		if readErr != nil && !errors.Is(readErr, os.ErrNotExist) {
+			// File exists but unreadable/corrupt — skip to avoid clobber.
+			return nil
+		}
+		s.PendingSync = true
+		return state.Write(h, s)
+	})
 }
 
 func reportUpgradedGentleAI(report upgrade.UpgradeReport) bool {
