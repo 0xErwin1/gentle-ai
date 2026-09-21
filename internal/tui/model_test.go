@@ -25,6 +25,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v3/internal/planner"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/reviewtransaction"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/state"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/statecoord"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/system"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/tui/screens"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/tui/styles"
@@ -9168,5 +9169,53 @@ func TestOpenCodePluginUninstallStandaloneResetMatchesPluginsPattern(t *testing.
 			state := updated.(Model)
 			tc.validate(t, state)
 		})
+	}
+}
+
+// TestMarkPendingSyncUnderLockReReadsLatestStateAfterLockContention is the
+// #1809 preservation proof for the deferred-sync PendingSync flag. The helper
+// re-reads the latest state inside the canonical install-state lock, so a
+// concurrent writer's change survives. A contended lock must fail fast
+// without writing anything.
+func TestMarkPendingSyncUnderLockReReadsLatestStateAfterLockContention(t *testing.T) {
+	home := t.TempDir()
+	lockPath, err := statecoord.LockPath(home)
+	if err != nil {
+		t.Fatalf("install state lock path: %v", err)
+	}
+	held, err := reviewtransaction.AcquireAuthorityFileLock(lockPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := state.Write(home, state.InstallState{
+		InstalledAgents: []string{"opencode"},
+		RDDMode:         string(reviewtransaction.RDDModeOn),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// Contended run: the helper must fail fast and leave the state untouched.
+	markPendingSyncUnderLock(home)
+	contended, err := state.Read(home)
+	if err != nil || contended.PendingSync || contended.RDDMode != string(reviewtransaction.RDDModeOn) {
+		t.Fatalf("state after contended run = %#v, err = %v", contended, err)
+	}
+	if err := held.Release(); err != nil {
+		t.Fatal(err)
+	}
+
+	// Uncontended run: PendingSync is set and the concurrent fields survive.
+	markPendingSyncUnderLock(home)
+	got, err := state.Read(home)
+	if err != nil {
+		t.Fatalf("re-read state: %v", err)
+	}
+	if !got.PendingSync {
+		t.Fatal("PendingSync = false after markPendingSyncUnderLock, want true")
+	}
+	if len(got.InstalledAgents) != 1 || got.InstalledAgents[0] != "opencode" {
+		t.Fatalf("InstalledAgents = %v, want [opencode]", got.InstalledAgents)
+	}
+	if got.RDDMode != string(reviewtransaction.RDDModeOn) {
+		t.Fatalf("concurrent RDDMode clobbered: got %q, want %q", got.RDDMode, reviewtransaction.RDDModeOn)
 	}
 }
