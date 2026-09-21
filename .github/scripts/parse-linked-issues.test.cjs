@@ -135,3 +135,28 @@ test('the same issue as both closing and non-closing is ambiguous and fails clos
   assert.match(result.errors[0].raw, /#42/);
   assert.match(result.errors[0].reason, /ambiguous/i);
 });
+
+test('colon separator forms are accepted fail-closed; colon without whitespace stays malformed', () => {
+  const cases = [
+    ['Closes: #10', [closing(10)]],
+    ['Refs: #10', [nonClosing(10)]],
+    ['Closes: #10\nFixes: #11\nResolves: #12', [closing(10), closing(11), closing(12)]],
+  ];
+  for (const [body, references] of cases) {
+    assert.deepEqual(parseLinkedIssues(body), ok(...references));
+  }
+
+  const malformed = parseLinkedIssues('Closes:#10');
+  assert.deepEqual(malformed.references, []);
+  assert.equal(malformed.errors.length, 1);
+  assert.equal(malformed.errors[0].raw, 'Closes:#10');
+  assert.match(malformed.errors[0].reason, /malformed/i);
+});
+
+test('an oversized issue number fails closed; a normal reference beside it still parses', () => {
+  const result = parseLinkedIssues('Closes #1770\nCloses #99999999999999999999');
+  assert.deepEqual(result.references, [closing(1770)]);
+  assert.equal(result.errors.length, 1);
+  assert.equal(result.errors[0].raw, 'Closes #99999999999999999999');
+  assert.match(result.errors[0].reason, /malformed/i);
+});
