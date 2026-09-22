@@ -29,7 +29,12 @@ func TestHelpRequestPrintsDerivedUsageAndSucceeds(t *testing.T) {
 			run: func(args []string, stdout *bytes.Buffer) error {
 				return RunRestore(args, stdout)
 			},
-			expects: []string{"list", "yes"},
+			expects: []string{
+				"list",
+				"yes",
+				"list available backups without restoring",
+				"gentle-ai restore [--list | latest | <id>] [--yes]",
+			},
 		},
 	} {
 		for _, flagName := range []string{"--help", "-h"} {
@@ -63,8 +68,17 @@ func TestRestoreAnswersHelpAndRejectsUnknownFlagAfterPositional(t *testing.T) {
 			if err := RunRestore([]string{"backup-001", flagName}, &stdout); err != nil {
 				t.Fatalf("restore backup-001 %s returned %v, want success", flagName, err)
 			}
-			if !strings.Contains(stdout.String(), "list") || !strings.Contains(stdout.String(), "yes") {
-				t.Fatalf("restore backup-001 %s printed no usage: %q", flagName, stdout.String())
+			output := stdout.String()
+			if !strings.Contains(output, "list") || !strings.Contains(output, "yes") {
+				t.Fatalf("restore backup-001 %s printed no usage: %q", flagName, output)
+			}
+			for _, want := range []string{
+				"list available backups without restoring",
+				"gentle-ai restore [--list | latest | <id>] [--yes]",
+			} {
+				if !strings.Contains(output, want) {
+					t.Fatalf("restore backup-001 %s usage omits %q:\n%s", flagName, want, output)
+				}
 			}
 		})
 	}

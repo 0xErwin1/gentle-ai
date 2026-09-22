@@ -49,6 +49,27 @@ func RunRestoreWithFnAndInput(args []string, restorer RestoreFunc, stdout io.Wri
 	return runRestoreWithHomeDir(args, restorer, stdout, stdin, homeDir)
 }
 
+// newRestoreFlagSet builds the flag set used to answer help requests and to
+// report unknown flags with the same derived usage. The custom Usage adds the
+// positional backup-selection syntax the flag package cannot derive from the
+// registrations; PrintDefaults keeps the flag descriptions derived from them.
+func newRestoreFlagSet() *flag.FlagSet {
+	fs := flag.NewFlagSet("restore", flag.ContinueOnError)
+	// Descriptions are what the derived usage shows the operator,
+	// so they are the documentation rather than a placeholder.
+	_ = fs.Bool("list", false, "list available backups without restoring")
+	_ = fs.Bool("yes", false, "skip confirmation prompt")
+	fs.Usage = func() {
+		// Keep the "Usage of " prefix: derivedUsageText strips everything
+		// before it, so the flag package's duplicated error line is not
+		// reported twice alongside the custom block.
+		fmt.Fprintf(fs.Output(), "Usage of %s:\n", fs.Name())
+		fmt.Fprintln(fs.Output(), "  gentle-ai restore [--list | latest | <id>] [--yes]")
+		fs.PrintDefaults()
+	}
+	return fs
+}
+
 // runRestoreWithHomeDir is the internal implementation.
 func runRestoreWithHomeDir(args []string, restorer RestoreFunc, stdout io.Writer, stdin io.Reader, homeDir string) error {
 	// Pre-scan for --yes/-y and --list flags before standard flag parsing,
@@ -68,11 +89,7 @@ func runRestoreWithHomeDir(args []string, restorer RestoreFunc, stdout io.Writer
 		default:
 			if strings.HasPrefix(a, "-") {
 				// Unknown flag — surface error via flag.FlagSet for consistent messages.
-				fs := flag.NewFlagSet("restore", flag.ContinueOnError)
-				// Descriptions are what the derived usage shows the operator,
-				// so they are the documentation rather than a placeholder.
-				_ = fs.Bool("list", false, "list available backups without restoring")
-				_ = fs.Bool("yes", false, "skip confirmation prompt")
+				fs := newRestoreFlagSet()
 				// Parse only the flag actually detected. flag.Parse stops at
 				// the first non-flag token, so handing it the full args slice
 				// makes `restore <backup> --anything` return nil: the unknown
