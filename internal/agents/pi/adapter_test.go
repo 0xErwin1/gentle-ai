@@ -84,6 +84,7 @@ func TestAgentConfigPathHonorsPiCodingAgentDir(t *testing.T) {
 	defaultPath := filepath.Join(homeDir, ".pi", "agent")
 
 	t.Run("unset uses default", func(t *testing.T) {
+		t.Setenv("PI_CODING_AGENT_DIR", "")
 		if got := AgentConfigPath(homeDir); got != defaultPath {
 			t.Fatalf("AgentConfigPath() = %q, want %q", got, defaultPath)
 		}

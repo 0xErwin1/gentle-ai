@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -306,6 +307,9 @@ func TestRunInstallEngramForPiTargetsConfiguredAgentDirectory(t *testing.T) {
 // os/exec.Cmd defaults to the parent's environment whenever Env is nil, and
 // neither runCommandSequenceWithProgress nor executeCommand ever sets Env.
 func TestExecuteCommandInheritsPiCodingAgentDirForChildProcesses(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("the child-process probe below runs a POSIX sh one-liner")
+	}
 	restoreStreaming := SetCommandOutputStreaming(false)
 	t.Cleanup(restoreStreaming)
 
