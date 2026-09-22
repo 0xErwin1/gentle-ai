@@ -2,17 +2,20 @@ package cli
 
 import (
 	"fmt"
+	"os"
 	"slices"
+	"strings"
 
 	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/reviewerprovider"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/state"
 )
 
 // reviewProviderAdapter resolves a compiled runtime only after the role's
 // canonical contract has declared the shared transport capability. Execution
 // can therefore never bypass the role registry that owns the schema, budget,
 // prompt, and immutable storage binding.
-func reviewProviderAdapter(role string, agent model.AgentID) (reviewerprovider.Adapter, error) {
+func reviewProviderAdapter(role string, agent model.AgentID, lens ...string) (reviewerprovider.Adapter, error) {
 	contract, err := reviewProviderRoleContractFor(role)
 	if err != nil {
 		return nil, err
@@ -20,7 +23,61 @@ func reviewProviderAdapter(role string, agent model.AgentID) (reviewerprovider.A
 	if !slices.Contains(contract.RequiredCapabilities, reviewProviderTransportCapability) {
 		return nil, fmt.Errorf("reviewer provider role %q does not permit the compiled transport", contract.Role) // refusal:by-design world-action: a role must explicitly opt in to the compiled provider transport
 	}
-	return reviewProviderAdapterFor(contract, agent)
+	adapter, err := reviewProviderAdapterFor(contract, agent)
+	if err != nil || agent != model.AgentClaudeCode {
+		return adapter, err
+	}
+	key := ""
+	switch role {
+	case reviewProviderRoleLens:
+		if len(lens) == 1 {
+			key = strings.TrimPrefix(lens[0], "review-")
+			switch key {
+			case "risk", "readability", "reliability", "resilience":
+			default:
+				key = ""
+			}
+		}
+	case reviewProviderRoleRefuter:
+		key = "refuter"
+	case reviewProviderRoleTargetedValidator:
+		key = "validator"
+	}
+	if claude, ok := adapter.(*reviewerprovider.ClaudeAdapter); ok {
+		claude.Model = savedClaudeReviewModel(key)
+	}
+	return adapter, nil
+}
+
+// savedClaudeReviewModel never replaces the native transport's default for
+// missing or malformed assignments. A valid phase assignment takes priority
+// over the legacy model-only representation.
+func savedClaudeReviewModel(role string) model.ClaudeModelAlias {
+	if role == "" {
+		return ""
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	installed, err := state.Read(home)
+	if err != nil {
+		return ""
+	}
+	if assignment, ok := installed.ClaudePhaseAssignments[role]; ok {
+		configured := model.ClaudePhaseAssignment{
+			Model:  model.ClaudeModelAlias(assignment.Model),
+			Effort: model.ClaudeEffort(assignment.Effort),
+		}
+		if configured.Valid() {
+			return configured.Model
+		}
+	}
+	alias := model.ClaudeModelAlias(installed.ClaudeModelAssignments[role])
+	if alias.Valid() {
+		return alias
+	}
+	return ""
 }
 
 var reviewProviderAdapterFor = func(contract reviewerprovider.Contract, agent model.AgentID) (reviewerprovider.Adapter, error) {
