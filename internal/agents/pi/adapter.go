@@ -272,16 +272,11 @@ func (a *Adapter) engramInitCommand() []string {
 	return []string{"npm", "exec", "--yes", "--package", "gentle-engram@latest", "--", "pi-engram", "init"}
 }
 
-// GlobalConfigDir returns Pi's global config directory. It stays under
-// homeDir/.pi when PI_CODING_AGENT_DIR is unset (matching every other
-// installed agent's config root) and follows the override when set, so
-// shared components that write Pi state through this directory (persona,
-// SDD, Engram, theme, CodeGraph guidance) target the same isolated home Pi
-// itself will use instead of the real ~/.pi.
+// GlobalConfigDir returns Pi's global config directory: always
+// homeDir/.pi, matching every other installed agent's config root.
+// PI_CODING_AGENT_DIR never moves this parent root — it only relocates
+// Pi's agent-owned paths, resolved separately through AgentConfigPath.
 func (a *Adapter) GlobalConfigDir(homeDir string) string {
-	if piCodingAgentDirOverride() != "" {
-		return AgentConfigPath(homeDir)
-	}
 	return ConfigPath(homeDir)
 }
 
@@ -363,10 +358,18 @@ func piCodingAgentDirOverride() string {
 	return strings.TrimSpace(os.Getenv("PI_CODING_AGENT_DIR"))
 }
 
+// resolveAbsPath resolves a relative path against the process's current
+// working directory. It is a package-level var so tests can simulate the
+// (extremely rare) failure of the underlying os.Getwd call.
+var resolveAbsPath = filepath.Abs
+
 // resolvePiAgentDirOverride resolves a PI_CODING_AGENT_DIR value the same way
 // Pi itself does: a leading "~/" (or a bare "~") expands against homeDir, an
 // absolute path is used as-is, and a relative path resolves against the
-// process's current working directory.
+// process's current working directory. If that cwd resolution fails, it
+// falls back to the default agent directory instead of returning the raw
+// relative string, which would silently resolve to something else entirely
+// once passed to filepath.Join by a caller.
 func resolvePiAgentDirOverride(override, homeDir string) string {
 	switch {
 	case override == "~":
@@ -376,10 +379,10 @@ func resolvePiAgentDirOverride(override, homeDir string) string {
 	case filepath.IsAbs(override):
 		return filepath.Clean(override)
 	default:
-		if abs, err := filepath.Abs(override); err == nil {
+		if abs, err := resolveAbsPath(override); err == nil {
 			return abs
 		}
-		return override
+		return filepath.Join(ConfigPath(homeDir), "agent")
 	}
 }
 
@@ -393,7 +396,9 @@ func resolvePiAgentDirOverride(override, homeDir string) string {
 func (a *Adapter) ProvisionEngramMCP(homeDir string) (bool, []string, error) {
 	paths := []string{
 		a.SettingsPath(homeDir),
-		filepath.Join(a.GlobalConfigDir(homeDir), piNPMDirectory, piNPMPackageFile),
+		// Pi's npm manifest lives at <agentDir>/npm/package.json
+		// (package-manager.ts:2033), not under GlobalConfigDir's ~/.pi root.
+		filepath.Join(AgentConfigPath(homeDir), piNPMDirectory, piNPMPackageFile),
 	}
 	overlays := [][]byte{
 		nil,
