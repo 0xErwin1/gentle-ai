@@ -6,12 +6,16 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+
+	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
 )
 
 // ClaudeAdapter invokes Claude Code with an opaque provider invocation and
 // returns its stdout bytes without interpreting them.
 type ClaudeAdapter struct {
-	LookPath       func(string) (string, error)
+	LookPath func(string) (string, error)
+	// Model is optional; an absent or invalid assignment preserves Claude's default.
+	Model          model.ClaudeModelAlias
 	commandContext func(context.Context, string, ...string) *exec.Cmd
 }
 
@@ -58,14 +62,18 @@ func (adapter *ClaudeAdapter) Review(ctx context.Context, invocation Invocation)
 	if commandContext == nil {
 		commandContext = exec.CommandContext
 	}
-	command := commandContext(ctx, binary, claudeReviewerArguments...)
+	arguments := append([]string(nil), claudeReviewerArguments...)
+	if adapter.Model.Valid() {
+		arguments = append(arguments, "--model", adapter.Model.String())
+	}
+	command := commandContext(ctx, binary, arguments...)
 	command.Dir = scratch
 	// On Windows, `claude` from an npm-style install resolves to a `.cmd`
 	// shim; launching it goes through cmd.exe's own command-line reparsing,
 	// which needs its own quoting when the resolved path contains a space
 	// (issue #4039). This is a no-op for every other binary and platform: the
 	// binary is otherwise launched directly, with no shell.
-	configureWindowsBatchLaunch(command, binary, claudeReviewerArguments)
+	configureWindowsBatchLaunch(command, binary, arguments)
 	command.Stdin = bytes.NewReader(invocation.Prompt())
 	var stdout, stderr bytes.Buffer
 	command.Stdout, command.Stderr = &stdout, &stderr

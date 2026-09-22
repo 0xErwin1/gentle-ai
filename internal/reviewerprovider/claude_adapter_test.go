@@ -11,6 +11,8 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+
+	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
 )
 
 const claudeAdapterHelperEnvironment = "GENTLE_AI_REVIEWER_PROVIDER_CLAUDE_HELPER"
@@ -69,6 +71,57 @@ func TestClaudeAdapterUsesStdinAndReturnsUntouchedRawOutput(t *testing.T) {
 		if !strings.Contains(string(arguments), flag) {
 			t.Fatalf("claude arguments = %q, missing %q", arguments, flag)
 		}
+	}
+}
+
+func TestClaudeAdapterExecutesWithSavedModelOnlyWhenValid(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("the helper process uses POSIX argument handling")
+	}
+	for _, tc := range []struct {
+		name  string
+		model model.ClaudeModelAlias
+		want  string
+	}{
+		{"configured", model.ClaudeModelHaiku, "haiku"},
+		{"missing", "", ""},
+		{"invalid", "unknown", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			argumentsPath := filepath.Join(t.TempDir(), "arguments")
+			t.Setenv(claudeAdapterHelperEnvironment, "1")
+			t.Setenv(claudeAdapterPromptPathEnvironment, filepath.Join(t.TempDir(), "prompt"))
+			t.Setenv(claudeAdapterArgumentsPathEnvironment, argumentsPath)
+			adapter := &ClaudeAdapter{
+				Model:    tc.model,
+				LookPath: func(string) (string, error) { return "claude", nil },
+				commandContext: func(ctx context.Context, _ string, arguments ...string) *exec.Cmd {
+					return exec.CommandContext(ctx, os.Args[0], append([]string{"-test.run=^TestClaudeAdapterHelperProcess$", "--"}, arguments...)...)
+				},
+			}
+			if _, err := adapter.Review(context.Background(), NewInvocation([]byte("opaque prompt"))); err != nil {
+				t.Fatal(err)
+			}
+			data, err := os.ReadFile(argumentsPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			args := strings.Split(string(data), "\n")
+			for i, arg := range args {
+				if arg == "--effort" {
+					t.Fatal("reviewer must not pass unverified effort flags")
+				}
+				if arg == "--model" {
+					if tc.want == "" || i+1 >= len(args) || args[i+1] != tc.want {
+						t.Fatalf("unexpected model arguments: %q", args)
+					}
+					return
+				}
+			}
+			if tc.want != "" {
+				t.Fatalf("missing --model %s in %q", tc.want, args)
+			}
+		})
 	}
 }
 
