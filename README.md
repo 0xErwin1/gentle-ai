@@ -21,7 +21,6 @@
 <a href="https://gentlemanprogramming.com/"><strong>Website</strong></a> &bull;
 <a href="docs/quickstart.md"><strong>Quickstart</strong></a> &bull;
 <a href="docs/intended-usage.md"><strong>Docs</strong></a> &bull;
-<a href="docs/novedades/README.md"><strong>Novedades</strong></a> &bull;
 <a href="https://gentle-ai-wiki.gentlemanprogramming.com/"><strong>Wiki</strong></a>
 </p>
 
