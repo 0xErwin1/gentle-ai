@@ -164,6 +164,14 @@ func RunArgs(args []string, stdout io.Writer) error {
 				cli.PrintSyncHelp(stdout)
 				return nil
 			}
+		case "restore":
+			// Answer an explicit help request before system detection: a host
+			// with no resolvable home directory must still be able to read the
+			// restore usage, and cli.RunRestore answers --help before it
+			// resolves the home directory itself.
+			if hasHelpFlag(args[1:]) {
+				return cli.RunRestore([]string{"--help"}, stdout)
+			}
 		}
 	}
 
