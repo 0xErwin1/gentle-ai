@@ -2,6 +2,7 @@ package sdd
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -8373,17 +8374,23 @@ func TestInject_ClaudeCodeInstallsReviewStopHook(t *testing.T) {
 }
 
 // TestClaudeUserPromptSubmitHookExecutesPowerShellCommandWithSpecialChars
-// exercises the canonical Windows hook command against a fake gentle-ai on
-// PATH with a CLAUDE_PROJECT_DIR that contains spaces, an apostrophe, and
-// a path-traversal segment.
+// executes the exact hook command read back out of the generated Claude
+// settings (written by the production ensureClaudeSkillRegistryHook path)
+// against a fake `gentle-ai`, with a CLAUDE_PROJECT_DIR that contains a
+// space, an apostrophe, a `$` PowerShell would expand if unquoted, plus
+// parentheses and `&`. The fake is the test binary re-executed under the
+// `gentle-ai` name (see gentle_ai_fake_test.go); a POSIX #!/bin/sh script
+// cannot be launched on Windows, so no shell is involved in the fake.
 //
-// CI caveat: this test runs on pwsh (PowerShell Core 7.x) under Linux, not
-// Windows PowerShell 5.1 where the original bug was filed. PS 5.1 and pwsh
-// 7.x have different argument-parsing rules (notably $ expansion inside
-// double-quoted strings, backtick escaping). The canonical literal avoids
-// PS-5.1-only constructs (no ${VAR:-DEFAULT}, no || true), so pwsh coverage
-// is a sanity check, not a proof of PS 5.1 correctness. Skipped when pwsh
-// is unavailable, or on Windows hosts without /bin/sh.
+// Executor adaptation vs. the review design: on Windows the settings literal
+// names `powershell`, so the body is extracted from the literal and run as
+// `powershell -NoProfile -Command <body>` and this is never skipped
+// (powershell ships with every Windows host). On POSIX the production literal
+// is the plain shell form `... "${CLAUDE_PROJECT_DIR:-$PWD}" || true`, which
+// is not PowerShell syntax (pwsh cannot parse ${VAR:-DEFAULT}) and would fail
+// on any pwsh-equipped POSIX host; it is therefore executed under /bin/sh -c,
+// exactly how Claude Code runs hook commands on POSIX, skipping only when
+// /bin/sh is unavailable.
 
 // TestPruneLegacyClaudeHookPreservesSiblingsWithinSameItem verifies that when
 // an outer UserPromptSubmit entry contains the legacy literal alongside a
@@ -8453,95 +8460,189 @@ func TestPruneLegacyClaudeHookDeletesUserPromptSubmitWhenAllEntriesPruned(t *tes
 }
 
 func TestClaudeUserPromptSubmitHookExecutesPowerShellCommandWithSpecialChars(t *testing.T) {
-	pwshPath, err := exec.LookPath("pwsh")
-	if err != nil {
-		t.Skip("pwsh (PowerShell Core) is not installed; cannot exercise the PowerShell command literal")
-	}
-	if runtime.GOOS == "windows" {
-		// The fake gentle-ai below uses POSIX /bin/sh; skip on Windows hosts
-		// without git-bash or WSL.
-		if _, statErr := os.Stat("/bin/sh"); statErr != nil {
-			t.Skip("/bin/sh not available on this Windows host; cannot run the fake gentle-ai")
-		}
-	}
-
 	root := t.TempDir()
 	bin := filepath.Join(root, "bin")
 	if err := os.MkdirAll(bin, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	fakeLogPath := filepath.Join(root, "fake-gentle-ai.log")
-	fakeScript := `#!/bin/sh
-{
-  echo "argc=$#"
-  i=0
-  for a in "$@"; do
-    i=$((i+1))
-    printf 'argv[%d]=%s\n' "$i" "$a"
-  done
-  echo "CLAUDE_PROJECT_DIR=${CLAUDE_PROJECT_DIR-<unset>}"
-  echo "PWD=$PWD"
-} > "$FAKE_LOG"
-exit 0
-`
-	if err := os.WriteFile(filepath.Join(bin, "gentle-ai"), []byte(fakeScript), 0o755); err != nil {
+
+	// Install the fake gentle-ai as a copy (not a symlink, so Windows is
+	// safe) of the current test binary; TestMain in gentle_ai_fake_test.go
+	// turns the child process into the fake when GENTLE_AI_FAKE_LOG is set.
+	fakeName := "gentle-ai"
+	if runtime.GOOS == "windows" {
+		fakeName = "gentle-ai.exe"
+	}
+	testBinary, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := copyExecutable(testBinary, filepath.Join(bin, fakeName)); err != nil {
 		t.Fatal(err)
 	}
 
-	projectDir := filepath.Join(root, "Weird Path", "John's project", "..", "John's project")
+	// Hazardous project directory: a space, an apostrophe, a `$` that an
+	// unquoted PowerShell string would expand, plus parentheses and `&`.
+	projectDir := filepath.Join(root, "Weird Path", "John's project", "$dollar (paren) & and")
 	if err := os.MkdirAll(projectDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
 
+	// Write the hook through the production path, then read the command
+	// back out of the generated settings: the test must execute exactly
+	// what ships, never a hand-built literal.
 	settingsPath := filepath.Join(root, ".claude", "settings.json")
 	if err := os.MkdirAll(filepath.Dir(settingsPath), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	canonicalCmd := `if (Test-Path env:CLAUDE_PROJECT_DIR) { $dir = $env:CLAUDE_PROJECT_DIR } else { $dir = $PWD }; gentle-ai skill-registry refresh --quiet --no-gitignore --cwd "$dir"; exit 0`
-	settingsJSON := fmt.Sprintf(`{"hooks":{"UserPromptSubmit":[{"matcher":"","hooks":[{"type":"command","command":"powershell -NoProfile -Command '%s'"}]}]}}`, canonicalCmd)
-	if err := os.WriteFile(settingsPath, []byte(settingsJSON), 0o644); err != nil {
+	if _, err := ensureClaudeSkillRegistryHook(settingsPath); err != nil {
+		t.Fatalf("ensureClaudeSkillRegistryHook() error = %v", err)
+	}
+	data, err := os.ReadFile(settingsPath)
+	if err != nil {
 		t.Fatal(err)
 	}
+	var settings struct {
+		Hooks struct {
+			UserPromptSubmit []struct {
+				Matcher string `json:"matcher"`
+				Hooks   []struct {
+					Type    string `json:"type"`
+					Command string `json:"command"`
+				} `json:"hooks"`
+			} `json:"UserPromptSubmit"`
+		} `json:"hooks"`
+	}
+	if err := json.Unmarshal(data, &settings); err != nil {
+		t.Fatalf("parse generated settings %q: %v\n%s", settingsPath, err, data)
+	}
+	if len(settings.Hooks.UserPromptSubmit) != 1 || len(settings.Hooks.UserPromptSubmit[0].Hooks) != 1 {
+		t.Fatalf("unexpected generated hook shape:\n%s", data)
+	}
+	settingsCommand := settings.Hooks.UserPromptSubmit[0].Hooks[0].Command
 
-	pwshCmd := exec.Command(pwshPath, "-NoProfile", "-Command", canonicalCmd)
-	pwshCmd.Env = append(os.Environ(),
+	// Execute the settings literal the way the platform runs it. On Windows
+	// the literal is `powershell -NoProfile -Command '<body>'`; powershell.exe
+	// strips the outer single quotes of a -Command value itself, so the test
+	// extracts the body and passes it as the -Command argument directly. On
+	// POSIX the production literal is the plain shell form (see the function
+	// comment for why it cannot run under pwsh) and is run under /bin/sh,
+	// exactly how Claude Code executes hook commands on POSIX.
+	var execName string
+	var execArgs []string
+	if runtime.GOOS == "windows" {
+		const wrapper = `powershell -NoProfile -Command '`
+		if !strings.HasPrefix(settingsCommand, wrapper) || !strings.HasSuffix(settingsCommand, "'") {
+			t.Fatalf("Windows settings command lost the powershell wrapper: %q", settingsCommand)
+		}
+		body := strings.TrimSuffix(strings.TrimPrefix(settingsCommand, wrapper), "'")
+		execName = "powershell"
+		execArgs = []string{"-NoProfile", "-Command", body}
+	} else {
+		execName = "/bin/sh"
+		execArgs = []string{"-c", settingsCommand}
+	}
+	if _, err := exec.LookPath(execName); err != nil {
+		if runtime.GOOS == "windows" {
+			t.Fatalf("powershell.exe not found on PATH on a Windows host: %v", err)
+		}
+		t.Skipf("%s is not on PATH; cannot execute the hook command on this host", execName)
+	}
+
+	// Environment for the child: the temp bin first on PATH so the literal's
+	// bare `gentle-ai` resolves to the fake, the fake's log/exit wiring, and
+	// the hazardous project directory. Existing GENTLE_AI_FAKE_* variables
+	// are stripped so the outer environment cannot leak into the child, and
+	// PATH is replaced (not appended) so the temp bin actually wins.
+	fakeLogPath := filepath.Join(root, "fake-gentle-ai.log")
+	childEnv := make([]string, 0, len(os.Environ())+4)
+	for _, kv := range os.Environ() {
+		if strings.HasPrefix(kv, "PATH=") ||
+			strings.HasPrefix(kv, "GENTLE_AI_FAKE_LOG=") ||
+			strings.HasPrefix(kv, "GENTLE_AI_FAKE_EXIT=") {
+			continue
+		}
+		childEnv = append(childEnv, kv)
+	}
+	childEnv = append(childEnv,
 		"PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"),
-		"FAKE_LOG="+fakeLogPath,
+		"GENTLE_AI_FAKE_LOG="+fakeLogPath,
+		"GENTLE_AI_FAKE_EXIT=7",
 		"CLAUDE_PROJECT_DIR="+projectDir,
 	)
-	pwshOutput, err := pwshCmd.CombinedOutput()
+
+	// Bounded timeout so a wedged PowerShell can never hang the suite.
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, execName, execArgs...)
+	cmd.Dir = projectDir
+	cmd.Env = childEnv
+	stdinPayload := "hook stdin probe from TestClaudeUserPromptSubmitHook\n"
+	cmd.Stdin = strings.NewReader(stdinPayload)
+	output, err := cmd.CombinedOutput()
 	if err != nil {
-		t.Fatalf("pwsh -NoProfile -Command <canonical> failed: %v\n%s", err, pwshOutput)
+		t.Fatalf("hook command exited non-zero (a failing child must not break the hook):\ncommand: %s\nerr: %v\noutput:\n%s", settingsCommand, err, output)
 	}
+	// The err == nil above is the proof that the wrapper process exited 0
+	// even though the fake child exited 7.
 
 	logBytes, err := os.ReadFile(fakeLogPath)
 	if err != nil {
-		t.Fatalf("fake gentle-ai log not written: %v\npwsh output:\n%s", err, pwshOutput)
+		t.Fatalf("fake gentle-ai log %q not written: %v\ncommand output:\n%s", fakeLogPath, err, output)
 	}
-	log := string(logBytes)
+	logText := string(logBytes)
+	lines := strings.Split(logText, "\n")
 
-	if !strings.Contains(log, "argc=") || !strings.Contains(log, "argv[1]=skill-registry") {
-		t.Fatalf("fake gentle-ai was not invoked with the expected argv:\n%s\npwsh output:\n%s", log, pwshOutput)
+	// Assertions (a)+(b): the fake must have seen exactly the full argv
+	// `skill-registry refresh --quiet --no-gitignore --cwd <dir>`, with the
+	// --cwd value as exactly ONE element equal to the project directory byte
+	// for byte; a split or re-expanded path fails this comparison.
+	wantArgv := []string{"skill-registry", "refresh", "--quiet", "--no-gitignore", "--cwd", projectDir}
+	gotArgv := make([]string, 0, len(wantArgv))
+	for _, line := range lines {
+		if !strings.HasPrefix(line, "argv[") {
+			continue
+		}
+		eq := strings.Index(line, "=")
+		if eq < 0 {
+			t.Fatalf("malformed argv log line %q:\n%s", line, logText)
+		}
+		gotArgv = append(gotArgv, line[eq+1:])
 	}
-	if !strings.Contains(log, "argv[2]=refresh") {
-		t.Fatalf("missing argv[2]=refresh:\n%s", log)
+	if !reflect.DeepEqual(gotArgv, wantArgv) {
+		t.Fatalf("fake gentle-ai argv mismatch (special-character CLAUDE_PROJECT_DIR did not survive argument reconstruction):\n got: %#v\nwant: %#v\nlog:\n%s\ncommand output:\n%s", gotArgv, wantArgv, logText, output)
 	}
-	if !strings.Contains(log, "argv[3]=--quiet") {
-		t.Fatalf("missing argv[3]=--quiet:\n%s", log)
+
+	// Assertion (c): the fake recorded the stdin bytes delivered by the hook.
+	if !strings.Contains(logText, fmt.Sprintf("stdin-bytes=%d", len(stdinPayload))) ||
+		!strings.Contains(logText, stdinPayload) {
+		t.Fatalf("fake gentle-ai did not record the stdin payload:\nlog:\n%s\ncommand output:\n%s", logText, output)
 	}
-	if !strings.Contains(log, "argv[4]=--no-gitignore") {
-		t.Fatalf("missing argv[4]=--no-gitignore:\n%s", log)
+
+	// Assertion (d): the fake's own exit code (GENTLE_AI_FAKE_EXIT=7) was
+	// recorded as 7.
+	if !strings.Contains(logText, "exit=7\n") {
+		t.Fatalf("fake gentle-ai did not record exit code 7:\nlog:\n%s\ncommand output:\n%s", logText, output)
 	}
-	if !strings.Contains(log, "argv[5]=--cwd") {
-		t.Fatalf("missing argv[5]=--cwd:\n%s", log)
+
+	// The hook body derives --cwd from CLAUDE_PROJECT_DIR, so the variable
+	// must have reached the fake unchanged.
+	if !strings.Contains(logText, "env-CLAUDE_PROJECT_DIR="+projectDir+"\n") {
+		t.Fatalf("CLAUDE_PROJECT_DIR not propagated into the fake:\nlog:\n%s\ncommand output:\n%s", logText, output)
 	}
-	wantCwdArg := fmt.Sprintf("argv[6]=%s", projectDir)
-	if !strings.Contains(log, wantCwdArg) {
-		t.Fatalf("missing %q in argv (special-character CLAUDE_PROJECT_DIR did not survive argument reconstruction):\nlog:\n%s\npwsh output:\n%s", wantCwdArg, log, pwshOutput)
+}
+
+// copyExecutable copies src to dst with the executable bit set; a copy (not
+// a symlink) keeps this safe on Windows.
+func copyExecutable(src, dst string) error {
+	data, err := os.ReadFile(src)
+	if err != nil {
+		return fmt.Errorf("read %s: %w", src, err)
 	}
-	if !strings.Contains(log, fmt.Sprintf("CLAUDE_PROJECT_DIR=%s", projectDir)) {
-		t.Fatalf("CLAUDE_PROJECT_DIR not propagated into the fake:\n%s", log)
+	if err := os.WriteFile(dst, data, 0o755); err != nil {
+		return fmt.Errorf("write %s: %w", dst, err)
 	}
+	return nil
 }
 
 func TestEnsureCodexSkillRegistryHookWritesSessionStartHookIdempotently(t *testing.T) {
