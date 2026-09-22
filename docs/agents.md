@@ -119,13 +119,17 @@ Kiro uses native custom agents in `~/.kiro/agents/`. `gentle-ai` writes phase ag
 
 #### Windows-Native Delegation (no WSL)
 
-OpenCode's `gentle-orchestrator` supports headless delegation via `opencode run --agent gentle-orchestrator "<task>"`, but that alone doesn't give you a persistent, identifiable terminal window/tab to route delegated work into — the role tmux `send-keys` plays on Linux/macOS. On native Windows (PowerShell or Git Bash, no WSL), use Windows Terminal's `wt.exe` instead:
+OpenCode's `gentle-orchestrator` supports headless delegation via `opencode run --agent gentle-orchestrator "<task>"`. On native Windows (PowerShell or Git Bash, no WSL) you can launch that headless run in a named, titled Windows Terminal window with `wt.exe`:
 
 ```bash
 wt -w orquestador-gentleman new-tab --title "OpenCode" opencode run --agent gentle-orchestrator "<task>"
 ```
 
-`wt -w <name>` reuses an existing named window if one is already open, or creates it if not — the closest native Windows equivalent to targeting a persistent tmux pane by name. Combined with `opencode run --agent <name> "<task>"` headless mode (no TUI interaction required), this gives a scriptable delegation path with zero extra dependencies: no WSL, no tmux port.
+`wt -w <name>` reuses the named window when it already exists and creates it otherwise, so successive delegated runs land in the same window, each in its own tab.
+
+This is a launch path, not a delivery path. `new-tab` always opens a fresh tab for the invocation, and that tab normally ends when `opencode run` exits, so it does not send work into a pane or tab that is already running — which is what tmux `send-keys` does. `wt.exe` exposes no equivalent primitive: if you need to drive an already-open session, use WSL plus tmux instead.
+
+Quote the task argument the way your shell expects it — double quotes in PowerShell, single quotes in Git Bash — so metacharacters such as `$` are not expanded before `opencode` sees them.
 
 This requires `wt.exe` (ships with Windows Terminal, installed by default on Windows 11) and `opencode` on `PATH`. WSL + tmux remains a valid alternative if you already have that setup, but it's unnecessary extra onboarding for a Windows-only workflow.
 
