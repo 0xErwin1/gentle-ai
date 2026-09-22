@@ -52,6 +52,12 @@ var claudePhases = []string{
 	"jd-judge-a",
 	"jd-judge-b",
 	"jd-fix-agent",
+	"risk",
+	"readability",
+	"reliability",
+	"resilience",
+	"refuter",
+	"validator",
 	"default",
 }
 
@@ -71,6 +77,12 @@ var claudePhaseLabels = map[string]string{
 	"jd-judge-a":   "JD Judge A",
 	"jd-judge-b":   "JD Judge B",
 	"jd-fix-agent": "JD Fix Agent",
+	"risk":         "RDD Risk",
+	"readability":  "RDD Readability",
+	"reliability":  "RDD Reliability",
+	"resilience":   "RDD Resilience",
+	"refuter":      "RDD Refuter",
+	"validator":    "RDD Validator",
 	"default":      "General delegation",
 }
 

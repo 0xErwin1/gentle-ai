@@ -32,6 +32,25 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v3/internal/update/upgrade"
 )
 
+func TestClaudeNativeReviewAssignmentsPersistThroughAppStateConversion(t *testing.T) {
+	roles := []string{"risk", "readability", "reliability", "resilience", "refuter", "validator"}
+	assignments := make(map[string]model.ClaudePhaseAssignment)
+	for _, role := range roles {
+		assignments[role] = model.ClaudePhaseAssignment{Model: model.ClaudeModelHaiku}
+	}
+	home := t.TempDir()
+	if err := state.Write(home, state.InstallState{ClaudePhaseAssignments: claudePhaseAssignmentsToState(assignments)}); err != nil {
+		t.Fatal(err)
+	}
+	reopened := model.Selection{}
+	loadPersistedAssignments(home, &reopened)
+	for _, role := range roles {
+		if got := reopened.ClaudePhaseAssignments[role].Model; got != model.ClaudeModelHaiku {
+			t.Errorf("reopened %s model = %q, want haiku", role, got)
+		}
+	}
+}
+
 // TestListBackupsNewestFirst verifies that ListBackups returns manifests sorted
 // newest-first by CreatedAt timestamp, matching the spec "newest first" ordering.
 func TestListBackupsNewestFirst(t *testing.T) {

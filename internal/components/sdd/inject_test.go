@@ -7496,6 +7496,53 @@ func TestInjectClaudeSubAgentsResolveModels(t *testing.T) {
 	}
 }
 
+func TestInjectClaudeNativeReviewAgentsUseSavedRoleModels(t *testing.T) {
+	home := t.TempDir()
+	assignments := map[string]model.ClaudePhaseAssignment{
+		"risk":        {Model: model.ClaudeModelOpus},
+		"readability": {Model: model.ClaudeModelHaiku},
+		"reliability": {Model: model.ClaudeModelFable},
+		"resilience":  {Model: model.ClaudeModelOpus},
+		"refuter":     {Model: model.ClaudeModelHaiku},
+		"sdd-design":  {Model: model.ClaudeModelOpus},
+	}
+	if _, err := Inject(home, claudeAdapter(), "", InjectOptions{ClaudePhaseAssignments: assignments}); err != nil {
+		t.Fatal(err)
+	}
+	for role, assignment := range assignments {
+		name := "review-" + role
+		if role == "sdd-design" {
+			name = role
+		}
+		content, err := os.ReadFile(filepath.Join(home, ".claude", "agents", name+".md"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if want := "model: " + string(assignment.Model); !strings.Contains(string(content), want) {
+			t.Errorf("%s missing %q", name, want)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(home, ".claude", "agents", "review-validator.md")); !os.IsNotExist(err) {
+		t.Fatalf("unexpected validator agent: %v", err)
+	}
+}
+
+func TestInjectClaudeReviewAgentFallsBackForInvalidRole(t *testing.T) {
+	home := t.TempDir()
+	if _, err := Inject(home, claudeAdapter(), "", InjectOptions{
+		ClaudePhaseAssignments: map[string]model.ClaudePhaseAssignment{"risk": {Model: "invalid"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	content, err := os.ReadFile(filepath.Join(home, ".claude", "agents", "review-risk.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(content), "model: sonnet") {
+		t.Fatal("invalid role did not retain established generated-agent fallback")
+	}
+}
+
 func TestInjectClaudeSubAgentsRenderConfiguredEffort(t *testing.T) {
 	home := t.TempDir()
 
