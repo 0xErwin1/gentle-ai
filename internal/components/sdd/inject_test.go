@@ -8022,13 +8022,12 @@ func TestEnsureClaudeSkillRegistryHookWritesPlatformAwareCommand(t *testing.T) {
 }
 
 // TestEnsureClaudeSkillRegistryHookReplacesLegacyPOSIXCommand is the Windows
-// migration: a settings.json with the pre-fix POSIX literal gets replaced by
-// the canonical PowerShell literal without leaving a duplicate. Skipped on
-// non-Windows where the legacy IS the canonical.
+// migration regression: a settings.json carrying the pre-fix POSIX literal
+// must be replaced by the canonical PowerShell literal without leaving a
+// duplicate. It drives the platform-independent core with the Windows literal
+// pair so it runs on every GOOS; the real runtime.GOOS emission path is
+// covered by TestEnsureClaudeSkillRegistryHookWritesPlatformAwareCommand.
 func TestEnsureClaudeSkillRegistryHookReplacesLegacyPOSIXCommand(t *testing.T) {
-	if runtime.GOOS != "windows" {
-		t.Skip("Windows-only test; non-Windows has no legacy-vs-canonical drift")
-	}
 	home := t.TempDir()
 	settingsPath := filepath.Join(home, ".claude", "settings.json")
 	if err := os.MkdirAll(filepath.Dir(settingsPath), 0o755); err != nil {
@@ -8052,9 +8051,9 @@ func TestEnsureClaudeSkillRegistryHookReplacesLegacyPOSIXCommand(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	changed, err := ensureClaudeSkillRegistryHook(settingsPath)
+	changed, err := ensureClaudeSkillRegistryHookWithLegacy(settingsPath, legacyCmd, canonicalCmd)
 	if err != nil {
-		t.Fatalf("ensureClaudeSkillRegistryHook() with legacy entry error = %v", err)
+		t.Fatalf("ensureClaudeSkillRegistryHookWithLegacy() with legacy entry error = %v", err)
 	}
 	if !changed {
 		t.Fatal("changed = false, want true (legacy POSIX replaced with canonical PowerShell)")
@@ -8109,15 +8108,15 @@ func TestEnsureClaudeSkillRegistryHookReplacesLegacyPOSIXCommand(t *testing.T) {
 }
 
 // TestEnsureClaudeSkillRegistryHookPersistsLegacyPruneWhenCanonicalExists is
-// the Windows-only regression for the persistence defect flagged by decode2:
-// a settings file that already carries the canonical entry but still has the
-// pre-fix POSIX literal must have the legacy stripped on disk, not just in
-// memory. Without this, the canonical-existence early return would discard
-// the in-memory prune and both hooks would remain.
+// the regression for the persistence defect flagged by decode2 and the
+// duplicate-canonical defect found by automated review: a settings file that
+// already carries BOTH the legacy POSIX literal and the canonical literal in
+// one UserPromptSubmit item must have the legacy stripped on disk, keep the
+// canonical entry exactly once, report the change, and stay stable on a
+// second call. It drives the platform-independent core with the Windows
+// literal pair so it runs on every GOOS; without the post-prune existence
+// check the canonical entry would be appended a second time.
 func TestEnsureClaudeSkillRegistryHookPersistsLegacyPruneWhenCanonicalExists(t *testing.T) {
-	if runtime.GOOS != "windows" {
-		t.Skip("Windows-only test; non-Windows has no legacy-vs-canonical drift")
-	}
 	home := t.TempDir()
 	settingsPath := filepath.Join(home, ".claude", "settings.json")
 	if err := os.MkdirAll(filepath.Dir(settingsPath), 0o755); err != nil {
@@ -8127,6 +8126,14 @@ func TestEnsureClaudeSkillRegistryHookPersistsLegacyPruneWhenCanonicalExists(t *
 	canonicalCmd := `powershell -NoProfile -Command 'if (Test-Path env:CLAUDE_PROJECT_DIR) { $dir = $env:CLAUDE_PROJECT_DIR } else { $dir = $PWD }; gentle-ai skill-registry refresh --quiet --no-gitignore --cwd "$dir"; exit 0'`
 	initial := fmt.Sprintf(`{
   "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {"type": "command", "command": "echo keep"}
+        ]
+      }
+    ],
     "UserPromptSubmit": [
       {
         "matcher": "",
@@ -8142,9 +8149,9 @@ func TestEnsureClaudeSkillRegistryHookPersistsLegacyPruneWhenCanonicalExists(t *
 		t.Fatal(err)
 	}
 
-	changed, err := ensureClaudeSkillRegistryHook(settingsPath)
+	changed, err := ensureClaudeSkillRegistryHookWithLegacy(settingsPath, legacyCmd, canonicalCmd)
 	if err != nil {
-		t.Fatalf("ensureClaudeSkillRegistryHook() with both literals error = %v", err)
+		t.Fatalf("ensureClaudeSkillRegistryHookWithLegacy() with both literals error = %v", err)
 	}
 	if !changed {
 		t.Fatal("changed = false, want true (legacy POSIX must be stripped even when canonical already present)")
@@ -8197,11 +8204,29 @@ func TestEnsureClaudeSkillRegistryHookPersistsLegacyPruneWhenCanonicalExists(t *
 		t.Errorf("canonical PowerShell literal count = %d, want 1; settings on disk:\n%s", canonicalCount, data)
 	}
 
+	// Unrelated hooks must survive the prune-and-ensure untouched.
+	kept, ok := hooks["PreToolUse"].([]any)
+	if !ok || len(kept) != 1 {
+		t.Fatalf("PreToolUse entry count = %d (ok=%v), want 1 (unrelated hooks must survive)", len(kept), ok)
+	}
+	keptItem, ok := kept[0].(map[string]any)
+	if !ok {
+		t.Fatalf("PreToolUse[0] wrong shape: %T", kept[0])
+	}
+	keptInner, ok := keptItem["hooks"].([]any)
+	if !ok || len(keptInner) != 1 {
+		t.Fatalf("PreToolUse[0].hooks missing or wrong count: %v", keptItem["hooks"])
+	}
+	keptCmd, _ := keptInner[0].(map[string]any)["command"].(string)
+	if keptCmd != "echo keep" {
+		t.Errorf("unrelated PreToolUse hook command = %q, want %q (must survive)", keptCmd, "echo keep")
+	}
+
 	// Idempotence: a second call must not re-write the file (no change)
 	// and must leave the canonical as the sole entry.
-	changed2, err := ensureClaudeSkillRegistryHook(settingsPath)
+	changed2, err := ensureClaudeSkillRegistryHookWithLegacy(settingsPath, legacyCmd, canonicalCmd)
 	if err != nil {
-		t.Fatalf("second ensureClaudeSkillRegistryHook() error = %v", err)
+		t.Fatalf("second ensureClaudeSkillRegistryHookWithLegacy() error = %v", err)
 	}
 	if changed2 {
 		t.Error("second call changed = true, want false (after legacy prune + canonical exists)")
