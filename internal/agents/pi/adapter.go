@@ -88,10 +88,7 @@ type CodeGraphPathSet struct {
 // CodeGraphPaths resolves PI_CODING_AGENT_DIR when set, matching Pi's runtime
 // override instead of assuming the default agent directory.
 func CodeGraphPaths(homeDir string) CodeGraphPathSet {
-	agentDir := strings.TrimSpace(os.Getenv("PI_CODING_AGENT_DIR"))
-	if agentDir == "" {
-		agentDir = AgentConfigPath(homeDir)
-	}
+	agentDir := AgentConfigPath(homeDir)
 	return CodeGraphPathSet{
 		AgentDir:  agentDir,
 		MCPConfig: filepath.Join(agentDir, piEngramMCPConfigFile),
@@ -275,7 +272,18 @@ func (a *Adapter) engramInitCommand() []string {
 	return []string{"npm", "exec", "--yes", "--package", "gentle-engram@latest", "--", "pi-engram", "init"}
 }
 
-func (a *Adapter) GlobalConfigDir(homeDir string) string { return ConfigPath(homeDir) }
+// GlobalConfigDir returns Pi's global config directory. It stays under
+// homeDir/.pi when PI_CODING_AGENT_DIR is unset (matching every other
+// installed agent's config root) and follows the override when set, so
+// shared components that write Pi state through this directory (persona,
+// SDD, Engram, theme, CodeGraph guidance) target the same isolated home Pi
+// itself will use instead of the real ~/.pi.
+func (a *Adapter) GlobalConfigDir(homeDir string) string {
+	if piCodingAgentDirOverride() != "" {
+		return AgentConfigPath(homeDir)
+	}
+	return ConfigPath(homeDir)
+}
 
 func (a *Adapter) SystemPromptDir(homeDir string) string { return AgentConfigPath(homeDir) }
 
@@ -331,11 +339,49 @@ func (a *Adapter) SupportsMCP() bool {
 	return a.CapabilityManifest().Features.MCP
 }
 
-// ConfigPath returns Pi's global config directory path.
+// ConfigPath returns Pi's global config directory path. It always stays
+// under homeDir/.pi, even when PI_CODING_AGENT_DIR is set: Pi's own
+// precedence only overrides the agent directory, not this parent.
 func ConfigPath(homeDir string) string { return filepath.Join(homeDir, ".pi") }
 
-// AgentConfigPath returns Pi's current agent-owned config directory path.
-func AgentConfigPath(homeDir string) string { return filepath.Join(ConfigPath(homeDir), "agent") }
+// AgentConfigPath returns Pi's current agent-owned config directory path. It
+// honors PI_CODING_AGENT_DIR when set and non-blank, matching Pi's own
+// runtime override, so gentle-ai's install and sync operations target the
+// same directory Pi itself reads and writes (for example gentle-shell's
+// isolated `~/.gentle-shell/agent` home). Falls back to homeDir/.pi/agent
+// otherwise.
+func AgentConfigPath(homeDir string) string {
+	if override := piCodingAgentDirOverride(); override != "" {
+		return resolvePiAgentDirOverride(override, homeDir)
+	}
+	return filepath.Join(ConfigPath(homeDir), "agent")
+}
+
+// piCodingAgentDirOverride returns the trimmed PI_CODING_AGENT_DIR value, or
+// "" when it is unset or blank.
+func piCodingAgentDirOverride() string {
+	return strings.TrimSpace(os.Getenv("PI_CODING_AGENT_DIR"))
+}
+
+// resolvePiAgentDirOverride resolves a PI_CODING_AGENT_DIR value the same way
+// Pi itself does: a leading "~/" (or a bare "~") expands against homeDir, an
+// absolute path is used as-is, and a relative path resolves against the
+// process's current working directory.
+func resolvePiAgentDirOverride(override, homeDir string) string {
+	switch {
+	case override == "~":
+		return homeDir
+	case strings.HasPrefix(override, "~/"):
+		return filepath.Join(homeDir, strings.TrimPrefix(override, "~/"))
+	case filepath.IsAbs(override):
+		return filepath.Clean(override)
+	default:
+		if abs, err := filepath.Abs(override); err == nil {
+			return abs
+		}
+		return override
+	}
+}
 
 // ProvisionEngramMCP declares pi-mcp-adapter in Pi's settings.json and
 // package.json. It is invoked by ComponentEngram; keeping it here lets Pi
@@ -347,7 +393,7 @@ func AgentConfigPath(homeDir string) string { return filepath.Join(ConfigPath(ho
 func (a *Adapter) ProvisionEngramMCP(homeDir string) (bool, []string, error) {
 	paths := []string{
 		a.SettingsPath(homeDir),
-		filepath.Join(ConfigPath(homeDir), piNPMDirectory, piNPMPackageFile),
+		filepath.Join(a.GlobalConfigDir(homeDir), piNPMDirectory, piNPMPackageFile),
 	}
 	overlays := [][]byte{
 		nil,

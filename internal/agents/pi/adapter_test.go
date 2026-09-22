@@ -78,6 +78,126 @@ func TestAdapterPaths(t *testing.T) {
 	}
 }
 
+func TestAgentConfigPathHonorsPiCodingAgentDir(t *testing.T) {
+	homeDir := t.TempDir()
+	defaultPath := filepath.Join(homeDir, ".pi", "agent")
+
+	t.Run("unset uses default", func(t *testing.T) {
+		if got := AgentConfigPath(homeDir); got != defaultPath {
+			t.Fatalf("AgentConfigPath() = %q, want %q", got, defaultPath)
+		}
+	})
+
+	t.Run("blank is ignored", func(t *testing.T) {
+		t.Setenv("PI_CODING_AGENT_DIR", "   ")
+		if got := AgentConfigPath(homeDir); got != defaultPath {
+			t.Fatalf("AgentConfigPath() = %q, want %q", got, defaultPath)
+		}
+	})
+
+	t.Run("absolute override wins", func(t *testing.T) {
+		configured := filepath.Join(homeDir, "isolated-agent")
+		t.Setenv("PI_CODING_AGENT_DIR", configured)
+		if got := AgentConfigPath(homeDir); got != configured {
+			t.Fatalf("AgentConfigPath() = %q, want %q", got, configured)
+		}
+	})
+
+	t.Run("tilde override expands against home", func(t *testing.T) {
+		t.Setenv("PI_CODING_AGENT_DIR", "~/gentle-shell/agent")
+		want := filepath.Join(homeDir, "gentle-shell", "agent")
+		if got := AgentConfigPath(homeDir); got != want {
+			t.Fatalf("AgentConfigPath() = %q, want %q", got, want)
+		}
+	})
+
+	t.Run("bare tilde override expands to home", func(t *testing.T) {
+		t.Setenv("PI_CODING_AGENT_DIR", "~")
+		if got := AgentConfigPath(homeDir); got != homeDir {
+			t.Fatalf("AgentConfigPath() = %q, want %q", got, homeDir)
+		}
+	})
+
+	t.Run("relative override resolves against cwd", func(t *testing.T) {
+		t.Setenv("PI_CODING_AGENT_DIR", "relative-pi-agent")
+		wantAbs, err := filepath.Abs("relative-pi-agent")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := AgentConfigPath(homeDir); got != wantAbs {
+			t.Fatalf("AgentConfigPath() = %q, want %q", got, wantAbs)
+		}
+	})
+}
+
+func TestAdapterPathsFollowConfiguredAgentDirectory(t *testing.T) {
+	a := NewAdapter()
+	homeDir := t.TempDir()
+	configured := filepath.Join(t.TempDir(), "isolated-home", "agent")
+	t.Setenv("PI_CODING_AGENT_DIR", configured)
+
+	tests := []struct {
+		name string
+		got  string
+		want string
+	}{
+		{"GlobalConfigDir", a.GlobalConfigDir(homeDir), configured},
+		{"SystemPromptDir", a.SystemPromptDir(homeDir), configured},
+		{"SystemPromptFile", a.SystemPromptFile(homeDir), filepath.Join(configured, "APPEND_SYSTEM.md")},
+		{"SettingsPath", a.SettingsPath(homeDir), filepath.Join(configured, "settings.json")},
+		{"MCPConfigPath", a.MCPConfigPath(homeDir, "context7"), filepath.Join(configured, "mcp.json")},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if tt.got != tt.want {
+				t.Fatalf("%s = %q, want %q", tt.name, tt.got, tt.want)
+			}
+		})
+	}
+}
+
+func TestProvisionEngramMCPTargetsConfiguredAgentDirectoryAndLeavesRealHomeUntouched(t *testing.T) {
+	a := NewAdapter()
+	realHome := t.TempDir()
+	override := filepath.Join(t.TempDir(), "gentle-shell-home", "agent")
+	t.Setenv("PI_CODING_AGENT_DIR", override)
+
+	changed, paths, err := a.ProvisionEngramMCP(realHome)
+	if err != nil {
+		t.Fatalf("ProvisionEngramMCP() error = %v", err)
+	}
+	if !changed {
+		t.Fatalf("ProvisionEngramMCP() changed = false, want true")
+	}
+
+	wantSettings := filepath.Join(override, "settings.json")
+	wantNPMPackage := filepath.Join(override, "npm", "package.json")
+	if !reflect.DeepEqual(paths, []string{wantSettings, wantNPMPackage}) {
+		t.Fatalf("ProvisionEngramMCP() paths = %v, want [%q %q]", paths, wantSettings, wantNPMPackage)
+	}
+
+	settingsBody, err := os.ReadFile(wantSettings)
+	if err != nil {
+		t.Fatalf("ReadFile(settings) error = %v", err)
+	}
+	if !strings.Contains(string(settingsBody), "npm:pi-mcp-adapter") {
+		t.Fatalf("settings.json = %s, want npm:pi-mcp-adapter", settingsBody)
+	}
+
+	npmBody, err := os.ReadFile(wantNPMPackage)
+	if err != nil {
+		t.Fatalf("ReadFile(npm package.json) error = %v", err)
+	}
+	if !strings.Contains(string(npmBody), "pi-mcp-adapter") {
+		t.Fatalf("npm/package.json = %s, want pi-mcp-adapter", npmBody)
+	}
+
+	if _, err := os.Stat(filepath.Join(realHome, ".pi")); !os.IsNotExist(err) {
+		t.Fatalf("real home .pi dir stat err = %v, want IsNotExist (real home must stay untouched by the override)", err)
+	}
+}
+
 func TestCodeGraphPathsResolveConfiguredAgentDirectory(t *testing.T) {
 	home := t.TempDir()
 	configured := filepath.Join(home, "custom-pi")
