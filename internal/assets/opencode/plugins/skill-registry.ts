@@ -8,9 +8,10 @@
  *
  * Failure policy (issue #2971): the plugin is best-effort and must never
  * block OpenCode startup. When the refresh command fails, we emit one
- * actionable single line that distinguishes a failed executable spawn from
- * an unreachable working directory, without claiming a cause the runtime
- * did not report, instead of a raw Node `ENOENT` stack.
+ * actionable single line that distinguishes a spawn-or-absent-syscall ENOENT
+ * (missing resource not identified) from an unreachable working directory,
+ * without claiming a cause the runtime did not report, instead of a raw Node
+ * `ENOENT` stack.
  */
 
 import type { Plugin } from "@opencode-ai/plugin"
@@ -84,13 +85,15 @@ function errorMessage(err: unknown): string {
  * Classify an `execFileAsync` failure for `gentle-ai skill-registry refresh`
  * into a single actionable log line.
  *
- * - `ENOENT` from a `spawn gentle-ai` syscall: the OpenCode runtime could
- *   not spawn or resolve the binary. The cause is reported neutrally: a
- *   live occurrence had the binary and PATH present, so we never assert
- *   PATH absence. Emit one line that names the runtime context, the
- *   binary, and a manual continuation equivalent to the automatic
- *   refresh (`--no-gitignore`) using a literal `<project>` placeholder
- *   instead of interpolating a platform-specific shell argument.
+ * - `ENOENT` from a `spawn gentle-ai` syscall (or with no syscall field):
+ *   the OpenCode runtime could not complete the gentle-ai refresh, and the
+ *   error does not identify the missing resource. The cause is reported
+ *   neutrally: a live occurrence had the binary and PATH present, so we
+ *   never assert PATH absence or blame the binary. Emit one line that
+ *   names the runtime context and a manual continuation equivalent to the
+ *   automatic refresh (`--no-gitignore`) using a literal `<project>`
+ *   placeholder instead of interpolating a platform-specific shell
+ *   argument.
  * - `ENOENT` from any other syscall (typically `access`/`stat` on the
  *   working directory): the working directory itself is invalid. Emit one
  *   line that names the cwd rather than falsely blaming the binary.
@@ -107,9 +110,10 @@ export function describeRefreshFailure(err: unknown, cwd: string): string {
   const cwdExample = quoteCwd(cwd)
   if (code === "ENOENT" && (!syscall || syscall.startsWith("spawn"))) {
     return singleLine(
-      `[skill-registry] the OpenCode runtime could not spawn or resolve the gentle-ai executable (spawn ENOENT); ` +
-      `skipping the skill-registry refresh for ${cwdExample}. ` +
-      `Once gentle-ai resolves correctly in the OpenCode runtime environment, run ` +
+      `[skill-registry] the OpenCode runtime could not complete the gentle-ai skill-registry refresh (ENOENT); ` +
+      `the missing resource was not identified. ` +
+      `Skipping the skill-registry refresh for ${cwdExample}. ` +
+      `Once the OpenCode runtime environment is valid, run ` +
       `\`gentle-ai skill-registry refresh --no-gitignore --cwd <project>\` from a working shell, then re-launch OpenCode. ` +
       `Plugin stays best-effort and does not block startup.`,
     )
