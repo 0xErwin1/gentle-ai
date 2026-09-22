@@ -7800,6 +7800,10 @@ func TestInjectClaudeSubAgentsScopedTools(t *testing.T) {
 // Windows PowerShell literal wraps --cwd's argument in double quotes so
 // special-character project paths cannot break argv parsing or escape the
 // command. decode2's CHANGES_REQUESTED on PR #2342 required this guarantee.
+// The command is asserted on the DECODED JSON value, never on the raw file
+// text: inside settings.json the inner double quotes are JSON-escaped
+// (`--cwd \"$dir\"`), so a raw-text match for `--cwd "$dir"` would fail on
+// Windows even though the command on disk is correct.
 func TestEnsureClaudeSkillRegistryHookWindowsCommandQuotesCwdArg(t *testing.T) {
 	home := t.TempDir()
 	settingsPath := filepath.Join(home, ".claude", "settings.json")
@@ -7810,12 +7814,6 @@ func TestEnsureClaudeSkillRegistryHookWindowsCommandQuotesCwdArg(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Capture the platform-aware command by reading it back from disk
-	// after a guaranteed no-op write on the current GOOS.
-	// On Windows the file already contains the canonical PowerShell literal;
-	// on other GOOSes the file contains the POSIX literal which we can
-	// inspect to assert the structural invariants that translate to the
-	// Windows form (quoted --cwd, exit 0).
 	_, err := ensureClaudeSkillRegistryHook(settingsPath)
 	if err != nil {
 		t.Fatalf("ensureClaudeSkillRegistryHook() error = %v", err)
@@ -7824,18 +7822,36 @@ func TestEnsureClaudeSkillRegistryHookWindowsCommandQuotesCwdArg(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	text := string(data)
+	var root map[string]any
+	if err := json.Unmarshal(data, &root); err != nil {
+		t.Fatalf("settings.json is not valid JSON: %v", err)
+	}
+	hooks, ok := root["hooks"].(map[string]any)
+	if !ok {
+		t.Fatalf("hooks key missing or wrong shape: %v", root["hooks"])
+	}
+	ups, ok := hooks["UserPromptSubmit"].([]any)
+	if !ok || len(ups) == 0 {
+		t.Fatalf("UserPromptSubmit missing or empty: %v", hooks["UserPromptSubmit"])
+	}
+	entry, ok := ups[0].(map[string]any)
+	if !ok {
+		t.Fatalf("UserPromptSubmit[0] wrong shape: %T", ups[0])
+	}
+	inner, ok := entry["hooks"].([]any)
+	if !ok || len(inner) == 0 {
+		t.Fatalf("UserPromptSubmit[0].hooks missing or empty")
+	}
+	command, _ := inner[0].(map[string]any)["command"].(string)
 
 	if runtime.GOOS != "windows" {
 		// On non-Windows the generated command uses POSIX-shell quoting;
 		// verify it still pins the cwd path with double-quote protection.
-		// The file is JSON-marshalled, so the inner double quotes around
-		// --cwd's argument are JSON-escaped.
-		if !strings.Contains(text, `--cwd \"${CLAUDE_PROJECT_DIR:-$PWD}\"`) {
-			t.Errorf("POSIX hook must quote the cwd path; settings on disk:\n%s", text)
+		if !strings.Contains(command, `--cwd "${CLAUDE_PROJECT_DIR:-$PWD}"`) {
+			t.Errorf("POSIX hook must quote the cwd path; decoded command: %s", command)
 		}
-		if !strings.Contains(text, "|| true") {
-			t.Errorf("POSIX hook must end with '|| true' so a missing binary does not break Claude; settings on disk:\n%s", text)
+		if !strings.HasSuffix(command, "|| true") {
+			t.Errorf("POSIX hook must end with '|| true' so a missing binary does not break Claude; decoded command: %s", command)
 		}
 		return
 	}
@@ -7843,14 +7859,14 @@ func TestEnsureClaudeSkillRegistryHookWindowsCommandQuotesCwdArg(t *testing.T) {
 	// Windows: the literal wraps the whole PowerShell body in single quotes
 	// so PowerShell parses it as a -Command argument, and --cwd's value is
 	// double-quoted so $dir expansion is treated as one argv element.
-	if !strings.Contains(text, `--cwd "$dir"`) {
-		t.Errorf("Windows hook must wrap --cwd argument in double quotes; settings on disk:\n%s", text)
+	if !strings.Contains(command, `--cwd "$dir"`) {
+		t.Errorf("Windows hook must wrap --cwd argument in double quotes; decoded command: %s", command)
 	}
-	if !strings.Contains(text, "exit 0") {
-		t.Errorf("Windows hook must end with 'exit 0' so a failing gentle-ai refresh does not block Claude; settings on disk:\n%s", text)
+	if !strings.HasSuffix(command, "exit 0'") {
+		t.Errorf("Windows hook must end with 'exit 0' so a failing gentle-ai refresh does not block Claude; decoded command: %s", command)
 	}
-	if !strings.Contains(text, "powershell -NoProfile -Command '") {
-		t.Errorf("Windows hook must invoke powershell with a single-quoted -Command body; settings on disk:\n%s", text)
+	if !strings.HasPrefix(command, `powershell -NoProfile -Command '`) {
+		t.Errorf("Windows hook must invoke powershell with a single-quoted -Command body; decoded command: %s", command)
 	}
 }
 
@@ -8022,13 +8038,12 @@ func TestEnsureClaudeSkillRegistryHookWritesPlatformAwareCommand(t *testing.T) {
 }
 
 // TestEnsureClaudeSkillRegistryHookReplacesLegacyPOSIXCommand is the Windows
-// migration: a settings.json with the pre-fix POSIX literal gets replaced by
-// the canonical PowerShell literal without leaving a duplicate. Skipped on
-// non-Windows where the legacy IS the canonical.
+// migration regression: a settings.json carrying the pre-fix POSIX literal
+// must be replaced by the canonical PowerShell literal without leaving a
+// duplicate. It drives the platform-independent core with the Windows literal
+// pair so it runs on every GOOS; the real runtime.GOOS emission path is
+// covered by TestEnsureClaudeSkillRegistryHookWritesPlatformAwareCommand.
 func TestEnsureClaudeSkillRegistryHookReplacesLegacyPOSIXCommand(t *testing.T) {
-	if runtime.GOOS != "windows" {
-		t.Skip("Windows-only test; non-Windows has no legacy-vs-canonical drift")
-	}
 	home := t.TempDir()
 	settingsPath := filepath.Join(home, ".claude", "settings.json")
 	if err := os.MkdirAll(filepath.Dir(settingsPath), 0o755); err != nil {
@@ -8052,9 +8067,9 @@ func TestEnsureClaudeSkillRegistryHookReplacesLegacyPOSIXCommand(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	changed, err := ensureClaudeSkillRegistryHook(settingsPath)
+	changed, err := ensureClaudeSkillRegistryHookWithLegacy(settingsPath, legacyCmd, canonicalCmd)
 	if err != nil {
-		t.Fatalf("ensureClaudeSkillRegistryHook() with legacy entry error = %v", err)
+		t.Fatalf("ensureClaudeSkillRegistryHookWithLegacy() with legacy entry error = %v", err)
 	}
 	if !changed {
 		t.Fatal("changed = false, want true (legacy POSIX replaced with canonical PowerShell)")
@@ -8109,15 +8124,15 @@ func TestEnsureClaudeSkillRegistryHookReplacesLegacyPOSIXCommand(t *testing.T) {
 }
 
 // TestEnsureClaudeSkillRegistryHookPersistsLegacyPruneWhenCanonicalExists is
-// the Windows-only regression for the persistence defect flagged by decode2:
-// a settings file that already carries the canonical entry but still has the
-// pre-fix POSIX literal must have the legacy stripped on disk, not just in
-// memory. Without this, the canonical-existence early return would discard
-// the in-memory prune and both hooks would remain.
+// the regression for the persistence defect flagged by decode2 and the
+// duplicate-canonical defect found by automated review: a settings file that
+// already carries BOTH the legacy POSIX literal and the canonical literal in
+// one UserPromptSubmit item must have the legacy stripped on disk, keep the
+// canonical entry exactly once, report the change, and stay stable on a
+// second call. It drives the platform-independent core with the Windows
+// literal pair so it runs on every GOOS; without the post-prune existence
+// check the canonical entry would be appended a second time.
 func TestEnsureClaudeSkillRegistryHookPersistsLegacyPruneWhenCanonicalExists(t *testing.T) {
-	if runtime.GOOS != "windows" {
-		t.Skip("Windows-only test; non-Windows has no legacy-vs-canonical drift")
-	}
 	home := t.TempDir()
 	settingsPath := filepath.Join(home, ".claude", "settings.json")
 	if err := os.MkdirAll(filepath.Dir(settingsPath), 0o755); err != nil {
@@ -8127,6 +8142,14 @@ func TestEnsureClaudeSkillRegistryHookPersistsLegacyPruneWhenCanonicalExists(t *
 	canonicalCmd := `powershell -NoProfile -Command 'if (Test-Path env:CLAUDE_PROJECT_DIR) { $dir = $env:CLAUDE_PROJECT_DIR } else { $dir = $PWD }; gentle-ai skill-registry refresh --quiet --no-gitignore --cwd "$dir"; exit 0'`
 	initial := fmt.Sprintf(`{
   "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {"type": "command", "command": "echo keep"}
+        ]
+      }
+    ],
     "UserPromptSubmit": [
       {
         "matcher": "",
@@ -8142,9 +8165,9 @@ func TestEnsureClaudeSkillRegistryHookPersistsLegacyPruneWhenCanonicalExists(t *
 		t.Fatal(err)
 	}
 
-	changed, err := ensureClaudeSkillRegistryHook(settingsPath)
+	changed, err := ensureClaudeSkillRegistryHookWithLegacy(settingsPath, legacyCmd, canonicalCmd)
 	if err != nil {
-		t.Fatalf("ensureClaudeSkillRegistryHook() with both literals error = %v", err)
+		t.Fatalf("ensureClaudeSkillRegistryHookWithLegacy() with both literals error = %v", err)
 	}
 	if !changed {
 		t.Fatal("changed = false, want true (legacy POSIX must be stripped even when canonical already present)")
@@ -8197,11 +8220,29 @@ func TestEnsureClaudeSkillRegistryHookPersistsLegacyPruneWhenCanonicalExists(t *
 		t.Errorf("canonical PowerShell literal count = %d, want 1; settings on disk:\n%s", canonicalCount, data)
 	}
 
+	// Unrelated hooks must survive the prune-and-ensure untouched.
+	kept, ok := hooks["PreToolUse"].([]any)
+	if !ok || len(kept) != 1 {
+		t.Fatalf("PreToolUse entry count = %d (ok=%v), want 1 (unrelated hooks must survive)", len(kept), ok)
+	}
+	keptItem, ok := kept[0].(map[string]any)
+	if !ok {
+		t.Fatalf("PreToolUse[0] wrong shape: %T", kept[0])
+	}
+	keptInner, ok := keptItem["hooks"].([]any)
+	if !ok || len(keptInner) != 1 {
+		t.Fatalf("PreToolUse[0].hooks missing or wrong count: %v", keptItem["hooks"])
+	}
+	keptCmd, _ := keptInner[0].(map[string]any)["command"].(string)
+	if keptCmd != "echo keep" {
+		t.Errorf("unrelated PreToolUse hook command = %q, want %q (must survive)", keptCmd, "echo keep")
+	}
+
 	// Idempotence: a second call must not re-write the file (no change)
 	// and must leave the canonical as the sole entry.
-	changed2, err := ensureClaudeSkillRegistryHook(settingsPath)
+	changed2, err := ensureClaudeSkillRegistryHookWithLegacy(settingsPath, legacyCmd, canonicalCmd)
 	if err != nil {
-		t.Fatalf("second ensureClaudeSkillRegistryHook() error = %v", err)
+		t.Fatalf("second ensureClaudeSkillRegistryHookWithLegacy() error = %v", err)
 	}
 	if changed2 {
 		t.Error("second call changed = true, want false (after legacy prune + canonical exists)")
@@ -8212,6 +8253,122 @@ func TestEnsureClaudeSkillRegistryHookPersistsLegacyPruneWhenCanonicalExists(t *
 	}
 	if !bytes.Equal(data, data2) {
 		t.Errorf("second call rewrote the file:\n%s\n---\n%s", data, data2)
+	}
+}
+
+// TestEnsureClaudeSkillRegistryHookAddsUPSEntryWhenCanonicalOnlyOnOtherEvent
+// is the regression for the cross-event existence defect: a settings file
+// whose UserPromptSubmit carries only the legacy POSIX literal while a
+// different event (Stop) already carries the canonical command must gain
+// exactly one canonical UserPromptSubmit entry. The pre-fix existence check
+// scanned SessionStart/Stop/SubagentStop too, so the canonical Stop entry
+// silently suppressed the required UserPromptSubmit hook and the
+// skill-registry refresh never ran on prompt submit. It drives the
+// platform-independent core so it runs on every GOOS.
+func TestEnsureClaudeSkillRegistryHookAddsUPSEntryWhenCanonicalOnlyOnOtherEvent(t *testing.T) {
+	home := t.TempDir()
+	settingsPath := filepath.Join(home, ".claude", "settings.json")
+	if err := os.MkdirAll(filepath.Dir(settingsPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	legacyCmd := `gentle-ai skill-registry refresh --quiet --no-gitignore --cwd "${CLAUDE_PROJECT_DIR:-$PWD}" || true`
+	canonicalCmd := `powershell -NoProfile -Command 'if (Test-Path env:CLAUDE_PROJECT_DIR) { $dir = $env:CLAUDE_PROJECT_DIR } else { $dir = $PWD }; gentle-ai skill-registry refresh --quiet --no-gitignore --cwd "$dir"; exit 0'`
+	initial := fmt.Sprintf(`{
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "matcher": "",
+        "hooks": [
+          {"type": "command", "command": %q}
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "matcher": "",
+        "hooks": [
+          {"type": "command", "command": %q}
+        ]
+      }
+    ]
+  }
+}`, legacyCmd, canonicalCmd)
+	if err := os.WriteFile(settingsPath, []byte(initial), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	changed, err := ensureClaudeSkillRegistryHookWithLegacy(settingsPath, legacyCmd, canonicalCmd)
+	if err != nil {
+		t.Fatalf("ensureClaudeSkillRegistryHookWithLegacy() error = %v", err)
+	}
+	if !changed {
+		t.Fatal("changed = false, want true (legacy pruned AND canonical UserPromptSubmit entry added)")
+	}
+
+	data, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var gotRoot map[string]any
+	if err := json.Unmarshal(data, &gotRoot); err != nil {
+		t.Fatalf("settings.json is not valid JSON: %v\n%s", err, data)
+	}
+	hooks, ok := gotRoot["hooks"].(map[string]any)
+	if !ok {
+		t.Fatalf("hooks key missing or wrong shape: %v", gotRoot["hooks"])
+	}
+
+	countCommands := func(items []any, want string) int {
+		count := 0
+		for _, item := range items {
+			itemMap, ok := item.(map[string]any)
+			if !ok {
+				continue
+			}
+			innerHooks, ok := itemMap["hooks"].([]any)
+			if !ok {
+				continue
+			}
+			for _, h := range innerHooks {
+				hMap, ok := h.(map[string]any)
+				if !ok {
+					continue
+				}
+				if cmd, _ := hMap["command"].(string); cmd == want {
+					count++
+				}
+			}
+		}
+		return count
+	}
+
+	ups, ok := hooks["UserPromptSubmit"].([]any)
+	if !ok {
+		t.Fatalf("UserPromptSubmit missing or wrong shape: %v", hooks["UserPromptSubmit"])
+	}
+	if got := countCommands(ups, legacyCmd); got != 0 {
+		t.Errorf("legacy POSIX literal still present %d time(s) in UserPromptSubmit:\n%s", got, data)
+	}
+	if got := countCommands(ups, canonicalCmd); got != 1 {
+		t.Errorf("canonical command count in UserPromptSubmit = %d, want exactly 1:\n%s", got, data)
+	}
+
+	// The canonical Stop entry must be untouched by the ensure call.
+	stop, ok := hooks["Stop"].([]any)
+	if !ok || len(stop) != 1 {
+		t.Fatalf("Stop entry count = %d (ok=%v), want 1 (Stop must be untouched)", len(stop), ok)
+	}
+	if got := countCommands(stop, canonicalCmd); got != 1 {
+		t.Errorf("canonical command count in Stop = %d, want 1 (Stop entry must be untouched):\n%s", got, data)
+	}
+
+	// Idempotence: a second call must report no change.
+	changed2, err := ensureClaudeSkillRegistryHookWithLegacy(settingsPath, legacyCmd, canonicalCmd)
+	if err != nil {
+		t.Fatalf("second ensureClaudeSkillRegistryHookWithLegacy() error = %v", err)
+	}
+	if changed2 {
+		t.Error("second call changed = true, want false")
 	}
 }
 
