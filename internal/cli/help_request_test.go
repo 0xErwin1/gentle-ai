@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"errors"
 	"strings"
 	"testing"
 )
@@ -90,6 +91,44 @@ func TestRestoreAnswersHelpAndRejectsUnknownFlagAfterPositional(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "unknown") {
 		t.Fatalf("restore unknown-flag refusal does not name the flag: %v", err)
+	}
+}
+
+// Resolving the home directory is a step toward serving a restore, not a
+// prerequisite for answering a help request. On a host where the home
+// directory cannot be resolved, an explicit --help or -h must still print the
+// derived usage and succeed, while a restore flow that actually needs the home
+// directory must still fail with the resolution error.
+func TestRestoreHelpAnswersBeforeHomeResolution(t *testing.T) {
+	origHomeDir := osUserHomeDir
+	t.Cleanup(func() { osUserHomeDir = origHomeDir })
+	osUserHomeDir = func() (string, error) { return "", errors.New("no home directory") }
+
+	for _, flagName := range []string{"--help", "-h"} {
+		t.Run("help "+flagName, func(t *testing.T) {
+			var stdout bytes.Buffer
+			if err := RunRestore([]string{flagName}, &stdout); err != nil {
+				t.Fatalf("restore %s returned %v, want success", flagName, err)
+			}
+			output := stdout.String()
+			for _, want := range []string{
+				"gentle-ai restore [--list | latest | <id>] [--yes]",
+				"list available backups without restoring",
+			} {
+				if !strings.Contains(output, want) {
+					t.Fatalf("restore %s usage omits %q:\n%s", flagName, want, output)
+				}
+			}
+		})
+	}
+
+	var stdout bytes.Buffer
+	err := RunRestore([]string{"--list"}, &stdout)
+	if err == nil {
+		t.Fatal("restore --list with unresolvable home directory succeeded, want resolve home directory error")
+	}
+	if !strings.Contains(err.Error(), "resolve home directory") {
+		t.Fatalf("restore --list error does not mention home resolution: %v", err)
 	}
 }
 

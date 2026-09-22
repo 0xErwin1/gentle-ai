@@ -18,35 +18,20 @@ type RestoreFunc func(manifest backup.Manifest) error
 // RunRestore is the top-level entry point for `gentle-ai restore [args]`.
 // It reads backups from the real home directory and uses the default restore function.
 func RunRestore(args []string, stdout io.Writer) error {
-	homeDir, err := osUserHomeDir()
-	if err != nil {
-		return fmt.Errorf("resolve home directory: %w", err)
-	}
-
 	restorer := defaultRestorer()
-	return runRestoreWithHomeDir(args, restorer, stdout, os.Stdin, homeDir)
+	return runRestoreWithHomeDir(args, restorer, stdout, os.Stdin, osUserHomeDir)
 }
 
 // RunRestoreWithFn is the testable variant of RunRestore. It uses the provided
 // RestoreFunc and reads backups from the HOME environment variable (set by tests).
 func RunRestoreWithFn(args []string, restorer RestoreFunc, stdout io.Writer) error {
-	homeDir, err := osUserHomeDir()
-	if err != nil {
-		return fmt.Errorf("resolve home directory: %w", err)
-	}
-
-	return runRestoreWithHomeDir(args, restorer, stdout, os.Stdin, homeDir)
+	return runRestoreWithHomeDir(args, restorer, stdout, os.Stdin, osUserHomeDir)
 }
 
 // RunRestoreWithFnAndInput is the fully injectable variant used in tests that
 // need to simulate stdin input (e.g. testing confirmation prompts).
 func RunRestoreWithFnAndInput(args []string, restorer RestoreFunc, stdout io.Writer, stdin io.Reader) error {
-	homeDir, err := osUserHomeDir()
-	if err != nil {
-		return fmt.Errorf("resolve home directory: %w", err)
-	}
-
-	return runRestoreWithHomeDir(args, restorer, stdout, stdin, homeDir)
+	return runRestoreWithHomeDir(args, restorer, stdout, stdin, osUserHomeDir)
 }
 
 // newRestoreFlagSet builds the flag set used to answer help requests and to
@@ -70,8 +55,12 @@ func newRestoreFlagSet() *flag.FlagSet {
 	return fs
 }
 
-// runRestoreWithHomeDir is the internal implementation.
-func runRestoreWithHomeDir(args []string, restorer RestoreFunc, stdout io.Writer, stdin io.Reader, homeDir string) error {
+// runRestoreWithHomeDir is the internal implementation. The home directory is
+// resolved lazily via resolveHome, after the argument pre-scan: an explicit
+// help request or an unknown flag must be answered before any attempt to
+// resolve the home directory, so `restore --help` works even on hosts where
+// the home directory cannot be resolved.
+func runRestoreWithHomeDir(args []string, restorer RestoreFunc, stdout io.Writer, stdin io.Reader, resolveHome func() (string, error)) error {
 	// Pre-scan for --yes/-y and --list flags before standard flag parsing,
 	// because positional arguments (e.g. `restore backup-001 --yes`) appear
 	// before flags in the args slice and flag.FlagSet stops parsing at the
@@ -104,6 +93,12 @@ func runRestoreWithHomeDir(args []string, restorer RestoreFunc, stdout io.Writer
 			}
 			positional = append(positional, a)
 		}
+	}
+
+	// Resolve the home directory only once the request is known to need it.
+	homeDir, err := resolveHome()
+	if err != nil {
+		return fmt.Errorf("resolve home directory: %w", err)
 	}
 
 	// Load backups from the real backup directory.
