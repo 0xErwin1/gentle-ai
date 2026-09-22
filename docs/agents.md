@@ -117,6 +117,30 @@ Kiro uses native custom agents in `~/.kiro/agents/`. `gentle-ai` writes phase ag
 - OpenCode Desktop SDD commands resolve the project with `git rev-parse --show-toplevel || pwd` before acting, avoiding Electron current-working-directory drift.
 - Review launch runs from an ordinary already-running OpenCode session: no restart, child process, special user-visible session, or `OPENCODE_DISABLE_PROJECT_CONFIG` / `OPENCODE_DISABLE_EXTERNAL_SKILLS` variable is required (rdd-advisory-transport SKILL.md).
 
+#### Windows-Native Delegation (no WSL)
+
+OpenCode's `gentle-orchestrator` supports headless delegation via `opencode run --agent gentle-orchestrator "<task>"`. On native Windows (PowerShell or Git Bash, no WSL) you can launch that headless run in a named, titled Windows Terminal window with `wt.exe`:
+
+```powershell
+# PowerShell
+wt.exe -w orquestador-gentleman new-tab -d "$PWD" --title "OpenCode" opencode run --agent gentle-orchestrator '<task>'
+```
+
+```bash
+# Git Bash
+wt.exe -w orquestador-gentleman new-tab -d . --title "OpenCode" opencode run --agent gentle-orchestrator '<task>'
+```
+
+`-d` is what makes the run land on the project you care about: without it the new tab starts in the profile's default directory, and `opencode run` would act on whatever project lives there. PowerShell can expand its own location with `"$PWD"`; in Git Bash use `.` for the directory you are standing in.
+
+Quote the task with single quotes in both shells, so metacharacters such as `$` reach `opencode` literally instead of being expanded by the shell first.
+
+`wt -w <name>` reuses the named window when it already exists and creates it otherwise, so successive delegated runs land in the same window, each in its own tab.
+
+This is a launch path, not a delivery path. `new-tab` always opens a fresh tab for the invocation, and that tab normally ends when `opencode run` exits, so it does not send work into a pane or tab that is already running, which is what tmux `send-keys` does. `wt.exe` exposes no equivalent primitive: if you need to drive an already-open session, use WSL plus tmux instead.
+
+This requires `wt.exe` (ships with Windows Terminal, installed by default on Windows 11) and `opencode` on `PATH`. WSL + tmux remains a valid alternative if you already have that setup, but it's unnecessary extra onboarding for a Windows-only workflow.
+
 ### Kilo Code
 
 - **Detection**: gentle-ai detects Kilo Code from `~/.config/kilo` and checks for the `kilo` binary on `PATH`
