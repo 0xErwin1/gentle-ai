@@ -13,6 +13,45 @@ func TestClaudeModelPickerPlacesResearchAfterExplore(t *testing.T) {
 	}
 }
 
+func TestClaudePickerSavesAndReopensNativeReviewRoles(t *testing.T) {
+	roles := []string{"risk", "readability", "reliability", "resilience", "refuter", "validator"}
+	picker := NewClaudeModelPickerState()
+	picker.InCustomMode = true
+	for _, role := range roles {
+		row := -1
+		for i, key := range claudePhases {
+			if key == role {
+				row = i
+				break
+			}
+		}
+		if row < 0 || claudePhaseLabels[role] == "" {
+			t.Fatalf("missing custom picker row for %s", role)
+		}
+		HandleClaudeModelPickerNav("enter", &picker, row)
+		if picker.SelectedPhase != role {
+			t.Fatalf("selected %q, want %q", picker.SelectedPhase, role)
+		}
+		HandleClaudeModelPickerNav("enter", &picker, 3) // haiku
+	}
+	_, saved := HandleClaudeModelPickerNav("enter", &picker, len(claudePhases))
+	if saved == nil {
+		t.Fatal("confirm did not return assignments")
+	}
+	reopened := NewClaudeModelPickerStateFromPhaseAssignments(saved)
+	if reopened.Preset != ClaudePresetCustom {
+		t.Fatalf("reopened preset = %s, want custom", reopened.Preset)
+	}
+	for _, role := range roles {
+		if reopened.CustomAssignments[role].Model != model.ClaudeModelHaiku {
+			t.Errorf("reopened %s = %v, want haiku", role, reopened.CustomAssignments[role])
+		}
+	}
+	if _, present := model.ClaudeModelPresetBalanced()["risk"]; present {
+		t.Fatal("named preset policy changed")
+	}
+}
+
 func TestNewClaudeModelPickerStateFromAssignments(t *testing.T) {
 	cases := []struct {
 		name        string

@@ -839,6 +839,12 @@ func Inject(homeDir string, adapter agents.Adapter, sddMode model.SDDModeID, opt
 			// Non-Claude adapters don't implement claudeModelResolver and are unaffected.
 			if cmr, ok := adapter.(claudeModelResolver); ok {
 				phase := strings.TrimSuffix(entry.Name(), ".md")
+				// Native review roles are stored without the installed agent's
+				// review- prefix. Leave SDD and JD phase keys unchanged.
+				switch phase {
+				case "review-risk", "review-readability", "review-reliability", "review-resilience", "review-refuter":
+					phase = strings.TrimPrefix(phase, "review-")
+				}
 				assignment := resolveClaudePhaseAssignment(opts.ClaudeModelAssignments, opts.ClaudePhaseAssignments, phase)
 				contentStr = strings.ReplaceAll(contentStr, "{{CLAUDE_MODEL}}", cmr.ClaudeModelID(assignment.Model))
 				contentStr = injectClaudeEffortFrontmatter(contentStr, assignment)
