@@ -636,7 +636,6 @@ func TestPartialUninstallPiReportsRetainedResourcesAndOptionalCleanup(t *testing
 		"pi remove npm:gentle-pi",
 		"pi remove npm:gentle-engram",
 		"pi remove npm:pi-mcp-adapter",
-		"pi remove npm:@juicesharp/rpiv-ask-user-question",
 		"pi remove npm:pi-web-access",
 		"pi remove npm:pi-btw",
 	}
