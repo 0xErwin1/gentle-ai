@@ -164,6 +164,14 @@ func RunArgs(args []string, stdout io.Writer) error {
 				cli.PrintSyncHelp(stdout)
 				return nil
 			}
+		case "restore":
+			// Answer an explicit help request before system detection: a host
+			// with no resolvable home directory must still be able to read the
+			// restore usage, and cli.RunRestore answers --help before it
+			// resolves the home directory itself.
+			if hasHelpFlag(args[1:]) {
+				return cli.RunRestore([]string{"--help"}, stdout)
+			}
 		}
 	}
 
@@ -346,7 +354,10 @@ func runUninstall(args []string, stdout io.Writer) error {
 
 func hasHelpFlag(args []string) bool {
 	for _, arg := range args {
-		if arg == "--help" || arg == "-h" {
+		// The flag package treats one and two leading dashes as equivalent,
+		// and both "help" and "h" trigger flag.ErrHelp, so the pre-dispatch
+		// must match every spelling the parser accepts.
+		if arg == "--help" || arg == "-help" || arg == "-h" || arg == "--h" {
 			return true
 		}
 	}
