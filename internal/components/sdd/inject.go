@@ -1971,15 +1971,17 @@ func ensureClaudeSkillRegistryHookWithLegacy(settingsPath, legacy, command strin
 		pruned = pruneLegacyClaudeHook(root, legacy)
 	}
 
-	exists := claudeHookExists(root, command)
+	// Canonical existence is scoped to UserPromptSubmit so a canonical command
+	// registered under a different event (SessionStart, Stop, SubagentStop)
+	// never suppresses the required UserPromptSubmit entry.
+	hooksMap, _ := root["hooks"].(map[string]any)
+	exists := hookCommandExists(hooksMap, "UserPromptSubmit", command)
 	if !pruned && exists {
 		return false, nil
 	}
 
 	if !exists {
-		hooksRaw, hasHooks := root["hooks"]
-		hooksMap, _ := hooksRaw.(map[string]any)
-		if hasHooks && hooksMap == nil {
+		if _, hasHooks := root["hooks"]; hasHooks && hooksMap == nil {
 			return false, fmt.Errorf("Claude settings %q has unsupported hooks shape: want object", settingsPath)
 		}
 		if hooksMap == nil {
@@ -2218,23 +2220,6 @@ func ensureClaudeTelemetryHooks(settingsPath string) (bool, error) {
 		return false, err
 	}
 	return wr.Changed, nil
-}
-
-func claudeHookExists(root map[string]any, command string) bool {
-	hooksMap, ok := root["hooks"].(map[string]any)
-	if !ok {
-		return false
-	}
-	for _, key := range []string{"UserPromptSubmit", "SessionStart", "Stop", "SubagentStop"} {
-		hookEntries, ok := hooksMap[key].([]any)
-		if !ok {
-			continue
-		}
-		if claudeHookListContains(hookEntries, command) {
-			return true
-		}
-	}
-	return false
 }
 
 // pruneLegacyClaudeHook removes any inner-hook entry whose `command` matches
