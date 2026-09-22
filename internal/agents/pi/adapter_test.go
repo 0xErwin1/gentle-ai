@@ -3,6 +3,7 @@ package pi
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -128,11 +129,24 @@ func TestAgentConfigPathHonorsPiCodingAgentDir(t *testing.T) {
 			t.Fatalf("AgentConfigPath() = %q, want %q", got, wantAbs)
 		}
 	})
+
+	t.Run("relative override falls back to default agent dir when cwd resolution fails", func(t *testing.T) {
+		t.Setenv("PI_CODING_AGENT_DIR", "relative-pi-agent")
+		restore := resolveAbsPath
+		resolveAbsPath = func(string) (string, error) { return "", fmt.Errorf("getwd unavailable") }
+		t.Cleanup(func() { resolveAbsPath = restore })
+
+		want := filepath.Join(homeDir, ".pi", "agent")
+		if got := AgentConfigPath(homeDir); got != want {
+			t.Fatalf("AgentConfigPath() = %q, want %q", got, want)
+		}
+	})
 }
 
 func TestAdapterPathsFollowConfiguredAgentDirectory(t *testing.T) {
 	a := NewAdapter()
 	homeDir := t.TempDir()
+	piDir := filepath.Join(homeDir, ".pi")
 	configured := filepath.Join(t.TempDir(), "isolated-home", "agent")
 	t.Setenv("PI_CODING_AGENT_DIR", configured)
 
@@ -141,7 +155,10 @@ func TestAdapterPathsFollowConfiguredAgentDirectory(t *testing.T) {
 		got  string
 		want string
 	}{
-		{"GlobalConfigDir", a.GlobalConfigDir(homeDir), configured},
+		// GlobalConfigDir never follows the override: it always stays the
+		// homeDir/.pi parent root, even while PI_CODING_AGENT_DIR relocates
+		// the agent-owned paths below.
+		{"GlobalConfigDir", a.GlobalConfigDir(homeDir), piDir},
 		{"SystemPromptDir", a.SystemPromptDir(homeDir), configured},
 		{"SystemPromptFile", a.SystemPromptFile(homeDir), filepath.Join(configured, "APPEND_SYSTEM.md")},
 		{"SettingsPath", a.SettingsPath(homeDir), filepath.Join(configured, "settings.json")},
