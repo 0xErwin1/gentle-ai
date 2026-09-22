@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -225,7 +226,7 @@ func TestRunInstallEngramForPiAndOpenCodeProvisionsBothMCPTargets(t *testing.T) 
 	}
 
 	assertFileContains(t, filepath.Join(home, ".pi", "agent", "settings.json"), "npm:pi-mcp-adapter")
-	assertFileContains(t, filepath.Join(home, ".pi", "npm", "package.json"), "pi-mcp-adapter")
+	assertFileContains(t, filepath.Join(home, ".pi", "agent", "npm", "package.json"), "pi-mcp-adapter")
 	assertFileContains(t, filepath.Join(home, ".config", "opencode", "opencode.json"), "engram")
 
 	if !stringSliceContains(commands, "pi install npm:pi-mcp-adapter") {
@@ -233,6 +234,99 @@ func TestRunInstallEngramForPiAndOpenCodeProvisionsBothMCPTargets(t *testing.T) 
 	}
 	if !stringSliceContains(commands, engramInitCommandForTest) {
 		t.Fatalf("commands missing %q; got %v", engramInitCommandForTest, commands)
+	}
+}
+
+// TestRunInstallEngramForPiTargetsConfiguredAgentDirectory proves that
+// setting PI_CODING_AGENT_DIR (as gentle-shell does for its isolated Pi home)
+// makes install target that directory instead of the real ~/.pi, and leaves
+// the real ~/.pi untouched.
+func TestRunInstallEngramForPiTargetsConfiguredAgentDirectory(t *testing.T) {
+	home := t.TempDir()
+	configured := filepath.Join(t.TempDir(), "gentle-shell-home", "agent")
+	t.Setenv("PI_CODING_AGENT_DIR", configured)
+
+	restoreHome := osUserHomeDir
+	restoreCommand := runCommand
+	restoreLookPath := cmdLookPath
+	t.Cleanup(func() {
+		osUserHomeDir = restoreHome
+		runCommand = restoreCommand
+		cmdLookPath = restoreLookPath
+	})
+
+	osUserHomeDir = func() (string, error) { return home, nil }
+	cmdLookPath = func(name string) (string, error) {
+		return filepath.Join(home, "bin", name), nil
+	}
+	restorePreflightLookPath := installcmd.OverrideLookPath(func(name string) (string, error) {
+		return filepath.Join(home, "bin", name), nil
+	})
+	t.Cleanup(restorePreflightLookPath)
+
+	runCommand = func(name string, args ...string) error {
+		// Simulate pi-engram init writing mcp.json with the new schema,
+		// exactly as it does under the real Pi binary, under the
+		// configured agent directory rather than the default one.
+		isNpmEngramInit := name == "npm" && len(args) >= 7 && args[5] == "pi-engram" && args[6] == "init"
+		if isNpmEngramInit {
+			mcpPath := filepath.Join(configured, "mcp.json")
+			if err := os.MkdirAll(filepath.Dir(mcpPath), 0o755); err != nil {
+				return err
+			}
+			if err := os.WriteFile(mcpPath, []byte(`{"activeMCP":"engram","mcpServers":{"engram":{"command":"node","args":["--eval","require('child_process').spawn('engram',['mcp','--tools=agent'],{stdio:'inherit'})"]}}}`+"\n"), 0o644); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+
+	result, err := RunInstall([]string{
+		"--agent", "pi",
+		"--component", "engram",
+	}, system.DetectionResult{})
+	if err != nil {
+		t.Fatalf("RunInstall() error = %v", err)
+	}
+	if !result.Verify.Ready {
+		t.Fatalf("verification ready = false, report = %#v", result.Verify)
+	}
+
+	assertFileContains(t, filepath.Join(configured, "settings.json"), "npm:pi-mcp-adapter")
+	assertFileContains(t, filepath.Join(configured, "npm", "package.json"), "pi-mcp-adapter")
+
+	if _, statErr := os.Stat(filepath.Join(home, ".pi")); !os.IsNotExist(statErr) {
+		t.Fatalf("real home .pi dir stat err = %v, want IsNotExist (install must not touch the real ~/.pi while PI_CODING_AGENT_DIR is set)", statErr)
+	}
+}
+
+// TestExecuteCommandInheritsPiCodingAgentDirForChildProcesses proves that Pi
+// package-install child processes (spawned through executeCommand, the
+// runCommand default) inherit PI_CODING_AGENT_DIR from the parent process's
+// environment without gentle-ai needing to build an explicit Env slice: Go's
+// os/exec.Cmd defaults to the parent's environment whenever Env is nil, and
+// neither runCommandSequenceWithProgress nor executeCommand ever sets Env.
+func TestExecuteCommandInheritsPiCodingAgentDirForChildProcesses(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("the child-process probe below runs a POSIX sh one-liner")
+	}
+	restoreStreaming := SetCommandOutputStreaming(false)
+	t.Cleanup(restoreStreaming)
+
+	configured := filepath.Join(t.TempDir(), "gentle-shell-home", "agent")
+	t.Setenv("PI_CODING_AGENT_DIR", configured)
+
+	outFile := filepath.Join(t.TempDir(), "observed-env")
+	if err := executeCommand("sh", "-c", `printf '%s' "$PI_CODING_AGENT_DIR" > "$1"`, "--", outFile); err != nil {
+		t.Fatalf("executeCommand() error = %v", err)
+	}
+
+	got, err := os.ReadFile(outFile)
+	if err != nil {
+		t.Fatalf("ReadFile(observed env) error = %v", err)
+	}
+	if string(got) != configured {
+		t.Fatalf("child process observed PI_CODING_AGENT_DIR = %q, want %q", got, configured)
 	}
 }
 

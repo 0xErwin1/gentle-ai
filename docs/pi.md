@@ -55,9 +55,11 @@ During that Engram provisioning step, Gentle AI declares `npm:pi-mcp-adapter` in
 Files updated by Gentle AI's Engram provisioning:
 
 ```text
-.pi/agent/settings.json    # packages includes npm:pi-mcp-adapter
-.pi/npm/package.json       # dependencies.pi-mcp-adapter = ^2.6.0
+.pi/agent/settings.json      # packages includes npm:pi-mcp-adapter
+.pi/agent/npm/package.json   # dependencies.pi-mcp-adapter = ^2.6.0
 ```
+
+Setting `PI_CODING_AGENT_DIR` before `install` or `sync` overrides the Pi agent directory for both files above (and `mcp.json`, `APPEND_SYSTEM.md`) so they land under the configured path instead of `~/.pi/agent` — this is how gentle-shell's isolated Pi home gets the recommended package stack. Set `PI_CODING_AGENT_DIR` to an absolute or `~`-prefixed path; a relative value is resolved against the directory gentle-ai runs from, which may differ from where Pi runs.
 
 `gentle-engram` owns the MCP schema itself. The installer runs `pi-engram init`, which initializes Pi's Engram MCP config under the Pi agent config directory instead of having Gentle AI hand-write that file.
 
