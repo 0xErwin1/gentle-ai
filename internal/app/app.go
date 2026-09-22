@@ -354,7 +354,10 @@ func runUninstall(args []string, stdout io.Writer) error {
 
 func hasHelpFlag(args []string) bool {
 	for _, arg := range args {
-		if arg == "--help" || arg == "-h" {
+		// The flag package treats one and two leading dashes as equivalent,
+		// and both "help" and "h" trigger flag.ErrHelp, so the pre-dispatch
+		// must match every spelling the parser accepts.
+		if arg == "--help" || arg == "-help" || arg == "-h" || arg == "--h" {
 			return true
 		}
 	}
