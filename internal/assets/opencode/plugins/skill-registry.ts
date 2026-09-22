@@ -8,8 +8,9 @@
  *
  * Failure policy (issue #2971): the plugin is best-effort and must never
  * block OpenCode startup. When the refresh command fails, we emit one
- * actionable single line that distinguishes a missing binary from an
- * unreachable working directory, instead of a raw Node `ENOENT` stack.
+ * actionable single line that distinguishes a failed executable spawn from
+ * an unreachable working directory, without claiming a cause the runtime
+ * did not report, instead of a raw Node `ENOENT` stack.
  */
 
 import type { Plugin } from "@opencode-ai/plugin"
@@ -58,26 +59,38 @@ function quoteCwd(cwd: string): string {
 }
 
 /**
- * Encode a working-directory string as a POSIX-shell literal argument.
- * JSON.stringify is not POSIX-safe (double quotes leave $() and
- * backtick substitution live); single quotes escape everything except
- * themselves, which we encode via the canonical '\'' close/escape/open.
+ * Collapse every physical line break (CR/LF) and NUL into a single space so
+ * a diagnostic built from hostile input can never break out of its row.
  */
-function quoteCwdForShell(cwd: string): string {
-  return `'${cwd.replace(/'/g, "'\\''")}'`
+function singleLine(s: string): string {
+  return s.replace(/[\r\n\0]+/g, " ")
 }
 
-function singleLine(s: string): string {
-  return s.replace(/[\r\n]+/g, " ")
+/**
+ * Extract a human-readable message from any thrown value, including plain
+ * structured errors like `{ code: "EIO", message: "disk failure" }` that
+ * would otherwise stringify as "[object Object]".
+ */
+function errorMessage(err: unknown): string {
+  if (err instanceof Error) return err.message
+  if (typeof err === "object" && err !== null) {
+    const message = (err as { message?: unknown }).message
+    if (typeof message === "string") return message
+  }
+  return String(err)
 }
 
 /**
  * Classify an `execFileAsync` failure for `gentle-ai skill-registry refresh`
  * into a single actionable log line.
  *
- * - `ENOENT` from a `spawn gentle-ai` syscall: the binary was not on the
- *   OpenCode process PATH. Emit one line that names the missing binary and
- *   the manual continuation command.
+ * - `ENOENT` from a `spawn gentle-ai` syscall: the OpenCode runtime could
+ *   not spawn or resolve the binary. The cause is reported neutrally: a
+ *   live occurrence had the binary and PATH present, so we never assert
+ *   PATH absence. Emit one line that names the runtime context, the
+ *   binary, and a manual continuation equivalent to the automatic
+ *   refresh (`--no-gitignore`) using a literal `<project>` placeholder
+ *   instead of interpolating a platform-specific shell argument.
  * - `ENOENT` from any other syscall (typically `access`/`stat` on the
  *   working directory): the working directory itself is invalid. Emit one
  *   line that names the cwd rather than falsely blaming the binary.
@@ -94,10 +107,10 @@ export function describeRefreshFailure(err: unknown, cwd: string): string {
   const cwdExample = quoteCwd(cwd)
   if (code === "ENOENT" && (!syscall || syscall.startsWith("spawn"))) {
     return singleLine(
-      `[skill-registry] gentle-ai executable was not found on the PATH inherited by the OpenCode process; ` +
+      `[skill-registry] the OpenCode runtime could not spawn or resolve the gentle-ai executable (spawn ENOENT); ` +
       `skipping the skill-registry refresh for ${cwdExample}. ` +
-      `Run \`gentle-ai skill-registry refresh --cwd ${quoteCwdForShell(cwd)}\` from a shell where gentle-ai is installed, ` +
-      `then re-launch OpenCode in a session that inherits that PATH. ` +
+      `Once gentle-ai resolves correctly in the OpenCode runtime environment, run ` +
+      `\`gentle-ai skill-registry refresh --no-gitignore --cwd <project>\` from a working shell, then re-launch OpenCode. ` +
       `Plugin stays best-effort and does not block startup.`,
     )
   }
@@ -109,7 +122,7 @@ export function describeRefreshFailure(err: unknown, cwd: string): string {
       `Plugin stays best-effort and does not block startup.`,
     )
   }
-  const safeMessage = err instanceof Error ? err.message : String(err)
+  const safeMessage = errorMessage(err)
   const codeTag = code ? ` code=${code}` : ""
   return singleLine(
     `[skill-registry] refresh failed for ${cwdExample}${codeTag}: ${safeMessage}`,
