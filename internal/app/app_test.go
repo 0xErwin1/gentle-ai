@@ -293,7 +293,7 @@ func TestRunArgsRestoreHelpBypassesSystemDetection(t *testing.T) {
 		return system.DetectionResult{}, fmt.Errorf("$HOME is not defined")
 	}
 
-	for _, helpFlag := range []string{"--help", "-h"} {
+	for _, helpFlag := range []string{"--help", "-help", "-h", "--h"} {
 		t.Run(helpFlag, func(t *testing.T) {
 			var buf bytes.Buffer
 			if err := RunArgs([]string{"restore", helpFlag}, &buf); err != nil {
@@ -318,6 +318,26 @@ func TestRunArgsRestoreHelpBypassesSystemDetection(t *testing.T) {
 	err := RunArgs([]string{"restore", "--list"}, &buf)
 	if err == nil || !strings.Contains(err.Error(), "$HOME is not defined") {
 		t.Fatalf("RunArgs(restore --list) error = %v, want detection failure", err)
+	}
+}
+
+// TestHelpFlagSpellings pins the helper's contract: the flag package treats
+// one and two leading dashes as equivalent and both "help" and "h" trigger
+// flag.ErrHelp, so hasHelpFlag must recognise all four spellings and nothing
+// else.
+func TestHelpFlagSpellings(t *testing.T) {
+	for _, arg := range []string{"--help", "-help", "-h", "--h"} {
+		if !hasHelpFlag([]string{arg}) {
+			t.Errorf("hasHelpFlag(%q) = false, want true", arg)
+		}
+	}
+	for _, arg := range []string{"--list", "latest", "--helpx"} {
+		if hasHelpFlag([]string{arg}) {
+			t.Errorf("hasHelpFlag(%q) = true, want false", arg)
+		}
+	}
+	if hasHelpFlag(nil) {
+		t.Error("hasHelpFlag(empty) = true, want false")
 	}
 }
 
