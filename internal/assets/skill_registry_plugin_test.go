@@ -65,11 +65,12 @@ func decodeHarnessJSON(t *testing.T, output string, target any) {
 }
 
 // assertSpawnEnoentDiagnostic pins the spawn-ENOENT diagnostic contract: a
-// single physical line, causally neutral about the resolver (a live
-// Bun/OpenCode occurrence had the binary and PATH present, so the plugin must
-// never claim PATH absence), naming the OpenCode runtime context and the
-// binary, and suggesting a manual continuation that preserves --no-gitignore
-// via a literal <project> placeholder instead of interpolated shell quoting.
+// single physical line, causally neutral about the failure (a live
+// Bun/OpenCode occurrence had the binary and PATH present, and the error
+// does not identify the missing resource, so the plugin must never claim
+// PATH absence or blame the binary), naming the OpenCode runtime context,
+// and suggesting a manual continuation that preserves --no-gitignore via a
+// literal <project> placeholder instead of interpolated shell quoting.
 func assertSpawnEnoentDiagnostic(t *testing.T, label, got string) {
 	t.Helper()
 	if strings.ContainsAny(got, "\r\n") {
@@ -78,11 +79,20 @@ func assertSpawnEnoentDiagnostic(t *testing.T, label, got string) {
 	if strings.Contains(got, "was not found on the PATH") {
 		t.Errorf("%s must not assert PATH absence as the cause: %q", label, got)
 	}
-	if !strings.Contains(got, "could not spawn or resolve the gentle-ai executable") {
-		t.Errorf("%s must name the failed spawn/resolution of the binary: %q", label, got)
+	if !strings.Contains(got, "could not complete the gentle-ai skill-registry refresh") {
+		t.Errorf("%s must state the refresh could not be completed: %q", label, got)
+	}
+	if !strings.Contains(got, "the missing resource was not identified") {
+		t.Errorf("%s must state the missing resource was not identified: %q", label, got)
+	}
+	if strings.Contains(got, "gentle-ai executable") {
+		t.Errorf("%s must not attribute the missing resource to the gentle-ai executable: %q", label, got)
 	}
 	if !strings.Contains(got, "OpenCode") {
 		t.Errorf("%s must name the OpenCode runtime context: %q", label, got)
+	}
+	if !strings.Contains(got, "Once the OpenCode runtime environment is valid") {
+		t.Errorf("%s must use neutral follow-up guidance: %q", label, got)
 	}
 	if !strings.Contains(got, "gentle-ai skill-registry refresh --no-gitignore --cwd <project>") {
 		t.Errorf("%s must suggest a manual continuation matching the automatic refresh: %q", label, got)
@@ -158,8 +168,9 @@ console.log(JSON.stringify({
 	}
 
 	// Non-spawn ENOENT (access/stat on the working directory) must not be
-	// blamed on the binary and must name the cwd instead.
-	if got := result["invalidCwd"]; !strings.Contains(got, "could not access the working directory") || strings.Contains(got, "could not spawn or resolve") {
+	// blamed on the binary or reported as an incomplete refresh, and must
+	// name the cwd instead.
+	if got := result["invalidCwd"]; !strings.Contains(got, "could not access the working directory") || strings.Contains(got, "could not complete the gentle-ai skill-registry refresh") {
 		t.Errorf("invalidCwd must name the cwd, not the binary: %q", got)
 	}
 
