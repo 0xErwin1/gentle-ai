@@ -177,6 +177,29 @@ If you start Pi with `pi -ns`, Pi skips startup skill loading/hooks. That mode i
 | Memory tools or `/mcp` are missing                     | Re-run `gentle-ai install --agent pi` to refresh `.pi/agent/settings.json`, `.pi/npm/package.json`, and the `pi-engram init` wiring, then check `/gentle:status`. |
 | `gentle-engram` is installed but Engram is unavailable | Re-run `gentle-ai install --agent pi` so the real Engram component is provisioned.                                                                                |
 
+## Gentle Shell and its own home
+
+[Gentle Shell](https://www.npmjs.com/package/gentle-pi) (npm package `gentle-pi`, command `gentle-shell`) is a standalone launcher for Pi, separate from this repository. It runs in its own Pi agent home, `~/.gentle-shell/agent`, by default. `gentle-shell --link` skips that home entirely and uses `~/.pi/agent` live — no copy — so it behaves like a normal Pi session in your existing agent directory.
+
+On first run in its own home, and again whenever its pinned Gentle AI version changes, Gentle Shell provisions that home automatically. It does this by running its own package-local, pinned `gentle-ai` binary as:
+
+```bash
+gentle-ai install --agent pi --scope global
+```
+
+with [`PI_CODING_AGENT_DIR`](#installed-packages) pointing at the Gentle Shell home. `gentle-shell setup` re-runs this manually. Your regular `~/.pi/agent` is never touched by this provisioning step, and credentials are not copied between homes — a freshly provisioned home needs its own `/login`. This flow ships with gentle-pi 3.6.0 and later.
+
+`PI_CODING_AGENT_DIR` support in Gentle AI itself shipped in gentle-ai v3.6.0. Setting it redirects `install`/`sync` to the target agent directory instead of `~/.pi/agent`, as described under [Installed Packages](#installed-packages) above. Children Gentle Shell spawns (`pi install`, `pi-engram init`) inherit that same directory. The Pi config root `~/.pi` itself never moves — only the agent-owned files under it do.
+
+Known gap: `.pi/gentle-ai/persona.json`, the background-subagents policy, uninstall targets, the skill-registry scan, and Gentle AI's own Pi config detection still resolve against `~/.pi` rather than following `PI_CODING_AGENT_DIR`. In an isolated Gentle Shell home, those still act on your regular `~/.pi`, not the Gentle Shell home.
+
+### Managed plugin lifecycle
+
+Gentle Shell replaces third-party companion plugins with native `gentle-pi` features over time. Each retirement is a Gentle AI change: a release removes the retired package from the Pi `settings.json` on the next `install` or `sync`, so Pi stops loading it. See [Installed Packages](#installed-packages) above for the currently retired identities (`@juicesharp/rpiv-todo`, `pi-subagents-j0k3r`, and on `main`, `@juicesharp/rpiv-ask-user-question`).
+
+The lifecycle repeats the same way for future retirements: Gentle AI releases the prune → `gentle-pi` bumps its Gentle AI pin → the next `gentle-shell` launch re-provisions its home and Gentle AI prunes the retired package there too.
+
+
 ## Next Steps
 
 - Read [Supported Agents](agents.md) for the full agent matrix.
