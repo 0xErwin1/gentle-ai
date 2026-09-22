@@ -195,11 +195,10 @@ Known gap: `.pi/gentle-ai/persona.json`, the background-subagents policy, uninst
 
 ### Managed plugin lifecycle
 
-Gentle Shell replaces third-party companion plugins with native `gentle-pi` features over time. Each retirement is a Gentle AI change: a release prunes the retired package from `settings.json` on the next `install` or `sync`, so Pi uninstalls it on its next package sync. See [Installed Packages](#installed-packages) above for the currently retired identities (`@juicesharp/rpiv-todo`, `pi-subagents-j0k3r`, and on `main`, `@juicesharp/rpiv-ask-user-question`).
+Gentle Shell replaces third-party companion plugins with native `gentle-pi` features over time. Each retirement is a Gentle AI change: a release removes the retired package from the Pi `settings.json` on the next `install` or `sync`, so Pi stops loading it. See [Installed Packages](#installed-packages) above for the currently retired identities (`@juicesharp/rpiv-todo`, `pi-subagents-j0k3r`, and on `main`, `@juicesharp/rpiv-ask-user-question`).
 
 The lifecycle repeats the same way for future retirements: Gentle AI releases the prune → `gentle-pi` bumps its Gentle AI pin → the next `gentle-shell` launch re-provisions its home and Gentle AI prunes the retired package there too.
 
-This repository does not install Gentle Shell into Pi; that installer, if one ships, is a separate, unrelated effort.
 
 ## Next Steps
 
