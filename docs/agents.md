@@ -288,6 +288,7 @@ For the full Pi command and package reference, see [Pi Agent](pi.md).
 - **`@juicesharp/rpiv-ask-user-question` retirement**: gentle-pi ships the first-party `ask_user_question` tool since `f2d9d073` (gentle-pi#1274). Pi tool names are exclusive, so keeping the third-party package installed makes Pi fail to load with `Tool "ask_user_question" conflicts with ...`. Gentle AI no longer installs `@juicesharp/rpiv-ask-user-question`, and an existing entry is dropped from `settings.json` on the next install or update so Pi uninstalls it on its next package sync.
 - **Pi companion packages**: `pi-web-access` and `pi-btw` add web access and companion workflow support. Todo tracking ships inside `gentle-pi` (Gentle Todo); an existing `@juicesharp/rpiv-todo` entry is dropped from `settings.json` on the next install or update, and Pi uninstalls it on its next package sync.
 - **Pi-only flow**: when Pi is the only selected agent, gentle-ai skips persona, ecosystem component selection, and Strict TDD prompts because those behaviors are provided by `gentle-pi`.
+- **Gentle Shell**: the standalone `gentle-shell` launcher (npm package `gentle-pi`) runs in its own isolated Pi home by default and provisions it with this repository's `PI_CODING_AGENT_DIR` override. See [Gentle Shell and its own home](pi.md#gentle-shell-and-its-own-home) for homes, provisioning, and the managed plugin lifecycle.
 
 ### Hermes Ephemeral Delegation
 
