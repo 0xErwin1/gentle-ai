@@ -44,16 +44,20 @@ var legacyPiSubagentPackageIdentities = map[string]struct{}{
 // file that pins an older gentle-pi keeps the retired subagents package.
 const gentleAgentsGentlePiVersion = "2.5.0"
 
+// gentle-pi ships the first-party ask_user_question tool since gentle-pi
+// f2d9d073 (gentle-pi#1274). Pi tool names are exclusive, so keeping
+// npm:@juicesharp/rpiv-ask-user-question installed alongside it makes Pi
+// fail to load with `Tool "ask_user_question" conflicts with ...`.
 var retiredPiPackageIdentities = map[string]struct{}{
-	"npm:@juicesharp/rpiv-todo": {},
-	"npm:pi-subagents-j0k3r":    {},
+	"npm:@juicesharp/rpiv-todo":              {},
+	"npm:pi-subagents-j0k3r":                 {},
+	"npm:@juicesharp/rpiv-ask-user-question": {},
 }
 
 var managedPackageSources = []string{
 	"npm:gentle-pi",
 	piGentleEngramPackageSource,
 	piMCPAdapterPackage,
-	"npm:@juicesharp/rpiv-ask-user-question",
 	"npm:pi-web-access",
 	"npm:pi-btw",
 }
