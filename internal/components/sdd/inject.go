@@ -1938,6 +1938,25 @@ func hookCommandExists(hooksMap map[string]any, event, command string) bool {
 }
 
 func ensureClaudeSkillRegistryHook(settingsPath string) (bool, error) {
+	// command is platform-aware so the legacy POSIX `|| true` form does not
+	// reach Windows PowerShell 5.1, which fails to parse it.
+	if runtime.GOOS == "windows" {
+		return ensureClaudeSkillRegistryHookWithLegacy(settingsPath,
+			`gentle-ai skill-registry refresh --quiet --no-gitignore --cwd "${CLAUDE_PROJECT_DIR:-$PWD}" || true`,
+			`powershell -NoProfile -Command 'if (Test-Path env:CLAUDE_PROJECT_DIR) { $dir = $env:CLAUDE_PROJECT_DIR } else { $dir = $PWD }; gentle-ai skill-registry refresh --quiet --no-gitignore --cwd "$dir"; exit 0'`)
+	}
+	return ensureClaudeSkillRegistryHookWithLegacy(settingsPath, "",
+		`gentle-ai skill-registry refresh --quiet --no-gitignore --cwd "${CLAUDE_PROJECT_DIR:-$PWD}" || true`)
+}
+
+// ensureClaudeSkillRegistryHookWithLegacy is the platform-independent core of
+// ensureClaudeSkillRegistryHook: it prunes the pre-fix `legacy` hook literal
+// (an empty legacy disables pruning) and then ensures the canonical `command`
+// is present exactly once. Canonical existence is computed AFTER the prune so
+// a settings file that already carries both the legacy and the canonical
+// literals is migrated (prune persisted to disk, changed reported truthfully)
+// instead of gaining a second canonical entry.
+func ensureClaudeSkillRegistryHookWithLegacy(settingsPath, legacy, command string) (bool, error) {
 	root := map[string]any{}
 	if data, err := os.ReadFile(settingsPath); err == nil && len(strings.TrimSpace(string(data))) > 0 {
 		if err := json.Unmarshal(data, &root); err != nil {
@@ -1947,55 +1966,43 @@ func ensureClaudeSkillRegistryHook(settingsPath string) (bool, error) {
 		return false, err
 	}
 
-	// command is platform-aware so the legacy POSIX `|| true` form does not
-	// reach Windows PowerShell 5.1, which fails to parse it.
-	var command string
-	if runtime.GOOS == "windows" {
-		command = `powershell -NoProfile -Command 'if (Test-Path env:CLAUDE_PROJECT_DIR) { $dir = $env:CLAUDE_PROJECT_DIR } else { $dir = $PWD }; gentle-ai skill-registry refresh --quiet --no-gitignore --cwd "$dir"; exit 0'`
-	} else {
-		command = `gentle-ai skill-registry refresh --quiet --no-gitignore --cwd "${CLAUDE_PROJECT_DIR:-$PWD}" || true`
-	}
-
-	// On Windows, prune the pre-fix POSIX literal from the loaded settings.
-	// The pruning must reach disk before the canonical-existence early return
-	// below; otherwise a settings file that already carries the canonical
-	// entry would retain the legacy entry on disk (the in-memory prune would
-	// be discarded when the function returned without writing).
 	pruned := false
-	if runtime.GOOS == "windows" {
-		const legacy = `gentle-ai skill-registry refresh --quiet --no-gitignore --cwd "${CLAUDE_PROJECT_DIR:-$PWD}" || true`
+	if legacy != "" {
 		pruned = pruneLegacyClaudeHook(root, legacy)
 	}
 
-	if !pruned && claudeHookExists(root, command) {
+	exists := claudeHookExists(root, command)
+	if !pruned && exists {
 		return false, nil
 	}
 
-	hooksRaw, hasHooks := root["hooks"]
-	hooksMap, _ := hooksRaw.(map[string]any)
-	if hasHooks && hooksMap == nil {
-		return false, fmt.Errorf("Claude settings %q has unsupported hooks shape: want object", settingsPath)
-	}
-	if hooksMap == nil {
-		hooksMap = map[string]any{}
-	}
+	if !exists {
+		hooksRaw, hasHooks := root["hooks"]
+		hooksMap, _ := hooksRaw.(map[string]any)
+		if hasHooks && hooksMap == nil {
+			return false, fmt.Errorf("Claude settings %q has unsupported hooks shape: want object", settingsPath)
+		}
+		if hooksMap == nil {
+			hooksMap = map[string]any{}
+		}
 
-	promptRaw, hasUserPromptSubmit := hooksMap["UserPromptSubmit"]
-	userPromptSubmit, _ := promptRaw.([]any)
-	if hasUserPromptSubmit && userPromptSubmit == nil {
-		return false, fmt.Errorf("Claude settings %q has unsupported hooks.UserPromptSubmit shape: want array", settingsPath)
-	}
-	userPromptSubmit = append(userPromptSubmit, map[string]any{
-		"matcher": "",
-		"hooks": []any{
-			map[string]any{
-				"type":    "command",
-				"command": command,
+		promptRaw, hasUserPromptSubmit := hooksMap["UserPromptSubmit"]
+		userPromptSubmit, _ := promptRaw.([]any)
+		if hasUserPromptSubmit && userPromptSubmit == nil {
+			return false, fmt.Errorf("Claude settings %q has unsupported hooks.UserPromptSubmit shape: want array", settingsPath)
+		}
+		userPromptSubmit = append(userPromptSubmit, map[string]any{
+			"matcher": "",
+			"hooks": []any{
+				map[string]any{
+					"type":    "command",
+					"command": command,
+				},
 			},
-		},
-	})
-	hooksMap["UserPromptSubmit"] = userPromptSubmit
-	root["hooks"] = hooksMap
+		})
+		hooksMap["UserPromptSubmit"] = userPromptSubmit
+		root["hooks"] = hooksMap
+	}
 
 	out, err := json.MarshalIndent(root, "", "  ")
 	if err != nil {
