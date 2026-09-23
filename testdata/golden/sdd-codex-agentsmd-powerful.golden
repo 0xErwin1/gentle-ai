@@ -581,8 +581,19 @@ These profile files apply to whole CLI sessions: `codex --profile <name> "<promp
 
 | Profile (CLI) | Model | `reasoning_effort` (spawn_agent) | SDD phases |
 |---------------|-------|----------------------------------|------------|
-| `sdd-strong` | `gpt-5.6-sol` | `xhigh` | explore, research, propose, design, verify, judge |
-| `sdd-mid` | `gpt-5.6-sol` | `high` | apply, fix-agent |
-| `sdd-cheap` | `gpt-5.6-luna` | `high` | spec, tasks, archive, onboard |
+| `sdd-strong` | `gpt-6-astra` | `xhigh` | explore, research, propose, design, verify, judge |
+| `sdd-mid` | `gpt-6-sol` | `high` | apply, fix-agent |
+| `sdd-cheap` | `gpt-6-luna` | `high` | spec, tasks, archive, onboard |
+
+
+### ODD worker-class assignments
+
+These are worker classes, not installed named agents. For ODD delegation, select the matching row below and pass its `model` and `reasoning_effort` directly to `spawn_agent` with `fork_turns: "none"`. If a custom assignment is absent, the row inherits the selected preset carril. Do not use RDD role assignments for these workers; RDD is handled by the native adapter.
+
+| ODD worker class | Model | reasoning_effort |
+|---|---|---|
+| `odd-explorer` | `gpt-6-luna` | `high` |
+| `odd-worker` | `gpt-6-sol` | `high` |
+| `odd-verify` | `gpt-6-astra` | `xhigh` |
 
 <!-- /gentle-ai:sdd-orchestrator -->

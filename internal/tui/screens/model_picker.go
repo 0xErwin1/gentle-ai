@@ -114,7 +114,7 @@ type ModelPickerState struct {
 	// AllCustomAgentsModel tracks the assignment last set via the "Set all custom agents" row.
 	AllCustomAgentsModel model.ModelAssignment
 
-	// CustomAgents holds discovered custom native agents defined in opencode.json.
+	// CustomAgents holds discovered non-reserved agents defined in opencode.json.
 	CustomAgents []string
 
 	// EffortCursor and EffortScroll manage navigation in ModeEffortSelect.
@@ -243,7 +243,7 @@ func modelPickerRowsWithCustom(includeReview bool, customAgents []string) []stri
 }
 
 func modelPickerRowsWithCustomIdentity(includeReview bool, customAgents []string) []ModelPickerRow {
-	rows := make([]ModelPickerRow, 0, 2+len(opencode.SDDPhases())+1+len(opencode.JDPhases())+1+len(opencode.ReviewPhases())+len(customAgents)+2)
+	rows := make([]ModelPickerRow, 0, 2+len(opencode.SDDPhases())+1+len(opencode.JDPhases())+1+len(opencode.ReviewPhases())+3+len(customAgents)+2)
 	rows = append(rows,
 		ModelPickerRow{Kind: ModelPickerRowKindAgent, Label: SDDOrchestratorPhase, AgentID: SDDOrchestratorPhase},
 		ModelPickerRow{Kind: ModelPickerRowKindSetAllSDD, Label: "Set all SDD phases"},
@@ -262,6 +262,13 @@ func modelPickerRowsWithCustomIdentity(includeReview bool, customAgents []string
 		for _, phase := range opencode.ReviewPhases() {
 			rows = append(rows, ModelPickerRow{Kind: ModelPickerRowKindAgent, Label: phase, AgentID: phase})
 		}
+	}
+	if includeReview {
+		rows = append(rows,
+			ModelPickerRow{Kind: ModelPickerRowKindSeparator, Label: "--- OpenCode native agents ---"},
+			ModelPickerRow{Kind: ModelPickerRowKindAgent, Label: "general", AgentID: "general"},
+			ModelPickerRow{Kind: ModelPickerRowKindAgent, Label: "explore", AgentID: "explore"},
+		)
 	}
 	if len(customAgents) > 0 {
 		rows = append(rows,

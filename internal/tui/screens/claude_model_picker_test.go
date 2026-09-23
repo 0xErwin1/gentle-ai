@@ -7,9 +7,69 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
 )
 
+func TestClaudeShortTerminalShowsFocusedRDDRowsAndConfirm(t *testing.T) {
+	picker := NewClaudeModelPickerState()
+	picker.InCustomMode = true
+	picker.Mode = ClaudeModePhaseList
+	for _, role := range []string{"risk", "readability", "reliability", "resilience", "refuter", "validator"} {
+		for row, phase := range claudePhases {
+			if phase != role {
+				continue
+			}
+			view := RenderClaudeModelPicker(picker, row, 12)
+			if !strings.Contains(view, claudePhaseLabels[role]) || len(strings.Split(view, "\n")) > 12 {
+				t.Errorf("role %s not visible within 12 lines: %q", role, view)
+			}
+		}
+	}
+	view := RenderClaudeModelPicker(picker, len(claudePhases), 12)
+	if !strings.Contains(view, "Confirm") || len(strings.Split(view, "\n")) > 12 {
+		t.Errorf("Confirm not visible within 12 lines: %q", view)
+	}
+}
+
 func TestClaudeModelPickerPlacesResearchAfterExplore(t *testing.T) {
 	if len(claudePhases) < 3 || claudePhases[0] != "sdd-explore" || claudePhases[1] != "sdd-research" || claudePhases[2] != "sdd-propose" {
 		t.Fatalf("claude phase order = %v", claudePhases)
+	}
+}
+
+func TestClaudePickerSavesAndReopensNativeReviewRoles(t *testing.T) {
+	roles := []string{"risk", "readability", "reliability", "resilience", "refuter", "validator"}
+	picker := NewClaudeModelPickerState()
+	picker.InCustomMode = true
+	for _, role := range roles {
+		row := -1
+		for i, key := range claudePhases {
+			if key == role {
+				row = i
+				break
+			}
+		}
+		if row < 0 || claudePhaseLabels[role] == "" {
+			t.Fatalf("missing custom picker row for %s", role)
+		}
+		HandleClaudeModelPickerNav("enter", &picker, row)
+		if picker.SelectedPhase != role {
+			t.Fatalf("selected %q, want %q", picker.SelectedPhase, role)
+		}
+		HandleClaudeModelPickerNav("enter", &picker, 3) // haiku
+	}
+	_, saved := HandleClaudeModelPickerNav("enter", &picker, len(claudePhases))
+	if saved == nil {
+		t.Fatal("confirm did not return assignments")
+	}
+	reopened := NewClaudeModelPickerStateFromPhaseAssignments(saved)
+	if reopened.Preset != ClaudePresetCustom {
+		t.Fatalf("reopened preset = %s, want custom", reopened.Preset)
+	}
+	for _, role := range roles {
+		if reopened.CustomAssignments[role].Model != model.ClaudeModelHaiku {
+			t.Errorf("reopened %s = %v, want haiku", role, reopened.CustomAssignments[role])
+		}
+	}
+	if _, present := model.ClaudeModelPresetBalanced()["risk"]; present {
+		t.Fatal("named preset policy changed")
 	}
 }
 

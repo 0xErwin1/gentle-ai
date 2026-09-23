@@ -32,9 +32,9 @@ var codexPresetOrder = []CodexModelPreset{
 }
 
 var codexPresetDescriptions = map[CodexModelPreset]string{
-	CodexPresetLowCost:     "Lowest-cost GPT-5.6 mix — Terra for work, Luna for lightweight phases",
-	CodexPresetRecommended: "Balanced GPT-5.6 mix — Sol for reasoning, Terra for code, Luna for light work",
-	CodexPresetPowerful:    "High-effort GPT-5.6 mix — Sol for reasoning, Terra for code, Luna for light work",
+	CodexPresetLowCost:     "Lowest-cost GPT-6 mix — Sol for reasoning, Luna for code and light work",
+	CodexPresetRecommended: "Balanced GPT-6 mix — Sol for reasoning, Luna for code and light work",
+	CodexPresetPowerful:    "High-effort GPT-6 mix — Astra for reasoning, Sol for code, Luna for light work",
 }
 
 var codexPresetConstructors = map[CodexModelPreset]func() map[string]model.CodexEffort{
@@ -43,12 +43,14 @@ var codexPresetConstructors = map[CodexModelPreset]func() map[string]model.Codex
 	CodexPresetPowerful:    model.CodexModelPresetPowerful,
 }
 
-// codexCustomPhases is the ordered list of the 13 SDD phases for the Custom
+// codexCustomPhases is the ordered list of SDD, ODD and RDD roles for the Custom
 // per-phase model picker. Order matches codexTierGroups phase groupings.
 var codexCustomPhases = []string{
 	"sdd-explore", "sdd-research", "sdd-propose", "sdd-spec", "sdd-design", "sdd-tasks",
 	"sdd-apply", "sdd-verify", "sdd-archive", "sdd-onboard",
 	"jd-judge-a", "jd-judge-b", "jd-fix-agent", "default",
+	"odd-explorer", "odd-worker", "odd-verify",
+	"rdd-risk", "rdd-readability", "rdd-reliability", "rdd-resilience", "rdd-refuter", "rdd-validator",
 }
 
 // CodexCustomMode represents the active sub-mode of the Custom picker flow.
@@ -57,7 +59,7 @@ type CodexCustomMode int
 const (
 	// CodexCustomModeNone means the main picker is showing (no Custom sub-mode active).
 	CodexCustomModeNone CodexCustomMode = iota
-	// CodexCustomModePhaseList shows the 13 phases with their current assignments.
+	// CodexCustomModePhaseList shows all roles with their current assignments.
 	CodexCustomModePhaseList
 	// CodexCustomModeModelSelect shows the searchable model list for a selected phase.
 	CodexCustomModeModelSelect
@@ -109,7 +111,7 @@ func NewCodexModelPickerStateFromAssignments(assignments map[string]model.CodexE
 	}
 	for _, preset := range codexPresetOrder {
 		constructor := codexPresetConstructors[preset]
-		if codexAssignmentsEqual(constructor(), assignments) {
+		if codexAssignmentsEqual(constructor(), assignments) || codexPresetMatchesCustomEfforts(preset, assignments) {
 			return CodexModelPickerState{
 				Preset:            preset,
 				AvailableModels:   model.CodexAvailableModels(),
@@ -123,6 +125,19 @@ func NewCodexModelPickerStateFromAssignments(assignments map[string]model.CodexE
 		AvailableModels:   model.CodexAvailableModels(),
 		CustomAssignments: make(map[string]CodexCustomAssignment),
 	}
+}
+
+func codexPresetMatchesCustomEfforts(preset CodexModelPreset, assignments map[string]model.CodexEffort) bool {
+	defaults := codexPresetConstructors[preset]()
+	if len(assignments) < len(defaults) {
+		return false
+	}
+	for phase, effort := range defaults {
+		if assignments[phase] != effort {
+			return false
+		}
+	}
+	return true
 }
 
 func codexAssignmentsEqual(a, b map[string]model.CodexEffort) bool {
@@ -148,7 +163,7 @@ func filteredCodexModels(state CodexModelPickerState) []string {
 // CodexModelPickerOptionCount returns the total number of selectable rows based
 // on the active sub-mode:
 //   - Main picker: 3 presets + Custom + Back = 5
-//   - Phase list: 13 phases + Confirm = 14
+//   - Phase list: SDD phases + ODD worker classes + RDD roles + Confirm
 //   - Model select / Effort select: navigated by HandleCodexModelPickerNav
 //     directly (cursor is managed by the sub-flow, not the outer optionCount).
 func CodexModelPickerOptionCount(state CodexModelPickerState) int {
@@ -271,8 +286,16 @@ func handleCustomPhaseListNav(key string, state *CodexModelPickerState, cursor i
 		// Confirm row is at index phaseCount.
 		if cursor == phaseCount {
 			// Build effort assignments from CustomAssignments.
-			// Phases without a custom assignment use Recommended preset defaults.
-			base := model.CodexModelPresetRecommended()
+			// Phases without a custom assignment use the selected preset defaults.
+			constructor := codexPresetConstructors[state.Preset]
+			if constructor == nil {
+				constructor = model.CodexModelPresetRecommended
+			}
+			base := constructor()
+			presetCarrils := model.CodexPresetCarrilDefaults(string(state.Preset))
+			for _, role := range model.CodexODDRoleCarrils() {
+				base[role.Role] = presetCarrils[role.Carril].Effort
+			}
 			for phase, a := range state.CustomAssignments {
 				if a.Effort != "" {
 					base[phase] = a.Effort
@@ -397,10 +420,14 @@ func isCodexSearchInput(key string) bool {
 // RenderCodexModelPicker renders the Codex preset selection screen.
 // In default mode: title + 3 presets + Custom + Back.
 // In custom sub-modes: delegates to the appropriate sub-renderer.
-func RenderCodexModelPicker(state CodexModelPickerState, cursor int) string {
+func RenderCodexModelPicker(state CodexModelPickerState, cursor int, height ...int) string {
 	switch state.CustomMode {
 	case CodexCustomModePhaseList:
-		return renderCodexCustomPhaseList(state, cursor)
+		availableHeight := 0
+		if len(height) > 0 {
+			availableHeight = height[0]
+		}
+		return renderCodexCustomPhaseList(state, cursor, availableHeight)
 	case CodexCustomModeModelSelect:
 		return renderCodexCustomModelSelect(state)
 	case CodexCustomModeEffortSelect:
@@ -433,7 +460,7 @@ func renderCodexMainPicker(state CodexModelPickerState, cursor int) string {
 	} else {
 		b.WriteString(styles.UnselectedStyle.Render("  "+customLabel) + "\n")
 	}
-	b.WriteString(styles.SubtextStyle.Render("    Assign a specific model and effort to each of the 13 SDD phases") + "\n")
+	b.WriteString(styles.SubtextStyle.Render("    Assign a specific model and effort to SDD, ODD and RDD roles") + "\n")
 
 	b.WriteString("\n")
 	b.WriteString(renderOptions([]string{"← Back"}, cursor-len(codexPresetOrder)-1))
@@ -443,15 +470,26 @@ func renderCodexMainPicker(state CodexModelPickerState, cursor int) string {
 	return b.String()
 }
 
-func renderCodexCustomPhaseList(state CodexModelPickerState, cursor int) string {
+func renderCodexCustomPhaseList(state CodexModelPickerState, cursor, height int) string {
+	// Reserve six lines for title, instruction and help; scroll the role list
+	// with the cursor so the RDD roles and Confirm remain reachable on short terminals.
+	start, end := 0, len(codexCustomPhases)+1
+	if height > 0 && height < end+6 {
+		visible := max(1, height-6)
+		start = max(0, min(cursor-visible+1, end-visible))
+		end = min(end, start+visible)
+	}
 	var b strings.Builder
 
 	b.WriteString(styles.TitleStyle.Render("Custom — Per-Phase Model & Effort"))
 	b.WriteString("\n\n")
-	b.WriteString(styles.SubtextStyle.Render("Select a phase to assign its model and effort. Unassigned phases use Recommended defaults."))
+	b.WriteString(styles.SubtextStyle.Render("Select a role to assign its model and effort. Unassigned roles use preset defaults (RDD: native defaults)."))
 	b.WriteString("\n\n")
 
 	for idx, phase := range codexCustomPhases {
+		if idx < start || idx >= end {
+			continue
+		}
 		focused := idx == cursor
 		a, hasAssignment := state.CustomAssignments[phase]
 
@@ -472,10 +510,12 @@ func renderCodexCustomPhaseList(state CodexModelPickerState, cursor int) string 
 	b.WriteString("\n")
 	confirmIdx := len(codexCustomPhases)
 	confirmFocused := cursor == confirmIdx
-	if confirmFocused {
-		b.WriteString(styles.SelectedStyle.Render(styles.Cursor+"Confirm assignments") + "\n")
-	} else {
-		b.WriteString(styles.UnselectedStyle.Render("  Confirm assignments") + "\n")
+	if confirmIdx >= start && confirmIdx < end {
+		if confirmFocused {
+			b.WriteString(styles.SelectedStyle.Render(styles.Cursor+"Confirm assignments") + "\n")
+		} else {
+			b.WriteString(styles.UnselectedStyle.Render("  Confirm assignments") + "\n")
+		}
 	}
 
 	b.WriteString("\n")

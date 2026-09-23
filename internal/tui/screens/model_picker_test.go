@@ -33,7 +33,7 @@ func makeTestState(phaseIdx int) *ModelPickerState {
 
 func TestModelPickerRows_Count(t *testing.T) {
 	rows := ModelPickerRows()
-	want := 2 + len(opencode.SDDPhases()) + 1 + len(opencode.JDPhases()) + 1 + len(opencode.ReviewPhases())
+	want := 2 + len(opencode.SDDPhases()) + 1 + len(opencode.JDPhases()) + 1 + len(opencode.ReviewPhases()) + 3
 	if len(rows) != want {
 		t.Fatalf("ModelPickerRows() len = %d, want %d; rows = %v", len(rows), want, rows)
 	}
@@ -42,7 +42,7 @@ func TestModelPickerRows_Count(t *testing.T) {
 func TestModelPickerRows_ReviewAgentsFollowJudgmentDay(t *testing.T) {
 	rows := ModelPickerRows()
 	wantSuffix := append([]string{"--- Review agents ---"}, opencode.ReviewPhases()...)
-	got := rows[len(rows)-len(wantSuffix):]
+	got := rows[len(rows)-3-len(wantSuffix) : len(rows)-3]
 	for i := range wantSuffix {
 		if got[i] != wantSuffix[i] {
 			t.Fatalf("review row %d = %q, want %q; rows = %v", i, got[i], wantSuffix[i], rows)
@@ -52,7 +52,7 @@ func TestModelPickerRows_ReviewAgentsFollowJudgmentDay(t *testing.T) {
 
 func TestRenderModelPickerScrollsToReviewAgents(t *testing.T) {
 	rows := ModelPickerRows()
-	cursor := len(rows) - 1
+	cursor := len(rows) - 4
 	state := ModelPickerState{AvailableIDs: []string{"openai"}}
 
 	output := RenderModelPicker(nil, state, cursor)
@@ -1148,6 +1148,62 @@ func TestModelPickerRowsForProfile(t *testing.T) {
 			}
 		}
 	}
+}
+
+func TestModelPickerNativeRowsAndBulkIsolation(t *testing.T) {
+	state := ModelPickerState{CustomAgents: []string{"custom"}}
+	rows := ModelPickerRowsForStateWithIdentity(state)
+	var nativeIdx, customIdx int
+	for i, row := range rows {
+		if row.Label == "--- OpenCode native agents ---" {
+			nativeIdx = i
+		}
+		if row.Label == "Set all custom agents" {
+			customIdx = i
+		}
+	}
+	if nativeIdx == 0 || rows[nativeIdx+1].AgentID != "general" || rows[nativeIdx+2].AgentID != "explore" || customIdx <= nativeIdx+2 {
+		t.Fatalf("native section/order: %+v", rows)
+	}
+	choice := model.ModelAssignment{ProviderID: "openai", ModelID: "gpt-5"}
+	for _, native := range []string{"general", "explore"} {
+		selected := nativeIdx + 1
+		if native == "explore" {
+			selected++
+		}
+		picker := makeTestState(selected)
+		picker.CustomAgents = state.CustomAgents
+		_, assigned := HandleModelPickerNav("enter", picker, nil)
+		if assigned[native] != (model.ModelAssignment{ProviderID: "test-provider", ModelID: "model-alpha"}) || len(assigned) != 1 {
+			t.Fatalf("native selection %s: %v", native, assigned)
+		}
+	}
+	state.SelectedPhaseIdx = customIdx
+	assigned := applyAssignment(state, map[string]model.ModelAssignment{"general": choice, "explore": choice}, model.ModelAssignment{ProviderID: "other", ModelID: "other"})
+	if assigned["general"] != choice || assigned["explore"] != choice || assigned["custom"].ProviderID != "other" {
+		t.Fatalf("custom bulk touched native: %v", assigned)
+	}
+	state.SelectedPhaseIdx = 1
+	assigned = applyAssignment(state, assigned, model.ModelAssignment{ProviderID: "sdd", ModelID: "sdd"})
+	if assigned["general"] != choice || assigned["explore"] != choice || assigned["custom"].ProviderID != "other" {
+		t.Fatalf("SDD bulk touched native: %v", assigned)
+	}
+	profile := ModelPickerRowsForState(ModelPickerState{ForProfile: true, CustomAgents: []string{"custom"}})
+	if !equalPickerRows(profile, ModelPickerRowsForProfile()) {
+		t.Fatalf("profile rows changed: %v", profile)
+	}
+}
+
+func equalPickerRows(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 func TestModelPickerRowsForState_WithCustomAgents(t *testing.T) {

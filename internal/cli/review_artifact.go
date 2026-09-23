@@ -325,7 +325,7 @@ func RunReviewCaptureResult(args []string, stdout io.Writer) error {
 			}
 			return nil
 		}
-		adapter, adapterErr := reviewProviderAdapter(reviewProviderRoleLens, providerRuntime)
+		adapter, adapterErr := reviewProviderAdapter(reviewProviderRoleLens, providerRuntime, *lens)
 		if adapterErr != nil {
 			return reviewPreflightError(adapterErr)
 		}
