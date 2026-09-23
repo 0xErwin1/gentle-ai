@@ -529,22 +529,32 @@ func TestCodexCustomEffortSelect_MultipleDownReachesIndex2(t *testing.T) {
 // HandleCodexModelPickerNav returns a non-nil, non-empty assignments map from
 // the stored custom per-phase assignments, and CustomConfirmed is set to true.
 func TestCodexCustomRestoresPresetWithWorkerEfforts(t *testing.T) {
-	for _, tc := range []struct { preset screens.CodexModelPreset; efforts map[string]model.CodexEffort }{
+	for _, tc := range []struct {
+		preset  screens.CodexModelPreset
+		efforts map[string]model.CodexEffort
+	}{
 		{screens.CodexPresetLowCost, model.CodexModelPresetLowCost()},
 		{screens.CodexPresetRecommended, model.CodexModelPresetRecommended()},
 		{screens.CodexPresetPowerful, model.CodexModelPresetPowerful()},
 	} {
 		defaults := model.CodexPresetCarrilDefaults(string(tc.preset))
-		for _, role := range model.CodexODDRoleCarrils() { tc.efforts[role.Role] = defaults[role.Carril].Effort }
+		for _, role := range model.CodexODDRoleCarrils() {
+			tc.efforts[role.Role] = defaults[role.Carril].Effort
+		}
 		got := screens.NewCodexModelPickerStateFromAssignments(tc.efforts)
-		if got.Preset != tc.preset { t.Errorf("restored preset = %s, want %s", got.Preset, tc.preset) }
+		if got.Preset != tc.preset {
+			t.Errorf("restored preset = %s, want %s", got.Preset, tc.preset)
+		}
 	}
 }
 
 func TestCodexCustomShortTerminalFollowsRDDAndConfirm(t *testing.T) {
 	state := screens.NewCodexModelPickerState()
 	state.CustomMode = screens.CodexCustomModePhaseList
-	for _, tc := range []struct{ cursor int; visible, hidden string }{
+	for _, tc := range []struct {
+		cursor          int
+		visible, hidden string
+	}{
 		{0, "sdd-explore", "rdd-validator"},
 		{17, "rdd-risk", "sdd-explore"},
 		{22, "rdd-validator", "sdd-explore"},
@@ -562,13 +572,21 @@ func TestCodexCustomODDAndRDDRowsRoundTrip(t *testing.T) {
 	state := screens.NewCodexModelPickerState()
 	state.CustomMode = screens.CodexCustomModePhaseList
 	for idx, role := range roles {
-		if handled, _ := screens.HandleCodexCustomNav("enter", &state, idx); !handled || state.CustomMode != screens.CodexCustomModeModelSelect { t.Fatalf("row %d (%s) did not enter model selection", idx, role) }
+		if handled, _ := screens.HandleCodexCustomNav("enter", &state, idx); !handled || state.CustomMode != screens.CodexCustomModeModelSelect {
+			t.Fatalf("row %d (%s) did not enter model selection", idx, role)
+		}
 		screens.HandleCodexCustomNav("enter", &state, idx)
 		screens.HandleCodexCustomNav("enter", &state, idx)
-		if got := state.CustomAssignments[role]; got.ModelID != model.CodexAvailableModels()[0] || got.Effort != model.CodexEffortLow { t.Errorf("role %s = %+v", role, got) }
+		if got := state.CustomAssignments[role]; got.ModelID != model.CodexAvailableModels()[0] || got.Effort != model.CodexEffortLow {
+			t.Errorf("role %s = %+v", role, got)
+		}
 	}
 	_, efforts := screens.HandleCodexCustomNav("enter", &state, screens.CodexModelPickerOptionCount(state)-1)
-	for _, role := range roles { if efforts[role] != model.CodexEffortLow { t.Errorf("role %s effort = %s", role, efforts[role]) } }
+	for _, role := range roles {
+		if efforts[role] != model.CodexEffortLow {
+			t.Errorf("role %s effort = %s", role, efforts[role])
+		}
+	}
 }
 
 func TestCodexCustom_ConfirmReturnsPhaseModelAssignments(t *testing.T) {

@@ -421,7 +421,7 @@ func renderCustomPhaseList(state ClaudeModelPickerState, cursor, height int) str
 		}
 		end = start + visible
 		if end > len(claudePhases)+2 {
-			end = len(claudePhases)+2
+			end = len(claudePhases) + 2
 		}
 	}
 	var b strings.Builder

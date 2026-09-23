@@ -129,9 +129,13 @@ func NewCodexModelPickerStateFromAssignments(assignments map[string]model.CodexE
 
 func codexPresetMatchesCustomEfforts(preset CodexModelPreset, assignments map[string]model.CodexEffort) bool {
 	defaults := codexPresetConstructors[preset]()
-	if len(assignments) < len(defaults) { return false }
+	if len(assignments) < len(defaults) {
+		return false
+	}
 	for phase, effort := range defaults {
-		if assignments[phase] != effort { return false }
+		if assignments[phase] != effort {
+			return false
+		}
 	}
 	return true
 }
@@ -284,7 +288,9 @@ func handleCustomPhaseListNav(key string, state *CodexModelPickerState, cursor i
 			// Build effort assignments from CustomAssignments.
 			// Phases without a custom assignment use the selected preset defaults.
 			constructor := codexPresetConstructors[state.Preset]
-			if constructor == nil { constructor = model.CodexModelPresetRecommended }
+			if constructor == nil {
+				constructor = model.CodexModelPresetRecommended
+			}
 			base := constructor()
 			presetCarrils := model.CodexPresetCarrilDefaults(string(state.Preset))
 			for _, role := range model.CodexODDRoleCarrils() {
@@ -418,7 +424,9 @@ func RenderCodexModelPicker(state CodexModelPickerState, cursor int, height ...i
 	switch state.CustomMode {
 	case CodexCustomModePhaseList:
 		availableHeight := 0
-		if len(height) > 0 { availableHeight = height[0] }
+		if len(height) > 0 {
+			availableHeight = height[0]
+		}
 		return renderCodexCustomPhaseList(state, cursor, availableHeight)
 	case CodexCustomModeModelSelect:
 		return renderCodexCustomModelSelect(state)
@@ -479,7 +487,9 @@ func renderCodexCustomPhaseList(state CodexModelPickerState, cursor, height int)
 	b.WriteString("\n\n")
 
 	for idx, phase := range codexCustomPhases {
-		if idx < start || idx >= end { continue }
+		if idx < start || idx >= end {
+			continue
+		}
 		focused := idx == cursor
 		a, hasAssignment := state.CustomAssignments[phase]
 
