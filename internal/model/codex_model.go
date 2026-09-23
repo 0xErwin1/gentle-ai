@@ -28,6 +28,21 @@ var codexModelCatalog = []string{
 	"gpt-5.2-codex",
 }
 
+// ValidCodexReviewModel accepts a single CLI model identifier, including IDs
+// discovered from Codex that are not yet in the bundled catalog. Rejecting
+// whitespace and option prefixes keeps persisted state from shaping argv.
+func ValidCodexReviewModel(id string) bool {
+	if id == "" || id[0] == '-' {
+		return false
+	}
+	for _, c := range id {
+		if !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '-' || c == '_' || c == '.') {
+			return false
+		}
+	}
+	return true
+}
+
 // CodexAvailableModels returns Gentle AI's curated selectable Codex model
 // catalog for per-phase Custom picker assignments. The slice is a copy —
 // mutations do not affect the canonical catalog.
