@@ -7,6 +7,27 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
 )
 
+func TestClaudeShortTerminalShowsFocusedRDDRowsAndConfirm(t *testing.T) {
+	picker := NewClaudeModelPickerState()
+	picker.InCustomMode = true
+	picker.Mode = ClaudeModePhaseList
+	for _, role := range []string{"risk", "readability", "reliability", "resilience", "refuter", "validator"} {
+		for row, phase := range claudePhases {
+			if phase != role {
+				continue
+			}
+			view := RenderClaudeModelPicker(picker, row, 12)
+			if !strings.Contains(view, claudePhaseLabels[role]) || len(strings.Split(view, "\n")) > 12 {
+				t.Errorf("role %s not visible within 12 lines: %q", role, view)
+			}
+		}
+	}
+	view := RenderClaudeModelPicker(picker, len(claudePhases), 12)
+	if !strings.Contains(view, "Confirm") || len(strings.Split(view, "\n")) > 12 {
+		t.Errorf("Confirm not visible within 12 lines: %q", view)
+	}
+}
+
 func TestClaudeModelPickerPlacesResearchAfterExplore(t *testing.T) {
 	if len(claudePhases) < 3 || claudePhases[0] != "sdd-explore" || claudePhases[1] != "sdd-research" || claudePhases[2] != "sdd-propose" {
 		t.Fatalf("claude phase order = %v", claudePhases)

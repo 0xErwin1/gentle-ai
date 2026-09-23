@@ -357,7 +357,7 @@ func handleClaudeCustomEffortSelectNav(
 }
 
 // RenderClaudeModelPicker renders the Claude model picker screen.
-func RenderClaudeModelPicker(state ClaudeModelPickerState, cursor int) string {
+func RenderClaudeModelPicker(state ClaudeModelPickerState, cursor int, height ...int) string {
 	if state.InCustomMode {
 		switch state.Mode {
 		case ClaudeModeModelSelect:
@@ -365,7 +365,11 @@ func RenderClaudeModelPicker(state ClaudeModelPickerState, cursor int) string {
 		case ClaudeModeEffortSelect:
 			return renderCustomEffortSelect(state, cursor)
 		default:
-			return renderCustomPhaseList(state, cursor)
+			availableHeight := 0
+			if len(height) > 0 {
+				availableHeight = height[0]
+			}
+			return renderCustomPhaseList(state, cursor, availableHeight)
 		}
 	}
 	return renderPresetList(state, cursor)
@@ -396,7 +400,30 @@ func renderPresetList(state ClaudeModelPickerState, cursor int) string {
 	return b.String()
 }
 
-func renderCustomPhaseList(state ClaudeModelPickerState, cursor int) string {
+func renderCustomPhaseList(state ClaudeModelPickerState, cursor, height int) string {
+	// Keep the title, instruction, and help visible while following the cursor
+	// through the phase and action rows on short terminals.
+	start, end := 0, len(claudePhases)+2
+	if height > 0 && height < end+6 {
+		visible := height - 6
+		if visible < 1 {
+			visible = 1
+		}
+		start = cursor - visible + 1
+		if start < 0 {
+			start = 0
+		}
+		if start > end-visible {
+			start = end - visible
+		}
+		if start < 0 {
+			start = 0
+		}
+		end = start + visible
+		if end > len(claudePhases)+2 {
+			end = len(claudePhases)+2
+		}
+	}
 	var b strings.Builder
 
 	b.WriteString(styles.TitleStyle.Render("Custom Claude Assignments"))
@@ -405,6 +432,9 @@ func renderCustomPhaseList(state ClaudeModelPickerState, cursor int) string {
 	b.WriteString("\n\n")
 
 	for idx, phase := range claudePhases {
+		if idx < start || idx >= end {
+			continue
+		}
 		focused := idx == cursor
 		assignment := state.CustomAssignments[phase]
 		if !assignment.Model.Valid() {
@@ -423,10 +453,12 @@ func renderCustomPhaseList(state ClaudeModelPickerState, cursor int) string {
 		}
 	}
 
-	b.WriteString("\n")
-
-	actionCursor := cursor - len(claudePhases)
-	b.WriteString(renderOptions([]string{"Confirm", "← Back"}, actionCursor))
+	for idx, label := range []string{"Confirm", "← Back"} {
+		row := len(claudePhases) + idx
+		if row >= start && row < end {
+			b.WriteString(renderOptions([]string{label}, cursor-row))
+		}
+	}
 	b.WriteString("\n")
 	b.WriteString(styles.HelpStyle.Render("j/k: navigate • enter: edit phase / confirm • esc: back to presets"))
 

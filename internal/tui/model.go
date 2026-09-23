@@ -1531,7 +1531,7 @@ func (m Model) View() string {
 	case ScreenPreset:
 		return screens.RenderPreset(m.Selection.Preset, m.Cursor)
 	case ScreenClaudeModelPicker:
-		return screens.RenderClaudeModelPicker(m.ClaudeModelPicker, m.Cursor)
+		return screens.RenderClaudeModelPicker(m.ClaudeModelPicker, m.Cursor, m.Height)
 	case ScreenKiroModelPicker:
 		return screens.RenderKiroModelPicker(m.KiroModelPicker, m.Cursor)
 	case ScreenCodexModelPicker:
