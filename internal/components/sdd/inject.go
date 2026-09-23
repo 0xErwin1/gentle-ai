@@ -3463,11 +3463,11 @@ func injectModelAssignments(overlayBytes []byte, assignments map[string]model.Mo
 		}
 	}
 
-	// Explicit assignments for existing custom agents are not present in the
-	// managed overlay. Add a minimal overlay definition so the deep merge updates
-	// only the model fields while preserving the user's custom agent settings.
+	// Native general/explore may be absent from both the managed overlay and
+	// existing settings. Explicit choices still need a minimal overlay entry.
+	// Custom agents remain limited to keys already present in user settings.
 	for agent, assignment := range assignments {
-		if !existingAgentKeys[agent] || assignment.ProviderID == "" || assignment.ModelID == "" {
+		if (!existingAgentKeys[agent] && agent != "general" && agent != "explore") || assignment.ProviderID == "" || assignment.ModelID == "" {
 			continue
 		}
 		if _, managed := agents[agent]; managed {
