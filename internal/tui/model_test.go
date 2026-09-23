@@ -8549,9 +8549,11 @@ func TestCodexCustomAssignmentsRestoreFromSelection(t *testing.T) {
 	m.restoreCodexCustomAssignments()
 	for role, want := range map[string]screens.CodexCustomAssignment{
 		"odd-explorer": {ModelID: "gpt-6-luna", Effort: model.CodexEffortLow},
-		"rdd-risk": {ModelID: "gpt-6-astra", Effort: model.CodexEffortHigh},
+		"rdd-risk":     {ModelID: "gpt-6-astra", Effort: model.CodexEffortHigh},
 	} {
-		if got := m.CodexModelPicker.CustomAssignments[role]; got != want { t.Errorf("restored %s = %+v, want %+v", role, got, want) }
+		if got := m.CodexModelPicker.CustomAssignments[role]; got != want {
+			t.Errorf("restored %s = %+v, want %+v", role, got, want)
+		}
 	}
 }
 

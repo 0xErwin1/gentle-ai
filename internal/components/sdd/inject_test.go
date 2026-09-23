@@ -1047,28 +1047,48 @@ func TestInjectOpenCodeNativeModelsAbsentAndPresent(t *testing.T) {
 			adapter := opencodeAdapter()
 			path := adapter.SettingsPath(home)
 			if present {
-				if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil { t.Fatal(err) }
-				if err := os.WriteFile(path, []byte(`{"agent":{"general":{"model":"old/model","description":"keep general"},"explore":{"model":"old/model","description":"keep explore"},"custom":{"model":"old/model"}}}`), 0o644); err != nil { t.Fatal(err) }
+				if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(path, []byte(`{"agent":{"general":{"model":"old/model","description":"keep general"},"explore":{"model":"old/model","description":"keep explore"},"custom":{"model":"old/model"}}}`), 0o644); err != nil {
+					t.Fatal(err)
+				}
 			}
 			assignments := map[string]model.ModelAssignment{
-				"general": {ProviderID:"openai", ModelID:"gpt-5"},
-				"explore": {ProviderID:"anthropic", ModelID:"claude-sonnet-4", Effort:"high"},
+				"general": {ProviderID: "openai", ModelID: "gpt-5"},
+				"explore": {ProviderID: "anthropic", ModelID: "claude-sonnet-4", Effort: "high"},
 			}
-			if _, err := Inject(home, adapter, model.SDDModeMulti, InjectOptions{OpenCodeModelAssignments:assignments}); err != nil { t.Fatal(err) }
+			if _, err := Inject(home, adapter, model.SDDModeMulti, InjectOptions{OpenCodeModelAssignments: assignments}); err != nil {
+				t.Fatal(err)
+			}
 			got, err := ReadCurrentModelAssignments(path)
-			if err != nil { t.Fatal(err) }
-			for name, want := range assignments {
-				if got[name] != want { t.Errorf("%s = %+v, want %+v", name, got[name], want) }
+			if err != nil {
+				t.Fatal(err)
 			}
-			var settings struct { Agent map[string]map[string]any `json:"agent"` }
+			for name, want := range assignments {
+				if got[name] != want {
+					t.Errorf("%s = %+v, want %+v", name, got[name], want)
+				}
+			}
+			var settings struct {
+				Agent map[string]map[string]any `json:"agent"`
+			}
 			data, err := os.ReadFile(path)
-			if err != nil { t.Fatal(err) }
-			if err := json.Unmarshal(data, &settings); err != nil { t.Fatal(err) }
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := json.Unmarshal(data, &settings); err != nil {
+				t.Fatal(err)
+			}
 			if present {
 				for _, name := range []string{"general", "explore"} {
-					if settings.Agent[name]["prompt"] == nil || settings.Agent[name]["mode"] != "subagent" { t.Errorf("%s lost managed definition", name) }
+					if settings.Agent[name]["prompt"] == nil || settings.Agent[name]["mode"] != "subagent" {
+						t.Errorf("%s lost managed definition", name)
+					}
 				}
-				if settings.Agent["custom"]["model"] != "old/model" { t.Errorf("custom changed: %v", settings.Agent["custom"]) }
+				if settings.Agent["custom"]["model"] != "old/model" {
+					t.Errorf("custom changed: %v", settings.Agent["custom"])
+				}
 			}
 		})
 	}
@@ -5940,7 +5960,9 @@ func TestInjectCodexWritesSDDOrchestratorAndSkills(t *testing.T) {
 		"| `odd-verify` | `gpt-6-sol` | `medium` |",
 		"fork_turns: \"none\"",
 	} {
-		if !strings.Contains(text, row) { t.Errorf("Codex guidance missing %q", row) }
+		if !strings.Contains(text, row) {
+			t.Errorf("Codex guidance missing %q", row)
+		}
 	}
 
 	// Codex-specific asset must reference Codex skill paths.

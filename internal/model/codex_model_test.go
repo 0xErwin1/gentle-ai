@@ -419,7 +419,9 @@ func TestCodexODDEffortFallbackIgnoresUnrelatedSDDEffort(t *testing.T) {
 	for _, effort := range []model.CodexEffort{"", "invalid"} {
 		efforts := model.CodexModelPresetRecommended()
 		efforts["sdd-apply"] = model.CodexEffortXHigh
-		if effort != "" { efforts["odd-worker"] = effort }
+		if effort != "" {
+			efforts["odd-worker"] = effort
+		}
 		out := model.RenderCodexODDAssignments(nil, efforts, nil)
 		if !strings.Contains(out, "| `odd-worker` | `gpt-6-luna` | `high` |") {
 			t.Errorf("missing/invalid role effort %q inherited unrelated SDD effort: %s", effort, out)
@@ -429,11 +431,11 @@ func TestCodexODDEffortFallbackIgnoresUnrelatedSDDEffort(t *testing.T) {
 
 func TestCodexODDAssignmentsDefaultsAndOverrides(t *testing.T) {
 	for _, tc := range []struct {
-		name string
-		models map[string]string
+		name    string
+		models  map[string]string
 		efforts map[string]model.CodexEffort
 		carrils map[string]string
-		rows []string
+		rows    []string
 	}{
 		{"recommended fallback", nil, nil, nil, []string{
 			"| `odd-explorer` | `gpt-6-luna` | `high` |",
@@ -443,15 +445,21 @@ func TestCodexODDAssignmentsDefaultsAndOverrides(t *testing.T) {
 		{"custom overrides", map[string]string{"odd-worker": "gpt-6-astra", "rdd-risk": "gpt-6-astra"},
 			map[string]model.CodexEffort{"odd-worker": model.CodexEffortXHigh},
 			map[string]string{"sdd-cheap": "gpt-6-luna", "sdd-mid": "gpt-6-sol", "sdd-strong": "gpt-6-astra"}, []string{
-			"| `odd-explorer` | `gpt-6-luna` | `high` |",
-			"| `odd-worker` | `gpt-6-astra` | `xhigh` |",
-			"| `odd-verify` | `gpt-6-astra` | `medium` |",
-		}},
+				"| `odd-explorer` | `gpt-6-luna` | `high` |",
+				"| `odd-worker` | `gpt-6-astra` | `xhigh` |",
+				"| `odd-verify` | `gpt-6-astra` | `medium` |",
+			}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			got := model.RenderCodexODDAssignments(tc.models, tc.efforts, tc.carrils)
-			for _, row := range tc.rows { if !strings.Contains(got, row) { t.Errorf("missing %q in %q", row, got) } }
-			if strings.Contains(got, "rdd-risk") { t.Errorf("RDD role leaked into ODD table: %q", got) }
+			for _, row := range tc.rows {
+				if !strings.Contains(got, row) {
+					t.Errorf("missing %q in %q", row, got)
+				}
+			}
+			if strings.Contains(got, "rdd-risk") {
+				t.Errorf("RDD role leaked into ODD table: %q", got)
+			}
 		})
 	}
 }

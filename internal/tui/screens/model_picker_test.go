@@ -1155,16 +1155,22 @@ func TestModelPickerNativeRowsAndBulkIsolation(t *testing.T) {
 	rows := ModelPickerRowsForStateWithIdentity(state)
 	var nativeIdx, customIdx int
 	for i, row := range rows {
-		if row.Label == "--- OpenCode native agents ---" { nativeIdx = i }
-		if row.Label == "Set all custom agents" { customIdx = i }
+		if row.Label == "--- OpenCode native agents ---" {
+			nativeIdx = i
+		}
+		if row.Label == "Set all custom agents" {
+			customIdx = i
+		}
 	}
 	if nativeIdx == 0 || rows[nativeIdx+1].AgentID != "general" || rows[nativeIdx+2].AgentID != "explore" || customIdx <= nativeIdx+2 {
 		t.Fatalf("native section/order: %+v", rows)
 	}
 	choice := model.ModelAssignment{ProviderID: "openai", ModelID: "gpt-5"}
 	for _, native := range []string{"general", "explore"} {
-		selected := nativeIdx+1
-		if native == "explore" { selected++ }
+		selected := nativeIdx + 1
+		if native == "explore" {
+			selected++
+		}
 		picker := makeTestState(selected)
 		picker.CustomAgents = state.CustomAgents
 		_, assigned := HandleModelPickerNav("enter", picker, nil)
@@ -1173,22 +1179,30 @@ func TestModelPickerNativeRowsAndBulkIsolation(t *testing.T) {
 		}
 	}
 	state.SelectedPhaseIdx = customIdx
-	assigned := applyAssignment(state, map[string]model.ModelAssignment{"general": choice, "explore": choice}, model.ModelAssignment{ProviderID:"other", ModelID:"other"})
+	assigned := applyAssignment(state, map[string]model.ModelAssignment{"general": choice, "explore": choice}, model.ModelAssignment{ProviderID: "other", ModelID: "other"})
 	if assigned["general"] != choice || assigned["explore"] != choice || assigned["custom"].ProviderID != "other" {
 		t.Fatalf("custom bulk touched native: %v", assigned)
 	}
 	state.SelectedPhaseIdx = 1
-	assigned = applyAssignment(state, assigned, model.ModelAssignment{ProviderID:"sdd", ModelID:"sdd"})
+	assigned = applyAssignment(state, assigned, model.ModelAssignment{ProviderID: "sdd", ModelID: "sdd"})
 	if assigned["general"] != choice || assigned["explore"] != choice || assigned["custom"].ProviderID != "other" {
 		t.Fatalf("SDD bulk touched native: %v", assigned)
 	}
-	profile := ModelPickerRowsForState(ModelPickerState{ForProfile:true, CustomAgents: []string{"custom"}})
-	if !equalPickerRows(profile, ModelPickerRowsForProfile()) { t.Fatalf("profile rows changed: %v", profile) }
+	profile := ModelPickerRowsForState(ModelPickerState{ForProfile: true, CustomAgents: []string{"custom"}})
+	if !equalPickerRows(profile, ModelPickerRowsForProfile()) {
+		t.Fatalf("profile rows changed: %v", profile)
+	}
 }
 
 func equalPickerRows(a, b []string) bool {
-	if len(a) != len(b) { return false }
-	for i := range a { if a[i] != b[i] { return false } }
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
 	return true
 }
 
