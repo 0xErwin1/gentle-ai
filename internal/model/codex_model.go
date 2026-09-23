@@ -15,6 +15,9 @@ import (
 // availability probe; the Codex CLI remains the source of truth at execution
 // time. Order is intentional: newest/most-capable first.
 var codexModelCatalog = []string{
+	"gpt-6-astra",
+	"gpt-6-sol",
+	"gpt-6-luna",
 	"gpt-5.6-sol",
 	"gpt-5.6-terra",
 	"gpt-5.6-luna",
@@ -165,31 +168,87 @@ const (
 
 var codexPresetMatrix = map[CodexPresetKey]map[string]CodexCarrilDefault{
 	CodexPresetLowCost: {
-		"sdd-strong": {Model: "gpt-5.6-sol", Effort: CodexEffortMedium},
-		"sdd-mid":    {Model: "gpt-5.6-terra", Effort: CodexEffortMedium},
-		"sdd-cheap":  {Model: "gpt-5.6-luna", Effort: CodexEffortHigh},
+		"sdd-strong": {Model: "gpt-6-sol", Effort: CodexEffortMedium},
+		"sdd-mid":    {Model: "gpt-6-luna", Effort: CodexEffortMedium},
+		"sdd-cheap":  {Model: "gpt-6-luna", Effort: CodexEffortHigh},
 	},
 	CodexPresetRecommended: {
-		"sdd-strong": {Model: "gpt-5.6-sol", Effort: CodexEffortMedium},
-		"sdd-mid":    {Model: "gpt-5.6-terra", Effort: CodexEffortHigh},
-		"sdd-cheap":  {Model: "gpt-5.6-luna", Effort: CodexEffortHigh},
+		"sdd-strong": {Model: "gpt-6-sol", Effort: CodexEffortMedium},
+		"sdd-mid":    {Model: "gpt-6-luna", Effort: CodexEffortHigh},
+		"sdd-cheap":  {Model: "gpt-6-luna", Effort: CodexEffortHigh},
 	},
 	CodexPresetPowerful: {
-		"sdd-strong": {Model: "gpt-5.6-sol", Effort: CodexEffortXHigh},
-		"sdd-mid":    {Model: "gpt-5.6-sol", Effort: CodexEffortHigh},
-		"sdd-cheap":  {Model: "gpt-5.6-luna", Effort: CodexEffortHigh},
+		"sdd-strong": {Model: "gpt-6-astra", Effort: CodexEffortXHigh},
+		"sdd-mid":    {Model: "gpt-6-sol", Effort: CodexEffortHigh},
+		"sdd-cheap":  {Model: "gpt-6-luna", Effort: CodexEffortHigh},
 	},
 }
 
 // codexPresetOrchestrator is the main-session model per preset. It is no
 // longer one shared policy: the low-cost preset runs the orchestrator on
-// Terra, because a Plus plan cannot afford Sol in both the main session and
+// Luna, because a Plus plan cannot afford Sol in both the main session and
 // every strong lane, and the strong lanes are where reasoning actually pays.
 // Unknown keys fall back to Recommended, as the carril matrix does.
 var codexPresetOrchestrator = map[CodexPresetKey]CodexOrchestratorAssignment{
-	CodexPresetLowCost:     {Model: "gpt-5.6-terra", Effort: CodexEffortMedium},
-	CodexPresetRecommended: {Model: "gpt-5.6-sol", Effort: CodexEffortMedium},
-	CodexPresetPowerful:    {Model: "gpt-5.6-sol", Effort: CodexEffortMedium},
+	CodexPresetLowCost:     {Model: "gpt-6-luna", Effort: CodexEffortMedium},
+	CodexPresetRecommended: {Model: "gpt-6-sol", Effort: CodexEffortMedium},
+	CodexPresetPowerful:    {Model: "gpt-6-astra", Effort: CodexEffortMedium},
+}
+
+// CodexODDRoles maps worker classes (not installed named agents) to preset lanes.
+var codexODDRoles = []struct{ Role, Carril string }{
+	{"odd-explorer", "sdd-cheap"},
+	{"odd-worker", "sdd-mid"},
+	{"odd-verify", "sdd-strong"},
+}
+
+// CodexODDRoleCarrils returns the worker-class to preset-lane mapping.
+func CodexODDRoleCarrils() []struct{ Role, Carril string } {
+	return append([]struct{ Role, Carril string }(nil), codexODDRoles...)
+}
+
+// RenderCodexODDAssignments provides spawn_agent arguments for ODD work.
+// RDD assignments remain persisted for the native adapter, not prompt delegation.
+func RenderCodexODDAssignments(phaseModels map[string]string, efforts map[string]CodexEffort, carrilModels map[string]string) string {
+	if len(carrilModels) == 0 {
+		carrilModels = DefaultCarrilModels()
+	}
+	preset := CodexPresetRecommended
+	for _, candidate := range []CodexPresetKey{CodexPresetLowCost, CodexPresetPowerful} {
+		defaults := codexPresetEfforts(string(candidate))
+		if len(efforts) != len(defaults) {
+			continue
+		}
+		match := true
+		for phase, expected := range defaults {
+			if efforts[phase] != expected {
+				match = false
+				break
+			}
+		}
+		if match {
+			preset = candidate
+			break
+		}
+	}
+	var b strings.Builder
+	b.WriteString("| ODD worker class | Model | reasoning_effort |\n|---|---|---|\n")
+	for _, role := range codexODDRoles {
+		defaults := CodexPresetCarrilDefaults(string(CodexPresetRecommended))[role.Carril]
+		modelID := carrilModels[role.Carril]
+		if modelID == "" {
+			modelID = defaults.Model
+		}
+		if phaseModels[role.Role] != "" {
+			modelID = phaseModels[role.Role]
+		}
+		effort := efforts[role.Role]
+		if !effort.Valid() {
+			effort = CodexPresetCarrilDefaults(string(preset))[role.Carril].Effort
+		}
+		fmt.Fprintf(&b, "| `%s` | `%s` | `%s` |\n", role.Role, modelID, effort)
+	}
+	return b.String()
 }
 
 // CodexOrchestratorAssignment is the explicit top-level Codex session model
@@ -288,8 +347,8 @@ func CodexModelPresetLowCost() map[string]CodexEffort {
 // extension), the canonical default model id for that carril, the default
 // reasoning_effort tier, and the SDD phases covered.
 //
-// Phase groupings (Approach C — orthogonal carril axis). Sol reasons, Terra
-// writes, Luna transcribes:
+// Phase groupings (Approach C — orthogonal carril axis). Sol/Astra reason,
+// Luna/Sol write, Luna handles lightweight work:
 //   - sdd-strong (Razonamiento): explore, propose, design, verify, judge-a, judge-b, default
 //   - sdd-mid    (Código):       apply, fix-agent
 //   - sdd-cheap  (Liviano):      spec, tasks, archive, onboard
