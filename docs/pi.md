@@ -30,7 +30,6 @@ pi install npm:gentle-pi
 pi install npm:gentle-engram
 pi install npm:pi-mcp-adapter
 npm exec --yes --package gentle-engram@latest -- pi-engram init
-pi install npm:@juicesharp/rpiv-ask-user-question
 pi install npm:pi-web-access
 pi install npm:pi-btw
 ```
@@ -41,11 +40,12 @@ pi install npm:pi-btw
 | [`gentle-engram`](https://pi.dev/packages/gentle-engram) | Pi integration for Engram session memory and MCP tools. It is not the Engram binary itself.                               |
 | `pi-mcp-adapter`                                         | Lets Pi expose MCP servers, including Engram, through Pi's MCP runtime.                                                   |
 | `pi-engram init`                                         | Initializes the Pi Engram MCP config shape owned by `gentle-engram`.                                                      |
-| `@juicesharp/rpiv-ask-user-question`                     | Lets Pi child agents ask the active user session for clarification when they need human input.                            |
 | `pi-web-access`                                          | Adds web access tools for Pi.                                                                                             |
 | `pi-btw`                                                 | Adds BTW companion workflow support for Pi.                                                                               |
 
 Discovering and running SDD agents from `.pi/agents/` is provided by `gentle-pi`'s Gentle Agents, which ships the same `subagent_*` tools that the retired `npm:pi-subagents-j0k3r` package used to provide. Gentle AI no longer installs `pi-subagents-j0k3r`, and an existing entry is dropped from `settings.json` on the next install or update so Pi uninstalls it on its next package sync.
+
+Asking the active user session for clarification is provided by `gentle-pi`'s first-party `ask_user_question` tool, shipped since `f2d9d073` (gentle-pi#1274), which replaces the retired `npm:@juicesharp/rpiv-ask-user-question` package. Because Pi tool names are exclusive, keeping that package installed alongside `gentle-pi` made Pi fail to load with `Tool "ask_user_question" conflicts with ...`. Gentle AI no longer installs `@juicesharp/rpiv-ask-user-question`, and an existing entry is dropped from `settings.json` on the next install or update so Pi uninstalls it on its next package sync.
 
 `gentle-pi` owns Pi's runtime behavior. Its current harness enforces parent-only delegation triggers: delegate exploration after 4+ files, use one writer for multi-file changes, require fresh review before PRs, run fresh audits after incidents, and pause long monolithic sessions before they drift.
 
@@ -176,6 +176,29 @@ If you start Pi with `pi -ns`, Pi skips startup skill loading/hooks. That mode i
 | Model override should be removed                       | Open `/gentle:models` and choose `Inherit active/default model`.                                                                                                  |
 | Memory tools or `/mcp` are missing                     | Re-run `gentle-ai install --agent pi` to refresh `.pi/agent/settings.json`, `.pi/npm/package.json`, and the `pi-engram init` wiring, then check `/gentle:status`. |
 | `gentle-engram` is installed but Engram is unavailable | Re-run `gentle-ai install --agent pi` so the real Engram component is provisioned.                                                                                |
+
+## Gentle Shell and its own home
+
+[Gentle Shell](https://www.npmjs.com/package/gentle-pi) (npm package `gentle-pi`, command `gentle-shell`) is a standalone launcher for Pi, separate from this repository. It runs in its own Pi agent home, `~/.gentle-shell/agent`, by default. `gentle-shell --link` skips that home entirely and uses `~/.pi/agent` live — no copy — so it behaves like a normal Pi session in your existing agent directory.
+
+On first run in its own home, and again whenever its pinned Gentle AI version changes, Gentle Shell provisions that home automatically. It does this by running its own package-local, pinned `gentle-ai` binary as:
+
+```bash
+gentle-ai install --agent pi --scope global
+```
+
+with [`PI_CODING_AGENT_DIR`](#installed-packages) pointing at the Gentle Shell home. `gentle-shell setup` re-runs this manually. Your regular `~/.pi/agent` is never touched by this provisioning step, and credentials are not copied between homes — a freshly provisioned home needs its own `/login`. This flow ships with gentle-pi 3.6.0 and later.
+
+`PI_CODING_AGENT_DIR` support in Gentle AI itself shipped in gentle-ai v3.6.0. Setting it redirects `install`/`sync` to the target agent directory instead of `~/.pi/agent`, as described under [Installed Packages](#installed-packages) above. Children Gentle Shell spawns (`pi install`, `pi-engram init`) inherit that same directory. The Pi config root `~/.pi` itself never moves — only the agent-owned files under it do.
+
+Known gap: `.pi/gentle-ai/persona.json`, the background-subagents policy, uninstall targets, the skill-registry scan, and Gentle AI's own Pi config detection still resolve against `~/.pi` rather than following `PI_CODING_AGENT_DIR`. In an isolated Gentle Shell home, those still act on your regular `~/.pi`, not the Gentle Shell home.
+
+### Managed plugin lifecycle
+
+Gentle Shell replaces third-party companion plugins with native `gentle-pi` features over time. Each retirement is a Gentle AI change: a release removes the retired package from the Pi `settings.json` on the next `install` or `sync`, so Pi stops loading it. See [Installed Packages](#installed-packages) above for the currently retired identities (`@juicesharp/rpiv-todo`, `pi-subagents-j0k3r`, and on `main`, `@juicesharp/rpiv-ask-user-question`).
+
+The lifecycle repeats the same way for future retirements: Gentle AI releases the prune → `gentle-pi` bumps its Gentle AI pin → the next `gentle-shell` launch re-provisions its home and Gentle AI prunes the retired package there too.
+
 
 ## Next Steps
 

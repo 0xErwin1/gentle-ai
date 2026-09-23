@@ -202,6 +202,13 @@ func TestRenderRoutingOrganicTaskContinuity(t *testing.T) {
 			"Deterministic failures need fixes, not model debate",
 			"The native RDD refuter owns native review claims; never duplicate or bypass it",
 		}},
+		{"spend-proportional implementation and verification", []string{
+			"Validate consequential premises against available evidence before building",
+			"reuse relevant sibling investigation instead of repeating it",
+			"Run focused checks during iteration and all applicable full checks at task closure",
+			"without a hard spend or line gate",
+			"preserve configured TDD, native RDD, safety, and consent requirements",
+		}},
 		{"existing checks and ownership", []string{
 			"Preserve existing native risk selection and applicable functional verification",
 			"Run applicable functional checks per task, not a review cycle per TODO checkbox",
@@ -621,6 +628,7 @@ func TestRenderRoutingMakesDelegationMandatory(t *testing.T) {
 				"executing past a fired trigger inline is a routing defect",
 				fmt.Sprintf("**Mapping trigger:** when understanding the work requires %d or more files", routing.DelegatedDirect.MappingMinUnderstandingFiles),
 				fmt.Sprintf("**Writer trigger:** when implementation touches %d or more non-trivial files", routing.DelegatedDirect.WriterMinNonTrivialFiles),
+				"A mechanical second-file edit does not fire this trigger solely because an earlier file was touched; count non-trivial files in the current work",
 				"**Preparation trigger:**",
 				"**Long-session backstop:**",
 				"pause and delegate the next bounded unit of work",

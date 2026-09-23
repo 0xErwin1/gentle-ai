@@ -397,7 +397,6 @@ func TestManagedPackageSourcesReturnsCanonicalCopy(t *testing.T) {
 		"npm:gentle-pi",
 		"npm:gentle-engram",
 		"npm:pi-mcp-adapter",
-		"npm:@juicesharp/rpiv-ask-user-question",
 		"npm:pi-web-access",
 		"npm:pi-btw",
 	}
@@ -431,7 +430,6 @@ func TestAdapterInstallCommandSequenceUsesNpmWhenPnpmIsUnavailable(t *testing.T)
 		{"pi", "install", "npm:gentle-engram"},
 		{"pi", "install", "npm:pi-mcp-adapter"},
 		{"npm", "exec", "--yes", "--package", "gentle-engram@latest", "--", "pi-engram", "init"},
-		{"pi", "install", "npm:@juicesharp/rpiv-ask-user-question"},
 		{"pi", "install", "npm:pi-web-access"},
 		{"pi", "install", "npm:pi-btw"},
 	}
@@ -506,8 +504,8 @@ func TestMergePiSettingsFileRemovesRetiredCompanionPackages(t *testing.T) {
 	if err := json.Unmarshal(data, &settings); err != nil {
 		t.Fatalf("Unmarshal(settings) error = %v", err)
 	}
-	if !reflect.DeepEqual(settings.Packages, []string{"npm:@juicesharp/rpiv-ask-user-question", "npm:other@1.0.0", "npm:pi-mcp-adapter"}) {
-		t.Fatalf("packages = %#v, want the retired todo and subagents-j0k3r packages gone and the rest untouched", settings.Packages)
+	if !reflect.DeepEqual(settings.Packages, []string{"npm:other@1.0.0", "npm:pi-mcp-adapter"}) {
+		t.Fatalf("packages = %#v, want the retired todo, subagents-j0k3r, and ask-user-question packages gone and the rest untouched", settings.Packages)
 	}
 }
 

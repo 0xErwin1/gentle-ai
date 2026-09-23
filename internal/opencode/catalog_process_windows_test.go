@@ -9,11 +9,89 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"testing"
 	"time"
 
 	"golang.org/x/sys/windows"
 )
+
+// catalogDescendantPIDEnv names the environment variable the generated helper
+// reads to record its grandchild's PID. Reaping that grandchild before
+// t.TempDir removes the helper image is what keeps the Windows cleanup from
+// failing with "Access is denied" on an executable that is still running
+// (#4843).
+const catalogDescendantPIDEnv = "GENTLE_AI_CATALOG_DESCENDANT_PID_FILE"
+
+// reapDescendantProcess registers a cleanup that terminates and reaps the
+// grandchild whose PID the helper records in pidPath. On Windows an escaping
+// descendant keeps the test-built helper .exe mapped, so t.TempDir's RemoveAll
+// fails until the process is gone. Cleanups run LIFO and t.TempDir registers
+// its removal first, so a cleanup registered after it runs before the removal.
+// The pattern mirrors the descendant-pid reaping in
+// internal/components/engram/healthprobe_test.go.
+func reapDescendantProcess(t *testing.T, pidPath string) {
+	t.Helper()
+	t.Cleanup(func() {
+		pid, err := waitForDescendantPID(pidPath, time.Second)
+		if err != nil {
+			return
+		}
+		terminateAndReapProcess(t, pid)
+	})
+}
+
+// waitForDescendantPID polls pidPath until the helper has written a positive
+// PID. The helper writes it before printing, but a bounded wait keeps the
+// cleanup robust without racing the spawn.
+func waitForDescendantPID(path string, timeout time.Duration) (int, error) {
+	deadline := time.Now().Add(timeout)
+	var lastErr error
+	for {
+		raw, err := os.ReadFile(path)
+		if err == nil {
+			pid, parseErr := strconv.Atoi(strings.TrimSpace(string(raw)))
+			switch {
+			case parseErr == nil && pid > 0:
+				return pid, nil
+			case parseErr != nil:
+				lastErr = parseErr
+			default:
+				lastErr = errors.New("descendant pid must be positive")
+			}
+		} else {
+			lastErr = err
+		}
+		if !time.Now().Before(deadline) {
+			return 0, lastErr
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// terminateAndReapProcess kills pid and waits for the process object to signal
+// so the executable image stops being mapped before t.TempDir removes it.
+func terminateAndReapProcess(t *testing.T, pid int) {
+	t.Helper()
+	if process, err := os.FindProcess(pid); err == nil {
+		_ = process.Kill()
+		_ = process.Release()
+	}
+	handle, err := windows.OpenProcess(windows.SYNCHRONIZE, false, uint32(pid))
+	if err == windows.ERROR_INVALID_PARAMETER {
+		return
+	}
+	if err != nil {
+		t.Errorf("open descendant process %d: %v", pid, err)
+		return
+	}
+	defer windows.CloseHandle(handle)
+	status, err := windows.WaitForSingleObject(handle, uint32(2*time.Second/time.Millisecond))
+	if err != nil || status != windows.WAIT_OBJECT_0 {
+		t.Errorf("wait for descendant process %d: status=%d error=%v", pid, status, err)
+	}
+}
 
 // TestRunCatalogCommandDeadlineNotBlockedByInheritingDescendantWindows is the
 // Windows counterpart of TestRunCatalogCommandDeadlineNotBlockedByInheritingDescendant:
@@ -25,12 +103,16 @@ func TestRunCatalogCommandDeadlineNotBlockedByInheritingDescendantWindows(t *tes
 	dir := t.TempDir()
 	helper := filepath.Join(dir, "descendant-helper.exe")
 	source := filepath.Join(dir, "main.go")
+	pidPath := filepath.Join(dir, "descendant.pid")
+	t.Setenv(catalogDescendantPIDEnv, pidPath)
+	reapDescendantProcess(t, pidPath)
 	src := `package main
 
 import (
 	"fmt"
 	"os"
 	"os/exec"
+	"strconv"
 	"time"
 )
 
@@ -43,6 +125,9 @@ func main() {
 	grandchild.Stdout = os.Stdout
 	grandchild.Stderr = os.Stderr
 	_ = grandchild.Start()
+	if path := os.Getenv("GENTLE_AI_CATALOG_DESCENDANT_PID_FILE"); path != "" && grandchild.Process != nil {
+		_ = os.WriteFile(path, []byte(strconv.Itoa(grandchild.Process.Pid)), 0o600)
+	}
 	fmt.Println("custom/model")
 	fmt.Println("{\"id\":\"model\",\"name\":\"Model\",\"capabilities\":{\"toolcall\":true}}")
 	time.Sleep(25 * time.Millisecond)
@@ -84,12 +169,16 @@ func TestRunCatalogCommandDeadlineNotBlockedByInheritingDescendantWindowsFallbac
 	dir := t.TempDir()
 	helper := filepath.Join(dir, "descendant-fallback-helper.exe")
 	source := filepath.Join(dir, "main.go")
+	pidPath := filepath.Join(dir, "descendant.pid")
+	t.Setenv(catalogDescendantPIDEnv, pidPath)
+	reapDescendantProcess(t, pidPath)
 	src := `package main
 
 import (
 	"fmt"
 	"os"
 	"os/exec"
+	"strconv"
 	"time"
 )
 
@@ -102,6 +191,9 @@ func main() {
 	grandchild.Stdout = os.Stdout
 	grandchild.Stderr = os.Stderr
 	_ = grandchild.Start()
+	if path := os.Getenv("GENTLE_AI_CATALOG_DESCENDANT_PID_FILE"); path != "" && grandchild.Process != nil {
+		_ = os.WriteFile(path, []byte(strconv.Itoa(grandchild.Process.Pid)), 0o600)
+	}
 	fmt.Println("custom/model")
 	fmt.Println("{\"id\":\"model\",\"name\":\"Model\",\"capabilities\":{\"toolcall\":true}}")
 	time.Sleep(25 * time.Millisecond)
@@ -143,12 +235,16 @@ func TestRunCatalogCommandDeadlineNotBlockedByInheritingDescendantWindowsAssignm
 	dir := t.TempDir()
 	helper := filepath.Join(dir, "descendant-assign-fallback-helper.exe")
 	source := filepath.Join(dir, "main.go")
+	pidPath := filepath.Join(dir, "descendant.pid")
+	t.Setenv(catalogDescendantPIDEnv, pidPath)
+	reapDescendantProcess(t, pidPath)
 	src := `package main
 
 import (
 	"fmt"
 	"os"
 	"os/exec"
+	"strconv"
 	"time"
 )
 
@@ -161,6 +257,9 @@ func main() {
 	grandchild.Stdout = os.Stdout
 	grandchild.Stderr = os.Stderr
 	_ = grandchild.Start()
+	if path := os.Getenv("GENTLE_AI_CATALOG_DESCENDANT_PID_FILE"); path != "" && grandchild.Process != nil {
+		_ = os.WriteFile(path, []byte(strconv.Itoa(grandchild.Process.Pid)), 0o600)
+	}
 	fmt.Println("custom/model")
 	fmt.Println("{\"id\":\"model\",\"name\":\"Model\",\"capabilities\":{\"toolcall\":true}}")
 	time.Sleep(25 * time.Millisecond)

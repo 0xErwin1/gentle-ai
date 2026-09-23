@@ -22,7 +22,8 @@ func init() {
 		Properties: []string{
 			"j97 drives the compiled TUI model-picker state through the public gentle-ai binary and checks the persisted opencode.json boundary.",
 			"The journey requires a product binary built with -tags bench_fixture; ordinary binaries report unsupported instead of fabricating a pass.",
-			"The fixture uses a fresh HOME with an unconfigured custom native agent and injects an effective tool-capable runtime catalog without OpenCode private cache files.",
+			"The fixture uses a fresh HOME with a user-owned custom native agent that already carries a variant, and injects an effective tool-capable runtime catalog without OpenCode private cache files.",
+			"A model pick that carries no effort must leave the user-owned variant untouched: the custom-agent overlay omits the key instead of clearing it (#3262).",
 		},
 		Journeys: modelPickerJourneys,
 	})
@@ -35,7 +36,7 @@ func modelPickerJourneys() []Journey {
 		Title:  "Runtime model picker discovers and persists a custom native agent assignment",
 		Source: "https://github.com/Gentleman-Programming/gentle-ai/issues/2098",
 		Steps: []Step{
-			{Name: "fixture: unconfigured custom agent and selectable model", Fixture: modelPickerFixture},
+			{Name: "fixture: custom agent with a user-owned variant and selectable model", Fixture: modelPickerFixture},
 			{Name: "public model-picker runtime exposes and persists the custom assignment", Requires: modelPickerCapability,
 				Args: func(*Sandbox) ([]string, error) {
 					return []string{"bench-model-picker", "--json"}, nil
@@ -49,11 +50,16 @@ func modelPickerFixture(sandbox *Sandbox) error {
 		return err
 	}
 	settingsPath := filepath.Join(sandbox.Home, ".config", "opencode", "opencode.json")
+	// The custom agent already owns "variant": "high". Without a pre-existing
+	// value the assertion below could not tell "the overlay omitted variant"
+	// apart from "the overlay cleared variant to empty" — and preserving the
+	// user's value is exactly what #3262 protects.
 	settings := `{
   "agent": {
     "custom-refactor-agent": {
       "mode": "subagent",
-      "description": "preserve this custom agent"
+      "description": "preserve this custom agent",
+      "variant": "high"
     }
   }
 }`
@@ -89,8 +95,12 @@ func modelPickerAfter(sandbox *Sandbox, observation Observation) error {
 	if result.PersistedModel != result.SelectedAssignment {
 		return fmt.Errorf("persisted model = %q, want %q", result.PersistedModel, result.SelectedAssignment)
 	}
-	if !result.VariantPresent || result.PersistedVariant != "" {
-		return fmt.Errorf("persisted variant = %q (present=%t), want present empty variant", result.PersistedVariant, result.VariantPresent)
+	// Ownership boundary (#3262): the picker assigns a model with no effort, so
+	// the minimal custom-agent overlay omits "variant" and the deep merge keeps
+	// the user's own "high". Managed definitions still clear a stale variant on
+	// empty effort; that contract is pinned separately in profiles_test.go.
+	if !result.VariantPresent || result.PersistedVariant != "high" {
+		return fmt.Errorf("persisted variant = %q (present=%t), want the user-owned variant %q preserved (#3262)", result.PersistedVariant, result.VariantPresent, "high")
 	}
 	if !result.DescriptionPreserved {
 		return fmt.Errorf("custom-agent description was not preserved: %+v", result)
