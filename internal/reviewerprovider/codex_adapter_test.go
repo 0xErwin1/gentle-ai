@@ -81,6 +81,40 @@ func TestCodexAdapterUsesStdinAndReturnsUntouchedRawOutput(t *testing.T) {
 	}
 }
 
+func TestCodexAdapterModelArgumentPreservesIsolation(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("helper process uses POSIX argument handling")
+	}
+	t.Setenv(codexAdapterHelperEnvironment, "1")
+	t.Setenv(codexAdapterPromptPathEnvironment, filepath.Join(t.TempDir(), "prompt"))
+	t.Setenv(codexAdapterArgumentsPathEnvironment, filepath.Join(t.TempDir(), "arguments"))
+	t.Setenv(codexReviewerLoopbackBaseURLEnvironment, "")
+	for _, tc := range []struct {
+		model    string
+		assigned bool
+	}{
+		{"gpt-6-sol", true}, {"", false}, {"--unsafe", false}, {"bad model", false},
+	} {
+		var args []string
+		adapter := &CodexAdapter{Model: tc.model, LookPath: func(string) (string, error) { return "codex", nil },
+			commandContext: func(ctx context.Context, _ string, arguments ...string) *exec.Cmd {
+				args = append([]string(nil), arguments...)
+				return exec.CommandContext(ctx, os.Args[0], append([]string{"-test.run=^TestCodexAdapterHelperProcess$", "--"}, arguments...)...)
+			},
+		}
+		if _, err := adapter.Review(context.Background(), NewInvocation([]byte("prompt"))); err != nil {
+			t.Fatal(err)
+		}
+		want := []string{"exec", "--skip-git-repo-check", "--ignore-user-config", "--sandbox", "read-only", "-C", args[6], "--output-last-message", args[8]}
+		if tc.assigned {
+			want = append(want, "--model", tc.model)
+		}
+		if !slices.Equal(args, want) {
+			t.Errorf("model %q argv = %q, want %q", tc.model, args, want)
+		}
+	}
+}
+
 func TestCodexAdapterConfiguresApprovedLoopbackProvider(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("the helper process uses POSIX argument handling")

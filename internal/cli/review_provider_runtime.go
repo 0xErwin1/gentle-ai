@@ -24,8 +24,11 @@ func reviewProviderAdapter(role string, agent model.AgentID, lens ...string) (re
 		return nil, fmt.Errorf("reviewer provider role %q does not permit the compiled transport", contract.Role) // refusal:by-design world-action: a role must explicitly opt in to the compiled provider transport
 	}
 	adapter, err := reviewProviderAdapterFor(contract, agent)
-	if err != nil || agent != model.AgentClaudeCode {
-		return adapter, err
+	if err != nil {
+		return nil, err
+	}
+	if agent != model.AgentClaudeCode && agent != model.AgentCodex {
+		return adapter, nil
 	}
 	key := ""
 	switch role {
@@ -46,7 +49,31 @@ func reviewProviderAdapter(role string, agent model.AgentID, lens ...string) (re
 	if claude, ok := adapter.(*reviewerprovider.ClaudeAdapter); ok {
 		claude.Model = savedClaudeReviewModel(key)
 	}
+	if codex, ok := adapter.(*reviewerprovider.CodexAdapter); ok {
+		codex.Model = savedCodexReviewModel(key)
+	}
 	return adapter, nil
+}
+
+// savedCodexReviewModel uses only explicit, syntactically valid role assignments.
+// Absent or malformed state leaves the isolated CLI's native model default intact.
+func savedCodexReviewModel(role string) string {
+	if role == "" {
+		return ""
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	installed, err := state.Read(home)
+	if err != nil {
+		return ""
+	}
+	id := installed.CodexPhaseModelAssignments["rdd-"+role]
+	if model.ValidCodexReviewModel(id) {
+		return id
+	}
+	return ""
 }
 
 // savedClaudeReviewModel never replaces the native transport's default for

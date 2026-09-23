@@ -11,6 +11,8 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+
+	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
 )
 
 const codexReviewerLoopbackBaseURLEnvironment = "GENTLE_AI_CODEX_REVIEWER_LOOPBACK_BASE_URL"
@@ -20,6 +22,7 @@ const codexReviewerLoopbackProviderID = "gentle_ai_reviewer_loopback"
 // CodexAdapter invokes Codex with an opaque provider invocation and returns
 // the CLI's raw final-message bytes without interpreting them.
 type CodexAdapter struct {
+	Model          string
 	LookPath       func(string) (string, error)
 	commandContext func(context.Context, string, ...string) *exec.Cmd
 }
@@ -55,6 +58,9 @@ func (adapter *CodexAdapter) Review(ctx context.Context, invocation Invocation) 
 	arguments, err := codexReviewerArguments(scratch, outputPath)
 	if err != nil {
 		return nil, fmt.Errorf("codex reviewer transport unavailable: %w", err)
+	}
+	if model.ValidCodexReviewModel(adapter.Model) {
+		arguments = append(arguments, "--model", adapter.Model)
 	}
 	command := commandContext(ctx, binary, arguments...)
 	command.Dir = scratch
