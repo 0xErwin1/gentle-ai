@@ -113,26 +113,26 @@ func TestWriteCodexProfiles_DefaultFallback(t *testing.T) {
 		t.Fatal("WriteCodexProfiles(nil) changed = false, want true on first write")
 	}
 
-	// sdd-strong must have gpt-5.6-sol and effort=medium (Recommended default)
+	// sdd-strong must have gpt-6-sol and effort=medium (Recommended default)
 	strong, _ := os.ReadFile(filepath.Join(dir, "sdd-strong.config.toml"))
-	if !strings.Contains(string(strong), `"gpt-5.6-sol"`) {
-		t.Errorf("sdd-strong default model: want gpt-5.6-sol; got:\n%s", strong)
+	if !strings.Contains(string(strong), `"gpt-6-sol"`) {
+		t.Errorf("sdd-strong default model: want gpt-6-sol; got:\n%s", strong)
 	}
 	if !strings.Contains(string(strong), `"medium"`) {
 		t.Errorf("sdd-strong default effort: want medium; got:\n%s", strong)
 	}
-	// sdd-mid must have gpt-5.6-terra and effort=medium (Recommended default)
+	// sdd-mid must have gpt-6-luna and effort=high (Recommended default)
 	mid, _ := os.ReadFile(filepath.Join(dir, "sdd-mid.config.toml"))
-	if !strings.Contains(string(mid), `"gpt-5.6-terra"`) {
-		t.Errorf("sdd-mid default model: want gpt-5.6-terra; got:\n%s", mid)
+	if !strings.Contains(string(mid), `"gpt-6-luna"`) {
+		t.Errorf("sdd-mid default model: want gpt-6-luna; got:\n%s", mid)
 	}
 	if !strings.Contains(string(mid), `"high"`) {
 		t.Errorf("sdd-mid default effort: want high; got:\n%s", mid)
 	}
-	// sdd-cheap must have gpt-5.6-luna and effort=high (Recommended default)
+	// sdd-cheap must have gpt-6-luna and effort=high (Recommended default)
 	cheap, _ := os.ReadFile(filepath.Join(dir, "sdd-cheap.config.toml"))
-	if !strings.Contains(string(cheap), `"gpt-5.6-luna"`) {
-		t.Errorf("sdd-cheap default model: want gpt-5.6-luna; got:\n%s", cheap)
+	if !strings.Contains(string(cheap), `"gpt-6-luna"`) {
+		t.Errorf("sdd-cheap default model: want gpt-6-luna; got:\n%s", cheap)
 	}
 	if !strings.Contains(string(cheap), `"high"`) {
 		t.Errorf("sdd-cheap default effort: want high; got:\n%s", cheap)

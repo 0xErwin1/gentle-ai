@@ -157,6 +157,24 @@ func TestReadCurrentModelAssignmentsIncludesReviewAgentsFromJSONC(t *testing.T) 
 	}
 }
 
+func TestReadCurrentModelAssignmentsNativeAgents(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "opencode.json")
+	if err := os.WriteFile(path, []byte(`{"agent":{"general":{"model":"openai/gpt-5"},"explore":{"model":"anthropic/claude-sonnet-4","variant":"high"}}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	got, err := ReadCurrentModelAssignments(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got["general"] != (model.ModelAssignment{ProviderID: "openai", ModelID: "gpt-5"}) || got["explore"] != (model.ModelAssignment{ProviderID: "anthropic", ModelID: "claude-sonnet-4", Effort: "high"}) {
+		t.Fatalf("native assignments = %v", got)
+	}
+	custom, err := DiscoverCustomAgents(path)
+	if err != nil || len(custom) != 0 {
+		t.Fatalf("native entries discovered as custom: %v, %v", custom, err)
+	}
+}
+
 func TestReadCurrentModelAssignmentsNoFile(t *testing.T) {
 	got, err := ReadCurrentModelAssignments("/nonexistent/path/opencode.json")
 	if err != nil {

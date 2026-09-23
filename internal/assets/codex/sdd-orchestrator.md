@@ -420,3 +420,9 @@ When the Codex CLI is installed and supports GPT-5.6 profiles, gentle-ai writes 
 These profile files apply to whole CLI sessions: `codex --profile <name> "<prompt>"`. They do NOT apply to spawned sub-agents. When delegating a phase via `spawn_agent`, pass the tier's effort directly as `reasoning_effort` (with `fork_turns: "none"`), using the same tier values below.
 
 {{CODEX_PHASE_EFFORTS}}
+
+### ODD worker-class assignments
+
+These are worker classes, not installed named agents. For ODD delegation, select the matching row below and pass its `model` and `reasoning_effort` directly to `spawn_agent` with `fork_turns: "none"`. If a custom assignment is absent, the row inherits the selected preset carril. Do not use RDD role assignments for these workers; RDD is handled by the native adapter.
+
+{{CODEX_ODD_ASSIGNMENTS}}

@@ -1042,6 +1042,61 @@ func TestInjectOpenCodeSDDCommandsRemainParentOwned(t *testing.T) {
 	assertSDDCommandsParentOwned(t, home)
 }
 
+func TestInjectOpenCodeNativeModelsAbsentAndPresent(t *testing.T) {
+	for _, present := range []bool{false, true} {
+		t.Run(fmt.Sprintf("present=%t", present), func(t *testing.T) {
+			home := t.TempDir()
+			t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+			adapter := opencodeAdapter()
+			path := adapter.SettingsPath(home)
+			if present {
+				if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(path, []byte(`{"agent":{"general":{"model":"old/model","description":"keep general"},"explore":{"model":"old/model","description":"keep explore"},"custom":{"model":"old/model"}}}`), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			assignments := map[string]model.ModelAssignment{
+				"general": {ProviderID: "openai", ModelID: "gpt-5"},
+				"explore": {ProviderID: "anthropic", ModelID: "claude-sonnet-4", Effort: "high"},
+			}
+			if _, err := Inject(home, adapter, model.SDDModeMulti, InjectOptions{OpenCodeModelAssignments: assignments}); err != nil {
+				t.Fatal(err)
+			}
+			got, err := ReadCurrentModelAssignments(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for name, want := range assignments {
+				if got[name] != want {
+					t.Errorf("%s = %+v, want %+v", name, got[name], want)
+				}
+			}
+			var settings struct {
+				Agent map[string]map[string]any `json:"agent"`
+			}
+			data, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := json.Unmarshal(data, &settings); err != nil {
+				t.Fatal(err)
+			}
+			if present {
+				for _, name := range []string{"general", "explore"} {
+					if settings.Agent[name]["prompt"] == nil || settings.Agent[name]["mode"] != "subagent" {
+						t.Errorf("%s lost managed definition", name)
+					}
+				}
+				if settings.Agent["custom"]["model"] != "old/model" {
+					t.Errorf("custom changed: %v", settings.Agent["custom"])
+				}
+			}
+		})
+	}
+}
+
 func TestInjectOpenCodeIsIdempotent(t *testing.T) {
 	mockNoPackageManager(t)
 	home := t.TempDir()
@@ -5952,6 +6007,16 @@ func TestInjectCodexWritesSDDOrchestratorAndSkills(t *testing.T) {
 	if !strings.Contains(text, "Spec-Driven Development") {
 		t.Fatal("agents.md missing SDD orchestrator content")
 	}
+	for _, row := range []string{
+		"| `odd-explorer` | `gpt-6-luna` | `high` |",
+		"| `odd-worker` | `gpt-6-luna` | `high` |",
+		"| `odd-verify` | `gpt-6-sol` | `medium` |",
+		"fork_turns: \"none\"",
+	} {
+		if !strings.Contains(text, row) {
+			t.Errorf("Codex guidance missing %q", row)
+		}
+	}
 
 	// Codex-specific asset must reference Codex skill paths.
 	if !strings.Contains(text, "~/.codex/skills/_shared/") {
@@ -7546,6 +7611,53 @@ func TestInjectClaudeSubAgentsResolveModels(t *testing.T) {
 				t.Fatalf("agent %s missing %q\n--- file ---\n%s", tt.phase, tt.want, text)
 			}
 		})
+	}
+}
+
+func TestInjectClaudeNativeReviewAgentsUseSavedRoleModels(t *testing.T) {
+	home := t.TempDir()
+	assignments := map[string]model.ClaudePhaseAssignment{
+		"risk":        {Model: model.ClaudeModelOpus},
+		"readability": {Model: model.ClaudeModelHaiku},
+		"reliability": {Model: model.ClaudeModelFable},
+		"resilience":  {Model: model.ClaudeModelOpus},
+		"refuter":     {Model: model.ClaudeModelHaiku},
+		"sdd-design":  {Model: model.ClaudeModelOpus},
+	}
+	if _, err := Inject(home, claudeAdapter(), "", InjectOptions{ClaudePhaseAssignments: assignments}); err != nil {
+		t.Fatal(err)
+	}
+	for role, assignment := range assignments {
+		name := "review-" + role
+		if role == "sdd-design" {
+			name = role
+		}
+		content, err := os.ReadFile(filepath.Join(home, ".claude", "agents", name+".md"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if want := "model: " + string(assignment.Model); !strings.Contains(string(content), want) {
+			t.Errorf("%s missing %q", name, want)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(home, ".claude", "agents", "review-validator.md")); !os.IsNotExist(err) {
+		t.Fatalf("unexpected validator agent: %v", err)
+	}
+}
+
+func TestInjectClaudeReviewAgentFallsBackForInvalidRole(t *testing.T) {
+	home := t.TempDir()
+	if _, err := Inject(home, claudeAdapter(), "", InjectOptions{
+		ClaudePhaseAssignments: map[string]model.ClaudePhaseAssignment{"risk": {Model: "invalid"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	content, err := os.ReadFile(filepath.Join(home, ".claude", "agents", "review-risk.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(content), "model: sonnet") {
+		t.Fatal("invalid role did not retain established generated-agent fallback")
 	}
 }
 
@@ -9284,9 +9396,9 @@ func TestInjectCodexNilCarrilModels(t *testing.T) {
 	if !strings.Contains(text, "Model") {
 		t.Error("AGENTS.md missing Model column — nil carrilModels should fall back to defaults")
 	}
-	for _, want := range []string{"gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"} {
+	for _, want := range []string{"gpt-6-sol", "gpt-6-luna"} {
 		if !strings.Contains(text, want) {
-			t.Errorf("AGENTS.md missing %s — nil carrilModels should show GPT-5.6 defaults", want)
+			t.Errorf("AGENTS.md missing %s — nil carrilModels should show GPT-6 defaults", want)
 		}
 	}
 }

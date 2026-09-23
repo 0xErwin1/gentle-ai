@@ -6012,27 +6012,27 @@ func TestCodexPresetSelection_PopulatesPendingSyncOverrides(t *testing.T) {
 			name:   "low cost",
 			cursor: 0,
 			want: map[string]string{
-				"sdd-strong": "gpt-5.6-sol",
-				"sdd-mid":    "gpt-5.6-terra",
-				"sdd-cheap":  "gpt-5.6-luna",
+				"sdd-strong": "gpt-6-sol",
+				"sdd-mid":    "gpt-6-luna",
+				"sdd-cheap":  "gpt-6-luna",
 			},
 		},
 		{
 			name:   "recommended",
 			cursor: 1,
 			want: map[string]string{
-				"sdd-strong": "gpt-5.6-sol",
-				"sdd-mid":    "gpt-5.6-terra",
-				"sdd-cheap":  "gpt-5.6-luna",
+				"sdd-strong": "gpt-6-sol",
+				"sdd-mid":    "gpt-6-luna",
+				"sdd-cheap":  "gpt-6-luna",
 			},
 		},
 		{
 			name:   "powerful",
 			cursor: 2,
 			want: map[string]string{
-				"sdd-strong": "gpt-5.6-sol",
-				"sdd-mid":    "gpt-5.6-sol",
-				"sdd-cheap":  "gpt-5.6-luna",
+				"sdd-strong": "gpt-6-astra",
+				"sdd-mid":    "gpt-6-sol",
+				"sdd-cheap":  "gpt-6-luna",
 			},
 		},
 	}
@@ -8542,14 +8542,32 @@ func TestStrictTDDForward(t *testing.T) {
 	}
 }
 
+func TestCodexCustomAssignmentsRestoreFromSelection(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Selection.CodexPhaseModelAssignments = map[string]string{"odd-explorer": "gpt-6-luna", "rdd-risk": "gpt-6-astra"}
+	m.Selection.CodexModelAssignments = map[string]model.CodexEffort{"odd-explorer": model.CodexEffortLow, "rdd-risk": model.CodexEffortHigh}
+	m.CodexModelPicker = screens.NewCodexModelPickerStateFromAssignments(m.Selection.CodexModelAssignments)
+	m.restoreCodexCustomAssignments()
+	for role, want := range map[string]screens.CodexCustomAssignment{
+		"odd-explorer": {ModelID: "gpt-6-luna", Effort: model.CodexEffortLow},
+		"rdd-risk":     {ModelID: "gpt-6-astra", Effort: model.CodexEffortHigh},
+	} {
+		if got := m.CodexModelPicker.CustomAssignments[role]; got != want {
+			t.Errorf("restored %s = %+v, want %+v", role, got, want)
+		}
+	}
+}
+
 func TestCodexModelPickerCustomConfirmSignalsOrchestratorClear(t *testing.T) {
 	m := NewModel(system.DetectionResult{}, "dev")
 	m.Screen = ScreenCodexModelPicker
 	m.ModelConfigMode = true
 	m.CodexModelPicker = screens.NewCodexModelPickerState()
 	m.CodexModelPicker.CustomMode = screens.CodexCustomModePhaseList
+	m.CodexModelPicker.CustomAssignments["odd-worker"] = screens.CodexCustomAssignment{ModelID: "gpt-6-sol", Effort: model.CodexEffortHigh}
+	m.CodexModelPicker.CustomAssignments["rdd-validator"] = screens.CodexCustomAssignment{ModelID: "gpt-6-astra", Effort: model.CodexEffortXHigh}
 	m.Selection.CodexOrchestratorAssignment = model.CodexPresetOrchestratorAssignment(string(model.CodexPresetRecommended))
-	m.Cursor = 14 // Confirm row after the 14 phases.
+	m.Cursor = screens.CodexModelPickerOptionCount(m.CodexModelPicker) - 1 // Confirm row.
 
 	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	state := updated.(Model)
@@ -8561,6 +8579,11 @@ func TestCodexModelPickerCustomConfirmSignalsOrchestratorClear(t *testing.T) {
 	}
 	if state.PendingSyncOverrides == nil || !state.PendingSyncOverrides.ClearCodexOrchestratorAssignment {
 		t.Fatal("custom confirmation did not propagate clear signal to sync overrides")
+	}
+	for role, want := range map[string]string{"odd-worker": "gpt-6-sol", "rdd-validator": "gpt-6-astra"} {
+		if state.Selection.CodexPhaseModelAssignments[role] != want || state.PendingSyncOverrides.CodexPhaseModelAssignments[role] != want {
+			t.Errorf("role %s not forwarded to persisted sync selection", role)
+		}
 	}
 }
 
