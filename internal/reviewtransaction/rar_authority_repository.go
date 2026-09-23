@@ -273,23 +273,24 @@ func (repository *RARAuthorityRepository) Publish(
 		request.ReceiptRef,
 	)
 	if err != nil {
-		// Bounded lock exhaustion converges only when a winner published this
-		// caller's exact immutable pair and it still matches live native authority.
 		if errors.Is(err, ErrAuthorityLockTimeout) {
-			if _, readErr := readPrivateRARFile(repository.pairIndexPath(request.ReceiptRef, request.Result.ResultRef)); readErr == nil {
-				replay, resolveErr := repository.ResolveReceiptResult(ctx, request.ReceiptRef, request.Result.ResultRef)
-				if resolveErr == nil && replay.Receipt.lineageID() == request.LineageID &&
-					reflect.DeepEqual(replay.Applicability, request.Applicability) &&
-					reflect.DeepEqual(replay.Registry, request.Registry) &&
-					reflect.DeepEqual(replay.Plan, request.Plan) &&
-					reflect.DeepEqual(replay.Result, request.Result) {
-					return replay, nil
-				}
+			if replay, converged := repository.convergePublishedRARAuthority(ctx, request); converged {
+				return replay, nil
 			}
 		}
 		return RARVerificationAuthority{}, err
 	}
-	defer release()
+	// The native receipt lock must be released before lock-exhaustion
+	// convergence: the convergence predicate re-resolves live authority
+	// through ResolveReceiptResult, which re-acquires this same lock.
+	released := false
+	releaseOnce := func() {
+		if !released {
+			released = true
+			release()
+		}
+	}
+	defer releaseOnce()
 	if request.Result.Subject != subject ||
 		request.Applicability.Subject != subject ||
 		request.Plan.Subject != subject ||
@@ -329,6 +330,22 @@ func (repository *RARAuthorityRepository) Publish(
 	}
 	lock, err := acquireRARAuthorityLock(ctx, filepath.Join(repository.root, "LOCK"))
 	if err != nil {
+		// Bounded lock exhaustion converges only when a winner published this
+		// caller's exact immutable pair and it still matches live native
+		// authority: the pair index and authority object are published by
+		// atomic no-replace renames, so an exact read-back of the pair proves
+		// this caller's publication already completed, and ResolveReceiptResult
+		// then applies the same live-authority gate the winner passes after
+		// publishing. Everything else keeps the typed error — cancellation, a
+		// missing pair, divergent contracts, a stale native receipt, or a
+		// replaced repository identity mean there is nothing proven to
+		// converge on, and liveness is never broadened beyond that gate.
+		if errors.Is(err, ErrAuthorityLockTimeout) {
+			releaseOnce()
+			if replay, converged := repository.convergePublishedRARAuthority(ctx, request); converged {
+				return replay, nil
+			}
+		}
 		return RARVerificationAuthority{}, err
 	}
 	defer lock.release()
@@ -342,6 +359,37 @@ func (repository *RARAuthorityRepository) Publish(
 		return RARVerificationAuthority{}, err
 	}
 	return authority, nil
+}
+
+// convergePublishedRARAuthority is the single lock-exhaustion convergence
+// predicate for Publish. The pair index and authority object are immutable and
+// published by atomic no-replace renames, so an exact read-back of this
+// caller's receipt+result pair proves a winner already completed the exact
+// publication; ResolveReceiptResult then applies the same live-authority gate
+// the winner passes after publishing. Anything else — missing pair, divergent
+// contracts, stale native receipt, cancellation — reports false and the caller
+// keeps its original typed failure instead of converging. This is an internal
+// predicate, not a refusal: a non-convergent caller observes only the caller's
+// own lock error, never a second error from here.
+func (repository *RARAuthorityRepository) convergePublishedRARAuthority(
+	ctx context.Context,
+	request RARAuthorityPublication,
+) (RARVerificationAuthority, bool) {
+	if _, err := readPrivateRARFile(repository.pairIndexPath(request.ReceiptRef, request.Result.ResultRef)); err != nil {
+		return RARVerificationAuthority{}, false
+	}
+	replay, err := repository.ResolveReceiptResult(ctx, request.ReceiptRef, request.Result.ResultRef)
+	if err != nil {
+		return RARVerificationAuthority{}, false
+	}
+	if replay.Receipt.lineageID() != request.LineageID ||
+		!reflect.DeepEqual(replay.Applicability, request.Applicability) ||
+		!reflect.DeepEqual(replay.Registry, request.Registry) ||
+		!reflect.DeepEqual(replay.Plan, request.Plan) ||
+		!reflect.DeepEqual(replay.Result, request.Result) {
+		return RARVerificationAuthority{}, false
+	}
+	return replay, true
 }
 
 // ResolveResult resolves the unique immutable authority occupying resultRef
