@@ -5934,6 +5934,14 @@ func TestInjectCodexWritesSDDOrchestratorAndSkills(t *testing.T) {
 	if !strings.Contains(text, "Spec-Driven Development") {
 		t.Fatal("agents.md missing SDD orchestrator content")
 	}
+	for _, row := range []string{
+		"| `odd-explorer` | `gpt-6-luna` | `high` |",
+		"| `odd-worker` | `gpt-6-luna` | `high` |",
+		"| `odd-verify` | `gpt-6-sol` | `medium` |",
+		"fork_turns: \"none\"",
+	} {
+		if !strings.Contains(text, row) { t.Errorf("Codex guidance missing %q", row) }
+	}
 
 	// Codex-specific asset must reference Codex skill paths.
 	if !strings.Contains(text, "~/.codex/skills/_shared/") {
@@ -8575,9 +8583,9 @@ func TestInjectCodexNilCarrilModels(t *testing.T) {
 	if !strings.Contains(text, "Model") {
 		t.Error("AGENTS.md missing Model column — nil carrilModels should fall back to defaults")
 	}
-	for _, want := range []string{"gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"} {
+	for _, want := range []string{"gpt-6-sol", "gpt-6-luna"} {
 		if !strings.Contains(text, want) {
-			t.Errorf("AGENTS.md missing %s — nil carrilModels should show GPT-5.6 defaults", want)
+			t.Errorf("AGENTS.md missing %s — nil carrilModels should show GPT-6 defaults", want)
 		}
 	}
 }

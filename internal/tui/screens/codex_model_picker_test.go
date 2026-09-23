@@ -71,8 +71,8 @@ func TestCodexModelPickerOptionCount_PhaseListMode(t *testing.T) {
 	state := screens.NewCodexModelPickerState()
 	state.CustomMode = screens.CodexCustomModePhaseList
 	count := screens.CodexModelPickerOptionCount(state)
-	if count != 15 {
-		t.Errorf("CodexModelPickerOptionCount(phase-list) = %d, want 15", count)
+	if count != 24 {
+		t.Errorf("CodexModelPickerOptionCount(phase-list) = %d, want 24", count)
 	}
 }
 
@@ -425,8 +425,8 @@ func TestCodexCustom_SelectModelAndEffortUpdatesAssignment(t *testing.T) {
 	if !ok {
 		t.Fatalf("CustomAssignments missing sdd-explore; got: %v", state.CustomAssignments)
 	}
-	if a.ModelID != "gpt-5.6-sol" {
-		t.Errorf("CustomAssignments[sdd-explore].ModelID = %q, want gpt-5.6-sol", a.ModelID)
+	if a.ModelID != model.CodexAvailableModels()[0] {
+		t.Errorf("CustomAssignments[sdd-explore].ModelID = %q, want first catalog model", a.ModelID)
 	}
 	if a.Effort != model.CodexEffortHigh {
 		t.Errorf("CustomAssignments[sdd-explore].Effort = %q, want high", a.Effort)
@@ -528,6 +528,49 @@ func TestCodexCustomEffortSelect_MultipleDownReachesIndex2(t *testing.T) {
 // user navigates to the Confirm row in phase list mode and presses enter,
 // HandleCodexModelPickerNav returns a non-nil, non-empty assignments map from
 // the stored custom per-phase assignments, and CustomConfirmed is set to true.
+func TestCodexCustomRestoresPresetWithWorkerEfforts(t *testing.T) {
+	for _, tc := range []struct { preset screens.CodexModelPreset; efforts map[string]model.CodexEffort }{
+		{screens.CodexPresetLowCost, model.CodexModelPresetLowCost()},
+		{screens.CodexPresetRecommended, model.CodexModelPresetRecommended()},
+		{screens.CodexPresetPowerful, model.CodexModelPresetPowerful()},
+	} {
+		defaults := model.CodexPresetCarrilDefaults(string(tc.preset))
+		for _, role := range model.CodexODDRoleCarrils() { tc.efforts[role.Role] = defaults[role.Carril].Effort }
+		got := screens.NewCodexModelPickerStateFromAssignments(tc.efforts)
+		if got.Preset != tc.preset { t.Errorf("restored preset = %s, want %s", got.Preset, tc.preset) }
+	}
+}
+
+func TestCodexCustomShortTerminalFollowsRDDAndConfirm(t *testing.T) {
+	state := screens.NewCodexModelPickerState()
+	state.CustomMode = screens.CodexCustomModePhaseList
+	for _, tc := range []struct{ cursor int; visible, hidden string }{
+		{0, "sdd-explore", "rdd-validator"},
+		{17, "rdd-risk", "sdd-explore"},
+		{22, "rdd-validator", "sdd-explore"},
+		{23, "Confirm assignments", "sdd-explore"},
+	} {
+		out := screens.RenderCodexModelPicker(state, tc.cursor, 12)
+		if !strings.Contains(out, tc.visible) || strings.Contains(out, tc.hidden) {
+			t.Errorf("cursor %d viewport missing %q or showing %q: %q", tc.cursor, tc.visible, tc.hidden, out)
+		}
+	}
+}
+
+func TestCodexCustomODDAndRDDRowsRoundTrip(t *testing.T) {
+	roles := map[int]string{14: "odd-explorer", 15: "odd-worker", 16: "odd-verify", 17: "rdd-risk", 18: "rdd-readability", 19: "rdd-reliability", 20: "rdd-resilience", 21: "rdd-refuter", 22: "rdd-validator"}
+	state := screens.NewCodexModelPickerState()
+	state.CustomMode = screens.CodexCustomModePhaseList
+	for idx, role := range roles {
+		if handled, _ := screens.HandleCodexCustomNav("enter", &state, idx); !handled || state.CustomMode != screens.CodexCustomModeModelSelect { t.Fatalf("row %d (%s) did not enter model selection", idx, role) }
+		screens.HandleCodexCustomNav("enter", &state, idx)
+		screens.HandleCodexCustomNav("enter", &state, idx)
+		if got := state.CustomAssignments[role]; got.ModelID != model.CodexAvailableModels()[0] || got.Effort != model.CodexEffortLow { t.Errorf("role %s = %+v", role, got) }
+	}
+	_, efforts := screens.HandleCodexCustomNav("enter", &state, screens.CodexModelPickerOptionCount(state)-1)
+	for _, role := range roles { if efforts[role] != model.CodexEffortLow { t.Errorf("role %s effort = %s", role, efforts[role]) } }
+}
+
 func TestCodexCustom_ConfirmReturnsPhaseModelAssignments(t *testing.T) {
 	state := screens.NewCodexModelPickerState()
 	state.CustomMode = screens.CodexCustomModePhaseList
@@ -537,7 +580,7 @@ func TestCodexCustom_ConfirmReturnsPhaseModelAssignments(t *testing.T) {
 	}
 
 	// Confirm row is the LAST row in phase-list mode (after 14 phases).
-	confirmIdx := 14
+	confirmIdx := screens.CodexModelPickerOptionCount(state) - 1
 	handled, assignments := screens.HandleCodexModelPickerNav("enter", &state, confirmIdx)
 	if !handled {
 		t.Fatal("Confirm row: handled = false, want true")

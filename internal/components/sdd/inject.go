@@ -2923,6 +2923,7 @@ func renderSessionPreflightPrompt(adapter agents.Adapter, opts InjectOptions) (s
 			rendered = cmr.RenderCodexPhaseEfforts(opts.CodexModelAssignments, opts.CodexCarrilModelAssignments)
 		}
 		content = strings.ReplaceAll(content, "{{CODEX_PHASE_EFFORTS}}", rendered)
+		content = strings.ReplaceAll(content, "{{CODEX_ODD_ASSIGNMENTS}}", model.RenderCodexODDAssignments(opts.CodexPhaseModelAssignments, opts.CodexModelAssignments, opts.CodexCarrilModelAssignments))
 		// Post-check: fail loudly if any placeholder token remains unresolved.
 		if strings.Contains(content, "{{") {
 			return "", fmt.Errorf("inject(codex): unresolved placeholder token '{{' remains in AGENTS.md content after substitution")
