@@ -750,8 +750,8 @@ func TestComponentSyncStepCodexRuntimeGate(t *testing.T) {
 				if tt.preserveProfiles && string(content) != "user-content\n" {
 					t.Errorf("runtime should preserve %s: %q", name, content)
 				}
-				if !tt.wantErr && !tt.preserveProfiles && !strings.Contains(string(content), "gpt-5.6-") {
-					t.Errorf("valid runtime did not write GPT-5.6 profile %s: %q", name, content)
+				if !tt.wantErr && !tt.preserveProfiles && !strings.Contains(string(content), "gpt-6-") {
+					t.Errorf("valid runtime did not write GPT-6 profile %s: %q", name, content)
 				}
 			}
 			if !tt.wantErr {
