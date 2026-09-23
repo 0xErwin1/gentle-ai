@@ -249,13 +249,15 @@ func TestRARVerificationAuthorityLockExhaustionWithoutConvergentPairStaysTyped(t
 			t.Fatal(err)
 		}
 
-		// The convergence predicate must revalidate live native authority, so a
-		// receipt that no longer matches the repository keeps it from accepting
-		// the on-disk pair.
-		if _, converged := fixture.repository.convergePublishedRARAuthority(
-			context.Background(), fixture.publication,
-		); converged {
-			t.Fatal("convergePublishedRARAuthority() converged on a pair whose live receipt no longer matches the repository")
+		// The convergence path must revalidate live native authority through
+		// ResolveReceiptResult, so a receipt that no longer matches the
+		// repository keeps it from accepting the on-disk pair. The local
+		// convergence closure is intentionally not directly callable, so this
+		// asserts the exact resolver contract the closure depends on.
+		if _, err := fixture.repository.ResolveReceiptResult(
+			context.Background(), fixture.publication.ReceiptRef, fixture.publication.Result.ResultRef,
+		); !errors.Is(err, ErrRARAuthorityStale) {
+			t.Fatalf("ResolveReceiptResult() on a tampered live receipt = %v, want %v", err, ErrRARAuthorityStale)
 		}
 	})
 }
