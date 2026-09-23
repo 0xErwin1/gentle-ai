@@ -1039,6 +1039,41 @@ func TestInjectOpenCodeSDDCommandsRemainParentOwned(t *testing.T) {
 	assertSDDCommandsParentOwned(t, home)
 }
 
+func TestInjectOpenCodeNativeModelsAbsentAndPresent(t *testing.T) {
+	for _, present := range []bool{false, true} {
+		t.Run(fmt.Sprintf("present=%t", present), func(t *testing.T) {
+			home := t.TempDir()
+			t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+			adapter := opencodeAdapter()
+			path := adapter.SettingsPath(home)
+			if present {
+				if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil { t.Fatal(err) }
+				if err := os.WriteFile(path, []byte(`{"agent":{"general":{"model":"old/model","description":"keep general"},"explore":{"model":"old/model","description":"keep explore"},"custom":{"model":"old/model"}}}`), 0o644); err != nil { t.Fatal(err) }
+			}
+			assignments := map[string]model.ModelAssignment{
+				"general": {ProviderID:"openai", ModelID:"gpt-5"},
+				"explore": {ProviderID:"anthropic", ModelID:"claude-sonnet-4", Effort:"high"},
+			}
+			if _, err := Inject(home, adapter, model.SDDModeMulti, InjectOptions{OpenCodeModelAssignments:assignments}); err != nil { t.Fatal(err) }
+			got, err := ReadCurrentModelAssignments(path)
+			if err != nil { t.Fatal(err) }
+			for name, want := range assignments {
+				if got[name] != want { t.Errorf("%s = %+v, want %+v", name, got[name], want) }
+			}
+			var settings struct { Agent map[string]map[string]any `json:"agent"` }
+			data, err := os.ReadFile(path)
+			if err != nil { t.Fatal(err) }
+			if err := json.Unmarshal(data, &settings); err != nil { t.Fatal(err) }
+			if present {
+				for _, name := range []string{"general", "explore"} {
+					if settings.Agent[name]["prompt"] == nil || settings.Agent[name]["mode"] != "subagent" { t.Errorf("%s lost managed definition", name) }
+				}
+				if settings.Agent["custom"]["model"] != "old/model" { t.Errorf("custom changed: %v", settings.Agent["custom"]) }
+			}
+		})
+	}
+}
+
 func TestInjectOpenCodeIsIdempotent(t *testing.T) {
 	mockNoPackageManager(t)
 	home := t.TempDir()
