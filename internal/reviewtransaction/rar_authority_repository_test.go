@@ -167,8 +167,13 @@ func TestRARVerificationAuthorityConvergesOnExhaustedRepositoryLock(t *testing.T
 // the guard on the convergence above: exhaustion with genuinely divergent
 // state — no published pair, or different contracts addressed to the same
 // pair — must keep failing with the typed *AuthorityLockTimeoutError and must
-// not converge on a foreign authority. Do not relax this test to make
-// contention disappear.
+// not converge on a foreign authority. The native-lock subtest proves the
+// convergence predicate never accepts the on-disk pair while live native
+// authority is inaccessible, and the stale-receipt subtest proves it
+// revalidates the live receipt instead of trusting the published bytes; the
+// no-pair and divergent subtests prove a false predicate preserves the
+// caller's typed timeout, so the properties compose. Do not relax this test
+// to make contention disappear.
 func TestRARVerificationAuthorityLockExhaustionWithoutConvergentPairStaysTyped(t *testing.T) {
 	t.Run("no published pair", func(t *testing.T) {
 		fixture := newRARVerificationFixture(t, "authority-lock-missing")
@@ -205,4 +210,63 @@ func TestRARVerificationAuthorityLockExhaustionWithoutConvergentPairStaysTyped(t
 			t.Fatalf("Publish() behind a held lock with divergent contracts = %v, want %v", err, ErrAuthorityLockTimeout)
 		}
 	})
+
+	t.Run("native receipt lock held at the exact pair", func(t *testing.T) {
+		fixture := newRARVerificationFixture(t, "authority-lock-native")
+		if _, err := fixture.repository.Publish(context.Background(), fixture.publication); err != nil {
+			t.Fatal(err)
+		}
+		held, err := acquireMaintenanceLock(
+			context.Background(), rarNativeMaintenanceLockPath(t, fixture.repository), maintenanceExclusive,
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = held.Release() }()
+
+		// The exact pair is on disk, but the convergence predicate must not
+		// accept it while the native receipt maintenance lock is inaccessible:
+		// its ResolveReceiptResult call revalidates live native authority through
+		// the same lock and fails, so the replay must preserve the original
+		// typed timeout instead of converging.
+		_, err = fixture.repository.Publish(context.Background(), fixture.publication)
+		if !errors.Is(err, ErrAuthorityLockTimeout) || errors.Is(err, ErrRARAuthorityStale) {
+			t.Fatalf("Publish() behind the held native receipt maintenance lock with the exact published pair = %v, want %v preserved", err, ErrAuthorityLockTimeout)
+		}
+	})
+
+	t.Run("stale live receipt refuses convergence at the exact pair", func(t *testing.T) {
+		fixture := newRARVerificationFixture(t, "authority-lock-stale")
+		if _, err := fixture.repository.Publish(context.Background(), fixture.publication); err != nil {
+			t.Fatal(err)
+		}
+		store, err := AuthoritativeStore(context.Background(), fixture.repo, fixture.publication.LineageID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		receiptPath := filepath.Join(store.Dir, "artifacts", "receipt.json")
+		if err := os.WriteFile(receiptPath, []byte("{\"tampered\":true}\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+
+		// The convergence predicate must revalidate live native authority, so a
+		// receipt that no longer matches the repository keeps it from accepting
+		// the on-disk pair.
+		if _, converged := fixture.repository.convergePublishedRARAuthority(
+			context.Background(), fixture.publication,
+		); converged {
+			t.Fatal("convergePublishedRARAuthority() converged on a pair whose live receipt no longer matches the repository")
+		}
+	})
+}
+
+// rarNativeMaintenanceLockPath returns the exact REVIEW-MAINTENANCE.lock that
+// lockNativeReceipt acquires for this repository, derived the same way.
+func rarNativeMaintenanceLockPath(t *testing.T, repository *RARAuthorityRepository) string {
+	t.Helper()
+	base, _, err := reviewAuthorityRoot(context.Background(), repository.identity.RepositoryRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return compactMaintenanceLockPath(base)
 }
