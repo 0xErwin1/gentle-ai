@@ -266,6 +266,34 @@ func (repository *RARAuthorityRepository) Publish(
 	if err := repository.validateIdentity(ctx); err != nil {
 		return RARVerificationAuthority{}, err
 	}
+	// converge is the single lock-exhaustion convergence predicate for
+	// Publish. The pair index and authority object are immutable and published
+	// by atomic no-replace renames, so an exact read-back of this caller's
+	// receipt+result pair proves a winner already completed the exact
+	// publication; ResolveReceiptResult then applies the same live-authority
+	// gate the winner passes after publishing. Anything else — missing pair,
+	// divergent contracts, stale native receipt, cancellation — reports false
+	// and the caller keeps its original typed failure instead of converging.
+	// This is an internal predicate, not a refusal: a non-convergent caller
+	// observes only the caller's own lock error, never a second error from
+	// here.
+	converge := func() (RARVerificationAuthority, bool) {
+		if _, err := readPrivateRARFile(repository.pairIndexPath(request.ReceiptRef, request.Result.ResultRef)); err != nil {
+			return RARVerificationAuthority{}, false
+		}
+		replay, err := repository.ResolveReceiptResult(ctx, request.ReceiptRef, request.Result.ResultRef)
+		if err != nil {
+			return RARVerificationAuthority{}, false
+		}
+		if replay.Receipt.lineageID() != request.LineageID ||
+			!reflect.DeepEqual(replay.Applicability, request.Applicability) ||
+			!reflect.DeepEqual(replay.Registry, request.Registry) ||
+			!reflect.DeepEqual(replay.Plan, request.Plan) ||
+			!reflect.DeepEqual(replay.Result, request.Result) {
+			return RARVerificationAuthority{}, false
+		}
+		return replay, true
+	}
 
 	native, subject, release, err := repository.lockNativeReceipt(
 		ctx,
@@ -274,7 +302,7 @@ func (repository *RARAuthorityRepository) Publish(
 	)
 	if err != nil {
 		if errors.Is(err, ErrAuthorityLockTimeout) {
-			if replay, converged := repository.convergePublishedRARAuthority(ctx, request); converged {
+			if replay, converged := converge(); converged {
 				return replay, nil
 			}
 		}
@@ -342,7 +370,7 @@ func (repository *RARAuthorityRepository) Publish(
 		// converge on, and liveness is never broadened beyond that gate.
 		if errors.Is(err, ErrAuthorityLockTimeout) {
 			releaseOnce()
-			if replay, converged := repository.convergePublishedRARAuthority(ctx, request); converged {
+			if replay, converged := converge(); converged {
 				return replay, nil
 			}
 		}
@@ -359,37 +387,6 @@ func (repository *RARAuthorityRepository) Publish(
 		return RARVerificationAuthority{}, err
 	}
 	return authority, nil
-}
-
-// convergePublishedRARAuthority is the single lock-exhaustion convergence
-// predicate for Publish. The pair index and authority object are immutable and
-// published by atomic no-replace renames, so an exact read-back of this
-// caller's receipt+result pair proves a winner already completed the exact
-// publication; ResolveReceiptResult then applies the same live-authority gate
-// the winner passes after publishing. Anything else — missing pair, divergent
-// contracts, stale native receipt, cancellation — reports false and the caller
-// keeps its original typed failure instead of converging. This is an internal
-// predicate, not a refusal: a non-convergent caller observes only the caller's
-// own lock error, never a second error from here.
-func (repository *RARAuthorityRepository) convergePublishedRARAuthority(
-	ctx context.Context,
-	request RARAuthorityPublication,
-) (RARVerificationAuthority, bool) {
-	if _, err := readPrivateRARFile(repository.pairIndexPath(request.ReceiptRef, request.Result.ResultRef)); err != nil {
-		return RARVerificationAuthority{}, false
-	}
-	replay, err := repository.ResolveReceiptResult(ctx, request.ReceiptRef, request.Result.ResultRef)
-	if err != nil {
-		return RARVerificationAuthority{}, false
-	}
-	if replay.Receipt.lineageID() != request.LineageID ||
-		!reflect.DeepEqual(replay.Applicability, request.Applicability) ||
-		!reflect.DeepEqual(replay.Registry, request.Registry) ||
-		!reflect.DeepEqual(replay.Plan, request.Plan) ||
-		!reflect.DeepEqual(replay.Result, request.Result) {
-		return RARVerificationAuthority{}, false
-	}
-	return replay, true
 }
 
 // ResolveResult resolves the unique immutable authority occupying resultRef
