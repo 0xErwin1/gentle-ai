@@ -64,6 +64,26 @@ func Run() error {
 
 const nonInteractiveTUIError = "gentle-ai requires both stdin and stdout to be terminals (TTYs); use --version, gentle-ai update, or --help for non-interactive use"
 
+// clearPendingSyncAfterDeferredSync clears PendingSync under the canonical
+// install-state lock. It re-reads the latest state inside the lock so changes
+// written by a concurrent writer between the deferred sync and this clear are
+// preserved; the stale fallback is used only when the state file does not
+// exist yet.
+func clearPendingSyncAfterDeferredSync(homeDir string, fallback state.InstallState) error {
+	return statecoord.WithLock(homeDir, func() error {
+		current, readErr := state.Read(homeDir)
+		if readErr != nil {
+			if errors.Is(readErr, os.ErrNotExist) {
+				current = fallback
+			} else {
+				return readErr
+			}
+		}
+		current.PendingSync = false
+		return state.Write(homeDir, current)
+	})
+}
+
 func RunArgs(args []string, stdout io.Writer) error {
 	if len(args) == 0 && (!isattyFn(os.Stdin.Fd()) || !isattyFn(os.Stdout.Fd())) {
 		return errors.New(nonInteractiveTUIError)
@@ -144,6 +164,14 @@ func RunArgs(args []string, stdout io.Writer) error {
 				cli.PrintSyncHelp(stdout)
 				return nil
 			}
+		case "restore":
+			// Answer an explicit help request before system detection: a host
+			// with no resolvable home directory must still be able to read the
+			// restore usage, and cli.RunRestore answers --help before it
+			// resolves the home directory itself.
+			if hasHelpFlag(args[1:]) {
+				return cli.RunRestore([]string{"--help"}, stdout)
+			}
 		}
 	}
 
@@ -223,8 +251,9 @@ func RunArgs(args []string, stdout io.Writer) error {
 				_, _ = fmt.Fprintf(stdout, "Warning: deferred sync failed: %v\n", err)
 				// Leave PendingSync=true so the next launch retries.
 			} else {
-				installedState.PendingSync = false
-				if writeErr := state.Write(homeDir, installedState); writeErr != nil {
+				// Re-read the latest state inside the canonical lock so a
+				// concurrent writer's changes survive the PendingSync clear.
+				if writeErr := clearPendingSyncAfterDeferredSync(homeDir, installedState); writeErr != nil {
 					// Best-effort: surface the failure so it's not silently swallowed.
 					// Idempotent re-sync on the next launch is acceptable.
 					_, _ = fmt.Fprintf(stdout, "Warning: failed to clear PendingSync flag: %v\n", writeErr)
@@ -325,7 +354,10 @@ func runUninstall(args []string, stdout io.Writer) error {
 
 func hasHelpFlag(args []string) bool {
 	for _, arg := range args {
-		if arg == "--help" || arg == "-h" {
+		// The flag package treats one and two leading dashes as equivalent,
+		// and both "help" and "h" trigger flag.ErrHelp, so the pre-dispatch
+		// must match every spelling the parser accepts.
+		if arg == "--help" || arg == "-help" || arg == "-h" || arg == "--h" {
 			return true
 		}
 	}
@@ -937,72 +969,77 @@ func persistAssignments(homeDir string, selection model.Selection) error {
 	if len(selection.ClaudeModelAssignments) == 0 && len(selection.ClaudePhaseAssignments) == 0 && len(selection.KiroModelAssignments) == 0 && len(selection.ModelAssignments) == 0 && len(selection.CodexModelAssignments) == 0 && len(selection.CodexCarrilModelAssignments) == 0 && len(selection.CodexPhaseModelAssignments) == 0 && !hasAssignmentSignal {
 		return nil
 	}
-	current, err := state.Read(homeDir)
-	if err != nil {
-		// State file may not exist yet (e.g. pre-state users). Other read
-		// failures, such as invalid JSON, must not overwrite existing state.
-		if !errors.Is(err, os.ErrNotExist) {
-			return nil
+	// The whole read-modify-write runs under the canonical install-state lock:
+	// the written value derives from the read below, so the read must happen
+	// inside the lock or a concurrent writer's changes would be lost.
+	return statecoord.WithLock(homeDir, func() error {
+		current, err := state.Read(homeDir)
+		if err != nil {
+			// State file may not exist yet (e.g. pre-state users). Other read
+			// failures, such as invalid JSON, must not overwrite existing state.
+			if !errors.Is(err, os.ErrNotExist) {
+				return nil
+			}
+			current = state.InstallState{}
 		}
-		current = state.InstallState{}
-	}
-	if selection.ClaudeModelAssignments != nil {
-		if len(selection.ClaudeModelAssignments) > 0 {
-			current.ClaudeModelAssignments = claudeAliasesToStrings(selection.ClaudeModelAssignments)
-		} else {
+		if selection.ClaudeModelAssignments != nil {
+			if len(selection.ClaudeModelAssignments) > 0 {
+				current.ClaudeModelAssignments = claudeAliasesToStrings(selection.ClaudeModelAssignments)
+			} else {
+				current.ClaudeModelAssignments = nil
+			}
+		}
+		if selection.ClaudePhaseAssignments != nil {
+			if len(selection.ClaudePhaseAssignments) > 0 {
+				current.ClaudePhaseAssignments = claudePhaseAssignmentsToState(selection.ClaudePhaseAssignments)
+			} else {
+				current.ClaudePhaseAssignments = nil
+			}
 			current.ClaudeModelAssignments = nil
 		}
-	}
-	if selection.ClaudePhaseAssignments != nil {
-		if len(selection.ClaudePhaseAssignments) > 0 {
-			current.ClaudePhaseAssignments = claudePhaseAssignmentsToState(selection.ClaudePhaseAssignments)
-		} else {
-			current.ClaudePhaseAssignments = nil
+		if selection.KiroModelAssignments != nil {
+			if len(selection.KiroModelAssignments) > 0 {
+				current.KiroModelAssignments = kiroAliasesToStrings(selection.KiroModelAssignments)
+			} else {
+				current.KiroModelAssignments = nil
+			}
 		}
-		current.ClaudeModelAssignments = nil
-	}
-	if selection.KiroModelAssignments != nil {
-		if len(selection.KiroModelAssignments) > 0 {
-			current.KiroModelAssignments = kiroAliasesToStrings(selection.KiroModelAssignments)
-		} else {
-			current.KiroModelAssignments = nil
+		if selection.ClearCodexOrchestratorAssignment {
+			current.CodexOrchestratorAssignment = nil
+		} else if selection.CodexOrchestratorAssignment != nil {
+			current.CodexOrchestratorAssignment = codexOrchestratorToState(selection.CodexOrchestratorAssignment)
 		}
-	}
-	if selection.ClearCodexOrchestratorAssignment {
-		current.CodexOrchestratorAssignment = nil
-	} else if selection.CodexOrchestratorAssignment != nil {
-		current.CodexOrchestratorAssignment = codexOrchestratorToState(selection.CodexOrchestratorAssignment)
-	}
-	if selection.CodexModelAssignments != nil {
-		if len(selection.CodexModelAssignments) > 0 {
-			current.CodexModelAssignments = codexEffortsToStrings(selection.CodexModelAssignments)
-		} else {
-			current.CodexModelAssignments = nil
+		if selection.CodexModelAssignments != nil {
+			if len(selection.CodexModelAssignments) > 0 {
+				current.CodexModelAssignments = codexEffortsToStrings(selection.CodexModelAssignments)
+			} else {
+				current.CodexModelAssignments = nil
+			}
 		}
-	}
-	if selection.CodexCarrilModelAssignments != nil {
-		if len(selection.CodexCarrilModelAssignments) > 0 {
-			current.CodexCarrilModelAssignments = selection.CodexCarrilModelAssignments
-		} else {
-			current.CodexCarrilModelAssignments = nil
+		if selection.CodexCarrilModelAssignments != nil {
+			if len(selection.CodexCarrilModelAssignments) > 0 {
+				current.CodexCarrilModelAssignments = selection.CodexCarrilModelAssignments
+			} else {
+				current.CodexCarrilModelAssignments = nil
+			}
 		}
-	}
-	// non-nil, len > 0 → write; non-nil, len == 0 → clear (explicit preset signal); nil → leave untouched.
-	if selection.CodexPhaseModelAssignments != nil {
-		if len(selection.CodexPhaseModelAssignments) > 0 {
-			current.CodexPhaseModelAssignments = selection.CodexPhaseModelAssignments
-		} else {
-			current.CodexPhaseModelAssignments = nil
+		// non-nil, len > 0 → write; non-nil, len == 0 → clear (explicit preset signal); nil → leave untouched.
+		if selection.CodexPhaseModelAssignments != nil {
+			if len(selection.CodexPhaseModelAssignments) > 0 {
+				current.CodexPhaseModelAssignments = selection.CodexPhaseModelAssignments
+			} else {
+				current.CodexPhaseModelAssignments = nil
+			}
 		}
-	}
-	if selection.ModelAssignments != nil {
-		if len(selection.ModelAssignments) > 0 {
-			current.ModelAssignments = modelAssignmentsToState(selection.ModelAssignments)
-		} else {
-			current.ModelAssignments = nil
+		if selection.ModelAssignments != nil {
+			if len(selection.ModelAssignments) > 0 {
+				current.ModelAssignments = modelAssignmentsToState(selection.ModelAssignments)
+			} else {
+				current.ModelAssignments = nil
+			}
 		}
-	}
-	return state.Write(homeDir, current)
+		return state.Write(homeDir, current)
+	})
 }
 
 // claudeAliasesToStrings converts a typed ClaudeModelAlias map to plain strings

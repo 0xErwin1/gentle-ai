@@ -3,7 +3,7 @@
 
 <div align="center">
 
-<img width="100%" alt="Gentle-AI neon rose banner" src="docs/assets/brand/gentle-ai-banner.png" />
+<img width="100%" alt="Gentle-AI neon rose banner: the rose blooms in, the GENTLE-AI wordmark is written on, and the tagline Ecosystem, Framework, Workflows appears" src="docs/assets/brand/gentle-ai-banner.gif" />
 
 <h1>Gentle-AI™</h1>
 
@@ -21,7 +21,6 @@
 <a href="https://gentlemanprogramming.com/"><strong>Website</strong></a> &bull;
 <a href="docs/quickstart.md"><strong>Quickstart</strong></a> &bull;
 <a href="docs/intended-usage.md"><strong>Docs</strong></a> &bull;
-<a href="docs/novedades/README.md"><strong>Novedades</strong></a> &bull;
 <a href="https://gentle-ai-wiki.gentlemanprogramming.com/"><strong>Wiki</strong></a>
 </p>
 
