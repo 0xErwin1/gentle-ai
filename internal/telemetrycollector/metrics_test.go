@@ -51,7 +51,6 @@ func TestRuntimeMetricsObserve_DeliveryAndRowCounters(t *testing.T) {
 		`gentle_runtime_rows_total{host="pi",agent_kind="orchestrator",agent_class="orchestrator",provider="anthropic",model="claude-hi",selected_effort="high"} 1`,
 		`gentle_runtime_responses_total{host="pi",agent_kind="built_in",agent_class="sdd-apply",provider="openai",model="gpt-5.4",selected_effort="minimal"} 6`,
 		`gentle_runtime_responses_total{host="pi",agent_kind="orchestrator",agent_class="orchestrator",provider="anthropic",model="claude-hi",selected_effort="high"} 4`,
-		`gentle_runtime_launches_total{host="pi",agent_kind="built_in",agent_class="sdd-apply",provider="openai",model="gpt-5.4",selected_effort="minimal"} 0`,
 		`gentle_runtime_launches_total{host="pi",agent_kind="orchestrator",agent_class="orchestrator",provider="anthropic",model="claude-hi",selected_effort="high"} 3`,
 		`gentle_runtime_tokens_total{host="pi",agent_kind="built_in",agent_class="sdd-apply",provider="openai",model="gpt-5.4",selected_effort="minimal",kind="input"} 999999999999`,
 		`gentle_runtime_tokens_total{host="pi",agent_kind="orchestrator",agent_class="orchestrator",provider="anthropic",model="claude-hi",selected_effort="high",kind="output"} 500`,
@@ -61,7 +60,6 @@ func TestRuntimeMetricsObserve_DeliveryAndRowCounters(t *testing.T) {
 		`gentle_runtime_errors_total{host="pi",agent_kind="orchestrator",agent_class="orchestrator",provider="anthropic",model="claude-hi",selected_effort="high",category="rate_limit"} 1`,
 		`gentle_runtime_duration_ms_sum{host="pi",agent_kind="built_in",agent_class="sdd-apply",provider="openai",model="gpt-5.4",selected_effort="minimal",duration_kind="message"} 1.25`,
 		`gentle_runtime_duration_measured_total{host="pi",agent_kind="built_in",agent_class="sdd-apply",provider="openai",model="gpt-5.4",selected_effort="minimal",duration_kind="message"} 2`,
-		`gentle_runtime_duration_measured_total{host="pi",agent_kind="orchestrator",agent_class="orchestrator",provider="anthropic",model="claude-hi",selected_effort="high",duration_kind="unavailable"} 0`,
 		`gentle_runtime_rows_by_evidence_total{host="pi",model_evidence="response",effective_effort="medium"} 1`,
 		`gentle_runtime_rows_by_evidence_total{host="pi",model_evidence="selected",effective_effort="high"} 1`,
 	} {
@@ -70,9 +68,72 @@ func TestRuntimeMetricsObserve_DeliveryAndRowCounters(t *testing.T) {
 		}
 	}
 
+	// Zero-valued observations must not create series.
+	for _, absent := range []string{
+		`gentle_runtime_launches_total{host="pi",agent_kind="built_in",agent_class="sdd-apply",provider="openai",model="gpt-5.4",selected_effort="minimal"}`,
+		`gentle_runtime_duration_measured_total{host="pi",agent_kind="orchestrator",agent_class="orchestrator",provider="anthropic",model="claude-hi",selected_effort="high",duration_kind="unavailable"}`,
+	} {
+		if strings.Contains(out, absent) {
+			t.Errorf("zero-valued series rendered %q:\n%s", absent, out)
+		}
+	}
+
 	// error_category "none" must never create a series (rowA).
 	if strings.Contains(out, `agent_class="sdd-apply",provider="openai",model="gpt-5.4",selected_effort="minimal",category=`) {
 		t.Errorf("row with error_category=none produced an errors series:\n%s", out)
+	}
+}
+
+func TestRuntimeMetricsAdd_ZeroDeltaDoesNotCreateOrRemoveSeries(t *testing.T) {
+	m := NewRuntimeMetrics()
+	label := runtimeLabel{"host", "pi"}
+	m.add("gentle_runtime_responses_total", 0, label)
+
+	var buf bytes.Buffer
+	if _, err := m.WriteTo(&buf); err != nil {
+		t.Fatalf("WriteTo after absent zero: %v", err)
+	}
+	if got := buf.String(); got != "" {
+		t.Fatalf("absent zero-delta series rendered: %q", got)
+	}
+
+	m.add("gentle_runtime_responses_total", 3, label)
+	buf.Reset()
+	if _, err := m.WriteTo(&buf); err != nil {
+		t.Fatalf("WriteTo after increment: %v", err)
+	}
+	before := buf.String()
+	if !strings.Contains(before, `gentle_runtime_responses_total{host="pi"} 3`) {
+		t.Fatalf("non-zero delta was not rendered: %q", before)
+	}
+
+	m.add("gentle_runtime_responses_total", 0, label)
+	buf.Reset()
+	if _, err := m.WriteTo(&buf); err != nil {
+		t.Fatalf("WriteTo after existing zero: %v", err)
+	}
+	if got := buf.String(); got != before {
+		t.Errorf("existing series changed after zero delta:\nbefore: %q\nafter: %q", before, got)
+	}
+}
+
+func TestRuntimeMetricsObserve_ReportedOnlySkipsZeroCoverageStates(t *testing.T) {
+	m := NewRuntimeMetrics()
+	m.Observe(twoRowRuntimeFixture(t))
+
+	var buf bytes.Buffer
+	if _, err := m.WriteTo(&buf); err != nil {
+		t.Fatalf("WriteTo: %v", err)
+	}
+	out := buf.String()
+	prefix := `gentle_runtime_token_fields_total{host="pi",agent_kind="orchestrator",agent_class="orchestrator",provider="anthropic",model="claude-hi",selected_effort="high",kind="input",state="`
+	if !strings.Contains(out, prefix+`reported"} 2`) {
+		t.Fatalf("reported token coverage missing:\n%s", out)
+	}
+	for _, state := range []string{"unavailable", "unsupported"} {
+		if strings.Contains(out, prefix+state+`"}`) {
+			t.Errorf("zero %s token coverage rendered:\n%s", state, out)
+		}
 	}
 }
 

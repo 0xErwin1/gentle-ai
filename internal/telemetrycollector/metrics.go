@@ -46,7 +46,9 @@ type runtimeSeries struct {
 
 // RuntimeMetrics is a dependency-free, mutex-guarded registry of
 // monotonically increasing float64 counters, keyed by metric name and an
-// ordered label set. It never resets or decrements a counter: Observe only
+// ordered label set. A series is created only by a non-zero increment;
+// zero deltas leave existing series unchanged and absent series absent.
+// It never resets or decrements a counter: Observe only
 // adds, and a counter reset only ever happens by process restart (handled
 // downstream by increase()/rate() in VictoriaMetrics/Prometheus, not here).
 // Deduplication of a repeated delivery is the caller's responsibility
@@ -63,10 +65,14 @@ func NewRuntimeMetrics() *RuntimeMetrics {
 	return &RuntimeMetrics{data: make(map[string]map[string]*runtimeSeries)}
 }
 
-// add increments (creating if absent) the series identified by metric and
-// labels by delta. labels order is preserved verbatim in the rendered
-// output; callers must pass the same order for the same metric every time.
+// add increments the series identified by metric and labels by delta,
+// creating it only for a non-zero delta. A zero delta leaves an existing
+// series present and unchanged. labels order is preserved verbatim in the
+// rendered output; callers must pass the same order for the same metric.
 func (m *RuntimeMetrics) add(metric string, delta float64, labels ...runtimeLabel) {
+	if delta == 0 {
+		return
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	family := m.data[metric]

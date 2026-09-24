@@ -140,6 +140,8 @@ downstream by `increase()`/`rate()`), all carrying `host`:
 | `gentle_runtime_duration_measured_total` | same as rows, `+duration_kind` | sum of `duration.measured_count` |
 | `gentle_runtime_rows_by_evidence_total` | `host,model_evidence,effective_effort` | one per row, kept low-cardinality by leaving out agent/provider/model |
 
+A series appears only after a non-zero increment, so an absent series means zero; downstream `sum`/`increase` treat it the same.
+
 A label value is sanitized for the exposition format (`\`, `"`, and newline
 escaped) and an empty value renders as `unknown`; in practice every label
 already comes from the wire contract (see
