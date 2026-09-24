@@ -42,14 +42,15 @@ const (
 type RiskSignal string
 
 const (
-	SignalAuth         RiskSignal = "auth"
-	SignalUpdate       RiskSignal = "update"
-	SignalSecurity     RiskSignal = "security"
-	SignalPayments     RiskSignal = "payments"
-	SignalDataExposure RiskSignal = "data_exposure"
-	SignalDataLoss     RiskSignal = "data_loss"
-	SignalPermissions  RiskSignal = "permissions"
-	SignalShellProcess RiskSignal = "shell_process"
+	SignalAuth          RiskSignal = "auth"
+	SignalUpdate        RiskSignal = "update"
+	SignalSecurity      RiskSignal = "security"
+	SignalPayments      RiskSignal = "payments"
+	SignalDataExposure  RiskSignal = "data_exposure"
+	SignalDataLoss      RiskSignal = "data_loss"
+	SignalPermissions   RiskSignal = "permissions"
+	SignalShellProcess  RiskSignal = "shell_process"
+	SignalDangerousSink RiskSignal = "dangerous_sink"
 )
 
 type DiffStat struct {
@@ -70,6 +71,7 @@ const (
 	RiskReasonServiceToken     RiskReasonCode = "service_token"
 	RiskReasonShellSource      RiskReasonCode = "shell_source"
 	RiskReasonProcessBoundary  RiskReasonCode = "process_boundary"
+	RiskReasonDangerousSink    RiskReasonCode = "dangerous_sink"
 	RiskReasonProcessScanLimit RiskReasonCode = "process_scan_limit"
 	RiskReasonExecutableMode   RiskReasonCode = "executable_mode"
 	// RiskReasonLargeChange is never derived anymore; size stopped selecting a
@@ -674,7 +676,7 @@ func (builder SnapshotBuilder) processBoundaryRiskReasons(ctx context.Context, s
 		// attribution cannot be trusted: the first path handed to this batch, so
 		// the reason still points somewhere inspectable inside it.
 		ambiguousReason := RiskReason{Code: RiskReasonProcessScanLimit, Signal: SignalShellProcess, Path: strings.TrimPrefix(batch[0], ":(literal)")}
-		currentPath, inHunk := "", false
+		currentPath, inHunk, processSeen, sinkSeen := "", false, false, false
 		for _, line := range bytes.Split(output, []byte{'\n'}) {
 			switch {
 			case bytes.HasPrefix(line, []byte("diff --git ")):
@@ -682,15 +684,22 @@ func (builder SnapshotBuilder) processBoundaryRiskReasons(ctx context.Context, s
 				if separator < 0 {
 					return []RiskReason{ambiguousReason}, nil
 				}
-				currentPath, inHunk = string(line[separator+len(" b/"):]), false
+				currentPath, inHunk, processSeen, sinkSeen = string(line[separator+len(" b/"):]), false, false, false
 				if _, known := batchPaths[currentPath]; !known {
 					return []RiskReason{ambiguousReason}, nil
 				}
 			case bytes.HasPrefix(line, []byte("@@")):
 				inHunk = true
-			case inHunk && len(line) > 0 && line[0] == '+' && processSpawnLine.Match(line[1:]):
-				reasons = append(reasons, RiskReason{Code: RiskReasonProcessBoundary, Signal: SignalShellProcess, Path: currentPath})
-				inHunk = false
+			case inHunk && len(line) > 0 && line[0] == '+':
+				added := line[1:]
+				if !processSeen && processSpawnLine.Match(added) {
+					reasons = append(reasons, RiskReason{Code: RiskReasonProcessBoundary, Signal: SignalShellProcess, Path: currentPath})
+					processSeen = true
+				}
+				if !sinkSeen && dangerousSinkLine(currentPath, string(added)) {
+					reasons = append(reasons, RiskReason{Code: RiskReasonDangerousSink, Signal: SignalDangerousSink, Path: currentPath})
+					sinkSeen = true
+				}
 			}
 		}
 	}
@@ -1406,7 +1415,7 @@ func hasHighSignal(signals []RiskSignal) bool {
 func validRiskSignal(signal RiskSignal) bool {
 	switch signal {
 	case SignalAuth, SignalUpdate, SignalSecurity, SignalPayments,
-		SignalDataExposure, SignalDataLoss, SignalPermissions, SignalShellProcess:
+		SignalDataExposure, SignalDataLoss, SignalPermissions, SignalShellProcess, SignalDangerousSink:
 		return true
 	default:
 		return false
