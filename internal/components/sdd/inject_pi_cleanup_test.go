@@ -101,9 +101,13 @@ func TestRetirePiSystemPromptBlocksStripsAgentRoutingBlock(t *testing.T) {
 }
 
 func TestRetirePiSystemPromptBlocksDeletesOwnedEmptyFile(t *testing.T) {
+	t.Setenv("PI_CODING_AGENT_DIR", "")
 	home := t.TempDir()
 	adapter := pi.NewAdapter()
 	promptPath := adapter.SystemPromptFile(home)
+	if want := filepath.Join(home, ".pi", "agent", "APPEND_SYSTEM.md"); promptPath != want {
+		t.Fatalf("prompt path = %q, want isolated path %q", promptPath, want)
+	}
 	fixture := "   \n<!-- gentle-ai:persona -->\npersona body\n<!-- /gentle-ai:persona -->\n"
 	if err := os.MkdirAll(filepath.Dir(promptPath), 0o755); err != nil {
 		t.Fatalf("MkdirAll: %v", err)
