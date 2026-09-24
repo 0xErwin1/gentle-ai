@@ -110,6 +110,7 @@ var coreJourneyReviewModes = map[string]ReviewPrecondition{
 	"j121-rdd-tui-controls-global-mode":                                         reviewUntouched,
 	"j127-customizable-install-rdd-choice":                                      reviewUntouched,
 	"j4395-telemetry-trigger-resolves-rdd-repository":                           reviewUntouched,
+	"j4433-restored-escalated-derived-target-stops":                             reviewOptedIn,
 	"j128-historical-verification-does-not-block-apply":                         reviewUntouched,
 	"j122-global-review-mode-from-non-git-cwd":                                  reviewUntouched,
 	"j123-rejected-provider-validator-starts-fresh-high-risk-review":            reviewOptedIn,
