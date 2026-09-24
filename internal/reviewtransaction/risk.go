@@ -647,10 +647,11 @@ func (builder SnapshotBuilder) processBoundaryRiskReasons(ctx context.Context, s
 	// Diff output is bounded separately from the blob inventory; an oversized
 	// patch fails closed into the same scan-limit reason the blob scan uses,
 	// instead of erroring the whole assessment. Presentation is pinned so user
-	// prefix config cannot break path attribution and a textconv driver cannot
-	// replace the frozen bytes being scanned.
+	// prefix config cannot break path attribution, a textconv driver cannot
+	// replace the frozen bytes being scanned, and a binary or -diff attribute
+	// cannot collapse the patch into "Binary files differ".
 	diffFixedArgs := []string{
-		"-c", "core.quotePath=false", "diff", "--no-color", "--no-ext-diff", "--no-textconv",
+		"-c", "core.quotePath=false", "diff", "--text", "--no-color", "--no-ext-diff", "--no-textconv",
 		"--src-prefix=a/", "--dst-prefix=b/", "--unified=0",
 		snapshot.BaseTree, snapshot.CandidateTree, "--",
 	}

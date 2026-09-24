@@ -191,20 +191,24 @@ func TestProcessBoundaryChangedLines(t *testing.T) {
 // TestProcessBoundaryDiffScanIgnoresUserDiffPresentation keeps the added-line
 // scan independent of repository diff presentation config: custom prefixes
 // must not turn every change into a scan-limit high, and a textconv driver
-// must not hide the frozen bytes that are actually committed.
+// must not hide the frozen bytes that are actually committed, and neither
+// may a binary or -diff attribute collapse the patch to "Binary files differ".
 func TestProcessBoundaryDiffScanIgnoresUserDiffPresentation(t *testing.T) {
 	for _, tc := range []struct {
-		name   string
-		config [][2]string
+		name       string
+		attributes string
+		config     [][2]string
 	}{
-		{"noprefix", [][2]string{{"diff.noprefix", "true"}}},
-		{"mnemonic prefix", [][2]string{{"diff.mnemonicPrefix", "true"}}},
-		{"custom prefixes", [][2]string{{"diff.srcPrefix", "old/"}, {"diff.dstPrefix", "new/"}}},
-		{"textconv hides content", [][2]string{{"diff.hide.textconv", "true"}}},
+		{"noprefix", "*.go diff=hide\n", [][2]string{{"diff.noprefix", "true"}}},
+		{"mnemonic prefix", "*.go diff=hide\n", [][2]string{{"diff.mnemonicPrefix", "true"}}},
+		{"custom prefixes", "*.go diff=hide\n", [][2]string{{"diff.srcPrefix", "old/"}, {"diff.dstPrefix", "new/"}}},
+		{"textconv hides content", "*.go diff=hide\n", [][2]string{{"diff.hide.textconv", "true"}}},
+		{"binary attribute", "*.go binary\n", nil},
+		{"no-diff attribute", "*.go -diff\n", nil},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			repo := initSnapshotRepo(t)
-			writeSnapshotFile(t, repo, ".gitattributes", "*.go diff=hide\n")
+			writeSnapshotFile(t, repo, ".gitattributes", tc.attributes)
 			writeSnapshotFile(t, repo, "tools/runner.go", "package tools\n")
 			gitSnapshot(t, repo, "add", "--", ".gitattributes", "tools/runner.go")
 			gitSnapshot(t, repo, "commit", "-m", "base")
