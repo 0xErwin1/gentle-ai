@@ -144,11 +144,13 @@ A process restart or idle-series eviction resets that series downstream;
 A series appears only after a non-zero increment, so an absent series means
 zero; downstream `sum`/`increase` treat it the same. A zero increment does
 not refresh its idle lifetime. `--runtime-metrics-ttl` defaults to `24h`: a
-series idle for longer than that is evicted on the next `GET /metrics` and
-disappears from memory and the exposition. If observed again, it restarts
-at the new delta (a downstream counter reset). Set the flag to `0` to
-disable eviction. Keep the TTL far above the scrape interval (15s on the
-reference deployment) so the last increment is scraped before eviction.
+series idle for longer than that is rendered one last time by the successful
+`GET /metrics` scrape that evicts it, then disappears from memory and the next
+exposition. A failed scrape write does not evict it. If observed again, it
+restarts at the new delta (a downstream counter reset). Set the flag to `0`
+to disable eviction. Keep the TTL far above the scrape interval (15s on the
+reference deployment) for regular scrapes; even after a longer scrape outage,
+the first successful scrape renders the last increment before eviction.
 
 A label value is sanitized for the exposition format (`\`, `"`, and newline
 escaped) and an empty value renders as `unknown`; in practice every label

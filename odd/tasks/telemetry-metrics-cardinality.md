@@ -30,7 +30,7 @@ Raising the cap only moves the limit to VPS RAM (collector + VictoriaMetrics bot
 - [x] T1 — Skip creating a series for a zero delta (existing series unchanged). Route: delegated direct (writer covers T1+T2: 2+ non-trivial files).
 - [x] T2 — Idle-series TTL: `lastUpdate` per series, evict idle series during `WriteTo`, injectable clock, `--runtime-metrics-ttl` flag (default 24h, `0` disables), doc update. Route: delegated direct (same writer).
 - [x] T4 — Record delivery: T1+T2 pushed directly to `main` (user decision, no PR; the collector is not shipped by goreleaser) and deployed to the VPS. Route: direct inline (this document only).
-- [ ] T3 — Render before evicting: `WriteTo` renders every live series, including ones past the TTL, then deletes the expired ones, so each series is scraped at least once after its last increment even after a scrape outage longer than the TTL. Route: delegated direct (writer trigger: metrics.go + tests + docs).
+- [x] T3 — Render before evicting: `WriteTo` renders every live series, including ones past the TTL, then deletes the expired ones, so each series is scraped at least once after its last increment even after a scrape outage longer than the TTL. Route: delegated direct (writer trigger: metrics.go + tests + docs).
 
 ## Acceptance criteria
 - A delta of 0 on an absent series renders nothing; a delta of 0 on an existing series leaves it rendered unchanged.
@@ -50,11 +50,13 @@ Raising the cap only moves the limit to VPS RAM (collector + VictoriaMetrics bot
 - T1 done: zero deltas no longer create series (writer, strict TDD RED->GREEN observed by writer). Checks: go test, go vet, gofmt -l all clean; parent spot check `go test` ok.
 
 - T2 done: idle-series TTL evicted during WriteTo, NewRuntimeMetricsWithTTL, --runtime-metrics-ttl (default 24h, 0 disables, negative rejected), docs. Writer strict TDD RED (build failure on undefined API) -> GREEN. Checks: go test, go test -race, go vet, gofmt -l clean; parent spot check `go test -count=1` ok.
-- Known limit: eviction runs before rendering, so if VictoriaMetrics stops scraping for longer than the TTL, increments landed during that outage on series that then went idle are dropped instead of scraped once. Accepted for now; the fix is to render before evicting.
+- (Resolved by T3) Former limit: eviction ran before rendering, so if VictoriaMetrics stops scraping for longer than the TTL, increments landed during that outage on series that then went idle are dropped instead of scraped once. Accepted for now; the fix is to render before evicting.
 
 - Delivery: user chose a direct push to `main` without a PR (collector is not in `.goreleaser.yaml`). Pushed 465452ebe..480f2e3bd on 2026-09-24; the ruleset's required status checks were bypassed by the maintainer account.
 - Full suite before push: `go vet ./...` clean; `go test ./...` had 4 failures that fail identically on `origin/main` (pre-existing, unrelated): `internal/reviewtransaction` TestStoreLoadsLegacyBoundedLineageAndCompletesFixWithoutNewBudgetSemantics, TestStoreRejectsFreshLegacyShapedBoundedGenesis, TestStoreLoadChainBindsGenesisHeadAndOrderedIdentity; `internal/update/upgrade` TestConfigPathsForBackup_ExcludesPiSessionRuntimeFile.
 - Deploy 2026-09-24 15:17 CST: VPS checkout moved to `origin/main`, `install.sh --local-source`, then `systemctl restart gentle-telemetry` (install.sh does not restart a running collector). `/metrics` 50,566,896 -> 511,920 bytes (2,721 series); collector memory 720 MB -> 33 MB; VictoriaMetrics target up. Rollback binary: `/usr/local/bin/gentle-telemetry.bak-20260924`.
 
+- T3 done: WriteTo renders expired series once more and evicts only after a successful write; a failed write keeps them. Writer strict TDD RED (TTL and failing-writer tests) -> GREEN. Checks: go test, go test -race, go vet, gofmt -l clean; parent spot check `go test -count=1` ok.
+
 ## Next step
-T3, then push, deploy, and a baseline measurement. Re-measure `/metrics` on 2026-09-25/26 to confirm it plateaus.
+Push, deploy, and a baseline measurement. Re-measure `/metrics` on 2026-09-25/26 to confirm it plateaus.

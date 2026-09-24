@@ -2,6 +2,7 @@ package telemetrycollector
 
 import (
 	"bytes"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -137,8 +138,11 @@ func TestRuntimeMetricsWriteTo_IdleTTL(t *testing.T) {
 
 	clock = start.Add(time.Hour + time.Nanosecond)
 	out := metricsOutput(t, m)
-	if strings.Contains(out, `host="stale"`) {
-		t.Errorf("idle series not evicted: %q", out)
+	if !strings.Contains(out, `gentle_runtime_responses_total{host="stale"} 3`) {
+		t.Errorf("idle series not rendered on eviction scrape: %q", out)
+	}
+	if next := metricsOutput(t, m); strings.Contains(next, `host="stale"`) {
+		t.Errorf("idle series rendered after eviction: %q", next)
 	}
 	if !strings.Contains(out, `gentle_runtime_responses_total{host="active"} 7`) {
 		t.Errorf("recently updated series missing: %q", out)
@@ -148,6 +152,7 @@ func TestRuntimeMetricsWriteTo_IdleTTL(t *testing.T) {
 	}
 
 	clock = start.Add(2 * time.Hour)
+	assertMetricsContain(t, m, `gentle_runtime_responses_total{host="active"} 7`)
 	if out := metricsOutput(t, m); out != "" {
 		t.Errorf("empty family still rendered: %q", out)
 	}
@@ -156,6 +161,29 @@ func TestRuntimeMetricsWriteTo_IdleTTL(t *testing.T) {
 	}
 	m.add(metric, 4, stale)
 	assertMetricsContain(t, m, `gentle_runtime_responses_total{host="stale"} 4`)
+}
+
+type failingMetricsWriter struct{}
+
+func (failingMetricsWriter) Write([]byte) (int, error) { return 0, errors.New("scrape write failed") }
+
+func TestRuntimeMetricsWriteTo_WriteErrorPreservesExpiredSeries(t *testing.T) {
+	const metric = "gentle_runtime_responses_total"
+	clock := time.Date(2026, 9, 24, 0, 0, 0, 0, time.UTC)
+	m := NewRuntimeMetricsWithTTL(time.Hour)
+	m.now = func() time.Time { return clock }
+	m.add(metric, 3, runtimeLabel{"host", "pi"})
+	clock = clock.Add(2 * time.Hour)
+	if _, err := m.WriteTo(failingMetricsWriter{}); err == nil {
+		t.Fatal("expected write error")
+	}
+	if _, exists := m.data[metric]; !exists {
+		t.Fatal("failed scrape evicted series")
+	}
+	assertMetricsContain(t, m, `gentle_runtime_responses_total{host="pi"} 3`)
+	if out := metricsOutput(t, m); out != "" {
+		t.Errorf("series survived successful eviction scrape: %q", out)
+	}
 }
 
 func TestRuntimeMetricsWriteTo_ZeroTTLNeverEvicts(t *testing.T) {

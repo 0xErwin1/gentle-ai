@@ -51,10 +51,11 @@ type runtimeSeries struct {
 // ordered label set. A series is created only by a non-zero increment;
 // zero deltas leave existing series unchanged and absent series absent.
 // Observe only adds while a series lives. With a positive TTL, WriteTo
-// evicts series idle for longer than the TTL; observing one again starts
-// from its new delta. Eviction is a counter reset downstream, handled by
-// increase()/rate(). Keep the TTL far above the scrape interval so the last
-// increment is scraped before the series disappears.
+// renders series idle for longer than the TTL once more before evicting
+// them after a successful write; observing one again starts from its new
+// delta. Eviction is a counter reset downstream, handled by increase()/rate().
+// Keep the TTL far above the scrape interval for regular scrapes; even after
+// a scrape outage, the first successful scrape renders the last increment.
 // Deduplication of a repeated delivery is the caller's responsibility
 // (runtime_handlers.go only calls Observe for a newly stored delivery), not
 // this registry's: calling Observe twice with the same event simply doubles
@@ -73,8 +74,9 @@ func NewRuntimeMetrics() *RuntimeMetrics {
 
 // NewRuntimeMetricsWithTTL returns an empty registry ready for concurrent
 // use. A non-positive TTL disables eviction. Choose a TTL far above the
-// scrape interval so the last increment is scraped before eviction;
-// re-observing an evicted series is a downstream counter reset.
+// scrape interval for regular scrapes; the eviction scrape renders expired
+// series once more, and failed scrape writes leave them intact. Re-observing
+// an evicted series is a downstream counter reset.
 func NewRuntimeMetricsWithTTL(ttl time.Duration) *RuntimeMetrics {
 	return &RuntimeMetrics{data: make(map[string]map[string]*runtimeSeries), ttl: ttl, now: time.Now}
 }
@@ -246,8 +248,8 @@ func (m *RuntimeMetrics) Observe(event telemetry.RuntimeEvent) {
 // line per metric family, then one line per series), families in
 // runtimeMetricNames order and series within a family sorted by their
 // rendered label key, so two calls against the same state always produce
-// byte-identical output. When TTL is positive, idle series are deleted
-// under the same lock before rendering.
+// byte-identical output. With a positive TTL, expired series are rendered
+// once more, then deleted under the same lock only after a successful write.
 func (m *RuntimeMetrics) WriteTo(w io.Writer) (int64, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -259,16 +261,6 @@ func (m *RuntimeMetrics) WriteTo(w io.Writer) (int64, error) {
 	}
 	for _, metric := range runtimeMetricNames {
 		family := m.data[metric]
-		if m.ttl > 0 {
-			for key, series := range family {
-				if now.Sub(series.lastUpdate) > m.ttl {
-					delete(family, key)
-				}
-			}
-			if len(family) == 0 {
-				delete(m.data, metric)
-			}
-		}
 		if len(family) == 0 {
 			continue
 		}
@@ -297,5 +289,21 @@ func (m *RuntimeMetrics) WriteTo(w io.Writer) (int64, error) {
 			buf.WriteByte('\n')
 		}
 	}
-	return buf.WriteTo(w)
+	n, err := buf.WriteTo(w)
+	if err != nil {
+		return n, err
+	}
+	if m.ttl > 0 {
+		for metric, family := range m.data {
+			for key, series := range family {
+				if now.Sub(series.lastUpdate) > m.ttl {
+					delete(family, key)
+				}
+			}
+			if len(family) == 0 {
+				delete(m.data, metric)
+			}
+		}
+	}
+	return n, nil
 }
