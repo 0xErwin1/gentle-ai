@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/gentleman-programming/gentle-ai/v3/internal/telemetry"
 )
@@ -114,6 +115,71 @@ func TestRuntimeMetricsAdd_ZeroDeltaDoesNotCreateOrRemoveSeries(t *testing.T) {
 	}
 	if got := buf.String(); got != before {
 		t.Errorf("existing series changed after zero delta:\nbefore: %q\nafter: %q", before, got)
+	}
+}
+
+func TestRuntimeMetricsWriteTo_IdleTTL(t *testing.T) {
+	const metric = "gentle_runtime_responses_total"
+	start := time.Date(2026, 9, 24, 0, 0, 0, 0, time.UTC)
+	clock := start
+	m := NewRuntimeMetricsWithTTL(time.Hour)
+	m.now = func() time.Time { return clock }
+	stale := runtimeLabel{"host", "stale"}
+	active := runtimeLabel{"host", "active"}
+	m.add(metric, 3, stale)
+	m.add(metric, 5, active)
+
+	clock = clock.Add(30 * time.Minute)
+	m.add(metric, 2, active)
+	m.add(metric, 0, stale) // zero is not an update
+	clock = start.Add(time.Hour)
+	assertMetricsContain(t, m, `gentle_runtime_responses_total{host="stale"} 3`)
+
+	clock = start.Add(time.Hour + time.Nanosecond)
+	out := metricsOutput(t, m)
+	if strings.Contains(out, `host="stale"`) {
+		t.Errorf("idle series not evicted: %q", out)
+	}
+	if !strings.Contains(out, `gentle_runtime_responses_total{host="active"} 7`) {
+		t.Errorf("recently updated series missing: %q", out)
+	}
+	if _, exists := m.data[metric][runtimeSeriesKey([]runtimeLabel{stale})]; exists {
+		t.Error("evicted series retained in registry")
+	}
+
+	clock = start.Add(2 * time.Hour)
+	if out := metricsOutput(t, m); out != "" {
+		t.Errorf("empty family still rendered: %q", out)
+	}
+	if _, exists := m.data[metric]; exists {
+		t.Error("empty family retained in registry")
+	}
+	m.add(metric, 4, stale)
+	assertMetricsContain(t, m, `gentle_runtime_responses_total{host="stale"} 4`)
+}
+
+func TestRuntimeMetricsWriteTo_ZeroTTLNeverEvicts(t *testing.T) {
+	m := NewRuntimeMetricsWithTTL(0)
+	clock := time.Date(2026, 9, 24, 0, 0, 0, 0, time.UTC)
+	m.now = func() time.Time { return clock }
+	m.add("gentle_runtime_responses_total", 3, runtimeLabel{"host", "pi"})
+	clock = clock.Add(365 * 24 * time.Hour)
+	assertMetricsContain(t, m, `gentle_runtime_responses_total{host="pi"} 3`)
+}
+
+func metricsOutput(t *testing.T, m *RuntimeMetrics) string {
+	t.Helper()
+	var buf bytes.Buffer
+	if _, err := m.WriteTo(&buf); err != nil {
+		t.Fatalf("WriteTo: %v", err)
+	}
+	return buf.String()
+}
+
+func assertMetricsContain(t *testing.T, m *RuntimeMetrics, want string) {
+	t.Helper()
+	if got := metricsOutput(t, m); !strings.Contains(got, want) {
+		t.Errorf("output missing %q: %q", want, got)
 	}
 }
 

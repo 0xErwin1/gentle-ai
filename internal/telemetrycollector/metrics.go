@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/gentleman-programming/gentle-ai/v3/internal/telemetry"
 )
@@ -40,17 +41,20 @@ type runtimeLabel struct {
 
 // runtimeSeries is one label combination's running counter value.
 type runtimeSeries struct {
-	labels []runtimeLabel
-	value  float64
+	labels     []runtimeLabel
+	value      float64
+	lastUpdate time.Time
 }
 
 // RuntimeMetrics is a dependency-free, mutex-guarded registry of
 // monotonically increasing float64 counters, keyed by metric name and an
 // ordered label set. A series is created only by a non-zero increment;
 // zero deltas leave existing series unchanged and absent series absent.
-// It never resets or decrements a counter: Observe only
-// adds, and a counter reset only ever happens by process restart (handled
-// downstream by increase()/rate() in VictoriaMetrics/Prometheus, not here).
+// Observe only adds while a series lives. With a positive TTL, WriteTo
+// evicts series idle for longer than the TTL; observing one again starts
+// from its new delta. Eviction is a counter reset downstream, handled by
+// increase()/rate(). Keep the TTL far above the scrape interval so the last
+// increment is scraped before the series disappears.
 // Deduplication of a repeated delivery is the caller's responsibility
 // (runtime_handlers.go only calls Observe for a newly stored delivery), not
 // this registry's: calling Observe twice with the same event simply doubles
@@ -58,11 +62,21 @@ type runtimeSeries struct {
 type RuntimeMetrics struct {
 	mu   sync.Mutex
 	data map[string]map[string]*runtimeSeries // metric name -> series key -> series
+	ttl  time.Duration
+	now  func() time.Time // called under mu; replace before concurrent use in tests
 }
 
-// NewRuntimeMetrics returns an empty registry ready for concurrent use.
+// NewRuntimeMetrics returns an empty registry with eviction disabled.
 func NewRuntimeMetrics() *RuntimeMetrics {
-	return &RuntimeMetrics{data: make(map[string]map[string]*runtimeSeries)}
+	return NewRuntimeMetricsWithTTL(0)
+}
+
+// NewRuntimeMetricsWithTTL returns an empty registry ready for concurrent
+// use. A non-positive TTL disables eviction. Choose a TTL far above the
+// scrape interval so the last increment is scraped before eviction;
+// re-observing an evicted series is a downstream counter reset.
+func NewRuntimeMetricsWithTTL(ttl time.Duration) *RuntimeMetrics {
+	return &RuntimeMetrics{data: make(map[string]map[string]*runtimeSeries), ttl: ttl, now: time.Now}
 }
 
 // add increments the series identified by metric and labels by delta,
@@ -87,6 +101,7 @@ func (m *RuntimeMetrics) add(metric string, delta float64, labels ...runtimeLabe
 		family[key] = series
 	}
 	series.value += delta
+	series.lastUpdate = m.now()
 }
 
 // runtimeSeriesKey builds a stable map key from a label set. \x1f (ASCII
@@ -231,14 +246,29 @@ func (m *RuntimeMetrics) Observe(event telemetry.RuntimeEvent) {
 // line per metric family, then one line per series), families in
 // runtimeMetricNames order and series within a family sorted by their
 // rendered label key, so two calls against the same state always produce
-// byte-identical output.
+// byte-identical output. When TTL is positive, idle series are deleted
+// under the same lock before rendering.
 func (m *RuntimeMetrics) WriteTo(w io.Writer) (int64, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	var buf bytes.Buffer
+	var now time.Time
+	if m.ttl > 0 {
+		now = m.now()
+	}
 	for _, metric := range runtimeMetricNames {
 		family := m.data[metric]
+		if m.ttl > 0 {
+			for key, series := range family {
+				if now.Sub(series.lastUpdate) > m.ttl {
+					delete(family, key)
+				}
+			}
+			if len(family) == 0 {
+				delete(m.data, metric)
+			}
+		}
 		if len(family) == 0 {
 			continue
 		}

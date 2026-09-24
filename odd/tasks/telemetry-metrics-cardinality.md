@@ -27,7 +27,7 @@ Raising the cap only moves the limit to VPS RAM (collector + VictoriaMetrics bot
 
 ## Tasks
 - [x] T1 — Skip creating a series for a zero delta (existing series unchanged). Route: delegated direct (writer covers T1+T2: 2+ non-trivial files).
-- [ ] T2 — Idle-series TTL: `lastUpdate` per series, evict idle series during `WriteTo`, injectable clock, `--runtime-metrics-ttl` flag (default 24h, `0` disables), doc update. Route: delegated direct (same writer).
+- [x] T2 — Idle-series TTL: `lastUpdate` per series, evict idle series during `WriteTo`, injectable clock, `--runtime-metrics-ttl` flag (default 24h, `0` disables), doc update. Route: delegated direct (same writer).
 
 ## Acceptance criteria
 - A delta of 0 on an absent series renders nothing; a delta of 0 on an existing series leaves it rendered unchanged.
@@ -42,7 +42,11 @@ Raising the cap only moves the limit to VPS RAM (collector + VictoriaMetrics bot
 
 ## Progress
 - 2026-09-24: diagnosis done on the VPS (read-only), worktree created, document created.
+- T1 commit 0281553d1; review assess (base origin/main, committed-only): medium, under_budget.
 - T1 done: zero deltas no longer create series (writer, strict TDD RED->GREEN observed by writer). Checks: go test, go vet, gofmt -l all clean; parent spot check `go test` ok.
 
+- T2 done: idle-series TTL evicted during WriteTo, NewRuntimeMetricsWithTTL, --runtime-metrics-ttl (default 24h, 0 disables, negative rejected), docs. Writer strict TDD RED (build failure on undefined API) -> GREEN. Checks: go test, go test -race, go vet, gofmt -l clean; parent spot check `go test -count=1` ok.
+- Known limit: eviction runs before rendering, so if VictoriaMetrics stops scraping for longer than the TTL, increments landed during that outage on series that then went idle are dropped instead of scraped once. Accepted for now; the fix is to render before evicting.
+
 ## Next step
-Delegate T1+T2 to one writer, two work-unit commits.
+Review assess on T1+T2, then PR and VPS deploy are the user's decisions.
