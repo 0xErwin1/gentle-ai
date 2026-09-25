@@ -22,6 +22,7 @@ func TestConfigFlagsRejectSemanticSelectionAndKeepOperationalFlags(t *testing.T)
 		args  []string
 	}{
 		{"install rejects semantic agent", func(args []string) error { _, err := ParseInstallFlags(args); return err }, []string{"--config", configPath, "--agent", "opencode"}},
+		{"sync rejects semantic skill", func(args []string) error { _, err := ParseSyncFlags(args); return err }, []string{"--config", configPath, "--skill", "example"}},
 		{"install keeps dry run", func(args []string) error {
 			flags, err := ParseInstallFlags(args)
 			if err == nil && !flags.DryRun {
@@ -116,13 +117,4 @@ func writeDesiredConfig(t *testing.T, contents string) string {
 		t.Fatal(err)
 	}
 	return path
-}
-
-func TestRemovedSDDModeRejectedWithOrWithoutConfig(t *testing.T) {
-	for _, args := range [][]string{{"--sdd-mode", "single"}, {"--config", "unused.json", "--sdd-mode", "single"}} {
-		_, err := ParseSyncFlags(args)
-		if err == nil || !strings.HasPrefix(err.Error(), "flag provided but not defined: -sdd-mode") {
-			t.Fatalf("args=%v error=%v", args, err)
-		}
-	}
 }

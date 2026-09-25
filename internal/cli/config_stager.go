@@ -112,8 +112,7 @@ func (stager configurationStager) Stage(state configdomain.DesiredState, stageRo
 // legitimately disagree about the file: install resolves the effective layered
 // project-over-global settings path from the working directory, and a render
 // must not depend on where it happens to run. Leaving the option empty keeps the
-// adapter's global fallback, which is the same choice staged SDD makes for the
-// same reason.
+// adapter's global fallback, avoiding dependence on the render's working directory.
 func stageRoutingGuidance(stageRoot string, adapters []agents.Adapter) error {
 	for _, adapter := range adapters {
 		agent := adapter.Agent()
@@ -126,7 +125,7 @@ func stageRoutingGuidance(stageRoot string, adapters []agents.Adapter) error {
 			target = stageRoot
 		}
 
-		if _, err := agentguidance.InjectRouting(target, agent); err != nil {
+		if _, err := agentguidance.InjectRoutingWithOptions(target, agent, agentguidance.RoutingOptions{}); err != nil {
 			return fmt.Errorf("stage routing guidance for %q: %w", agent, err)
 		}
 	}
@@ -266,6 +265,7 @@ func (stager configurationStager) stageComponentForAdapter(
 		_, err := theme.InjectVisualThemes(stageRoot, adapter)
 
 		return err
+
 	}
 
 	return nil
