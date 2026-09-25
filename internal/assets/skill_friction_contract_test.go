@@ -16,9 +16,9 @@ func TestBranchPRAndCollaborationDecisionBoundaries(t *testing.T) {
 		t.Fatal(err)
 	}
 	for name, text := range map[string]string{
-		"public branch PR": string(public),
+		"public branch PR":   string(public),
 		"embedded branch PR": MustRead("skills/branch-pr/SKILL.md"),
-		"collaboration": string(collab),
+		"collaboration":      string(collab),
 	} {
 		t.Run(name, func(t *testing.T) {
 			for _, marker := range []string{
@@ -110,8 +110,8 @@ func TestBranchPRGuidanceDoesNotOverrideHumanOrEvidence(t *testing.T) {
 		t.Fatal(err)
 	}
 	texts := map[string]string{
-		"public": string(public),
-		"embedded": MustRead("skills/branch-pr/SKILL.md"),
+		"public":        string(public),
+		"embedded":      MustRead("skills/branch-pr/SKILL.md"),
 		"collaboration": string(collab),
 	}
 	for name, text := range texts {
