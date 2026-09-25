@@ -114,7 +114,7 @@ func ParseSyncFlags(args []string) (SyncFlags, error) {
 	registerListFlag(fs, "agents", &opts.Agents)
 	registerListFlag(fs, "skill", &opts.Skills)
 	registerListFlag(fs, "skills", &opts.Skills)
-	fs.BoolVar(&opts.StrictTDD, "strict-tdd", false, "enable strict TDD mode for ODD (RED → GREEN → REFACTOR)")
+	fs.BoolVar(&opts.StrictTDD, "strict-tdd", false, "retired: ODD uses applicable test-first development by default")
 	fs.BoolVar(&opts.IncludePermissions, "include-permissions", false, "include permissions component in sync")
 	fs.BoolVar(&opts.IncludeTheme, "include-theme", false, "include theme component in sync")
 	fs.StringVar(&opts.OpenCodeBackgroundSubagents, "opencode-background-subagents", "", "--opencode-background-subagents=auto|on|off; env: GENTLE_AI_OPENCODE_BACKGROUND_SUBAGENTS; eligible versions use a managed launcher")
@@ -152,6 +152,10 @@ func ParseSyncFlags(args []string) (SyncFlags, error) {
 		}
 	})
 
+	if opts.strictTDDSet {
+		return SyncFlags{}, fmt.Errorf("--strict-tdd is retired: ODD uses applicable test-first development by default; rerun `gentle-ai sync` without --strict-tdd (retain any other flags)")
+	}
+
 	if fs.NArg() > 0 {
 		return SyncFlags{}, fmt.Errorf("unexpected sync argument %q — pass agents with the --agent %s flag, not a positional argument", fs.Arg(0), fs.Arg(0))
 	}
@@ -166,7 +170,7 @@ func PrintSyncHelp(w io.Writer) {
 FLAGS
   --agent, --agents <list>           Agents to sync
   --skill, --skills <list>           Skills to sync
-  --strict-tdd                       Enable strict TDD mode for ODD
+  --strict-tdd                       Retired (rejected); applicable test-first ODD is default
   --include-permissions              Include permissions component
   --include-theme                    Include theme component
   --opencode-background-subagents=auto|on|off
@@ -227,7 +231,6 @@ func BuildSyncSelection(flags SyncFlags, agentIDs []model.AgentID) model.Selecti
 		Components:         components,
 		SDDMode:            sddMode,
 		SDDProfileStrategy: model.SDDProfileStrategyID(flags.SDDProfileStrategy),
-		StrictTDD:          flags.StrictTDD,
 		Skills:             skillIDs,
 		Profiles:           flags.Profiles,
 		// Preset is set to full-gentleman so selectedSkillIDs() returns the
@@ -248,9 +251,6 @@ func RestorePersistedSelection(selection *model.Selection, persisted state.Insta
 	if flags.skillsSet {
 		selection.Skills = explicit.Skills
 		setSelectionComponent(selection, model.ComponentSkills, true, true)
-	}
-	if flags.strictTDDSet {
-		selection.StrictTDD = explicit.StrictTDD
 	}
 	setSelectionComponent(selection, model.ComponentPermission, flags.permissionsSet, flags.IncludePermissions)
 	setSelectionComponent(selection, model.ComponentTheme, flags.themeSet, flags.IncludeTheme)
@@ -421,7 +421,6 @@ func (r *syncRuntime) stagePlan() pipeline.StagePlan {
 			codexPhaseModels: r.selection.CodexPhaseModelAssignments,
 			codexEfforts:     r.selection.CodexModelAssignments,
 			codexCarrils:     r.selection.CodexCarrilModelAssignments,
-			strictTDD:        r.selection.StrictTDD,
 			backgroundPolicy: r.backgroundPolicy,
 			legacySDD:        false,
 			id:               "sync:agent-guidance:" + string(agent),

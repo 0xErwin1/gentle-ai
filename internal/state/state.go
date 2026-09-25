@@ -49,7 +49,7 @@ type InstallState struct {
 	Skills                 []model.SkillID     `json:"skills,omitempty"`
 	Preset                 model.PresetID      `json:"preset,omitempty"`
 	SDDMode                model.SDDModeID     `json:"sdd_mode,omitempty"`
-	StrictTDD              bool                `json:"strict_tdd,omitempty"`
+	StrictTDD              bool                `json:"-"` // decoded only for legacy compatibility; never persisted or used for routing
 	// CommunityTools records optional tools explicitly selected in the Gentle AI
 	// installer. Configured distinguishes a completed empty selection from legacy
 	// state files that predate persistence of this choice.
@@ -164,6 +164,11 @@ func (s *InstallState) UnmarshalJSON(data []byte) error {
 	}
 
 	*s = InstallState(decoded)
+	if legacy, ok := fields["strict_tdd"]; ok {
+		if err := json.Unmarshal(legacy, &s.StrictTDD); err != nil {
+			return err
+		}
+	}
 	_, s.PersonaPresent = fields["persona"]
 	return nil
 }
@@ -191,7 +196,7 @@ func (s *InstallState) SetSelection(selection model.Selection) {
 	s.SelectionConfigured = true
 	s.Components = activeComponents(selection.Components)
 	s.Skills = append([]model.SkillID(nil), selection.Skills...)
-	s.Preset, s.SDDMode, s.StrictTDD = selection.Preset, "", selection.StrictTDD
+	s.Preset, s.SDDMode, s.StrictTDD = selection.Preset, "", false
 }
 
 func (s InstallState) RestoreSelection(selection *model.Selection) {
@@ -200,7 +205,7 @@ func (s InstallState) RestoreSelection(selection *model.Selection) {
 	}
 	selection.Components = activeComponents(s.Components)
 	selection.Skills = append([]model.SkillID(nil), s.Skills...)
-	selection.Preset, selection.SDDMode, selection.StrictTDD = s.Preset, "", s.StrictTDD
+	selection.Preset, selection.SDDMode, selection.StrictTDD = s.Preset, "", false
 }
 
 // activeComponents preserves the persisted legacy value for decoding and
@@ -250,7 +255,7 @@ func MergeAgents(existing InstallState, newAgents []string) InstallState {
 		Skills:                      existing.Skills,
 		Preset:                      existing.Preset,
 		SDDMode:                     existing.SDDMode,
-		StrictTDD:                   existing.StrictTDD,
+		StrictTDD:                   false,
 		CommunityTools:              existing.CommunityTools,
 		CommunityToolsConfigured:    existing.CommunityToolsConfigured,
 		ModelAssignments:            existing.ModelAssignments,

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
@@ -69,18 +70,30 @@ func TestMergeExplicitAgentInstallStatePreservesExistingAssignmentsWhenFreshStat
 }
 
 func TestMergeExplicitAgentInstallStateMergesOnlyExplicitSelectionField(t *testing.T) {
-	original := state.InstallState{InstalledAgents: []string{"opencode"}, SelectionConfigured: true, Components: []model.ComponentID{model.ComponentEngram}, Skills: []model.SkillID{model.SkillCommentWriter}, Preset: model.PresetCustom, SDDMode: model.SDDModeSingle, StrictTDD: true, Persona: "neutral"}
+	original := state.InstallState{InstalledAgents: []string{"opencode"}, SelectionConfigured: true, Components: []model.ComponentID{model.ComponentEngram}, Skills: []model.SkillID{model.SkillCommentWriter}, Preset: model.PresetCustom, SDDMode: model.SDDModeSingle, Persona: "neutral"}
 	fresh := state.InstallState{InstalledAgents: []string{"codex"}, SelectionConfigured: true, Components: []model.ComponentID{model.ComponentSDD}, Skills: []model.SkillID{model.SkillSDDInit}, Preset: model.PresetFullGentleman, SDDMode: model.SDDModeMulti, Persona: "gentleman"}
 	cases := []InstallFlags{{Components: []string{"sdd"}}, {Skills: []string{"sdd-init"}}, {Preset: "full-gentleman"}, {SDDMode: "multi"}, {Persona: "gentleman"}}
-	wants := []string{"[sdd]|[comment-writer]|custom|single|true|neutral", "[engram]|[sdd-init]|custom|single|true|neutral", "[engram]|[comment-writer]|full-gentleman|single|true|neutral", "[engram]|[comment-writer]|custom|multi|true|neutral", "[engram]|[comment-writer]|custom|single|true|gentleman"}
+	wants := []string{"[sdd]|[comment-writer]|custom|single|neutral", "[engram]|[sdd-init]|custom|single|neutral", "[engram]|[comment-writer]|full-gentleman|single|neutral", "[engram]|[comment-writer]|custom|multi|neutral", "[engram]|[comment-writer]|custom|single|gentleman"}
 	for i, flags := range cases {
 		home := t.TempDir()
 		if err := state.Write(home, original); err != nil {
 			t.Fatal(err)
 		}
+		persisted, err := os.ReadFile(state.Path(home))
+		if err != nil {
+			t.Fatal(err)
+		}
+		legacy := strings.Replace(string(persisted), "{", `{"strict_tdd":true,`, 1)
+		if err := os.WriteFile(state.Path(home), []byte(legacy), 0o644); err != nil {
+			t.Fatal(err)
+		}
 		got, err := mergeExplicitAgentInstallState(home, fresh, []string{"codex"}, flags)
-		if key := fmt.Sprintf("%v|%v|%s|%s|%t|%s", got.Components, got.Skills, got.Preset, got.SDDMode, got.StrictTDD, got.Persona); err != nil || key != wants[i] {
-			t.Errorf("flags %#v merged selection %s, err %v", flags, key, err)
+		if err != nil {
+			t.Fatalf("flags %#v merge error: %v", flags, err)
+		}
+		key := fmt.Sprintf("%v|%v|%s|%s|%s", got.Components, got.Skills, got.Preset, got.SDDMode, got.Persona)
+		if key != wants[i] || got.StrictTDD || !got.SelectionConfigured || len(got.InstalledAgents) != 2 || got.InstalledAgents[0] != "opencode" || got.InstalledAgents[1] != "codex" {
+			t.Errorf("flags %#v merged state %#v, selection %s, want %s with legacy StrictTDD ignored and agents preserved", flags, got, key, wants[i])
 		}
 	}
 }
