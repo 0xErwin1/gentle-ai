@@ -583,11 +583,21 @@ func TestTuiSyncSelectionPreservesCustomPermissionExclusion(t *testing.T) {
 func TestTUIExecutePersistsConfiguredSelection(t *testing.T) {
 	home := t.TempDir()
 	setupMockHome(t, home)
+	if err := state.Write(home, state.InstallState{RDDMode: "off"}); err != nil {
+		t.Fatal(err)
+	}
 	selection := model.Selection{Agents: []model.AgentID{model.AgentClaudeCode}, Preset: model.PresetCustom, Components: []model.ComponentID{}, Skills: []model.SkillID{}, StrictTDD: true}
 	result := tuiExecuteWithBackground(selection, planner.ResolvedPlan{}, system.DetectionResult{}, "", "", "", "", nil)
 	got, err := state.Read(home)
-	if result.Err != nil || err != nil || !got.SelectionConfigured || got.Preset != model.PresetCustom || !got.StrictTDD || !slices.Equal(got.InstalledAgents, []string{string(model.AgentClaudeCode)}) || len(got.Components) != 0 || len(got.Skills) != 0 {
+	if result.Err != nil || err != nil || !got.SelectionConfigured || got.Preset != model.PresetCustom || got.StrictTDD || got.RDDMode != "off" || !slices.Equal(got.InstalledAgents, []string{string(model.AgentClaudeCode)}) || len(got.Components) != 0 || len(got.Skills) != 0 {
 		t.Fatalf("persisted selection = %#v, execute err = %v, read err = %v", got, result.Err, err)
+	}
+	persisted, err := os.ReadFile(state.Path(home))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(persisted, []byte(`"strict_tdd"`)) {
+		t.Fatalf("retired strict_tdd persisted: %s", persisted)
 	}
 }
 

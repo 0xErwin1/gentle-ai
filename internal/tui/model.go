@@ -542,7 +542,6 @@ const (
 	ScreenClaudeModelPicker
 	ScreenKiroModelPicker
 	ScreenCodexModelPicker
-	ScreenStrictTDD
 	ScreenOpenCodePlugins
 	ScreenOpenCodePluginResult
 	ScreenCommunityTools
@@ -1513,8 +1512,6 @@ func (m Model) View() string {
 		return screens.RenderKiroModelPicker(m.KiroModelPicker, m.Cursor)
 	case ScreenCodexModelPicker:
 		return screens.RenderCodexModelPicker(m.CodexModelPicker, m.Cursor, m.Height)
-	case ScreenStrictTDD:
-		return screens.RenderStrictTDD(m.Selection.StrictTDD, m.Cursor)
 	case ScreenOpenCodePlugins:
 		if m.OperationRunning {
 			return screens.RenderOperationRunning("Installing OpenCode Plugins", "Registering selected plugins...", m.SpinnerFrame)
@@ -2358,17 +2355,16 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 			m.Selection.Components = componentsForPreset(options[m.Cursor], m.Selection.Persona)
 			// Enter the conditional picker chain through the single source of
 			// truth. pickerNextScreen(ScreenPreset) returns the first chain member
-			// for the current selection (Claude → Kiro → Codex → StrictTDD);
+			// for the current selection (Claude → Kiro → Codex);
 			// applyPickerEntry initializes picker state.
 			// DependencyTree is the initial component picker for Custom and the
 			// terminal anchor for every other preset.
 			if next, ok := m.pickerNextScreen(); ok && (next != ScreenDependencyTree || m.Selection.Preset == model.PresetCustom) {
 				return m, m.applyPickerEntry(next)
 			}
-			// No picker/StrictTDD applies. CommunityTools and OpenCodePlugins
-			// are NOT in the slice (OpenCode's predicate reads m.Screen); optional
-			// setup screens are offered before the dependency tree. The community
-			// tools guard must stay AFTER pickerNextScreen so StrictTDD appears first.
+			// CommunityTools and OpenCodePlugins are NOT in the slice
+			// (OpenCode's predicate reads m.Screen); offer optional setup before
+			// the dependency tree.
 			if m.shouldShowCommunityToolsScreen() {
 				m.setScreen(ScreenCommunityTools)
 				return m, nil
@@ -2467,41 +2463,6 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 		// Back returns to the generic model configuration menu.
 		m.ModelConfigMode = false
 		m.setScreen(ScreenModelConfig)
-	case ScreenStrictTDD:
-		options := screens.StrictTDDOptions()
-		if m.Cursor < len(options) {
-			// Enable is index 0, Disable is index 1.
-			m.Selection.StrictTDD = (m.Cursor == screens.StrictTDDOptionEnable)
-			if m.shouldShowCommunityToolsScreen() {
-				// Early-return guard: CommunityTools is outside the picker slice.
-				m.setScreen(ScreenCommunityTools)
-			} else if m.shouldShowOpenCodePluginsScreen() {
-				// Early-return guard: OpenCodePlugins is outside the picker slice.
-				m.setScreen(ScreenOpenCodePlugins)
-			} else if m.Selection.Preset == model.PresetCustom {
-				// Custom preset: dependency plan was already built before StrictTDD.
-				// Check skill picker before going to review.
-				if m.shouldShowSkillPickerScreen() {
-					if len(m.SkillPicker) == 0 {
-						m.initSkillPicker()
-					}
-					m.setScreen(ScreenSkillPicker)
-				} else {
-					m.Review = planner.BuildReviewPayload(m.Selection, m.DependencyPlan)
-					return m.startInstallReviewModeLoad()
-				}
-			} else if next, ok := m.pickerNextScreen(); ok {
-				// Non-custom: advance to the next screen in the picker slice
-				// (always DependencyTree for StrictTDD, the last non-custom anchor).
-				m.buildDependencyPlan()
-				return m, m.applyPickerEntry(next)
-			}
-			return m, nil
-		}
-		// Back — use pickerPreviousScreen for unified reverse navigation.
-		if prev, ok := m.pickerPreviousScreen(); ok {
-			return m, m.applyPickerEntry(prev)
-		}
 	case ScreenOpenCodePlugins:
 		return m.confirmOpenCodePlugins()
 	case ScreenOpenCodePluginResult:
@@ -2608,9 +2569,7 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 		default:
 			// "Back" — in custom preset, return to the screen that preceded SkillPicker.
 			if m.Selection.Preset == model.PresetCustom {
-				if m.shouldShowStrictTDDScreen() {
-					m.setScreen(ScreenStrictTDD)
-				} else if m.shouldShowClaudeModelPickerScreen() {
+				if m.shouldShowClaudeModelPickerScreen() {
 					m.setScreen(ScreenClaudeModelPicker)
 				} else {
 					m.setScreen(ScreenDependencyTree)
@@ -2662,8 +2621,6 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 					m.initSkillPicker()
 				}
 				m.setScreen(ScreenSkillPicker)
-			} else if m.shouldShowStrictTDDScreen() {
-				m.setScreen(ScreenStrictTDD)
 			} else if m.shouldShowClaudeModelPickerScreen() {
 				m.setScreen(ScreenClaudeModelPicker)
 			} else {
@@ -3796,12 +3753,10 @@ func (m Model) goBack(cmd *tea.Cmd) Model {
 	}
 
 	// From SkillPicker, go back to the preceding screen.
-	// In custom preset: StrictTDD precedes SkillPicker; agent pickers precede StrictTDD.
+	// In custom preset, agent pickers precede SkillPicker.
 	if m.Screen == ScreenSkillPicker {
 		if m.Selection.Preset == model.PresetCustom {
-			if m.shouldShowStrictTDDScreen() {
-				m.setScreen(ScreenStrictTDD)
-			} else if m.shouldShowKiroModelPickerScreen() {
+			if m.shouldShowKiroModelPickerScreen() {
 				m.setScreen(ScreenKiroModelPicker)
 			} else if m.shouldShowClaudeModelPickerScreen() {
 				m.setScreen(ScreenClaudeModelPicker)
@@ -3840,17 +3795,7 @@ func (m Model) goBack(cmd *tea.Cmd) Model {
 		}
 	}
 
-	// goBack for picker flow screens: use pickerPreviousScreen for unified
-	// reverse navigation (StrictTDD, ClaudeModelPicker, KiroModelPicker,
-	// CodexModelPicker). The OpenCodePluginsStandalone guard is preserved as an
-	// early-return BEFORE the slice walk.
-	if m.Screen == ScreenStrictTDD {
-		if prev, ok := m.pickerPreviousScreen(); ok {
-			*cmd = m.applyPickerEntry(prev)
-			return m
-		}
-	}
-
+	// OpenCodePluginsStandalone is handled before returning through the picker chain.
 	if m.Screen == ScreenOpenCodePlugins {
 		return m.goBackFromOpenCodePlugins()
 	}
@@ -3898,10 +3843,6 @@ func (m Model) goBack(cmd *tea.Cmd) Model {
 				m.initSkillPicker()
 			}
 			m.setScreen(ScreenSkillPicker)
-			return m
-		}
-		if m.shouldShowStrictTDDScreen() {
-			m.setScreen(ScreenStrictTDD)
 			return m
 		}
 		if m.shouldShowClaudeModelPickerScreen() {
@@ -4052,8 +3993,6 @@ func (m Model) optionCount() int {
 		return screens.KiroModelPickerOptionCount(m.KiroModelPicker)
 	case ScreenCodexModelPicker:
 		return screens.CodexModelPickerOptionCount(m.CodexModelPicker)
-	case ScreenStrictTDD:
-		return len(screens.StrictTDDOptions()) + 1 // Enable + Disable + Back
 	case ScreenOpenCodePlugins:
 		return screens.OpenCodePluginsOptionCount()
 	case ScreenOpenCodePluginResult:
@@ -4370,10 +4309,6 @@ func (m Model) goBackFromCommunityTools() Model {
 		m.setScreen(ScreenWelcome)
 		return m
 	}
-	if m.shouldShowStrictTDDScreen() {
-		m.setScreen(ScreenStrictTDD)
-		return m
-	}
 	if m.shouldShowCodexModelPickerScreen() {
 		m.setScreen(ScreenCodexModelPicker)
 		return m
@@ -4461,11 +4396,11 @@ func (m Model) goBackFromOpenCodePlugins() Model {
 		m.setScreen(ScreenCommunityTools)
 		return m
 	}
-	if m.shouldShowStrictTDDScreen() {
-		m.setScreen(ScreenStrictTDD)
-		return m
+	if m.Selection.Preset == model.PresetCustom {
+		m.setScreen(ScreenDependencyTree)
+	} else {
+		m.setScreen(ScreenPreset)
 	}
-	m.setScreen(ScreenPreset)
 	return m
 }
 
@@ -4765,13 +4700,6 @@ func (m Model) shouldShowPiBackgroundScreen() bool {
 	return m.Selection.HasAgent(model.AgentPi)
 }
 
-// shouldShowStrictTDDScreen reports whether the Strict TDD Mode screen should
-// be shown in the ODD installer flow. The existing component selection
-// enables this configured mode independently of components and review mode.
-func (m Model) shouldShowStrictTDDScreen() bool {
-	return len(m.Selection.Agents) > 0
-}
-
 func (m Model) shouldShowClaudeModelPickerScreen() bool {
 	return m.ModelConfigMode // Never include phase pickers in the installer route.
 }
@@ -4810,9 +4738,6 @@ func (m Model) pickerFlowSlice() []Screen {
 	if m.shouldShowCodexModelPickerScreen() {
 		s = append(s, ScreenCodexModelPicker)
 	}
-	if m.shouldShowStrictTDDScreen() {
-		s = append(s, ScreenStrictTDD)
-	}
 	if !custom {
 		// Non-custom: DependencyTree is the last anchor.
 		s = append(s, ScreenDependencyTree)
@@ -4822,7 +4747,7 @@ func (m Model) pickerFlowSlice() []Screen {
 
 // pickerNextScreen returns the screen that follows m.Screen in the picker flow
 // slice. ok=false when m.Screen is not a chain member or is at the last
-// position (DependencyTree in non-custom, StrictTDD or last picker in custom).
+// position (DependencyTree in non-custom, last picker in custom).
 func (m Model) pickerNextScreen() (Screen, bool) {
 	slice := m.pickerFlowSlice()
 	for i, s := range slice {

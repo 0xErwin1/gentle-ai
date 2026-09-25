@@ -12,6 +12,23 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
 )
 
+func TestRoutingIncludesApplicableTestFirstPolicy(t *testing.T) {
+	for _, agent := range []model.AgentID{model.AgentClaudeCode, model.AgentOpenCode, model.AgentKimi} {
+		rendered, err := RenderRouting(agent)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, want := range []string{"relevant runnable deterministic test", "observe RED before implementation", "GREEN", "refactor", "passive documentation", "no meaningful runnable RED", "Tests or frameworks being present alone"} {
+			if !strings.Contains(rendered, want) {
+				t.Errorf("%s missing %q", agent, want)
+			}
+		}
+		if strings.Contains(rendered, "configured TDD mode") || strings.Contains(rendered, "Resolve effective TDD on/off") {
+			t.Errorf("%s retains toggle-gated ODD guidance", agent)
+		}
+	}
+}
+
 // supportedAgentCount guards the catalog itself: routing is unconditional for
 // every supported adapter, so a silently shrinking catalog must fail here
 // instead of quietly reducing coverage of the table-driven tests below.
@@ -169,17 +186,13 @@ func TestRenderRoutingOrganicTaskContinuity(t *testing.T) {
 			"Before implementation or resume, the parent reads both the actual file and full observation",
 			"passes the locator and relevant context; workers read the document before edits",
 		}},
-		{"configured TDD without implicit enablement", []string{
-			"Resolve effective TDD on/off from existing project/session configuration or explicit user choice",
-			"retain its source and exact test runner",
-			"Record resolved mode, source, and runner in the feature document when present",
-			"Tests or frameworks being present does not enable TDD",
-			"Forward mode, source, and runner on every implementation delegation; refresh on resume",
-			"When enabled, require observed RED before implementation, GREEN, then REFACTOR",
-			"When disabled, run ordinary functional checks, not no checks",
-			"If mode is unknown/conflicting or the runner is missing",
-			"resolve only the ambiguity affecting the next action",
-			"never invent precedence or a command to determine ODD TDD",
+		{"default applicable test-first policy", []string{
+			"relevant runnable deterministic test and clear expected outcome",
+			"observe RED before implementation, implement GREEN, then refactor",
+			"Tests or frameworks being present alone do not establish applicability",
+			"passive documentation, unavailable runners, or no meaningful runnable RED",
+			"explain the exception and run proportionate functional or structural checks",
+			"never invent RED/GREEN evidence or a runner",
 		}},
 		{"updates require proof", []string{
 			"automatically update affected intent and TODOs",
@@ -225,7 +238,7 @@ func TestRenderRoutingOrganicTaskContinuity(t *testing.T) {
 			"reuse relevant sibling investigation instead of repeating it",
 			"Run focused checks during iteration and all applicable full checks at task closure",
 			"without a hard spend or line gate",
-			"preserve configured TDD, native RDD, safety, and consent requirements",
+			"preserve the applicable test-first policy, native RDD, safety, and consent requirements",
 		}},
 		{"existing checks and ownership", []string{
 			"Preserve existing native risk selection and applicable functional verification",

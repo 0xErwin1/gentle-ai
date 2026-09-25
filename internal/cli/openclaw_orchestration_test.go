@@ -82,7 +82,7 @@ func TestComponentApplyStepOpenClawWorkspaceScopedInjections(t *testing.T) {
 		})
 	}
 
-	t.Run("ordinary install writes ODD routing and strict TDD to workspace AGENTS", func(t *testing.T) {
+	t.Run("ordinary install writes applicable test-first ODD routing to workspace AGENTS", func(t *testing.T) {
 		home, workspace := t.TempDir(), t.TempDir()
 		selection := model.Selection{Agents: []model.AgentID{model.AgentOpenClaw}, StrictTDD: true}
 		runtime, err := newInstallRuntime(home, ScopeWorkspace, ChannelStable, selection,
@@ -93,10 +93,13 @@ func TestComponentApplyStepOpenClawWorkspaceScopedInjections(t *testing.T) {
 		runtime.workspaceDir = workspace
 		runInstallInjectionSteps(t, runtime)
 		body := readOpenClawTestFile(t, filepath.Join(workspace, "AGENTS.md"))
-		for _, want := range []string{"gentle-ai:agent-routing", "Organic Driven Development (ODD)", "gentle-ai:strict-tdd-mode"} {
+		for _, want := range []string{"gentle-ai:agent-routing", "Organic Driven Development (ODD)", "relevant runnable deterministic test"} {
 			if !strings.Contains(body, want) {
 				t.Errorf("workspace AGENTS.md missing %q", want)
 			}
+		}
+		if strings.Contains(body, "gentle-ai:strict-tdd-mode") {
+			t.Error("workspace AGENTS.md retained retired strict TDD marker")
 		}
 		if strings.Contains(body, "gentle-ai:sdd-orchestrator") {
 			t.Error("workspace AGENTS.md retained retired SDD guidance")

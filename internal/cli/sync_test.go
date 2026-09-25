@@ -4102,45 +4102,34 @@ func TestRunSyncRollsBackOnFailure(t *testing.T) {
 
 // ─── Task 5: --strict-tdd flag ───────────────────────────────────────────────
 
-// TestParseSyncFlagsStrictTDD verifies that --strict-tdd flag is parsed correctly.
+// TestParseSyncFlagsStrictTDD verifies the retired flag cannot change policy.
 func TestParseSyncFlagsStrictTDD(t *testing.T) {
 	tests := []struct {
-		name string
-		args []string
-		want bool
+		name      string
+		args      []string
+		wantError bool
 	}{
-		{
-			name: "absent defaults to false",
-			args: []string{},
-			want: false,
-		},
-		{
-			name: "explicit true",
-			args: []string{"--strict-tdd"},
-			want: true,
-		},
+		{name: "absent", args: []string{}},
+		{name: "explicit true", args: []string{"--strict-tdd"}, wantError: true},
+		{name: "explicit false", args: []string{"--strict-tdd=false"}, wantError: true},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			flags, err := ParseSyncFlags(tt.args)
-			if err != nil {
-				t.Fatalf("ParseSyncFlags() error = %v", err)
-			}
-			if flags.StrictTDD != tt.want {
-				t.Errorf("StrictTDD = %v, want %v", flags.StrictTDD, tt.want)
+			_, err := ParseSyncFlags(tt.args)
+			if tt.wantError != (err != nil) || (tt.wantError && !strings.Contains(err.Error(), "applicable test-first")) {
+				t.Fatalf("ParseSyncFlags() error = %v, want retired flag guidance = %v", err, tt.wantError)
 			}
 		})
 	}
 }
 
-// TestBuildSyncSelectionStrictTDD verifies that StrictTDD flag is passed
-// through to the Selection when building sync selection.
+// TestBuildSyncSelectionStrictTDD verifies legacy callers cannot enable the retired toggle.
 func TestBuildSyncSelectionStrictTDD(t *testing.T) {
 	flags := SyncFlags{StrictTDD: true}
 	sel := BuildSyncSelection(flags, nil)
-	if !sel.StrictTDD {
-		t.Errorf("Selection.StrictTDD = false, want true (should be propagated from flags)")
+	if sel.StrictTDD {
+		t.Fatal("retired StrictTDD flag propagated into selection")
 	}
 
 	flagsDisabled := SyncFlags{StrictTDD: false}
@@ -4162,8 +4151,8 @@ func TestRunSyncRestoresConfiguredSelectionAndExplicitOverrides(t *testing.T) {
 	if err != nil || !reflect.DeepEqual(plain.Selection.Components, []model.ComponentID{model.ComponentEngram}) || !reflect.DeepEqual(plain.Selection.Skills, []model.SkillID{model.SkillCommentWriter}) || plain.Selection.Preset != model.PresetCustom {
 		t.Fatalf("plain sync selection = %#v, err = %v", plain.Selection, err)
 	}
-	overridden, err := RunSync([]string{"--dry-run", "--skill", "go-testing", "--strict-tdd"})
-	if err != nil || !reflect.DeepEqual(overridden.Selection.Skills, []model.SkillID{model.SkillID("go-testing")}) || !overridden.Selection.HasComponent(model.ComponentSkills) || !overridden.Selection.StrictTDD {
+	overridden, err := RunSync([]string{"--dry-run", "--skill", "go-testing"})
+	if err != nil || !reflect.DeepEqual(overridden.Selection.Skills, []model.SkillID{model.SkillID("go-testing")}) || !overridden.Selection.HasComponent(model.ComponentSkills) {
 		t.Fatalf("overridden sync selection = %#v, err = %v", overridden.Selection, err)
 	}
 	if err := state.Write(home, state.InstallState{InstalledAgents: []string{"cursor"}}); err != nil {
@@ -4422,7 +4411,7 @@ func TestRestorePersistedSelectionDoesNotActivateLegacySDDForAssignments(t *test
 	if selection.HasComponent(model.ComponentSDD) || selection.SDDMode != "" {
 		t.Fatalf("retired SDD activated: %+v", selection)
 	}
-	if !selection.StrictTDD || selection.ModelAssignments["explore"].ModelID != "gpt-5" || !selection.HasComponent(model.ComponentSkills) {
+	if selection.StrictTDD || selection.ModelAssignments["explore"].ModelID != "gpt-5" || !selection.HasComponent(model.ComponentSkills) {
 		t.Fatalf("retained sync options lost: %+v", selection)
 	}
 }

@@ -349,7 +349,7 @@ func mergeFullInstallState(existing, fresh state.InstallState) state.InstallStat
 	merged := existing
 	merged.InstalledAgents = fresh.InstalledAgents
 	merged.SelectionConfigured, merged.Components, merged.Skills = fresh.SelectionConfigured, fresh.Components, fresh.Skills
-	merged.Preset, merged.SDDMode, merged.StrictTDD = fresh.Preset, fresh.SDDMode, fresh.StrictTDD
+	merged.Preset, merged.SDDMode, merged.StrictTDD = fresh.Preset, fresh.SDDMode, false
 	merged.CommunityTools, merged.CommunityToolsConfigured = fresh.CommunityTools, fresh.CommunityToolsConfigured
 	merged.ClaudeModelAssignments, merged.ClaudePhaseAssignments = fresh.ClaudeModelAssignments, fresh.ClaudePhaseAssignments
 	merged.KiroModelAssignments, merged.CodexModelAssignments = fresh.KiroModelAssignments, fresh.CodexModelAssignments
@@ -850,7 +850,6 @@ func (r *installRuntime) stagePlan() pipeline.StagePlan {
 			codexPhaseModels: r.selection.CodexPhaseModelAssignments,
 			codexEfforts:     r.selection.CodexModelAssignments,
 			codexCarrils:     r.selection.CodexCarrilModelAssignments,
-			strictTDD:        r.selection.StrictTDD,
 			backgroundPolicy: r.backgroundActivation != nil && r.backgroundActivation.Capability().Ready() && r.background.Effective == model.OpenCodeBackgroundOn,
 			legacySDD:        false,
 			id:               "agent-guidance:" + string(agent),
@@ -958,7 +957,6 @@ type agentRoutingGuidanceStep struct {
 	codexPhaseModels map[string]string
 	codexEfforts     map[string]model.CodexEffort
 	codexCarrils     map[string]string
-	strictTDD        bool
 	backgroundPolicy bool
 	legacySDD        bool
 	id               string
@@ -1042,9 +1040,9 @@ func (s agentRoutingGuidanceStep) Run() error {
 
 	s.recordChanged(stripped)
 	s.recordChanged(injected)
-	strict, err := agentguidance.InjectStrictTDDWithOptions(targetDir, s.agent, s.strictTDD, options)
+	strict, err := agentguidance.InjectStrictTDDWithOptions(targetDir, s.agent, false, options)
 	if err != nil {
-		return fmt.Errorf("sync strict TDD guidance for %q: %w", s.agent, err)
+		return fmt.Errorf("retire legacy strict TDD guidance for %q: %w", s.agent, err)
 	}
 	s.recordChanged(strict)
 	if s.agent == model.AgentOpenCode && !s.legacySDD {
