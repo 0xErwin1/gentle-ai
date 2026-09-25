@@ -77,6 +77,218 @@ func TestSyncOpenCodeTelemetryReconcilesMissingWithoutSDD(t *testing.T) {
 	}
 }
 
+func TestSyncOpenCodeAssignmentRejectsSettingsSymlink(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		outsideHome bool
+	}{
+		{name: "target outside home", outsideHome: true},
+		{name: "target inside home"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			home := t.TempDir()
+			outside := t.TempDir()
+			settings := filepath.Join(home, ".config", "opencode", "opencode.json")
+			targetDir := home
+			if tc.outsideHome {
+				targetDir = outside
+			}
+			target := filepath.Join(targetDir, "user-settings.json")
+			original := []byte(`{"agent":{"custom-refactor-agent":{"variant":"high"}}}`)
+			if err := os.WriteFile(target, original, 0600); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.MkdirAll(filepath.Dir(settings), 0755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Symlink(target, settings); err != nil {
+				t.Skipf("symlinks unavailable: %v", err)
+			}
+			var changed []string
+			step := openCodeModelAssignmentSyncStep{
+				path: settings,
+				assignments: map[string]model.ModelAssignment{
+					"custom-refactor-agent": {ProviderID: "provider", ModelID: "model"},
+				}, changedFiles: &changed,
+			}
+			if err := step.Run(); err == nil {
+				t.Fatal("sync accepted leaf symlink")
+			}
+			if data, err := os.ReadFile(target); err != nil || !bytes.Equal(data, original) {
+				t.Fatalf("symlink target modified: %q, %v", data, err)
+			}
+			if info, err := os.Lstat(settings); err != nil || info.Mode()&os.ModeSymlink == 0 {
+				t.Fatalf("settings link replaced: %v, %v", info, err)
+			}
+			if len(changed) != 0 {
+				t.Fatalf("rejected sync reported changes: %v", changed)
+			}
+		})
+	}
+}
+
+func TestSyncOpenCodeGuidanceRejectsSymlinkBeforeAssignmentStep(t *testing.T) {
+	home := t.TempDir()
+	setOpenCodeTestHome(t, home)
+	selection := model.Selection{Agents: []model.AgentID{model.AgentOpenCode}, ModelAssignments: map[string]model.ModelAssignment{
+		"gentle-orchestrator": {ProviderID: "provider", ModelID: "model"},
+	}}
+	// Prime managed guidance before testing the full sync path with a link.
+	runSyncInjectionSteps(t, home, selection)
+	path := filepath.Join(home, ".config", "opencode", "opencode.json")
+	original, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(t.TempDir(), "settings.json")
+	if err := os.WriteFile(target, original, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, path); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	rt, err := newSyncRuntime(home, selection)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var rejected bool
+	for _, step := range rt.stagePlan().Apply {
+		if err := step.Run(); err != nil {
+			if step.ID() != "sync:agent-guidance:opencode" {
+				t.Fatalf("expected guidance to refuse symlink first, got %s: %v", step.ID(), err)
+			}
+			rejected = true
+			break
+		}
+		if step.ID() == "sync:opencode:model-assignments" {
+			t.Fatal("assignment step ran before guidance refused the symlink")
+		}
+	}
+	if !rejected {
+		t.Fatal("guidance accepted settings symlink after priming")
+	}
+	if data, err := os.ReadFile(target); err != nil || !bytes.Equal(data, original) {
+		t.Fatalf("settings target modified: %q, %v", data, err)
+	}
+	if info, err := os.Lstat(path); err != nil || info.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("settings link replaced: %v, %v", info, err)
+	}
+}
+
+func TestSyncOpenCodeAssignmentRejectsNonRegularSettings(t *testing.T) {
+	home := t.TempDir()
+	path := filepath.Join(home, "opencode.json")
+	if err := os.Mkdir(path, 0755); err != nil {
+		t.Fatal(err)
+	}
+	var changed []string
+	step := openCodeModelAssignmentSyncStep{
+		path: path, assignments: map[string]model.ModelAssignment{
+			"gentle-orchestrator": {ProviderID: "provider", ModelID: "model"},
+		}, changedFiles: &changed,
+	}
+	if err := step.Run(); err == nil {
+		t.Fatal("sync accepted directory at settings path")
+	}
+	if info, err := os.Lstat(path); err != nil || !info.IsDir() || len(changed) != 0 {
+		t.Fatalf("directory replaced or reported as changed: %v, %v, %v", info, err, changed)
+	}
+}
+
+func TestSyncOpenCodeCustomAgentAssignmentPreservesUserVariant(t *testing.T) {
+	home := t.TempDir()
+	setOpenCodeTestHome(t, home)
+	settingsPath := filepath.Join(home, ".config", "opencode", "opencode.json")
+	if err := os.MkdirAll(filepath.Dir(settingsPath), 0755); err != nil {
+		t.Fatal(err)
+	}
+	original := []byte(`{"agent":{"custom-refactor-agent":{"mode":"subagent","description":"user-owned","variant":"high"}}}`)
+	if err := os.WriteFile(settingsPath, original, 0600); err != nil {
+		t.Fatal(err)
+	}
+	selection := model.Selection{
+		Agents: []model.AgentID{model.AgentOpenCode},
+		ModelAssignments: map[string]model.ModelAssignment{
+			"custom-refactor-agent": {ProviderID: "bench-provider", ModelID: "bench-model"},
+		},
+	}
+	changed := runSyncInjectionSteps(t, home, selection)
+	data, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var settings struct {
+		Agent map[string]map[string]any `json:"agent"`
+	}
+	if err := json.Unmarshal(data, &settings); err != nil {
+		t.Fatal(err)
+	}
+	agent := settings.Agent["custom-refactor-agent"]
+	if got := agent["model"]; got != "bench-provider/bench-model" {
+		t.Fatalf("persisted custom model = %v, want bench-provider/bench-model", got)
+	}
+	if agent["variant"] != "high" || agent["description"] != "user-owned" || agent["mode"] != "subagent" {
+		t.Fatalf("user-owned agent keys changed: %v", agent)
+	}
+	if !containsString(changed, settingsPath) {
+		t.Fatalf("changed paths %v omit custom assignment", changed)
+	}
+	changed = runSyncInjectionSteps(t, home, selection)
+	if containsString(changed, settingsPath) {
+		t.Fatalf("unchanged assignment reported as changed: %v", changed)
+	}
+}
+
+func TestSyncOpenCodeAssignmentsIgnoreRetiredAndOtherAgents(t *testing.T) {
+	home := t.TempDir()
+	setOpenCodeTestHome(t, home)
+	path := filepath.Join(home, ".config", "opencode", "opencode.json")
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(`{"agent":{"custom-refactor-agent":{"variant":"high"}}}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	assignments := map[string]model.ModelAssignment{
+		"sdd-apply":             {ProviderID: "legacy", ModelID: "model"},
+		"custom-refactor-agent": {ProviderID: "new", ModelID: "model", Effort: "low"},
+	}
+	changed := runSyncInjectionSteps(t, home, model.Selection{Agents: []model.AgentID{model.AgentClaudeCode}, ModelAssignments: assignments})
+	if containsString(changed, path) {
+		t.Fatalf("non-OpenCode sync changed settings: %v", changed)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), `"model"`) {
+		t.Fatalf("non-OpenCode sync persisted assignments: %s", data)
+	}
+	changed = runSyncInjectionSteps(t, home, model.Selection{Agents: []model.AgentID{model.AgentOpenCode}, ModelAssignments: assignments})
+	if !containsString(changed, path) {
+		t.Fatalf("OpenCode sync omitted assignment: %v", changed)
+	}
+	data, err = os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var settings struct {
+		Agent map[string]map[string]any `json:"agent"`
+	}
+	if err := json.Unmarshal(data, &settings); err != nil {
+		t.Fatal(err)
+	}
+	if _, exists := settings.Agent["sdd-apply"]; exists {
+		t.Fatal("retired SDD assignment was recreated")
+	}
+	if got := settings.Agent["custom-refactor-agent"]["variant"]; got != "low" {
+		t.Fatalf("explicit custom-agent effort = %v, want low", got)
+	}
+}
+
 // ─── Phase 1: ParseSyncFlags ───────────────────────────────────────────────
 
 func TestSyncFlagsRetiredOptionsRejectedAndHelpOmitted(t *testing.T) {

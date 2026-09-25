@@ -26,6 +26,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v3/internal/components/filemerge"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/components/gga"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/components/mcp"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/components/opencodedefault"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/components/opencodeplugin"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/components/opencoderuntimeplugins"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/components/permissions"
@@ -432,6 +433,20 @@ func (r *syncRuntime) stagePlan() pipeline.StagePlan {
 		})
 	}
 
+	// Model assignments belong to the retained OpenCode sync route, not the
+	// retired SDD component. Run after guidance so both updates to opencode.json
+	// are included in the same sync transaction.
+	if len(r.selection.ModelAssignments) > 0 {
+		for _, adapter := range adapters {
+			if adapter.Agent() == model.AgentOpenCode {
+				apply = append(apply, openCodeModelAssignmentSyncStep{
+					path:        effectiveOpenCodeSettingsPath(r.homeDir, r.workspaceDir, ScopeGlobal, adapter),
+					assignments: r.selection.ModelAssignments, changedFiles: &r.changedFiles,
+				})
+			}
+		}
+	}
+
 	// Managed OpenCode-compatible plugins are versioned runtime artifacts tied
 	// to the installed binary (OpenCode and Kilocode receive them). When the
 	// persisted selection lacks the SDD component, no SDD step is planned and
@@ -509,6 +524,13 @@ func syncBackupTargets(homeDir, workspaceDir string, selection model.Selection, 
 				for _, path := range plan.OutputStylePaths(adapter.OutputStyleDir(componentInjectionDir(homeDir, workspaceDir, adapter))).Backup {
 					paths[path] = struct{}{}
 				}
+			}
+		}
+	}
+	if len(selection.ModelAssignments) > 0 {
+		for _, adapter := range adapters {
+			if adapter.Agent() == model.AgentOpenCode {
+				paths[effectiveOpenCodeSettingsPath(homeDir, workspaceDir, ScopeGlobal, adapter)] = struct{}{}
 			}
 		}
 	}
@@ -692,6 +714,94 @@ func syncPersonaPathsWithWorkspace(homeDir, workspaceDir string, selection model
 // changedFiles is a shared slice pointer. Each step appends candidate paths
 // from its aggregate InjectionResult when any file changed. RunSync compares
 // candidates with pre-sync snapshots before exposing persisted changes.
+// openCodeModelAssignmentSyncStep persists picker choices independently of the
+// retired SDD component. Only current picker identities are eligible; legacy
+// saved SDD keys must not be resurrected by an ordinary sync.
+type openCodeModelAssignmentSyncStep struct {
+	path         string
+	assignments  map[string]model.ModelAssignment
+	changedFiles *[]string
+}
+
+func (s openCodeModelAssignmentSyncStep) ID() string { return "sync:opencode:model-assignments" }
+
+func (s openCodeModelAssignmentSyncStep) Run() error {
+	// Refuse leaf links before discovery/read: following one can read and then
+	// overwrite a target not covered by the sync snapshot. The atomic writer
+	// independently refuses leaf links at publication time.
+	info, err := os.Lstat(s.path)
+	if err == nil && !info.Mode().IsRegular() {
+		return fmt.Errorf("refuse non-regular OpenCode settings %q", s.path)
+	}
+	if err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("stat OpenCode settings: %w", err)
+	}
+	custom, err := opencodedefault.DiscoverCustomAgents(s.path)
+	if err != nil {
+		return fmt.Errorf("discover OpenCode custom agents: %w", err)
+	}
+	allowed := map[string]bool{"gentle-orchestrator": true, "general": true, "explore": true}
+	for _, name := range opencodeactivation.JDPhases() {
+		allowed[name] = true
+	}
+	for _, name := range opencodeactivation.ReviewPhases() {
+		allowed[name] = true
+	}
+	for _, name := range custom {
+		allowed[name] = true
+	}
+	agents := make(map[string]any)
+	for name, assignment := range s.assignments {
+		if !allowed[name] || assignment.ProviderID == "" || assignment.ModelID == "" {
+			continue
+		}
+		entry := map[string]any{"model": assignment.FullID()}
+		// Omitting variant on an effortless custom assignment preserves the
+		// user's own value; an explicit picker effort may replace it (#3262).
+		if assignment.Effort != "" {
+			entry["variant"] = assignment.Effort
+		}
+		agents[name] = entry
+	}
+	if len(agents) == 0 {
+		return nil
+	}
+	original, err := os.ReadFile(s.path)
+	if err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("read OpenCode settings: %w", err)
+	}
+	if len(original) > 0 {
+		if _, err := filemerge.UnmarshalJSONObject(original); err != nil {
+			return fmt.Errorf("refuse to change malformed OpenCode settings: %w", err)
+		}
+	}
+	overlay, err := json.Marshal(map[string]any{"agent": agents})
+	if err != nil {
+		return fmt.Errorf("marshal OpenCode model assignments: %w", err)
+	}
+	updated, err := filemerge.MergeJSONObjectsForPath(s.path, original, overlay)
+	if err != nil {
+		return fmt.Errorf("merge OpenCode model assignments: %w", err)
+	}
+	if bytes.Equal(original, updated) {
+		return nil
+	}
+	mode := os.FileMode(0644)
+	if info != nil {
+		mode = info.Mode().Perm()
+	}
+	result, err := filemerge.WriteFileAtomic(s.path, updated, mode)
+	// Publication can land before a subsequent durability check fails. Report
+	// the landed path so transaction rollback has the correct evidence.
+	if result.Changed {
+		*s.changedFiles = append(*s.changedFiles, s.path)
+	}
+	if err != nil {
+		return fmt.Errorf("write OpenCode model assignments: %w", err)
+	}
+	return nil
+}
+
 type componentSyncStep struct {
 	id           string
 	component    model.ComponentID
