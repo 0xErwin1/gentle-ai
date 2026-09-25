@@ -1849,16 +1849,19 @@ func runOrganicProviderCaptureFake(agent string) int {
 	return 0
 }
 
-// organicRoutingGuidanceRequiredFragments pins the ODD routes and independent
-// review/TDD guidance delivered to each configured agent.
-// every configured agent must receive, shared between this file's Cursor
+// organicRoutingGuidanceRequiredFragments pins the ODD routes, applicable
+// test-first policy, and independent review guidance every configured agent
+// must receive, shared between this file's Cursor
 // case and organic_runtime_real_agent_detection_test.go's Claude Code /
 // OpenCode cases (see that file for why they're split).
 var organicRoutingGuidanceRequiredFragments = []string{
 	"Organic Driven Development",
 	"Direct inline",
 	"Delegated direct",
-	"configured TDD mode",
+	"when a relevant runnable deterministic test and clear expected outcome exist",
+	"observe RED before implementation, implement GREEN, then refactor while tests stay green",
+	"For passive documentation, unavailable runners, or no meaningful runnable RED",
+	"run proportionate functional or structural checks",
 	"gentle-ai review mode enable|disable|status",
 	"disabled/unmanaged",
 }
