@@ -541,15 +541,16 @@ test_oc_persona_custom_does_nothing() {
 }
 
 test_cc_skills_minimal() {
-    log_test "Claude Code: minimal skills component installs no default skills"
+    log_test "Claude Code: minimal skills component retains only judgment-day"
     cleanup_test_env
 
     if $BINARY install --agent claude-code --component skills --preset minimal --persona custom 2>&1; then
         local skills_dir="$HOME/.claude/skills"
         if [ -d "$skills_dir" ]; then
-            assert_file_count "$skills_dir" "SKILL.md" 0 "Minimal skills component installs no default skills"
+            assert_file_count "$skills_dir" "SKILL.md" 1 "Minimal skills component installs only judgment-day"
+            assert_file_exists "$skills_dir/judgment-day/SKILL.md" "Minimal Claude skills include judgment-day"
         else
-            log_pass "Minimal skills component creates no skills directory"
+            log_fail "Minimal skills component did not create judgment-day skills directory"
         fi
 
         # No framework skills in minimal
@@ -763,9 +764,10 @@ test_oc_skills_minimal() {
     if $BINARY install --agent opencode --component skills --preset minimal --persona custom 2>&1; then
         local skill_dir="$HOME/.config/opencode/skills"
         if [ -d "$skill_dir" ]; then
-            assert_file_count "$skill_dir" "SKILL.md" 0 "Minimal OpenCode skills component installs no default skills"
+            assert_file_count "$skill_dir" "SKILL.md" 1 "Minimal OpenCode skills component installs only judgment-day"
+            assert_file_exists "$skill_dir/judgment-day/SKILL.md" "Minimal OpenCode skills include judgment-day"
         else
-            log_pass "Minimal OpenCode skills component creates no skills directory"
+            log_fail "Minimal OpenCode skills component did not create judgment-day skills directory"
         fi
     else
         log_fail "OpenCode skills (minimal) install command failed"
@@ -947,10 +949,10 @@ test_full_preset_opencode() {
         assert_file_contains "$settings" '"context7"' "Has context7 MCP"
         assert_valid_json "$settings" "opencode.json is valid JSON"
 
-        # AGENTS.md carries ODD routing alongside independently managed sections.
+        # OpenCode owns ODD routing in the managed orchestrator prompt in opencode.json.
         assert_file_exists "$agents_md" "AGENTS.md exists"
         assert_file_contains "$agents_md" "Senior Architect" "Gentleman persona"
-        assert_file_contains "$agents_md" "gentle-ai:agent-routing" "AGENTS.md has ODD routing"
+        assert_file_contains "$settings" "gentle-ai:agent-routing" "OpenCode orchestrator has ODD routing"
         assert_file_contains "$agents_md" "gentle-ai:engram-protocol" "AGENTS.md has engram protocol"
         assert_no_duplicate_section "$agents_md" "engram-protocol" "No duplicate engram section in AGENTS.md"
         assert_file_count_min "$HOME/.config/opencode/skills" "SKILL.md" 8 "At least 8 foundation skill files"
@@ -1024,7 +1026,7 @@ test_ecosystem_both_agents() {
         assert_file_count_min "$HOME/.claude/skills" "SKILL.md" 8 "Claude foundation skills"
 
         # OpenCode
-        assert_file_contains "$HOME/.config/opencode/AGENTS.md" "gentle-ai:agent-routing" "OpenCode has ODD routing"
+        assert_file_contains "$HOME/.config/opencode/opencode.json" "gentle-ai:agent-routing" "OpenCode orchestrator has ODD routing"
         assert_file_count_min "$HOME/.config/opencode/skills" "SKILL.md" 8 "OpenCode foundation skills"
         assert_file_contains "$HOME/.config/opencode/opencode.json" '"context7"' "OpenCode context7"
         assert_valid_json "$HOME/.config/opencode/opencode.json" "OpenCode opencode.json valid JSON"
