@@ -48,7 +48,7 @@ The last two both write configuration and install something. `config render` pro
 
 ### Skills
 
-`sdd-init`, `sdd-explore`, `sdd-propose`, `sdd-spec`, `sdd-design`, `sdd-tasks`, `sdd-apply`, `sdd-verify`, `sdd-archive`, `sdd-onboard`, `go-testing`, `gentle-ai-bench`, `skill-creator`, `skill-improver`, `judgment-day`, `branch-pr`, `issue-creation`, `skill-registry`, `chained-pr`, `cognitive-doc-design`, `comment-writer`, `work-unit-commits`, `rdd-defect-workflow`, `systemic-issue-triage`.
+`sdd-init`, `sdd-research`, `sdd-explore`, `sdd-propose`, `sdd-spec`, `sdd-design`, `sdd-tasks`, `sdd-apply`, `sdd-verify`, `sdd-archive`, `sdd-onboard`, `go-testing`, `gentle-ai-bench`, `skill-creator`, `skill-improver`, `judgment-day`, `branch-pr`, `issue-creation`, `skill-registry`, `chained-pr`, `cognitive-doc-design`, `comment-writer`, `work-unit-commits`, `rdd-defect-workflow`, `systemic-issue-triage`.
 
 ## Workflow
 

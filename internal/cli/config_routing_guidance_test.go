@@ -35,8 +35,17 @@ func TestStagedRoutingGuidanceMatchesTheInstaller(t *testing.T) {
 			stage, _ := renderDocument(t, document)
 
 			delivered := stagedRoutingText(t, stage, adapter, agent)
-			if !strings.Contains(delivered, want) {
-				t.Errorf("staged tree for %q does not carry the guidance the installer writes\n--- want ---\n%s\n--- staged ---\n%s", agent, want, delivered)
+			// Shared injection can place agent-specific assignments between these sections.
+			// Compare each installer-owned section without requiring adjacency.
+			marker := "<!-- gentle-ai:remote-authorization -->"
+			sections := strings.SplitN(want, marker, 2)
+			if len(sections) != 2 {
+				t.Fatalf("installer guidance for %q lacks remote authorization section", agent)
+			}
+			for _, section := range []string{strings.TrimSpace(sections[0]), marker + sections[1]} {
+				if !strings.Contains(delivered, section) {
+					t.Errorf("staged tree for %q does not carry an installer guidance section\n--- want ---\n%s\n--- staged ---\n%s", agent, section, delivered)
+				}
 			}
 		})
 	}
