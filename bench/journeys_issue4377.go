@@ -12,7 +12,8 @@ import (
 // issue4377Journeys drives the customizable installer through its RDD choice
 // and final confirmation under a real PTY. The sandbox HOME is isolated, and
 // the exchange quits before installation, proving a cancelled choice cannot
-// change the user's global configuration.
+// change the user's global configuration. #4377 tests the deferred RDD choice;
+// ODD's default applicable test-first policy is not an installer choice.
 func issue4377Journeys() []Journey {
 	return []Journey{{
 		ID:     "j127-customizable-install-rdd-choice",
@@ -65,53 +66,48 @@ func issue4377TTYExchange(reader *bufio.Reader, writer io.WriteCloser) error {
 						if _, err := io.WriteString(writer, strings.Repeat("\x1b[B", 2)+"\r"); err != nil {
 							return err
 						}
-						return waitForIssue4377TTY(reader, []string{"STRICT TDD MODE", "Enable", "Disable"}, func() error {
-							// The ODD installer now asks about Strict TDD before community tools.
-							// Keep its default; this journey tests the later RDD choice.
-							if _, err := io.WriteString(writer, "\r"); err != nil {
+						// #4377 keeps the deferred RDD decision after community tools;
+						// there is no separate Strict TDD installer choice to confirm.
+						return waitForIssue4377TTY(reader, []string{"Community Tools/Plugins", "Continue"}, func() error {
+							if communityToolCursorRows == 0 {
+								return fmt.Errorf("community tools rendered no tool rows")
+							}
+							if _, err := io.WriteString(writer, strings.Repeat("\x1b[B", communityToolCursorRows)+"\r"); err != nil {
 								return err
 							}
-							return waitForIssue4377TTY(reader, []string{"Community Tools/Plugins", "Continue"}, func() error {
-								if communityToolCursorRows == 0 {
-									return fmt.Errorf("community tools rendered no tool rows")
-								}
-								if _, err := io.WriteString(writer, strings.Repeat("\x1b[B", communityToolCursorRows)+"\r"); err != nil {
+							return waitForIssue4377TTY(reader, []string{"Install Plan", "Continue"}, func() error {
+								if _, err := io.WriteString(writer, "\r"); err != nil {
 									return err
 								}
-								return waitForIssue4377TTY(reader, []string{"Install Plan", "Continue"}, func() error {
+								return waitForIssue4377TTY(reader, []string{
+									"Receipt-Driven Development",
+									"RDD is ON by default. You can opt out.",
+									"Disable RDD",
+									"No global RDD preference is configured.",
+								}, func() error {
+									// Confirm default ON, then return and explicitly opt out.
+									// Cancelling must persist neither selection.
 									if _, err := io.WriteString(writer, "\r"); err != nil {
 										return err
 									}
-									return waitForIssue4377TTY(reader, []string{
-										"Receipt-Driven Development",
-										"RDD is ON by default. You can opt out.",
-										"Disable RDD",
-										"No global RDD preference is configured.",
-									}, func() error {
-										// Confirm default ON, then return and explicitly opt out.
-										// Cancelling must persist neither selection.
-										if _, err := io.WriteString(writer, "\r"); err != nil {
+									return waitForIssue4377TTY(reader, []string{"Review and Confirm", "Receipt-Driven Development", "RDD ON"}, func() error {
+										if _, err := io.WriteString(writer, "\x1b[B\r"); err != nil {
 											return err
 										}
-										return waitForIssue4377TTY(reader, []string{"Review and Confirm", "Receipt-Driven Development", "RDD ON"}, func() error {
+										return waitForIssue4377TTY(reader, []string{"Receipt-Driven Development", "Enable RDD"}, func() error {
 											if _, err := io.WriteString(writer, "\x1b[B\r"); err != nil {
 												return err
 											}
-											return waitForIssue4377TTY(reader, []string{"Receipt-Driven Development", "Enable RDD"}, func() error {
-												if _, err := io.WriteString(writer, "\x1b[B\r"); err != nil {
-													return err
-												}
-												return waitForIssue4377TTY(reader, []string{"Review and Confirm", "Receipt-Driven Development", "RDD OFF"}, func() error {
-													_, err := io.WriteString(writer, "q")
-													return err
-												})
+											return waitForIssue4377TTY(reader, []string{"Review and Confirm", "Receipt-Driven Development", "RDD OFF"}, func() error {
+												_, err := io.WriteString(writer, "q")
+												return err
 											})
 										})
 									})
 								})
-							}, func(screen string) {
-								communityToolCursorRows = strings.Count(screen, "View repo:") * 2
 							})
+						}, func(screen string) {
+							communityToolCursorRows = strings.Count(screen, "View repo:") * 2
 						})
 					})
 				})
