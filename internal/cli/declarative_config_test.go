@@ -22,7 +22,7 @@ func TestConfigFlagsRejectSemanticSelectionAndKeepOperationalFlags(t *testing.T)
 		args  []string
 	}{
 		{"install rejects semantic agent", func(args []string) error { _, err := ParseInstallFlags(args); return err }, []string{"--config", configPath, "--agent", "opencode"}},
-		{"sync rejects semantic mode", func(args []string) error { _, err := ParseSyncFlags(args); return err }, []string{"--config", configPath, "--sdd-mode", "single"}},
+		{"sync rejects semantic skill", func(args []string) error { _, err := ParseSyncFlags(args); return err }, []string{"--config", configPath, "--skill", "example"}},
 		{"install keeps dry run", func(args []string) error {
 			flags, err := ParseInstallFlags(args)
 			if err == nil && !flags.DryRun {

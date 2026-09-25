@@ -17,7 +17,6 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v3/internal/components/opencodeplugin"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/components/permissions"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/components/persona"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/components/sdd"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/components/skills"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/components/theme"
 	configdomain "github.com/gentleman-programming/gentle-ai/v3/internal/config"
@@ -59,7 +58,6 @@ var stageableComponents = map[model.ComponentID]bool{
 	model.ComponentPersona:            true,
 	model.ComponentPermission:         true,
 	model.ComponentContext7:           true,
-	model.ComponentSDD:                true,
 	model.ComponentTheme:              true,
 	model.ComponentClaudeTheme:        true,
 	model.ComponentOpenCodeGentleLogo: true,
@@ -114,8 +112,7 @@ func (stager configurationStager) Stage(state configdomain.DesiredState, stageRo
 // legitimately disagree about the file: install resolves the effective layered
 // project-over-global settings path from the working directory, and a render
 // must not depend on where it happens to run. Leaving the option empty keeps the
-// adapter's global fallback, which is the same choice staged SDD makes for the
-// same reason.
+// adapter's global fallback, avoiding dependence on the render's working directory.
 func stageRoutingGuidance(stageRoot string, adapters []agents.Adapter) error {
 	for _, adapter := range adapters {
 		agent := adapter.Agent()
@@ -128,7 +125,7 @@ func stageRoutingGuidance(stageRoot string, adapters []agents.Adapter) error {
 			target = stageRoot
 		}
 
-		if _, err := agentguidance.InjectRouting(target, agent); err != nil {
+		if _, err := agentguidance.InjectRoutingWithOptions(target, agent, agentguidance.RoutingOptions{}); err != nil {
 			return fmt.Errorf("stage routing guidance for %q: %w", agent, err)
 		}
 	}
@@ -269,39 +266,9 @@ func (stager configurationStager) stageComponentForAdapter(
 
 		return err
 
-	case model.ComponentSDD:
-		_, err := injectSDD(target, adapter, selection.SDDMode, stager.sddOptions(selection, adapter))
-
-		return err
 	}
 
 	return nil
-}
-
-// sddOptions mirrors the installer's options exactly, so a staged SDD tree is
-// the same tree an install would write for the same document.
-func (stager configurationStager) sddOptions(selection model.Selection, adapter agents.Adapter) sdd.InjectOptions {
-	return sdd.InjectOptions{
-		OpenCodeModelAssignments:    selection.ModelAssignments,
-		ClaudeModelAssignments:      selection.ClaudeModelAssignments,
-		ClaudePhaseAssignments:      selection.ClaudePhaseAssignments,
-		KiroModelAssignments:        selection.KiroModelAssignments,
-		CodexModelAssignments:       selection.CodexModelAssignments,
-		CodexCarrilModelAssignments: selection.CodexCarrilModelAssignments,
-		CodexPhaseModelAssignments:  selection.CodexPhaseModelAssignments,
-		StrictTDD:                   selection.StrictTDD,
-		Profiles:                    selection.Profiles,
-		CodeGraphGuidanceMarkdown:   codeGraphGuidanceMarkdownForSDD(stager.readRoot, selection.CommunityTools),
-
-		// The installer also asks the local OpenCode whether it can run
-		// background sub-agents, and a render cannot: probing the machine
-		// would make the same document produce different prompts on two of
-		// them. A document that says "on" has already made that call, which
-		// is why only the explicit value carries the policy and `auto` --
-		// the value that means "decide for me" -- carries nothing.
-		IncludeOpenCodeBackgroundPolicy: adapter.Agent() == model.AgentOpenCode &&
-			selection.BackgroundIntent == model.OpenCodeBackgroundOn,
-	}
 }
 
 // stagePiBackgroundPolicy writes the policy gentle-pi reads. It runs outside
