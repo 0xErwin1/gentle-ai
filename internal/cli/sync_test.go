@@ -17,6 +17,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v3/internal/agents"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/agents/claude"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/agents/codex"
+	opencodeagent "github.com/gentleman-programming/gentle-ai/v3/internal/agents/opencode"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/assets"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/backup"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/components/agentguidance"
@@ -130,12 +131,13 @@ func TestSyncOpenCodeAssignmentRejectsSettingsSymlink(t *testing.T) {
 func TestSyncOpenCodeGuidanceRejectsSymlinkBeforeAssignmentStep(t *testing.T) {
 	home := t.TempDir()
 	setOpenCodeTestHome(t, home)
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	selection := model.Selection{Agents: []model.AgentID{model.AgentOpenCode}, ModelAssignments: map[string]model.ModelAssignment{
 		"gentle-orchestrator": {ProviderID: "provider", ModelID: "model"},
 	}}
 	// Prime managed guidance before testing the full sync path with a link.
 	runSyncInjectionSteps(t, home, selection)
-	path := filepath.Join(home, ".config", "opencode", "opencode.json")
+	path := effectiveOpenCodeSettingsPath(home, "", ScopeGlobal, opencodeagent.NewAdapter())
 	original, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
@@ -192,6 +194,8 @@ func TestSyncOpenCodeAssignmentRejectsNonRegularSettings(t *testing.T) {
 	}
 	if err := step.Run(); err == nil {
 		t.Fatal("sync accepted directory at settings path")
+	} else if !strings.Contains(err.Error(), "regular file") || !strings.Contains(err.Error(), "gentle-ai sync") {
+		t.Fatalf("settings refusal lacks an actionable resolution: %v", err)
 	}
 	if info, err := os.Lstat(path); err != nil || !info.IsDir() || len(changed) != 0 {
 		t.Fatalf("directory replaced or reported as changed: %v, %v, %v", info, err, changed)
@@ -201,7 +205,8 @@ func TestSyncOpenCodeAssignmentRejectsNonRegularSettings(t *testing.T) {
 func TestSyncOpenCodeCustomAgentAssignmentPreservesUserVariant(t *testing.T) {
 	home := t.TempDir()
 	setOpenCodeTestHome(t, home)
-	settingsPath := filepath.Join(home, ".config", "opencode", "opencode.json")
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	settingsPath := effectiveOpenCodeSettingsPath(home, "", ScopeGlobal, opencodeagent.NewAdapter())
 	if err := os.MkdirAll(filepath.Dir(settingsPath), 0755); err != nil {
 		t.Fatal(err)
 	}
@@ -245,7 +250,8 @@ func TestSyncOpenCodeCustomAgentAssignmentPreservesUserVariant(t *testing.T) {
 func TestSyncOpenCodeAssignmentsIgnoreRetiredAndOtherAgents(t *testing.T) {
 	home := t.TempDir()
 	setOpenCodeTestHome(t, home)
-	path := filepath.Join(home, ".config", "opencode", "opencode.json")
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	path := effectiveOpenCodeSettingsPath(home, "", ScopeGlobal, opencodeagent.NewAdapter())
 	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
 		t.Fatal(err)
 	}

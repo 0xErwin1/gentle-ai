@@ -731,7 +731,7 @@ func (s openCodeModelAssignmentSyncStep) Run() error {
 	// independently refuses leaf links at publication time.
 	info, err := os.Lstat(s.path)
 	if err == nil && !info.Mode().IsRegular() {
-		return fmt.Errorf("refuse non-regular OpenCode settings %q", s.path)
+		return fmt.Errorf("refuse non-regular OpenCode settings %q: move the symlink or directory aside, place a regular file at this path, then rerun `gentle-ai sync`", s.path)
 	}
 	if err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("stat OpenCode settings: %w", err)
