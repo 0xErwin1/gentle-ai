@@ -362,7 +362,7 @@ func TestBetaTargetBindsModuleAndFullCommit(t *testing.T) {
 	defer server.Close()
 	httpClient = server.Client()
 	httpClient.Transport = &testTransport{server: server, forwardRaw: true}
-	result := checkSingleTool(context.Background(), Tools[0], "3.0.0-0.20260614151827-6eff4a1ba110", system.PlatformProfile{})
+	result := checkSingleTool(context.Background(), Tools[0], "3.0.0-0.20260614151827-6eff4a1ba110", system.PlatformProfile{}, false)
 	want := "go install github.com/gentleman-programming/gentle-ai/v4/cmd/gentle-ai@" + sha
 	if result.Status != UpdateAvailable || result.UpdateHint != want || result.BetaCommit != sha || result.BetaModulePath != "github.com/gentleman-programming/gentle-ai/v4" {
 		t.Fatalf("beta result = %+v; want %s", result, want)
@@ -405,7 +405,7 @@ func TestBetaCheckRejectsUntrustedMetadata(t *testing.T) {
 			defer server.Close()
 			httpClient = server.Client()
 			httpClient.Transport = &testTransport{server: server, module: tc.module, rawStatus: tc.status}
-			got := checkSingleTool(context.Background(), Tools[0], "3.0.0-0.20260614151827-6eff4a1ba110", system.PlatformProfile{})
+			got := checkSingleTool(context.Background(), Tools[0], "3.0.0-0.20260614151827-6eff4a1ba110", system.PlatformProfile{}, false)
 			if got.Status != CheckFailed || got.Err == nil || strings.HasPrefix(got.LatestVersion, "main@") || got.BetaCommit != "" || got.BetaModulePath != "" || strings.Contains(got.UpdateHint, "go install") {
 				t.Fatalf("unchecked beta metadata advertised: %+v", got)
 			}

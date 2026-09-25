@@ -15,7 +15,7 @@ import (
 func TestFromSelectionPreservesInstallAndSyncPlannerSemantics(t *testing.T) {
 	install, err := cli.NormalizeInstallFlags(cli.InstallFlags{
 		Agents:     []string{"opencode"},
-		Components: []string{"engram", "sdd"},
+		Components: []string{"engram", "skills"},
 		Persona:    "neutral",
 		Preset:     "custom",
 	}, system.DetectionResult{})
