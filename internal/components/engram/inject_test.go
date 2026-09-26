@@ -1300,6 +1300,51 @@ func TestInjectCodexIsIdempotent(t *testing.T) {
 	}
 }
 
+func TestInjectCodexPreservesEngramHeaderInsideMultilineString(t *testing.T) {
+	validCodexRuntime(t)
+	home := t.TempDir()
+	configPath := filepath.Join(home, ".codex", "config.toml")
+	if err := os.MkdirAll(filepath.Dir(configPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll error = %v", err)
+	}
+	instructions := `developer_instructions = """
+Example config:
+[mcp_servers.engram]
+command = "fake"
+Keep this text.
+"""`
+	if err := os.WriteFile(configPath, []byte(instructions+"\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(config.toml) error = %v", err)
+	}
+
+	if _, err := Inject(home, codexAdapter()); err != nil {
+		t.Fatalf("Inject(codex) first error = %v", err)
+	}
+	second, err := Inject(home, codexAdapter())
+	if err != nil {
+		t.Fatalf("Inject(codex) second error = %v", err)
+	}
+	if second.Changed {
+		t.Fatalf("Inject(codex) second changed = true (should be idempotent)")
+	}
+
+	content, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("ReadFile(config.toml) error = %v", err)
+	}
+	text := string(content)
+	if !strings.Contains(text, instructions) {
+		t.Fatalf("developer_instructions was not preserved byte-for-byte; got:\n%s", text)
+	}
+	// One header lives in the preserved string, the other is the managed block.
+	if count := strings.Count(text, "[mcp_servers.engram]"); count != 2 {
+		t.Fatalf("config.toml has %d [mcp_servers.engram] lines, want 2; got:\n%s", count, text)
+	}
+	if !strings.Contains(text, `"--tools=agent"`) {
+		t.Fatalf("config.toml missing managed engram block; got:\n%s", text)
+	}
+}
+
 // ─── Codex profile injection tests ───────────────────────────────────────────
 
 func TestInjectCodexPreservesLegacyProfilesWithInstalledCLI(t *testing.T) {
