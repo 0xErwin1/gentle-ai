@@ -3618,6 +3618,32 @@ func TestGentlemanSyncToleratesUnparseableSelectedJSONC(t *testing.T) {
 	}
 }
 
+// TestSyncToleratesUnparseableSelectedJSONCWithAgentComments pins the sync
+// boundary: both sync cleanups skip settings they cannot parse, so a comment
+// inside the agent value must not turn tolerated input into a refusal.
+func TestSyncToleratesUnparseableSelectedJSONCWithAgentComments(t *testing.T) {
+	for _, persona := range []model.PersonaID{model.PersonaGentleman, model.PersonaNeutral} {
+		t.Run(string(persona), func(t *testing.T) {
+			home := t.TempDir()
+			path := filepath.Join(home, "workspace", "opencode.jsonc")
+			original := []byte("{\"agent\": {/* user note */ \"gentleman\": {\"tools\": {\"write\": true}}}")
+			if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(path, original, 0o644); err != nil {
+				t.Fatal(err)
+			}
+
+			if _, err := InjectForSyncAtSettingsPath(home, opencodeAdapter(), persona, path); err != nil {
+				t.Fatalf("sync must tolerate unparseable settings it never rewrites, got %v", err)
+			}
+			if after, err := os.ReadFile(path); err != nil || string(after) != string(original) {
+				t.Fatalf("malformed settings must be preserved untouched: %v\n%s", err, after)
+			}
+		})
+	}
+}
+
 // TestRemoveJSONNestedSubKeyPreservesCommentsForAnyParentKey covers issue
 // #5025 item 6: OpenCode JSONC cleanup keeps comments outside the cleaned
 // subtree for every parent key, and refuses before mutation when the cleaned

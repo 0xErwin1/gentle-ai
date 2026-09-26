@@ -713,7 +713,9 @@ func preflightJSONCAgentCleanup(path string, persona model.PersonaID, syncManage
 	}
 	root, err := filemerge.UnmarshalJSONObject(raw)
 	if err != nil {
-		if filemerge.JSONCAgentHasComments(raw) {
+		// Sync cleanups skip settings they cannot parse, so only install can
+		// reach a lossy rewrite of a malformed, comment-bearing agent value.
+		if !syncManaged && filemerge.JSONCAgentHasComments(raw) {
 			return fmt.Errorf("refuse malformed JSONC agent before persona mutation: %w", err)
 		}
 		return nil
