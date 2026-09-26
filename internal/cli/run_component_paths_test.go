@@ -1262,6 +1262,57 @@ func TestInstallRoutingGuidanceWorkspaceScopeDeliversOpenCodeToHome(t *testing.T
 	}
 }
 
+// TestRoutingLegacyTriggerCleanupTargetsSelectedOpenCodeSettings covers issue
+// #5025 item 2: the retired trigger-rules cleanup must act on the settings file
+// OpenCode loads, never on a non-loaded global decoy, for install and sync.
+func TestRoutingLegacyTriggerCleanupTargetsSelectedOpenCodeSettings(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		sync bool
+	}{{"install", false}, {"sync", true}} {
+		t.Run(tc.name, func(t *testing.T) {
+			home, workspace, selected, decoy, _ := themeSettingsFixture(t)
+			seeded := filemerge.InjectMarkdownSection("", "trigger-rules", "Retired WorkRun ceremony\n")
+			payload, err := json.Marshal(map[string]any{
+				"agent": map[string]any{opencodedefault.ManagedAgent: map[string]any{"prompt": seeded}},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			mustWriteFile(t, decoy, payload)
+			mustWriteFile(t, selected, payload)
+
+			var changed []string
+			step := agentRoutingGuidanceStep{
+				id:           "agent-guidance:" + string(model.AgentOpenCode),
+				agent:        model.AgentOpenCode,
+				homeDir:      home,
+				workspaceDir: workspace,
+				scope:        ScopeGlobal,
+			}
+			if tc.sync {
+				step.changedFiles = &changed
+			}
+			if err := step.Run(); err != nil {
+				t.Fatalf("Run() error = %v", err)
+			}
+
+			if got := readTextFile(t, decoy); got != string(payload) {
+				t.Fatalf("legacy cleanup rewrote the non-loaded decoy %q:\n%s", decoy, got)
+			}
+			if containsPath(changed, decoy) {
+				t.Fatalf("sync reported the non-loaded decoy %q as changed: %v", decoy, changed)
+			}
+			if strings.Contains(readTextFile(t, selected), "Retired WorkRun ceremony") {
+				t.Fatalf("legacy trigger-rules content survived in the selected settings %q", selected)
+			}
+			if tc.sync && !containsPath(changed, selected) {
+				t.Fatalf("sync did not report the selected settings %q as changed: %v", selected, changed)
+			}
+		})
+	}
+}
+
 // TestAgentRoutingGuidanceStepRetiresPiManagedBlocks covers issue #3508: Pi
 // owns APPEND_SYSTEM.md, so routing never injects a new block but does remove
 // the paired stale block an older gentle-ai release wrote.

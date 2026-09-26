@@ -1081,15 +1081,16 @@ func (s agentRoutingGuidanceStep) Run() error {
 		}
 	}
 
+	options := routingGuidanceOptions(s.homeDir, s.workspaceDir, adapter)
+
 	// Strip first: an installation upgraded from an older release still carries
 	// the retired block, and leaving it beside fresh guidance would hand the
 	// agent two conflicting sets of instructions.
-	stripped, err := stripLegacyTriggerRules(targetDir, adapter)
+	stripped, err := stripLegacyTriggerRules(targetDir, adapter, options.SettingsPath)
 	if err != nil {
 		return err
 	}
 
-	options := routingGuidanceOptions(s.homeDir, s.workspaceDir, adapter)
 	if s.agent == model.AgentCodex {
 		options.CodexPhaseModelAssignments = s.codexPhaseModels
 		options.CodexModelAssignments = s.codexEfforts
@@ -1403,10 +1404,17 @@ func (s agentRoutingGuidanceStep) recordChanged(result agentguidance.Result) {
 // Removal reuses filemerge.InjectMarkdownSection with empty content, which is
 // already the defined "delete this section" operation, so no second merge
 // implementation exists that could drift from the injector.
-func stripLegacyTriggerRules(targetDir string, adapter agents.Adapter) (agentguidance.Result, error) {
+//
+// settingsPath is the caller-resolved settings authority the routing injector
+// writes (OpenCode's effective loaded file); when empty, orchestrator-prompt
+// adapters keep their targetDir-derived settings path.
+func stripLegacyTriggerRules(targetDir string, adapter agents.Adapter, settingsPath string) (agentguidance.Result, error) {
 	switch {
 	case adapter.Agent() == model.AgentOpenCode || adapter.Agent() == model.AgentKilocode:
-		return stripLegacyTriggerRulesFromOrchestrator(adapter.SettingsPath(targetDir))
+		if settingsPath == "" {
+			settingsPath = adapter.SettingsPath(targetDir)
+		}
+		return stripLegacyTriggerRulesFromOrchestrator(settingsPath)
 	case adapter.SystemPromptStrategy() == model.StrategyJinjaModules:
 		return removeLegacyTriggerRulesModule(filepath.Join(adapter.GlobalConfigDir(targetDir), legacyTriggerRulesSection+".md"))
 	default:
