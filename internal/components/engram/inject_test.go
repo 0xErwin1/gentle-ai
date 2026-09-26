@@ -2839,6 +2839,29 @@ func TestUpsertCodexTableKeyBeforeMCPServersIgnoresMultilineStrings(t *testing.T
 	}
 }
 
+// TestUpsertCodexTableKeyBeforeMCPServersIgnoresTargetHeaderInMultilineStrings
+// pins #5022: a [features] line inside developer_instructions is text, so the
+// key must go to a real [features] table created outside the string, with or
+// without an MCP block after it.
+func TestUpsertCodexTableKeyBeforeMCPServersIgnoresTargetHeaderInMultilineStrings(t *testing.T) {
+	for _, delimiter := range []string{`"""`, "'''"} {
+		instructions := "developer_instructions = " + delimiter + "\n[features]\nmulti_agent = false\n" + delimiter + "\n"
+		for _, tail := range []string{"", "\n[mcp_servers.context7]\ncommand = \"npx\"\n"} {
+			got := upsertCodexTableKeyBeforeMCPServers(instructions+tail, "features", "multi_agent", "true")
+			if !strings.HasPrefix(got, instructions) {
+				t.Fatalf("delimiter %s tail %q: multiline string text was altered:\n%s", delimiter, tail, got)
+			}
+			table := strings.Index(got, delimiter+"\n\n[features]\nmulti_agent = true\n")
+			if table < 0 {
+				t.Fatalf("delimiter %s tail %q: [features] must be created after the multiline string:\n%s", delimiter, tail, got)
+			}
+			if mcp := strings.Index(got, "[mcp_servers.context7]"); tail != "" && (mcp < 0 || mcp < table) {
+				t.Fatalf("delimiter %s: [features] must stay before the MCP block:\n%s", delimiter, got)
+			}
+		}
+	}
+}
+
 // TestUpsertCodexTableKeyBeforeMCPServersIgnoresDelimitersInStringsAndComments
 // pins that a triple-quote sequence inside an ordinary string or a comment
 // does not open a multiline string, so the real MCP block is still found.
