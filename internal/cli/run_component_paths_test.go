@@ -360,15 +360,30 @@ func TestComponentPathsLegacyCommandsExactAndAbsentFromODD(t *testing.T) {
 	}
 }
 
-func TestComponentPathsSDDIncludesOpenCodeSettingsAndCommands(t *testing.T) {
+// TestComponentPathsSDDOmitsOpenCodeSettingsButKeepsCommands pins that the
+// retired SDD component declares no OpenCode settings or default-agent
+// ownership file: its apply step is a no-op, and the routing guidance owner
+// declares the ownership file it writes (#5025). Legacy commands stay in the
+// inventory for cleanup.
+func TestComponentPathsSDDOmitsOpenCodeSettingsButKeepsCommands(t *testing.T) {
 	home := t.TempDir()
+	workspace := t.TempDir()
 	adapters := resolveAdapters([]model.AgentID{model.AgentOpenCode})
 
 	paths := componentPaths(home, model.Selection{}, adapters, model.ComponentSDD)
 
-	settings := filepath.Join(home, ".config", "opencode", "opencode.json")
-	if !containsPath(paths, settings) {
-		t.Fatalf("componentPaths(sdd) missing OpenCode settings path %q\npaths=%v", settings, paths)
+	for _, scope := range []InstallScope{ScopeGlobal, ScopeWorkspace} {
+		declared := componentPathsWithWorkspaceScoped(home, workspace, scope, model.Selection{}, adapters, model.ComponentSDD)
+		for _, settings := range []string{
+			filepath.Join(home, ".config", "opencode", "opencode.json"),
+			effectiveOpenCodeSettingsPath(home, workspace, scope, adapters[0]),
+		} {
+			for _, retired := range []string{settings, opencodedefault.OwnershipPath(settings)} {
+				if containsPath(declared, retired) {
+					t.Fatalf("componentPaths(sdd, %s) declares %q, which the retired SDD step never writes\npaths=%v", scope, retired, declared)
+				}
+			}
+		}
 	}
 
 	command := filepath.Join(home, ".config", "opencode", "commands", "sdd-init.md")

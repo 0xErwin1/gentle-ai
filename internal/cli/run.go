@@ -2094,6 +2094,16 @@ func (s componentApplyStep) Run() error {
 		} else {
 			engramCommand = installedPath
 		}
+		// Refuse unsafe selected OpenCode settings before `engram setup`, whose
+		// external writes the later merge refusal could not undo.
+		for _, adapter := range adapters {
+			if adapter.Agent() != model.AgentOpenCode {
+				continue
+			}
+			if err := engram.ValidateOpenCodeSettings(openCodeLoadedSettingsPath(s.homeDir, s.workspaceDir, adapter)); err != nil {
+				return fmt.Errorf("inject engram for %q: %w", adapter.Agent(), err)
+			}
+		}
 		setupMode := engram.ParseSetupMode(os.Getenv(engram.SetupModeEnvVar))
 		setupStrict := engram.ParseSetupStrict(os.Getenv(engram.SetupStrictEnvVar))
 
@@ -2990,9 +3000,8 @@ func componentPathsWithWorkspaceScoped(homeDir, workspaceDir string, scope Insta
 				paths = append(paths, legacyassets.SlashCommandPaths(adapter.Agent(), adapter.CommandsDir(targetDir))...)
 			}
 			if adapter.Agent() == model.AgentOpenCode {
-				if p := effectiveOpenCodeSettingsPath(homeDir, workspaceDir, scope, adapter); p != "" {
-					paths = append(paths, p, opencodedefault.OwnershipPath(p))
-				}
+				// The retired SDD step writes no OpenCode settings; the routing
+				// guidance owner declares the default-agent ownership file (#5025).
 				paths = append(paths, openCodeSDDPluginPaths(adapter, targetDir)...)
 				// Shared prompt files in the selected OpenCode config scope — back these up
 				// so a sync does not silently overwrite user-customized prompt content.
