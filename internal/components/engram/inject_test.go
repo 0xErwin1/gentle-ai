@@ -2736,3 +2736,21 @@ func TestUpsertCodexTableKeyBeforeMCPServersIgnoresMultilineStrings(t *testing.T
 		}
 	}
 }
+
+// TestUpsertCodexTableKeyBeforeMCPServersIgnoresDelimitersInStringsAndComments
+// pins that a triple-quote sequence inside an ordinary string or a comment
+// does not open a multiline string, so the real MCP block is still found.
+func TestUpsertCodexTableKeyBeforeMCPServersIgnoresDelimitersInStringsAndComments(t *testing.T) {
+	for _, prefix := range []string{
+		"note = '\"\"\"'\n",
+		"# a comment with \"\"\" in it\n",
+	} {
+		content := prefix + "\n[mcp_servers.context7]\ncommand = \"npx\"\n"
+		got := upsertCodexTableKeyBeforeMCPServers(content, "features", "multi_agent", "true")
+		table := strings.Index(got, "[features]\n")
+		mcp := strings.Index(got, "[mcp_servers.context7]")
+		if table < 0 || table > mcp {
+			t.Fatalf("prefix %q: [features] must be inserted before the MCP block:\n%s", prefix, got)
+		}
+	}
+}
