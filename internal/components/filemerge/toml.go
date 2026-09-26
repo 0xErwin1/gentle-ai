@@ -23,35 +23,7 @@ func UpsertCodexEngramBlock(content, engramCmd string) string {
 	// e.g. C:\Users\foo → C:\\Users\\foo — prevents TOML unicode escape errors (\U).
 	escapedCmd := strings.ReplaceAll(engramCmd, `\`, `\\`)
 	codexEngramBlock := "[mcp_servers.engram]\ncommand = \"" + escapedCmd + "\"\nargs = [\"mcp\", \"--tools=agent\"]"
-	content = strings.ReplaceAll(content, "\r\n", "\n")
-	lines := strings.Split(content, "\n")
-
-	var kept []string
-	for i := 0; i < len(lines); {
-		trimmed := strings.TrimSpace(lines[i])
-		if trimmed == "[mcp_servers.engram]" {
-			// Skip the old block header and all its key-value lines.
-			i++
-			for i < len(lines) {
-				next := strings.TrimSpace(lines[i])
-				if strings.HasPrefix(next, "[") && strings.HasSuffix(next, "]") {
-					break
-				}
-				i++
-			}
-			continue
-		}
-
-		kept = append(kept, lines[i])
-		i++
-	}
-
-	base := strings.TrimSpace(strings.Join(kept, "\n"))
-	if base == "" {
-		return codexEngramBlock + "\n"
-	}
-
-	return base + "\n\n" + codexEngramBlock + "\n"
+	return replaceCodexMCPServerBlock(content, "[mcp_servers.engram]", codexEngramBlock)
 }
 
 // UpsertCodexMCPServerBlock removes any existing [mcp_servers.<serverID>] block
@@ -77,35 +49,7 @@ func UpsertCodexMCPServerBlock(content, serverID, command string, args []string)
 
 	block := header + "\ncommand = \"" + escapedCmd + "\"\n" + argsLine
 
-	content = strings.ReplaceAll(content, "\r\n", "\n")
-	lines := strings.Split(content, "\n")
-
-	var kept []string
-	for i := 0; i < len(lines); {
-		trimmed := strings.TrimSpace(lines[i])
-		if trimmed == header {
-			// Skip the old block header and all its key-value lines.
-			i++
-			for i < len(lines) {
-				next := strings.TrimSpace(lines[i])
-				if strings.HasPrefix(next, "[") && strings.HasSuffix(next, "]") {
-					break
-				}
-				i++
-			}
-			continue
-		}
-
-		kept = append(kept, lines[i])
-		i++
-	}
-
-	base := strings.TrimSpace(strings.Join(kept, "\n"))
-	if base == "" {
-		return block + "\n"
-	}
-
-	return base + "\n\n" + block + "\n"
+	return replaceCodexMCPServerBlock(content, header, block)
 }
 
 // UpsertCodexRemoteMCPServerBlock removes any existing [mcp_servers.<serverID>]
@@ -118,17 +62,25 @@ func UpsertCodexRemoteMCPServerBlock(content, serverID, url string) string {
 	escapedURL := strings.ReplaceAll(url, `\`, `\\`)
 	block := header + "\nurl = \"" + escapedURL + "\""
 
+	return replaceCodexMCPServerBlock(content, header, block)
+}
+
+// replaceCodexMCPServerBlock removes every existing table whose header is
+// exactly header, together with its key-value lines, and appends block at EOF.
+// Header-like lines inside a multiline string are value text: they neither
+// start nor end a removed block, so user strings are kept byte-for-byte.
+func replaceCodexMCPServerBlock(content, header, block string) string {
 	content = strings.ReplaceAll(content, "\r\n", "\n")
 	lines := strings.Split(content, "\n")
+	inString := tomlMultilineStringLines(lines)
 
 	var kept []string
 	for i := 0; i < len(lines); {
-		trimmed := strings.TrimSpace(lines[i])
-		if trimmed == header {
+		if !inString[i] && strings.TrimSpace(lines[i]) == header {
+			// Skip the old block header and all its key-value lines.
 			i++
 			for i < len(lines) {
-				next := strings.TrimSpace(lines[i])
-				if strings.HasPrefix(next, "[") && strings.HasSuffix(next, "]") {
+				if !inString[i] && isTOMLTableHeader(strings.TrimSpace(lines[i])) {
 					break
 				}
 				i++

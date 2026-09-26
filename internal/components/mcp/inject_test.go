@@ -1277,6 +1277,49 @@ args = ["mcp", "--tools=agent"]
 	}
 }
 
+func TestInjectCodexContext7PreservesHeaderInsideMultilineString(t *testing.T) {
+	home := t.TempDir()
+	configTOML := filepath.Join(home, ".codex", "config.toml")
+	if err := os.MkdirAll(filepath.Dir(configTOML), 0o755); err != nil {
+		t.Fatalf("MkdirAll error = %v", err)
+	}
+	instructions := `developer_instructions = '''
+Example config:
+[mcp_servers.context7]
+command = "fake"
+Keep this text.
+'''`
+	existing := instructions + `
+
+[mcp_servers.context7]
+command = "npx"
+args = ["-y", "context7-mcp"]
+`
+	if err := os.WriteFile(configTOML, []byte(existing), 0o644); err != nil {
+		t.Fatalf("WriteFile(config.toml) error = %v", err)
+	}
+
+	if _, err := Inject(home, home, codex.NewAdapter()); err != nil {
+		t.Fatalf("Inject(codex) first error = %v", err)
+	}
+	second, err := Inject(home, home, codex.NewAdapter())
+	if err != nil {
+		t.Fatalf("Inject(codex) second error = %v", err)
+	}
+	if second.Changed {
+		t.Fatal("Inject(codex) second changed = true (should be idempotent)")
+	}
+
+	content, err := os.ReadFile(configTOML)
+	if err != nil {
+		t.Fatalf("ReadFile(config.toml) error = %v", err)
+	}
+	want := instructions + "\n\n[mcp_servers.context7]\nurl = \"https://mcp.context7.com/mcp\"\n"
+	if got := string(content); got != want {
+		t.Fatalf("config.toml mismatch:\nwant:\n%s\ngot:\n%s", want, got)
+	}
+}
+
 func TestInjectVSCodeWritesContext7ToMCPConfigFile(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
