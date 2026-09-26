@@ -18,6 +18,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v3/internal/agents/openclaw"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/agents/opencode"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/assets"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/components/filemerge"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
 )
 
@@ -2385,7 +2386,7 @@ func TestJSONCCleanupPreservesNestedCustomAgentComments(t *testing.T) {
 		apply func(string) error
 	}{
 		{"neutral removes gentleman", func(path string) error {
-			_, err := removeJSONNestedSubKey(path, "agent", "gentleman")
+			_, err := removeJSONNestedSubKey(path, "agent", "gentleman", true)
 			return err
 		}},
 		{"sync removes legacy tools", func(path string) error {
@@ -3207,7 +3208,7 @@ func TestMergeJSONFileToleratingMalformed(t *testing.T) {
 			t.Fatalf("WriteFile(valid): %v", err)
 		}
 
-		result, err := mergeJSONFileToleratingMalformed(path, []byte(`{"outputStyle":"Neutral"}`))
+		result, err := mergeJSONFileToleratingMalformed(path, []byte(`{"outputStyle":"Neutral"}`), false)
 		if err != nil {
 			t.Fatalf("mergeJSONFileToleratingMalformed(valid) error = %v", err)
 		}
@@ -3235,7 +3236,7 @@ func TestMergeJSONFileToleratingMalformed(t *testing.T) {
 			t.Fatalf("WriteFile(malformed overlay): %v", err)
 		}
 
-		result, err := mergeJSONFileToleratingMalformed(path, []byte(`{"outputStyle":"Neutral"`))
+		result, err := mergeJSONFileToleratingMalformed(path, []byte(`{"outputStyle":"Neutral"`), false)
 		if err != nil {
 			t.Fatalf("mergeJSONFileToleratingMalformed(malformed overlay) error = %v", err)
 		}
@@ -3259,7 +3260,7 @@ func TestMergeJSONFileToleratingMalformed(t *testing.T) {
 			return nil, fmt.Errorf("permission denied")
 		}
 
-		if _, err := mergeJSONFileToleratingMalformed(filepath.Join(home, "denied.json"), []byte(`{}`)); err == nil {
+		if _, err := mergeJSONFileToleratingMalformed(filepath.Join(home, "denied.json"), []byte(`{}`), false); err == nil {
 			t.Fatal("mergeJSONFileToleratingMalformed(non-json error) error = nil")
 		}
 	})
@@ -3442,6 +3443,102 @@ func TestHermesPersonaAssetsContainIdentitySection(t *testing.T) {
 			}
 			if !strings.Contains(content, "Hermes") {
 				t.Fatalf("%s ## Identity section must mention \"Hermes\"", path)
+			}
+		})
+	}
+}
+
+func TestNonOpenCodeCommentedSettingsKeepBasePersonaMerge(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		adapter  agents.Adapter
+		persona  model.PersonaID
+		content  string
+		wantSame bool
+	}{
+		{"kilocode gentleman with duplicate keys", kilocodeAdapter(), model.PersonaGentleman, "{\n  // user note\n  \"theme\": \"a\",\n  \"theme\": \"b\"\n}\n", false},
+		{"kilocode gentleman with nested agent comments", kilocodeAdapter(), model.PersonaGentleman, "{\n  \"agent\": {/* keep */\"custom\": {}}\n}\n", false},
+		{"kilocode neutral with nested agent comments", kilocodeAdapter(), model.PersonaNeutral, "{\n  \"agent\": {\"gentleman\": {} /* keep */}\n}\n", true},
+		{"claude gentleman with duplicate keys", claudeAdapter(), model.PersonaGentleman, "{\n  // user note\n  \"theme\": \"a\",\n  \"theme\": \"b\"\n}\n", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			home := t.TempDir()
+			settings := tc.adapter.SettingsPath(home)
+			if err := os.MkdirAll(filepath.Dir(settings), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(settings, []byte(tc.content), 0o644); err != nil {
+				t.Fatal(err)
+			}
+
+			if _, err := Inject(home, tc.adapter, tc.persona); err != nil {
+				t.Fatalf("Inject() error = %v; want base persona merge, not an OpenCode JSONC refusal", err)
+			}
+			after, err := os.ReadFile(settings)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if tc.wantSame && string(after) != tc.content {
+				t.Fatalf("base cleanup skips non-strict JSON; settings changed:\n%s", after)
+			}
+			if !tc.wantSame {
+				if _, err := filemerge.UnmarshalJSONObject(after); err != nil || strings.Contains(string(after), "//") || strings.Contains(string(after), "/*") {
+					t.Fatalf("base merge re-encodes strict JSON; got %v\n%s", err, after)
+				}
+			}
+		})
+	}
+}
+
+func TestMalformedSelectedJSONCRefusesGentlemanInstallBeforePromptMutation(t *testing.T) {
+	home := t.TempDir()
+	adapter := opencodeAdapter()
+	path := filepath.Join(home, "workspace", "opencode.jsonc")
+	original := []byte("{\n  // user note\n  \"theme\": \"user\",,\n")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, original, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := InjectAtSettingsPath(home, adapter, model.PersonaGentleman, path)
+	if err == nil || !strings.Contains(err.Error(), "malformed JSONC") || !strings.Contains(err.Error(), path) {
+		t.Fatalf("InjectAtSettingsPath() error = %v; want actionable malformed JSONC refusal naming the file", err)
+	}
+	if _, statErr := os.Stat(adapter.SystemPromptFile(home)); !os.IsNotExist(statErr) {
+		t.Fatalf("prompt written before malformed JSONC refusal: %v", statErr)
+	}
+	if after, readErr := os.ReadFile(path); readErr != nil || string(after) != string(original) {
+		t.Fatalf("settings changed on refusal: %v\n%s", readErr, after)
+	}
+}
+
+func TestMalformedSelectedJSONCKeepsToleranceOutsideGentlemanInstall(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		persona model.PersonaID
+		inject  func(string, agents.Adapter, model.PersonaID, string) (InjectionResult, error)
+	}{
+		{"neutral install", model.PersonaNeutral, InjectAtSettingsPath},
+		{"neutral sync", model.PersonaNeutral, InjectForSyncAtSettingsPath},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			home := t.TempDir()
+			path := filepath.Join(home, "workspace", "opencode.jsonc")
+			original := []byte("{\"agent\":")
+			if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(path, original, 0o644); err != nil {
+				t.Fatal(err)
+			}
+
+			if _, err := tc.inject(home, opencodeAdapter(), tc.persona, path); err != nil {
+				t.Fatalf("malformed settings must stay tolerated outside the Gentleman install, got %v", err)
+			}
+			if after, err := os.ReadFile(path); err != nil || string(after) != string(original) {
+				t.Fatalf("malformed settings must be preserved untouched: %v\n%s", err, after)
 			}
 		})
 	}

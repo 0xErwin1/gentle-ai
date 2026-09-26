@@ -42,7 +42,7 @@ func TestJSONCMergesRefuseDuplicateKeysBeforeMapRewrite(t *testing.T) {
 				fn   func(string, []byte, []byte) ([]byte, error)
 			}{
 				{"overlay", MergeJSONObjectsForPath},
-				{"defaults", MergeJSONDefaultsForPath},
+				{"defaults", MergeOpenCodeJSONDefaultsForPath},
 			} {
 				t.Run(merge.name, func(t *testing.T) {
 					got, err := merge.fn("opencode.jsonc", base, []byte(tc.overlay))
@@ -311,7 +311,7 @@ func TestMergeJSONObjectsSupportsJSONCBase(t *testing.T) {
 	}
 }
 
-func TestMergeJSONObjectsPreserveJSONCKeepsCommentsAndTrailingCommas(t *testing.T) {
+func TestMergeOpenCodeJSONCObjectsKeepsCommentsAndTrailingCommas(t *testing.T) {
 	base := []byte(`{
   // user provider note
   "provider": {
@@ -324,9 +324,9 @@ func TestMergeJSONObjectsPreserveJSONCKeepsCommentsAndTrailingCommas(t *testing.
 }`)
 	overlay := []byte(`{"mcp":{"context7":{"type":"remote","enabled":true}}}`)
 
-	merged, err := MergeJSONObjectsPreserveJSONC(base, overlay)
+	merged, err := MergeOpenCodeJSONCObjects(base, overlay)
 	if err != nil {
-		t.Fatalf("MergeJSONObjectsPreserveJSONC() error = %v", err)
+		t.Fatalf("MergeOpenCodeJSONCObjects() error = %v", err)
 	}
 	text := string(merged)
 	for _, want := range []string{"// user provider note", `"m": {},`, "// managed server note"} {
@@ -347,15 +347,15 @@ func TestMergeJSONObjectsPreserveJSONCKeepsCommentsAndTrailingCommas(t *testing.
 	}
 }
 
-func TestMergeJSONObjectsPreserveJSONCInsertsMissingKeyAndUnwrapsSentinel(t *testing.T) {
+func TestMergeOpenCodeJSONCObjectsInsertsMissingKeyAndUnwrapsSentinel(t *testing.T) {
 	base := []byte(`{
   "provider": {"local": {}} // keep provider note
 }`)
 	overlay := []byte(`{"mcp":{"engram":{"__replace__":{"command":["engram","mcp"],"type":"local"}}}}`)
 
-	merged, err := MergeJSONObjectsPreserveJSONC(base, overlay)
+	merged, err := MergeOpenCodeJSONCObjects(base, overlay)
 	if err != nil {
-		t.Fatalf("MergeJSONObjectsPreserveJSONC() error = %v", err)
+		t.Fatalf("MergeOpenCodeJSONCObjects() error = %v", err)
 	}
 	text := string(merged)
 	if strings.Contains(text, "__replace__") {
@@ -375,7 +375,7 @@ func TestMergeJSONObjectsPreserveJSONCInsertsMissingKeyAndUnwrapsSentinel(t *tes
 	}
 }
 
-func TestMergeJSONObjectsPreserveJSONCInsertionIgnoresClosingBraceComments(t *testing.T) {
+func TestMergeOpenCodeJSONCObjectsInsertionIgnoresClosingBraceComments(t *testing.T) {
 	base := []byte(`{
   "provider": {"local": {}} // keep provider note
 }
@@ -383,9 +383,9 @@ func TestMergeJSONObjectsPreserveJSONCInsertionIgnoresClosingBraceComments(t *te
 `)
 	overlay := []byte(`{"mcp":{"context7":{"type":"remote"}}}`)
 
-	merged, err := MergeJSONObjectsPreserveJSONC(base, overlay)
+	merged, err := MergeOpenCodeJSONCObjects(base, overlay)
 	if err != nil {
-		t.Fatalf("MergeJSONObjectsPreserveJSONC() error = %v", err)
+		t.Fatalf("MergeOpenCodeJSONCObjects() error = %v", err)
 	}
 	if _, err := UnmarshalJSONObject(merged); err != nil {
 		t.Fatalf("merged JSONC no longer parses: %v\n%s", err, string(merged))
@@ -395,37 +395,37 @@ func TestMergeJSONObjectsPreserveJSONCInsertionIgnoresClosingBraceComments(t *te
 	}
 }
 
-func TestMergeJSONObjectsPreserveJSONCExistingFinalMemberIdempotent(t *testing.T) {
+func TestMergeOpenCodeJSONCObjectsExistingFinalMemberIdempotent(t *testing.T) {
 	base := []byte("{\n  \"theme\": \"default\"  \n}\n")
 	overlay := []byte(`{"theme":"gentleman"}`)
 
-	merged, err := MergeJSONObjectsPreserveJSONC(base, overlay)
+	merged, err := MergeOpenCodeJSONCObjects(base, overlay)
 	if err != nil {
-		t.Fatalf("MergeJSONObjectsPreserveJSONC() error = %v", err)
+		t.Fatalf("MergeOpenCodeJSONCObjects() error = %v", err)
 	}
-	mergedAgain, err := MergeJSONObjectsPreserveJSONC(merged, overlay)
+	mergedAgain, err := MergeOpenCodeJSONCObjects(merged, overlay)
 	if err != nil {
-		t.Fatalf("MergeJSONObjectsPreserveJSONC() second merge error = %v", err)
+		t.Fatalf("MergeOpenCodeJSONCObjects() second merge error = %v", err)
 	}
 	if string(mergedAgain) != string(merged) {
 		t.Fatalf("repeated merge changed bytes:\nfirst:\n%s\nsecond:\n%s", string(merged), string(mergedAgain))
 	}
 }
 
-func TestMergeJSONObjectsPreserveJSONCRejectsMalformedInputWithoutReplacingBytes(t *testing.T) {
+func TestMergeOpenCodeJSONCObjectsRejectsMalformedInputWithoutReplacingBytes(t *testing.T) {
 	base := []byte("// interrupted user edit\n{\n  \"mcp\": {\n")
 	overlay := []byte(`{"mcp":{"context7":{"type":"remote"}}}`)
 
-	merged, err := MergeJSONObjectsPreserveJSONC(base, overlay)
+	merged, err := MergeOpenCodeJSONCObjects(base, overlay)
 	if err == nil {
-		t.Fatal("MergeJSONObjectsPreserveJSONC() error = nil, want refusal for malformed JSONC")
+		t.Fatal("MergeOpenCodeJSONCObjects() error = nil, want refusal for malformed JSONC")
 	}
 	if string(merged) != string(base) {
 		t.Fatalf("malformed JSONC was replaced:\n got: %q\nwant: %q", merged, base)
 	}
 }
 
-func TestMergeJSONObjectsPreserveJSONCRejectsDuplicateTouchedTopLevelKey(t *testing.T) {
+func TestMergeOpenCodeJSONCObjectsRejectsDuplicateTouchedTopLevelKey(t *testing.T) {
 	base := []byte(`{
   "agent": {"effective": "stale"},
   "agent": {"effective": "current"}
@@ -433,9 +433,9 @@ func TestMergeJSONObjectsPreserveJSONCRejectsDuplicateTouchedTopLevelKey(t *test
 `)
 	overlay := []byte(`{"agent":{"managed":true}}`)
 
-	merged, err := MergeJSONObjectsPreserveJSONC(base, overlay)
+	merged, err := MergeOpenCodeJSONCObjects(base, overlay)
 	if err == nil {
-		t.Fatal("MergeJSONObjectsPreserveJSONC() error = nil, want refusal for duplicate touched top-level key")
+		t.Fatal("MergeOpenCodeJSONCObjects() error = nil, want refusal for duplicate touched top-level key")
 	}
 	if string(merged) != string(base) {
 		t.Fatalf("duplicate-key JSONC was modified on refusal:\n got: %q\nwant: %q", merged, base)
@@ -773,4 +773,31 @@ func TestMergeJSONObjects_Issue278_ReplaceSentinelFixesWildcard(t *testing.T) {
 	}
 
 	t.Logf("CONFIRMED: __replace__ produces exactly %d task keys (no wildcard)", len(task))
+}
+
+func TestSharedJSONMergesKeepBaseBehaviorWithoutOpenCodeOptIn(t *testing.T) {
+	kilocodeDefaults := func(base, overlay []byte) ([]byte, error) {
+		return MergeJSONDefaultsForPath("opencode.json", base, overlay)
+	}
+	kilocodeOverlay := func(base, overlay []byte) ([]byte, error) {
+		return MergeJSONObjectsForPath("opencode.json", base, overlay)
+	}
+	for _, tc := range []struct {
+		name, base, overlay string
+		merge               func([]byte, []byte) ([]byte, error)
+	}{
+		{"defaults over duplicate keys", `{"permission":{"bash":{"ssh":"deny","ssh":"allow"}}}`, `{"permission":{"read":{"*":"allow"}}}`, kilocodeDefaults},
+		{"json overlay over duplicate keys", "{\n  // note\n  \"mcp\":{\"a\":1,\"a\":2}\n}\n", `{"theme":"x"}`, kilocodeOverlay},
+		{"json overlay over nested comments", "{\n  \"agent\":{/* keep */\"custom\":{}}\n}\n", `{"agent":{"gentleman":{}}}`, kilocodeOverlay},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := tc.merge([]byte(tc.base), []byte(tc.overlay))
+			if err != nil {
+				t.Fatalf("shared merge must keep base behavior without the OpenCode opt-in; got %v", err)
+			}
+			if _, err := UnmarshalJSONObject(got); err != nil {
+				t.Fatalf("merged output is not a JSON object: %v\n%s", err, got)
+			}
+		})
+	}
 }

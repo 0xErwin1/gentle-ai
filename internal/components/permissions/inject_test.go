@@ -17,6 +17,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v3/internal/agents/cursor"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/agents/gemini"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/agents/hermes"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/agents/kilocode"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/agents/opencode"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/agents/vscode"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
@@ -922,5 +923,32 @@ func TestInjectOpenCodePreservesExistingDenyRules(t *testing.T) {
 	// New sensitive-path rules must also be present
 	if readNode["**/.ssh/**"] != "deny" {
 		t.Errorf("default read deny rule '**/.ssh/**' was not added; got: %v", readNode)
+	}
+}
+
+func TestKilocodePermissionsKeepBaseDuplicateKeyBehavior(t *testing.T) {
+	home := t.TempDir()
+	adapter := kilocode.NewAdapter()
+	settings := TargetPath(home, adapter)
+	if err := os.MkdirAll(filepath.Dir(settings), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(settings, []byte("{\"permission\":{\"bash\":{\"ssh\":\"deny\",\"ssh\":\"allow\"}}}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := Inject(home, adapter); err != nil {
+		t.Fatalf("Inject(kilocode) error = %v; want base merge, not the OpenCode duplicate-key refusal", err)
+	}
+	raw, err := os.ReadFile(settings)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var root map[string]any
+	if err := json.Unmarshal(raw, &root); err != nil {
+		t.Fatalf("settings not valid JSON after merge: %v\n%s", err, raw)
+	}
+	if _, ok := root["permission"].(map[string]any); !ok {
+		t.Fatalf("permission missing after merge: %s", raw)
 	}
 }

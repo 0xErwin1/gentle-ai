@@ -139,7 +139,7 @@ func injectMergeIntoSettings(homeDir string, adapter agents.Adapter, selectedSet
 
 	overlay := DefaultContext7OverlayJSON()
 	if adapter.Agent() == model.AgentOpenCode || adapter.Agent() == model.AgentKilocode {
-		return injectOpenCodeMergeIntoSettings(settingsPath)
+		return injectOpenCodeMergeIntoSettings(settingsPath, adapter.Agent())
 	}
 	if adapter.Agent() == model.AgentOpenClaw {
 		return injectOpenClawMergeIntoSettings(settingsPath)
@@ -153,9 +153,14 @@ func injectMergeIntoSettings(homeDir string, adapter agents.Adapter, selectedSet
 	return InjectionResult{Changed: settingsWrite.Changed, Files: []string{settingsPath}}, nil
 }
 
-func injectOpenCodeMergeIntoSettings(settingsPath string) (InjectionResult, error) {
-	if err := filemerge.RefuseLockedSettingsFile(settingsPath); err != nil {
-		return InjectionResult{}, err
+// injectOpenCodeMergeIntoSettings serves OpenCode and its Kilocode fork. Only
+// OpenCode settings refuse symlinked, non-regular or locked files; Kilocode
+// keeps the shared writer behavior.
+func injectOpenCodeMergeIntoSettings(settingsPath string, agent model.AgentID) (InjectionResult, error) {
+	if agent == model.AgentOpenCode {
+		if err := filemerge.RefuseLockedSettingsFile(settingsPath); err != nil {
+			return InjectionResult{}, err
+		}
 	}
 	baseJSON, err := osReadFile(settingsPath)
 	if err != nil {

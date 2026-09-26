@@ -23,6 +23,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v3/internal/agents/openclaw"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/agents/opencode"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/agents/vscode"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/versions"
 )
 
@@ -45,7 +46,7 @@ func TestContext7SelectedSettingsRefuseNestedCommentsAndLockedMode(t *testing.T)
 			if err := os.Chmod(path, tc.mode); err != nil {
 				t.Fatal(err)
 			}
-			_, err := injectOpenCodeMergeIntoSettings(path)
+			_, err := injectOpenCodeMergeIntoSettings(path, model.AgentOpenCode)
 			if err == nil || !strings.Contains(err.Error(), "refuse") {
 				t.Fatalf("want actionable refusal, got %v", err)
 			}
@@ -75,7 +76,7 @@ func TestContext7SelectedSettingsPreservePrivateMode(t *testing.T) {
 	if err := os.WriteFile(path, []byte("{\"mcp\":{}}\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := injectOpenCodeMergeIntoSettings(path); err != nil {
+	if _, err := injectOpenCodeMergeIntoSettings(path, model.AgentOpenCode); err != nil {
 		t.Fatal(err)
 	}
 	if runtime.GOOS == "windows" {
@@ -1600,5 +1601,36 @@ func TestMergeJSONFilePreservesExistingModeOnRewrite(t *testing.T) {
 	}
 	if got := info.Mode().Perm(); got != 0o600 {
 		t.Fatalf("mode after mergeJSONFile = %v, want 0600 preserved", got)
+	}
+}
+
+func TestKilocodeSymlinkedContext7SettingsKeepBaseWriterBehavior(t *testing.T) {
+	home := t.TempDir()
+	adapter := kilocodeAdapter()
+	settings := adapter.SettingsPath(home)
+	target := filepath.Join(home, "dotfiles", "opencode.json")
+	original := []byte("{\"mcp\":{}}\n")
+	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(settings), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(target, original, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, settings); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+
+	_, err := Inject(home, home, adapter)
+	if err == nil || !strings.Contains(err.Error(), "refusing to read symlink") || strings.Contains(err.Error(), "select a regular settings file") {
+		t.Fatalf("Inject(kilocode) error = %v; want base writer symlink error, not the OpenCode refusal", err)
+	}
+	if link, err := os.Readlink(settings); err != nil || link != target {
+		t.Fatalf("settings symlink changed: %q, %v", link, err)
+	}
+	if got, err := os.ReadFile(target); err != nil || string(got) != string(original) {
+		t.Fatalf("settings target changed: %q, %v", got, err)
 	}
 }

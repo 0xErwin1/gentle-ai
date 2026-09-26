@@ -35,17 +35,24 @@ func MergeJSONObjects(baseJSON []byte, overlayJSON []byte) ([]byte, error) {
 // MergeJSONObjectsForPath selects the JSON object merge mode appropriate for
 // path. JSONC files preserve comments and formatting around untouched values;
 // strict JSON files are normalized through standard JSON encoding.
+//
+// Only the OpenCode adapter resolves a .jsonc settings path, so the JSONC branch
+// is the OpenCode merge (see MergeOpenCodeJSONCObjects); every .json path keeps
+// the shared merge behavior for all agents.
 func MergeJSONObjectsForPath(path string, baseJSON []byte, overlayJSON []byte) ([]byte, error) {
 	if strings.HasSuffix(path, ".jsonc") {
-		return MergeJSONObjectsPreserveJSONC(baseJSON, overlayJSON)
+		return MergeOpenCodeJSONCObjects(baseJSON, overlayJSON)
 	}
 	return MergeJSONObjects(baseJSON, overlayJSON)
 }
 
-// MergeJSONObjectsPreserveJSONC merges JSON object overlays while preserving the
-// surrounding JSONC document text. It rewrites only top-level values touched by
-// the overlay, keeping unrelated comments and trailing commas intact.
-func MergeJSONObjectsPreserveJSONC(baseJSON []byte, overlayJSON []byte) ([]byte, error) {
+// MergeOpenCodeJSONCObjects merges JSON object overlays into OpenCode settings
+// while preserving the surrounding JSONC document text. It rewrites only
+// top-level values touched by the overlay, keeping unrelated comments and
+// trailing commas intact. It refuses duplicate keys at any depth, escaped
+// spellings of touched keys and comments inside touched values, all of which
+// the map-based rewrite would silently collapse or discard.
+func MergeOpenCodeJSONCObjects(baseJSON []byte, overlayJSON []byte) ([]byte, error) {
 	if len(bytes.TrimSpace(baseJSON)) == 0 {
 		return MergeJSONObjects(baseJSON, overlayJSON)
 	}
@@ -102,8 +109,21 @@ func MarshalJSONPreservingPermissions(base []byte, value any) ([]byte, error) {
 // New rules precede existing rules, except an initial catch-all allow remains
 // the fallback before new defaults. Existing rule order and scalar values win.
 func MergeJSONDefaultsForPath(path string, baseJSON, defaultsJSON []byte) ([]byte, error) {
-	if err := RejectDuplicateJSONKeys(baseJSON); err != nil {
-		return nil, fmt.Errorf("refuse defaults over settings; resolve duplicate keys and retry: %w", err)
+	return mergeJSONDefaultsForPath(path, baseJSON, defaultsJSON, false)
+}
+
+// MergeOpenCodeJSONDefaultsForPath is MergeJSONDefaultsForPath for OpenCode
+// settings writers. It additionally refuses duplicate keys at any depth,
+// escaped spellings of touched keys and comments inside touched JSONC values.
+func MergeOpenCodeJSONDefaultsForPath(path string, baseJSON, defaultsJSON []byte) ([]byte, error) {
+	return mergeJSONDefaultsForPath(path, baseJSON, defaultsJSON, true)
+}
+
+func mergeJSONDefaultsForPath(path string, baseJSON, defaultsJSON []byte, openCode bool) ([]byte, error) {
+	if openCode {
+		if err := RejectDuplicateJSONKeys(baseJSON); err != nil {
+			return nil, fmt.Errorf("refuse defaults over settings; resolve duplicate keys and retry: %w", err)
+		}
 	}
 	base, err := unmarshalJSONObject(baseJSON)
 	if err != nil {
@@ -126,13 +146,13 @@ func MergeJSONDefaultsForPath(path string, baseJSON, defaultsJSON []byte) ([]byt
 	}
 	updated := string(baseJSON)
 	for key := range defaults {
-		if _, present := base[key]; present && topLevelJSONCKeyCount(updated, key) == 0 {
+		if _, present := base[key]; openCode && present && topLevelJSONCKeyCount(updated, key) == 0 {
 			return nil, fmt.Errorf("refuse to rewrite JSONC %q with an escaped key spelling; use its unescaped spelling and retry", key)
 		}
 		if topLevelJSONCKeyCount(updated, key) > 1 {
 			return nil, fmt.Errorf("duplicate defaults key %q", key)
 		}
-		if JSONCTopLevelValueHasComments([]byte(updated), key) {
+		if openCode && JSONCTopLevelValueHasComments([]byte(updated), key) {
 			return nil, fmt.Errorf("refuse to rewrite JSONC %q with nested comments; move comments outside this value before retrying", key)
 		}
 		updated = upsertTopLevelJSONCValue(updated, key, string(members[key]))

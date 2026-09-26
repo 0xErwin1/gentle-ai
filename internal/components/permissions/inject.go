@@ -183,8 +183,14 @@ func InjectAtPath(settingsPath string, adapter agents.Adapter) (InjectionResult,
 		}
 	}
 
-	defaults := adapter.Agent() == model.AgentOpenCode || adapter.Agent() == model.AgentKilocode
-	writeResult, err := mergeJSONFile(settingsPath, overlay, defaults)
+	merge := filemerge.MergeJSONObjectsForPath
+	switch adapter.Agent() {
+	case model.AgentOpenCode:
+		merge = filemerge.MergeOpenCodeJSONDefaultsForPath
+	case model.AgentKilocode:
+		merge = filemerge.MergeJSONDefaultsForPath
+	}
+	writeResult, err := mergeJSONFile(settingsPath, overlay, merge)
 	if err != nil {
 		return InjectionResult{}, err
 	}
@@ -192,16 +198,12 @@ func InjectAtPath(settingsPath string, adapter agents.Adapter) (InjectionResult,
 	return InjectionResult{Changed: writeResult.Changed, Files: []string{settingsPath}}, nil
 }
 
-func mergeJSONFile(path string, overlay []byte, defaults bool) (filemerge.WriteResult, error) {
+func mergeJSONFile(path string, overlay []byte, merge func(string, []byte, []byte) ([]byte, error)) (filemerge.WriteResult, error) {
 	baseJSON, err := osReadFile(path)
 	if err != nil {
 		return filemerge.WriteResult{}, err
 	}
 
-	merge := filemerge.MergeJSONObjectsForPath
-	if defaults {
-		merge = filemerge.MergeJSONDefaultsForPath
-	}
 	merged, err := merge(path, baseJSON, overlay)
 	if err != nil {
 		return filemerge.WriteResult{}, err
