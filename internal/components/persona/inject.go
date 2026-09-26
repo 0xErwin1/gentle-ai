@@ -79,7 +79,13 @@ var kilocodeAgentOverlayJSON = []byte("{\n  \"agent\": {\n    \"gentleman\": {\n
 // the OpenCode/Kilocode `gentleman` agent definition in settings JSON, AND
 // the Claude Code output-style overlay. Used by `gentle-ai install`.
 func Inject(homeDir string, adapter agents.Adapter, persona model.PersonaID) (InjectionResult, error) {
-	return injectInternal(homeDir, adapter, persona, false)
+	return injectInternal(homeDir, adapter, persona, false, "")
+}
+
+// InjectAtSettingsPath keeps persona assets scoped to homeDir while targeting
+// the caller-selected OpenCode settings file for managed agent mutations.
+func InjectAtSettingsPath(homeDir string, adapter agents.Adapter, persona model.PersonaID, settingsPath string) (InjectionResult, error) {
+	return injectInternal(homeDir, adapter, persona, false, settingsPath)
 }
 
 // InjectForSync regenerates the persona assets that `gentle-ai sync` is
@@ -94,12 +100,18 @@ func Inject(homeDir string, adapter agents.Adapter, persona model.PersonaID) (In
 // each other's entries and breaks idempotency. That overlay remains an
 // install-only concern.
 func InjectForSync(homeDir string, adapter agents.Adapter, persona model.PersonaID) (InjectionResult, error) {
-	return injectInternal(homeDir, adapter, persona, true)
+	return injectInternal(homeDir, adapter, persona, true, "")
+}
+
+// InjectForSyncAtSettingsPath scopes narrow managed-agent cleanup to the
+// caller-selected OpenCode settings file.
+func InjectForSyncAtSettingsPath(homeDir string, adapter agents.Adapter, persona model.PersonaID, settingsPath string) (InjectionResult, error) {
+	return injectInternal(homeDir, adapter, persona, true, settingsPath)
 }
 
 // syncManaged is the internal flag previously called `markdownOnly`.
 // When true the OpenCode/Kilocode agent overlay is skipped (see InjectForSync).
-func injectInternal(homeDir string, adapter agents.Adapter, persona model.PersonaID, syncManaged bool) (InjectionResult, error) {
+func injectInternal(homeDir string, adapter agents.Adapter, persona model.PersonaID, syncManaged bool, selectedSettingsPath string) (InjectionResult, error) {
 	persona = canonicalPersona(persona)
 	if !adapter.SupportsSystemPrompt() {
 		return InjectionResult{}, nil
@@ -111,6 +123,29 @@ func injectInternal(homeDir string, adapter agents.Adapter, persona model.Person
 	// Custom persona does nothing — user keeps their own config.
 	if persona == model.PersonaCustom {
 		return InjectionResult{}, nil
+	}
+	if adapter.Agent() == model.AgentOpenCode {
+		settingsPath := adapter.SettingsPath(homeDir)
+		if selectedSettingsPath != "" {
+			settingsPath = selectedSettingsPath
+		}
+		if err := filemerge.RefuseLockedSettingsFile(settingsPath); err != nil {
+			return InjectionResult{}, err
+		}
+		settings, err := osReadFile(settingsPath)
+		if err != nil {
+			return InjectionResult{}, err
+		}
+		// Malformed settings are handled by the existing persona fallback paths;
+		// valid JSONC must not collapse duplicate keys during any later rewrite.
+		if _, parseErr := filemerge.UnmarshalJSONObject(settings); parseErr == nil {
+			if err := filemerge.RejectDuplicateJSONKeys(settings); err != nil {
+				return InjectionResult{}, fmt.Errorf("refuse OpenCode persona mutation: resolve duplicate JSON keys in %q and retry: %w", settingsPath, err)
+			}
+		}
+		if err := preflightJSONCAgentCleanup(settingsPath, persona, syncManaged); err != nil {
+			return InjectionResult{}, err
+		}
 	}
 
 	files := make([]string, 0, 3)
@@ -356,6 +391,9 @@ func injectInternal(homeDir string, adapter agents.Adapter, persona model.Person
 	// while non-gentleman personas remove agent.gentleman entirely.
 	if (adapter.Agent() == model.AgentOpenCode || adapter.Agent() == model.AgentKilocode) && persona != model.PersonaCustom {
 		settingsPath := adapter.SettingsPath(homeDir)
+		if adapter.Agent() == model.AgentOpenCode && selectedSettingsPath != "" {
+			settingsPath = selectedSettingsPath
+		}
 		if settingsPath != "" {
 			if isGentlemanConversationPersona(persona) {
 				if !syncManaged {
@@ -363,7 +401,7 @@ func injectInternal(homeDir string, adapter agents.Adapter, persona model.Person
 					if adapter.Agent() == model.AgentKilocode {
 						overlay, managedAgentNames = kilocodeAgentOverlayJSON, nil
 					}
-					agentResult, err := mergeJSONFile(settingsPath, overlay, managedAgentNames...)
+					agentResult, err := mergeJSONFile(settingsPath, overlay, adapter.Agent() == model.AgentOpenCode, managedAgentNames...)
 					if err != nil {
 						return InjectionResult{}, err
 					}
@@ -384,7 +422,7 @@ func injectInternal(homeDir string, adapter agents.Adapter, persona model.Person
 				// Non-gentleman: remove any residual agent.gentleman key left by a
 				// previous gentleman install. Only the "gentleman" sub-key is removed
 				// from within "agent" — other user-defined agents are preserved.
-				removed, err := removeJSONNestedSubKey(settingsPath, "agent", "gentleman")
+				removed, err := removeJSONNestedSubKey(settingsPath, "agent", "gentleman", adapter.Agent() == model.AgentOpenCode)
 				if err != nil {
 					return InjectionResult{}, fmt.Errorf("clean agent.gentleman from settings: %w", err)
 				}
@@ -413,13 +451,16 @@ func injectInternal(homeDir string, adapter agents.Adapter, persona model.Person
 		}
 
 		settingsPath := adapter.SettingsPath(homeDir)
+		if adapter.Agent() == model.AgentOpenCode && selectedSettingsPath != "" {
+			settingsPath = selectedSettingsPath
+		}
 		if selectedStyle && settingsPath != "" {
 			var settingsResult filemerge.WriteResult
 			var err error
 			if persona == model.PersonaNeutral {
-				settingsResult, err = mergeJSONFileToleratingMalformed(settingsPath, outputStyleOverlayJSON(style.Name))
+				settingsResult, err = mergeJSONFileToleratingMalformed(settingsPath, outputStyleOverlayJSON(style.Name), adapter.Agent() == model.AgentOpenCode)
 			} else {
-				settingsResult, err = mergeJSONFile(settingsPath, outputStyleOverlayJSON(style.Name))
+				settingsResult, err = mergeJSONFile(settingsPath, outputStyleOverlayJSON(style.Name), adapter.Agent() == model.AgentOpenCode)
 			}
 			if err != nil {
 				return InjectionResult{}, err
@@ -578,24 +619,52 @@ func gentlemanPersonaContent(agent model.AgentID) string {
 	}
 }
 
-func mergeJSONFile(path string, overlay []byte, managedAgentNames ...string) (filemerge.WriteResult, error) {
+// mergeJSONFile merges overlay into the settings at path. OpenCode settings
+// keep comments outside touched values and refuse lossy rewrites; every other
+// agent keeps the shared merge, which normalizes the document to strict JSON.
+func mergeJSONFile(path string, overlay []byte, openCode bool, managedAgentNames ...string) (filemerge.WriteResult, error) {
 	baseJSON, err := osReadFile(path)
 	if err != nil {
 		return filemerge.WriteResult{}, err
 	}
-	if len(managedAgentNames) > 0 {
-		baseJSON, err = filemerge.RemoveJSONAgentTools(baseJSON, managedAgentNames...)
+	if !openCode {
+		if len(managedAgentNames) > 0 {
+			baseJSON, err = filemerge.RemoveJSONAgentTools(baseJSON, managedAgentNames...)
+			if err != nil {
+				return filemerge.WriteResult{}, err
+			}
+		}
+		merged, err := filemerge.MergeJSONObjectsForPath(path, baseJSON, overlay)
 		if err != nil {
 			return filemerge.WriteResult{}, err
 		}
+		return filemerge.WriteFileAtomic(path, merged, filemerge.ExistingFileMode(path, 0o644))
+	}
+	if len(managedAgentNames) > 0 {
+		cleaned, cleanErr := filemerge.RemoveJSONAgentTools(baseJSON, managedAgentNames...)
+		if cleanErr != nil {
+			return filemerge.WriteResult{}, cleanErr
+		}
+		if preservesJSONComments(path, baseJSON) && !bytes.Equal(cleaned, baseJSON) {
+			baseJSON, err = replaceJSONCAgent(baseJSON, cleaned)
+			if err != nil {
+				return filemerge.WriteResult{}, err
+			}
+		} else {
+			baseJSON = cleaned
+		}
 	}
 
-	merged, err := filemerge.MergeJSONObjectsForPath(path, baseJSON, overlay)
+	merge := filemerge.MergeJSONObjects
+	if preservesJSONComments(path, baseJSON) {
+		merge = filemerge.MergeOpenCodeJSONCObjects
+	}
+	merged, err := merge(baseJSON, overlay)
 	if err != nil {
 		return filemerge.WriteResult{}, err
 	}
 
-	return filemerge.WriteFileAtomic(path, merged, 0o644)
+	return filemerge.WriteFileAtomic(path, merged, filemerge.ExistingFileMode(path, 0o644))
 }
 
 func removeJSONAgentTools(path string, names ...string) (filemerge.WriteResult, error) {
@@ -613,11 +682,76 @@ func removeJSONAgentTools(path string, names ...string) (filemerge.WriteResult, 
 	if bytes.Equal(cleaned, baseJSON) {
 		return filemerge.WriteResult{}, nil
 	}
-	return filemerge.WriteFileAtomic(path, cleaned, 0o644)
+	if preservesJSONComments(path, baseJSON) {
+		cleaned, err = replaceJSONCAgent(baseJSON, cleaned)
+		if err != nil {
+			return filemerge.WriteResult{}, err
+		}
+	}
+	return filemerge.WriteFileAtomic(path, cleaned, filemerge.ExistingFileMode(path, 0o644))
 }
 
-func mergeJSONFileToleratingMalformed(path string, overlay []byte) (filemerge.WriteResult, error) {
-	result, err := mergeJSONFile(path, overlay)
+// preflightJSONCAgentCleanup refuses a lossy agent rewrite before the persona
+// prompt or any other asset is changed. JSONC comments within custom agents
+// cannot be retained by the existing whole-agent merge, and the Gentleman
+// install cannot merge its agent into malformed JSONC at all.
+func preflightJSONCAgentCleanup(path string, persona model.PersonaID, syncManaged bool) error {
+	raw, err := osReadFile(path)
+	if err != nil {
+		return err
+	}
+	if strings.HasSuffix(path, ".jsonc") && isGentlemanConversationPersona(persona) && !syncManaged {
+		if _, parseErr := filemerge.UnmarshalJSONObject(raw); parseErr != nil {
+			return fmt.Errorf("refuse OpenCode persona install: %q is malformed JSONC; fix its syntax and retry: %w", path, parseErr)
+		}
+	}
+	if !preservesJSONComments(path, raw) || !filemerge.JSONCAgentHasComments(raw) {
+		return nil
+	}
+	root, err := filemerge.UnmarshalJSONObject(raw)
+	if err != nil {
+		return fmt.Errorf("refuse malformed JSONC agent before persona mutation: %w", err)
+	}
+	agents, _ := root["agent"].(map[string]any)
+	gentleman, _ := agents["gentleman"].(map[string]any)
+	rewrites := !isGentlemanConversationPersona(persona) && agents["gentleman"] != nil ||
+		isGentlemanConversationPersona(persona) && (!syncManaged || gentleman["tools"] != nil)
+	if rewrites {
+		return fmt.Errorf("refuse to rewrite JSONC agent with nested comments; remove the owned legacy fields manually or move the comments before retrying")
+	}
+	return nil
+}
+
+// preservesJSONComments reports whether a rewrite must keep the original
+// document text: JSONC files, and .json files that only parse tolerantly
+// because they carry comments or trailing commas.
+func preservesJSONComments(path string, raw []byte) bool {
+	if strings.HasSuffix(path, ".jsonc") || json.Valid(raw) {
+		return strings.HasSuffix(path, ".jsonc")
+	}
+	_, err := filemerge.UnmarshalJSONObject(raw)
+	return err == nil
+}
+
+// replaceJSONCAgent preserves comments outside the managed agent subtree when
+// the legacy tools cleanup re-encodes a JSONC document.
+func replaceJSONCAgent(original, cleaned []byte) ([]byte, error) {
+	if filemerge.JSONCAgentHasComments(original) {
+		return nil, fmt.Errorf("refuse to rewrite JSONC agent with nested comments; remove the owned legacy fields manually or move the comments before retrying")
+	}
+	root, err := filemerge.UnmarshalJSONObject(cleaned)
+	if err != nil {
+		return nil, err
+	}
+	overlay, err := json.Marshal(map[string]any{"agent": map[string]any{"__replace__": root["agent"]}})
+	if err != nil {
+		return nil, err
+	}
+	return filemerge.MergeOpenCodeJSONCObjects(original, overlay)
+}
+
+func mergeJSONFileToleratingMalformed(path string, overlay []byte, openCode bool) (filemerge.WriteResult, error) {
+	result, err := mergeJSONFile(path, overlay, openCode)
 	if err == nil {
 		return result, nil
 	}
@@ -784,7 +918,7 @@ func removeJSONKeyIfValue(path, key, wantValue string) (bool, error) {
 	}
 	encoded = append(encoded, '\n')
 
-	if _, err := filemerge.WriteFileAtomic(path, encoded, 0o644); err != nil {
+	if _, err := filemerge.WriteFileAtomic(path, encoded, filemerge.ExistingFileMode(path, 0o644)); err != nil {
 		return false, err
 	}
 	return true, nil
@@ -794,7 +928,11 @@ func removeJSONKeyIfValue(path, key, wantValue string) (bool, error) {
 // within the top-level parentKey object. Only the named subKey is deleted —
 // sibling keys inside parentKey are preserved. If the file does not exist, the
 // parentKey is absent, or subKey is not present, it is a no-op and returns false.
-func removeJSONNestedSubKey(path, parentKey, subKey string) (bool, error) {
+//
+// Only OpenCode settings parse comment-bearing JSON and keep comments outside
+// the cleaned agent subtree; other agents skip documents that are not strict
+// JSON.
+func removeJSONNestedSubKey(path, parentKey, subKey string, openCode bool) (bool, error) {
 	raw, err := osReadFile(path)
 	if err != nil {
 		return false, err
@@ -804,7 +942,12 @@ func removeJSONNestedSubKey(path, parentKey, subKey string) (bool, error) {
 	}
 
 	root := map[string]any{}
-	if err := json.Unmarshal(raw, &root); err != nil {
+	if openCode {
+		root, err = filemerge.UnmarshalJSONObject(raw)
+	} else {
+		err = json.Unmarshal(raw, &root)
+	}
+	if err != nil {
 		return false, nil
 	}
 
@@ -832,8 +975,22 @@ func removeJSONNestedSubKey(path, parentKey, subKey string) (bool, error) {
 		return false, fmt.Errorf("marshal settings after cleanup: %w", err)
 	}
 	encoded = append(encoded, '\n')
+	if openCode && preservesJSONComments(path, raw) && parentKey == "agent" {
+		// Preserve unrelated comments while replacing the cleaned agent subtree.
+		if _, exists := root[parentKey]; !exists {
+			root[parentKey] = map[string]any{}
+			encoded, err = json.Marshal(root)
+			if err != nil {
+				return false, err
+			}
+		}
+		encoded, err = replaceJSONCAgent(raw, encoded)
+		if err != nil {
+			return false, err
+		}
+	}
 
-	if _, err := filemerge.WriteFileAtomic(path, encoded, 0o644); err != nil {
+	if _, err := filemerge.WriteFileAtomic(path, encoded, filemerge.ExistingFileMode(path, 0o644)); err != nil {
 		return false, err
 	}
 	return true, nil
