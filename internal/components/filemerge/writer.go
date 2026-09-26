@@ -96,6 +96,8 @@ func WriteFileAtomic(path string, content []byte, perm fs.FileMode) (WriteResult
 // WriteFileAtomicMode replaces path with content and always applies perm,
 // widening or narrowing an existing file's mode as needed — including when
 // content is unchanged, so a caller restoring a recorded mode still lands it.
+// Such a mode-only repair reports Changed=true when it actually changed the
+// file's permission bits; same bytes and same mode report Changed=false.
 // Use WriteFileAtomic instead unless the caller owns the target mode outright.
 func WriteFileAtomicMode(path string, content []byte, perm fs.FileMode) (WriteResult, error) {
 	return writeFileAtomic(path, content, perm, true)
@@ -117,9 +119,7 @@ func writeFileAtomic(path string, content []byte, perm fs.FileMode, forceMode bo
 	if err == nil {
 		if bytes.Equal(existing, content) {
 			if forceMode {
-				if chmodErr := os.Chmod(path, perm); chmodErr != nil {
-					return WriteResult{}, fmt.Errorf("set permissions on %q: %w", path, chmodErr)
-				}
+				return enforceFileMode(path, perm)
 			}
 			return WriteResult{}, nil
 		}
@@ -139,6 +139,26 @@ func writeFileAtomic(path string, content []byte, perm fs.FileMode, forceMode bo
 		return result, err
 	}
 	return result, nil
+}
+
+// enforceFileMode applies perm to the existing file at path and reports
+// Changed when the permission bits read back from disk differ from the ones
+// read before, so a platform that ignores part of perm (Windows keeps only the
+// read-only bit) never reports a repair that did not happen.
+func enforceFileMode(path string, perm fs.FileMode) (WriteResult, error) {
+	before, err := os.Lstat(path)
+	if err != nil {
+		return WriteResult{}, fmt.Errorf("stat %q before setting permissions: %w", path, err)
+	}
+	if chmodErr := os.Chmod(path, perm); chmodErr != nil {
+		return WriteResult{}, fmt.Errorf("set permissions on %q: %w", path, chmodErr)
+	}
+	after, err := os.Lstat(path)
+	if err != nil {
+		// The chmod succeeded, so the mode may have changed; say so.
+		return WriteResult{Changed: true}, fmt.Errorf("read back permissions on %q: %w", path, err)
+	}
+	return WriteResult{Changed: after.Mode().Perm() != before.Mode().Perm()}, nil
 }
 
 // ExistingFileMode returns the permission bits of the regular file at path, or

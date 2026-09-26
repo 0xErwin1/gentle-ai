@@ -188,7 +188,8 @@ func TestWriteFileAtomicModeForcesRequestedPermOnExistingFile(t *testing.T) {
 // TestWriteFileAtomicModeEnforcesPermOnIdenticalContent pins the gga runtime
 // case named in gentle-ai#5006(F5): an existing script whose content already
 // matches the embedded asset but whose mode drifted (e.g. 0644) must still be
-// forced to the intended mode (0755) by the forced API.
+// forced to the intended mode (0755) by the forced API. That mode-only repair
+// mutates the file, so it reports Changed=true (#5022).
 func TestWriteFileAtomicModeEnforcesPermOnIdenticalContent(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("POSIX permission bits are not meaningful on Windows")
@@ -203,8 +204,8 @@ func TestWriteFileAtomicModeEnforcesPermOnIdenticalContent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("WriteFileAtomicMode() error = %v", err)
 	}
-	if result.Changed {
-		t.Fatalf("WriteFileAtomicMode() result = %+v, want Changed=false: content did not change", result)
+	if !result.Changed || result.Created {
+		t.Fatalf("WriteFileAtomicMode() result = %+v, want Changed=true Created=false: the mode was repaired", result)
 	}
 
 	info, err := os.Stat(path)
@@ -213,6 +214,38 @@ func TestWriteFileAtomicModeEnforcesPermOnIdenticalContent(t *testing.T) {
 	}
 	if got := info.Mode().Perm(); got != 0o755 {
 		t.Fatalf("mode after identical-content forced write = %v, want 0755 enforced", got)
+	}
+}
+
+// TestWriteFileAtomicModeIdenticalContentAndModeIsNoOp pins the other half of
+// #5022: same bytes and same mode touch nothing and report Changed=false.
+func TestWriteFileAtomicModeIdenticalContentAndModeIsNoOp(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX permission bits are not meaningful on Windows")
+	}
+	path := filepath.Join(t.TempDir(), "script.sh")
+	content := []byte("#!/bin/sh\necho hi\n")
+	if err := os.WriteFile(path, content, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(path, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := WriteFileAtomicMode(path, content, 0o755)
+	if err != nil {
+		t.Fatalf("WriteFileAtomicMode() error = %v", err)
+	}
+	if result.Changed || result.Created {
+		t.Fatalf("WriteFileAtomicMode() result = %+v, want Changed=false Created=false: nothing changed", result)
+	}
+
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := info.Mode().Perm(); got != 0o755 {
+		t.Fatalf("mode after no-op forced write = %v, want 0755", got)
 	}
 }
 
