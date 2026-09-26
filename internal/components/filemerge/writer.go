@@ -150,6 +150,11 @@ func enforceFileMode(path string, perm fs.FileMode) (WriteResult, error) {
 	if err != nil {
 		return WriteResult{}, fmt.Errorf("stat %q before setting permissions: %w", path, err)
 	}
+	// A true no-op must not touch the file: even a same-mode chmod updates
+	// its ctime.
+	if before.Mode().Perm() == perm.Perm() {
+		return WriteResult{}, nil
+	}
 	if chmodErr := os.Chmod(path, perm); chmodErr != nil {
 		return WriteResult{}, fmt.Errorf("set permissions on %q: %w", path, chmodErr)
 	}
