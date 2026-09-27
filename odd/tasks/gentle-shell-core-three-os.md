@@ -19,3 +19,12 @@ Command choice and channel choice are independent. A description does not select
 - Main's existing retired-SDD run/sync NO-OP cases, legacy fields and guidance are untouched. Add no SDD offer/manage API; do not import core's live SDD behavior or claim complete SDD removal.
 - Go tests are written as source DATA only. Independent adversarial STATIC review is the sole permitted verification now; no Go/Node/Pi tests/builds, config/Apply/root/network/CI, commit or delivery without fresh exact authority.
 - Rollback boundary is deleting only these seven new paths. No Main, `main-current`, W14 donor, frozen W12, or U1 modifications. An operational Linux installer and protected WSL runner remain separately gated.
+
+## W18 — Pi/Gentle-Shell draft and closed candidate gate (source-only)
+
+- Start at CLEAN committed W15 `7eb498a53a4912ffd63d985dabf04ba2d840a6be`, not W16's legacy OpenCode SDD cleanup. Edit only this append (≤35 lines), NEW `internal/shellinstaller/draft_plan.go`/`draft_plan_test.go` (≤85/125 lines), NEW `internal/cli/shell_install_gate.go`/`shell_install_gate_test.go` (≤45/85 lines); total ≤375, hard ≤400 changed diff lines.
+- Pure 2×2 `DraftPlan` records independent Stable/Main channel and `pi`/`gentle-shell` command intent; `pi` proposes replacing existing Pi only after future physical InstanceID-bound consent and rollback, while `gentle-shell` proposes separate Pi/home/executable without touching existing Pi.
+- Every draft enumerates MISSING independent source, physical instance, consent, rollback, executed-byte and Ready proofs. This is UNEXECUTABLE data, not a source pin, approval, operation, installation, verified Ready, home/path resolution or command invocation.
+- A distinct CLI **shell candidate** gate returns typed `not-authorized` for both modes BEFORE generic resolver/state/home/backup/command access; it neither calls `RunInstall`/pipeline nor creates any public app/TUI dispatch. Generic legacy Pi package installation remains unchanged and `Profile.Validate` still rejects `gentle-shell`.
+- Stable/Main source identity is not resolved or attested. New seam does not offer/manage/call SDD or OpenCode SDD functions. W17 stays paused; neither W17 nor legacy OpenCode SDD is a Pi/Gentle-Shell install dependency.
+- Go tests are source DATA only, RED/GREEN UNRUN; independent adversarial STATIC review required. No Go/Node/Pi test/compile, real configuration, Apply, root, network, CI, commit or delivery. Stop if cap/dependency closure fails or any Ready/authorization claim would be implied.
