@@ -865,6 +865,58 @@ func TestInjectAntigravityRemovesManagedGlobalEngramDuplicate(t *testing.T) {
 	}
 }
 
+func TestInjectAntigravityIgnoresNonEngramGlobalCommandWhenPreservingPlugin(t *testing.T) {
+	home := t.TempDir()
+	cliDir := filepath.Join(home, ".gemini", "antigravity-cli")
+	mcpPath := filepath.Join(cliDir, "mcp_config.json")
+	pluginDir := filepath.Join(cliDir, "plugins", "gentle-ai-engram")
+	pluginMCPPath := filepath.Join(pluginDir, "mcp_config.json")
+	if err := os.MkdirAll(pluginDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(%q) error = %v", pluginDir, err)
+	}
+	global := `{
+  "mcpServers": {
+    "engram": {"command": "npx", "args": ["-y", "not-engram"]}
+  }
+}
+`
+	if err := os.WriteFile(mcpPath, []byte(global), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q) error = %v", mcpPath, err)
+	}
+	if err := os.WriteFile(filepath.Join(cliDir, "settings.json"), []byte("{}\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(settings.json) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(pluginDir, "plugin.json"), []byte(antigravityEngramPluginJSON), 0o644); err != nil {
+		t.Fatalf("WriteFile(plugin.json) error = %v", err)
+	}
+	pluginRaw := engramOverlayJSON(model.AgentAntigravity, "/custom/bin/engram")
+	if err := os.WriteFile(pluginMCPPath, pluginRaw, 0o644); err != nil {
+		t.Fatalf("WriteFile(%q) error = %v", pluginMCPPath, err)
+	}
+	hooksRaw := antigravityEngramHooksJSON()
+	if err := os.WriteFile(filepath.Join(pluginDir, "hooks.json"), hooksRaw, 0o644); err != nil {
+		t.Fatalf("WriteFile(hooks.json) error = %v", err)
+	}
+
+	if _, err := Inject(home, antigravityAdapter()); err != nil {
+		t.Fatalf("Inject(antigravity) error = %v", err)
+	}
+	gotGlobal, err := os.ReadFile(mcpPath)
+	if err != nil {
+		t.Fatalf("ReadFile(%q) error = %v", mcpPath, err)
+	}
+	if string(gotGlobal) != global {
+		t.Fatalf("non-Engram global MCP entry changed\nwant:\n%s\ngot:\n%s", global, gotGlobal)
+	}
+	gotPlugin, err := os.ReadFile(pluginMCPPath)
+	if err != nil {
+		t.Fatalf("ReadFile(%q) error = %v", pluginMCPPath, err)
+	}
+	if string(gotPlugin) != string(pluginRaw) {
+		t.Fatalf("plugin MCP config should preserve existing Engram command when global command is not Engram\nwant:\n%s\ngot:\n%s", pluginRaw, gotPlugin)
+	}
+}
+
 func TestInjectAntigravityRemovesFileContainingOnlyManagedEngram(t *testing.T) {
 	home := t.TempDir()
 	cliDir := filepath.Join(home, ".gemini", "antigravity-cli")

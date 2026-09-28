@@ -808,7 +808,7 @@ func stableAntigravityEngramCommand(homeDir, globalPath string) string {
 		if err != nil {
 			continue
 		}
-		if cmd, ok := existingMergedEngramCommand(raw, model.AgentAntigravity); ok {
+		if cmd, ok := existingMergedEngramCommand(raw, model.AgentAntigravity); ok && isEngramCommand(cmd) {
 			return stableEngramCommandForExisting(cmd, model.AgentAntigravity)
 		}
 	}
