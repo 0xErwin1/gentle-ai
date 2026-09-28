@@ -573,14 +573,20 @@ func TestSyncWorkspaceBackupTargetsExcludeHomeOnlyPaths(t *testing.T) {
 func TestRunSyncWorkspaceScopeSucceedsWithGlobalLegacyPlugin(t *testing.T) {
 	home, workspace := t.TempDir(), t.TempDir()
 
+	restoreHome := osUserHomeDir
+	restoreBackupHome := backup.UserHomeDirFn
 	restoreCommand := runCommand
 	restoreLookPath := cmdLookPath
 	restoreVersionRunner := opencode.VersionRunnerOverride
 	t.Cleanup(func() {
+		osUserHomeDir = restoreHome
+		backup.UserHomeDirFn = restoreBackupHome
 		runCommand = restoreCommand
 		cmdLookPath = restoreLookPath
 		opencode.VersionRunnerOverride = restoreVersionRunner
 	})
+	osUserHomeDir = func() (string, error) { return home, nil }
+	backup.UserHomeDirFn = func() (string, error) { return home, nil }
 	runCommand = func(string, ...string) error { return nil }
 	cmdLookPath = func(name string) (string, error) { return "/usr/local/bin/" + name, nil }
 	opencode.VersionRunnerOverride = func(context.Context, opencode.Command) (opencode.CommandOutput, error) {
