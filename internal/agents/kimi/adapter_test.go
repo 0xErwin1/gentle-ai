@@ -555,10 +555,48 @@ func TestAdapter_BootstrapTemplate_CurrentExpandsJinjaModules(t *testing.T) {
 			t.Fatalf("current AGENTS.md retained unexpanded Jinja include %q:\n%s", forbidden, text)
 		}
 	}
-	for _, want := range []string{"PERSONA MODULE", "ROUTING MODULE", "kimi-code module persona.md", "kimi-code module agent-routing.md"} {
+	for _, want := range []string{"<!-- gentle-ai:kimi-agents-hub -->", "PERSONA MODULE", "ROUTING MODULE", "kimi-code module persona.md", "kimi-code module agent-routing.md"} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("current AGENTS.md missing expanded module content %q:\n%s", want, text)
 		}
+	}
+}
+
+func TestAdapter_BootstrapTemplate_CurrentPreservesUserAuthoredAgentsContent(t *testing.T) {
+	home := newTempHomeWithKimiCode(t)
+	configDir := filepath.Join(home, CurrentConfigDirName)
+	agentsPath := filepath.Join(configDir, "AGENTS.md")
+	if err := os.WriteFile(agentsPath, []byte("# Team Kimi Notes\n\nKeep this user rule.\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(configDir, "agent-routing.md"), []byte("FIRST ROUTING MODULE\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	a := NewAdapter()
+
+	if err := a.BootstrapTemplate(home); err != nil {
+		t.Fatalf("BootstrapTemplate() first error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(configDir, "agent-routing.md"), []byte("SECOND ROUTING MODULE\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.BootstrapTemplate(home); err != nil {
+		t.Fatalf("BootstrapTemplate() second error = %v", err)
+	}
+
+	content, err := os.ReadFile(agentsPath)
+	if err != nil {
+		t.Fatalf("ReadFile(AGENTS.md) error = %v", err)
+	}
+	text := string(content)
+	if !strings.Contains(text, "Keep this user rule.") {
+		t.Fatalf("current AGENTS.md lost user-authored content:\n%s", text)
+	}
+	if !strings.Contains(text, "SECOND ROUTING MODULE") || strings.Contains(text, "FIRST ROUTING MODULE") {
+		t.Fatalf("current AGENTS.md did not replace only the managed hub section:\n%s", text)
+	}
+	if count := strings.Count(text, "<!-- gentle-ai:kimi-agents-hub -->"); count != 1 {
+		t.Fatalf("current AGENTS.md has %d managed hub sections, want 1:\n%s", count, text)
 	}
 }
 

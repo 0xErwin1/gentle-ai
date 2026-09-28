@@ -338,6 +338,8 @@ func binaryName() string {
 
 var kimiIncludePattern = regexp.MustCompile(`(?m)^\s*\{%\s*include\s+"([^"]+)"\s+ignore\s+missing\s*%\}\s*$`)
 
+const currentAgentsHubSection = "kimi-agents-hub"
+
 func renderCurrentAgentsHub(configDir string, template string) (string, error) {
 	var renderErr error
 	rendered := kimiIncludePattern.ReplaceAllStringFunc(template, func(match string) string {
@@ -390,13 +392,19 @@ func (a *Adapter) BootstrapTemplate(homeDir string) error {
 
 	// We always write the skeleton to ensure any missing includes are restored.
 	// Legacy Kimi reads the Jinja router directly. Current kimi-code reads plain
-	// AGENTS.md, so it receives the same template with local modules expanded.
+	// AGENTS.md, so it receives the same template with local modules expanded and
+	// marker-bound into the existing file to preserve user-authored instructions.
 	content := assets.MustRead("kimi/KIMI.md")
 	if layout == LayoutCurrent {
-		content, err = renderCurrentAgentsHub(kimiDir, content)
+		managedContent, err := renderCurrentAgentsHub(kimiDir, content)
 		if err != nil {
 			return fmt.Errorf("render current kimi-code agents hub: %w", err)
 		}
+		existing, err := os.ReadFile(skeletonPath)
+		if err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("read existing current kimi-code agents hub: %w", err)
+		}
+		content = filemerge.InjectMarkdownSection(string(existing), currentAgentsHubSection, managedContent)
 	}
 	if _, err := filemerge.WriteFileAtomic(skeletonPath, []byte(content), 0o644); err != nil {
 		return fmt.Errorf("write system prompt skeleton: %w", err)
