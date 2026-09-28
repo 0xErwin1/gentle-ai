@@ -715,6 +715,43 @@ func TestComponentPathsSDDKimiIncludesAgentFilesAndGlobalSkills(t *testing.T) {
 	}
 }
 
+// TestComponentPathsSDDKimiCurrentLayoutPrefersKimiCode verifies that when
+// the current kimi-code v0.11+ root (~/.kimi-code directory) exists, SDD
+// component paths resolve under it (with the AGENTS.md hub) and skills go to
+// the native skills root instead of the legacy shared path. YAML agents are
+// only discoverable by the legacy CLI, so they stay on ~/.kimi/agents
+// (issue #782).
+func TestComponentPathsSDDKimiCurrentLayoutPrefersKimiCode(t *testing.T) {
+	home := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(home, ".kimi-code"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	selection := model.Selection{Agents: []model.AgentID{model.AgentKimi}, Components: []model.ComponentID{model.ComponentSkills}, Skills: []model.SkillID{model.SkillGoTesting}}
+	targets, err := backupTargets(home, "", ScopeGlobal, selection, planner.ResolvedPlan{Agents: selection.Agents, OrderedComponents: selection.Components})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, relative := range []string{
+		".kimi-code/AGENTS.md",
+		".kimi/agents/gentleman.yaml",
+		".kimi-code/skills/go-testing/SKILL.md",
+	} {
+		if !containsPath(targets, filepath.Join(home, relative)) {
+			t.Errorf("current-layout Kimi path missing: %s", relative)
+		}
+	}
+	for _, unwanted := range []string{
+		".kimi-code/KIMI.md",
+		".kimi-code/agents/gentleman.yaml",
+		".kimi/KIMI.md",
+		".config/agents/skills/go-testing/SKILL.md",
+	} {
+		if containsPath(targets, filepath.Join(home, unwanted)) {
+			t.Errorf("current-layout Kimi targets must not include path %s", unwanted)
+		}
+	}
+}
+
 func TestComponentPathsContext7KimiIncludesMCPConfig(t *testing.T) {
 	home := t.TempDir()
 	adapters := resolveAdapters([]model.AgentID{model.AgentKimi})
@@ -724,6 +761,24 @@ func TestComponentPathsContext7KimiIncludesMCPConfig(t *testing.T) {
 	want := filepath.Join(home, ".kimi", "mcp.json")
 	if !containsPath(paths, want) {
 		t.Fatalf("componentPaths(context7,kimi) missing %q\npaths=%v", want, paths)
+	}
+}
+
+// TestComponentPathsContext7KimiCurrentLayoutUsesKimiCodeMCP verifies that
+// MCP config paths resolve under ~/.kimi-code for the current kimi-code
+// v0.11+ layout (issue #782).
+func TestComponentPathsContext7KimiCurrentLayoutUsesKimiCodeMCP(t *testing.T) {
+	home := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(home, ".kimi-code"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	adapters := resolveAdapters([]model.AgentID{model.AgentKimi})
+
+	paths := componentPaths(home, model.Selection{}, adapters, model.ComponentContext7)
+
+	want := filepath.Join(home, ".kimi-code", "mcp.json")
+	if !containsPath(paths, want) {
+		t.Fatalf("componentPaths(context7,kimi) missing current-layout %q\npaths=%v", want, paths)
 	}
 }
 

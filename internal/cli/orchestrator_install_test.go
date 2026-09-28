@@ -49,7 +49,7 @@ func installedGuidance(t *testing.T, home string, agent model.AgentID) (string, 
 		t.Fatalf("NewAdapter(%q) error = %v", agent, err)
 	}
 	paths, err := agentguidance.RoutingPathsWithOptions(home, agent, routingGuidanceOptions(home, "", adapter))
-	if err != nil || len(paths) != 1 {
+	if err != nil || len(paths) == 0 {
 		t.Fatalf("RoutingPathsWithOptions(%q) = %v, %v", agent, paths, err)
 	}
 	raw := readTextFile(t, paths[0])

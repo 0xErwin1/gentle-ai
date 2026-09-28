@@ -1,6 +1,7 @@
 package agentguidance
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -246,7 +247,7 @@ func resolveRoutingDelivery(targetDir string, agent model.AgentID, options Routi
 			kind:         deliveryJinjaModule,
 			adapter:      adapter,
 			bootstrapper: bootstrapper,
-			paths:        []string{filepath.Join(configDir, routingModuleFile)},
+			paths:        []string{filepath.Join(configDir, routingModuleFile), adapter.SystemPromptFile(targetDir)},
 		}, nil
 
 	default:
@@ -299,6 +300,12 @@ func injectPromptSection(delivery routingDelivery, merge guidanceMerge) (Result,
 // file is destroyed by the next sync. The module survives because the router
 // only references it.
 func injectJinjaModule(targetDir string, delivery routingDelivery, agent model.AgentID, merge guidanceMerge) (Result, error) {
+	hubPath := delivery.adapter.SystemPromptFile(targetDir)
+	hubBefore, err := readBytesOrEmpty(hubPath)
+	if err != nil {
+		return Result{}, err
+	}
+
 	// Bootstrap first: the module is only ever read through the router template,
 	// so the template must exist before the module is worth writing.
 	if err := delivery.bootstrapper.BootstrapTemplate(targetDir); err != nil {
@@ -322,7 +329,19 @@ func injectJinjaModule(targetDir string, delivery routingDelivery, agent model.A
 		return Result{}, err
 	}
 
-	return Result{Changed: writeResult.Changed, Files: []string{modulePath}}, nil
+	// Some Jinja-module adapters (current kimi-code) read a plain AGENTS.md hub
+	// rather than evaluating {% include %} at runtime. Refresh the hub after the
+	// module write so those adapters load the newly written module content while
+	// legacy Jinja runtimes retain their router template unchanged.
+	if err := delivery.bootstrapper.BootstrapTemplate(targetDir); err != nil {
+		return Result{}, fmt.Errorf("refresh routing guidance template for %q: %w", agent, err)
+	}
+	hubAfter, err := readBytesOrEmpty(hubPath)
+	if err != nil {
+		return Result{}, err
+	}
+
+	return Result{Changed: writeResult.Changed || !bytes.Equal(hubBefore, hubAfter), Files: delivery.paths}, nil
 }
 
 // requireModuleIsIncluded verifies the freshly bootstrapped router template
