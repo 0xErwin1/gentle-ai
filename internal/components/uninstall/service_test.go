@@ -101,8 +101,11 @@ func TestUninstallOpenCodeFamilyManagedAgents(t *testing.T) {
 					}
 				}
 				info, err := os.Stat(path)
-				if err != nil || info.Mode().Perm() != 0600 {
-					t.Fatalf("mode: %v, %v", info, err)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if runtime.GOOS != "windows" && info.Mode().Perm() != 0600 {
+					t.Fatalf("mode: %v", info.Mode().Perm())
 				}
 			}
 		})
