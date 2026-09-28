@@ -235,19 +235,9 @@ func injectInternal(homeDir string, adapter agents.Adapter, persona model.Person
 				return InjectionResult{}, err
 			}
 
-			healed := existing
-
-			// Only strip legacy persona when a managed persona section already
-			// exists — that is the only strong proof the pre-marker content is
-			// stale installer output, not user-authored content.
-			if shouldStripManagedLegacyPersona(existing) {
-				healed = filemerge.StripLegacyPersonaBlock(existing)
-			} else {
-				healed = stripExactLegacyPersonaAsset(existing)
-			}
-
+			healed := stripExactLegacyPersonaAsset(existing)
 			healed = filemerge.StripLegacyATLBlock(healed)
-			updated := filemerge.InjectMarkdownSection(healed, "persona", content)
+			updated := injectPersonaBeforeManagedSections(healed, content)
 
 			writeResult, err := filemerge.WriteFileAtomic(promptPath, []byte(updated), 0o644)
 			if err != nil {
@@ -614,6 +604,25 @@ func stripExactLegacyPersonaAsset(existing string) string {
 		return existing[firstMarkerIdx:]
 	}
 	return existing
+}
+
+func injectPersonaBeforeManagedSections(existing, content string) string {
+	if strings.Contains(existing, "<!-- gentle-ai:persona -->") {
+		return filemerge.InjectMarkdownSection(existing, "persona", content)
+	}
+
+	firstMarkerIdx := strings.Index(existing, "<!-- gentle-ai:")
+	if firstMarkerIdx < 0 {
+		return filemerge.InjectMarkdownSection(existing, "persona", content)
+	}
+
+	section := filemerge.InjectMarkdownSection("", "persona", content)
+	before := strings.TrimRight(existing[:firstMarkerIdx], "\r\n")
+	after := strings.TrimLeft(existing[firstMarkerIdx:], "\r\n")
+	if before == "" {
+		return section + "\n" + after
+	}
+	return before + "\n\n" + section + "\n" + after
 }
 
 func shouldStripManagedLegacyPersona(existing string) bool {

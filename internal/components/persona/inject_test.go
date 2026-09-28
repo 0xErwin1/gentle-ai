@@ -3838,6 +3838,17 @@ func TestInjectCodexDoesNotStripLookalikeUserContent(t *testing.T) {
 	if !strings.Contains(string(content), "My own rule.") {
 		t.Fatal("lookalike user content was stripped without a managed persona marker")
 	}
+
+	if _, err := Inject(home, codexAdapter(), model.PersonaGentleman); err != nil {
+		t.Fatalf("second Inject() error = %v", err)
+	}
+	content, err = os.ReadFile(codexAgentsMDPath(home))
+	if err != nil {
+		t.Fatalf("ReadFile() after second injection error = %v", err)
+	}
+	if !strings.Contains(string(content), "My own rule.") {
+		t.Fatal("lookalike user content was stripped on repeated injection")
+	}
 }
 
 // TestInjectCodexReplacesExactLegacyAssetWithoutDuplication covers the
@@ -3910,11 +3921,23 @@ func TestInjectCodexMigratesLegacyPersonaAboveManagedSections(t *testing.T) {
 	if strings.Contains(beforeMarker, "Senior Architect") {
 		t.Fatalf("markerless legacy persona prose found before the managed section:\n%s", beforeMarker)
 	}
-	if !strings.Contains(text, "<!-- gentle-ai:engram-protocol -->\nEngram protocol here.\n<!-- /gentle-ai:engram-protocol -->") {
+	engramIdx := strings.Index(text, "<!-- gentle-ai:engram-protocol -->")
+	if engramIdx < 0 {
 		t.Fatal("managed engram section was not preserved during migration")
 	}
-	if !strings.Contains(text, "<!-- gentle-ai:sdd-orchestrator -->\nSDD orchestrator here.\n<!-- /gentle-ai:sdd-orchestrator -->") {
+	if !strings.Contains(text, "<!-- gentle-ai:engram-protocol -->\nEngram protocol here.\n<!-- /gentle-ai:engram-protocol -->") {
+		t.Fatal("managed engram section body was not preserved during migration")
+	}
+	sddIdx := strings.Index(text, "<!-- gentle-ai:sdd-orchestrator -->")
+	if sddIdx < 0 {
 		t.Fatal("managed SDD section was not preserved during migration")
+	}
+	if !strings.Contains(text, "<!-- gentle-ai:sdd-orchestrator -->\nSDD orchestrator here.\n<!-- /gentle-ai:sdd-orchestrator -->") {
+		t.Fatal("managed SDD section body was not preserved during migration")
+	}
+	personaIdx := strings.Index(text, "<!-- gentle-ai:persona -->")
+	if !(personaIdx < engramIdx && personaIdx < sddIdx) {
+		t.Fatalf("persona section must precede existing managed sections; persona=%d engram=%d sdd=%d\n%s", personaIdx, engramIdx, sddIdx, text)
 	}
 }
 
