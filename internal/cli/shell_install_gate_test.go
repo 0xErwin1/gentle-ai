@@ -28,6 +28,20 @@ func TestShellCandidateGateAlwaysRefusesFourDrafts(t *testing.T) {
 	}
 }
 
+func TestShellCandidateGatePiSyntaxIsNotTakeoverAuthority(t *testing.T) {
+	profile := shellinstaller.Profile{Channel: shellinstaller.ChannelStable, TerminalEntryPoint: shellinstaller.TerminalEntryPointPi}
+	if err := profile.Validate(); err != nil {
+		t.Fatalf("Pi syntax must remain valid: %v", err)
+	}
+	draft, err := GateShellInstallCandidate(profile)
+	var refusal ShellCandidateNotAuthorized
+	if !errors.As(err, &refusal) || refusal.Kind != ShellCandidateRefusalNotAuthorized ||
+		draft.MissingProofs[1] != shellinstaller.ProofPhysicalInstance ||
+		draft.MissingProofs[3] != shellinstaller.ProofRollback {
+		t.Fatalf("syntax-valid Pi takeover must be refused before install: draft=%+v error=%v", draft, err)
+	}
+}
+
 func TestShellCandidateGateDoesNotAuthorizeLegacyOrForgedCommand(t *testing.T) {
 	legacy, err := GateShellInstallCandidate(shellinstaller.Profile{Channel: shellinstaller.ChannelStable})
 	var refusal ShellCandidateNotAuthorized
