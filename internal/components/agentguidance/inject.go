@@ -322,6 +322,14 @@ func injectJinjaModule(targetDir string, delivery routingDelivery, agent model.A
 		return Result{}, err
 	}
 
+	// Some Jinja-module adapters (current kimi-code) read a plain AGENTS.md hub
+	// rather than evaluating {% include %} at runtime. Refresh the hub after the
+	// module write so those adapters load the newly written module content while
+	// legacy Jinja runtimes retain their router template unchanged.
+	if err := delivery.bootstrapper.BootstrapTemplate(targetDir); err != nil {
+		return Result{}, fmt.Errorf("refresh routing guidance template for %q: %w", agent, err)
+	}
+
 	return Result{Changed: writeResult.Changed, Files: []string{modulePath}}, nil
 }
 

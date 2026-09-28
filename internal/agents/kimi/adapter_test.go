@@ -509,6 +509,59 @@ func TestAdapter_Detect_KimiCodeFileFallsBackToLegacy(t *testing.T) {
 	}
 }
 
+func TestAdapter_BootstrapTemplate_LegacyKeepsJinjaRouter(t *testing.T) {
+	home := t.TempDir()
+	a := NewAdapter()
+
+	if err := a.BootstrapTemplate(home); err != nil {
+		t.Fatalf("BootstrapTemplate() error = %v", err)
+	}
+
+	content, err := os.ReadFile(filepath.Join(home, LegacyConfigDirName, "KIMI.md"))
+	if err != nil {
+		t.Fatalf("ReadFile(KIMI.md) error = %v", err)
+	}
+	text := string(content)
+	if !strings.Contains(text, `{% include "persona.md" ignore missing %}`) {
+		t.Fatalf("legacy KIMI.md lost Jinja include router:\n%s", text)
+	}
+	if _, err := os.Stat(filepath.Join(home, LegacyConfigDirName, "config.toml")); err != nil {
+		t.Fatalf("config.toml not created: %v", err)
+	}
+}
+
+func TestAdapter_BootstrapTemplate_CurrentExpandsJinjaModules(t *testing.T) {
+	home := newTempHomeWithKimiCode(t)
+	configDir := filepath.Join(home, CurrentConfigDirName)
+	if err := os.WriteFile(filepath.Join(configDir, "persona.md"), []byte("PERSONA MODULE\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(configDir, "agent-routing.md"), []byte("ROUTING MODULE\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	a := NewAdapter()
+
+	if err := a.BootstrapTemplate(home); err != nil {
+		t.Fatalf("BootstrapTemplate() error = %v", err)
+	}
+
+	content, err := os.ReadFile(filepath.Join(configDir, "AGENTS.md"))
+	if err != nil {
+		t.Fatalf("ReadFile(AGENTS.md) error = %v", err)
+	}
+	text := string(content)
+	for _, forbidden := range []string{`{% include "persona.md" ignore missing %}`, `{% include "agent-routing.md" ignore missing %}`} {
+		if strings.Contains(text, forbidden) {
+			t.Fatalf("current AGENTS.md retained unexpanded Jinja include %q:\n%s", forbidden, text)
+		}
+	}
+	for _, want := range []string{"PERSONA MODULE", "ROUTING MODULE", "kimi-code module persona.md", "kimi-code module agent-routing.md"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("current AGENTS.md missing expanded module content %q:\n%s", want, text)
+		}
+	}
+}
+
 // TestAdapter_Detect_UnexpectedStatErrorPropagates verifies that a stat
 // failure other than absence on the current config root is surfaced by
 // Detect instead of silently selecting the legacy layout.

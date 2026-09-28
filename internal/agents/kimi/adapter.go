@@ -12,7 +12,9 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
+	"strings"
 
 	"github.com/gentleman-programming/gentle-ai/v3/internal/agents/capabilitymanifest"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/assets"
@@ -334,12 +336,49 @@ func binaryName() string {
 	return "kimi"
 }
 
+var kimiIncludePattern = regexp.MustCompile(`(?m)^\s*\{%\s*include\s+"([^"]+)"\s+ignore\s+missing\s*%\}\s*$`)
+
+func renderCurrentAgentsHub(configDir string, template string) (string, error) {
+	var renderErr error
+	rendered := kimiIncludePattern.ReplaceAllStringFunc(template, func(match string) string {
+		if renderErr != nil {
+			return ""
+		}
+
+		parts := kimiIncludePattern.FindStringSubmatch(match)
+		if len(parts) != 2 {
+			return match
+		}
+
+		moduleName := parts[1]
+		modulePath := filepath.Join(configDir, moduleName)
+		content, err := os.ReadFile(modulePath)
+		if err != nil {
+			if os.IsNotExist(err) {
+				return fmt.Sprintf("<!-- kimi-code module %s: missing -->", moduleName)
+			}
+			renderErr = fmt.Errorf("read kimi-code module %s: %w", moduleName, err)
+			return ""
+		}
+
+		trimmed := strings.TrimRight(string(content), "\n")
+		if strings.TrimSpace(trimmed) == "" {
+			return fmt.Sprintf("<!-- kimi-code module %s: empty -->", moduleName)
+		}
+		return fmt.Sprintf("<!-- kimi-code module %s -->\n%s\n<!-- /kimi-code module %s -->", moduleName, trimmed, moduleName)
+	})
+	if renderErr != nil {
+		return "", renderErr
+	}
+	return rendered, nil
+}
+
 // BootstrapTemplate ensures the base system prompt hub exists in the agent's
 // config directory (KIMI.md for the legacy layout, AGENTS.md for the current
 // kimi-code v0.11+ layout). It is used by the installation pipeline to provide
 // the managed Kimi prompt even when optional components are not installed.
 func (a *Adapter) BootstrapTemplate(homeDir string) error {
-	kimiDir, _, err := a.configRoot(homeDir)
+	kimiDir, layout, err := a.configRoot(homeDir)
 	if err != nil {
 		return fmt.Errorf("resolve kimi config dir: %w", err)
 	}
@@ -350,9 +389,15 @@ func (a *Adapter) BootstrapTemplate(homeDir string) error {
 	skeletonPath := a.SystemPromptFile(homeDir)
 
 	// We always write the skeleton to ensure any missing includes are restored.
-	// Since the hub file is the 'router' for modular Jinja components, it should
-	// remain managed by the framework.
+	// Legacy Kimi reads the Jinja router directly. Current kimi-code reads plain
+	// AGENTS.md, so it receives the same template with local modules expanded.
 	content := assets.MustRead("kimi/KIMI.md")
+	if layout == LayoutCurrent {
+		content, err = renderCurrentAgentsHub(kimiDir, content)
+		if err != nil {
+			return fmt.Errorf("render current kimi-code agents hub: %w", err)
+		}
+	}
 	if _, err := filemerge.WriteFileAtomic(skeletonPath, []byte(content), 0o644); err != nil {
 		return fmt.Errorf("write system prompt skeleton: %w", err)
 	}
