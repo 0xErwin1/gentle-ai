@@ -213,7 +213,7 @@ func testGlobalArtifactRoots(t *testing.T, sync bool) {
 				cmdLookPath = func(name string) (string, error) { return filepath.Join(home, "bin", name), nil }
 			}
 			if sync {
-				rt, err := newSyncRuntime(home, selection)
+				rt, err := newSyncRuntimeWithScope(home, selection, ScopeGlobal)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -299,7 +299,7 @@ func TestOpenClawConfigDoesNotRedirectProjectToolRuntimeCwd(t *testing.T) {
 		CommunityTools: []model.CommunityToolID{model.CommunityToolCodeGraph},
 	}
 	install := newTestInstallRuntime(t, home, selection)
-	sync, err := newSyncRuntime(home, selection)
+	sync, err := newSyncRuntimeWithScope(home, selection, ScopeGlobal)
 	if err != nil {
 		t.Fatal(err)
 	}

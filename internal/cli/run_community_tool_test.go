@@ -724,10 +724,10 @@ func TestPiCodeGraphMCPRuntimeClassification(t *testing.T) {
 
 func TestSyncPlanIncludesPiCodeGraphReconciliationAfterComponentsWhenSelected(t *testing.T) {
 	home := t.TempDir()
-	runtime, err := newSyncRuntime(home, model.Selection{
+	runtime, err := newSyncRuntimeWithScope(home, model.Selection{
 		Agents:         []model.AgentID{model.AgentPi},
 		CommunityTools: []model.CommunityToolID{model.CommunityToolCodeGraph},
-	})
+	}, ScopeGlobal)
 	if err != nil {
 		t.Fatal(err)
 	}

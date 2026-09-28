@@ -1910,7 +1910,7 @@ func TestRunInstallDryRunMatchesActualInstall(t *testing.T) {
 	adapters := resolveAdapters(dryResult.Resolved.Agents)
 	var expectedPaths []string
 	for _, component := range dryResult.Resolved.OrderedComponents {
-		expectedPaths = append(expectedPaths, componentPaths(home, dryResult.Selection, adapters, component)...)
+		expectedPaths = append(expectedPaths, componentPathsWithWorkspaceScoped(home, "", ScopeGlobal, dryResult.Selection, adapters, component)...)
 	}
 	if len(expectedPaths) == 0 {
 		t.Fatal("dry-run resolved zero file paths — test is misconfigured")
@@ -1969,7 +1969,7 @@ func TestRunInstallDryRunMatchesActualInstallOpenCodeReview(t *testing.T) {
 	adapters := resolveAdapters(dryResult.Resolved.Agents)
 	var expectedPaths []string
 	for _, component := range dryResult.Resolved.OrderedComponents {
-		expectedPaths = append(expectedPaths, componentPaths(home, dryResult.Selection, adapters, component)...)
+		expectedPaths = append(expectedPaths, componentPathsWithWorkspaceScoped(home, "", ScopeGlobal, dryResult.Selection, adapters, component)...)
 	}
 	if len(expectedPaths) == 0 {
 		t.Fatal("dry-run omitted the requested persona files")
