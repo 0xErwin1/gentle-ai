@@ -301,7 +301,7 @@ func TestComponentPathsSDDIncludesSystemPromptForPromptFileAdapters(t *testing.T
 		model.AgentVSCodeCopilot,
 	})
 
-	paths := componentPaths(home, model.Selection{}, adapters, model.ComponentSDD)
+	paths := componentPathsWithWorkspaceScoped(home, "", ScopeGlobal, model.Selection{}, adapters, model.ComponentSDD)
 
 	for _, adapter := range adapters {
 		p := adapter.SystemPromptFile(home)
@@ -320,11 +320,11 @@ func TestComponentPathsSDDExcludesSystemPromptForManagedOpenCodeAgents(t *testin
 	adapters := resolveAdapters([]model.AgentID{model.AgentOpenCode, model.AgentKilocode})
 
 	for _, mode := range []model.SDDModeID{"", model.SDDModeSingle, model.SDDModeMulti} {
-		paths := componentPaths(home, model.Selection{SDDMode: mode}, adapters, model.ComponentSDD)
+		paths := componentPathsWithWorkspaceScoped(home, "", ScopeGlobal, model.Selection{SDDMode: mode}, adapters, model.ComponentSDD)
 		for _, adapter := range adapters {
 			p := adapter.SystemPromptFile(home)
 			if containsPath(paths, p) {
-				t.Fatalf("componentPaths(sdd, mode=%q) lists %q, which the SDD injector never writes for %s\npaths=%v", mode, p, adapter.Agent(), paths)
+				t.Fatalf("componentPathsWithWorkspaceScoped(sdd mode=%q) lists %q, which the SDD injector never writes for %s\npaths=%v", mode, p, adapter.Agent(), paths)
 			}
 		}
 	}
@@ -341,7 +341,7 @@ func TestComponentPathsLegacyCommandsExactAndAbsentFromODD(t *testing.T) {
 		{model.AgentOpenCode, ".config/opencode/commands", ""},
 	} {
 		adapter := resolveAdapters([]model.AgentID{tc.agent})[0]
-		paths := componentPaths(home, model.Selection{}, []agents.Adapter{adapter}, model.ComponentSDD)
+		paths := componentPathsWithWorkspaceScoped(home, "", ScopeGlobal, model.Selection{}, []agents.Adapter{adapter}, model.ComponentSDD)
 		names := []string{"sdd-init", "sdd-new", "sdd-continue", "sdd-status", "sdd-explore", "sdd-research", "sdd-ff", "sdd-apply", "sdd-verify", "sdd-archive", "sdd-onboard"}
 		for _, name := range names {
 			for _, prefix := range []string{tc.prefix, ""} {
@@ -351,7 +351,7 @@ func TestComponentPathsLegacyCommandsExactAndAbsentFromODD(t *testing.T) {
 				}
 			}
 		}
-		active := componentPaths(home, model.Selection{}, []agents.Adapter{adapter}, model.ComponentPersona)
+		active := componentPathsWithWorkspaceScoped(home, "", ScopeGlobal, model.Selection{}, []agents.Adapter{adapter}, model.ComponentPersona)
 		for _, path := range active {
 			if strings.Contains(path, "/commands/sdd-") || strings.Contains(path, "/commands/gentle-sdd-") {
 				t.Errorf("active ODD inventory includes legacy command %s", path)
@@ -370,7 +370,7 @@ func TestComponentPathsSDDOmitsOpenCodeSettingsButKeepsCommands(t *testing.T) {
 	workspace := t.TempDir()
 	adapters := resolveAdapters([]model.AgentID{model.AgentOpenCode})
 
-	paths := componentPaths(home, model.Selection{}, adapters, model.ComponentSDD)
+	paths := componentPathsWithWorkspaceScoped(home, "", ScopeGlobal, model.Selection{}, adapters, model.ComponentSDD)
 
 	for _, scope := range []InstallScope{ScopeGlobal, ScopeWorkspace} {
 		declared := componentPathsWithWorkspaceScoped(home, workspace, scope, model.Selection{}, adapters, model.ComponentSDD)
@@ -380,7 +380,7 @@ func TestComponentPathsSDDOmitsOpenCodeSettingsButKeepsCommands(t *testing.T) {
 		} {
 			for _, retired := range []string{settings, opencodedefault.OwnershipPath(settings)} {
 				if containsPath(declared, retired) {
-					t.Fatalf("componentPaths(sdd, %s) declares %q, which the retired SDD step never writes\npaths=%v", scope, retired, declared)
+					t.Fatalf("componentPathsWithWorkspaceScoped(sdd %s) declares %q, which the retired SDD step never writes\npaths=%v", scope, retired, declared)
 				}
 			}
 		}
@@ -575,7 +575,7 @@ func TestLegacyOpenCodeBackgroundAgentsPluginRequiresConfigOpenCodePluginsPath(t
 func TestComponentPathsSDDIncludesSkillsAndSharedConventions(t *testing.T) {
 	home := t.TempDir()
 	selection := model.Selection{Skills: []model.SkillID{model.SkillGoTesting, model.SkillJudgmentDay}}
-	paths := componentPaths(home, selection, resolveAdapters([]model.AgentID{model.AgentGeminiCLI}), model.ComponentSkills)
+	paths := componentPathsWithWorkspaceScoped(home, "", ScopeGlobal, selection, resolveAdapters([]model.AgentID{model.AgentGeminiCLI}), model.ComponentSkills)
 	for _, skill := range []string{"go-testing", "judgment-day"} {
 		want := filepath.Join(home, ".gemini", "skills", skill, "SKILL.md")
 		if !containsPath(paths, want) {
@@ -756,7 +756,7 @@ func TestComponentPathsContext7KimiIncludesMCPConfig(t *testing.T) {
 	home := t.TempDir()
 	adapters := resolveAdapters([]model.AgentID{model.AgentKimi})
 
-	paths := componentPaths(home, model.Selection{}, adapters, model.ComponentContext7)
+	paths := componentPathsWithWorkspaceScoped(home, "", ScopeGlobal, model.Selection{}, adapters, model.ComponentContext7)
 
 	want := filepath.Join(home, ".kimi", "mcp.json")
 	if !containsPath(paths, want) {
@@ -774,7 +774,7 @@ func TestComponentPathsContext7KimiCurrentLayoutUsesKimiCodeMCP(t *testing.T) {
 	}
 	adapters := resolveAdapters([]model.AgentID{model.AgentKimi})
 
-	paths := componentPaths(home, model.Selection{}, adapters, model.ComponentContext7)
+	paths := componentPathsWithWorkspaceScoped(home, "", ScopeGlobal, model.Selection{}, adapters, model.ComponentContext7)
 
 	want := filepath.Join(home, ".kimi-code", "mcp.json")
 	if !containsPath(paths, want) {
@@ -791,7 +791,7 @@ func TestComponentPathsContext7ClaudeUsesUserRegistry(t *testing.T) {
 	home := t.TempDir()
 	adapters := resolveAdapters([]model.AgentID{model.AgentClaudeCode})
 
-	paths := componentPaths(home, model.Selection{}, adapters, model.ComponentContext7)
+	paths := componentPathsWithWorkspaceScoped(home, "", ScopeGlobal, model.Selection{}, adapters, model.ComponentContext7)
 
 	registry := filepath.Join(home, ".claude.json")
 	if !containsPath(paths, registry) {
@@ -836,7 +836,7 @@ func TestComponentPathsEngramClaudeUsesUserRegistryAndPreservesWorkspaceScope(t 
 	workspace := t.TempDir()
 	adapters := resolveAdapters([]model.AgentID{model.AgentClaudeCode})
 
-	global := componentPaths(home, model.Selection{}, adapters, model.ComponentEngram)
+	global := componentPathsWithWorkspaceScoped(home, "", ScopeGlobal, model.Selection{}, adapters, model.ComponentEngram)
 	registry := filepath.Join(home, ".claude.json")
 	legacy := filepath.Join(home, ".claude", "mcp", "engram.json")
 	if !containsPath(global, registry) || containsPath(global, legacy) {
@@ -856,7 +856,7 @@ func TestComponentPathsEngramCodexIncludesConfigTOML(t *testing.T) {
 	home := t.TempDir()
 	adapters := resolveAdapters([]model.AgentID{model.AgentCodex})
 
-	paths := componentPaths(home, model.Selection{}, adapters, model.ComponentEngram)
+	paths := componentPathsWithWorkspaceScoped(home, "", ScopeGlobal, model.Selection{}, adapters, model.ComponentEngram)
 
 	want := filepath.Join(home, ".codex", "config.toml")
 	if !containsPath(paths, want) {
@@ -868,7 +868,7 @@ func TestComponentPathsSDDCodexIncludesHooksJSONOnlyForCodex(t *testing.T) {
 	home := t.TempDir()
 	adapters := resolveAdapters([]model.AgentID{model.AgentCodex, model.AgentClaudeCode})
 
-	paths := componentPaths(home, model.Selection{}, adapters, model.ComponentSDD)
+	paths := componentPathsWithWorkspaceScoped(home, "", ScopeGlobal, model.Selection{}, adapters, model.ComponentSDD)
 	codexHooks := filepath.Join(home, ".codex", "hooks.json")
 	if !containsPath(paths, codexHooks) {
 		t.Fatalf("componentPaths(sdd,codex) missing skill-registry hook %q\npaths=%v", codexHooks, paths)
@@ -896,7 +896,7 @@ func TestComponentPathsPermissionsCodexContributesNoPaths(t *testing.T) {
 	}
 	adapters := resolveAdapters([]model.AgentID{model.AgentCodex})
 
-	paths := componentPaths(home, model.Selection{}, adapters, model.ComponentPermission)
+	paths := componentPathsWithWorkspaceScoped(home, "", ScopeGlobal, model.Selection{}, adapters, model.ComponentPermission)
 
 	if len(paths) != 0 {
 		t.Fatalf("componentPaths(permissions,codex) = %v, want none", paths)
@@ -911,7 +911,7 @@ func TestComponentPathsPermissionsSkipsAgentsWithoutInjectionTarget(t *testing.T
 		model.AgentHermes,
 	})
 
-	paths := componentPaths(home, model.Selection{}, adapters, model.ComponentPermission)
+	paths := componentPathsWithWorkspaceScoped(home, "", ScopeGlobal, model.Selection{}, adapters, model.ComponentPermission)
 
 	for _, adapter := range adapters {
 		unwanted := adapter.SettingsPath(home)
@@ -935,7 +935,7 @@ func TestComponentPathsPermissionsIncludesAgentsWithInjectionTarget(t *testing.T
 		model.AgentVSCodeCopilot,
 	})
 
-	paths := componentPaths(home, model.Selection{}, adapters, model.ComponentPermission)
+	paths := componentPathsWithWorkspaceScoped(home, "", ScopeGlobal, model.Selection{}, adapters, model.ComponentPermission)
 
 	for _, adapter := range adapters {
 		want := adapter.SettingsPath(home)
@@ -958,7 +958,7 @@ func TestComponentPathsEngramOpenClawUsesCanonicalSettingsPath(t *testing.T) {
 	workspace := t.TempDir()
 	adapters := resolveAdapters([]model.AgentID{model.AgentOpenClaw})
 
-	paths := componentPathsWithWorkspace(home, workspace, model.Selection{}, adapters, model.ComponentEngram)
+	paths := componentPathsWithWorkspaceScoped(home, workspace, ScopeGlobal, model.Selection{}, adapters, model.ComponentEngram)
 
 	canonical := filepath.Join(home, ".openclaw", "openclaw.json")
 	if !containsPath(paths, canonical) {
@@ -1612,7 +1612,7 @@ func TestComponentPathsVisualThemesMatchSelectedAdapter(t *testing.T) {
 		{model.AgentClaudeCode, []string{filepath.Join(home, ".claude", "themes", "gentleman.json"), filepath.Join(home, ".claude", "themes", "gentleman-cute.json")}},
 		{model.AgentOpenCode, []string{filepath.Join(home, ".config", "opencode", "themes", "gentleman.json"), filepath.Join(home, ".config", "opencode", "themes", "gentleman-cute.json")}},
 	} {
-		paths := componentPaths(home, model.Selection{}, resolveAdapters([]model.AgentID{tt.agent}), model.ComponentClaudeTheme)
+		paths := componentPathsWithWorkspaceScoped(home, "", ScopeGlobal, model.Selection{}, resolveAdapters([]model.AgentID{tt.agent}), model.ComponentClaudeTheme)
 		if len(paths) != len(tt.want) {
 			t.Fatalf("%q paths = %v, want %v", tt.agent, paths, tt.want)
 		}
@@ -1636,7 +1636,7 @@ func TestComponentPathsOpenCodeGentleLogoMatchesSelectedAdapter(t *testing.T) {
 			filepath.Join(home, ".config", "opencode", "tui.json"),
 		}},
 	} {
-		paths := componentPaths(home, model.Selection{}, resolveAdapters([]model.AgentID{tt.agent}), model.ComponentOpenCodeGentleLogo)
+		paths := componentPathsWithWorkspaceScoped(home, "", ScopeGlobal, model.Selection{}, resolveAdapters([]model.AgentID{tt.agent}), model.ComponentOpenCodeGentleLogo)
 		if len(paths) != len(tt.want) {
 			t.Fatalf("%q paths = %v, want %v", tt.agent, paths, tt.want)
 		}

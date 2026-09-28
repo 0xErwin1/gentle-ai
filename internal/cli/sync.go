@@ -397,10 +397,6 @@ type syncRuntime struct {
 	piBackgroundProjection *piBackgroundProjectionPlan
 }
 
-func newSyncRuntime(homeDir string, selection model.Selection) (*syncRuntime, error) {
-	return newSyncRuntimeWithScope(homeDir, selection, ScopeGlobal)
-}
-
 // newSyncRuntimeWithScope builds the sync runtime for the requested scope.
 // ScopeWorkspace never touches the global backup store: the rollback snapshot
 // lives in a temporary transaction directory that is removed when the run ends
@@ -603,10 +599,6 @@ func (r *syncRuntime) stagePlan() pipeline.StagePlan {
 // persona backup also captures the non-selected managed output-style file so a
 // failed persona switch can be rolled back (verification still declares only
 // the selected file).
-func syncBackupTargets(homeDir, workspaceDir string, selection model.Selection, adapters []agents.Adapter) ([]string, error) {
-	return syncBackupTargetsScoped(homeDir, workspaceDir, ScopeGlobal, selection, adapters)
-}
-
 // syncBackupTargetsScoped returns the file paths that need to be backed up
 // before a scoped sync executes. ScopeWorkspace declares only workspace-scoped
 // targets: global-only components, plugins, routing guidance, compatibility
@@ -802,10 +794,6 @@ func syncBackupTargetsScoped(homeDir, workspaceDir string, scope InstallScope, s
 	return targets, nil
 }
 
-func syncAdapterSkillBackupTargets(homeDir, workspaceDir string, selection model.Selection, adapters []agents.Adapter) ([]string, error) {
-	return syncAdapterSkillBackupTargetsScoped(homeDir, workspaceDir, ScopeGlobal, selection, adapters)
-}
-
 func syncAdapterSkillBackupTargetsScoped(homeDir, workspaceDir string, scope InstallScope, selection model.Selection, adapters []agents.Adapter) ([]string, error) {
 	var paths []string
 	for _, adapter := range adapters {
@@ -928,34 +916,6 @@ func syncComponentPathsWithWorkspaceScoped(homeDir, workspaceDir string, scope I
 		return syncPersonaPathsWithWorkspaceScoped(homeDir, workspaceDir, scope, selection, adapters)
 	}
 	return componentPathsWithWorkspaceScoped(homeDir, workspaceDir, scope, selection, adapters, component)
-}
-
-func syncComponentPaths(homeDir string, selection model.Selection, adapters []agents.Adapter, component model.ComponentID) []string {
-	return syncComponentPathsWithWorkspace(homeDir, "", selection, adapters, component)
-}
-
-func syncComponentPathsWithWorkspace(homeDir, workspaceDir string, selection model.Selection, adapters []agents.Adapter, component model.ComponentID) []string {
-	if component == model.ComponentPersona {
-		return syncPersonaPathsWithWorkspace(homeDir, workspaceDir, selection, adapters)
-	}
-	return componentPathsWithWorkspace(homeDir, workspaceDir, selection, adapters, component)
-}
-
-// syncPersonaPaths returns the file paths that ComponentPersona writes during
-// sync. Mirrors persona.InjectForSync and the Pi runtime config writer:
-//   - Step 1: SystemPromptFile (the marker-bound markdown block — CLAUDE.md /
-//     AGENTS.md / equivalent).
-//   - Step 3: managed output-style overlay (only when the agent supports it).
-//   - Pi: the home-level gentle-pi persona state file.
-//
-// Step 2 does not merge OpenCode/Kilocode persona definitions during sync. A
-// narrow stale-state cleanup is tracked separately as a backup-only target.
-func syncPersonaPaths(homeDir string, selection model.Selection, adapters []agents.Adapter) []string {
-	return syncPersonaPathsWithWorkspace(homeDir, "", selection, adapters)
-}
-
-func syncPersonaPathsWithWorkspace(homeDir, workspaceDir string, selection model.Selection, adapters []agents.Adapter) []string {
-	return syncPersonaPathsWithWorkspaceScoped(homeDir, workspaceDir, ScopeGlobal, selection, adapters)
 }
 
 // syncPersonaPathsWithWorkspaceScoped resolves persona sync paths for the
@@ -1926,10 +1886,6 @@ func RunSyncWithSelectionScope(homeDir string, selection model.Selection, scope 
 var syncStagePlan = func(runtime *syncRuntime) pipeline.StagePlan { return runtime.stagePlan() }
 var compareChangedSyncFiles = changedSyncFiles
 
-func runSyncWithSelection(homeDir string, selection model.Selection, background OpenCodeBackgroundResolution, piBackground PiBackgroundResolution) (SyncResult, error) {
-	return runSyncWithSelectionScope(homeDir, selection, ScopeGlobal, background, piBackground)
-}
-
 func runSyncWithSelectionScope(homeDir string, selection model.Selection, scope InstallScope, background OpenCodeBackgroundResolution, piBackground PiBackgroundResolution) (SyncResult, error) {
 	agentIDs := selection.Agents
 	// The read error is captured, not discarded: the persona alias migration
@@ -2544,10 +2500,6 @@ func withFailedSyncVerificationNote(report verify.Report) verify.Report {
 }
 
 // runPostSyncVerification verifies that managed files exist after sync.
-func runPostSyncVerification(homeDir, workspaceDir string, selection model.Selection) verify.Report {
-	return runPostSyncVerificationScoped(homeDir, workspaceDir, ScopeGlobal, selection)
-}
-
 // runPostSyncVerificationScoped verifies that the files a scoped sync writes
 // exist after the run. Under ScopeWorkspace, globally-managed components are
 // skipped and any declared path that still resolves under the home root is
