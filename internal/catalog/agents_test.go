@@ -95,3 +95,35 @@ func TestIsSupportedAgentAcceptsHermes(t *testing.T) {
 		t.Fatalf("IsSupportedAgent(%q) = false, want true", model.AgentHermes)
 	}
 }
+
+func TestAllAgentsIncludesConductor(t *testing.T) {
+	agents := AllAgents()
+
+	for _, agent := range agents {
+		if agent.ID != model.AgentConductor {
+			continue
+		}
+
+		if agent.Name != "Conductor" {
+			t.Fatalf("Conductor Name = %q, want Conductor", agent.Name)
+		}
+
+		if agent.Tier != model.TierFull {
+			t.Fatalf("Conductor Tier = %q, want %q", agent.Tier, model.TierFull)
+		}
+
+		if agent.ConfigPath != "~/.conductor" {
+			t.Fatalf("Conductor ConfigPath = %q, want ~/.conductor", agent.ConfigPath)
+		}
+
+		return
+	}
+
+	t.Fatalf("AllAgents() missing %s", model.AgentConductor)
+}
+
+func TestIsSupportedAgentAcceptsConductor(t *testing.T) {
+	if !IsSupportedAgent(model.AgentConductor) {
+		t.Fatalf("IsSupportedAgent(%q) = false, want true", model.AgentConductor)
+	}
+}

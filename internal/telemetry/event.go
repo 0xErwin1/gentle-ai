@@ -41,7 +41,7 @@ var knownAgents = map[string]bool{
 	string(model.AgentCodex): true, string(model.AgentAntigravity): true, string(model.AgentWindsurf): true,
 	string(model.AgentKimi): true, string(model.AgentQwenCode): true, string(model.AgentKiroIDE): true,
 	string(model.AgentOpenClaw): true, string(model.AgentPi): true, string(model.AgentTrae): true,
-	string(model.AgentHermes): true,
+	string(model.AgentHermes): true, string(model.AgentConductor): true,
 }
 
 var knownComponents = map[string]bool{
