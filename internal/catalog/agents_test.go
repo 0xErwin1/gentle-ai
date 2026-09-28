@@ -1,6 +1,7 @@
 package catalog
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
@@ -125,5 +126,40 @@ func TestAllAgentsIncludesConductor(t *testing.T) {
 func TestIsSupportedAgentAcceptsConductor(t *testing.T) {
 	if !IsSupportedAgent(model.AgentConductor) {
 		t.Fatalf("IsSupportedAgent(%q) = false, want true", model.AgentConductor)
+	}
+}
+
+// TestConductorReviewNoteDocumentsInheritance pins the review-screen note for
+// Conductor: the note must say Conductor workspaces inherit Claude Code
+// configuration and that no Conductor-specific files are written.
+func TestConductorReviewNoteDocumentsInheritance(t *testing.T) {
+	for _, agent := range AllAgents() {
+		if agent.ID != model.AgentConductor {
+			continue
+		}
+		for _, required := range []string{
+			"inherit Claude Code configuration",
+			"no Conductor-specific files",
+		} {
+			if !strings.Contains(agent.ReviewNote, required) {
+				t.Fatalf("Conductor ReviewNote = %q, want it to mention %q", agent.ReviewNote, required)
+			}
+		}
+		return
+	}
+	t.Fatalf("AllAgents() missing %s", model.AgentConductor)
+}
+
+// TestOnlyConductorCarriesAReviewNote guards the review screen against
+// surfacing notes for unrelated agents: every writable agent must ship
+// without one.
+func TestOnlyConductorCarriesAReviewNote(t *testing.T) {
+	for _, agent := range AllAgents() {
+		if agent.ID == model.AgentConductor {
+			continue
+		}
+		if agent.ReviewNote != "" {
+			t.Fatalf("agent %q carries an unexpected review note %q", agent.ID, agent.ReviewNote)
+		}
 	}
 }

@@ -131,6 +131,9 @@ func TestRemoteAuthorizationPrimaryCarriers(t *testing.T) {
 		if agent.ID == model.AgentPi {
 			continue // The install/sync step leaves package-owned Pi prompts untouched.
 		}
+		if agent.ID == model.AgentConductor {
+			continue // Catalog-only: no standalone guidance carrier (see conductor_catalog_only_test.go).
+		}
 		covered++
 		t.Run(string(agent.ID), func(t *testing.T) {
 			home := t.TempDir()
@@ -162,6 +165,9 @@ func TestRemoteAuthorizationPrimaryCarriers(t *testing.T) {
 func TestInjectRoutingDeliversOnlyODDWorkflow(t *testing.T) {
 	t.Parallel()
 	for _, agent := range catalog.AllAgents() {
+		if agent.ID == model.AgentConductor {
+			continue // Catalog-only: no standalone guidance target.
+		}
 		t.Run(string(agent.ID), func(t *testing.T) {
 			t.Parallel()
 			result, err := InjectRoutingWithOptions(t.TempDir(), agent.ID, RoutingOptions{})
@@ -183,6 +189,9 @@ func TestInjectRoutingInstallsGuidanceForEverySupportedAgent(t *testing.T) {
 	t.Parallel()
 
 	for _, agent := range catalog.AllAgents() {
+		if agent.ID == model.AgentConductor {
+			continue // Catalog-only: covered by TestInjectRoutingNoOpsForCatalogOnlyConductor.
+		}
 		t.Run(string(agent.ID), func(t *testing.T) {
 			t.Parallel()
 
@@ -256,6 +265,9 @@ func TestInjectRoutingStaysContainedUnderHostileEnvironment(t *testing.T) {
 	t.Cleanup(func() { opencoderuntime.VersionRunnerOverride = previousVersionRunner })
 
 	for _, agent := range catalog.AllAgents() {
+		if agent.ID == model.AgentConductor {
+			continue // Catalog-only: no standalone guidance target.
+		}
 		t.Run(string(agent.ID), func(t *testing.T) {
 			targetDir := t.TempDir()
 
@@ -668,6 +680,9 @@ func TestInjectRoutingIsIdempotentForEverySupportedAgent(t *testing.T) {
 	t.Parallel()
 
 	for _, agent := range catalog.AllAgents() {
+		if agent.ID == model.AgentConductor {
+			continue // Catalog-only: no standalone guidance target.
+		}
 		t.Run(string(agent.ID), func(t *testing.T) {
 			t.Parallel()
 
@@ -700,6 +715,9 @@ func TestInjectRoutingDeliversNoRetiredControlPlaneVocabulary(t *testing.T) {
 	t.Parallel()
 
 	for _, agent := range catalog.AllAgents() {
+		if agent.ID == model.AgentConductor {
+			continue // Catalog-only: no standalone guidance target.
+		}
 		t.Run(string(agent.ID), func(t *testing.T) {
 			t.Parallel()
 
@@ -735,6 +753,9 @@ func markdownSectionAgents(t *testing.T) []model.AgentID {
 		if agent.ID == model.AgentOpenCode || agent.ID == model.AgentKilocode {
 			continue
 		}
+		if agent.ID == model.AgentConductor {
+			continue // Catalog-only: inherits Claude Code config, no prompt file of its own.
+		}
 		adapter, err := agents.NewAdapter(agent.ID)
 		if err != nil {
 			t.Fatalf("NewAdapter(%q) error = %v", agent.ID, err)
@@ -744,8 +765,8 @@ func markdownSectionAgents(t *testing.T) []model.AgentID {
 		}
 		selected = append(selected, agent.ID)
 	}
-	if len(selected) != supportedAgentCount-3 {
-		t.Fatalf("selected %d markdown-section agents, want %d", len(selected), supportedAgentCount-3)
+	if len(selected) != supportedAgentCount-4 {
+		t.Fatalf("selected %d markdown-section agents, want %d", len(selected), supportedAgentCount-4)
 	}
 	return selected
 }

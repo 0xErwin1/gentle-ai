@@ -21,7 +21,9 @@ const (
 )
 
 // orchestratorRuntimes lists every agent whose installed prompt carries the
-// orchestrator. Pi is excluded because its prompt is owned by Gentle Shell.
+// orchestrator. Pi is excluded because its prompt is owned by Gentle Shell,
+// and Conductor is excluded because it is detection/catalog-only and has no
+// prompt file of its own.
 func orchestratorRuntimes(t *testing.T) []model.AgentID {
 	t.Helper()
 
@@ -29,6 +31,9 @@ func orchestratorRuntimes(t *testing.T) []model.AgentID {
 	for _, agent := range catalog.AllAgents() {
 		if agent.ID == model.AgentPi {
 			continue
+		}
+		if agent.ID == model.AgentConductor {
+			continue // Catalog-only: no standalone guidance target.
 		}
 		adapter, err := agents.NewAdapter(agent.ID)
 		if err != nil {
@@ -39,8 +44,8 @@ func orchestratorRuntimes(t *testing.T) []model.AgentID {
 		}
 		selected = append(selected, agent.ID)
 	}
-	if len(selected) != supportedAgentCount-1 {
-		t.Fatalf("selected %d orchestrator runtimes, want %d", len(selected), supportedAgentCount-1)
+	if len(selected) != supportedAgentCount-2 {
+		t.Fatalf("selected %d orchestrator runtimes, want %d", len(selected), supportedAgentCount-2)
 	}
 	return selected
 }
