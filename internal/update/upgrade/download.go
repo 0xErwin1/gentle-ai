@@ -57,7 +57,7 @@ const (
 // releaseMinisignPublicKeys is the production trust-anchor injection point.
 // GoReleaser sets it with:
 //
-//	-X github.com/gentleman-programming/gentle-ai/v3/internal/update/upgrade.releaseMinisignPublicKeys=${MINISIGN_PUBLIC_KEYS}
+//	-X github.com/gentleman-programming/gentle-ai/v4/internal/update/upgrade.releaseMinisignPublicKeys=${MINISIGN_PUBLIC_KEYS}
 //
 // The value is one or two comma-separated minisign public-key payloads (the
 // base64 line accepted by `minisign -P`). Two keys permit a bounded overlap

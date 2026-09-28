@@ -3,9 +3,9 @@
 // isolated from install, pipeline, planner, and config-sync code paths.
 //
 // Import boundary: this package MUST NOT import:
-//   - github.com/gentleman-programming/gentle-ai/v3/internal/pipeline
-//   - github.com/gentleman-programming/gentle-ai/v3/internal/planner
-//   - github.com/gentleman-programming/gentle-ai/v3/internal/cli
+//   - github.com/gentleman-programming/gentle-ai/v4/internal/pipeline
+//   - github.com/gentleman-programming/gentle-ai/v4/internal/planner
+//   - github.com/gentleman-programming/gentle-ai/v4/internal/cli
 package upgrade
 
 import (
