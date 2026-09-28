@@ -755,6 +755,37 @@ func TestListReturnsDedupedEntriesWithoutWriting(t *testing.T) {
 	}
 }
 
+// TestListKeepsSharedUserSkillBeforeKimiCodeNativeSkills verifies that a
+// skill name present in both the shared user skills root and the current
+// kimi-code native skills root resolves to the shared user copy: the
+// .config/agents/skills source precedes .kimi-code/skills in UserSkillDirs,
+// so dedupeBySkillName keeps the earlier entry while project skills still
+// beat both (issue #782 review).
+func TestListKeepsSharedUserSkillBeforeKimiCodeNativeSkills(t *testing.T) {
+	cwd := t.TempDir()
+	home := t.TempDir()
+	writeSkill(t, filepath.Join(home, ".config", "agents", "skills", "shared", "SKILL.md"),
+		"---\nname: shared\ndescription: shared user copy\n---\n")
+	writeSkill(t, filepath.Join(home, ".kimi-code", "skills", "shared", "SKILL.md"),
+		"---\nname: shared\ndescription: kimi-code native copy\n---\n")
+
+	entries := List(cwd, home)
+	if len(entries) != 1 {
+		t.Fatalf("len(entries) = %d, want 1", len(entries))
+	}
+	if want := filepath.Join(home, ".config", "agents", "skills", "shared", "SKILL.md"); entries[0].Path != want {
+		t.Fatalf("entries[0].Path = %q, want the shared user copy %q", entries[0].Path, want)
+	}
+
+	// Project-local skills must still outrank both user-level roots.
+	writeSkill(t, filepath.Join(cwd, "skills", "shared", "SKILL.md"),
+		"---\nname: shared\ndescription: project copy\n---\n")
+	entries = List(cwd, home)
+	if len(entries) != 1 || entries[0].Description != "project copy" {
+		t.Fatalf("entries = %#v, want the project copy to win", entries)
+	}
+}
+
 func writeSkill(t *testing.T, path, content string) {
 	t.Helper()
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {

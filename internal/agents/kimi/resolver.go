@@ -1,6 +1,8 @@
 package kimi
 
 import (
+	"fmt"
+	"os"
 	"path/filepath"
 )
 
@@ -34,11 +36,21 @@ type statFunc func(string) statResult
 // resolveConfigRoot returns the Kimi config root for homeDir and the layout
 // it represents. The current ~/.kimi-code root is preferred only when it
 // exists as a directory; a plain file named .kimi-code is not a v0.11+ layout
-// and is ignored. Everything else falls back to the legacy ~/.kimi root.
-func resolveConfigRoot(statPath statFunc, homeDir string) (string, ConfigLayout) {
+// and is ignored, like absence. Only ENOENT/ENOTDIR (both reported by
+// os.IsNotExist) mean the current root is absent and select the legacy
+// ~/.kimi root; any other stat error is returned so callers can surface it
+// instead of silently falling back to the legacy layout.
+func resolveConfigRoot(statPath statFunc, homeDir string) (string, ConfigLayout, error) {
 	current := filepath.Join(homeDir, CurrentConfigDirName)
-	if stat := statPath(current); stat.err == nil && stat.isDir {
-		return current, LayoutCurrent
+	stat := statPath(current)
+	if stat.err != nil {
+		if !os.IsNotExist(stat.err) {
+			return "", LayoutLegacy, fmt.Errorf("resolve kimi config root: stat %s: %w", current, stat.err)
+		}
+		return filepath.Join(homeDir, LegacyConfigDirName), LayoutLegacy, nil
 	}
-	return filepath.Join(homeDir, LegacyConfigDirName), LayoutLegacy
+	if stat.isDir {
+		return current, LayoutCurrent, nil
+	}
+	return filepath.Join(homeDir, LegacyConfigDirName), LayoutLegacy, nil
 }

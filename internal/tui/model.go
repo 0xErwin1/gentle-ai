@@ -4968,7 +4968,10 @@ func agentBuilderSkillsDir(agentID model.AgentID) (string, bool) {
 // agentBuilderSkillsDirIn resolves the skills directory for agentID under the
 // given home directory. Kimi prefers the current kimi-code v0.11+ native
 // skills root (~/.kimi-code/skills) when the ~/.kimi-code directory exists,
-// and falls back to the shared legacy skills path.
+// and falls back to the shared legacy skills path. Only ENOENT/ENOTDIR mean
+// the current root is absent; any other stat failure leaves the layout
+// undeterminable and Kimi is omitted (ok=false) instead of silently being
+// routed to the legacy path.
 func agentBuilderSkillsDirIn(home string, agentID model.AgentID) (string, bool) {
 	switch agentID {
 	case model.AgentClaudeCode:
@@ -4980,7 +4983,11 @@ func agentBuilderSkillsDirIn(home string, agentID model.AgentID) (string, bool) 
 	case model.AgentCodex:
 		return filepath.Join(home, ".codex", "skills"), true
 	case model.AgentKimi:
-		if info, err := os.Stat(filepath.Join(home, ".kimi-code")); err == nil && info.IsDir() {
+		if info, err := osStatPathFn(filepath.Join(home, ".kimi-code")); err != nil {
+			if !os.IsNotExist(err) {
+				return "", false
+			}
+		} else if info.IsDir() {
 			return filepath.Join(home, ".kimi-code", "skills"), true
 		}
 		return filepath.Join(home, ".config", "agents", "skills"), true

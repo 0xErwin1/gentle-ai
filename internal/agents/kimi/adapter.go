@@ -62,7 +62,10 @@ func (a *Adapter) Tier() model.SupportTier {
 // --- Detection ---
 
 func (a *Adapter) Detect(_ context.Context, homeDir string) (bool, string, string, bool, error) {
-	configPath, _ := a.configRoot(homeDir)
+	configPath, _, err := a.configRoot(homeDir)
+	if err != nil {
+		return false, "", "", false, err
+	}
 
 	binaryPath, err := a.findKimi()
 	installed := err == nil && binaryPath != ""
@@ -127,11 +130,15 @@ func (a *Adapter) InstallCommand(profile system.PlatformProfile) ([][]string, er
 //
 // All path methods resolve through configRoot: the current ~/.kimi-code root
 // (kimi-code v0.11+) is preferred when it exists as a directory, and the
-// legacy ~/.kimi root is used otherwise.
+// legacy ~/.kimi root is used otherwise. The path accessors have no error
+// channel (the agents.Adapter interface returns plain strings), so they use
+// configRootForPaths: an unexpected stat failure there deterministically
+// selects the legacy root. Detect and BootstrapTemplate are the callers with
+// error channels, and they surface the error instead of falling back.
 
 // configRoot resolves the Kimi config root for homeDir using the adapter's
 // testable stat seam.
-func (a *Adapter) configRoot(homeDir string) (string, ConfigLayout) {
+func (a *Adapter) configRoot(homeDir string) (string, ConfigLayout, error) {
 	statPath := a.statPath
 	if statPath == nil {
 		statPath = defaultStat
@@ -139,8 +146,20 @@ func (a *Adapter) configRoot(homeDir string) (string, ConfigLayout) {
 	return resolveConfigRoot(statPath, homeDir)
 }
 
+// configRootForPaths is the configRoot variant for the string-only path
+// accessors: an unexpected stat failure (layout undeterminable) falls back to
+// the legacy root instead of silently assuming the current layout. Callers
+// that can surface errors (Detect, BootstrapTemplate) use configRoot directly.
+func (a *Adapter) configRootForPaths(homeDir string) (string, ConfigLayout) {
+	root, layout, err := a.configRoot(homeDir)
+	if err != nil {
+		return filepath.Join(homeDir, LegacyConfigDirName), LayoutLegacy
+	}
+	return root, layout
+}
+
 func (a *Adapter) GlobalConfigDir(homeDir string) string {
-	root, _ := a.configRoot(homeDir)
+	root, _ := a.configRootForPaths(homeDir)
 	return root
 }
 
@@ -148,8 +167,15 @@ func (a *Adapter) SystemPromptDir(homeDir string) string {
 	return a.GlobalConfigDir(homeDir)
 }
 
+// SystemPromptFile returns the system prompt hub file Kimi reads. The legacy
+// Python/uv CLI reads KIMI.md from its config root; the current kimi-code
+// v0.11+ layout reads AGENTS.md from ~/.kimi-code.
 func (a *Adapter) SystemPromptFile(homeDir string) string {
-	return filepath.Join(a.GlobalConfigDir(homeDir), "KIMI.md")
+	root, layout := a.configRootForPaths(homeDir)
+	if layout == LayoutCurrent {
+		return filepath.Join(root, "AGENTS.md")
+	}
+	return filepath.Join(root, "KIMI.md")
 }
 
 // SkillsDir returns the skills directory path for homeDir.
@@ -167,7 +193,7 @@ func (a *Adapter) SystemPromptFile(homeDir string) string {
 //
 // See: https://moonshotai.github.io/kimi-cli/en/customization/skills.html
 func (a *Adapter) SkillsDir(homeDir string) string {
-	root, layout := a.configRoot(homeDir)
+	root, layout := a.configRootForPaths(homeDir)
 	if layout == LayoutCurrent {
 		return filepath.Join(root, "skills")
 	}
@@ -232,8 +258,14 @@ func (a *Adapter) SupportsSubAgents() bool {
 	return a.CapabilityManifest().Features.FileSubAgents
 }
 
+// SubAgentsDir returns the YAML agents directory. Only the legacy Python/uv
+// layout discovers YAML agent specs (kimi --agent-file); the current
+// kimi-code v0.11+ layout retired that format upstream, so YAML agent
+// installations always target the legacy ~/.kimi/agents directory even when
+// the current layout is preferred. The current layout never receives agent
+// files it cannot load.
 func (a *Adapter) SubAgentsDir(homeDir string) string {
-	return filepath.Join(a.GlobalConfigDir(homeDir), "agents")
+	return filepath.Join(homeDir, LegacyConfigDirName, "agents")
 }
 
 func (a *Adapter) EmbeddedSubAgentsDir() string {
@@ -245,7 +277,12 @@ func (a *Adapter) EmbeddedSubAgentsDir() string {
 // the current kimi-code v0.11+ layout retired --agent-file upstream, so its
 // guidance only points at the native skills root.
 func (a *Adapter) PostInstallMessage(homeDir string) string {
-	root, layout := a.configRoot(homeDir)
+	root, layout, err := a.configRoot(homeDir)
+	if err != nil {
+		// The message is informational; fall back to the legacy guidance
+		// rather than failing on an undeterminable layout.
+		root, layout = filepath.Join(homeDir, LegacyConfigDirName), LayoutLegacy
+	}
 
 	if layout == LayoutCurrent {
 		skillsRoot := filepath.Join(root, "skills")
@@ -255,9 +292,10 @@ Usage:
   kimi --prompt "List skills"
 
 Kimi Code v0.11+ discovers native Agent Skills automatically from the skills root; no agent-file launch step is required.
+YAML agent specs (e.g. gentleman) are installed to %s for the legacy Kimi CLI; kimi-code v0.11+ does not load them.
 
 Skills root:
-  "%s"`, skillsRoot)
+  "%s"`, filepath.Join(homeDir, LegacyConfigDirName, "agents"), skillsRoot)
 	}
 
 	gentlemanYaml := filepath.Join(root, "agents", "gentleman.yaml")
@@ -296,11 +334,15 @@ func binaryName() string {
 	return "kimi"
 }
 
-// BootstrapTemplate ensures the base KIMI.md template exists in the agent's config directory.
-// It is used by the installation pipeline to provide the managed Kimi prompt
-// even when optional components are not installed.
+// BootstrapTemplate ensures the base system prompt hub exists in the agent's
+// config directory (KIMI.md for the legacy layout, AGENTS.md for the current
+// kimi-code v0.11+ layout). It is used by the installation pipeline to provide
+// the managed Kimi prompt even when optional components are not installed.
 func (a *Adapter) BootstrapTemplate(homeDir string) error {
-	kimiDir := a.GlobalConfigDir(homeDir)
+	kimiDir, _, err := a.configRoot(homeDir)
+	if err != nil {
+		return fmt.Errorf("resolve kimi config dir: %w", err)
+	}
 	if err := os.MkdirAll(kimiDir, 0o755); err != nil {
 		return fmt.Errorf("create kimi config dir: %w", err)
 	}
@@ -308,11 +350,11 @@ func (a *Adapter) BootstrapTemplate(homeDir string) error {
 	skeletonPath := a.SystemPromptFile(homeDir)
 
 	// We always write the skeleton to ensure any missing includes are restored.
-	// Since KIMI.md is the 'router' for modular Jinja components, it should
+	// Since the hub file is the 'router' for modular Jinja components, it should
 	// remain managed by the framework.
 	content := assets.MustRead("kimi/KIMI.md")
 	if _, err := filemerge.WriteFileAtomic(skeletonPath, []byte(content), 0o644); err != nil {
-		return fmt.Errorf("write KIMI.md skeleton: %w", err)
+		return fmt.Errorf("write system prompt skeleton: %w", err)
 	}
 
 	// Kimi considers config.toml a required file. We create an empty one if

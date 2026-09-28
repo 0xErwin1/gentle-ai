@@ -52,13 +52,25 @@ func knownAgentConfigDirs(homeDir string) []ConfigState {
 	}
 }
 
+// kimiConfigStat is the stat seam used to resolve the Kimi config layout.
+var kimiConfigStat = os.Stat
+
 // kimiConfigDir returns the Kimi config root for homeDir, preferring the
 // current kimi-code v0.11+ root `~/.kimi-code` when it exists as a directory
 // and falling back to the legacy `~/.kimi` root. A plain file named
-// `.kimi-code` is not a v0.11+ layout and is ignored.
+// `.kimi-code` is not a v0.11+ layout and is ignored, like absence.
+//
+// Only ENOENT/ENOTDIR (both reported by os.IsNotExist) mean the current root
+// is absent. Any other stat failure leaves the layout undeterminable: the
+// preferred current root is returned so ScanConfigs reports it as absent
+// (its stat fails too) instead of silently selecting the legacy layout.
 func kimiConfigDir(homeDir string) string {
 	current := filepath.Join(homeDir, ".kimi-code")
-	if info, err := os.Stat(current); err == nil && info.IsDir() {
+	if info, err := kimiConfigStat(current); err != nil {
+		if !os.IsNotExist(err) {
+			return current
+		}
+	} else if info.IsDir() {
 		return current
 	}
 	return filepath.Join(homeDir, ".kimi")

@@ -204,6 +204,38 @@ func TestScanConfigs_KimiPrefersCurrentLayout(t *testing.T) {
 	}
 }
 
+// TestScanConfigs_KimiUnexpectedStatErrorDoesNotSelectLegacy verifies that a
+// stat failure other than absence (ENOENT/ENOTDIR) on the current config root
+// does not silently select the legacy layout: the kimi entry keeps the
+// preferred current root path and is reported as absent because the layout
+// is undeterminable.
+func TestScanConfigs_KimiUnexpectedStatErrorDoesNotSelectLegacy(t *testing.T) {
+	home := t.TempDir()
+	statErr := os.ErrPermission
+
+	original := kimiConfigStat
+	kimiConfigStat = func(string) (os.FileInfo, error) { return nil, statErr }
+	defer func() { kimiConfigStat = original }()
+
+	configs := ScanConfigs(home)
+	var kimi *ConfigState
+	for i, c := range configs {
+		if c.Agent == "kimi" {
+			kimi = &configs[i]
+			break
+		}
+	}
+	if kimi == nil {
+		t.Fatal("ScanConfigs() missing kimi entry")
+	}
+	if kimi.Path != filepath.Join(home, ".kimi-code") {
+		t.Errorf("kimi Path = %q, want the preferred .kimi-code root (not the legacy fallback)", kimi.Path)
+	}
+	if kimi.Exists {
+		t.Error("kimi Exists = true, want false when the layout is undeterminable")
+	}
+}
+
 // TestScanConfigs_KimiCodeFileIsNotCurrentLayout verifies that a plain file
 // named .kimi-code is not treated as the v0.11+ layout: the scan falls back
 // to the legacy ~/.kimi root.

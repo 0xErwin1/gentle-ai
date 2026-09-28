@@ -717,8 +717,10 @@ func TestComponentPathsSDDKimiIncludesAgentFilesAndGlobalSkills(t *testing.T) {
 
 // TestComponentPathsSDDKimiCurrentLayoutPrefersKimiCode verifies that when
 // the current kimi-code v0.11+ root (~/.kimi-code directory) exists, SDD
-// component paths resolve under it and skills go to the native skills root
-// instead of the legacy shared path (issue #782).
+// component paths resolve under it (with the AGENTS.md hub) and skills go to
+// the native skills root instead of the legacy shared path. YAML agents are
+// only discoverable by the legacy CLI, so they stay on ~/.kimi/agents
+// (issue #782).
 func TestComponentPathsSDDKimiCurrentLayoutPrefersKimiCode(t *testing.T) {
 	home := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(home, ".kimi-code"), 0o755); err != nil {
@@ -729,14 +731,23 @@ func TestComponentPathsSDDKimiCurrentLayoutPrefersKimiCode(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, relative := range []string{".kimi-code/KIMI.md", ".kimi-code/agents/gentleman.yaml", ".kimi-code/skills/go-testing/SKILL.md"} {
+	for _, relative := range []string{
+		".kimi-code/AGENTS.md",
+		".kimi/agents/gentleman.yaml",
+		".kimi-code/skills/go-testing/SKILL.md",
+	} {
 		if !containsPath(targets, filepath.Join(home, relative)) {
 			t.Errorf("current-layout Kimi path missing: %s", relative)
 		}
 	}
-	for _, unwanted := range []string{".kimi/KIMI.md", ".config/agents/skills/go-testing/SKILL.md"} {
+	for _, unwanted := range []string{
+		".kimi-code/KIMI.md",
+		".kimi-code/agents/gentleman.yaml",
+		".kimi/KIMI.md",
+		".config/agents/skills/go-testing/SKILL.md",
+	} {
 		if containsPath(targets, filepath.Join(home, unwanted)) {
-			t.Errorf("current-layout Kimi targets must not include legacy path: %s", unwanted)
+			t.Errorf("current-layout Kimi targets must not include path %s", unwanted)
 		}
 	}
 }

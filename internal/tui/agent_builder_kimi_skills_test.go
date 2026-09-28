@@ -54,3 +54,24 @@ func TestAgentBuilderSkillsDirIn_KimiCodeFileIsNotCurrentLayout(t *testing.T) {
 		t.Errorf("agentBuilderSkillsDirIn(kimi) = %q, want legacy %q", got, want)
 	}
 }
+
+// TestAgentBuilderSkillsDirIn_KimiUnexpectedStatErrorOmitsKimi verifies that
+// a stat failure other than absence (ENOENT/ENOTDIR) on the current config
+// root omits Kimi from the agent builder instead of silently selecting the
+// legacy skills path.
+func TestAgentBuilderSkillsDirIn_KimiUnexpectedStatErrorOmitsKimi(t *testing.T) {
+	home := t.TempDir()
+	statErr := os.ErrPermission
+
+	original := osStatPathFn
+	osStatPathFn = func(string) (os.FileInfo, error) { return nil, statErr }
+	defer func() { osStatPathFn = original }()
+
+	got, ok := agentBuilderSkillsDirIn(home, model.AgentKimi)
+	if ok {
+		t.Fatalf("agentBuilderSkillsDirIn(kimi) ok = true with dir %q, want false on unexpected stat error", got)
+	}
+	if got != "" {
+		t.Errorf("agentBuilderSkillsDirIn(kimi) = %q, want empty on unexpected stat error", got)
+	}
+}

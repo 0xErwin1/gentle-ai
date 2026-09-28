@@ -2,6 +2,7 @@ package kimi
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -236,6 +237,7 @@ func TestResolveConfigRoot(t *testing.T) {
 	tests := []struct {
 		name    string
 		home    string
+		stat    func(string) statResult
 		setup   func(t *testing.T, home string)
 		want    string
 		current bool
@@ -278,7 +280,10 @@ func TestResolveConfigRoot(t *testing.T) {
 			} else if want == "" {
 				want = filepath.Join(tt.home, ".kimi")
 			}
-			got, layout := resolveConfigRoot(defaultStat, tt.home)
+			got, layout, err := resolveConfigRoot(defaultStat, tt.home)
+			if err != nil {
+				t.Fatalf("resolveConfigRoot(%q) error = %v", tt.home, err)
+			}
 			if got != want {
 				t.Errorf("resolveConfigRoot(%q) = %q, want %q", tt.home, got, want)
 			}
@@ -290,6 +295,21 @@ func TestResolveConfigRoot(t *testing.T) {
 				t.Errorf("resolveConfigRoot(%q) layout = %v, want %v", tt.home, layout, wantLayout)
 			}
 		})
+	}
+}
+
+// TestResolveConfigRoot_UnexpectedStatErrorFails verifies that stat failures
+// other than absence (ENOENT/ENOTDIR) are returned instead of silently
+// selecting the legacy layout.
+func TestResolveConfigRoot_UnexpectedStatErrorFails(t *testing.T) {
+	home := t.TempDir()
+	statErr := os.ErrPermission
+	_, _, err := resolveConfigRoot(func(string) statResult { return statResult{err: statErr} }, home)
+	if err == nil {
+		t.Fatal("resolveConfigRoot() error = nil, want the unexpected stat error to propagate")
+	}
+	if !errors.Is(err, statErr) {
+		t.Fatalf("resolveConfigRoot() error = %v, want it to wrap %v", err, statErr)
 	}
 }
 
@@ -394,10 +414,14 @@ func TestAdapter_PathMethods_PreferKimiCodeDir(t *testing.T) {
 	}{
 		{"GlobalConfigDir", a.GlobalConfigDir(home), wantRoot},
 		{"SystemPromptDir", a.SystemPromptDir(home), wantRoot},
-		{"SystemPromptFile", a.SystemPromptFile(home), filepath.Join(wantRoot, "KIMI.md")},
+		// The current kimi-code v0.11+ layout reads AGENTS.md, not KIMI.md.
+		{"SystemPromptFile", a.SystemPromptFile(home), filepath.Join(wantRoot, "AGENTS.md")},
 		{"SettingsPath", a.SettingsPath(home), filepath.Join(wantRoot, "config.toml")},
 		{"MCPConfigPath", a.MCPConfigPath(home, "srv"), filepath.Join(wantRoot, "mcp.json")},
-		{"SubAgentsDir", a.SubAgentsDir(home), filepath.Join(wantRoot, "agents")},
+		// YAML agents are only discovered by the legacy layout, so the agents
+		// directory stays on ~/.kimi/agents even when the current layout is
+		// preferred.
+		{"SubAgentsDir", a.SubAgentsDir(home), filepath.Join(home, LegacyConfigDirName, "agents")},
 		{"SkillsDir", a.SkillsDir(home), filepath.Join(wantRoot, "skills")},
 	}
 
@@ -482,6 +506,73 @@ func TestAdapter_Detect_KimiCodeFileFallsBackToLegacy(t *testing.T) {
 	}
 	if configPath != filepath.Join(home, LegacyConfigDirName) {
 		t.Errorf("Detect() configPath = %q, want the legacy .kimi root", configPath)
+	}
+}
+
+// TestAdapter_Detect_UnexpectedStatErrorPropagates verifies that a stat
+// failure other than absence on the current config root is surfaced by
+// Detect instead of silently selecting the legacy layout.
+func TestAdapter_Detect_UnexpectedStatErrorPropagates(t *testing.T) {
+	tmpDir := t.TempDir()
+	statErr := os.ErrPermission
+
+	a := &Adapter{
+		statPath: func(string) statResult { return statResult{err: statErr} },
+	}
+
+	_, _, _, _, err := a.Detect(context.Background(), tmpDir)
+	if err == nil {
+		t.Fatal("Detect() error = nil, want the unexpected stat error to propagate")
+	}
+	if !errors.Is(err, statErr) {
+		t.Fatalf("Detect() error = %v, want it to wrap %v", err, statErr)
+	}
+}
+
+// TestAdapter_BootstrapTemplate_UnexpectedStatErrorPropagates verifies that
+// BootstrapTemplate surfaces an undeterminable layout instead of writing the
+// skeleton into the legacy config root.
+func TestAdapter_BootstrapTemplate_UnexpectedStatErrorPropagates(t *testing.T) {
+	home := t.TempDir()
+	statErr := os.ErrPermission
+
+	a := &Adapter{
+		statPath: func(string) statResult { return statResult{err: statErr} },
+	}
+
+	if err := a.BootstrapTemplate(home); !errors.Is(err, statErr) {
+		t.Fatalf("BootstrapTemplate() error = %v, want it to wrap %v", err, statErr)
+	}
+	// Nothing must have been written while the layout was undeterminable.
+	if _, err := os.Stat(filepath.Join(home, LegacyConfigDirName, "KIMI.md")); !os.IsNotExist(err) {
+		t.Fatalf("BootstrapTemplate wrote the legacy skeleton (stat err = %v), want it absent", err)
+	}
+}
+
+// TestAdapter_SystemPromptFile_LegacyLayoutKeepsKimiMD pins the legacy
+// half of the system prompt filename split.
+func TestAdapter_SystemPromptFile_LegacyLayoutKeepsKimiMD(t *testing.T) {
+	home := t.TempDir()
+	a := NewAdapter()
+	if got, want := a.SystemPromptFile(home), filepath.Join(home, LegacyConfigDirName, "KIMI.md"); got != want {
+		t.Errorf("SystemPromptFile(%q) = %q, want %q", home, got, want)
+	}
+}
+
+// TestAdapter_SubAgentsDir_AlwaysLegacyLayout pins that YAML agents are
+// installed only where a Kimi CLI can actually discover them.
+func TestAdapter_SubAgentsDir_AlwaysLegacyLayout(t *testing.T) {
+	// Current layout active: SubAgentsDir must still point at ~/.kimi/agents.
+	home := newTempHomeWithKimiCode(t)
+	a := NewAdapter()
+	if got, want := a.SubAgentsDir(home), filepath.Join(home, LegacyConfigDirName, "agents"); got != want {
+		t.Errorf("SubAgentsDir(current layout) = %q, want %q", got, want)
+	}
+
+	// Legacy layout: unchanged behavior.
+	home = t.TempDir()
+	if got, want := a.SubAgentsDir(home), filepath.Join(home, LegacyConfigDirName, "agents"); got != want {
+		t.Errorf("SubAgentsDir(legacy layout) = %q, want %q", got, want)
 	}
 }
 

@@ -2598,7 +2598,7 @@ func TestRunInstallKimiCurrentLayoutBootstrapsHubInKimiCode(t *testing.T) {
 		t.Fatalf("RunInstall() error = %v", err)
 	}
 
-	hubPath := filepath.Join(home, ".kimi-code", "KIMI.md")
+	hubPath := filepath.Join(home, ".kimi-code", "AGENTS.md")
 	if _, err := os.Stat(hubPath); err != nil {
 		t.Fatalf("expected Kimi prompt hub %q in the current layout: %v", hubPath, err)
 	}
