@@ -340,6 +340,21 @@ var kimiIncludePattern = regexp.MustCompile(`(?m)^\s*\{%\s*include\s+"([^"]+)"\s
 
 const currentAgentsHubSection = "kimi-agents-hub"
 
+func removeLegacyPlaceholderSection(content, heading, token string) string {
+	start := strings.Index(content, heading)
+	if start < 0 {
+		return content
+	}
+	sectionEnd := len(content)
+	if next := strings.Index(content[start+len(heading):], "\n## "); next >= 0 {
+		sectionEnd = start + len(heading) + next + 1
+	}
+	if !strings.Contains(content[start:sectionEnd], token) {
+		return content
+	}
+	return content[:start] + content[sectionEnd:]
+}
+
 func renderCurrentAgentsHub(configDir string, template string) (string, error) {
 	var renderErr error
 	rendered := kimiIncludePattern.ReplaceAllStringFunc(template, func(match string) string {
@@ -372,7 +387,9 @@ func renderCurrentAgentsHub(configDir string, template string) (string, error) {
 	if renderErr != nil {
 		return "", renderErr
 	}
-	return rendered, nil
+	rendered = removeLegacyPlaceholderSection(rendered, "## Project Instructions", "${KIMI_AGENTS_MD}")
+	rendered = removeLegacyPlaceholderSection(rendered, "## Loaded Skills", "${KIMI_SKILLS}")
+	return strings.TrimSpace(rendered) + "\n", nil
 }
 
 // BootstrapTemplate ensures the base system prompt hub exists in the agent's

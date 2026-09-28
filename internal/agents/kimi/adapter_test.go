@@ -550,9 +550,9 @@ func TestAdapter_BootstrapTemplate_CurrentExpandsJinjaModules(t *testing.T) {
 		t.Fatalf("ReadFile(AGENTS.md) error = %v", err)
 	}
 	text := string(content)
-	for _, forbidden := range []string{`{% include "persona.md" ignore missing %}`, `{% include "agent-routing.md" ignore missing %}`} {
+	for _, forbidden := range []string{`{% include "persona.md" ignore missing %}`, `{% include "agent-routing.md" ignore missing %}`, "${KIMI_AGENTS_MD}", "${KIMI_SKILLS}", "## Project Instructions", "## Loaded Skills"} {
 		if strings.Contains(text, forbidden) {
-			t.Fatalf("current AGENTS.md retained unexpanded Jinja include %q:\n%s", forbidden, text)
+			t.Fatalf("current AGENTS.md retained legacy-only template content %q:\n%s", forbidden, text)
 		}
 	}
 	for _, want := range []string{"<!-- gentle-ai:kimi-agents-hub -->", "PERSONA MODULE", "ROUTING MODULE", "kimi-code module persona.md", "kimi-code module agent-routing.md"} {
