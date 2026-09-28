@@ -770,14 +770,17 @@ func TestInjectAntigravityRegistersEngramViaPluginOnly(t *testing.T) {
 
 func TestInjectAntigravityRemovesManagedGlobalEngramDuplicate(t *testing.T) {
 	for _, tc := range []struct {
-		name string
-		args string
+		name    string
+		command string
+		args    string
 	}{{
-		name: "default invocation",
-		args: `["mcp"]`,
+		name:    "default invocation",
+		command: "/custom/bin/engram",
+		args:    `["mcp"]`,
 	}, {
-		name: "legacy agent tool profile",
-		args: `["mcp", "--tools=agent"]`,
+		name:    "legacy agent tool profile",
+		command: "/usr/local/bin/engram",
+		args:    `["mcp", "--tools=agent"]`,
 	}} {
 		t.Run(tc.name, func(t *testing.T) {
 			home := t.TempDir()
@@ -789,10 +792,10 @@ func TestInjectAntigravityRemovesManagedGlobalEngramDuplicate(t *testing.T) {
 			global := fmt.Sprintf(`{
   "mcpServers": {
     "context7": {"command": "npx", "args": ["-y", "@upstash/context7-mcp"]},
-    "engram": {"command": "/usr/local/bin/engram", "args": %s}
+    "engram": {"command": %q, "args": %s}
   }
 }
-`, tc.args)
+`, tc.command, tc.args)
 			if err := os.WriteFile(mcpPath, []byte(global), 0o644); err != nil {
 				t.Fatalf("WriteFile(%q) error = %v", mcpPath, err)
 			}
@@ -832,6 +835,31 @@ func TestInjectAntigravityRemovesManagedGlobalEngramDuplicate(t *testing.T) {
 			}
 			if !strings.Contains(string(pluginRaw), "--tools=agent") {
 				t.Fatalf("plugin MCP config must use --tools=agent; got:\n%s", pluginRaw)
+			}
+			if !strings.Contains(string(pluginRaw), tc.command) {
+				t.Fatalf("plugin MCP config must preserve selected command %q; got:\n%s", tc.command, pluginRaw)
+			}
+
+			second, err := Inject(home, antigravityAdapter())
+			if err != nil {
+				t.Fatalf("second Inject(antigravity) error = %v", err)
+			}
+			if second.Changed {
+				t.Fatalf("second Inject(antigravity) changed = true, want false")
+			}
+			secondRaw, err := os.ReadFile(mcpPath)
+			if err != nil {
+				t.Fatalf("second ReadFile(%q) error = %v", mcpPath, err)
+			}
+			if string(secondRaw) != string(raw) {
+				t.Fatalf("global MCP config changed on second injection\nfirst:\n%s\nsecond:\n%s", raw, secondRaw)
+			}
+			secondPluginRaw, err := os.ReadFile(pluginMCPPath)
+			if err != nil {
+				t.Fatalf("second ReadFile(%q) error = %v", pluginMCPPath, err)
+			}
+			if string(secondPluginRaw) != string(pluginRaw) {
+				t.Fatalf("plugin MCP config changed on second injection\nfirst:\n%s\nsecond:\n%s", pluginRaw, secondPluginRaw)
 			}
 		})
 	}
