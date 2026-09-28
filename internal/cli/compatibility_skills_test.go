@@ -334,7 +334,7 @@ func TestCompatibilityManagedPathErrorsReachBackupPreparation(t *testing.T) {
 		},
 		{
 			name: "sync",
-			plan: (&syncRuntime{homeDir: home, selection: selection, backupRoot: backupRoot, state: &runtimeState{}}).stagePlan(),
+			plan: (&syncRuntime{homeDir: home, selection: selection, backupRoot: backupRoot, scope: ScopeGlobal, state: &runtimeState{}}).stagePlan(),
 		},
 	}
 	for _, tt := range tests {
@@ -389,7 +389,7 @@ func TestCompatibilityDirectoryStatErrorsReachBackupPreparation(t *testing.T) {
 				plan pipeline.StagePlan
 			}{
 				{name: "install", plan: (&installRuntime{homeDir: home, selection: selection, resolved: resolved, backupRoot: backupRoot, state: &runtimeState{}}).stagePlan()},
-				{name: "sync", plan: (&syncRuntime{homeDir: home, selection: selection, backupRoot: backupRoot, state: &runtimeState{}}).stagePlan()},
+				{name: "sync", plan: (&syncRuntime{homeDir: home, selection: selection, backupRoot: backupRoot, scope: ScopeGlobal, state: &runtimeState{}}).stagePlan()},
 			}
 			for _, tt := range plans {
 				t.Run(tt.name, func(t *testing.T) {
@@ -663,7 +663,7 @@ func TestStagePlansRefreshCompatibilitySkillsOncePerOperation(t *testing.T) {
 	resolved := planner.ResolvedPlan{Agents: selection.Agents, OrderedComponents: selection.Components}
 	plans := []pipeline.StagePlan{
 		(&installRuntime{selection: selection, resolved: resolved, state: &runtimeState{}}).stagePlan(),
-		(&syncRuntime{selection: selection, agentIDs: selection.Agents, state: &runtimeState{}}).stagePlan(),
+		(&syncRuntime{selection: selection, agentIDs: selection.Agents, scope: ScopeGlobal, state: &runtimeState{}}).stagePlan(),
 	}
 	for _, plan := range plans {
 		count := 0

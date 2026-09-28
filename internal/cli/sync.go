@@ -344,6 +344,37 @@ func DiscoverAgents(homeDir string) []model.AgentID {
 	return ids
 }
 
+// syncOpenCodeSettingsPath is the sync-layer OpenCode settings resolver.
+// Global scope delegates to the shared project-over-global resolver; workspace
+// scope targets the project file OpenCode actually loads in the workspace —
+// never the global authority, and never the unreadable
+// <workspace>/.config/opencode/opencode.json (issue #1074). Non-OpenCode
+// adapters keep their scoped settings path.
+func syncOpenCodeSettingsPath(homeDir, workspaceDir string, scope InstallScope, adapter agents.Adapter) string {
+	if adapter.Agent() == model.AgentOpenCode && scope == ScopeWorkspace {
+		return workspaceOpenCodeSettingsPath(workspaceDir)
+	}
+	return effectiveOpenCodeSettingsPath(homeDir, workspaceDir, scope, adapter)
+}
+
+// workspaceOpenCodeSettingsPath resolves the project settings document a
+// workspace-scoped sync writes for OpenCode: <workspace>/opencode.json, or an
+// existing opencode.jsonc (OpenCode loads both from the project root),
+// defaulting to opencode.json when neither exists. OpenCode never reads
+// <workspace>/.config/opencode/opencode.json, so writing that file would be a
+// false success the runtime can never observe (issue #1074).
+func workspaceOpenCodeSettingsPath(workspaceDir string) string {
+	jsonPath := filepath.Join(workspaceDir, "opencode.json")
+	if info, err := os.Lstat(jsonPath); err == nil && info.Mode().IsRegular() {
+		return jsonPath
+	}
+	jsoncPath := filepath.Join(workspaceDir, "opencode.jsonc")
+	if info, err := os.Lstat(jsoncPath); err == nil && info.Mode().IsRegular() {
+		return jsoncPath
+	}
+	return jsonPath
+}
+
 // syncRuntime mirrors installRuntime but builds a sync-scoped StagePlan.
 // It reuses backup/rollback infrastructure but only calls inject functions —
 // no agentInstallStep, no engram setup, no persona.
@@ -517,7 +548,7 @@ func (r *syncRuntime) stagePlan() pipeline.StagePlan {
 		for _, adapter := range adapters {
 			if adapter.Agent() == model.AgentOpenCode {
 				apply = append(apply, openCodeModelAssignmentSyncStep{
-					path:        effectiveOpenCodeSettingsPath(r.homeDir, r.workspaceDir, r.scope, adapter),
+					path:        syncOpenCodeSettingsPath(r.homeDir, r.workspaceDir, r.scope, adapter),
 					assignments: r.selection.ModelAssignments, changedFiles: &r.changedFiles,
 				})
 			}
@@ -530,7 +561,7 @@ func (r *syncRuntime) stagePlan() pipeline.StagePlan {
 	for _, adapter := range adapters {
 		if adapter.Agent() == model.AgentOpenCode {
 			apply = append(apply, &openCodeMarkerMigrationSyncStep{
-				path: effectiveOpenCodeSettingsPath(r.homeDir, r.workspaceDir, r.scope, adapter), changedFiles: &r.changedFiles,
+				path: syncOpenCodeSettingsPath(r.homeDir, r.workspaceDir, r.scope, adapter), changedFiles: &r.changedFiles,
 			})
 		}
 	}
@@ -627,7 +658,7 @@ func syncBackupTargetsScoped(homeDir, workspaceDir string, scope InstallScope, s
 					// not make best-effort cleanup a post-sync verification target.
 					path := adapter.SettingsPath(componentInjectionDirScoped(homeDir, workspaceDir, scope, adapter))
 					if adapter.Agent() == model.AgentOpenCode {
-						path = effectiveOpenCodeSettingsPath(homeDir, workspaceDir, scope, adapter)
+						path = syncOpenCodeSettingsPath(homeDir, workspaceDir, scope, adapter)
 					}
 					if path != "" {
 						paths[path] = struct{}{}
@@ -645,13 +676,13 @@ func syncBackupTargetsScoped(homeDir, workspaceDir string, scope InstallScope, s
 	}
 	for _, adapter := range adapters {
 		if adapter.Agent() == model.AgentOpenCode {
-			paths[effectiveOpenCodeSettingsPath(homeDir, workspaceDir, scope, adapter)] = struct{}{}
+			paths[syncOpenCodeSettingsPath(homeDir, workspaceDir, scope, adapter)] = struct{}{}
 		}
 	}
 	if len(selection.ModelAssignments) > 0 {
 		for _, adapter := range adapters {
 			if adapter.Agent() == model.AgentOpenCode {
-				paths[effectiveOpenCodeSettingsPath(homeDir, workspaceDir, scope, adapter)] = struct{}{}
+				paths[syncOpenCodeSettingsPath(homeDir, workspaceDir, scope, adapter)] = struct{}{}
 			}
 		}
 	}
@@ -757,6 +788,14 @@ func syncBackupTargetsScoped(homeDir, workspaceDir string, scope InstallScope, s
 
 	targets := make([]string, 0, len(paths))
 	for path := range paths {
+		if workspace && pathUnderHomeOnly(path, homeDir, workspaceDir) {
+			// A workspace sync never writes home-only files, so they must not
+			// enter the rollback contract either: a failed workspace run could
+			// otherwise restore global state (issue #1074). This covers every
+			// declaration source, including shared component and cleanup path
+			// helpers that still resolve the global settings authority.
+			continue
+		}
 		targets = append(targets, path)
 	}
 	sort.Strings(targets)
@@ -1365,7 +1404,7 @@ func (s componentSyncStep) Run() error {
 			Version:                     engramVersion,
 		}
 		for _, adapter := range adapters {
-			engramOpts.OpenCodeSettingsPath = effectiveOpenCodeSettingsPath(s.homeDir, s.workspaceDir, s.scope, adapter)
+			engramOpts.OpenCodeSettingsPath = syncOpenCodeSettingsPath(s.homeDir, s.workspaceDir, s.scope, adapter)
 			var res engram.InjectionResult
 			var err error
 			if adapter.Agent() == model.AgentOpenClaw {
@@ -1396,7 +1435,7 @@ func (s componentSyncStep) Run() error {
 			var res mcp.InjectionResult
 			var err error
 			if adapter.Agent() == model.AgentOpenCode {
-				res, err = mcp.InjectAtSettingsPath(s.homeDir, targetDir, adapter, effectiveOpenCodeSettingsPath(s.homeDir, s.workspaceDir, s.scope, adapter))
+				res, err = mcp.InjectAtSettingsPath(s.homeDir, targetDir, adapter, syncOpenCodeSettingsPath(s.homeDir, s.workspaceDir, s.scope, adapter))
 			} else {
 				res, err = mcp.Inject(s.homeDir, targetDir, adapter)
 			}
@@ -1458,7 +1497,7 @@ func (s componentSyncStep) Run() error {
 			var res permissions.InjectionResult
 			var err error
 			if adapter.Agent() == model.AgentOpenCode {
-				res, err = permissions.InjectAtPath(effectiveOpenCodeSettingsPath(s.homeDir, s.workspaceDir, s.scope, adapter), adapter)
+				res, err = permissions.InjectAtPath(syncOpenCodeSettingsPath(s.homeDir, s.workspaceDir, s.scope, adapter), adapter)
 			} else {
 				res, err = permissions.Inject(s.homeDir, adapter)
 			}
@@ -1488,7 +1527,7 @@ func (s componentSyncStep) Run() error {
 			targetDir := componentInjectionDirScoped(s.homeDir, s.workspaceDir, s.scope, adapter)
 			selectedSettingsPath := ""
 			if adapter.Agent() == model.AgentOpenCode {
-				selectedSettingsPath = effectiveOpenCodeSettingsPath(s.homeDir, s.workspaceDir, s.scope, adapter)
+				selectedSettingsPath = syncOpenCodeSettingsPath(s.homeDir, s.workspaceDir, s.scope, adapter)
 			}
 			res, err := injectSyncPersona(targetDir, adapter, s.selection.Persona, selectedSettingsPath)
 			if err != nil {
@@ -1504,7 +1543,7 @@ func (s componentSyncStep) Run() error {
 			var res theme.InjectionResult
 			var err error
 			if adapter.Agent() == model.AgentOpenCode {
-				res, err = theme.InjectAtPath(effectiveOpenCodeSettingsPath(s.homeDir, s.workspaceDir, s.scope, adapter))
+				res, err = theme.InjectAtPath(syncOpenCodeSettingsPath(s.homeDir, s.workspaceDir, s.scope, adapter))
 			} else {
 				res, err = theme.Inject(s.homeDir, adapter)
 			}
@@ -1855,6 +1894,11 @@ func RunSyncWithSelection(homeDir string, selection model.Selection) (SyncResult
 // sync. ScopeGlobal preserves the historical behavior; ScopeWorkspace runs the
 // issue-#1074 workspace-only refresh with zero global mutation.
 func RunSyncWithSelectionScope(homeDir string, selection model.Selection, scope InstallScope) (SyncResult, error) {
+	// The exported programmatic entry must reject unsupported scopes instead of
+	// silently falling back to global semantics (issue #1074).
+	if _, err := parseInstallScope(string(scope)); err != nil {
+		return SyncResult{}, err
+	}
 	persistedState, persistedStateErr := state.Read(homeDir)
 	if persistedStateErr != nil && !os.IsNotExist(persistedStateErr) {
 		return SyncResult{Agents: selection.Agents, Selection: selection}, fmt.Errorf("read persisted installation state: %w", persistedStateErr)
@@ -2585,7 +2629,7 @@ func runPostSyncVerificationScoped(homeDir, workspaceDir string, scope InstallSc
 				if adapter.Agent() != model.AgentOpenCode {
 					continue
 				}
-				settingsPath := effectiveOpenCodeSettingsPath(homeDir, workspaceDir, ScopeWorkspace, adapter)
+				settingsPath := syncOpenCodeSettingsPath(homeDir, workspaceDir, ScopeWorkspace, adapter)
 				if settingsPath == "" {
 					continue
 				}
@@ -2604,27 +2648,33 @@ func runPostSyncVerificationScoped(homeDir, workspaceDir string, scope InstallSc
 		}
 	}
 
-	for _, adapter := range adapters {
-		if workspace && workspaceAdapterManagedGlobally(model.ComponentPermission, adapter.Agent()) {
-			continue
+	// The global legacy-plugin check is a global-scope concern: workspace
+	// sync never touches the global plugin directory, so a pre-existing global
+	// legacy plugin must not fail (or be migrated by) a workspace refresh
+	// (issue #1074).
+	if !workspace {
+		for _, adapter := range adapters {
+			if workspaceAdapterManagedGlobally(model.ComponentPermission, adapter.Agent()) {
+				continue
+			}
+			if !opencoderuntimeplugins.AgentReceivesManagedOpenCodePlugins(adapter.Agent()) {
+				continue
+			}
+			pluginsDir := filepath.Join(adapter.GlobalConfigDir(homeDir), "plugins")
+			legacyPath := filepath.Join(pluginsDir, opencoderuntimeplugins.LegacyOpenCodeReviewPluginName)
+			checks = append(checks, verify.Check{
+				ID:          "verify:sync:file:" + legacyPath,
+				Description: "legacy OpenCode review plugin removed",
+				Run: func(context.Context) error {
+					if _, err := os.Lstat(legacyPath); err == nil {
+						return fmt.Errorf("legacy OpenCode review plugin still exists; rerun `gentle-ai sync` to complete the managed plugin migration")
+					} else if !os.IsNotExist(err) {
+						return err
+					}
+					return nil
+				},
+			})
 		}
-		if !opencoderuntimeplugins.AgentReceivesManagedOpenCodePlugins(adapter.Agent()) {
-			continue
-		}
-		pluginsDir := filepath.Join(adapter.GlobalConfigDir(homeDir), "plugins")
-		legacyPath := filepath.Join(pluginsDir, opencoderuntimeplugins.LegacyOpenCodeReviewPluginName)
-		checks = append(checks, verify.Check{
-			ID:          "verify:sync:file:" + legacyPath,
-			Description: "legacy OpenCode review plugin removed",
-			Run: func(context.Context) error {
-				if _, err := os.Lstat(legacyPath); err == nil {
-					return fmt.Errorf("legacy OpenCode review plugin still exists; rerun `gentle-ai sync` to complete the managed plugin migration")
-				} else if !os.IsNotExist(err) {
-					return err
-				}
-				return nil
-			},
-		})
 	}
 
 	return verify.BuildReport(verify.RunChecks(context.Background(), checks))
