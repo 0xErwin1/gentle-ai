@@ -691,7 +691,7 @@ func TestInjectGeminiToolsFlagPresent(t *testing.T) {
 	}
 }
 
-func TestInjectAntigravityWritesMCPToCLIConfig(t *testing.T) {
+func TestInjectAntigravityRegistersEngramViaPluginOnly(t *testing.T) {
 	home := t.TempDir()
 
 	result, err := Inject(home, antigravityAdapter())
@@ -702,17 +702,11 @@ func TestInjectAntigravityWritesMCPToCLIConfig(t *testing.T) {
 		t.Fatalf("Inject(antigravity) changed = false")
 	}
 
+	// #797: Engram registration is plugin-owned only; the global
+	// ~/.gemini/antigravity-cli/mcp_config.json is never written for Engram.
 	cliMCPPath := filepath.Join(home, ".gemini", "antigravity-cli", "mcp_config.json")
-	content, err := os.ReadFile(cliMCPPath)
-	if err != nil {
-		t.Fatalf("ReadFile(%q) error = %v", cliMCPPath, err)
-	}
-	text := string(content)
-	if !strings.Contains(text, `"args": [`) || !strings.Contains(text, `"mcp"`) {
-		t.Fatalf("Antigravity MCP config must launch Engram MCP; got:\n%s", text)
-	}
-	if strings.Contains(text, `--tools=`) {
-		t.Fatalf("Antigravity should use Engram's default MCP invocation without tool-profile flags; got:\n%s", text)
+	if _, err := os.Stat(cliMCPPath); !os.IsNotExist(err) {
+		t.Fatalf("global Antigravity MCP config %q must not be written for Engram; stat err = %v", cliMCPPath, err)
 	}
 
 	pluginPath := filepath.Join(home, ".gemini", "antigravity-cli", "plugins", "gentle-ai-engram", "plugin.json")
@@ -720,14 +714,28 @@ func TestInjectAntigravityWritesMCPToCLIConfig(t *testing.T) {
 		t.Fatalf("Antigravity Engram plugin manifest missing: %v", err)
 	}
 
+	// #797: the plugin MCP config must use the canonical Engram agent tool
+	// profile (args ["mcp", "--tools=agent"]).
 	pluginMCPPath := filepath.Join(home, ".gemini", "antigravity-cli", "plugins", "gentle-ai-engram", "mcp_config.json")
 	pluginMCPContent, err := os.ReadFile(pluginMCPPath)
 	if err != nil {
 		t.Fatalf("ReadFile(%q) error = %v", pluginMCPPath, err)
 	}
-	pluginMCPText := string(pluginMCPContent)
-	if !strings.Contains(pluginMCPText, `"mcp"`) || strings.Contains(pluginMCPText, `--tools=`) {
-		t.Fatalf("Antigravity Engram plugin MCP config should expose default Engram MCP tools; got:\n%s", pluginMCPText)
+	var pluginCfg struct {
+		MCPServers map[string]struct {
+			Command string   `json:"command"`
+			Args    []string `json:"args"`
+		} `json:"mcpServers"`
+	}
+	if err := json.Unmarshal(pluginMCPContent, &pluginCfg); err != nil {
+		t.Fatalf("Unmarshal(%q) error = %v", pluginMCPPath, err)
+	}
+	server, ok := pluginCfg.MCPServers["engram"]
+	if !ok || server.Command == "" {
+		t.Fatalf("Antigravity Engram plugin MCP config must register the engram server; got:\n%s", pluginMCPContent)
+	}
+	if len(server.Args) != 2 || server.Args[0] != "mcp" || server.Args[1] != "--tools=agent" {
+		t.Fatalf("Antigravity Engram plugin MCP config args = %v, want [mcp --tools=agent]; got:\n%s", server.Args, pluginMCPContent)
 	}
 
 	hooksPath := filepath.Join(home, ".gemini", "antigravity-cli", "plugins", "gentle-ai-engram", "hooks.json")
@@ -757,6 +765,145 @@ func TestInjectAntigravityWritesMCPToCLIConfig(t *testing.T) {
 	desktopMCPPath := filepath.Join(home, ".gemini", "antigravity", "mcp_config.json")
 	if _, err := os.Stat(desktopMCPPath); !os.IsNotExist(err) {
 		t.Fatalf("legacy desktop MCP path %q should not be written for antigravity; stat err = %v", desktopMCPPath, err)
+	}
+}
+
+func TestInjectAntigravityRemovesManagedGlobalEngramDuplicate(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		args string
+	}{{
+		name: "default invocation",
+		args: `["mcp"]`,
+	}, {
+		name: "legacy agent tool profile",
+		args: `["mcp", "--tools=agent"]`,
+	}} {
+		t.Run(tc.name, func(t *testing.T) {
+			home := t.TempDir()
+			cliDir := filepath.Join(home, ".gemini", "antigravity-cli")
+			mcpPath := filepath.Join(cliDir, "mcp_config.json")
+			if err := os.MkdirAll(cliDir, 0o755); err != nil {
+				t.Fatalf("MkdirAll(%q) error = %v", cliDir, err)
+			}
+			global := fmt.Sprintf(`{
+  "mcpServers": {
+    "context7": {"command": "npx", "args": ["-y", "@upstash/context7-mcp"]},
+    "engram": {"command": "/usr/local/bin/engram", "args": %s}
+  }
+}
+`, tc.args)
+			if err := os.WriteFile(mcpPath, []byte(global), 0o644); err != nil {
+				t.Fatalf("WriteFile(%q) error = %v", mcpPath, err)
+			}
+
+			result, err := Inject(home, antigravityAdapter())
+			if err != nil {
+				t.Fatalf("Inject(antigravity) error = %v", err)
+			}
+			if !result.Changed {
+				t.Fatalf("Inject(antigravity) changed = false")
+			}
+
+			// The duplicate global Engram owner is removed; unrelated servers
+			// in the same file are preserved untouched.
+			raw, err := os.ReadFile(mcpPath)
+			if err != nil {
+				t.Fatalf("ReadFile(%q) error = %v", mcpPath, err)
+			}
+			var cfg struct {
+				MCPServers map[string]json.RawMessage `json:"mcpServers"`
+			}
+			if err := json.Unmarshal(raw, &cfg); err != nil {
+				t.Fatalf("Unmarshal(%q) error = %v", mcpPath, err)
+			}
+			if _, ok := cfg.MCPServers["engram"]; ok {
+				t.Fatalf("duplicate global Engram entry must be removed; got:\n%s", raw)
+			}
+			if _, ok := cfg.MCPServers["context7"]; !ok {
+				t.Fatalf("unrelated context7 server must be preserved; got:\n%s", raw)
+			}
+
+			// The plugin carries the canonical agent tool profile.
+			pluginMCPPath := filepath.Join(cliDir, "plugins", "gentle-ai-engram", "mcp_config.json")
+			pluginRaw, err := os.ReadFile(pluginMCPPath)
+			if err != nil {
+				t.Fatalf("ReadFile(%q) error = %v", pluginMCPPath, err)
+			}
+			if !strings.Contains(string(pluginRaw), "--tools=agent") {
+				t.Fatalf("plugin MCP config must use --tools=agent; got:\n%s", pluginRaw)
+			}
+		})
+	}
+}
+
+func TestInjectAntigravityRemovesFileContainingOnlyManagedEngram(t *testing.T) {
+	home := t.TempDir()
+	cliDir := filepath.Join(home, ".gemini", "antigravity-cli")
+	mcpPath := filepath.Join(cliDir, "mcp_config.json")
+	if err := os.MkdirAll(cliDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(%q) error = %v", cliDir, err)
+	}
+	if err := os.WriteFile(mcpPath, []byte(`{"mcpServers":{"engram":{"command":"/usr/local/bin/engram","args":["mcp"]}}}`+"\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q) error = %v", mcpPath, err)
+	}
+
+	if _, err := Inject(home, antigravityAdapter()); err != nil {
+		t.Fatalf("Inject(antigravity) error = %v", err)
+	}
+
+	if _, err := os.Stat(mcpPath); !os.IsNotExist(err) {
+		t.Fatalf("global MCP config holding only the managed Engram entry should be removed; stat err = %v", err)
+	}
+}
+
+func TestInjectAntigravityLeavesUserModifiedGlobalEngramUntouched(t *testing.T) {
+	home := t.TempDir()
+	cliDir := filepath.Join(home, ".gemini", "antigravity-cli")
+	mcpPath := filepath.Join(cliDir, "mcp_config.json")
+	if err := os.MkdirAll(cliDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(%q) error = %v", cliDir, err)
+	}
+	global := `{
+  "mcpServers": {
+    "engram": {"command": "/opt/engram/bin/engram", "args": ["mcp", "--profile=custom"]}
+  }
+}
+`
+	if err := os.WriteFile(mcpPath, []byte(global), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q) error = %v", mcpPath, err)
+	}
+
+	if _, err := Inject(home, antigravityAdapter()); err != nil {
+		t.Fatalf("Inject(antigravity) error = %v", err)
+	}
+
+	raw, err := os.ReadFile(mcpPath)
+	if err != nil {
+		t.Fatalf("ReadFile(%q) error = %v", mcpPath, err)
+	}
+	if string(raw) != global {
+		t.Fatalf("user-modified global Engram entry must be preserved untouched; got:\n%s", raw)
+	}
+}
+
+func TestStableEngramCommandRecognizesLinuxbrewPath(t *testing.T) {
+	SetLookPathForTest(t, "/home/linuxbrew/.linuxbrew/bin/engram", "")
+
+	if !isStableHomebrewEngramPath("/home/linuxbrew/.linuxbrew/bin/engram") {
+		t.Fatalf("Linuxbrew stable path must be recognized as a stable Homebrew engram path")
+	}
+	if got := preferredStableEngramCommand(); got != "/home/linuxbrew/.linuxbrew/bin/engram" {
+		t.Fatalf("preferredStableEngramCommand() = %q, want the Linuxbrew stable path", got)
+	}
+
+	// Standard agents (including Antigravity plugin install) resolve the
+	// stable command through stableEngramCommandForMergedConfig when no prior
+	// config exists — the Linuxbrew stable path must be preserved there too.
+	home := t.TempDir()
+	got := stableEngramCommandForMergedConfig(filepath.Join(home, "missing", "mcp_config.json"), model.AgentAntigravity)
+	if got != "/home/linuxbrew/.linuxbrew/bin/engram" {
+		t.Fatalf("stableEngramCommandForMergedConfig(antigravity) = %q, want the Linuxbrew stable path", got)
 	}
 }
 
