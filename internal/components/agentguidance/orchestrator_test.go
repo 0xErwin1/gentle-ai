@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -237,7 +238,7 @@ func TestInjectRoutingReplacesLegacySDDOrchestratorBlockInPlace(t *testing.T) {
 			}
 			if info, err := os.Stat(promptPath); err != nil {
 				t.Fatal(err)
-			} else if info.Mode().Perm() != 0o600 {
+			} else if runtime.GOOS != "windows" && info.Mode().Perm() != 0o600 {
 				t.Fatalf("prompt mode = %v, want preserved 0600", info.Mode().Perm())
 			}
 		})

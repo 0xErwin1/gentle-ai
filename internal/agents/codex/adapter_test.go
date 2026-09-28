@@ -219,7 +219,7 @@ func TestAdapterSystemPromptStrategyStaysFileReplaceForMarkerPersona(t *testing.
 	if got := a.SystemPromptStrategy(); got != model.StrategyFileReplace {
 		t.Fatalf("SystemPromptStrategy() = %v, want StrategyFileReplace", got)
 	}
-	if got, want := a.SystemPromptFile("/home/user"), "/home/user/.codex/AGENTS.md"; got != want {
+	if got, want := a.SystemPromptFile("/home/user"), filepath.Join("/home/user", ".codex", "AGENTS.md"); got != want {
 		t.Fatalf("SystemPromptFile() = %q, want %q", got, want)
 	}
 }

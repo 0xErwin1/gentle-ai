@@ -3505,7 +3505,7 @@ func TestMalformedSelectedJSONCRefusesGentlemanInstallBeforePromptMutation(t *te
 	}
 
 	_, err := InjectAtSettingsPath(home, adapter, model.PersonaGentleman, path)
-	if err == nil || !strings.Contains(err.Error(), "malformed JSONC") || !strings.Contains(err.Error(), path) {
+	if err == nil || !strings.Contains(err.Error(), fmt.Sprintf("%q is malformed JSONC; fix its syntax and retry", path)) {
 		t.Fatalf("InjectAtSettingsPath() error = %v; want actionable malformed JSONC refusal naming the file", err)
 	}
 	if _, statErr := os.Stat(adapter.SystemPromptFile(home)); !os.IsNotExist(statErr) {
@@ -3588,7 +3588,7 @@ func TestEscapedAgentKeyRefusesBeforePromptMutation(t *testing.T) {
 				}
 				return
 			}
-			if err == nil || !strings.Contains(err.Error(), "escaped") || !strings.Contains(err.Error(), path) {
+			if err == nil || !strings.Contains(err.Error(), fmt.Sprintf("%q writes its \"agent\" key with an escaped spelling; use its unescaped spelling and retry", path)) {
 				t.Fatalf("error = %v; want actionable escaped-key refusal naming the file", err)
 			}
 			if _, statErr := os.Stat(adapter.SystemPromptFile(home)); !os.IsNotExist(statErr) {
