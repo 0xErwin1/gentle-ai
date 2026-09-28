@@ -22,6 +22,9 @@ func TestRoutingPathsMatchesEveryPathInjectRoutingWrites(t *testing.T) {
 	t.Parallel()
 
 	for _, agent := range catalog.AllAgents() {
+		if agent.ID == model.AgentConductor {
+			continue // Catalog-only: no guidance path to declare or write.
+		}
 		t.Run(string(agent.ID), func(t *testing.T) {
 			t.Parallel()
 
@@ -48,6 +51,9 @@ func TestRoutingPathsWritesNothingToDisk(t *testing.T) {
 	t.Parallel()
 
 	for _, agent := range catalog.AllAgents() {
+		if agent.ID == model.AgentConductor {
+			continue // Catalog-only: RoutingPaths must not touch disk for it.
+		}
 		t.Run(string(agent.ID), func(t *testing.T) {
 			t.Parallel()
 

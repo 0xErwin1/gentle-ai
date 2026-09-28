@@ -7,6 +7,12 @@ type Agent struct {
 	Name       string
 	Tier       model.SupportTier
 	ConfigPath string
+
+	// ReviewNote, when non-empty, is surfaced on the install review screen
+	// whenever this agent is selected. It exists for detection/catalog-only
+	// integrations whose selection deserves an explicit expectation setting;
+	// writable agents must leave it empty.
+	ReviewNote string
 }
 
 var allAgents = []Agent{
@@ -26,6 +32,11 @@ var allAgents = []Agent{
 	{ID: model.AgentPi, Name: "Pi", Tier: model.TierFull, ConfigPath: "~/.pi"},
 	{ID: model.AgentTrae, Name: "Trae IDE", Tier: model.TierFull, ConfigPath: "~/.trae"},
 	{ID: model.AgentHermes, Name: "Hermes", Tier: model.TierFull, ConfigPath: "~/.hermes"},
+	// Conductor is detection/catalog-only: its workspaces inherit Claude Code
+	// configuration, and Gentle AI writes no Conductor-specific files. The note
+	// sets that expectation before the user confirms the install.
+	{ID: model.AgentConductor, Name: "Conductor", Tier: model.TierFull, ConfigPath: "~/.conductor",
+		ReviewNote: "Conductor workspaces inherit Claude Code configuration; Gentle AI writes no Conductor-specific files."},
 }
 
 // mvpAgents are the original MVP agents (Claude Code, OpenCode).

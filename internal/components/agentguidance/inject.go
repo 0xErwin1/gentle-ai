@@ -87,6 +87,14 @@ type RoutingOptions struct {
 // Only the marked sections are owned by Gentle AI: everything a user wrote
 // around them is preserved verbatim, and a second identical injection is a no-op.
 func InjectRoutingWithOptions(targetDir string, agent model.AgentID, options RoutingOptions) (Result, error) {
+	// Conductor is detection/catalog-only: its workspaces inherit Claude Code
+	// configuration, so there is no standalone guidance target to write. Skip
+	// it cleanly instead of failing closed like an unknown delivery (see
+	// isCatalogOnlyGuidanceTarget).
+	if isCatalogOnlyGuidanceTarget(agent) {
+		return Result{}, nil
+	}
+
 	// Render before resolving the delivery so an unsupported agent is rejected
 	// without having touched the filesystem.
 	rendered, err := RenderRouting(agent)
@@ -151,11 +159,27 @@ func RoutingPaths(targetDir string, agent model.AgentID) ([]string, error) {
 // RoutingPathsWithOptions reports the same paths InjectRoutingWithOptions would
 // write, including any caller-resolved effective settings path.
 func RoutingPathsWithOptions(targetDir string, agent model.AgentID, options RoutingOptions) ([]string, error) {
+	if isCatalogOnlyGuidanceTarget(agent) {
+		// Same catalog-only skip as InjectRoutingWithOptions: no guidance
+		// target exists, so the backup snapshot must declare no path.
+		return nil, nil
+	}
+
 	delivery, err := resolveRoutingDelivery(targetDir, agent, options)
 	if err != nil {
 		return nil, err
 	}
 	return delivery.paths, nil
+}
+
+// isCatalogOnlyGuidanceTarget reports whether an agent is detection and
+// catalog only, with no standalone guidance target for install/sync to write.
+// Conductor inherits Claude Code configuration for the workspaces it manages,
+// and its capability manifest claims no managed system prompt; the skip must
+// track that canonical contract (guarded by
+// TestConductorIsTheOnlyCatalogOnlyGuidanceTarget).
+func isCatalogOnlyGuidanceTarget(agent model.AgentID) bool {
+	return agent == model.AgentConductor
 }
 
 // routingDeliveryKind names the three scopes an agent actually loads guidance

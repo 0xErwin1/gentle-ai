@@ -25,9 +25,9 @@ func TestScanConfigs_ReturnsAllKnownAgentsWithExistsFlag(t *testing.T) {
 	configs := ScanConfigs(home)
 
 	// Must return at least as many entries as the registry has adapters with
-	// a non-empty GlobalConfigDir. Currently 16 agents are supported.
-	if len(configs) < 16 {
-		t.Fatalf("ScanConfigs() returned %d entries, want >= 16; got %v", len(configs), configs)
+	// a non-empty GlobalConfigDir. Currently 17 agents are supported.
+	if len(configs) < 17 {
+		t.Fatalf("ScanConfigs() returned %d entries, want >= 17; got %v", len(configs), configs)
 	}
 
 	// Find claude — must be Exists=true.
@@ -85,6 +85,7 @@ func TestScanConfigs_AgentFieldMatchesModelAgentID(t *testing.T) {
 		"pi":             false,
 		"trae-ide":       false,
 		"hermes":         false,
+		"conductor":      false,
 	}
 
 	for _, c := range configs {

@@ -117,6 +117,7 @@ func TestDefaultRegistryIncludesAllAgents(t *testing.T) {
 		model.AgentWindsurf,
 		model.AgentQwenCode,
 		model.AgentHermes,
+		model.AgentConductor,
 	} {
 		if _, ok := registry.Get(agent); !ok {
 			t.Fatalf("registry missing %s adapter", agent)
