@@ -62,7 +62,7 @@ func (a *Adapter) Tier() model.SupportTier {
 // --- Detection ---
 
 func (a *Adapter) Detect(_ context.Context, homeDir string) (bool, string, string, bool, error) {
-	configPath := ConfigPath(homeDir)
+	configPath, _ := a.configRoot(homeDir)
 
 	binaryPath, err := a.findKimi()
 	installed := err == nil && binaryPath != ""
@@ -124,36 +124,58 @@ func (a *Adapter) InstallCommand(profile system.PlatformProfile) ([][]string, er
 }
 
 // --- Config paths ---
+//
+// All path methods resolve through configRoot: the current ~/.kimi-code root
+// (kimi-code v0.11+) is preferred when it exists as a directory, and the
+// legacy ~/.kimi root is used otherwise.
+
+// configRoot resolves the Kimi config root for homeDir using the adapter's
+// testable stat seam.
+func (a *Adapter) configRoot(homeDir string) (string, ConfigLayout) {
+	statPath := a.statPath
+	if statPath == nil {
+		statPath = defaultStat
+	}
+	return resolveConfigRoot(statPath, homeDir)
+}
 
 func (a *Adapter) GlobalConfigDir(homeDir string) string {
-	return filepath.Join(homeDir, ".kimi")
+	root, _ := a.configRoot(homeDir)
+	return root
 }
 
 func (a *Adapter) SystemPromptDir(homeDir string) string {
-	return filepath.Join(homeDir, ".kimi")
+	return a.GlobalConfigDir(homeDir)
 }
 
 func (a *Adapter) SystemPromptFile(homeDir string) string {
-	return filepath.Join(homeDir, ".kimi", "KIMI.md")
+	return filepath.Join(a.GlobalConfigDir(homeDir), "KIMI.md")
 }
 
-// SkillsDir returns the shared skills directory path.
+// SkillsDir returns the skills directory path for homeDir.
 //
-// Kimi Code CLI supports native Agent Skills. It recognizes both:
-//   - native brand-specific skills: ~/.kimi/skills
+// Kimi Code CLI supports native Agent Skills. For the current kimi-code
+// v0.11+ layout (config root ~/.kimi-code) the native per-brand skills
+// directory ~/.kimi-code/skills is used. For the legacy Python/uv layout the
+// generic shared skills directory is kept:
 //   - generic shared skills: ~/.config/agents/skills and ~/.agents/skills
 //
-// We intentionally use ~/.config/agents/skills here as a cross-agent shared
-// convention. Kimi will discover this directory natively as part of its
-// generic skills group (the docs mark this path as "recommended").
+// We intentionally use ~/.config/agents/skills for legacy installs as a
+// cross-agent shared convention. Kimi discovers this directory natively as
+// part of its generic skills group (the docs mark this path as
+// "recommended").
 //
 // See: https://moonshotai.github.io/kimi-cli/en/customization/skills.html
 func (a *Adapter) SkillsDir(homeDir string) string {
+	root, layout := a.configRoot(homeDir)
+	if layout == LayoutCurrent {
+		return filepath.Join(root, "skills")
+	}
 	return filepath.Join(homeDir, ".config", "agents", "skills")
 }
 
 func (a *Adapter) SettingsPath(homeDir string) string {
-	return filepath.Join(homeDir, ".kimi", "config.toml")
+	return filepath.Join(a.GlobalConfigDir(homeDir), "config.toml")
 }
 
 func (a *Adapter) CommandsDir(string) string {
@@ -173,7 +195,7 @@ func (a *Adapter) MCPStrategy() model.MCPStrategy {
 // --- MCP ---
 
 func (a *Adapter) MCPConfigPath(homeDir string, _ string) string {
-	return filepath.Join(homeDir, ".kimi", "mcp.json")
+	return filepath.Join(a.GlobalConfigDir(homeDir), "mcp.json")
 }
 
 // --- Optional capabilities ---
@@ -211,15 +233,34 @@ func (a *Adapter) SupportsSubAgents() bool {
 }
 
 func (a *Adapter) SubAgentsDir(homeDir string) string {
-	return filepath.Join(homeDir, ".kimi", "agents")
+	return filepath.Join(a.GlobalConfigDir(homeDir), "agents")
 }
 
 func (a *Adapter) EmbeddedSubAgentsDir() string {
 	return "kimi/agents"
 }
 
+// PostInstallMessage returns launch guidance for the resolved Kimi layout.
+// The legacy Python/uv layout keeps YAML agent instructions (--agent-file);
+// the current kimi-code v0.11+ layout retired --agent-file upstream, so its
+// guidance only points at the native skills root.
 func (a *Adapter) PostInstallMessage(homeDir string) string {
-	gentlemanYaml := filepath.Join(homeDir, ".kimi", "agents", "gentleman.yaml")
+	root, layout := a.configRoot(homeDir)
+
+	if layout == LayoutCurrent {
+		skillsRoot := filepath.Join(root, "skills")
+		return fmt.Sprintf(`Kimi Code configured!
+
+Usage:
+  kimi --prompt "List skills"
+
+Kimi Code v0.11+ discovers native Agent Skills automatically from the skills root; no agent-file launch step is required.
+
+Skills root:
+  "%s"`, skillsRoot)
+	}
+
+	gentlemanYaml := filepath.Join(root, "agents", "gentleman.yaml")
 	skillsRoot := filepath.Join(homeDir, ".config", "agents", "skills")
 
 	return fmt.Sprintf(`Kimi Code configured!
@@ -246,11 +287,6 @@ func defaultStat(path string) statResult {
 func defaultPathExists(path string) bool {
 	_, err := os.Stat(path)
 	return err == nil
-}
-
-// ConfigPath returns the configuration directory path.
-func ConfigPath(homeDir string) string {
-	return filepath.Join(homeDir, ".kimi")
 }
 
 func binaryName() string {

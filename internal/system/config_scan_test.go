@@ -176,3 +176,83 @@ func agentNames(configs []ConfigState) []string {
 	}
 	return names
 }
+
+// TestScanConfigs_KimiPrefersCurrentLayout verifies that the kimi entry
+// resolves to the current kimi-code v0.11+ root ~/.kimi-code when it exists
+// as a directory (issue #782).
+func TestScanConfigs_KimiPrefersCurrentLayout(t *testing.T) {
+	home := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(home, ".kimi-code"), 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+
+	var kimi *ConfigState
+	for i := range ScanConfigs(home) {
+		if configs := ScanConfigs(home); configs[i].Agent == "kimi" {
+			kimi = &configs[i]
+			break
+		}
+	}
+	if kimi == nil {
+		t.Fatal("ScanConfigs() missing kimi entry")
+	}
+	if kimi.Path != filepath.Join(home, ".kimi-code") {
+		t.Errorf("kimi Path = %q, want the .kimi-code root", kimi.Path)
+	}
+	if !kimi.Exists || !kimi.IsDirectory {
+		t.Errorf("kimi Exists=%v IsDirectory=%v, want both true", kimi.Exists, kimi.IsDirectory)
+	}
+}
+
+// TestScanConfigs_KimiCodeFileIsNotCurrentLayout verifies that a plain file
+// named .kimi-code is not treated as the v0.11+ layout: the scan falls back
+// to the legacy ~/.kimi root.
+func TestScanConfigs_KimiCodeFileIsNotCurrentLayout(t *testing.T) {
+	home := t.TempDir()
+	if err := os.WriteFile(filepath.Join(home, ".kimi-code"), []byte("not a dir"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	var kimi *ConfigState
+	for i := range ScanConfigs(home) {
+		if ScanConfigs(home)[i].Agent == "kimi" {
+			kimi = &ScanConfigs(home)[i]
+			break
+		}
+	}
+	if kimi == nil {
+		t.Fatal("ScanConfigs() missing kimi entry")
+	}
+	if kimi.Path != filepath.Join(home, ".kimi") {
+		t.Errorf("kimi Path = %q, want the legacy .kimi root", kimi.Path)
+	}
+	if kimi.Exists {
+		t.Errorf("kimi Exists = true, want false (only a .kimi-code file exists)")
+	}
+}
+
+// TestScanConfigs_KimiLegacyFallback verifies that the kimi entry keeps
+// reporting the legacy ~/.kimi root when no .kimi-code directory exists.
+func TestScanConfigs_KimiLegacyFallback(t *testing.T) {
+	home := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(home, ".kimi"), 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+
+	var kimi *ConfigState
+	for i := range ScanConfigs(home) {
+		if ScanConfigs(home)[i].Agent == "kimi" {
+			kimi = &ScanConfigs(home)[i]
+			break
+		}
+	}
+	if kimi == nil {
+		t.Fatal("ScanConfigs() missing kimi entry")
+	}
+	if kimi.Path != filepath.Join(home, ".kimi") {
+		t.Errorf("kimi Path = %q, want the legacy .kimi root", kimi.Path)
+	}
+	if !kimi.Exists || !kimi.IsDirectory {
+		t.Errorf("kimi Exists=%v IsDirectory=%v, want both true", kimi.Exists, kimi.IsDirectory)
+	}
+}

@@ -33,7 +33,11 @@ func TestAdapter_Tier(t *testing.T) {
 }
 
 func TestAdapter_ConfigPaths(t *testing.T) {
-	a := NewAdapter()
+	// Stub the stat seam so the legacy fallback is deterministic regardless
+	// of the host filesystem.
+	a := &Adapter{
+		statPath: func(string) statResult { return statResult{err: os.ErrNotExist} },
+	}
 	homeDir := "/home/test"
 
 	tests := []struct {
@@ -104,7 +108,9 @@ func TestAdapter_EmbeddedSubAgentsDir(t *testing.T) {
 }
 
 func TestAdapter_MCPConfigPath(t *testing.T) {
-	a := NewAdapter()
+	a := &Adapter{
+		statPath: func(string) statResult { return statResult{err: os.ErrNotExist} },
+	}
 	homeDir := "/home/test"
 	serverName := "test-server"
 
@@ -226,12 +232,64 @@ func TestAdapter_Detect_FallbackPaths(t *testing.T) {
 	}
 }
 
-func TestConfigPath(t *testing.T) {
-	homeDir := "/home/test"
-	got := ConfigPath(homeDir)
-	expected := filepath.Join(homeDir, ".kimi")
-	if got != expected {
-		t.Errorf("ConfigPath() = %v, want %v", got, expected)
+func TestResolveConfigRoot(t *testing.T) {
+	tests := []struct {
+		name    string
+		home    string
+		setup   func(t *testing.T, home string)
+		want    string
+		current bool
+	}{
+		{
+			name: "legacy fallback when no config dirs exist",
+			home: t.TempDir(),
+			want: "",
+		},
+		{
+			name: "legacy fallback when only legacy dir exists",
+			home: t.TempDir(),
+			setup: func(t *testing.T, home string) {
+				if err := os.MkdirAll(filepath.Join(home, ".kimi"), 0o755); err != nil {
+					t.Fatal(err)
+				}
+			},
+		},
+		{
+			name: "current root preferred when .kimi-code dir exists",
+			home: t.TempDir(),
+			setup: func(t *testing.T, home string) {
+				if err := os.MkdirAll(filepath.Join(home, ".kimi-code"), 0o755); err != nil {
+					t.Fatal(err)
+				}
+			},
+			want:    "",
+			current: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if tt.setup != nil {
+				tt.setup(t, tt.home)
+			}
+			want := tt.want
+			if tt.current {
+				want = filepath.Join(tt.home, ".kimi-code")
+			} else if want == "" {
+				want = filepath.Join(tt.home, ".kimi")
+			}
+			got, layout := resolveConfigRoot(defaultStat, tt.home)
+			if got != want {
+				t.Errorf("resolveConfigRoot(%q) = %q, want %q", tt.home, got, want)
+			}
+			wantLayout := LayoutLegacy
+			if tt.current {
+				wantLayout = LayoutCurrent
+			}
+			if layout != wantLayout {
+				t.Errorf("resolveConfigRoot(%q) layout = %v, want %v", tt.home, layout, wantLayout)
+			}
+		})
 	}
 }
 
@@ -255,7 +313,11 @@ func TestAdapter_PostInstallMessage(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			a := NewAdapter()
+			// Stub the stat seam so the legacy layout (and its --agent-file
+			// guidance) is deterministic regardless of the host filesystem.
+			a := &Adapter{
+				statPath: func(string) statResult { return statResult{err: os.ErrNotExist} },
+			}
 			// Mock homeDir relative to expected path style.
 			// We use a safe path like /tmp/test which filepath.FromSlash will normalize
 			// to \tmp\test on Windows.
@@ -306,5 +368,151 @@ func TestAdapter_PostInstallMessage(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// newTempHomeWithKimiCode creates a home directory containing a real
+// ~/.kimi-code directory (the kimi-code v0.11+ layout).
+func newTempHomeWithKimiCode(t *testing.T) string {
+	t.Helper()
+	home := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(home, CurrentConfigDirName), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return home
+}
+
+func TestAdapter_PathMethods_PreferKimiCodeDir(t *testing.T) {
+	home := newTempHomeWithKimiCode(t)
+	a := NewAdapter()
+
+	wantRoot := filepath.Join(home, CurrentConfigDirName)
+	tests := []struct {
+		name string
+		got  string
+		want string
+	}{
+		{"GlobalConfigDir", a.GlobalConfigDir(home), wantRoot},
+		{"SystemPromptDir", a.SystemPromptDir(home), wantRoot},
+		{"SystemPromptFile", a.SystemPromptFile(home), filepath.Join(wantRoot, "KIMI.md")},
+		{"SettingsPath", a.SettingsPath(home), filepath.Join(wantRoot, "config.toml")},
+		{"MCPConfigPath", a.MCPConfigPath(home, "srv"), filepath.Join(wantRoot, "mcp.json")},
+		{"SubAgentsDir", a.SubAgentsDir(home), filepath.Join(wantRoot, "agents")},
+		{"SkillsDir", a.SkillsDir(home), filepath.Join(wantRoot, "skills")},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if tt.got != tt.want {
+				t.Errorf("%s = %q, want %q", tt.name, tt.got, tt.want)
+			}
+		})
+	}
+}
+
+func TestAdapter_SkillsDir_LegacyLayoutKeepsSharedSkillsPath(t *testing.T) {
+	home := t.TempDir()
+	// No config dirs created: legacy layout resolution.
+	a := NewAdapter()
+	if got, want := a.SkillsDir(home), filepath.Join(home, ".config", "agents", "skills"); got != want {
+		t.Errorf("SkillsDir(%q) = %q, want %q", home, got, want)
+	}
+}
+
+func TestAdapter_PathMethods_KimiCodeFileFallsBackToLegacy(t *testing.T) {
+	home := t.TempDir()
+	// A plain file named .kimi-code is not a v0.11+ layout.
+	if err := os.WriteFile(filepath.Join(home, CurrentConfigDirName), []byte("not a dir"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	a := NewAdapter()
+	if got, want := a.GlobalConfigDir(home), filepath.Join(home, LegacyConfigDirName); got != want {
+		t.Errorf("GlobalConfigDir(%q) = %q, want %q", home, got, want)
+	}
+	if got, want := a.SettingsPath(home), filepath.Join(home, LegacyConfigDirName, "config.toml"); got != want {
+		t.Errorf("SettingsPath(%q) = %q, want %q", home, got, want)
+	}
+}
+
+func TestAdapter_Detect_PrefersKimiCodeDir(t *testing.T) {
+	home := newTempHomeWithKimiCode(t)
+
+	a := &Adapter{
+		lookPath:    func(string) (string, error) { return "/usr/bin/kimi", nil },
+		statPath:    defaultStat,
+		pathExists:  func(string) bool { return false },
+		userHomeDir: func() (string, error) { return home, nil },
+	}
+
+	installed, _, configPath, configFound, err := a.Detect(context.Background(), home)
+	if err != nil {
+		t.Fatalf("Detect() error = %v", err)
+	}
+	if !installed || !configFound {
+		t.Fatalf("Detect() installed=%v configFound=%v, want both true", installed, configFound)
+	}
+	if configPath != filepath.Join(home, CurrentConfigDirName) {
+		t.Errorf("Detect() configPath = %q, want the .kimi-code root", configPath)
+	}
+}
+
+func TestAdapter_Detect_KimiCodeFileFallsBackToLegacy(t *testing.T) {
+	home := t.TempDir()
+	if err := os.WriteFile(filepath.Join(home, CurrentConfigDirName), []byte("not a dir"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(home, LegacyConfigDirName), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	a := &Adapter{
+		lookPath:    func(string) (string, error) { return "", os.ErrNotExist },
+		statPath:    defaultStat,
+		pathExists:  func(string) bool { return false },
+		userHomeDir: func() (string, error) { return home, nil },
+	}
+
+	_, _, configPath, configFound, err := a.Detect(context.Background(), home)
+	if err != nil {
+		t.Fatalf("Detect() error = %v", err)
+	}
+	if !configFound {
+		t.Fatal("Detect() configFound = false, want true (legacy .kimi dir exists)")
+	}
+	if configPath != filepath.Join(home, LegacyConfigDirName) {
+		t.Errorf("Detect() configPath = %q, want the legacy .kimi root", configPath)
+	}
+}
+
+func TestAdapter_PostInstallMessage_CurrentLayoutOmitsAgentFile(t *testing.T) {
+	home := newTempHomeWithKimiCode(t)
+	a := NewAdapter()
+
+	msg := a.PostInstallMessage(home)
+	if strings.Contains(msg, "--agent-file") {
+		t.Errorf("PostInstallMessage() advertises retired --agent-file for v0.11+ layout:\n%s", msg)
+	}
+	if !strings.Contains(msg, `"`+filepath.Join(home, CurrentConfigDirName, "skills")+`"`) {
+		t.Errorf("PostInstallMessage() missing quoted current skills root:\n%s", msg)
+	}
+	if !strings.Contains(msg, "Kimi Code configured!") {
+		t.Errorf("PostInstallMessage() missing header:\n%s", msg)
+	}
+}
+
+func TestAdapter_PostInstallMessage_LegacyLayoutKeepsAgentFileGuidance(t *testing.T) {
+	home := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(home, LegacyConfigDirName), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	a := NewAdapter()
+
+	msg := a.PostInstallMessage(home)
+	if !strings.Contains(msg, "kimi --agent-file") {
+		t.Errorf("PostInstallMessage() legacy layout missing --agent-file guidance:\n%s", msg)
+	}
+	if !strings.Contains(msg, "ODD") {
+		t.Errorf("PostInstallMessage() legacy layout missing ODD guidance:\n%s", msg)
 	}
 }

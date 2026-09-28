@@ -2557,6 +2557,57 @@ func TestRunInstallKimiBootstrapsHub(t *testing.T) {
 	}
 }
 
+// TestRunInstallKimiCurrentLayoutBootstrapsHubInKimiCode verifies that when
+// the current kimi-code v0.11+ root (~/.kimi-code directory) exists, install
+// bootstraps the prompt hub there instead of the legacy ~/.kimi root
+// (issue #782).
+func TestRunInstallKimiCurrentLayoutBootstrapsHubInKimiCode(t *testing.T) {
+	home := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(home, ".kimi-code"), 0o755); err != nil {
+		t.Fatalf("MkdirAll(.kimi-code): %v", err)
+	}
+	restoreHome := osUserHomeDir
+	restoreCommand := runCommand
+	restoreLookPath := cmdLookPath
+	t.Cleanup(func() {
+		osUserHomeDir = restoreHome
+		runCommand = restoreCommand
+		cmdLookPath = restoreLookPath
+	})
+	osUserHomeDir = func() (string, error) { return home, nil }
+	runCommand = func(string, ...string) error { return nil }
+	cmdLookPath = missingBinaryLookPath
+	restoreInstallcmdLookPath := installcmd.OverrideLookPath(func(name string) (string, error) {
+		if name == "uv" {
+			return "/usr/bin/uv", nil
+		}
+		return "", exec.ErrNotFound
+	})
+	t.Cleanup(restoreInstallcmdLookPath)
+
+	// Simulate Kimi as already installed (same rationale as the legacy test).
+	restoreKimiLookPath := kimi.LookPathOverride
+	kimi.LookPathOverride = func(string) (string, error) { return "/usr/local/bin/kimi", nil }
+	t.Cleanup(func() { kimi.LookPathOverride = restoreKimiLookPath })
+
+	_, err := RunInstall(
+		[]string{"--agent", "kimi", "--component", "permissions"},
+		system.DetectionResult{},
+	)
+	if err != nil {
+		t.Fatalf("RunInstall() error = %v", err)
+	}
+
+	hubPath := filepath.Join(home, ".kimi-code", "KIMI.md")
+	if _, err := os.Stat(hubPath); err != nil {
+		t.Fatalf("expected Kimi prompt hub %q in the current layout: %v", hubPath, err)
+	}
+	legacyHub := filepath.Join(home, ".kimi", "KIMI.md")
+	if _, err := os.Stat(legacyHub); err == nil {
+		t.Errorf("legacy hub %q must not be created when the current layout exists", legacyHub)
+	}
+}
+
 func TestRunInstallKimiAlreadyInstalledDoesNotRequireUV(t *testing.T) {
 	home := t.TempDir()
 	restoreHome := osUserHomeDir

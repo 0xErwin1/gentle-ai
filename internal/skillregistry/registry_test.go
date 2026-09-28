@@ -443,6 +443,7 @@ func TestUserSkillDirsIncludesSupportedAgentSkillLocations(t *testing.T) {
 		filepath.Join(home, ".codex", "skills"),
 		filepath.Join(home, ".codeium", "windsurf", "skills"),
 		filepath.Join(home, ".config", "agents", "skills"),
+		filepath.Join(home, ".kimi-code", "skills"),
 		filepath.Join(home, ".kimi", "skills"),
 		filepath.Join(home, ".qwen", "skills"),
 		filepath.Join(home, ".kiro", "skills"),

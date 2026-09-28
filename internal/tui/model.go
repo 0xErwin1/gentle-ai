@@ -4962,7 +4962,14 @@ func buildInstalledAgentIDs(adapters []agentbuilder.AdapterInfo) []model.AgentID
 // agentBuilderSkillsDir returns the skills directory for the given agent and a
 // flag indicating whether the path was found among the well-known agents.
 func agentBuilderSkillsDir(agentID model.AgentID) (string, bool) {
-	home := homeDir()
+	return agentBuilderSkillsDirIn(homeDir(), agentID)
+}
+
+// agentBuilderSkillsDirIn resolves the skills directory for agentID under the
+// given home directory. Kimi prefers the current kimi-code v0.11+ native
+// skills root (~/.kimi-code/skills) when the ~/.kimi-code directory exists,
+// and falls back to the shared legacy skills path.
+func agentBuilderSkillsDirIn(home string, agentID model.AgentID) (string, bool) {
 	switch agentID {
 	case model.AgentClaudeCode:
 		return filepath.Join(home, ".claude", "skills"), true
@@ -4972,6 +4979,11 @@ func agentBuilderSkillsDir(agentID model.AgentID) (string, bool) {
 		return filepath.Join(home, ".gemini", "skills"), true
 	case model.AgentCodex:
 		return filepath.Join(home, ".codex", "skills"), true
+	case model.AgentKimi:
+		if info, err := os.Stat(filepath.Join(home, ".kimi-code")); err == nil && info.IsDir() {
+			return filepath.Join(home, ".kimi-code", "skills"), true
+		}
+		return filepath.Join(home, ".config", "agents", "skills"), true
 	default:
 		return "", false
 	}
