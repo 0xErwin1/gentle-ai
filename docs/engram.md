@@ -86,6 +86,13 @@ engram cloud enroll <project-name>
 engram sync --cloud --project <project-name>
 ```
 
+On each additional machine, configure the same server and token, enroll the project, and import existing cloud memories:
+
+```bash
+engram cloud enroll <project-name>
+engram sync --cloud --import --project <project-name>
+```
+
 To let Engram's own runtime attempt background cloud sync, set autosync in the environment used to launch that runtime:
 
 ```bash
@@ -96,11 +103,13 @@ export ENGRAM_CLOUD_AUTOSYNC=1
 
 ### Environment carriers
 
-| Setup | Durable carrier |
+| Setup | Environment carrier |
 |---|---|
 | macOS GUI sessions | `launchctl setenv ENGRAM_CLOUD_TOKEN <token>` and `launchctl setenv ENGRAM_CLOUD_AUTOSYNC 1` |
 | Linux systemd user sessions | `systemctl --user import-environment ENGRAM_CLOUD_TOKEN ENGRAM_CLOUD_AUTOSYNC` after exporting them in the current shell |
 | Shell-only use | `export ENGRAM_CLOUD_TOKEN=<token>` and `export ENGRAM_CLOUD_AUTOSYNC=1` in your shell profile |
+
+The macOS and Linux manager commands update the current launchd or systemd user-manager environment. Reapply them after that manager restarts or after reboot, unless you configure a persistent service environment for the Engram process.
 
 Treat `ENGRAM_CLOUD_TOKEN` like any other credential: do not commit it, paste it into issue reports, or put it in project-local scripts. Environment variables are inherited by child processes, so use the narrowest carrier that fits how you launch Engram.
 
