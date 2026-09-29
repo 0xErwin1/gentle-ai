@@ -34,6 +34,10 @@ const gentleShellStableTestRoot = "https://example.com/"
 
 func gentleShellStableTestClient(t *testing.T, server *httptest.Server, trustTestCertificate bool) *http.Client {
 	t.Helper()
+	// Prove the fixture's DNS SAN before requesting its example.com alias.
+	if err := server.Certificate().VerifyHostname("example.com"); err != nil {
+		t.Fatalf("test certificate does not cover example.com: %v", err)
+	}
 	transport := server.Client().Transport.(*http.Transport).Clone()
 	transport.Proxy = nil
 	transport.DialContext = func(ctx context.Context, network, address string) (net.Conn, error) {
