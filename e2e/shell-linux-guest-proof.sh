@@ -18,8 +18,13 @@ env | awk -F= '
 for inode in "${HOST_NETNS:-}" "${HOST_MNTNS:-}"; do
     case "$inode" in ''|*[!0-9]*) fail "host namespace inode absent or invalid" ;; esac
 done
-test "$(stat -Lc %i /proc/self/ns/net)" != "$HOST_NETNS" || fail "shared host network namespace"
-test "$(stat -Lc %i /proc/self/ns/mnt)" != "$HOST_MNTNS" || fail "shared host mount namespace"
+guest_netns=$(stat -Lc %i /proc/self/ns/net) || fail "guest network namespace observation failed"
+guest_mntns=$(stat -Lc %i /proc/self/ns/mnt) || fail "guest mount namespace observation failed"
+for inode in "$guest_netns" "$guest_mntns"; do
+    case "$inode" in ''|*[!0-9]*) fail "guest namespace inode absent or invalid" ;; esac
+done
+test "$guest_netns" != "$HOST_NETNS" || fail "shared host network namespace"
+test "$guest_mntns" != "$HOST_MNTNS" || fail "shared host mount namespace"
 test "$(id -u)" = 65532 || fail "guest UID is not the designated unprivileged UID"
 test "$(id -g)" = 65532 || fail "guest GID is not the designated unprivileged GID"
 awk '/^CapEff:/ { found=1; if ($2 != "0000000000000000") bad=1 }
