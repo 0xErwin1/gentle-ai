@@ -36,12 +36,13 @@ type LinuxObservedObject struct {
 type LinuxInventoryRefusalKind string
 
 const LinuxInventoryNotAuthorized LinuxInventoryRefusalKind = "not-authorized"
+
 type LinuxInventoryReject uint32
 
 type LinuxInstanceRole string
 
 const (
-	LinuxInstanceRolePi         LinuxInstanceRole = "pi"
+	LinuxInstanceRolePi          LinuxInstanceRole = "pi"
 	LinuxInstanceRoleGentleShell LinuxInstanceRole = "gentle-shell"
 )
 
@@ -73,6 +74,7 @@ const (
 	RejectInventoryAlias
 	RejectInventoryDrift
 )
+
 // LinuxInstanceInventory refuses even if Rejected is zero.
 type LinuxInstanceInventory struct {
 	Kind                 LinuxInventoryRefusalKind

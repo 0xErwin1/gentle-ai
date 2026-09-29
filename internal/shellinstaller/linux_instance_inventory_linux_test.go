@@ -307,7 +307,7 @@ func TestLinuxInventoryDetectsDeterministicReplacement(t *testing.T) {
 	f := newInventoryFixture(t)
 	before := ObserveLinuxInstanceInventory(Profile{Channel: ChannelStable,
 		TerminalEntryPoint: TerminalEntryPointPi}, LinuxInventoryPaths{
-			ExistingPiExecutable: f.piExec, ExistingPiHome: f.piHome})
+		ExistingPiExecutable: f.piExec, ExistingPiHome: f.piHome})
 	if before.Rejected != 0 || before.ExistingPiInstanceID == nil {
 		t.Fatalf("initial synthetic Pi identity: %+v", before)
 	}
@@ -327,7 +327,7 @@ func TestLinuxInventoryDetectsDeterministicReplacement(t *testing.T) {
 	}
 	after := ObserveLinuxInstanceInventory(Profile{Channel: ChannelStable,
 		TerminalEntryPoint: TerminalEntryPointPi}, LinuxInventoryPaths{
-			ExistingPiExecutable: f.piExec, ExistingPiHome: f.piHome})
+		ExistingPiExecutable: f.piExec, ExistingPiHome: f.piHome})
 	if after.Rejected != 0 || after.ExistingPiInstanceID == nil ||
 		*before.ExistingPiInstanceID == *after.ExistingPiInstanceID {
 		t.Fatalf("re-observation must identify a replacement rather than reuse stale data: before=%+v after=%+v",
