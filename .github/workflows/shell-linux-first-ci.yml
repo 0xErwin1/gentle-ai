@@ -74,7 +74,7 @@ jobs:
             go test -mod=readonly -count=1 -p 2 -parallel 2 -timeout=2m \
               ./internal/shellinstaller ./internal/pathidentity
 
-      - name: Check formatting of the three synthetic tests
+      - name: Check formatting of Shell Linux source and synthetic tests
         shell: bash
         run: |
           set -euo pipefail
@@ -83,7 +83,9 @@ jobs:
             TMPDIR="$RUNNER_TEMP/shell-ci/tmp" \
             gofmt -d internal/shellinstaller/linux_instance_inventory_linux_test.go \
               internal/shellinstaller/linux_transaction_test.go \
-              internal/shellinstaller/gentle_shell_source_test.go | tee "$diff"
+              internal/shellinstaller/gentle_shell_source_test.go \
+              internal/shellinstaller/gentle_shell_tls.go \
+              internal/shellinstaller/gentle_shell_tls_test.go | tee "$diff"
           if test -s "$diff"; then
             printf 'STOP: synthetic tests are not gofmt-clean; full diff above.\n' >&2
             exit 1
