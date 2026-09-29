@@ -194,6 +194,30 @@ func TestLinuxInventoryAbsentLeafIsParentDataNotObjectID(t *testing.T) {
 	}
 }
 
+// Synthetic facts exercise bind-mount aliases without creating or inspecting mounts.
+func TestLinuxInventoryCrossedMountDoesNotProveDisjointness(t *testing.T) {
+	root := LinuxObservedObject{Dev: 1, Ino: 2, MountID: 10, Exists: true}
+	pi := LinuxObservedObject{Dev: 7, Ino: 8, MountID: 11, Exists: true}
+	alias := pi
+	alias.MountID = 22
+	piWalk := linuxInventoryWalk{facts: []LinuxObservedObject{root, pi}}
+	aliasWalk := linuxInventoryWalk{facts: []LinuxObservedObject{root, alias}}
+	if !linuxInventoryCrossedMount(piWalk) || !linuxInventoryCrossedMount(aliasWalk) {
+		t.Fatal("distinct mount transitions must be observed")
+	}
+	if !linuxInventorySameObject(pi, alias) || !linuxInventoryPathOverlaps(piWalk, aliasWalk) {
+		t.Fatal("different MountIDs must not hide a shared Dev+Ino")
+	}
+	pending := LinuxObservedObject{Absent: true, ParentDev: pi.Dev, ParentIno: pi.Ino,
+		ParentMountID: pi.MountID, MissingLeaf: "new-bin"}
+	pendingAlias := pending
+	pendingAlias.ParentMountID = alias.MountID
+	pendingAlias.MissingLeaf = "other-name"
+	if !linuxInventorySameAbsent(pending, pendingAlias) {
+		t.Fatal("a shared parent through different MountIDs must remain ambiguous")
+	}
+}
+
 func TestLinuxInventoryDetectsDeterministicReplacement(t *testing.T) {
 	f := newInventoryFixture(t)
 	held, err := linuxInventoryWalkPath(f.piExec, false, false)
