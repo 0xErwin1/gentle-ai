@@ -15,6 +15,7 @@ import (
 )
 
 const gentleShellStablePackageName = "gentle-pi"
+const gentleShellStableRegistryURL = "https://registry.npmjs.org/"
 const gentleShellMainRepository = "Gentleman-Programming/gentle-shell"
 const gentleShellMaxArchiveBytes int64 = 64 << 20
 
@@ -66,9 +67,27 @@ type GentleShellSourceDescription struct {
 	Missing     [3]string
 }
 
+// GentleShellStableSourceClaim represents asserted Stable approval as unverified
+// DATA; equality with a selector does not establish human approval, TLS, publisher identity or graph proof.
+type GentleShellStableSourceClaim struct {
+	PackageName  string
+	Version      string
+	IntegritySRI string
+	ByteLength   int64
+	RegistryURL  string
+}
+
+// GentleShellStableClaimComparison reports exact equality of claim DATA only.
+// MatchesSelector never means authorized, TLS-verified, or ready to Apply.
+type GentleShellStableClaimComparison struct {
+	Kind            string
+	MatchesSelector bool
+}
+
 func (s GentleShellSourceSelection) Describe() (GentleShellSourceDescription, error) {
 	result := GentleShellSourceDescription{Kind: "not-authorized", Channel: s.channel,
-		Missing: [3]string{"publisher-and-graph-proof", "toolchain-and-loaded-bytes", "instance-consent-and-ready"}}
+		Missing: [3]string{"human-approved-exact-byte-sri-and-registry-tls-and-dependency-graph-proof",
+			"toolchain-and-loaded-bytes", "instance-consent-and-ready"}}
 	switch s.channel {
 	case ChannelStable:
 		if s.packageName != gentleShellStablePackageName || !gentleShellExactStableVersion(s.version) ||
@@ -89,6 +108,24 @@ func (s GentleShellSourceSelection) Describe() (GentleShellSourceDescription, er
 	default:
 		return GentleShellSourceDescription{}, errors.New("STOP: missing explicit source channel")
 	}
+	return result, nil
+}
+
+// CompareGentleShellStableClaim compares claimed source DATA to an exact Stable
+// selector. Exact equality does not prove approval provenance, a TLS handshake,
+// publisher identity or graph completeness, and never authorizes Apply.
+func CompareGentleShellStableClaim(selector GentleShellSourceSelection,
+	claim GentleShellStableSourceClaim) (GentleShellStableClaimComparison, error) {
+	result := GentleShellStableClaimComparison{Kind: "not-authorized"}
+	if _, err := selector.Describe(); err != nil || selector.channel != ChannelStable {
+		return result, errors.New("STOP: expected exact Stable selector")
+	}
+	if claim.PackageName != selector.packageName || claim.Version != selector.version ||
+		claim.IntegritySRI != selector.integritySRI || claim.ByteLength != selector.byteLength ||
+		claim.RegistryURL != gentleShellStableRegistryURL {
+		return result, errors.New("STOP: Stable source claim is missing, noncanonical or differs from selector")
+	}
+	result.MatchesSelector = true
 	return result, nil
 }
 

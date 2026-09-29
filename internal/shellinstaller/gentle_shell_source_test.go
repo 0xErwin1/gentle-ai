@@ -90,8 +90,51 @@ func TestGentleShellStableSelectionIsStrictData(t *testing.T) {
 			d, err := s.Describe()
 			if err != nil || d.Kind != "not-authorized" || d.Channel != ChannelStable ||
 				d.PackageName != "gentle-pi" || d.Version != "3.7.0" || d.Repository != "" || d.Commit != "" ||
-				d.Missing[0] == "" || d.Missing[1] == "" || d.Missing[2] == "" {
+				d.Missing[0] != "human-approved-exact-byte-sri-and-registry-tls-and-dependency-graph-proof" ||
+				d.Missing[1] == "" || d.Missing[2] == "" {
 				t.Fatalf("valid selector described as authorization: %+v err=%v", d, err)
+			}
+		})
+	}
+}
+
+func TestGentleShellStableClaimComparisonIsDataOnly(t *testing.T) {
+	selector := sourceSelector(t, syntheticSourceBytes, int64(len(syntheticSourceBytes)))
+	claim := GentleShellStableSourceClaim{
+		PackageName: selector.packageName, Version: selector.version,
+		IntegritySRI: selector.integritySRI, ByteLength: selector.byteLength,
+		RegistryURL: gentleShellStableRegistryURL,
+	}
+	wrongSRI, _ := sourceExpectations([]byte("different synthetic non-tar bytes"))
+	mainSelector, err := NewGentleShellMainSource(gentleShellMainRepository, strings.Repeat("a", 40))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cases := []struct {
+		name     string
+		selector GentleShellSourceSelection
+		claim    GentleShellStableSourceClaim
+		matches  bool
+	}{
+		{"matching claim remains DATA", selector, claim, true},
+		{"missing claim", selector, GentleShellStableSourceClaim{}, false},
+		{"wrong package", selector, func() GentleShellStableSourceClaim { c := claim; c.PackageName = "other"; return c }(), false},
+		{"wrong version", selector, func() GentleShellStableSourceClaim { c := claim; c.Version = "3.7.1"; return c }(), false},
+		{"wrong SRI", selector, func() GentleShellStableSourceClaim { c := claim; c.IntegritySRI = wrongSRI; return c }(), false},
+		{"wrong length", selector, func() GentleShellStableSourceClaim { c := claim; c.ByteLength++; return c }(), false},
+		{"http URL", selector, func() GentleShellStableSourceClaim { c := claim; c.RegistryURL = "http://registry.npmjs.org/"; return c }(), false},
+		{"noncanonical host", selector, func() GentleShellStableSourceClaim { c := claim; c.RegistryURL = "https://REGISTRY.npmjs.org/"; return c }(), false},
+		{"noncanonical host suffix", selector, func() GentleShellStableSourceClaim { c := claim; c.RegistryURL = "https://registry.npmjs.org.evil/"; return c }(), false},
+		{"query", selector, func() GentleShellStableSourceClaim { c := claim; c.RegistryURL += "?x=1"; return c }(), false},
+		{"fragment", selector, func() GentleShellStableSourceClaim { c := claim; c.RegistryURL += "#x"; return c }(), false},
+		{"userinfo", selector, func() GentleShellStableSourceClaim { c := claim; c.RegistryURL = "https://user@registry.npmjs.org/"; return c }(), false},
+		{"Main rejected", mainSelector, claim, false},
+	}
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := CompareGentleShellStableClaim(tt.selector, tt.claim)
+			if got.Kind != "not-authorized" || got.MatchesSelector != tt.matches || (err == nil) != tt.matches {
+				t.Fatalf("claim comparison must remain non-authorizing data: %+v err=%v", got, err)
 			}
 		})
 	}
