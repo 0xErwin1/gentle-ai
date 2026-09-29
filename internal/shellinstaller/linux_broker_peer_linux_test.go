@@ -104,8 +104,35 @@ func TestLinuxBrokerBufferedClosure(t *testing.T) {
 	}
 }
 
+func checkBrokerCallerDeadlines(t *testing.T, conn *net.UnixConn, authenticate func() error) {
+	t.Helper()
+	// Expired caller deadlines must survive authentication on both I/O directions.
+	if err := conn.SetDeadline(time.Now().Add(-time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if err := authenticate(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := conn.Write([]byte("deadline-probe")); !os.IsTimeout(err) {
+		t.Fatalf("caller write deadline lost: %v", err)
+	}
+	if _, err := conn.Read(make([]byte, 1)); !os.IsTimeout(err) {
+		t.Fatalf("caller read deadline lost: %v", err)
+	}
+	// Only the caller clears its own deadlines before the idle exchange.
+	if err := conn.SetDeadline(time.Time{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := authenticate(); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // Explicit opt-in is mandatory and never converts a missing prerequisite to skip.
 func TestLinuxBrokerGuest(t *testing.T) {
+	if testing.Short() {
+		t.Skip("slow isolated guest exchange")
+	}
 	if os.Getenv("GENTLE_BROKER_GUEST") != "1" {
 		t.Skip("requires isolated root guest opt-in")
 	}
@@ -163,11 +190,13 @@ func TestLinuxBrokerGuest(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer conn.Close()
-	if err := CheckLinuxOperatorPeer(conn, 65532); err != nil {
-		t.Fatal(err)
-	}
+	checkBrokerCallerDeadlines(t, conn, func() error { return CheckLinuxOperatorPeer(conn, 65532) })
 	if CheckLinuxOperatorPeer(conn, 65531) == nil || CheckLinuxOperatorPeer(conn, 0) == nil {
 		t.Fatal("wrong or root operator accepted")
+	}
+	// Synchronize after both sides authenticate, then let the client remain idle.
+	if _, err := conn.Write([]byte("ready")); err != nil {
+		t.Fatal(err)
 	}
 	claim := make([]byte, len(`{"uid":0,"pid":1,"approved":true}`))
 	if _, err := io.ReadFull(conn, claim); err != nil {
@@ -220,9 +249,13 @@ func TestLinuxBrokerGuestClient(t *testing.T) {
 		t.Fatal(err)
 	}
 	peer := conn.(*net.UnixConn)
-	if err := CheckLinuxBrokerPeer(peer); err != nil {
-		t.Fatal(err)
+	defer peer.Close()
+	checkBrokerCallerDeadlines(t, peer, func() error { return CheckLinuxBrokerPeer(peer) })
+	ready := make([]byte, len("ready"))
+	if _, err := io.ReadFull(peer, ready); err != nil || string(ready) != "ready" {
+		t.Fatalf("broker synchronization failed: %q, %v", ready, err)
 	}
+	time.Sleep(3200 * time.Millisecond)
 	if _, err := peer.Write([]byte(`{"uid":0,"pid":1,"approved":true}`)); err != nil {
 		t.Fatal(err)
 	}

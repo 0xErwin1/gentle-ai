@@ -6,7 +6,6 @@ import (
 	"errors"
 	"net"
 	"os"
-	"time"
 
 	"golang.org/x/sys/unix"
 )
@@ -41,9 +40,6 @@ func CheckLinuxOperatorPeer(conn *net.UnixConn, operator uint32) error {
 func checkLinuxPeer(conn *net.UnixConn, operator uint32, server bool) error {
 	if conn == nil {
 		return errors.New("missing Unix connection")
-	}
-	if err := conn.SetDeadline(time.Now().Add(3 * time.Second)); err != nil {
-		return err
 	}
 	raw, err := conn.SyscallConn()
 	if err != nil {
