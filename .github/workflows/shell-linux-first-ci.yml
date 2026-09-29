@@ -123,6 +123,42 @@ jobs:
           mkdir -p "$GOMODCACHE"
           go mod download golang.org/x/sys@v0.47.0
 
+      - name: Build authentication tests offline and execute only in broker guest
+        shell: bash
+        env:
+          GOMODCACHE: ${{ runner.temp }}/shell-ci/modcache
+        run: |
+          set -euo pipefail
+          test "$(go version)" = 'go version go1.25.10 linux/amd64'
+          scratch="$RUNNER_TEMP/shell-broker-context"
+          mkdir -p "$scratch" "$RUNNER_TEMP/shell-ci/home" \
+            "$RUNNER_TEMP/shell-ci/tmp" "$RUNNER_TEMP/shell-ci/gocache"
+          format_diff="$RUNNER_TEMP/shell-ci/broker-gofmt.diff"
+          timeout 10 env -i PATH="$PATH" HOME="$RUNNER_TEMP/shell-ci/home" \
+            TMPDIR="$RUNNER_TEMP/shell-ci/tmp" gofmt -d \
+            internal/shellinstaller/linux_broker_peer_linux.go \
+            internal/shellinstaller/linux_broker_peer_linux_test.go \
+            | head -c 65536 | tee "$format_diff"
+          test ! -s "$format_diff"
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          env -i PATH="$PATH" HOME="$RUNNER_TEMP/shell-ci/home" \
+            TMPDIR="$RUNNER_TEMP/shell-ci/tmp" GOCACHE="$RUNNER_TEMP/shell-ci/gocache" \
+            GOMODCACHE="$GOMODCACHE" GOTOOLCHAIN=local GOPROXY=off GOSUMDB=off CGO_ENABLED=0 \
+            go test -mod=readonly -c -o "$scratch/shellinstaller.test" ./internal/shellinstaller
+          cp e2e/Dockerfile.shell-linux-broker e2e/shell-linux-broker-guest.sh \
+            e2e/shell-linux-guest-proof.sh "$scratch/"
+          timeout --kill-after=5 180 docker build -f "$scratch/Dockerfile.shell-linux-broker" \
+            -t gentle-shell-broker:ci "$scratch"
+          host_net="$(stat -Lc %i /proc/self/ns/net)"
+          host_mnt="$(stat -Lc %i /proc/self/ns/mnt)"
+          timeout --kill-after=5 40 docker run --rm --pull=never \
+            --network none --read-only --user 0:0 --cap-drop=ALL \
+            --cap-add=SETUID --cap-add=SETGID --security-opt=no-new-privileges \
+            --tmpfs /tmp:rw,nosuid,nodev,mode=1777 \
+            --cpus=1 --memory=128m --memory-swap=128m --pids-limit=32 \
+            -e HOME=/tmp -e HOST_NETNS="$host_net" -e HOST_MNTNS="$host_mnt" \
+            gentle-shell-broker:ci
+
       - name: Run focused tests with a scrubbed process environment
         shell: bash
         env:

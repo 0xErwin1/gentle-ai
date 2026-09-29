@@ -1,0 +1,4 @@
+# Narrow scratch context: two proof scripts and the compiled test binary only.
+FROM --platform=linux/amd64 debian:bookworm-slim@sha256:f3034a6ec3c1205360777c4aae76234998866ad18806ae62b63a3f84ccad782b
+COPY shell-linux-guest-proof.sh shell-linux-broker-guest.sh shellinstaller.test /usr/local/bin/
+ENTRYPOINT ["/bin/sh", "/usr/local/bin/shell-linux-broker-guest.sh"]
