@@ -255,13 +255,49 @@ func mustJSONString(v any) string {
 	return string(b)
 }
 
+// writeAntigravityFileAtomic is the private writer boundary for the Antigravity
+// injection pass (managed global rewrite, settings bootstrap, plugin
+// manifest/MCP/hooks). Production default is the real durable writer; tests
+// route real bytes through it and then inject an error at one exact write so
+// landed-vs-before-replacement accounting is proved against files actually on
+// disk.
+var writeAntigravityFileAtomic = filemerge.WriteFileAtomic
+
 func ensureJSONFileIfMissing(path string) (filemerge.WriteResult, error) {
 	if _, err := os.Stat(path); err == nil {
 		return filemerge.WriteResult{Changed: false}, nil
 	} else if !os.IsNotExist(err) {
 		return filemerge.WriteResult{}, err
 	}
-	return filemerge.WriteFileAtomic(path, []byte("{}\n"), 0o644)
+	return writeAntigravityFileAtomic(path, []byte("{}\n"), 0o644)
+}
+
+// validateAntigravityGlobalMCPConfig prevalidates the shared global Antigravity
+// MCP config before any injection writes (#1635). A missing, empty, or
+// whitespace-only file is accepted without normalization; anything else must
+// be readable and parse as a JSON object. Malformed JSON, unreadable paths,
+// and non-object top-level values (including null) are an error here, so
+// injection never mutates any file or activates the plugin next to input it
+// could not classify.
+func validateAntigravityGlobalMCPConfig(path string) error {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return fmt.Errorf("read Antigravity global MCP config %q: %w", path, err)
+	}
+	if strings.TrimSpace(string(raw)) == "" {
+		return nil
+	}
+	var root map[string]any
+	if err := json.Unmarshal(raw, &root); err != nil {
+		return fmt.Errorf("parse Antigravity global MCP config %q: %w", path, err)
+	}
+	if root == nil {
+		return fmt.Errorf("parse Antigravity global MCP config %q: top-level JSON value is not an object", path)
+	}
+	return nil
 }
 
 func installAntigravityEngramPlugin(homeDir, engramCommand string) (bool, []string, error) {
@@ -269,26 +305,41 @@ func installAntigravityEngramPlugin(homeDir, engramCommand string) (bool, []stri
 	files := make([]string, 0, 3)
 	changed := false
 
+	// #1635: each write reports truthfully on failure — a landed replacement
+	// stays in Changed/Files even when the write then errors, and a failure
+	// before replacement claims no mutation.
 	pluginPath := filepath.Join(pluginDir, "plugin.json")
-	pluginWrite, err := filemerge.WriteFileAtomic(pluginPath, []byte(antigravityEngramPluginJSON), 0o644)
+	pluginWrite, err := writeAntigravityFileAtomic(pluginPath, []byte(antigravityEngramPluginJSON), 0o644)
 	if err != nil {
-		return false, nil, fmt.Errorf("write Antigravity Engram plugin manifest: %w", err)
+		if pluginWrite.Changed {
+			changed = true
+			files = append(files, pluginPath)
+		}
+		return changed, files, fmt.Errorf("write Antigravity Engram plugin manifest: %w", err)
 	}
 	changed = changed || pluginWrite.Changed
 	files = append(files, pluginPath)
 
 	pluginMCPPath := filepath.Join(pluginDir, "mcp_config.json")
-	mcpWrite, err := filemerge.WriteFileAtomic(pluginMCPPath, engramOverlayJSON(model.AgentAntigravity, engramCommand), 0o644)
+	mcpWrite, err := writeAntigravityFileAtomic(pluginMCPPath, engramOverlayJSON(model.AgentAntigravity, engramCommand), 0o644)
 	if err != nil {
-		return false, nil, fmt.Errorf("write Antigravity Engram plugin MCP config: %w", err)
+		if mcpWrite.Changed {
+			changed = true
+			files = append(files, pluginMCPPath)
+		}
+		return changed, files, fmt.Errorf("write Antigravity Engram plugin MCP config: %w", err)
 	}
 	changed = changed || mcpWrite.Changed
 	files = append(files, pluginMCPPath)
 
 	hooksPath := filepath.Join(pluginDir, "hooks.json")
-	hooksWrite, err := filemerge.WriteFileAtomic(hooksPath, antigravityEngramHooksJSON(), 0o644)
+	hooksWrite, err := writeAntigravityFileAtomic(hooksPath, antigravityEngramHooksJSON(), 0o644)
 	if err != nil {
-		return false, nil, fmt.Errorf("write Antigravity Engram hooks: %w", err)
+		if hooksWrite.Changed {
+			changed = true
+			files = append(files, hooksPath)
+		}
+		return changed, files, fmt.Errorf("write Antigravity Engram hooks: %w", err)
 	}
 	changed = changed || hooksWrite.Changed
 	files = append(files, hooksPath)
@@ -378,9 +429,19 @@ func injectWithOptions(configHomeDir, promptDir string, adapter agents.Adapter, 
 			// with other MCP servers (e.g. Context7), so gentle-ai never
 			// writes it for Engram and removes only its own exact managed
 			// duplicate entry left behind by older versions.
+			//
+			// #1635: the shared global config is prevalidated BEFORE any
+			// writes so malformed, unreadable, or non-object content stops
+			// injection before any mutation or plugin activation.
+			if err := validateAntigravityGlobalMCPConfig(mcpPath); err != nil {
+				return InjectionResult{}, err
+			}
 			removed, removalFiles, removalErr := removeManagedAntigravityGlobalEngram(mcpPath)
 			if removalErr != nil {
-				return InjectionResult{}, removalErr
+				// #1635: a landed rewrite is reported even alongside the error.
+				changed = changed || removed
+				files = append(files, removalFiles...)
+				return InjectionResult{Changed: changed, Files: files}, removalErr
 			}
 			changed = changed || removed
 			files = append(files, removalFiles...)
@@ -388,17 +449,25 @@ func injectWithOptions(configHomeDir, promptDir string, adapter agents.Adapter, 
 			settingsTarget := adapter.SettingsPath(configHomeDir)
 			settingsWrite, settingsErr := ensureJSONFileIfMissing(settingsTarget)
 			if settingsErr != nil {
-				return InjectionResult{}, fmt.Errorf("ensure Antigravity settings: %w", settingsErr)
+				// #1635: a landed settings creation is reported even alongside
+				// the error; a failure before replacement claims no mutation.
+				changed = changed || settingsWrite.Changed
+				if settingsWrite.Changed {
+					files = append(files, settingsTarget)
+				}
+				return InjectionResult{Changed: changed, Files: files}, fmt.Errorf("ensure Antigravity settings: %w", settingsErr)
 			}
 			changed = changed || settingsWrite.Changed
 			files = append(files, settingsTarget)
 
 			pluginChanged, pluginFiles, pluginErr := installAntigravityEngramPlugin(configHomeDir, engramCommand)
-			if pluginErr != nil {
-				return InjectionResult{}, pluginErr
-			}
+			// #1635: the plugin install reports every file it already landed
+			// even when a later write fails; keep them in the cumulative result.
 			changed = changed || pluginChanged
 			files = append(files, pluginFiles...)
+			if pluginErr != nil {
+				return InjectionResult{Changed: changed, Files: files}, pluginErr
+			}
 			break
 		}
 
@@ -1164,8 +1233,14 @@ func removeManagedAntigravityGlobalEngram(path string) (bool, []string, error) {
 	if err != nil {
 		return false, nil, fmt.Errorf("encode Antigravity global MCP config %q: %w", path, err)
 	}
-	writeResult, err := filemerge.WriteFileAtomic(path, append(merged, '\n'), filemerge.ExistingFileMode(path, 0o644))
+	writeResult, err := writeAntigravityFileAtomic(path, append(merged, '\n'), filemerge.ExistingFileMode(path, 0o644))
 	if err != nil {
+		// #1635: the writer reports Changed when the replacement landed even
+		// though it then failed; keep that signal so the entry is not reported
+		// as still registered. Ownership classification is unchanged.
+		if writeResult.Changed {
+			return true, []string{path}, fmt.Errorf("rewrite Antigravity global MCP config %q: %w", path, err)
+		}
 		return false, nil, fmt.Errorf("rewrite Antigravity global MCP config %q: %w", path, err)
 	}
 	return writeResult.Changed, []string{path}, nil
