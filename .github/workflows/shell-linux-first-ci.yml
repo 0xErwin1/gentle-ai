@@ -38,6 +38,29 @@ jobs:
           test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
           printf 'Verified public fork commit: %s\n' "$EXPECTED_SHA"
 
+      # Fetch archive bytes as DATA only. Never unpack or execute npm lifecycle scripts.
+      - name: Measure human-approved Stable archive bytes without execution
+        shell: bash
+        env:
+          ARCHIVE_URL: https://registry.npmjs.org/gentle-pi/-/gentle-pi-3.7.0.tgz
+          EXPECTED_SRI: sha512-SXBp9jIRnVIcOsLCW/Zw4XDTXxhViXNxrCZS7LyioB6kdRl99Ohojeaj+yIH5+K/ucwLlTlHYBz8zwue9aspNQ==
+        run: |
+          set -euo pipefail
+          umask 077
+          archive="$(mktemp "$RUNNER_TEMP/gentle-shell-stable-3.7.0.XXXXXXXX.tgz")"
+          trap 'rm -f -- "$archive"' EXIT
+          status="$(curl --proto '=https' --max-redirs 0 --fail --silent --show-error \
+            --tlsv1.2 --connect-timeout 10 --max-time 90 --max-filesize 67108864 \
+            --write-out '%{http_code}' --output "$archive" "$ARCHIVE_URL")"
+          test "$status" = 200
+          bytes="$(wc -c < "$archive" | tr -d '[:space:]')"
+          test "$bytes" -gt 0 && test "$bytes" -le 67108864
+          actual_sri="sha512-$(openssl dgst -sha512 -binary "$archive" | base64 -w0)"
+          test "$actual_sri" = "$EXPECTED_SRI"
+          sha256="$(sha256sum "$archive" | cut -d ' ' -f1)"
+          printf 'Stable data only: gentle-pi@3.7.0 bytes=%s sha256=%s sri=%s\n' \
+            "$bytes" "$sha256" "$actual_sri"
+
       - name: Select pinned Go toolchain
         uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
         with:
