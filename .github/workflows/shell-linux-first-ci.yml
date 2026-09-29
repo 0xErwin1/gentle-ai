@@ -138,6 +138,8 @@ jobs:
             TMPDIR="$RUNNER_TEMP/shell-ci/tmp" gofmt -d \
             internal/shellinstaller/linux_broker_peer_linux.go \
             internal/shellinstaller/linux_broker_peer_linux_test.go \
+            internal/shellinstaller/linux_broker_consent_linux.go \
+            internal/shellinstaller/linux_broker_consent_linux_test.go \
             | head -c 65536 | tee "$format_diff"
           test ! -s "$format_diff"
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
