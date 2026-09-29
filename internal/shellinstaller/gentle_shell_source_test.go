@@ -122,12 +122,28 @@ func TestGentleShellStableClaimComparisonIsDataOnly(t *testing.T) {
 		{"wrong version", selector, func() GentleShellStableSourceClaim { c := claim; c.Version = "3.7.1"; return c }(), false},
 		{"wrong SRI", selector, func() GentleShellStableSourceClaim { c := claim; c.IntegritySRI = wrongSRI; return c }(), false},
 		{"wrong length", selector, func() GentleShellStableSourceClaim { c := claim; c.ByteLength++; return c }(), false},
-		{"http URL", selector, func() GentleShellStableSourceClaim { c := claim; c.RegistryURL = "http://registry.npmjs.org/"; return c }(), false},
-		{"noncanonical host", selector, func() GentleShellStableSourceClaim { c := claim; c.RegistryURL = "https://REGISTRY.npmjs.org/"; return c }(), false},
-		{"noncanonical host suffix", selector, func() GentleShellStableSourceClaim { c := claim; c.RegistryURL = "https://registry.npmjs.org.evil/"; return c }(), false},
+		{"http URL", selector, func() GentleShellStableSourceClaim {
+			c := claim
+			c.RegistryURL = "http://registry.npmjs.org/"
+			return c
+		}(), false},
+		{"noncanonical host", selector, func() GentleShellStableSourceClaim {
+			c := claim
+			c.RegistryURL = "https://REGISTRY.npmjs.org/"
+			return c
+		}(), false},
+		{"noncanonical host suffix", selector, func() GentleShellStableSourceClaim {
+			c := claim
+			c.RegistryURL = "https://registry.npmjs.org.evil/"
+			return c
+		}(), false},
 		{"query", selector, func() GentleShellStableSourceClaim { c := claim; c.RegistryURL += "?x=1"; return c }(), false},
 		{"fragment", selector, func() GentleShellStableSourceClaim { c := claim; c.RegistryURL += "#x"; return c }(), false},
-		{"userinfo", selector, func() GentleShellStableSourceClaim { c := claim; c.RegistryURL = "https://user@registry.npmjs.org/"; return c }(), false},
+		{"userinfo", selector, func() GentleShellStableSourceClaim {
+			c := claim
+			c.RegistryURL = "https://user@registry.npmjs.org/"
+			return c
+		}(), false},
 		{"Main rejected", mainSelector, claim, false},
 	}
 	for _, tt := range cases {
