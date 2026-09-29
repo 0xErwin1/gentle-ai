@@ -85,7 +85,9 @@ jobs:
               internal/shellinstaller/linux_transaction_test.go \
               internal/shellinstaller/gentle_shell_source_test.go \
               internal/shellinstaller/gentle_shell_tls.go \
-              internal/shellinstaller/gentle_shell_tls_test.go | tee "$diff"
+              internal/shellinstaller/gentle_shell_tls_test.go \
+              internal/shellinstaller/linux_journal_root_linux.go \
+              internal/shellinstaller/linux_journal_root_linux_test.go | tee "$diff"
           if test -s "$diff"; then
             printf 'STOP: synthetic tests are not gofmt-clean; full diff above.\n' >&2
             exit 1
