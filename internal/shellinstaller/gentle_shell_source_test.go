@@ -59,8 +59,8 @@ func TestGentleShellStableSelectionIsStrictData(t *testing.T) {
 	sri, digest := sourceExpectations(syntheticSourceBytes)
 	cases := []struct {
 		name, pkg, version, sri, digest string
-		length int64
-		valid bool
+		length                          int64
+		valid                           bool
 	}{
 		{"exact Stable", "gentle-pi", "3.7.0", sri, digest, 1, true},
 		{"maximum declared bytes", "gentle-pi", "3.7.0", sri, digest, gentleShellMaxArchiveBytes, true},
@@ -137,8 +137,8 @@ func TestGentleShellStableComparisonIsBoundedData(t *testing.T) {
 	s := sourceSelector(t, data, int64(len(data)))
 	sri, digest := sourceExpectations(data)
 	for _, tt := range []struct {
-		name string
-		reader io.Reader
+		name         string
+		reader       io.Reader
 		wantRequests []int
 	}{
 		{"ordinary EOF probe", bytes.NewReader(data), nil},
@@ -185,9 +185,9 @@ func TestGentleShellStableComparisonStopsOnUncertainBytes(t *testing.T) {
 	}
 	var typedNil *sourceScriptReader
 	cases := []struct {
-		name string
+		name     string
 		selector GentleShellSourceSelection
-		reader io.Reader
+		reader   io.Reader
 	}{
 		{"nil interface", s, nil},
 		{"typed nil reader", s, typedNil},

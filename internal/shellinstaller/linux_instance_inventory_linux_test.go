@@ -17,8 +17,8 @@ func newInventoryFixture(t *testing.T) inventoryFixture {
 	t.Helper()
 	root := t.TempDir()
 	f := inventoryFixture{root: root,
-		piExec: filepath.Join(root, "pi-file"),
-		piHome: filepath.Join(root, "pi-home"),
+		piExec:       filepath.Join(root, "pi-file"),
+		piHome:       filepath.Join(root, "pi-home"),
 		separateExec: filepath.Join(root, "dedicated-file"),
 		separateHome: filepath.Join(root, "dedicated-home")}
 	if err := os.WriteFile(f.piExec, []byte("synthetic pi, never executed"), 0o600); err != nil {
@@ -44,9 +44,9 @@ func (f inventoryFixture) paths() LinuxInventoryPaths {
 
 func TestLinuxInventoryExplicitModesAndPhysicalObjects(t *testing.T) {
 	cases := []struct {
-		name string
-		channel Channel
-		mode TerminalEntryPoint
+		name       string
+		channel    Channel
+		mode       TerminalEntryPoint
 		wantReject LinuxInventoryReject
 	}{
 		{"pi Stable", ChannelStable, TerminalEntryPointPi, 0},
@@ -94,10 +94,10 @@ func TestLinuxInventoryExplicitModesAndPhysicalObjects(t *testing.T) {
 
 func TestLinuxInventoryRefusesUnsafeSyntheticPaths(t *testing.T) {
 	cases := []struct {
-		name string
-		mode TerminalEntryPoint
+		name   string
+		mode   TerminalEntryPoint
 		mutate func(*testing.T, inventoryFixture, *LinuxInventoryPaths)
-		want LinuxInventoryReject
+		want   LinuxInventoryReject
 	}{
 		{"existing Pi symlink", TerminalEntryPointPi, func(t *testing.T, f inventoryFixture, p *LinuxInventoryPaths) {
 			link := filepath.Join(f.root, "pi-link")
@@ -170,7 +170,7 @@ func TestLinuxInventoryAbsentLeafIsParentDataNotObjectID(t *testing.T) {
 	}
 	for _, tt := range []struct {
 		object LinuxObservedObject
-		leaf string
+		leaf   string
 	}{
 		{got.SeparateExecutable, "new-bin"}, {got.SeparateHome, "new-home"},
 	} {

@@ -61,8 +61,8 @@ func journalTestReported(t *testing.T, mode TerminalEntryPoint, count int) (Linu
 
 func TestLinuxJournalFixedModesAndReverseSelection(t *testing.T) {
 	cases := []struct {
-		name string
-		mode TerminalEntryPoint
+		name    string
+		mode    TerminalEntryPoint
 		actions [4]LinuxJournalAction
 		inverse LinuxInverseAction
 	}{
@@ -127,8 +127,8 @@ func TestLinuxJournalFixedModesAndReverseSelection(t *testing.T) {
 func TestLinuxJournalInvalidBeginningsAndReceiptOrder(t *testing.T) {
 	prior := journalTestObjects(10)
 	cases := []struct {
-		name string
-		mode TerminalEntryPoint
+		name     string
+		mode     TerminalEntryPoint
 		instance string
 		preimage [4]LinuxJournalObject
 	}{
@@ -159,8 +159,7 @@ func TestLinuxJournalInvalidBeginningsAndReceiptOrder(t *testing.T) {
 			if mode == TerminalEntryPointGentleShell {
 				claim = journalTestDigest(500)
 			}
-			if wrongOrder := ReportLinuxPostimage(before, before.Actions[0], journalTestObject(100), claim);
-				wrongOrder.Phase != LinuxJournalQuarantined {
+			if wrongOrder := ReportLinuxPostimage(before, before.Actions[0], journalTestObject(100), claim); wrongOrder.Phase != LinuxJournalQuarantined {
 				t.Fatal("postimage before receipt must quarantine")
 			}
 			for _, bad := range []string{"", "ABC", fmt.Sprintf("%064X", uint64(0xabcdef))} {
@@ -180,20 +179,17 @@ func TestLinuxJournalRejectsWrongActionDuplicateAndCreationClaim(t *testing.T) {
 			if mode == TerminalEntryPointGentleShell {
 				claim = journalTestDigest(500)
 			}
-			if got := ReportLinuxPostimage(base, base.Actions[1], journalTestObject(100), claim);
-				got.Phase != LinuxJournalQuarantined {
+			if got := ReportLinuxPostimage(base, base.Actions[1], journalTestObject(100), claim); got.Phase != LinuxJournalQuarantined {
 				t.Fatal("wrong next action must quarantine")
 			}
-			if got := ReportLinuxPostimage(base, base.Actions[0], LinuxJournalObject{}, claim);
-				got.Phase != LinuxJournalQuarantined {
+			if got := ReportLinuxPostimage(base, base.Actions[0], LinuxJournalObject{}, claim); got.Phase != LinuxJournalQuarantined {
 				t.Fatal("zero object must quarantine")
 			}
 			badClaim := journalTestDigest(500)
 			if mode == TerminalEntryPointGentleShell {
 				badClaim = ""
 			}
-			if got := ReportLinuxPostimage(base, base.Actions[0], journalTestObject(100), badClaim);
-				got.Phase != LinuxJournalQuarantined {
+			if got := ReportLinuxPostimage(base, base.Actions[0], journalTestObject(100), badClaim); got.Phase != LinuxJournalQuarantined {
 				t.Fatal("missing create claim or takeover creation claim must quarantine")
 			}
 			one, _ := journalTestReported(t, mode, 1)
@@ -206,8 +202,7 @@ func TestLinuxJournalRejectsWrongActionDuplicateAndCreationClaim(t *testing.T) {
 			if mode == TerminalEntryPointGentleShell {
 				claim = journalTestDigest(501)
 			}
-			if got := ReportLinuxPostimage(one, one.Actions[1], duplicate, claim);
-				got.Phase != LinuxJournalQuarantined {
+			if got := ReportLinuxPostimage(one, one.Actions[1], duplicate, claim); got.Phase != LinuxJournalQuarantined {
 				t.Fatal("same dev+ino across mount IDs must quarantine")
 			}
 		})
@@ -247,9 +242,9 @@ func TestLinuxJournalInverseQuarantinesIncompleteOrDriftedClaims(t *testing.T) {
 				badCreate.CreatedClaimSHA256[0] = ""
 			}
 			cases := []struct {
-				name string
-				state LinuxTransactionData
-				live [4]LinuxJournalObject
+				name          string
+				state         LinuxTransactionData
+				live          [4]LinuxJournalObject
 				restoreFailed bool
 			}{
 				{"zero postimages", zero, posts, false},
