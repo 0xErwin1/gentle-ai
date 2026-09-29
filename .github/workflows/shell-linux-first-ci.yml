@@ -1,0 +1,75 @@
+name: Gentle Shell first Linux evidence
+
+on:
+  push:
+    branches: [feat/shell-linux-first-ci-34]
+
+permissions: {}
+
+jobs:
+  focused-linux:
+    if: github.repository == 'decode2/gentle-ai' && github.ref == 'refs/heads/feat/shell-linux-first-ci-34'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      # No checkout action or credentialed checkout: the exact public commit is data.
+      - name: Fetch exact public fork commit without a token
+        shell: bash
+        env:
+          EXPECTED_SHA: ${{ github.sha }}
+          EXPECTED_REPO: ${{ github.repository }}
+          EXPECTED_REF: ${{ github.ref }}
+          GIT_TERMINAL_PROMPT: '0'
+          GIT_CONFIG_NOSYSTEM: '1'
+          GIT_CONFIG_GLOBAL: /dev/null
+          GIT_ASKPASS: /bin/false
+        run: |
+          set -euo pipefail
+          test "$EXPECTED_REPO" = 'decode2/gentle-ai'
+          test "$EXPECTED_REF" = 'refs/heads/feat/shell-linux-first-ci-34'
+          [[ "$EXPECTED_SHA" =~ ^[0-9a-f]{40}$ ]]
+          test ! -e .git
+          git init -q
+          git remote add origin https://github.com/decode2/gentle-ai.git
+          git -c credential.helper= -c core.askPass= -c http.followRedirects=false \
+            fetch --no-tags --depth=1 origin "$EXPECTED_SHA"
+          test "$(git rev-parse FETCH_HEAD)" = "$EXPECTED_SHA"
+          git checkout --detach --force FETCH_HEAD
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+          printf 'Verified public fork commit: %s\n' "$EXPECTED_SHA"
+
+      - name: Select pinned Go toolchain
+        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
+        with:
+          go-version-file: go.mod
+          cache: false
+          token: ''
+
+      # Prefetch module before tests; no OS network isolation is claimed.
+      - name: Prepare the one focused external module
+        shell: bash
+        env:
+          GOTOOLCHAIN: local
+          GOMODCACHE: ${{ runner.temp }}/shell-ci/modcache
+        run: |
+          set -euo pipefail
+          test "$(go version)" = 'go version go1.25.10 linux/amd64'
+          mkdir -p "$GOMODCACHE"
+          go mod download golang.org/x/sys@v0.47.0
+
+      - name: Run focused tests with a scrubbed process environment
+        shell: bash
+        env:
+          GOMODCACHE: ${{ runner.temp }}/shell-ci/modcache
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          mkdir -p "$RUNNER_TEMP/shell-ci/home" \
+            "$RUNNER_TEMP/shell-ci/tmp" "$RUNNER_TEMP/shell-ci/gocache"
+          printf 'Testing exact commit: %s\n' "$GITHUB_SHA"
+          env -i PATH="$PATH" \
+            HOME="$RUNNER_TEMP/shell-ci/home" TMPDIR="$RUNNER_TEMP/shell-ci/tmp" \
+            GOCACHE="$RUNNER_TEMP/shell-ci/gocache" GOMODCACHE="$GOMODCACHE" \
+            GOTOOLCHAIN=local GOPROXY=off GOSUMDB=off \
+            go test -mod=readonly -count=1 -p 2 -parallel 2 -timeout=2m \
+              ./internal/shellinstaller ./internal/pathidentity
