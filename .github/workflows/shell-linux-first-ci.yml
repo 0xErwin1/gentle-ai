@@ -104,7 +104,8 @@ jobs:
           diff="$RUNNER_TEMP/shell-ci/gofmt.diff"
           env -i PATH="$PATH" HOME="$RUNNER_TEMP/shell-ci/home" \
             TMPDIR="$RUNNER_TEMP/shell-ci/tmp" \
-            gofmt -d internal/shellinstaller/linux_instance_inventory_linux_test.go \
+            gofmt -d internal/shellinstaller/linux_instance_inventory_linux.go \
+              internal/shellinstaller/linux_instance_inventory_linux_test.go \
               internal/shellinstaller/linux_transaction_test.go \
               internal/shellinstaller/gentle_shell_source_test.go \
               internal/shellinstaller/gentle_shell_tls.go \

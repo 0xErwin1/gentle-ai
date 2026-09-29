@@ -38,6 +38,30 @@ type LinuxInventoryRefusalKind string
 const LinuxInventoryNotAuthorized LinuxInventoryRefusalKind = "not-authorized"
 type LinuxInventoryReject uint32
 
+type LinuxInstanceRole string
+
+const (
+	LinuxInstanceRolePi         LinuxInstanceRole = "pi"
+	LinuxInstanceRoleGentleShell LinuxInstanceRole = "gentle-shell"
+)
+
+// LinuxPhysicalObjectID is a canonical descriptor-observed object tuple.
+// It is point-in-time data, not authority for consent, CAS, or effects.
+type LinuxPhysicalObjectID struct {
+	Dev     uint64
+	Ino     uint64
+	MountID uint64
+	Type    uint32
+}
+
+// LinuxPhysicalInstanceID combines both physical objects with an explicit role.
+// It is derived only by the Linux observer; it is neither caller input nor a hash.
+type LinuxPhysicalInstanceID struct {
+	Role       LinuxInstanceRole
+	Executable LinuxPhysicalObjectID
+	Home       LinuxPhysicalObjectID
+}
+
 const (
 	RejectInventoryMode LinuxInventoryReject = 1 << iota
 	RejectInventoryChannel
@@ -58,6 +82,8 @@ type LinuxInstanceInventory struct {
 	ExistingPiHome       LinuxObservedObject
 	SeparateExecutable   LinuxObservedObject
 	SeparateHome         LinuxObservedObject
+	ExistingPiInstanceID *LinuxPhysicalInstanceID
+	SeparateInstanceID   *LinuxPhysicalInstanceID
 }
 
 type linuxInventoryWalk struct {
@@ -188,7 +214,9 @@ func linuxInventorySameObject(a, b LinuxObservedObject) bool {
 
 func linuxInventoryCrossedMount(w linuxInventoryWalk) bool {
 	for i := 1; i < len(w.facts); i++ {
-		if w.facts[i].MountID != w.facts[i-1].MountID { return true }
+		if w.facts[i].MountID != w.facts[i-1].MountID {
+			return true
+		}
 	}
 	return false
 }
@@ -242,6 +270,18 @@ func linuxInventoryStable(path string, dir, allowMissing bool, held linuxInvento
 		}
 	}
 	return true // post-close drift still needs a later recheck
+}
+
+func linuxInventoryInstanceID(role LinuxInstanceRole, executable, home LinuxObservedObject) (LinuxPhysicalInstanceID, bool) {
+	if !executable.Exists || !home.Exists || executable.Mode&unix.S_IFMT != unix.S_IFREG ||
+		home.Mode&unix.S_IFMT != unix.S_IFDIR {
+		return LinuxPhysicalInstanceID{}, false
+	}
+	return LinuxPhysicalInstanceID{Role: role,
+		Executable: LinuxPhysicalObjectID{Dev: executable.Dev, Ino: executable.Ino,
+			MountID: executable.MountID, Type: executable.Mode & unix.S_IFMT},
+		Home: LinuxPhysicalObjectID{Dev: home.Dev, Ino: home.Ino,
+			MountID: home.MountID, Type: home.Mode & unix.S_IFMT}}, true
 }
 
 func linuxInventoryRejectError(err error) LinuxInventoryReject {
@@ -342,6 +382,19 @@ func ObserveLinuxInstanceInventory(profile Profile, paths LinuxInventoryPaths) L
 	if !linuxInventoryStable(paths.ExistingPiExecutable, false, false, piExec) ||
 		!linuxInventoryStable(paths.ExistingPiHome, true, false, piHome) {
 		out.Rejected |= RejectInventoryDrift
+	}
+	if out.Rejected != 0 {
+		return out
+	}
+	if id, ok := linuxInventoryInstanceID(LinuxInstanceRolePi,
+		out.ExistingPiExecutable, out.ExistingPiHome); ok {
+		out.ExistingPiInstanceID = &id
+	}
+	if profile.TerminalEntryPoint == TerminalEntryPointGentleShell {
+		if id, ok := linuxInventoryInstanceID(LinuxInstanceRoleGentleShell,
+			out.SeparateExecutable, out.SeparateHome); ok {
+			out.SeparateInstanceID = &id
+		}
 	}
 	return out
 }

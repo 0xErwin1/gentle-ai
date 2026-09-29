@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"golang.org/x/sys/unix"
 )
 
 // All paths are synthetic: never inspect the operator's HOME or Pi install.
@@ -68,6 +70,16 @@ func TestLinuxInventoryExplicitModesAndPhysicalObjects(t *testing.T) {
 			if got.Kind != LinuxInventoryNotAuthorized || got.Rejected != tt.wantReject {
 				t.Fatalf("kind=%q rejected=%b, want not-authorized/%b", got.Kind, got.Rejected, tt.wantReject)
 			}
+			if tt.wantReject == 0 && (got.ExistingPiInstanceID == nil ||
+				got.ExistingPiInstanceID.Role != LinuxInstanceRolePi) {
+				t.Fatalf("valid inventory must observe the explicit Pi role: %+v", got)
+			}
+			if tt.mode == TerminalEntryPointPi && got.SeparateInstanceID != nil {
+				t.Fatal("explicit Pi mode must not claim a separate instance")
+			}
+			if got.Rejected != 0 && (got.ExistingPiInstanceID != nil || got.SeparateInstanceID != nil) {
+				t.Fatalf("rejected inventory must not publish instance IDs: %+v", got)
+			}
 			if tt.wantReject == RejectInventoryMode {
 				if got.ExistingPiExecutable.Exists || got.ExistingPiHome.Exists {
 					t.Fatal("invalid mode must not inventory an existing object")
@@ -89,6 +101,40 @@ func TestLinuxInventoryExplicitModesAndPhysicalObjects(t *testing.T) {
 				t.Fatal("explicit Pi must not claim separate target objects")
 			}
 		})
+	}
+}
+
+func TestLinuxInventoryBuildsCanonicalRoleTaggedInstanceIDs(t *testing.T) {
+	f := newInventoryFixture(t)
+	first := ObserveLinuxInstanceInventory(Profile{Channel: ChannelStable,
+		TerminalEntryPoint: TerminalEntryPointGentleShell}, f.paths())
+	again := ObserveLinuxInstanceInventory(Profile{Channel: ChannelStable,
+		TerminalEntryPoint: TerminalEntryPointGentleShell}, f.paths())
+	if first.Rejected != 0 || first.ExistingPiInstanceID == nil || first.SeparateInstanceID == nil {
+		t.Fatalf("complete physical inventories must provide both IDs: first=%+v", first)
+	}
+	if again.Rejected != 0 || again.ExistingPiInstanceID == nil || again.SeparateInstanceID == nil {
+		t.Fatalf("complete repeated physical inventory must provide both IDs: again=%+v", again)
+	}
+	if *first.ExistingPiInstanceID != *again.ExistingPiInstanceID ||
+		*first.SeparateInstanceID != *again.SeparateInstanceID {
+		t.Fatalf("same descriptor-observed objects must produce deterministic IDs: first=%+v again=%+v",
+			first, again)
+	}
+	if first.ExistingPiInstanceID.Role != LinuxInstanceRolePi ||
+		first.SeparateInstanceID.Role != LinuxInstanceRoleGentleShell {
+		t.Fatalf("instance roles must stay explicit and distinct: pi=%+v separate=%+v",
+			first.ExistingPiInstanceID, first.SeparateInstanceID)
+	}
+	piID := first.ExistingPiInstanceID
+	if piID.Executable.Type != first.ExistingPiExecutable.Mode&unix.S_IFMT ||
+		piID.Executable.Dev != first.ExistingPiExecutable.Dev ||
+		piID.Executable.Ino != first.ExistingPiExecutable.Ino ||
+		piID.Executable.MountID != first.ExistingPiExecutable.MountID ||
+		piID.Home.Type != first.ExistingPiHome.Mode&unix.S_IFMT ||
+		piID.Home.Dev != first.ExistingPiHome.Dev || piID.Home.Ino != first.ExistingPiHome.Ino ||
+		piID.Home.MountID != first.ExistingPiHome.MountID {
+		t.Fatalf("physical ID must preserve descriptor-observed object types and tuples: %+v", piID)
 	}
 }
 
@@ -148,6 +194,9 @@ func TestLinuxInventoryRefusesUnsafeSyntheticPaths(t *testing.T) {
 				(tt.want != 0 && got.Rejected&tt.want == 0) {
 				t.Fatalf("unsafe path kind=%q rejected=%b, want nonzero/bit %b", got.Kind, got.Rejected, tt.want)
 			}
+			if got.ExistingPiInstanceID != nil || got.SeparateInstanceID != nil {
+				t.Fatalf("rejected inventory must not publish instance IDs: %+v", got)
+			}
 		})
 	}
 }
@@ -167,6 +216,9 @@ func TestLinuxInventoryAbsentLeafIsParentDataNotObjectID(t *testing.T) {
 		TerminalEntryPoint: TerminalEntryPointGentleShell}, p)
 	if got.Kind != LinuxInventoryNotAuthorized || got.Rejected != 0 {
 		t.Fatalf("direct absence must remain data, not authority/error: %+v", got)
+	}
+	if got.ExistingPiInstanceID == nil || got.SeparateInstanceID != nil {
+		t.Fatalf("missing separate targets must retain Pi ID but invent no separate ID: %+v", got)
 	}
 	for _, tt := range []struct {
 		object LinuxObservedObject
@@ -195,6 +247,39 @@ func TestLinuxInventoryAbsentLeafIsParentDataNotObjectID(t *testing.T) {
 }
 
 // Synthetic facts exercise bind-mount aliases without creating or inspecting mounts.
+func TestLinuxInventoryPartialSeparateTargetHasNoInstanceID(t *testing.T) {
+	for _, missingExecutable := range []bool{true, false} {
+		name := "home absent"
+		if missingExecutable {
+			name = "executable absent"
+		}
+		t.Run(name, func(t *testing.T) {
+			f := newInventoryFixture(t)
+			paths := f.paths()
+			missing := filepath.Join(f.root, "future-target")
+			if missingExecutable {
+				paths.SeparateExecutable = missing
+			} else {
+				paths.SeparateHome = missing
+			}
+			got := ObserveLinuxInstanceInventory(Profile{Channel: ChannelStable,
+				TerminalEntryPoint: TerminalEntryPointGentleShell}, paths)
+			if got.Rejected != 0 || got.SeparateInstanceID != nil {
+				t.Fatalf("incomplete separate target cannot have an InstanceID: %+v", got)
+			}
+			absent := got.SeparateHome
+			if missingExecutable {
+				absent = got.SeparateExecutable
+			}
+			if !absent.Absent || absent.Exists || absent.Dev != 0 || absent.Ino != 0 ||
+				absent.MountID != 0 || absent.ParentDev == 0 || absent.ParentIno == 0 ||
+				absent.ParentMountID == 0 || absent.MissingLeaf != "future-target" {
+				t.Fatalf("missing leaf must preserve only accurate parent/name facts: %+v", absent)
+			}
+		})
+	}
+}
+
 func TestLinuxInventoryCrossedMountDoesNotProveDisjointness(t *testing.T) {
 	root := LinuxObservedObject{Dev: 1, Ino: 2, MountID: 10, Exists: true}
 	pi := LinuxObservedObject{Dev: 7, Ino: 8, MountID: 11, Exists: true}
@@ -220,6 +305,12 @@ func TestLinuxInventoryCrossedMountDoesNotProveDisjointness(t *testing.T) {
 
 func TestLinuxInventoryDetectsDeterministicReplacement(t *testing.T) {
 	f := newInventoryFixture(t)
+	before := ObserveLinuxInstanceInventory(Profile{Channel: ChannelStable,
+		TerminalEntryPoint: TerminalEntryPointPi}, LinuxInventoryPaths{
+			ExistingPiExecutable: f.piExec, ExistingPiHome: f.piHome})
+	if before.Rejected != 0 || before.ExistingPiInstanceID == nil {
+		t.Fatalf("initial synthetic Pi identity: %+v", before)
+	}
 	held, err := linuxInventoryWalkPath(f.piExec, false, false)
 	defer held.close()
 	if err != nil {
@@ -233,6 +324,14 @@ func TestLinuxInventoryDetectsDeterministicReplacement(t *testing.T) {
 	}
 	if linuxInventoryStable(f.piExec, false, false, held) {
 		t.Fatal("held original FD must not match a replaced name")
+	}
+	after := ObserveLinuxInstanceInventory(Profile{Channel: ChannelStable,
+		TerminalEntryPoint: TerminalEntryPointPi}, LinuxInventoryPaths{
+			ExistingPiExecutable: f.piExec, ExistingPiHome: f.piHome})
+	if after.Rejected != 0 || after.ExistingPiInstanceID == nil ||
+		*before.ExistingPiInstanceID == *after.ExistingPiInstanceID {
+		t.Fatalf("re-observation must identify a replacement rather than reuse stale data: before=%+v after=%+v",
+			before.ExistingPiInstanceID, after.ExistingPiInstanceID)
 	}
 	missing := filepath.Join(f.root, "pending-child")
 	absent, err := linuxInventoryWalkPath(missing, false, true)
