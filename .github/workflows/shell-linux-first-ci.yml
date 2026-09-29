@@ -38,6 +38,49 @@ jobs:
           test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
           printf 'Verified public fork commit: %s\n' "$EXPECTED_SHA"
 
+      # Stock OS boundary first: no candidate Go/Node/Pi enters this image.
+      - name: Build pinned stock Linux guest
+        shell: bash
+        run: |
+          set -euo pipefail
+          command -v docker
+          command -v timeout
+          test -r /proc/self/ns/net && test -r /proc/self/ns/mnt
+          timeout --kill-after=5 180 docker build -f e2e/Dockerfile.shell-linux-guest -t gentle-shell-guest:ci e2e
+
+      - name: Prove stock guest isolation and rejection controls
+        shell: bash
+        run: |
+          set -euo pipefail
+          host_net="$(stat -Lc %i /proc/self/ns/net)"
+          host_mnt="$(stat -Lc %i /proc/self/ns/mnt)"
+          guest() {
+            local network="$1"
+            shift
+            timeout --kill-after=5 30 docker run --rm --pull=never \
+              --network "$network" --cap-drop=ALL \
+              --security-opt=no-new-privileges --read-only --user 65532:65532 \
+              --tmpfs /tmp:rw,nosuid,nodev,mode=1777 \
+              --cpus=1 --memory=128m --memory-swap=128m --pids-limit=32 \
+              -e HOME=/tmp -e HOST_NETNS="$host_net" -e HOST_MNTNS="$host_mnt" \
+              "$@" gentle-shell-guest:ci
+          }
+          # Success is required before testing controls; Docker failure is not proof.
+          guest none
+          expect_rejection() {
+            local expected="$1" status=0 output
+            shift
+            # Capture privately: raw guest output could contain environment values.
+            output="$(guest "$@" 2>&1)" || status=$?
+            if test "$status" != 1 || test "$output" != "$expected"; then
+              printf 'STOP: negative control did not return the expected guest rejection (status=%s).\n' "$status" >&2
+              exit 1
+            fi
+          }
+          expect_rejection 'STOP: non-loopback interface present' bridge
+          expect_rejection 'STOP: unexpected environment name (credentials forbidden)' none -e GITHUB_TOKEN=synthetic-canary
+          printf 'Stock guest positive and negative controls passed; installation remains unproven.\n'
+
       # Fetch archive bytes as DATA only. Never unpack or execute npm lifecycle scripts.
       - name: Measure human-approved Stable archive bytes without execution
         shell: bash

@@ -1,0 +1,4 @@
+# Stock OS only: no candidate, package manager or lifecycle execution.
+FROM --platform=linux/amd64 debian:bookworm-slim@sha256:f3034a6ec3c1205360777c4aae76234998866ad18806ae62b63a3f84ccad782b
+COPY shell-linux-guest-proof.sh /usr/local/bin/shell-linux-guest-proof.sh
+ENTRYPOINT ["/bin/sh", "/usr/local/bin/shell-linux-guest-proof.sh"]
