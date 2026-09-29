@@ -2,13 +2,13 @@ name: Gentle Shell first Linux evidence
 
 on:
   push:
-    branches: [feat/shell-linux-first-ci-34]
+    branches: [feat/shell-linux-runtime-35]
 
 permissions: {}
 
 jobs:
   focused-linux:
-    if: github.repository == 'decode2/gentle-ai' && github.ref == 'refs/heads/feat/shell-linux-first-ci-34'
+    if: github.repository == 'decode2/gentle-ai' && github.ref == 'refs/heads/feat/shell-linux-runtime-35'
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
@@ -26,7 +26,7 @@ jobs:
         run: |
           set -euo pipefail
           test "$EXPECTED_REPO" = 'decode2/gentle-ai'
-          test "$EXPECTED_REF" = 'refs/heads/feat/shell-linux-first-ci-34'
+          test "$EXPECTED_REF" = 'refs/heads/feat/shell-linux-runtime-35'
           [[ "$EXPECTED_SHA" =~ ^[0-9a-f]{40}$ ]]
           test ! -e .git
           git init -q
