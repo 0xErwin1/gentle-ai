@@ -54,6 +54,25 @@ func (root *LinuxJournalRoot) Close() error {
 	return unix.Close(fd)
 }
 
+// validateForPrepareLocked rechecks the pinned directory before journal effects.
+// The caller must hold closeMu so Close cannot release or replace the descriptor.
+func (root *LinuxJournalRoot) validateForPrepareLocked() error {
+	if root == nil || root.closed || root.fd < 0 {
+		return fmt.Errorf("journal root is closed")
+	}
+	fact, err := linuxJournalRootDescriptorFact(root.fd)
+	if err != nil {
+		return err
+	}
+	if fact.identity != root.identity {
+		return fmt.Errorf("journal root descriptor identity changed")
+	}
+	if fact.uid != uint32(unix.Geteuid()) || fact.mode&0o077 != 0 {
+		return fmt.Errorf("journal root is no longer owned and private")
+	}
+	return nil
+}
+
 // OpenLinuxJournalRoot opens one explicit absolute directory using a single
 // openat2 resolution from a descriptor for /. It rejects symlinks in every
 // component and roots not owned by the effective user or accessible to
