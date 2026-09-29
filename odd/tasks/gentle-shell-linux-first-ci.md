@@ -1,0 +1,18 @@
+# First executed Linux evidence for Gentle Shell
+
+Goal: obtain a conclusive Ubuntu-hosted compile and focused Go test result for T1 physical inventory, T3 two-mode inverse selection, and T2a Stable/Main source-byte selection; then build the smallest disposable Linux E2E for installation, update, rollback, and independent Ready for both explicit modes. This verification does not authorize real Pi/WSL installation or claim publisher authenticity.
+
+## Authority and starting point
+
+User authorized one isolated branch in fork `decode2/gentle-ai`, test and focused Ubuntu workflow source, work-unit commits, push of **only that feature branch**, and execution/repetition of that workflow until a conclusive result. User forbids pushes to upstream/main, PRs, merges, real Pi/WSL mutation, and tests on the real installation without new consent. Start at clean `0a0548a39a3efd7d54328af5c2371b0cd0c25851` in `shell-linux-first-ci-34`; preserve T1/T3/T2a original commits and W18 fail-closed gate. No local candidate Go/Node/Pi execution in credentialed WSL. Actual fork preflight: `decode2/gentle-ai` public fork, Actions enabled, allowed_actions=all (read-only API response; recheck before push).
+
+## Reviewable work units
+
+- [ ] C1: Add synthetic Linux T1 tests for distinct physical instances, alias/symlink/missing ancestors, mount identity/drift, and refusal-only output; never inspect the real HOME or Pi. This slice uses only `t.TempDir` synthetic paths and makes no executable launch; focused command when separately run in fork Ubuntu CI: `go test -count=1 ./internal/shellinstaller` (**NOT RUN** here). Expected absent leaves expose measured parent/name without leaf IDs; same-parent pending targets refuse conservatively, mount IDs are observed DATA and cannot prove Ready. Rollback boundary: this new test file and this C1 wording only; no W18 gate or T1/T3/T2a code edits.
+- [ ] C2: Add T3 pure state-machine tests for fixed explicit modes, journal-before-selection, forged IDs, duplicate postimages, CAS drift, complete reverse order and partial/zero quarantine; no filesystem mutation.
+- [ ] C3: Add T2a reader/source tests for exact Stable name/version/SRI/SHA256/size, typed nil, short/extra/zero-progress, final `(n>0,io.EOF)` with extra probe, and Main full lowercase SHA STOP; no tar extraction or installation.
+- [ ] C4: Add one push-on-this-feature-branch Ubuntu 24.04 workflow, exact-ref checkout and Go 1.25.10, `permissions: {}`, no secrets to test process, no current tokened E2E/npm/bench, bounded focused test commands, evidence SHA and report. A branch push runs the workflow only if fork Actions remains enabled. No `workflow_dispatch` assumption for a branch-only file.
+- [ ] C5: Observe the first CI run URL/commit/test inventory and correct failed code or infrastructure in reviewable work units until conclusive. A green unit suite is NOT install/Ready proof; full repo CI/deadcode ratchet remains a separate integration gate.
+- [ ] C6: After the unit gate, create isolated no-secret Linux fixture E2E for both explicit modes, install/update/failure/rollback and loaded-byte/Ready readback. Do not run the existing tokened/default-network E2E. If the protected transaction or source graph is absent, fail honestly; do not manufacture Ready.
+
+Each source/test/workflow commit is <=400 changed lines, Conventional Commit, with independent static review and native review when offered. Record exact command, SHA, workflow run URL/status, skipped checks and rollback boundary after each unit. Keep one writer at a time. The user must separately approve any test of their actual Pi/WSL environment. No current CI or native review is evidence of runtime until observed.
