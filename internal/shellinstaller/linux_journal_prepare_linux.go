@@ -224,6 +224,9 @@ func linuxJournalRecordFact(fd int, size uint64, mode uint32, links uint32) (lin
 	}
 	return linuxJournalRecordMetadata{
 		identity: LinuxJournalRootIdentity{Device: unix.Mkdev(sx.Dev_major, sx.Dev_minor), Inode: sx.Ino, MountID: sx.Mnt_id},
-		size: sx.Size, links: sx.Nlink, mode: uint32(sx.Mode) & 0o7777, uid: sx.Uid,
+		size:     sx.Size,
+		links:    sx.Nlink,
+		mode:     uint32(sx.Mode) & 0o7777,
+		uid:      sx.Uid,
 	}, nil
 }
