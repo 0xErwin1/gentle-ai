@@ -153,7 +153,7 @@ function walk(modules) {
 }
 walk('node_modules');
 actual.sort();
-if (JSON.stringify(actual) !== JSON.stringify(expected)) throw Error('installed closure set differs');
+if (JSON.stringify(actual) !== JSON.stringify(expected)) throw Error(`installed closure set differs record=${JSON.stringify({expectedCount: expected.length, actualCount: actual.length, missing: expected.filter(path => !actual.includes(path)), extra: actual.filter(path => !expected.includes(path))})}`);
 console.log(`closure expected=${expected.length} actual=${actual.length}`);
 let count = 0, lifecycle = 0, native = 0;
 for (const path of expected) {
