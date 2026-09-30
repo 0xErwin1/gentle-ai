@@ -69,7 +69,12 @@ Contract updates to pre-existing tests (justified by A2):
   update above; removal of pre-existing dead helpers flagged by the static
   gate (`engramServerJSON`, `ensureAntigravitySettings`+
   `settingsBootstrapResult`, `isAbsoluteEngramPath`, `assertNestedBool`,
-  `assertNestedMissing`, unused `agentID` param blanked).
+  unused `agentID` param blanked). Post-merge correction (a5c209d1):
+  `assertNestedMissing` is retained because the upstream
+  `TestInjectPiProvisioningRetiresMCPAdapterAndPreservesUnrelatedContent`
+  migration test calls it; `assertNestedStringsUnordered` is dropped since
+  upstream rewrote its only call sites (pi-mcp-adapter retirement), and
+  `assertNestedBool` stays removed (still unused on main).
 - `.deadcode-baseline.txt`: +2 entries (`internal/filecoord/lock.go`
   `UnsupportedError.Error` / `.Unwrap`). These methods are pre-existing and
   unreachable from main; importing `internal/filecoord` for the B lock makes
@@ -80,10 +85,10 @@ Contract updates to pre-existing tests (justified by A2):
 
 ## Size / budget
 
-- Direct base `e63d27e3` → working: source + tests + baseline deltas
-  (289+111 / 531+69 changed, +89/+211 new files, +2/−3 baseline) = 1305
-  changed lines.
-- Including this 95-line document: 1400 ≤ 1400 (at ceiling; no headroom).
+- Direct base `a5c209d1` (latest main) → resolved worktree, measured after the
+  merge resolution: 6 files, +1222/−176 changed lines (source + tests +
+  baseline deltas + this document) = 1398 changed lines.
+- 1398 ≤ 1400 budget (at ceiling, 2 lines of headroom).
 
 ## Limitations
 
