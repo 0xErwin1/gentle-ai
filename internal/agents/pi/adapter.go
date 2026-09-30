@@ -31,7 +31,9 @@ const (
 const (
 	piGentleEngramPackageSource = "npm:gentle-engram"
 	piAppendSystemFile          = "APPEND_SYSTEM.md"
-	piEngramMCPConfigFile       = "mcp.json"
+	piMCPConfigFile             = "mcp.json"
+	piMCPAdapterConfigFile      = "mcp-adapter.json"
+	piMCPServersKey             = "mcpServers"
 	piSettingsFile              = "settings.json"
 	piNPMDirectory              = "npm"
 	piNPMPackageFile            = "package.json"
@@ -114,7 +116,7 @@ func CodeGraphPaths(homeDir string) CodeGraphPathSet {
 	}
 	return CodeGraphPathSet{
 		AgentDir:  agentDir,
-		MCPConfig: filepath.Join(agentDir, piEngramMCPConfigFile),
+		MCPConfig: filepath.Join(agentDir, piMCPConfigFile),
 		Manifest:  manifest,
 	}
 }
@@ -322,7 +324,7 @@ func (a *Adapter) SystemPromptStrategy() model.SystemPromptStrategy {
 func (a *Adapter) MCPStrategy() model.MCPStrategy { return model.StrategyMCPConfigFile }
 
 func (a *Adapter) MCPConfigPath(homeDir string, _ string) string {
-	return filepath.Join(AgentConfigPath(homeDir), piEngramMCPConfigFile)
+	return filepath.Join(AgentConfigPath(homeDir), piMCPConfigFile)
 }
 
 func (a *Adapter) SupportsOutputStyles() bool {
@@ -430,19 +432,26 @@ func resolvePiAgentDirOverride(override, homeDir string) string {
 	}
 }
 
-// ProvisionEngramMCP prepares Pi's Engram MCP runtime. Pi >= 0.99.0 runs MCP
-// servers from mcp.json through its built-in MCP support, so this only retires
-// what would shadow it: the pi-mcp-adapter package in settings.json (plus the
-// legacy and retired companion packages) and the pi-mcp-adapter dependency in
-// <agentDir>/npm/package.json. It is invoked by ComponentEngram; keeping it
-// here lets Pi own the exact config shape without teaching the generic Engram
-// injector about Pi internals.
+// ProvisionEngramMCP prepares Pi's MCP runtime for the Engram component. Pi
+// Engram itself is native-only: gentle-engram registers its tools directly,
+// not through MCP, so this never adds an engram server to mcp.json (and never
+// removes a user-owned one). Pi >= 0.99.0 runs other MCP servers from
+// <agentDir>/mcp.json through its built-in MCP support. It is invoked by
+// ComponentEngram on install and sync; keeping it here lets Pi own its config
+// shape without teaching the generic Engram injector about Pi internals. It:
 //
-// Missing files are never created, and files with nothing to retire are left
-// byte-identical. The returned paths are the files actually rewritten.
+//  1. retires what would shadow built-in MCP: the pi-mcp-adapter package in
+//     settings.json (plus the legacy and retired companion packages) and the
+//     pi-mcp-adapter dependency in <agentDir>/npm/package.json;
+//  2. merges the mcpServers entries of a legacy <agentDir>/mcp-adapter.json
+//     (the file pi-mcp-adapter 3.x read) into mcp.json, creating mcp.json
+//     only when there is a server to migrate. Entries already in mcp.json win;
+//     mcp-adapter.json is never modified or removed.
 //
-// mcp.json is NOT written here. pi-engram init (invoked by InstallCommand)
-// is the sole writer of that file and owns its schema.
+// Malformed JSON in any file it must read is reported, never overwritten.
+// Missing settings and npm manifests are never created, and files with
+// nothing to change are left byte-identical. The returned paths are the files
+// actually rewritten.
 func (a *Adapter) ProvisionEngramMCP(homeDir string) (bool, []string, error) {
 	settingsPath := a.SettingsPath(homeDir)
 	// Pi's npm manifest lives at <agentDir>/npm/package.json
@@ -452,12 +461,13 @@ func (a *Adapter) ProvisionEngramMCP(homeDir string) (bool, []string, error) {
 	var paths []string
 	for _, step := range []struct {
 		path  string
-		prune func(string) (filemerge.WriteResult, error)
+		apply func(string) (filemerge.WriteResult, error)
 	}{
 		{settingsPath, prunePiSettingsFile},
 		{npmPackagePath, prunePiNPMPackageFile},
+		{a.MCPConfigPath(homeDir, ""), migratePiMCPAdapterServers},
 	} {
-		write, err := step.prune(step.path)
+		write, err := step.apply(step.path)
 		if err != nil {
 			return false, nil, err
 		}
@@ -508,6 +518,53 @@ func prunePiNPMPackageFile(path string) (filemerge.WriteResult, error) {
 	delete(dependencies, retiredPiMCPAdapterDependency)
 
 	return writePiJSONObject(path, manifest)
+}
+
+// migratePiMCPAdapterServers copies into the mcp.json at path every server of
+// a sibling mcp-adapter.json that mcp.json lacks, preserving every other key.
+// It never adds a server of its own: Pi Engram is native-only (gentle-engram),
+// so an engram entry appears only when the user kept one in mcp-adapter.json.
+// With nothing to migrate it reads and writes nothing, so mcp.json is created
+// only to hold migrated servers.
+func migratePiMCPAdapterServers(path string) (filemerge.WriteResult, error) {
+	legacy, legacyExists, err := readExistingPiJSONObject(filepath.Join(filepath.Dir(path), piMCPAdapterConfigFile))
+	if err != nil {
+		return filemerge.WriteResult{}, err
+	}
+	legacyServers, isObject := legacy[piMCPServersKey].(map[string]any)
+	if !legacyExists || !isObject || len(legacyServers) == 0 {
+		return filemerge.WriteResult{}, nil
+	}
+
+	config, err := readPiJSONObject(path)
+	if err != nil {
+		return filemerge.WriteResult{}, err
+	}
+	servers := map[string]any{}
+	if existing, present := config[piMCPServersKey]; present && existing != nil {
+		object, isObject := existing.(map[string]any)
+		if !isObject {
+			return filemerge.WriteResult{}, fmt.Errorf("pi mcp config %q: %s must be a JSON object", path, piMCPServersKey)
+		}
+		servers = object
+	}
+
+	changed := false
+	for name, server := range legacyServers {
+		if _, present := servers[name]; !present {
+			servers[name] = server
+			changed = true
+		}
+	}
+	if !changed {
+		return filemerge.WriteResult{}, nil
+	}
+	config[piMCPServersKey] = servers
+
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return filemerge.WriteResult{}, fmt.Errorf("create pi agent dir for %q: %w", path, err)
+	}
+	return writePiJSONObject(path, config)
 }
 
 func readExistingPiJSONObject(path string) (map[string]any, bool, error) {

@@ -231,6 +231,9 @@ func TestProvisionEngramMCPTargetsConfiguredAgentDirectoryAndLeavesRealHomeUntou
 	if !reflect.DeepEqual(paths, []string{wantSettings, wantNPMPackage}) {
 		t.Fatalf("ProvisionEngramMCP() paths = %v, want [%q %q]", paths, wantSettings, wantNPMPackage)
 	}
+	if _, err := os.Stat(filepath.Join(override, "mcp.json")); !os.IsNotExist(err) {
+		t.Fatalf("stat mcp.json err = %v, want IsNotExist (Pi Engram is native-only; nothing to migrate)", err)
+	}
 
 	for _, path := range []string{wantSettings, wantNPMPackage} {
 		body, err := os.ReadFile(path)
@@ -247,7 +250,7 @@ func TestProvisionEngramMCPTargetsConfiguredAgentDirectoryAndLeavesRealHomeUntou
 	}
 }
 
-func TestProvisionEngramMCPFreshAgentDirectoryWritesNoAdapterFiles(t *testing.T) {
+func TestProvisionEngramMCPFreshAgentDirectoryWritesNothing(t *testing.T) {
 	a := NewAdapter()
 	home := t.TempDir()
 	setRealHome(t, home)
@@ -263,9 +266,11 @@ func TestProvisionEngramMCPFreshAgentDirectoryWritesNoAdapterFiles(t *testing.T)
 	for _, path := range []string{
 		filepath.Join(home, ".pi", "agent", "settings.json"),
 		filepath.Join(home, ".pi", "agent", "npm", "package.json"),
+		filepath.Join(home, ".pi", "agent", "mcp.json"),
+		filepath.Join(home, ".pi", "agent", "mcp-adapter.json"),
 	} {
 		if _, err := os.Stat(path); !os.IsNotExist(err) {
-			t.Fatalf("stat %q err = %v, want IsNotExist (nothing to retire, nothing to create)", path, err)
+			t.Fatalf("stat %q err = %v, want IsNotExist (nothing to retire, migrate, or create)", path, err)
 		}
 	}
 }
@@ -335,19 +340,22 @@ func TestProvisionEngramMCPLeavesFilesWithoutAdapterUntouched(t *testing.T) {
 	t.Setenv("PI_CODING_AGENT_DIR", "")
 	settingsPath := filepath.Join(home, ".pi", "agent", "settings.json")
 	npmPath := filepath.Join(home, ".pi", "agent", "npm", "package.json")
+	mcpPath := filepath.Join(home, ".pi", "agent", "mcp.json")
 	settingsBody := `{"theme":"kanagawa","packages":["npm:gentle-pi"]}`
 	npmBody := `{"dependencies":{"left-pad":"^1.0.0"}}`
+	mcpBody := `{"mcpServers":{"context7":{"command":"npx"}}}`
 	writeTestFile(t, settingsPath, settingsBody)
 	writeTestFile(t, npmPath, npmBody)
+	writeTestFile(t, mcpPath, mcpBody)
 
 	changed, _, err := a.ProvisionEngramMCP(home)
 	if err != nil {
 		t.Fatalf("ProvisionEngramMCP() error = %v", err)
 	}
 	if changed {
-		t.Fatalf("ProvisionEngramMCP() changed = true, want false without adapter entries")
+		t.Fatalf("ProvisionEngramMCP() changed = true, want false without adapter entries or servers to migrate")
 	}
-	for path, want := range map[string]string{settingsPath: settingsBody, npmPath: npmBody} {
+	for path, want := range map[string]string{settingsPath: settingsBody, npmPath: npmBody, mcpPath: mcpBody} {
 		body, err := os.ReadFile(path)
 		if err != nil {
 			t.Fatalf("ReadFile(%q) error = %v", path, err)
