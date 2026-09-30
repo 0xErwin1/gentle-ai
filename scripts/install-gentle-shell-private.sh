@@ -94,7 +94,7 @@ for (const [path, p] of Object.entries(lock.packages)) {
   if (!packagePath.test(path) || p.link ||
       !/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(p.version) ||
       !/^https:\/\/registry\.npmjs\.org\/[A-Za-z0-9@%/_.-]+\.tgz$/.test(p.resolved) ||
-      !/^sha512-[A-Za-z0-9+/]{86}==$/.test(p.integrity)) reject(`unsafe closure: ${path}`);
+      !/^sha512-[A-Za-z0-9+/]{86}==$/.test(p.integrity)) reject(`unsafe closure: ${path} record=${JSON.stringify(p)}`);
   const name = p.name ?? path.split('node_modules/').at(-1);
   if (!packageName.test(name)) reject(`unsafe package name: ${path}`);
   const leaf = name.split('/').at(-1);
