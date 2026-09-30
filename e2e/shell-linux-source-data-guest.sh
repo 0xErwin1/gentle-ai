@@ -5,12 +5,13 @@ export LC_ALL=C TZ=UTC
 umask 077
 fail() { printf 'STOP: %s\n' "$1" >&2; exit 1; }
 # Limits: compressed 9417802 bytes, decompressed 64 MiB, 8192 members,
-# each regular member 8 MiB, selected member 256 KiB, selected total 768 KiB.
+# each regular member 8 MiB, selected member 256 KiB, selected total 1792 KiB.
 # RAW tar listing is capped at 2 MiB; encoded inventory is NOT that listing.
 # Total public log bound: 8 MiB, derived without truncating any accepted output:
 # inventory <= 8192*(512 encoded-name + 64 framing) = 4718592 bytes;
-# selected base64 <= 1048584 bytes + 3*4600 lines*14 framing = 1241784;
-# fixed headers, controls/proof and final messages < 8192 bytes. Sum < 6 MiB.
+# selected output <= 7*(349528 base64 bytes + 4600 lines*14 framing)
+# = 2897496 bytes; fixed headers, controls/proof and final messages < 8192.
+# Combined bound = 7624280 bytes < 8 MiB; accepted output is never truncated.
 # Names <= 384 bytes and decimal size labels <= 7 digits enforce this accounting.
 # Synthetic output stays private. Any quota, parser or extraction error fails.
 validate() {
@@ -31,13 +32,17 @@ validate() {
                 (type != "-" && type != "d")) bad=1
             if (name == "package/package.json" ||
                 name == "package/bin/gentle-shell.mjs" ||
-                name == "package/scripts/install-gentle-ai.mjs") {
+                name == "package/scripts/install-gentle-ai.mjs" ||
+                name == "package/runtime/gentle-shell-launcher.mjs" ||
+                name == "package/runtime/gentle-ai-binary.mjs" ||
+                name == "package/scripts/gentle-ai-installer.mjs" ||
+                name == "package/scripts/install-tui-mode-setting.mjs") {
                 if (type != "-" || size > 262144) bad=1
                 total+=size; found++
                 print name, size
             }
         }
-        END { if (bad || found != 3 || total > 786432) exit 1 }
+        END { if (bad || found != 7 || total > 1835008) exit 1 }
     ' "$listing" > "$selected" || fail 'unsafe, missing, duplicate, nonregular or oversized member'
     # Prefix every line and encode names/content: no raw archive text enters CI logs.
     while read -r mode owner size date clock name; do
@@ -89,7 +94,7 @@ printf 'DATA commands: sha512sum /data/approved.tgz; sha256sum /data/approved.tg
 printf 'DATA commands: timeout --kill-after=1 15 gzip -dc /data/approved.tgz\n'
 printf 'DATA commands: timeout --kill-after=1 15 tar --numeric-owner --quoting-style=escape -tvf /tmp/data.tar\n'
 printf 'DATA commands: (ulimit -f 256; timeout --kill-after=1 10 tar -xOf /tmp/data.tar -- SELECTED_MEMBER)\n'
-printf 'DATA limits: decompressed=67108864 raw-listing=2097152 total-log<=8388608 count=8192 regular=8388608 selected=262144 total-selected=786432\n'
+printf 'DATA limits: decompressed=67108864 raw-listing=2097152 total-log<=8388608 count=8192 regular=8388608 selected=262144 total-selected=1835008\n'
 (ulimit -f 65536; timeout --kill-after=1 15 gzip -dc "$archive" > /tmp/data.tar 2>/tmp/gzip-errors) \
     || fail 'decompression failed or exceeded 64 MiB'
 test ! -s /tmp/gzip-errors || fail 'gzip diagnostics present'

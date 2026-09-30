@@ -30,17 +30,32 @@ reject() {
 printf 'not a gzip or tar archive\n' > /tmp/control.tgz
 reject 'STOP: approved SRI mismatch before tar' --sri-control /tmp/control.tgz
 test ! -e /tmp/data.tar && test ! -e /tmp/data-list || fail 'SRI failure reached archive parsing'
-mkdir -p /tmp/control/package/bin /tmp/control/package/scripts
+mkdir -p /tmp/control/package/bin /tmp/control/package/scripts /tmp/control/package/runtime
 printf '{}\n' > /tmp/control/package/package.json
 printf 'synthetic launcher data\n' > /tmp/control/package/bin/gentle-shell.mjs
 printf 'synthetic lifecycle data\n' > /tmp/control/package/scripts/install-gentle-ai.mjs
+printf 'synthetic runtime launcher data\n' > /tmp/control/package/runtime/gentle-shell-launcher.mjs
+printf 'synthetic binary resolver data\n' > /tmp/control/package/runtime/gentle-ai-binary.mjs
+printf 'synthetic installer data\n' > /tmp/control/package/scripts/gentle-ai-installer.mjs
+printf 'synthetic TUI setting data\n' > /tmp/control/package/scripts/install-tui-mode-setting.mjs
 make_tar() {
     tar -cf /tmp/control.tar -C /tmp/control \
-        package/package.json package/bin/gentle-shell.mjs package/scripts/install-gentle-ai.mjs
+        package/package.json package/bin/gentle-shell.mjs package/scripts/install-gentle-ai.mjs \
+        package/runtime/gentle-shell-launcher.mjs package/runtime/gentle-ai-binary.mjs \
+        package/scripts/gentle-ai-installer.mjs package/scripts/install-tui-mode-setting.mjs
 }
 make_tar
 timeout --kill-after=1 25 /bin/bash "$inspector" --synthetic /tmp/control.tar \
     > /tmp/control-output 2>&1 || fail 'synthetic positive inspection failed'
+test "$(grep -c '^DATA member=' /tmp/control-output)" = 7 \
+    || fail 'synthetic positive selected member count differed'
+for member in package/package.json package/bin/gentle-shell.mjs \
+    package/scripts/install-gentle-ai.mjs package/runtime/gentle-shell-launcher.mjs \
+    package/runtime/gentle-ai-binary.mjs package/scripts/gentle-ai-installer.mjs \
+    package/scripts/install-tui-mode-setting.mjs; do
+    grep -Fq "DATA member=$member bytes=" /tmp/control-output \
+        || fail 'synthetic positive required member absent'
+done
 reason='STOP: unsafe, missing, duplicate, nonregular or oversized member'
 # Every hostile name is appended to an otherwise valid base archive as DATA.
 # Transform changes only the stored label; no traversal path is created.
@@ -76,5 +91,11 @@ reject "$reason" --synthetic /tmp/control.tar
 # Required lifecycle data cannot silently disappear.
 tar -cf /tmp/control.tar -C /tmp/control package/package.json package/bin/gentle-shell.mjs
 reject "$reason" --synthetic /tmp/control.tar
-printf 'PASS: synthetic SRI-order, unsafe-name, duplicate, nonregular, oversize and missing controls only.\n'
+# Keep every legacy member and three imports: the fourth import is mandatory too.
+tar -cf /tmp/control.tar -C /tmp/control \
+    package/package.json package/bin/gentle-shell.mjs package/scripts/install-gentle-ai.mjs \
+    package/runtime/gentle-shell-launcher.mjs package/runtime/gentle-ai-binary.mjs \
+    package/scripts/gentle-ai-installer.mjs
+reject "$reason" --synthetic /tmp/control.tar
+printf 'PASS: synthetic seven-member positive; SRI-order, unsafe-name, duplicate, nonregular, oversize, legacy-missing and import-missing controls only.\n'
 timeout --kill-after=1 90 /bin/bash "$inspector"
