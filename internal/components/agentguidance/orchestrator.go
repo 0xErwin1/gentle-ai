@@ -146,12 +146,6 @@ func orchestratorAsset(agent model.AgentID) string {
 	}
 }
 
-// RenderOrchestratorWithSource is RenderOrchestrator with an explicit review
-// contract source, which takes precedence over the package-level fallback.
-func RenderOrchestratorWithSource(agent model.AgentID, source ReviewContractSource) (string, error) {
-	return renderOrchestratorWithCapability(agent, source, "")
-}
-
 // selectGenericOrchestrator selects instruction text, never an execution model.
 // Validate both shipped sections before replacing either so malformed assets
 // fail closed rather than silently losing common surrounding content.
@@ -188,7 +182,11 @@ func selectGenericOrchestrator(content, capability string) (string, error) {
 	return content, nil
 }
 
-func renderOrchestratorWithCapability(agent model.AgentID, source ReviewContractSource, capability string) (string, error) {
+// RenderOrchestratorWithSource is RenderOrchestrator with an explicit review
+// contract source, which takes precedence over the package-level fallback.
+// capability selects the generic instruction variant: "small" selects the
+// small-model text and any other value, including empty, selects capable.
+func RenderOrchestratorWithSource(agent model.AgentID, source ReviewContractSource, capability string) (string, error) {
 	if agent == model.AgentPi {
 		return "", fmt.Errorf("render orchestrator for %q: the Pi prompt is owned by Gentle Shell", agent)
 	}

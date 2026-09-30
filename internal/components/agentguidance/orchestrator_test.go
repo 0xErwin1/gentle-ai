@@ -76,7 +76,7 @@ func advertisesReviewTransport(t *testing.T, agent model.AgentID) bool {
 }
 
 func TestRenderGenericOrchestratorModelVariants(t *testing.T) {
-	content, err := RenderOrchestratorWithSource(model.AgentOpenClaw, nil)
+	content, err := RenderOrchestratorWithSource(model.AgentOpenClaw, nil, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -192,11 +192,11 @@ func TestRenderExplicitOrchestratorsIgnoreModelCapability(t *testing.T) {
 			continue
 		}
 		t.Run(string(agent), func(t *testing.T) {
-			want, err := RenderOrchestratorWithSource(agent, nil)
+			want, err := RenderOrchestratorWithSource(agent, nil, "")
 			if err != nil {
 				t.Fatal(err)
 			}
-			got, err := renderOrchestratorWithCapability(agent, nil, "small")
+			got, err := RenderOrchestratorWithSource(agent, nil, "small")
 			if err != nil || got != want {
 				t.Fatal("generic capability changed explicit runtime output", err)
 			}

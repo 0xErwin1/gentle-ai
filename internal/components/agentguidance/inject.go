@@ -126,7 +126,7 @@ func InjectRoutingWithOptions(targetDir string, agent model.AgentID, options Rou
 	// half-applied. Pi is the only runtime without one: Gentle Shell owns it.
 	var orchestrator string
 	if agent != model.AgentPi {
-		orchestrator, err = renderOrchestratorWithCapability(agent, options.ReviewContract, options.OrchestratorCapability)
+		orchestrator, err = RenderOrchestratorWithSource(agent, options.ReviewContract, options.OrchestratorCapability)
 		if err != nil {
 			return Result{}, err
 		}
