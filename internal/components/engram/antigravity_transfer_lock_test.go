@@ -106,8 +106,12 @@ func TestAntigravityCoordinationLockResolvesMissingLeafThroughExistingAncestor(t
 	if homeTarget != aliasTarget {
 		t.Fatalf("lock targets must share one key across aliases\ngot  %q\nwant %q", aliasTarget, homeTarget)
 	}
-	if !strings.HasPrefix(homeTarget, home+string(filepath.Separator)) {
-		t.Fatalf("lock target %q must canonicalize under the physical home %q", homeTarget, home)
+	physicalHome, err := filepath.EvalSymlinks(home)
+	if err != nil {
+		t.Fatalf("EvalSymlinks(%q) error = %v", home, err)
+	}
+	if !strings.HasPrefix(homeTarget, physicalHome+string(filepath.Separator)) {
+		t.Fatalf("lock target %q must canonicalize under the physical home %q", homeTarget, physicalHome)
 	}
 }
 
