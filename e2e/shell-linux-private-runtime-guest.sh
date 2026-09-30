@@ -26,12 +26,22 @@ unchanged() {
     test "$fixture_after" = "$fixture_before"
     test -z "$(find /tmp/private -maxdepth 1 -name '.gentle-shell-stage.*' -print -quit)"
 }
+unexpected_fixture() {
+    bytes=$(printf '%s' "$output" | wc -c)
+    printf 'STOP: unexpected fixture=%s status=%s diagnostic-bytes=%s\n' "$1" "$status" "$bytes"
+    if test "$bytes" -le 4096; then
+        printf '%s\n' "$output" | awk '{print "|" $0}'
+    else
+        printf 'STOP: fixture diagnostic exceeds 4096-byte bound; content not printed.\n'
+    fi
+    exit 1
+}
 reject() {
     expected=$1; shift
     status=0
     output=$(command_install "$@" 2>&1) || status=$?
-    test "$status" = 1
-    case "$output" in *"STOP: $expected"*) ;; *) exit 1 ;; esac
+    test "$status" = 1 || unexpected_fixture "$expected"
+    case "$output" in *"STOP: $expected"*) ;; *) unexpected_fixture "$expected" ;; esac
     unchanged
     printf 'PASS: rejection=%s exit=1 fixture-Pi-unchanged=true\n' "$expected"
 }
@@ -85,16 +95,7 @@ status=0
 output=$(command_install /tmp/private/rejected /tmp/bad "$bad_receipt" 2>&1) || status=$?
 expected=false
 case "$output" in *'root pin differs: gentle-pi'*) test "$status" = 0 || expected=true ;; esac
-if test "$expected" != true; then
-    bytes=$(printf '%s' "$output" | wc -c)
-    printf 'STOP: unexpected root-SRI fixture outcome status=%s diagnostic-bytes=%s\n' "$status" "$bytes"
-    if test "$bytes" -le 4096; then
-        printf '%s\n' "$output" | awk '{print "|" $0}'
-    else
-        printf 'STOP: root-SRI diagnostic exceeds 4096-byte bound; content not printed.\n'
-    fi
-    exit 1
-fi
+test "$expected" = true || unexpected_fixture 'corrupted root SRI'
 unchanged
 test ! -e /tmp/private/rejected
 printf 'PASS: corrupted root SRI rejected before offline install; fixture-Pi-unchanged=true\n'
@@ -108,7 +109,7 @@ test ! -e /tmp/private/rejected
 rm -rf /tmp/bad
 # Required positive case: real physical private install, not package launch.
 printf 'command: /bin/sh install-gentle-shell-private.sh --destination /tmp/private/stable --bundle /bundle --bundle-sha256 %s\n' "$receipt"
-output=$(command_install /tmp/private/stable /bundle "$receipt" 2>&1)
+output=$(command_install /tmp/private/stable /bundle "$receipt" 2>&1) || { status=$?; unexpected_fixture 'positive installation'; }
 test "${#output}" -le 12000
 printf '%s\n' "$output" | awk '/^closure expected=[0-9]+ actual=[0-9]+$/ {split($2,e,"="); split($3,a,"="); count++; if(e[2]!=a[2]) bad=1} END {exit (count!=1 || bad)}'
 printf '%s\n' "$output"
