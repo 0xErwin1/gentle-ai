@@ -160,7 +160,7 @@ jobs:
           bounded timeout --kill-after=5 300 docker run --rm --pull=never \
             --network none --read-only --user 65532:65532 --cap-drop=ALL \
             --security-opt=no-new-privileges \
-            --tmpfs /tmp:rw,nosuid,nodev,mode=1777,size=2g \
+            --tmpfs /tmp:rw,nosuid,nodev,exec,mode=1777,size=2g \
             --cpus=1 --memory=3g --memory-swap=3g --pids-limit=64 \
             -e HOME=/tmp -e HOST_NETNS="$host_net" -e HOST_MNTNS="$host_mnt" \
             gentle-shell-private-runtime:ci
