@@ -1,0 +1,54 @@
+FROM --platform=linux/amd64 debian:bookworm-slim@sha256:f3034a6ec3c1205360777c4aae76234998866ad18806ae62b63a3f84ccad782b AS acquire
+COPY node.tgz /node.tgz
+RUN chmod 0444 /node.tgz
+# Stock hash/size checks precede archive parsing and every runtime invocation.
+RUN test "$(wc -c < /node.tgz)" = 57224421 && \
+    echo '783130984963db7ba9cbd01089eaf2c2efb055c7c1693c943174b967b3050cb8  /node.tgz' | sha256sum -c - && \
+    mkdir /original /bundle && tar -xzf /node.tgz -C /original --strip-components=1 && \
+    find /original -type l -exec sh -c 'for p do case "$(realpath "$p")" in /original/*) ;; *) exit 1;; esac; done' sh {} + && \
+    cp -RL /original /bundle/node && mkdir /bundle/project /bundle/cache && mkdir -m 0700 /acquire && \
+    touch /acquire/user.npmrc /acquire/global.npmrc && chmod 0600 /acquire/*.npmrc
+RUN printf '%s\n' '{"name":"gentle-shell-private","version":"1.0.0","private":true,"dependencies":{"gentle-pi":"3.7.0","@earendil-works/pi-coding-agent":"0.85.1","@earendil-works/pi-tui":"0.85.1","@heyhuynhgiabuu/pi-pretty":"0.6.27","typebox":"1.3.7"}}' > /bundle/project/package.json
+# Acquisition bounds the trusted Node heap, CPU time, and per-UID processes.
+RUN chown -R 65532:65532 /bundle/project /bundle/cache /acquire
+USER 65532:65532
+SHELL ["/bin/bash", "-c"]
+# A stock shell guard runs inside EACH acquisition executor before npm.
+RUN printf '%s\n' \
+    'set -eu' \
+    'test "$(cat /sys/fs/cgroup/memory.max)" = 3221225472' \
+    'test "$(cat /sys/fs/cgroup/memory.swap.max)" = 0' \
+    'test "$(cat /sys/fs/cgroup/cpu.max)" = "100000 100000"' \
+    'printf "acquisition cgroup memory=3221225472 swap=0 cpu=100000/100000 verified\\n" > /acquire/limits.receipt' \
+    > /acquire/limits.sh
+ENV BASH_ENV=/acquire/limits.sh
+# Network acquisition invokes only pinned stock npm; lifecycle is always disabled.
+RUN ulimit -t 240 && ulimit -u 64 && cd /bundle/project && env -i HOME=/acquire PATH=/bundle/node/bin:/usr/bin:/bin \
+    NPM_CONFIG_USERCONFIG=/acquire/user.npmrc NPM_CONFIG_GLOBALCONFIG=/acquire/global.npmrc \
+    /bundle/node/bin/node --max-old-space-size=2048 /bundle/node/lib/node_modules/npm/bin/npm-cli.js \
+    install --package-lock-only --ignore-scripts --engine-strict --no-audit --no-fund \
+    --registry=https://registry.npmjs.org --cache=/bundle/cache > /acquire/resolve.log 2>&1 || \
+    { test "$(wc -c < /acquire/resolve.log)" -gt 4096 || awk '{print "npm resolver: " $0}' /acquire/resolve.log; exit 1; }
+RUN ulimit -t 240 && ulimit -u 64 && cd /bundle/project && env -i HOME=/acquire PATH=/bundle/node/bin:/usr/bin:/bin \
+    NPM_CONFIG_USERCONFIG=/acquire/user.npmrc NPM_CONFIG_GLOBALCONFIG=/acquire/global.npmrc \
+    /bundle/node/bin/node --max-old-space-size=2048 /bundle/node/lib/node_modules/npm/bin/npm-cli.js \
+    ci --ignore-scripts --engine-strict --no-audit --no-fund \
+    --registry=https://registry.npmjs.org --cache=/bundle/cache > /acquire/cache.log 2>&1 || \
+    { test "$(wc -c < /acquire/cache.log)" -gt 4096 || awk '{print "npm acquisition: " $0}' /acquire/cache.log; exit 1; }
+USER 0:0
+# Retain data-only metadata, not executable acquisition output or .bin links.
+RUN mkdir /normalized && cd /bundle/project && \
+    find . -type f \( -name package.json -o -name package-lock.json -o -name binding.gyp \) \
+    -exec cp --parents -t /normalized {} + && \
+    mv /bundle/project /acquired-project && mv /normalized /bundle/project && \
+    cd /bundle && find node cache project -type f -print0 | LC_ALL=C sort -z | xargs -0 sha256sum > SHA256SUMS && \
+    sha256sum SHA256SUMS | cut -d ' ' -f1 > /bundle-receipt && chmod -R a+rX /bundle
+FROM --platform=linux/amd64 debian:bookworm-slim@sha256:f3034a6ec3c1205360777c4aae76234998866ad18806ae62b63a3f84ccad782b
+ARG SOURCE_SHA
+LABEL org.opencontainers.image.revision=$SOURCE_SHA
+COPY --from=acquire /bundle /bundle
+COPY --from=acquire /bundle-receipt /bundle-receipt
+COPY --from=acquire /acquire/limits.receipt /acquisition-limits
+COPY shell-linux-guest-proof.sh install-gentle-shell-private.sh shell-linux-private-runtime-guest.sh /usr/local/bin/
+RUN chmod 0444 /usr/local/bin/*.sh
+ENTRYPOINT ["/bin/sh", "/usr/local/bin/shell-linux-private-runtime-guest.sh"]

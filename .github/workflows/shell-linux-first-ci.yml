@@ -10,7 +10,7 @@ jobs:
   focused-linux:
     if: github.repository == 'decode2/gentle-ai' && github.ref == 'refs/heads/feat/shell-linux-runtime-35'
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 35
     steps:
       # No checkout action or credentialed checkout: the exact public commit is data.
       - name: Fetch exact public fork commit without a token
@@ -122,6 +122,48 @@ jobs:
             --cpus=1 --memory=128m --memory-swap=128m --pids-limit=32 \
             -e HOME=/tmp -e HOST_NETNS="$host_net" -e HOST_MNTNS="$host_mnt" \
             gentle-shell-source-data:ci
+
+      # Component install evidence: no operator runtime or broad checkout context.
+      - name: Acquire pinned runtime data and execute private install in isolated guest
+        timeout-minutes: 16
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          context="$(mktemp -d "$RUNNER_TEMP/shell-private-runtime.XXXXXXXX")"
+          status="$(curl --proto '=https' --max-redirs 0 --fail --silent --show-error \
+            --tlsv1.2 --connect-timeout 10 --max-time 120 --max-filesize 57224421 \
+            --write-out '%{http_code}' --output "$context/node.tgz" \
+            https://nodejs.org/dist/v24.18.0/node-v24.18.0-linux-x64.tar.gz)"
+          test "$status" = 200
+          test "$(wc -c < "$context/node.tgz")" = 57224421
+          echo "783130984963db7ba9cbd01089eaf2c2efb055c7c1693c943174b967b3050cb8  $context/node.tgz" | sha256sum -c -
+          cp e2e/Dockerfile.shell-linux-private-runtime e2e/shell-linux-guest-proof.sh \
+            e2e/shell-linux-private-runtime-guest.sh scripts/install-gentle-shell-private.sh "$context/"
+          # Capture complete output in memory; reject excess before public printing.
+          bounded() {
+            local output status=0 bytes
+            output="$("$@" 2>&1)" || status=$?
+            bytes="$(printf '%s' "$output" | wc -c)"
+            test "$bytes" -le 12000 || { printf 'STOP: component output bound exceeded.\n'; return 1; }
+            printf '%s\n' "$output"
+            return "$status"
+          }
+          printf 'Private install candidate source=%s Node-data-sha256=783130984963db7ba9cbd01089eaf2c2efb055c7c1693c943174b967b3050cb8\n' "$GITHUB_SHA"
+          bounded timeout --kill-after=5 480 env DOCKER_BUILDKIT=0 docker build --quiet --network=default \
+            --memory=3g --memory-swap=3g --cpu-period=100000 --cpu-quota=100000 \
+            --build-arg SOURCE_SHA="$GITHUB_SHA" \
+            -f "$context/Dockerfile.shell-linux-private-runtime" \
+            -t gentle-shell-private-runtime:ci "$context"
+          host_net="$(stat -Lc %i /proc/self/ns/net)"
+          host_mnt="$(stat -Lc %i /proc/self/ns/mnt)"
+          bounded timeout --kill-after=5 300 docker run --rm --pull=never \
+            --network none --read-only --user 65532:65532 --cap-drop=ALL \
+            --security-opt=no-new-privileges \
+            --tmpfs /tmp:rw,nosuid,nodev,mode=1777,size=2g \
+            --cpus=1 --memory=3g --memory-swap=3g --pids-limit=64 \
+            -e HOME=/tmp -e HOST_NETNS="$host_net" -e HOST_MNTNS="$host_mnt" \
+            gentle-shell-private-runtime:ci
 
       - name: Select pinned Go toolchain
         uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
