@@ -153,7 +153,13 @@ function walk(modules) {
 }
 walk('node_modules');
 actual.sort();
-if (JSON.stringify(actual) !== JSON.stringify(expected)) throw Error(`installed closure set differs record=${JSON.stringify({expectedCount: expected.length, actualCount: actual.length, missing: expected.filter(path => !actual.includes(path)), extra: actual.filter(path => !expected.includes(path))})}`);
+if (JSON.stringify(actual) !== JSON.stringify(expected)) {
+  const missing = expected.filter(path => !actual.includes(path)), extra = actual.filter(path => !expected.includes(path));
+  const path = extra[0];
+  const firstExtra = path ? {path, locked: lock.packages[path], entries: fs.readdirSync(`${root}/${path}`)} : null;
+  console.error(`installed closure set differs record=${JSON.stringify({expectedCount: expected.length, actualCount: actual.length, missingCount: missing.length, extraCount: extra.length, firstExtra})}`);
+  process.exit(1);
+}
 console.log(`closure expected=${expected.length} actual=${actual.length}`);
 let count = 0, lifecycle = 0, native = 0;
 for (const path of expected) {
