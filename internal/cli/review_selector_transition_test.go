@@ -132,17 +132,53 @@ func TestStatusRecoverTransitionExecutesExactBaseDiffSelectors(t *testing.T) {
 	}
 }
 
+type accountingRecoveryScenario struct {
+	name, focus                                                                                string
+	customPolicy, implicit, compatible, conflictFocus, conflictPolicy, changedTarget, hashOnly bool
+	emptyFocus, wrongAuthorization, emptyAuthorization                                         bool
+}
+
 // TestStatusRecoverTransitionExecutesAccountingOnlyRecoveryWithoutSelectors
 // drives the core decision through negotiated STATUS. The evidence-bound
 // accounting-only edge deliberately carries no target selector, unlike an
 // absent selector from an unrepresentable recovery.
 func TestStatusRecoverTransitionExecutesAccountingOnlyRecoveryWithoutSelectors(t *testing.T) {
+	for _, tc := range []accountingRecoveryScenario{
+		{name: "default"},
+		{name: "nondefault-focus", focus: "resilience"},
+		{name: "custom-policy", customPolicy: true},
+		{name: "implicit-frozen-shape", focus: "resilience", customPolicy: true, implicit: true},
+		{name: "compatible-overrides", focus: "resilience", customPolicy: true, compatible: true},
+		{name: "incompatible-focus", focus: "resilience", conflictFocus: true},
+		{name: "incompatible-policy", customPolicy: true, conflictPolicy: true},
+		{name: "changed-target", focus: "resilience", customPolicy: true, changedTarget: true},
+		{name: "nullable-policy", focus: "resilience", hashOnly: true},
+		{name: "empty-focus", focus: "resilience", emptyFocus: true},
+		{name: "wrong-authorization", focus: "resilience", customPolicy: true, wrongAuthorization: true},
+		{name: "empty-authorization", focus: "resilience", customPolicy: true, emptyAuthorization: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			testAccountingOnlyRecoveryShape(t, tc)
+		})
+	}
+}
+
+func testAccountingOnlyRecoveryShape(t *testing.T, tc accountingRecoveryScenario) {
 	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
-	writeReviewStartCandidate(t, repo, "candidate.go", "package candidate\n\nfunc value() int { return 1 }\n", 0o644)
-	startedBytes, err := runLegacyFacadeStartForTestBytes(t, []string{
-		"--cwd", repo, "--lineage", "selector-accounting-only",
-	})
+	writeReviewStartCandidate(t, repo, "candidate.go", "package candidate\n\nfunc value() int { return 1 }\n\n// historical candidate\n", 0o644)
+	startArgs := []string{"--cwd", repo, "--lineage", "selector-accounting-only"}
+	if tc.focus != "" {
+		startArgs = append(startArgs, "--focus", tc.focus)
+	}
+	policyPath := t.TempDir() + "/policy.txt"
+	if tc.customPolicy {
+		if err := os.WriteFile(policyPath, []byte("private fixture policy bytes\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		startArgs = append(startArgs, "--policy", policyPath)
+	}
+	startedBytes, err := runLegacyFacadeStartForTestBytes(t, startArgs)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -172,7 +208,7 @@ func TestStatusRecoverTransitionExecutesAccountingOnlyRecoveryWithoutSelectors(t
 	if err != nil {
 		t.Fatal(err)
 	}
-	writeReviewStartCandidate(t, repo, "candidate.go", "package candidate\n\nfunc value() int { return 2 }\n", 0o644)
+	writeReviewStartCandidate(t, repo, "candidate.go", "package candidate\n\nfunc value() int { return 2 }\n\n// historical candidate\n// corrected candidate\n", 0o644)
 	correction := requestedCorrectionSnapshot(t, repo, predecessor.State)
 	nativeLines, err := (reviewtransaction.SnapshotBuilder{Repo: repo}).ChangedLines(context.Background(), correction)
 	if err != nil || nativeLines <= 0 || nativeLines > predecessor.State.CorrectionBudget {
@@ -215,6 +251,9 @@ func TestStatusRecoverTransitionExecutesAccountingOnlyRecoveryWithoutSelectors(t
 		policyContent != nil && (predecessor.State.FrozenPolicyContent == nil || *predecessor.State.FrozenPolicyContent != *policyContent)) {
 		t.Fatal("historical/legacy fixture changed frozen policy content")
 	}
+	if tc.hashOnly {
+		predecessor.State.FrozenPolicyContent = nil
+	}
 	revision, err := reviewtransaction.CompactRevisionForState(predecessor.State)
 	if err != nil {
 		t.Fatal(err)
@@ -238,11 +277,34 @@ func TestStatusRecoverTransitionExecutesAccountingOnlyRecoveryWithoutSelectors(t
 		t.Fatalf("native accounting-only status: %v", err)
 	}
 
+	if tc.changedTarget {
+		writeReviewStartCandidate(t, repo, "candidate.go", "package candidate\n\nfunc value() int { return 3 }\n", 0o644)
+	}
+	before, err := os.ReadFile(store.StatePath())
+	if err != nil {
+		t.Fatal(err)
+	}
 	probe := selectorTransitionStatus(t, repo, "--lineage", started.LineageID)
+	if probe.NextTransition == nil || probe.NextTransition.Collect == nil {
+		t.Fatalf("unauthorized STATUS must still collect: %#v", probe.NextTransition)
+	}
 	if probe.Action != reviewtransaction.TargetStatusActionRecover || probe.ActionDisposition != reviewtransaction.RecoveryEscalated {
 		t.Fatalf("accounting-only status = %#v", probe)
 	}
 	const successor, actor, reason = "selector-accounting-successor", "maintainer", "recover accounting-only escalation"
+	if tc.changedTarget {
+		if err := RunReviewRecover([]string{"--cwd", repo, "--predecessor-lineage", started.LineageID,
+			"--expected-predecessor-revision", predecessor.Revision, "--successor-lineage", successor, "--disposition", "escalated"}, io.Discard); err != nil {
+			t.Fatal(err)
+		}
+		successorStore, _ := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, successor)
+		next, err := successorStore.Load()
+		after, _ := os.ReadFile(store.StatePath())
+		if err != nil || next.State.Recovery.Evidence != nil || next.State.PolicyHash == predecessor.State.PolicyHash || reflect.DeepEqual(next.State.SelectedLenses, predecessor.State.SelectedLenses) || !bytes.Equal(before, after) {
+			t.Fatalf("changed target inherited frozen shape or mutated predecessor: %#v, %v", next, err)
+		}
+		return
+	}
 	authorization := "gentle-ai.review-recovery-authorization/v1\npredecessor_lineage=" + started.LineageID +
 		"\npredecessor_revision=" + probe.Authority.Revision + "\ntarget_identity=" + probe.TargetIdentity +
 		"\nactor=" + actor + "\nreason=" + reason
@@ -258,9 +320,112 @@ func TestStatusRecoverTransitionExecutesAccountingOnlyRecoveryWithoutSelectors(t
 	if status.NextTransition.Execute.SelectorArguments != nil {
 		t.Fatalf("accounting-only recovery selectors = %#v, want no selector arguments", status.NextTransition.Execute.SelectorArguments)
 	}
-	payload := executeSelectorTransition(t, repo, status)
+	recoverArgs, err := selectorTransitionCommandArguments(repo, status)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tc.implicit {
+		recoverArgs = []string{"recover", "--cwd", repo, "--predecessor-lineage", started.LineageID,
+			"--expected-predecessor-revision", predecessor.Revision, "--successor-lineage", successor, "--disposition", "escalated"}
+	}
+	if tc.compatible {
+		recoverArgs = append(recoverArgs, "--focus", tc.focus, "--policy", policyPath)
+	}
+	conflictFlag := ""
+	if tc.conflictFocus {
+		recoverArgs, conflictFlag = append(recoverArgs, "--focus", "reliability"), "--focus"
+	}
+	if tc.conflictPolicy {
+		recoverArgs, conflictFlag = append(recoverArgs, "--policy", ""), "--policy"
+	}
+	if tc.emptyFocus {
+		t.Chdir(repo)
+		for index, argument := range recoverArgs {
+			if strings.HasPrefix(argument, "--cwd=") {
+				recoverArgs = append(recoverArgs[:index], recoverArgs[index+1:]...)
+				break
+			}
+		}
+		recoverArgs, conflictFlag = append(recoverArgs, "--focus", ""), "--focus"
+	}
+	if tc.conflictFocus || tc.conflictPolicy || tc.emptyFocus {
+		recoverArgs = append(recoverArgs, "--projection", "workspace", "--untracked-scope", "exclude", "--expected-untracked-inventory", probe.EligibleUntrackedInventory)
+	}
+	if tc.wrongAuthorization || tc.emptyAuthorization {
+		arguments := setSelectorTransitionArgument(append([]ReviewTransitionArgument(nil), status.NextTransition.Execute.Arguments...), "maintainer-authorization", "")
+		if tc.wrongAuthorization {
+			arguments = setSelectorTransitionArgument(arguments, "maintainer-authorization", "wrong")
+		}
+		recoverArgs = []string{"recover", "--cwd", repo}
+		for _, argument := range arguments {
+			recoverArgs = append(recoverArgs, "--"+argument.Name, argument.Value)
+		}
+		conflictFlag = "--maintainer-authorization"
+		if tc.emptyAuthorization {
+			conflictFlag = "maintainer authorization"
+		}
+	}
+	if tc.hashOnly {
+		// The nullable pair must remain hash-only; core targeted validation
+		// refuses it rather than letting RECOVER inject default policy bytes.
+		conflictFlag = "no frozen policy content"
+	}
+	var output bytes.Buffer
+	err = RunReview(recoverArgs, &output)
+	after, _ := os.ReadFile(store.StatePath())
+	if !bytes.Equal(before, after) {
+		t.Fatal("RECOVER changed predecessor authority")
+	}
+	if conflictFlag != "" {
+		if err == nil || !strings.Contains(err.Error(), conflictFlag) || strings.Contains(err.Error(), "private fixture policy bytes") {
+			t.Fatalf("incompatible override refusal = %v", err)
+		}
+		stores, discoverErr := reviewtransaction.DiscoverCompactStores(context.Background(), repo)
+		if discoverErr != nil || len(stores) != 1 {
+			t.Fatalf("refused override created successor: %v, %v", stores, discoverErr)
+		}
+		if !(tc.conflictFocus || tc.conflictPolicy || tc.emptyFocus) {
+			return
+		}
+		_, command, named := strings.Cut(err.Error(), "re-run: ")
+		if !named {
+			// Exercise the old bare advice in RED, rather than just checking
+			// whether the improved diagnostic's marker exists.
+			_, command, named = strings.Cut(err.Error(), "rerun `")
+			command = strings.TrimSuffix(command, "`")
+		}
+		if !named {
+			t.Fatalf("conflict refusal names no continuation: %v", err)
+		}
+		words := reviewShellWords(t, command)
+		if len(words) < 3 || words[0] != "gentle-ai" || words[1] != "review" {
+			t.Fatalf("conflict continuation is not a review command: %q", command)
+		}
+		recoverArgs = words[2:]
+		output.Reset()
+		if err := RunReview(recoverArgs, &output); err != nil {
+			t.Fatalf("printed conflict continuation did not run: %v; command=%q", err, command)
+		}
+		want := []string{"recover", "--predecessor-lineage", started.LineageID,
+			"--expected-predecessor-revision", predecessor.Revision, "--successor-lineage", successor,
+			"--disposition", "escalated"}
+		if !tc.emptyFocus {
+			want = append(want, "--cwd", repo)
+		}
+		want = append(want, "--expected-untracked-inventory="+probe.EligibleUntrackedInventory,
+			"--projection=workspace", "--untracked-scope=exclude")
+		if !reflect.DeepEqual(recoverArgs, want) {
+			t.Fatalf("conflict continuation lost bindings/selectors or retained overrides: %v, want %v", recoverArgs, want)
+		}
+		after, _ := os.ReadFile(store.StatePath())
+		if !bytes.Equal(before, after) {
+			t.Fatal("printed conflict continuation mutated predecessor")
+		}
+	} else if err != nil {
+		t.Fatal(err)
+	}
 	var recovered ReviewRecoverResult
-	decodeStrictReviewJSON(t, payload, &recovered)
+	decodeStrictReviewJSON(t, output.Bytes(), &recovered)
 	if recovered.LineageID != successor || recovered.State != reviewtransaction.StateValidating || recovered.Recovery.Evidence == nil {
 		t.Fatalf("accounting-only recovery = %#v", recovered)
 	}
@@ -271,6 +436,13 @@ func TestStatusRecoverTransitionExecutesAccountingOnlyRecoveryWithoutSelectors(t
 	successorRecord, err := successorStore.Load()
 	if err != nil {
 		t.Fatal(err)
+	}
+	assessment, err := (reviewtransaction.SnapshotBuilder{Repo: repo}).AssessSnapshotRisk(context.Background(), successorRecord.State.InitialSnapshot)
+	if err != nil || successorRecord.State.RiskLevel != assessment.Level || successorRecord.State.OriginalChangedLines != assessment.ChangedLines || successorRecord.State.OriginalChangedLines == predecessor.State.OriginalChangedLines {
+		t.Fatalf("recovery risk/lines are not fresh: %#v, %v", successorRecord.State, err)
+	}
+	if successorRecord.State.PolicyHash != predecessor.State.PolicyHash || !reflect.DeepEqual(successorRecord.State.FrozenPolicyContent, predecessor.State.FrozenPolicyContent) || !reflect.DeepEqual(successorRecord.State.SelectedLenses, predecessor.State.SelectedLenses) {
+		t.Fatal("recovery did not preserve frozen policy/lenses")
 	}
 	if len(successorRecord.State.AdmittedRoleResults) != len(predecessor.State.AdmittedRoleResults) {
 		t.Fatalf("accounting-only successor did not retain the canonical role references: %#v", successorRecord.State)
@@ -287,9 +459,12 @@ func TestStatusRecoverTransitionExecutesAccountingOnlyRecoveryWithoutSelectors(t
 	if err != nil {
 		t.Fatal(err)
 	}
-	replayPayload := executeSelectorTransition(t, repo, status)
+	output.Reset()
+	if err := RunReview(recoverArgs, &output); err != nil {
+		t.Fatal(err)
+	}
 	var replay ReviewRecoverResult
-	decodeStrictReviewJSON(t, replayPayload, &replay)
+	decodeStrictReviewJSON(t, output.Bytes(), &replay)
 	afterReplay, err := os.ReadFile(successorStore.StatePath())
 	if err != nil {
 		t.Fatal(err)
