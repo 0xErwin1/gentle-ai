@@ -29,7 +29,9 @@ test "$actual" = "$listed" || fail 'bundle inventory differs'
 (cd "$bundle" && sha256sum --strict -c SHA256SUMS >/dev/null) || fail 'bundle byte mismatch'
 node=$bundle/node/bin/node
 npm=$bundle/node/lib/node_modules/npm/bin/npm-cli.js
-test -x "$node" && test -f "$npm" || fail 'private runtime absent'
+test -x "$node" || printf 'runtime guard node-mode=%s tmp-options=%s\n' "$(stat -c %a "$node")" "$(awk '$5=="/tmp" {print $6}' /proc/self/mountinfo)"
+test -x "$node" || fail 'private Node not executable'
+test -f "$npm" || fail 'private npm CLI absent'
 # No inherited HOME, npm configuration, loader flags, or global Pi search path.
 stage=$(mktemp -d "$parent/.gentle-shell-stage.XXXXXXXX")
 cleanup() { test -z "${stage:-}" || rm -rf -- "$stage"; }
