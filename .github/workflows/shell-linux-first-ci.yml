@@ -139,7 +139,13 @@ jobs:
           test "$(wc -c < "$context/node.tgz")" = 57224421
           echo "783130984963db7ba9cbd01089eaf2c2efb055c7c1693c943174b967b3050cb8  $context/node.tgz" | sha256sum -c -
           cp e2e/Dockerfile.shell-linux-private-runtime e2e/shell-linux-guest-proof.sh \
-            e2e/shell-linux-private-runtime-guest.sh scripts/install-gentle-shell-private.sh "$context/"
+            e2e/shell-linux-private-runtime-guest.sh scripts/install-gentle-shell-private.sh \
+            scripts/complete-generated-lock-sri.mjs e2e/complete-generated-lock-sri.test.mjs "$context/"
+          printf 'Owned data-only commands source=%s\n' "$GITHUB_SHA"
+          sha256sum "$context/complete-generated-lock-sri.mjs" "$context/complete-generated-lock-sri.test.mjs"
+          printf '%s\n' \
+            '/bundle/node/bin/node --max-old-space-size=256 /owned/complete-generated-lock-sri.test.mjs' \
+            '/bundle/node/bin/node --max-old-space-size=256 /owned/complete-generated-lock-sri.mjs /bundle/project/package-lock.json'
           # Capture complete output in memory; reject excess before public printing.
           bounded() {
             local output status=0 bytes
