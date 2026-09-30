@@ -575,8 +575,8 @@ func TestInjectAntigravityRecoveryFailureIsExplicit(t *testing.T) {
 		}
 	})
 
-	t.Run("recovery readback failure", func(t *testing.T) {
-		home, _, _, _, _, _, _, before := antigravityRecoveryFixture(t)
+	t.Run("recovery read failure", func(t *testing.T) {
+		home, _, _, pluginPath, pluginMCPPath, hooksPath, _, _ := antigravityRecoveryFixture(t)
 		failAntigravityWrite(t, filepath.Join(".gemini", "antigravity-cli", "plugins", "gentle-ai-engram", "hooks.json"), true)
 		readbackFault := errors.New("injected antigravity readback fault")
 		origRead := readAntigravityPluginAsset
@@ -602,10 +602,21 @@ func TestInjectAntigravityRecoveryFailureIsExplicit(t *testing.T) {
 		if !result.Changed {
 			t.Fatalf("result.Changed = false; the landed writes are real mutations")
 		}
-		// Restoration itself succeeded: every asset matches its before-image,
-		// but the failed readback means recovery still refuses to claim it.
-		for path, want := range before {
-			assertAntigravityAssetState(t, "restored", path, want)
+		// A faulted read cannot prove the disk still holds what this pass
+		// wrote, so recovery must refuse to restore anything rather than
+		// risk clobbering newer bytes: every asset keeps its landed state,
+		// and the uncertainty is reported, never claimed as success.
+		// (No global config is seeded here, so the installed command preserves
+		// the /custom/engram command the fixture plugin already carried.)
+		want := map[string][]byte{
+			pluginPath:    []byte(antigravityEngramPluginJSON),
+			pluginMCPPath: engramOverlayJSON(model.AgentAntigravity, "/custom/engram"),
+			hooksPath:     antigravityEngramHooksJSON(),
+		}
+		for path, content := range want {
+			if got, readErr := os.ReadFile(path); readErr != nil || !bytes.Equal(got, content) {
+				t.Fatalf("plugin asset %q must keep its landed canonical bytes while recovery is refused; got %q, err %v", path, got, readErr)
+			}
 		}
 	})
 }
@@ -936,6 +947,126 @@ func TestInjectAntigravityOwnershipTransferUncertaintyIsExplicit(t *testing.T) {
 			t.Fatalf("global MCP config must stay untouched\nwant:\n%s\ngot:\n%s", global, raw)
 		}
 	})
+}
+
+// ─── #1635 A: concurrency drift guards on classify and rollback ─────────────
+
+func TestInjectAntigravityClassifyDriftBlocksDestructiveRestore(t *testing.T) {
+	home := t.TempDir()
+	cliDir, _, _ := seedAntigravitySoleEntry(t, home)
+	pluginMCPPath := filepath.Join(cliDir, "plugins", "gentle-ai-engram", "mcp_config.json")
+	drift := []byte(`{"mcpServers":{"engram":{"command":"/external/engram","args":["mcp"]}}}` + "\n")
+	classifyCalls := 0
+	orig := classifyAntigravityGlobalManagedEntry
+	classifyAntigravityGlobalManagedEntry = func(path string) (antigravityGlobalManagedState, error) {
+		classifyCalls++
+		state, err := orig(path)
+		if classifyCalls == 1 && err == nil {
+			// A concurrent writer replaces a freshly installed plugin asset
+			// between the install and the ownership classification.
+			if writeErr := os.WriteFile(pluginMCPPath, drift, 0o644); writeErr != nil {
+				return state, errors.Join(err, writeErr)
+			}
+		}
+		return state, err
+	}
+	t.Cleanup(func() { classifyAntigravityGlobalManagedEntry = orig })
+	failAntigravityRemove(t, "before")
+
+	_, err := Inject(home, antigravityAdapter())
+
+	assertAntigravityFaults(t, err, errAntigravityRemoveFault)
+	if !strings.Contains(err.Error(), "uncertain") || !strings.Contains(err.Error(), "no plugin asset was restored") {
+		t.Fatalf("error must report uncertainty without restoration: %v", err)
+	}
+	if got := readAntigravityFile(t, pluginMCPPath); !bytes.Equal(got, drift) {
+		t.Fatalf("drifted plugin asset must be preserved byte-for-byte, not clobbered by a stale before-image\nwant:\n%s\ngot:\n%s", drift, got)
+	}
+	// Nothing was restored: the untouched plugin assets keep their installed bytes.
+	assertAntigravityCanonicalPluginAsset(t, filepath.Join(cliDir, "plugins", "gentle-ai-engram", "plugin.json"))
+	assertAntigravityCanonicalPluginAsset(t, filepath.Join(cliDir, "plugins", "gentle-ai-engram", "hooks.json"))
+}
+
+func TestInjectAntigravityStaleGlobalRetirementPreventsPluginRestore(t *testing.T) {
+	home := t.TempDir()
+	cliDir, mcpPath, _ := seedAntigravitySoleEntry(t, home)
+	retired := []byte(`{"mcpServers":{"context7":{"command":"npx"}}}` + "\n")
+	classifyCalls := 0
+	orig := classifyAntigravityGlobalManagedEntry
+	classifyAntigravityGlobalManagedEntry = func(path string) (antigravityGlobalManagedState, error) {
+		classifyCalls++
+		if classifyCalls == 1 {
+			return orig(path)
+		}
+		// A concurrent writer retires the managed global registration between
+		// the classification and the pre-restore reread.
+		if writeErr := os.WriteFile(path, retired, 0o644); writeErr != nil {
+			return antigravityGlobalManagedAbsent, writeErr
+		}
+		return orig(path)
+	}
+	t.Cleanup(func() { classifyAntigravityGlobalManagedEntry = orig })
+	failAntigravityRemove(t, "before")
+
+	_, err := Inject(home, antigravityAdapter())
+
+	assertAntigravityFaults(t, err, errAntigravityRemoveFault)
+	if !strings.Contains(err.Error(), "uncertain") || !strings.Contains(err.Error(), "no plugin asset was restored") {
+		t.Fatalf("error must report the concurrent retirement as uncertain without restoring: %v", err)
+	}
+	if got := readAntigravityFile(t, mcpPath); !bytes.Equal(got, retired) {
+		t.Fatalf("concurrent global retirement must stay in place\nwant:\n%s\ngot:\n%s", retired, got)
+	}
+	// The stale before-images (absent) must NOT be restored over the plugin:
+	// that would leave zero Engram registrations anywhere.
+	for _, name := range []string{"plugin.json", "mcp_config.json", "hooks.json"} {
+		assertAntigravityCanonicalPluginAsset(t, filepath.Join(cliDir, "plugins", "gentle-ai-engram", name))
+	}
+}
+
+func TestInjectAntigravityRollbackPreservesDriftedPluginAsset(t *testing.T) {
+	home, _, _, pluginPath, pluginMCPPath, hooksPath, _, before := antigravityRecoveryFixture(t)
+	drift := []byte(`{"external":"drift"}` + "\n")
+	drifted := false
+	origRead := readAntigravityPluginAsset
+	readAntigravityPluginAsset = func(path string) (antigravityAssetBackup, error) {
+		if !drifted && path == pluginMCPPath {
+			drifted = true
+			if writeErr := os.WriteFile(pluginMCPPath, drift, 0o600); writeErr != nil {
+				return antigravityAssetBackup{}, writeErr
+			}
+		}
+		return origRead(path)
+	}
+	t.Cleanup(func() { readAntigravityPluginAsset = origRead })
+	restored := map[string]bool{}
+	origRestore := restoreAntigravityFileAtomic
+	restoreAntigravityFileAtomic = func(path string, content []byte, perm fs.FileMode) (filemerge.WriteResult, error) {
+		restored[path] = true
+		return origRestore(path, content, perm)
+	}
+	t.Cleanup(func() { restoreAntigravityFileAtomic = origRestore })
+	failAntigravityWrite(t, filepath.Join(".gemini", "antigravity-cli", "plugins", "gentle-ai-engram", "hooks.json"), true)
+
+	_, err := Inject(home, antigravityAdapter())
+
+	assertAntigravityFaults(t, err, errAntigravityWriteFault)
+	if !strings.Contains(err.Error(), "uncertain") {
+		t.Fatalf("error must report the drifted asset as uncertain: %v", err)
+	}
+	// The drifted asset keeps the concurrent writer's bytes and is never
+	// restored from the stale before-image.
+	if got := readAntigravityFile(t, pluginMCPPath); !bytes.Equal(got, drift) {
+		t.Fatalf("drifted plugin asset must be preserved byte-for-byte\nwant:\n%s\ngot:\n%s", drift, got)
+	}
+	if restored[pluginMCPPath] {
+		t.Fatalf("the drifted plugin asset must not be restored from its stale before-image")
+	}
+	// Assets that still match what this pass wrote are restored normally.
+	assertAntigravityAssetState(t, "restored", pluginPath, before[pluginPath])
+	if _, statErr := os.Stat(hooksPath); !os.IsNotExist(statErr) {
+		t.Fatalf("hooks.json must be restored to its absent before-image; stat err = %v", statErr)
+	}
 }
 
 func TestEngramSelectedSettingsRefuseNestedCommentsAndLockedMode(t *testing.T) {
@@ -2982,24 +3113,6 @@ func assertNestedStringsUnordered(t *testing.T, root map[string]any, want []stri
 		if count != 0 {
 			t.Fatalf("JSON path %v missing/extra %q count delta %d; got %#v", path, item, count, got)
 		}
-	}
-}
-
-func assertNestedBool(t *testing.T, root map[string]any, want bool, path ...string) {
-	t.Helper()
-	got, ok := nestedValue(t, root, path...)
-	if !ok {
-		t.Fatalf("missing JSON path %v in %#v", path, root)
-	}
-	if got != want {
-		t.Fatalf("JSON path %v = %#v, want %v", path, got, want)
-	}
-}
-
-func assertNestedMissing(t *testing.T, root map[string]any, path ...string) {
-	t.Helper()
-	if got, ok := nestedValue(t, root, path...); ok {
-		t.Fatalf("JSON path %v present = %#v, want missing", path, got)
 	}
 }
 
