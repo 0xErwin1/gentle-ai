@@ -83,8 +83,18 @@ refresh() {
 refresh
 status=0
 output=$(command_install /tmp/private/rejected /tmp/bad "$bad_receipt" 2>&1) || status=$?
-test "$status" != 0
-case "$output" in *'root pin differs: gentle-pi'*) ;; *) exit 1 ;; esac
+expected=false
+case "$output" in *'root pin differs: gentle-pi'*) test "$status" = 0 || expected=true ;; esac
+if test "$expected" != true; then
+    bytes=$(printf '%s' "$output" | wc -c)
+    printf 'STOP: unexpected root-SRI fixture outcome status=%s diagnostic-bytes=%s\n' "$status" "$bytes"
+    if test "$bytes" -le 4096; then
+        printf '%s\n' "$output" | awk '{print "|" $0}'
+    else
+        printf 'STOP: root-SRI diagnostic exceeds 4096-byte bound; content not printed.\n'
+    fi
+    exit 1
+fi
 unchanged
 test ! -e /tmp/private/rejected
 printf 'PASS: corrupted root SRI rejected before offline install; fixture-Pi-unchanged=true\n'
