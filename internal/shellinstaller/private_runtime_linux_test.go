@@ -3,18 +3,34 @@
 package shellinstaller
 
 import (
+	"bytes"
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
 	"crypto/sha256"
+	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
+	"io"
+	"log"
+	"math/big"
+	"net"
+	"net/http"
+	"net/http/cookiejar"
+	"net/http/httptest"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -463,4 +479,588 @@ func TestPrivateInstall(t *testing.T) {
 	}
 	assertPreserved()
 	fmt.Printf("Go private pipeline: ComponentInstalled closure=283 lock-sha256=%s launch=not-run Ready=false\n", result.LockSHA256)
+}
+
+// These seams exercise DATA and resource accounting, not production TLS authority.
+type privateColdTransport func(*http.Request) (*http.Response, error)
+
+func (f privateColdTransport) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+type privateColdBody struct {
+	io.Reader
+	closes   int
+	closeErr error
+}
+
+func (b *privateColdBody) Close() error {
+	b.closes++
+	return b.closeErr
+}
+
+type privateColdSink struct {
+	bytes.Buffer
+	closes             int
+	writeErr, closeErr error
+}
+
+func (s *privateColdSink) Write(p []byte) (int, error) {
+	if s.writeErr != nil {
+		return 0, s.writeErr
+	}
+	return s.Buffer.Write(p)
+}
+func (s *privateColdSink) Close() error {
+	s.closes++
+	return s.closeErr
+}
+
+type privateColdReader struct{ err error }
+
+func (r privateColdReader) Read([]byte) (int, error) { return 0, r.err }
+
+type privateColdReadFunc func([]byte) (int, error)
+
+func (f privateColdReadFunc) Read(p []byte) (int, error) { return f(p) }
+
+func privateColdCertificate(t *testing.T, hostname string) (tls.Certificate, *x509.Certificate) {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	privateMust(t, err)
+	template := &x509.Certificate{
+		SerialNumber:          big.NewInt(1),
+		Subject:               pkix.Name{CommonName: hostname},
+		DNSNames:              []string{hostname},
+		NotBefore:             time.Now().Add(-time.Hour),
+		NotAfter:              time.Now().Add(time.Hour),
+		IsCA:                  true,
+		BasicConstraintsValid: true,
+		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+	}
+	der, err := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
+	privateMust(t, err)
+	cert, err := x509.ParseCertificate(der)
+	privateMust(t, err)
+	return tls.Certificate{Certificate: [][]byte{der}, PrivateKey: key}, cert
+}
+
+func privateColdResponse(t *testing.T, body *privateColdBody, length int64) *http.Response {
+	t.Helper()
+	_, cert := privateColdCertificate(t, "nodejs.org")
+	request, err := http.NewRequest(http.MethodGet, "https://nodejs.org/dist/v24.18.0/node-v24.18.0-linux-x64.tar.gz", nil)
+	privateMust(t, err)
+	return &http.Response{
+		StatusCode:    200,
+		Header:        make(http.Header),
+		Body:          body,
+		ContentLength: length,
+		Request:       request,
+		TLS:           &tls.ConnectionState{Version: tls.VersionTLS12, ServerName: "nodejs.org", PeerCertificates: []*x509.Certificate{cert}, VerifiedChains: [][]*x509.Certificate{{cert}}},
+	}
+}
+
+func TestPrivateColdData(t *testing.T) {
+	privateGuest(t)
+	// Synthetic Guest-only ambient proxy settings cannot select a transport.
+	t.Setenv("HTTP_PROXY", "http://127.0.0.1:1")
+	t.Setenv("HTTPS_PROXY", "http://127.0.0.1:1")
+	// Independent literals: changing production pins cannot silently change the controls.
+	if privateColdURL != "https://nodejs.org/dist/v24.18.0/node-v24.18.0-linux-x64.tar.gz" || privateColdSize != 57224421 || privateColdSHA != "783130984963db7ba9cbd01089eaf2c2efb055c7c1693c943174b967b3050cb8" {
+		t.Fatal("fixed Node DATA pins changed")
+	}
+	client, err := privateColdClient()
+	privateMust(t, err)
+	transport, ok := client.Transport.(*http.Transport)
+	if !ok || transport.Proxy != nil || !transport.DisableCompression || transport.MaxResponseHeaderBytes != 16384 || transport.TLSHandshakeTimeout != 10*time.Second || transport.ResponseHeaderTimeout != 30*time.Second || client.Timeout != 120*time.Second || client.Jar != nil {
+		t.Fatal("production transport bounds or ambient effects")
+	}
+	defer transport.CloseIdleConnections()
+	config := transport.TLSClientConfig
+	if config == nil || config.InsecureSkipVerify || config.MinVersion != tls.VersionTLS12 || config.ServerName != "nodejs.org" || config.RootCAs == nil || len(config.RootCAs.Subjects()) == 0 || config.VerifyConnection != nil || config.VerifyPeerCertificate != nil {
+		t.Fatal("production TLS verification configuration")
+	}
+	if client.CheckRedirect(nil, nil) != http.ErrUseLastResponse {
+		t.Fatal("redirects enabled")
+	}
+	fixture := []byte("small helper-only pinned DATA; never production archive authority")
+	digest := fmt.Sprintf("%x", sha256.Sum256(fixture))
+	fault := errors.New("resource fault DATA")
+	cases := []struct {
+		label  string
+		mutate func(*http.Response, *privateColdBody, *privateColdSink, context.CancelFunc)
+		wantOK bool
+	}{
+		{"valid", func(*http.Response, *privateColdBody, *privateColdSink, context.CancelFunc) {}, true},
+		{"status", func(r *http.Response, _ *privateColdBody, _ *privateColdSink, _ context.CancelFunc) { r.StatusCode = 302 }, false},
+		{"encoding", func(r *http.Response, _ *privateColdBody, _ *privateColdSink, _ context.CancelFunc) { r.Header.Set("Content-Encoding", "gzip") }, false},
+		{"duplicate encoding", func(r *http.Response, _ *privateColdBody, _ *privateColdSink, _ context.CancelFunc) { r.Header["Content-Encoding"] = []string{"identity", "gzip"} }, false},
+		{"decoded", func(r *http.Response, _ *privateColdBody, _ *privateColdSink, _ context.CancelFunc) { r.Uncompressed = true }, false},
+		{"declared length", func(r *http.Response, _ *privateColdBody, _ *privateColdSink, _ context.CancelFunc) { r.ContentLength++ }, false},
+		{"unknown length", func(r *http.Response, _ *privateColdBody, _ *privateColdSink, _ context.CancelFunc) { r.ContentLength = -1 }, false},
+		{"oversize", func(_ *http.Response, b *privateColdBody, _ *privateColdSink, _ context.CancelFunc) { b.Reader = bytes.NewReader(append(append([]byte(nil), fixture...), 'x')) }, false},
+		{"truncated", func(_ *http.Response, b *privateColdBody, _ *privateColdSink, _ context.CancelFunc) { b.Reader = bytes.NewReader(fixture[:len(fixture)-1]) }, false},
+		{"hash", func(_ *http.Response, b *privateColdBody, _ *privateColdSink, _ context.CancelFunc) { b.Reader = bytes.NewReader(bytes.Repeat([]byte{'x'}, len(fixture))) }, false},
+		{"read", func(_ *http.Response, b *privateColdBody, _ *privateColdSink, _ context.CancelFunc) { b.Reader = privateColdReader{fault} }, false},
+		{"write", func(_ *http.Response, _ *privateColdBody, s *privateColdSink, _ context.CancelFunc) { s.writeErr = fault }, false},
+		{"body close", func(_ *http.Response, b *privateColdBody, _ *privateColdSink, _ context.CancelFunc) { b.closeErr = fault }, false},
+		{"file close", func(_ *http.Response, _ *privateColdBody, s *privateColdSink, _ context.CancelFunc) { s.closeErr = fault }, false},
+		{"cancel", func(_ *http.Response, _ *privateColdBody, _ *privateColdSink, cancel context.CancelFunc) { cancel() }, false},
+		{"cancel during read", func(_ *http.Response, b *privateColdBody, _ *privateColdSink, cancel context.CancelFunc) {
+			reader := bytes.NewReader(fixture)
+			b.Reader = privateColdReadFunc(func(p []byte) (int, error) {
+				cancel()
+				return reader.Read(p)
+			})
+		}, false},
+		{"method", func(r *http.Response, _ *privateColdBody, _ *privateColdSink, _ context.CancelFunc) { r.Request.Method = "POST" }, false},
+		{"origin", func(r *http.Response, _ *privateColdBody, _ *privateColdSink, _ context.CancelFunc) { r.Request.URL.Host = "example.com" }, false},
+		{"path", func(r *http.Response, _ *privateColdBody, _ *privateColdSink, _ context.CancelFunc) { r.Request.URL.Path += "/" }, false},
+		{"query", func(r *http.Response, _ *privateColdBody, _ *privateColdSink, _ context.CancelFunc) { r.Request.URL.RawQuery = "x=1" }, false},
+		{"request host", func(r *http.Response, _ *privateColdBody, _ *privateColdSink, _ context.CancelFunc) { r.Request.Host = "example.com" }, false},
+		{"scheme", func(r *http.Response, _ *privateColdBody, _ *privateColdSink, _ context.CancelFunc) { r.Request.URL.Scheme = "http" }, false},
+		{"raw path", func(r *http.Response, _ *privateColdBody, _ *privateColdSink, _ context.CancelFunc) { r.Request.URL.RawPath = r.Request.URL.Path }, false},
+		{"userinfo", func(r *http.Response, _ *privateColdBody, _ *privateColdSink, _ context.CancelFunc) { r.Request.URL.User = url.User("synthetic") }, false},
+		{"fragment", func(r *http.Response, _ *privateColdBody, _ *privateColdSink, _ context.CancelFunc) { r.Request.URL.Fragment = "x" }, false},
+		{"SNI", func(r *http.Response, _ *privateColdBody, _ *privateColdSink, _ context.CancelFunc) { r.TLS.ServerName = "example.com" }, false},
+		{"unverified", func(r *http.Response, _ *privateColdBody, _ *privateColdSink, _ context.CancelFunc) { r.TLS.VerifiedChains = nil }, false},
+		{"chain leaf mismatch", func(r *http.Response, _ *privateColdBody, _ *privateColdSink, _ context.CancelFunc) {
+			_, different := privateColdCertificate(t, "nodejs.org")
+			r.TLS.VerifiedChains = [][]*x509.Certificate{{different}}
+		}, false},
+		{"old TLS", func(r *http.Response, _ *privateColdBody, _ *privateColdSink, _ context.CancelFunc) { r.TLS.Version = tls.VersionTLS11 }, false},
+		{"no TLS", func(r *http.Response, _ *privateColdBody, _ *privateColdSink, _ context.CancelFunc) { r.TLS = nil }, false},
+	}
+	// No per-success logs: every assertion executes under the unchanged raw 4KiB bound.
+	for index, tc := range cases {
+		body := &privateColdBody{Reader: bytes.NewReader(fixture)}
+		sink := &privateColdSink{}
+		response := privateColdResponse(t, body, int64(len(fixture)))
+		ctx, cancel := context.WithCancel(context.Background())
+		tc.mutate(response, body, sink, cancel)
+		err := privateColdReceive(ctx, response, sink, int64(len(fixture)), digest)
+		cancel()
+		var failure *PrivateRuntimeError
+		if (err == nil) != tc.wantOK || (!tc.wantOK && (!errors.As(err, &failure) || failure.Kind != "acquisition")) || body.closes != 1 || sink.closes != 1 || sink.Len() > len(fixture)+1 {
+			t.Fatalf("DATA control %d (%s): result/resources %v", index, tc.label, err)
+		}
+		wantBytes := 0
+		switch tc.label {
+		case "valid", "hash", "body close", "file close", "cancel during read":
+			wantBytes = len(fixture)
+		case "oversize":
+			wantBytes = len(fixture) + 1
+		case "truncated":
+			wantBytes = len(fixture) - 1
+		}
+		if sink.Len() != wantBytes || (tc.wantOK && !bytes.Equal(sink.Bytes(), fixture)) {
+			t.Fatalf("DATA control %d wrote unexpected bytes", index)
+		}
+		if (tc.label == "read" || tc.label == "write" || tc.label == "body close" || tc.label == "file close") && !errors.Is(err, fault) {
+			t.Fatalf("DATA control %d lost resource cause", index)
+		}
+	}
+	ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+	defer cancel()
+	body := &privateColdBody{Reader: bytes.NewReader(fixture)}
+	sink := &privateColdSink{}
+	err = privateColdReceive(ctx, privateColdResponse(t, body, int64(len(fixture))), sink, int64(len(fixture)), digest)
+	if !errors.Is(err, context.DeadlineExceeded) || body.closes != 1 || sink.closes != 1 || sink.Len() != 0 {
+		t.Fatal("expired DATA deadline did not close without writes")
+	}
+}
+
+func TestPrivateColdTLS(t *testing.T) {
+	privateGuest(t)
+	fixture := []byte("local TLS helper DATA, not a production Node archive")
+	digest := fmt.Sprintf("%x", sha256.Sum256(fixture))
+	for index, hostname := range []string{"nodejs.org", "example.com", "nodejs.org", "nodejs.org", "nodejs.org"} {
+		certificate, cert := privateColdCertificate(t, hostname)
+		var requests atomic.Int32
+		server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			requests.Add(1)
+			if r.Method != "GET" || r.Host != "nodejs.org" || r.URL.RequestURI() != "/dist/v24.18.0/node-v24.18.0-linux-x64.tar.gz" || r.Header.Get("Cookie") != "" || r.Header.Get("Accept-Encoding") != "" {
+				t.Error("fixed TLS request or ambient headers changed")
+			}
+			w.Header().Set("Content-Length", strconv.Itoa(len(fixture)))
+			if index == 3 {
+				w.Header().Set("X-Oversize", strings.Repeat("x", 20000))
+			}
+			if index == 4 {
+				w.WriteHeader(http.StatusOK)
+				w.(http.Flusher).Flush()
+				<-r.Context().Done()
+				return
+			}
+			_, _ = w.Write(fixture)
+		}))
+		server.TLS = &tls.Config{Certificates: []tls.Certificate{certificate}, MinVersion: tls.VersionTLS12}
+		// Expected handshake rejection is not an unbounded server diagnostic stream.
+		server.Config.ErrorLog = log.New(io.Discard, "", 0)
+		server.StartTLS()
+		roots := x509.NewCertPool()
+		if index != 2 {
+			roots.AddCert(cert)
+		}
+		transport := &http.Transport{
+			Proxy:                  nil,
+			DisableCompression:     true,
+			MaxResponseHeaderBytes: 16384,
+			TLSClientConfig:        &tls.Config{RootCAs: roots, ServerName: "nodejs.org", MinVersion: tls.VersionTLS12},
+			DialContext: func(ctx context.Context, network, address string) (net.Conn, error) {
+				if address != "nodejs.org:443" {
+					return nil, errors.New("unexpected TLS address")
+				}
+				return (&net.Dialer{Timeout: time.Second}).DialContext(ctx, network, server.Listener.Addr().String())
+			},
+		}
+		jar, err := cookiejar.New(nil)
+		privateMust(t, err)
+		origin, err := url.Parse("https://nodejs.org/")
+		privateMust(t, err)
+		jar.SetCookies(origin, []*http.Cookie{{Name: "synthetic-canary", Value: "not-a-credential"}})
+		client := &http.Client{Transport: transport, Timeout: 3 * time.Second, Jar: jar}
+		if index == 4 {
+			client.Timeout = time.Second
+		}
+		parent := t.TempDir()
+		archive := filepath.Join(parent, "fixture")
+		err = privateColdFetch(context.Background(), client, archive, int64(len(fixture)), digest)
+		transport.CloseIdleConnections()
+		server.Close()
+		var failure *PrivateRuntimeError
+		if index == 0 {
+			data, readErr := os.ReadFile(archive)
+			info, statErr := os.Lstat(archive)
+			if err != nil || readErr != nil || statErr != nil || !bytes.Equal(data, fixture) || info.Mode() != 0600 || requests.Load() != 1 {
+				t.Fatal("real local TLS verified Node SAN DATA transfer", err)
+			}
+		} else {
+			wantRequests := int32(0)
+			if index >= 3 {
+				wantRequests = 1
+			}
+			if !errors.As(err, &failure) || failure.Kind != "acquisition" || requests.Load() != wantRequests {
+				t.Fatalf("actual TLS/HTTP rejection %d effects", index)
+			}
+			if index == 4 {
+				info, statErr := os.Lstat(archive)
+				if !errors.Is(err, context.DeadlineExceeded) || statErr != nil || info.Size() != 0 || info.Mode() != 0600 {
+					t.Fatal("actual body deadline/resource effects", err)
+				}
+			} else if _, statErr := os.Lstat(archive); !os.IsNotExist(statErr) {
+				t.Fatal("TLS/header rejection wrote archive")
+			}
+		}
+	}
+}
+
+func TestPrivateColdRequest(t *testing.T) {
+	privateGuest(t)
+	parent := t.TempDir()
+	fixture := []byte("bounded request DATA")
+	digest := fmt.Sprintf("%x", sha256.Sum256(fixture))
+	for index, kind := range []string{"success", "redirect", "transport", "nil body", "file collision", "cancel"} {
+		archive := filepath.Join(parent, strconv.Itoa(index))
+		body := &privateColdBody{Reader: bytes.NewReader(fixture)}
+		calls := 0
+		client := &http.Client{Transport: privateColdTransport(func(request *http.Request) (*http.Response, error) {
+			calls++
+			deadline, ok := request.Context().Deadline()
+			if request.Method != "GET" || request.URL.String() != "https://nodejs.org/dist/v24.18.0/node-v24.18.0-linux-x64.tar.gz" || request.Header.Get("Cookie") != "" || !ok || time.Until(deadline) > 120*time.Second {
+				t.Fatal("fixed request/deadline changed")
+			}
+			if kind == "transport" {
+				return nil, errors.New("transport DATA fault")
+			}
+			response := privateColdResponse(t, body, int64(len(fixture)))
+			if kind == "redirect" {
+				response.StatusCode = 302
+				response.Header.Set("Location", "https://example.com/")
+			}
+			if kind == "nil body" {
+				response.Body = nil
+			}
+			return response, nil
+		})}
+		if kind == "file collision" {
+			privateMust(t, os.WriteFile(archive, []byte("sentinel"), 0600))
+		}
+		before := privateFixture(t, parent)
+		ctx, cancel := context.WithCancel(context.Background())
+		if kind == "cancel" {
+			cancel()
+		}
+		err := privateColdFetch(ctx, client, archive, int64(len(fixture)), digest)
+		cancel()
+		var failure *PrivateRuntimeError
+		if kind == "success" {
+			data, readErr := os.ReadFile(archive)
+			if err != nil || readErr != nil || !bytes.Equal(data, fixture) || body.closes != 1 || calls != 1 {
+				t.Fatal("request success resources", err)
+			}
+		} else {
+			if !errors.As(err, &failure) || failure.Kind != "acquisition" || calls > 1 {
+				t.Fatalf("request DATA control %d", index)
+			}
+			if kind != "nil body" && kind != "transport" && kind != "cancel" && body.closes != 1 {
+				t.Fatal("rejected response body leaked")
+			}
+			if (kind == "file collision" || kind == "cancel" || kind == "transport") && !reflect.DeepEqual(before, privateFixture(t, parent)) {
+				t.Fatal("request rejection changed preimage")
+			}
+			if kind == "cancel" && (calls != 0 || !errors.Is(err, context.Canceled)) {
+				t.Fatal("cancelled request reached transport or lost cause")
+			}
+		}
+	}
+}
+
+func TestPrivateColdInvalidArchive(t *testing.T) {
+	privateGuest(t)
+	parent := t.TempDir()
+	privateMust(t, os.Chmod(parent, 0700))
+	pi := filepath.Join(parent, "pi")
+	privateMust(t, os.Mkdir(pi, 0700))
+	privateMust(t, os.WriteFile(filepath.Join(pi, "sentinel"), []byte("unrelated Pi"), 0600))
+	before := privateFixture(t, pi)
+	for index, kind := range []string{"wrong hash", "truncated", "oversize"} {
+		workspace, err := os.MkdirTemp(parent, ".gentle-go-cold-")
+		privateMust(t, err)
+		identity, err := privateDirectory(workspace)
+		privateMust(t, err)
+		length := int64(57224421)
+		if kind == "truncated" {
+			length--
+		}
+		if kind == "oversize" {
+			length++
+		}
+		body := &privateColdBody{Reader: io.LimitReader(privateColdReadFunc(func(p []byte) (int, error) {
+			clear(p)
+			return len(p), nil
+		}), length)}
+		calls := 0
+		client := &http.Client{Transport: privateColdTransport(func(*http.Request) (*http.Response, error) {
+			calls++
+			return privateColdResponse(t, body, 57224421), nil
+		})}
+		err = privateColdFetch(context.Background(), client, filepath.Join(workspace, "node.tgz"), 57224421, "783130984963db7ba9cbd01089eaf2c2efb055c7c1693c943174b967b3050cb8")
+		var failure *PrivateRuntimeError
+		entries, readErr := os.ReadDir(workspace)
+		if !errors.As(err, &failure) || failure.Kind != "acquisition" || body.closes != 1 || calls != 1 || readErr != nil || len(entries) != 1 || entries[0].Name() != "node.tgz" || !reflect.DeepEqual(before, privateFixture(t, pi)) {
+			t.Fatalf("invalid full-size DATA control %d reached bootstrap or changed Pi", index)
+		}
+		dest := filepath.Join(parent, "rejected")
+		result, finishErr := privateColdFinish(context.Background(), PrivateInstallResult{}, err, workspace, identity, dest)
+		if result != (PrivateInstallResult{}) || !errors.As(finishErr, &failure) || failure.Kind != "acquisition" || failure.Workspace != workspace || failure.Destination != dest {
+			t.Fatal("invalid DATA lost empty result or cleanup error classification")
+		}
+		if _, statErr := os.Lstat(dest); !os.IsNotExist(statErr) {
+			t.Fatal("invalid DATA published a destination")
+		}
+	}
+	privateNoStage(t, parent)
+}
+
+func TestPrivateColdOwnership(t *testing.T) {
+	privateGuest(t)
+	rootOwned, err := os.Lstat("/cold-root-owned")
+	privateMust(t, err)
+	_, ownerErr := privateDirectory("/cold-root-owned")
+	if rootOwned.Mode() != os.ModeDir|0700 || rootOwned.Sys().(*syscall.Stat_t).Uid != 0 || ownerErr == nil {
+		t.Fatal("actual foreign owner with otherwise private mode accepted")
+	}
+	for index, kind := range []string{"valid", "parent mode", "stage mode", "parent replacement", "stage replacement", "parent symlink", "stage symlink", "nil identity", "destination appeared"} {
+		base := t.TempDir()
+		parent := filepath.Join(base, "parent")
+		privateMust(t, os.Mkdir(parent, 0700))
+		parentIdentity, err := privateDirectory(parent)
+		privateMust(t, err)
+		workspace, err := os.MkdirTemp(parent, ".gentle-go-cold-")
+		privateMust(t, err)
+		identity, err := privateDirectory(workspace)
+		privateMust(t, err)
+		dest := filepath.Join(parent, "published")
+		switch kind {
+		case "parent mode":
+			privateMust(t, os.Chmod(parent, 0755))
+		case "stage mode":
+			privateMust(t, os.Chmod(workspace, 0755))
+		case "parent replacement":
+			privateMust(t, os.Rename(parent, parent+".old"))
+			privateMust(t, os.Mkdir(parent, 0700))
+			privateMust(t, os.Mkdir(workspace, 0700))
+		case "parent symlink":
+			privateMust(t, os.Rename(parent, parent+".old"))
+			privateMust(t, os.Symlink(parent+".old", parent))
+		case "stage replacement", "stage symlink":
+			privateMust(t, os.Rename(workspace, workspace+".old"))
+			if kind == "stage symlink" {
+				privateMust(t, os.Symlink(workspace+".old", workspace))
+			} else {
+				privateMust(t, os.Mkdir(workspace, 0700))
+			}
+		case "nil identity":
+			identity = nil
+		case "destination appeared":
+			privateMust(t, os.Mkdir(dest, 0700))
+		}
+		before := privateFixture(t, base)
+		err = privateColdWorkspace(parent, parentIdentity, workspace, identity, dest)
+		var failure *PrivateRuntimeError
+		if (err == nil) != (kind == "valid") || (err != nil && (!errors.As(err, &failure) || failure.Kind != "preimage")) || !reflect.DeepEqual(before, privateFixture(t, base)) {
+			t.Fatalf("ownership control %d changed preimage/classification", index)
+		}
+	}
+	// Actual filesystem cleanup denial and replacement preservation. The
+	// published sentinel is a classifier fixture, not a simulated full pipeline.
+	for index, kind := range []string{"permission", "replacement", "nil identity", "cancel after publication", "readback after publication"} {
+		parent := t.TempDir()
+		workspace, err := os.MkdirTemp(parent, ".gentle-go-cold-")
+		privateMust(t, err)
+		identity, err := privateDirectory(workspace)
+		privateMust(t, err)
+		dest := filepath.Join(parent, "published")
+		privateMust(t, os.Mkdir(dest, 0700))
+		privateMust(t, os.WriteFile(filepath.Join(dest, "sentinel"), []byte("published preserve"), 0600))
+		published := privateFixture(t, dest)
+		blocked := filepath.Join(workspace, "blocked")
+		privateMust(t, os.Mkdir(blocked, 0700))
+		privateMust(t, os.WriteFile(filepath.Join(blocked, "child"), []byte("owned"), 0600))
+		if kind == "permission" {
+			privateMust(t, os.Chmod(blocked, 0000))
+		}
+		if kind == "replacement" {
+			privateMust(t, os.Rename(workspace, workspace+".old"))
+			privateMust(t, os.Mkdir(workspace, 0700))
+			privateMust(t, os.WriteFile(filepath.Join(workspace, "foreign"), []byte("preserve"), 0600))
+		}
+		if kind == "nil identity" {
+			identity = nil
+		}
+		ctx, cancel := context.WithCancel(context.Background())
+		if kind == "cancel after publication" {
+			cancel()
+		}
+		var stageBefore map[string]string
+		if kind == "replacement" || kind == "nil identity" {
+			stageBefore = privateFixture(t, workspace)
+		}
+		var cause error
+		if kind == "readback after publication" {
+			cause = privateError("readback", errors.New("readback DATA fault"))
+		}
+		result, failureErr := privateColdFinish(ctx, PrivateInstallResult{State: "ComponentInstalled", Destination: dest}, cause, workspace, identity, dest)
+		cancel()
+		if kind == "permission" {
+			privateMust(t, os.Chmod(blocked, 0700))
+		}
+		var failure *PrivateRuntimeError
+		if result != (PrivateInstallResult{}) || !errors.As(failureErr, &failure) || failure.Kind != "uncertain" || failure.Workspace != workspace || failure.Destination != dest || !reflect.DeepEqual(published, privateFixture(t, dest)) {
+			t.Fatalf("late failure control %d lost publication/ambiguity", index)
+		}
+		if (kind == "replacement" || kind == "nil identity") && !reflect.DeepEqual(stageBefore, privateFixture(t, workspace)) {
+			t.Fatal("refused cleanup changed foreign or unowned preimage")
+		}
+		if kind == "replacement" {
+			data, err := os.ReadFile(filepath.Join(workspace, "foreign"))
+			if err != nil || string(data) != "preserve" {
+				t.Fatal("foreign replacement deleted")
+			}
+		}
+	}
+}
+
+func TestPrivateColdInstall(t *testing.T) {
+	privateGuest(t)
+	parent := t.TempDir()
+	privateMust(t, os.Chmod(parent, 0700))
+	pi := filepath.Join(parent, "pi")
+	privateMust(t, os.Mkdir(pi, 0700))
+	privateMust(t, os.WriteFile(filepath.Join(pi, "settings.json"), []byte("cold Pi preimage"), 0600))
+	privateMust(t, os.Symlink("settings.json", filepath.Join(pi, "link")))
+	piBefore := privateFixture(t, pi)
+	for index, kind := range []string{"nil", "cancel", "file", "directory", "symlink"} {
+		dest := filepath.Join(parent, strconv.Itoa(index))
+		ctx := context.Background()
+		wantKind := "refused"
+		switch kind {
+		case "nil":
+			ctx = nil
+			wantKind = "canceled"
+		case "cancel":
+			var cancel context.CancelFunc
+			ctx, cancel = context.WithCancel(ctx)
+			cancel()
+			wantKind = "canceled"
+		case "file":
+			privateMust(t, os.WriteFile(dest, []byte("sentinel"), 0600))
+		case "directory":
+			privateMust(t, os.Mkdir(dest, 0700))
+		case "symlink":
+			privateMust(t, os.Symlink(pi, dest))
+		}
+		before := privateFixture(t, parent)
+		result, err := RunPrivateInstallCold(ctx, dest)
+		var failure *PrivateRuntimeError
+		if result != (PrivateInstallResult{}) || !errors.As(err, &failure) || failure.Kind != wantKind || !reflect.DeepEqual(before, privateFixture(t, parent)) {
+			t.Fatalf("early public cold control %d", index)
+		}
+	}
+	// Public fixed API: real HTTPS fetch, not /node.tgz or an injected client.
+	// Independent old tests retain the separate warm archive acquisition path.
+	ctx, cancel := context.WithTimeout(context.Background(), 870*time.Second)
+	defer cancel()
+	dest := filepath.Join(parent, "installed")
+	result, err := RunPrivateInstallCold(ctx, dest)
+	if err != nil || result.State != "ComponentInstalled" || result.Destination != dest {
+		t.Fatal("public fixed cold pipeline", err)
+	}
+	privateMust(t, privateReadback(dest, result.LockSHA256))
+	lock, err := os.ReadFile(filepath.Join(dest, "project/package-lock.json"))
+	privateMust(t, err)
+	if fmt.Sprintf("%x", sha256.Sum256(lock)) != result.LockSHA256 {
+		t.Fatal("cold PRE/post lock differs")
+	}
+	var manifest struct{ Dependencies map[string]string }
+	data, err := os.ReadFile(filepath.Join(dest, "project/package.json"))
+	privateMust(t, err)
+	privateMust(t, json.Unmarshal(data, &manifest))
+	pins := map[string]string{"gentle-pi": "3.7.0", "@earendil-works/pi-coding-agent": "0.85.1", "@earendil-works/pi-tui": "0.85.1", "@heyhuynhgiabuu/pi-pretty": "0.6.27", "typebox": "1.3.7"}
+	if !reflect.DeepEqual(manifest.Dependencies, pins) {
+		t.Fatal("cold five independent pins")
+	}
+	var closure []string
+	data, err = os.ReadFile(filepath.Join(dest, "closure.json"))
+	privateMust(t, err)
+	privateMust(t, json.Unmarshal(data, &closure))
+	if len(closure) != 283 {
+		t.Fatal("cold closure cardinality")
+	}
+	published := privateFixture(t, dest)
+	retry, err := RunPrivateInstallCold(context.Background(), dest)
+	var failure *PrivateRuntimeError
+	if retry != (PrivateInstallResult{}) || !errors.As(err, &failure) || failure.Kind != "refused" || !reflect.DeepEqual(published, privateFixture(t, dest)) || !reflect.DeepEqual(piBefore, privateFixture(t, pi)) {
+		t.Fatal("cold retry or Pi preimage changed")
+	}
+	privateNoStage(t, parent)
+	// Real publication from the public API, then an actual owned-filesystem
+	// cleanup fault through its shared finalizer. This is not a claim that a
+	// transport failure was injected into the preceding public invocation.
+	workspace, err := os.MkdirTemp(parent, ".gentle-go-cold-")
+	privateMust(t, err)
+	identity, err := privateDirectory(workspace)
+	privateMust(t, err)
+	blocked := filepath.Join(workspace, "blocked")
+	privateMust(t, os.Mkdir(blocked, 0700))
+	privateMust(t, os.WriteFile(filepath.Join(blocked, "child"), []byte("owned cleanup witness"), 0600))
+	privateMust(t, os.Chmod(blocked, 0000))
+	uncertain, cleanupErr := privateColdFinish(ctx, result, nil, workspace, identity, dest)
+	privateMust(t, os.Chmod(blocked, 0700))
+	if uncertain != (PrivateInstallResult{}) || !errors.As(cleanupErr, &failure) || failure.Kind != "uncertain" || failure.Workspace != workspace || failure.Destination != dest || !reflect.DeepEqual(published, privateFixture(t, dest)) || !reflect.DeepEqual(piBefore, privateFixture(t, pi)) {
+		t.Fatal("actual published installation lost on owned cleanup failure")
+	}
+	privateMust(t, privateCleanup(workspace, identity))
+	privateNoStage(t, parent)
+	fmt.Printf("Go fixed HTTPS cold pipeline: ComponentInstalled closure=283 lock-sha256=%s launch=not-run Ready=false\n", result.LockSHA256)
 }

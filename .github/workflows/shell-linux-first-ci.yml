@@ -296,7 +296,7 @@ jobs:
           # Repeat every mapping DATA control and the complete cold API pipeline.
           bounded printf '%s\n' \
             "Host-like Go Guest candidate source=$GITHUB_SHA; require live non-root membership; kernel limits unchanged" \
-            'timeout --kill-after=5 900 docker run --rm --pull=never --cgroupns=host --network default --read-only --user 65532:65532 --cap-drop=ALL --security-opt=no-new-privileges --tmpfs /tmp:rw,nosuid,nodev,exec,mode=1777,size=2g --cpus=1 --memory=3g --memory-swap=3g --pids-limit=64 gentle-shell-go-backend:ci -private-cgroup-non-root=true -test.run=^TestPrivate(CgroupMapping|Install)$' \
+            'timeout --kill-after=5 900 docker run --rm --pull=never --cgroupns=host --network default --read-only --user 65532:65532 --cap-drop=ALL --security-opt=no-new-privileges --tmpfs /tmp:rw,nosuid,nodev,exec,mode=1777,size=2g --cpus=1 --memory=3g --memory-swap=3g --pids-limit=64 gentle-shell-go-backend:ci -private-cgroup-non-root=true -test.run=^TestPrivate(CgroupMapping|Install|ColdInstall)$' \
             'Fixed ENTRYPOINT env-i retains exactly PATH HOME TMPDIR GENTLE_PRIVATE_GUEST; appended test.run selects mapping and full install; live-cgroup-member must be non-root'
           bounded timeout --kill-after=5 900 docker run --rm --pull=never \
             --cgroupns=host --network default --read-only --user 65532:65532 \
@@ -304,7 +304,7 @@ jobs:
             --tmpfs /tmp:rw,nosuid,nodev,exec,mode=1777,size=2g \
             --cpus=1 --memory=3g --memory-swap=3g --pids-limit=64 \
             gentle-shell-go-backend:ci -private-cgroup-non-root=true \
-            '-test.run=^TestPrivate(CgroupMapping|Install)$'
+            '-test.run=^TestPrivate(CgroupMapping|Install|ColdInstall)$'
 
       - name: Run focused tests with a scrubbed process environment
         shell: bash
