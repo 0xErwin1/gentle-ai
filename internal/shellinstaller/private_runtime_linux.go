@@ -17,6 +17,7 @@ import (
 	"sync"
 	"syscall"
 	"time"
+	"unicode"
 	"unicode/utf8"
 
 	assets "github.com/gentleman-programming/gentle-ai/v3/scripts"
@@ -56,16 +57,76 @@ func privateMount(data, target, required string) bool {
 	return false
 }
 
-func privateKernelData(membership, mounts string, limits []string) error {
-	mounted := false
-	for _, line := range strings.Split(mounts, "\n") {
+func privateHierarchyPath(path string) bool {
+	return utf8.ValidString(path) && filepath.IsAbs(path) && filepath.Clean(path) == path && !strings.ContainsRune(path, '\\') && strings.IndexFunc(path, unicode.IsControl) == -1
+}
+
+func privateMountPath(field string) (string, bool) {
+	// Only the defined space escape is supported. Refuse all other escapes,
+	// including encoded separators and control characters, rather than guess.
+	path := strings.ReplaceAll(field, `\040`, " ")
+	return path, privateHierarchyPath(path)
+}
+
+// privateCgroupPath resolves DATA only; production supplies /proc/self bytes.
+// Membership is in hierarchy coordinates, not relative to the mountpoint.
+func privateCgroupPath(membership, mounts string) (string, error) {
+	member := strings.TrimSuffix(membership, "\n")
+	if !strings.HasPrefix(member, "0::") || !privateHierarchyPath(strings.TrimPrefix(member, "0::")) {
+		return "", privateError("unavailable", nil)
+	}
+	member = strings.TrimPrefix(member, "0::")
+	const trusted = "/sys/fs/cgroup"
+	root := ""
+	for _, line := range strings.Split(strings.TrimSuffix(mounts, "\n"), "\n") {
 		fields := strings.Fields(line)
-		if len(fields) >= 10 && fields[3] == "/" && fields[4] == "/sys/fs/cgroup" && strings.Contains(line, " - cgroup2 cgroup ") {
-			mounted = true
+		separator := -1
+		for i, field := range fields {
+			if field == "-" {
+				if separator != -1 {
+					return "", privateError("unavailable", nil)
+				}
+				separator = i
+			}
+		}
+		if separator < 6 || len(fields) != separator+4 {
+			return "", privateError("unavailable", nil)
+		}
+		mountRoot, rootOK := privateMountPath(fields[3])
+		mountpoint, pointOK := privateMountPath(fields[4])
+		if !rootOK || !pointOK || strings.HasPrefix(mountpoint, trusted+"/") {
+			return "", privateError("unavailable", nil)
+		}
+		if mountpoint == trusted {
+			if root != "" || fields[separator+1] != "cgroup2" {
+				return "", privateError("unavailable", nil)
+			}
+			root = mountRoot
 		}
 	}
-	if !mounted || strings.TrimSpace(membership) != "0::/" || strings.Join(limits, "\n") != "3221225472\n0\n100000 100000\n64" {
+	if root == "" || (root != "/" && member != root && !strings.HasPrefix(member, root+"/")) {
+		return "", privateError("unavailable", nil)
+	}
+	relative := strings.TrimPrefix(member, root)
+	return filepath.Join(trusted, relative), nil
+}
+
+func privateKernelData(membership, mounts string, limits []string) error {
+	if _, err := privateCgroupPath(membership, mounts); err != nil {
+		return err
+	}
+	if len(limits) != 4 || strings.Join(limits, "\n") != "3221225472\n0\n100000 100000\n64" {
 		return privateError("unavailable", nil)
+	}
+	return nil
+}
+
+func privateCgroupPhysical(path string, directory bool) error {
+	info, err := os.Lstat(path)
+	canonical, canonicalErr := filepath.EvalSymlinks(path)
+	var fs unix.Statfs_t
+	if err != nil || canonicalErr != nil || canonical != path || (directory && !info.IsDir()) || (!directory && !info.Mode().IsRegular()) || unix.Statfs(path, &fs) != nil || fs.Type != unix.CGROUP2_SUPER_MAGIC {
+		return privateError("unavailable", errors.Join(err, canonicalErr))
 	}
 	return nil
 }
@@ -73,19 +134,39 @@ func privateKernelData(membership, mounts string, limits []string) error {
 func privateKernel() error {
 	membership, e1 := os.ReadFile("/proc/self/cgroup")
 	mounts, e2 := os.ReadFile("/proc/self/mountinfo")
-	var fs unix.Statfs_t
-	root, e3 := filepath.EvalSymlinks("/sys/fs/cgroup")
-	if e1 != nil || e2 != nil || e3 != nil || root != "/sys/fs/cgroup" || unix.Statfs(root, &fs) != nil || fs.Type != unix.CGROUP2_SUPER_MAGIC {
-		return privateError("unavailable", errors.Join(e1, e2, e3))
+	if e1 != nil || e2 != nil {
+		return privateError("unavailable", errors.Join(e1, e2))
 	}
+	current, err := privateCgroupPath(string(membership), string(mounts))
+	if err != nil {
+		return err
+	}
+	for _, path := range []string{"/sys/fs/cgroup", current} {
+		if err := privateCgroupPhysical(path, true); err != nil {
+			return err
+		}
+	}
+	// Exact leaf limits enforce upper bounds even with permissive ancestors.
+	// Stricter ancestors can reduce availability; this does not promise capacity.
 	var limits []string
 	for _, name := range []string{"memory.max", "memory.swap.max", "cpu.max", "pids.max"} {
-		path := filepath.Join(root, name)
+		path := filepath.Join(current, name)
+		if err := privateCgroupPhysical(path, false); err != nil {
+			return err
+		}
 		data, err := os.ReadFile(path)
-		if err != nil || len(data) > 64 || unix.Statfs(path, &fs) != nil || fs.Type != unix.CGROUP2_SUPER_MAGIC {
+		if err != nil || len(data) > 64 {
 			return privateError("unavailable", err)
 		}
+		if err := privateCgroupPhysical(path, false); err != nil {
+			return err
+		}
 		limits = append(limits, strings.TrimSpace(string(data)))
+	}
+	freshMembership, e1 := os.ReadFile("/proc/self/cgroup")
+	freshMounts, e2 := os.ReadFile("/proc/self/mountinfo")
+	if e1 != nil || e2 != nil || !bytes.Equal(membership, freshMembership) || !bytes.Equal(mounts, freshMounts) {
+		return privateError("unavailable", errors.Join(e1, e2))
 	}
 	return privateKernelData(string(membership), string(mounts), limits)
 }

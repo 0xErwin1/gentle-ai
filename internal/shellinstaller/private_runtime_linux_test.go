@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"errors"
+	"flag"
 	"fmt"
 	"os"
 	"os/exec"
@@ -22,6 +23,8 @@ import (
 	"golang.org/x/sys/unix"
 )
 
+var privateNonRootCgroup = flag.Bool("private-cgroup-non-root", false, "require live non-root unified cgroup membership")
+
 func privateMust(t *testing.T, err error) {
 	t.Helper()
 	if err != nil {
@@ -35,6 +38,11 @@ func privateGuest(t *testing.T) {
 		t.Skip("requires separately approved bounded Linux Guest")
 	}
 	privateMust(t, privateKernel())
+	membership, err := os.ReadFile("/proc/self/cgroup")
+	privateMust(t, err)
+	if *privateNonRootCgroup && strings.TrimSuffix(string(membership), "\n") == "0::/" {
+		t.Fatal("host-like qualification requires actual non-root membership")
+	}
 	status, err := os.ReadFile("/proc/self/status")
 	privateMust(t, err)
 	if os.Getuid() != 65532 || !strings.Contains(string(status), "CapEff:\t0000000000000000") || !strings.Contains(string(status), "NoNewPrivs:\t1") {
@@ -65,7 +73,7 @@ func TestPrivateKernel(t *testing.T) {
 		change                  int
 	}{
 		{"accepted", "0::/\n", mount, -1},
-		{"foreign membership", "0::/host\n", mount, -1},
+		{"unmapped membership", "0::/host\n", strings.Replace(mount, "0:1 / ", "0:1 /other ", 1), -1},
 		{"multiple memberships", "0::/\n1:cpu:/\n", mount, -1},
 		{"absent mount", "0::/\n", "", -1},
 		{"wrong filesystem", "0::/\n", strings.ReplaceAll(mount, "cgroup2", "tmpfs"), -1},
@@ -84,6 +92,83 @@ func TestPrivateKernel(t *testing.T) {
 				t.Fatal("kernel qualification mismatch")
 			}
 		})
+	}
+}
+
+func TestPrivateCgroupMapping(t *testing.T) {
+	privateGuest(t)
+	mount := "1 0 0:1 / /sys/fs/cgroup ro - cgroup2 cgroup rw\n"
+	submount := strings.Replace(mount, "0:1 / ", "0:1 /tenant ", 1)
+	cases := []struct {
+		name, membership, mounts, want string
+	}{
+		{"root", "0::/\n", mount, "/sys/fs/cgroup"},
+		{"nested", "0::/system.slice/docker-abc.scope\n", mount, "/sys/fs/cgroup/system.slice/docker-abc.scope"},
+		{"subtree", "0::/tenant/child\n", submount, "/sys/fs/cgroup/child"},
+		{"subtree root", "0::/tenant\n", submount, "/sys/fs/cgroup"},
+		{"decoded root", "0::/tenant space/child\n", strings.Replace(mount, "0:1 / ", `0:1 /tenant\040space `, 1), "/sys/fs/cgroup/child"},
+		{"optional fields", "0::/child\n", strings.Replace(mount, " ro - ", " ro shared:2 master:1 - ", 1), "/sys/fs/cgroup/child"},
+		{"literal space", "0::/child space\n", mount, "/sys/fs/cgroup/child space"},
+		{"invalid UTF-8", "0::/child\xff\n", mount, ""},
+		{"missing membership", "", mount, ""},
+		{"duplicate membership", "0::/\n0::/\n", mount, ""},
+		{"hybrid", "0::/\n1:cpu:/\n", mount, ""},
+		{"unrooted", "0::child\n", mount, ""},
+		{"traversal", "0::/tenant/../other\n", mount, ""},
+		{"dot", "0::/./child\n", mount, ""},
+		{"lateral", "0::/../../docker.scope\n", mount, ""},
+		{"repeated slash", "0:://child\n", mount, ""},
+		{"trailing slash", "0::/child/\n", mount, ""},
+		{"whitespace", " 0::/\n", mount, ""},
+		{"nul", "0::/child\x00\n", mount, ""},
+		{"control character", "0::/child\v\n", mount, ""},
+		{"unsupported member escape", `0::/child\040name`, mount, ""},
+		{"prefix boundary", "0::/tenant-other\n", submount, ""},
+		{"outside subtree", "0::/other\n", submount, ""},
+		{"missing mount", "0::/\n", "", ""},
+		{"duplicate mount", "0::/\n", mount + mount, ""},
+		{"wrong filesystem", "0::/\n", strings.Replace(mount, "cgroup2", "tmpfs", 1), ""},
+		{"shadow", "0::/child\n", mount + "2 1 0:2 / /sys/fs/cgroup/child ro - tmpfs tmpfs rw\n", ""},
+		{"noncanonical root", "0::/tenant\n", strings.Replace(mount, "0:1 / ", "0:1 /tenant/../ ", 1), ""},
+		{"unsupported escape", "0::/\n", strings.Replace(mount, "/sys/fs/cgroup", `/sys/fs/cgroup\057`, 1), ""},
+		{"decoded traversal", "0::/\n", strings.Replace(mount, "0:1 / ", `0:1 /tenant\040/../ `, 1), ""},
+		{"missing separator", "0::/\n", strings.Replace(mount, " - ", " ", 1), ""},
+	}
+	// All DATA cases execute in both Guest modes. Avoid per-case success logs so
+	// the complete verbose Guest output remains subject to the 4096-byte cap.
+	for _, tc := range cases {
+		got, err := privateCgroupPath(tc.membership, tc.mounts)
+		var failure *PrivateRuntimeError
+		if got != tc.want || (tc.want != "" && err != nil) || (tc.want == "" && (!errors.As(err, &failure) || failure.Kind != "unavailable")) {
+			t.Errorf("%s: mapping=%q error=%v", tc.name, got, err)
+		}
+	}
+	// Assert each C0, DEL and C1 code point independently without success logs.
+	// Numeric failure labels cannot themselves emit terminal control characters.
+	for _, bounds := range [][2]rune{{0, 0x1f}, {0x7f, 0x9f}} {
+		for control := bounds[0]; control <= bounds[1]; control++ {
+			membership := "0::/child" + string(control) + "name\n"
+			got, err := privateCgroupPath(membership, mount)
+			var failure *PrivateRuntimeError
+			if got != "" || !errors.As(err, &failure) || failure.Kind != "unavailable" {
+				t.Errorf("control U+%04X: expected empty mapping and typed unavailable", control)
+			}
+		}
+	}
+	// Missing limit DATA is refusal, not a simulation of live kernel file reads.
+	if err := privateKernelData("0::/\n", mount, nil); err == nil {
+		t.Fatal("missing limits accepted")
+	}
+	// Real filesystem refusal checks stay inside the qualified Guest; no fake
+	// reader or alternate kernel source can authorize RunPrivateInstall.
+	parent := t.TempDir()
+	link := filepath.Join(parent, "cgroup-link")
+	privateMust(t, os.Symlink("/sys/fs/cgroup", link))
+	for _, path := range []string{filepath.Join(parent, "missing"), parent, link} {
+		var failure *PrivateRuntimeError
+		if err := privateCgroupPhysical(path, true); !errors.As(err, &failure) || failure.Kind != "unavailable" {
+			t.Fatal("unreadable, wrong-filesystem or symlink kernel path accepted")
+		}
 	}
 }
 
@@ -271,6 +356,17 @@ func TestPrivateRunner(t *testing.T) {
 
 func TestPrivateInstall(t *testing.T) {
 	privateGuest(t)
+	membership, err := os.ReadFile("/proc/self/cgroup")
+	privateMust(t, err)
+	mounts, err := os.ReadFile("/proc/self/mountinfo")
+	privateMust(t, err)
+	mapped, err := privateCgroupPath(string(membership), string(mounts))
+	privateMust(t, err)
+	marker := fmt.Sprintf("live-cgroup-member=%s mapped=%s\n", strings.TrimSuffix(string(membership), "\n"), mapped)
+	if len(marker) > 1024 {
+		t.Fatal("live membership diagnostic withheld: bound exceeded")
+	}
+	fmt.Print(marker)
 	parent := t.TempDir()
 	privateMust(t, os.Chmod(parent, 0700))
 	pi := filepath.Join(parent, "pi")
@@ -288,7 +384,7 @@ func TestPrivateInstall(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	cancelledBefore := privateFixture(t, parent)
-	_, err := RunPrivateInstall(ctx, filepath.Join(parent, "cancelled"), "/node.tgz")
+	_, err = RunPrivateInstall(ctx, filepath.Join(parent, "cancelled"), "/node.tgz")
 	var failure *PrivateRuntimeError
 	if !errors.As(err, &failure) || failure.Kind != "canceled" || !reflect.DeepEqual(cancelledBefore, privateFixture(t, parent)) {
 		t.Fatal("pre-cancelled invocation", err)
