@@ -142,7 +142,20 @@ jobs:
             e2e/shell-linux-private-runtime-guest.sh scripts/install-gentle-shell-private.sh \
             scripts/complete-generated-lock-sri.mjs e2e/complete-generated-lock-sri.test.mjs \
             scripts/normalize-private-optional-platform-closure.mjs \
-            e2e/normalize-private-optional-platform-closure.test.mjs "$context/"
+            e2e/normalize-private-optional-platform-closure.test.mjs \
+            scripts/bootstrap-gentle-shell-private-node.sh \
+            e2e/shell-linux-node-bootstrap-controls.sh "$context/"
+          printf 'Owned Node bootstrap commands source=%s archive-bytes=57224421\n' "$GITHUB_SHA"
+          sha256sum "$context/bootstrap-gentle-shell-private-node.sh" \
+            "$context/shell-linux-node-bootstrap-controls.sh" \
+            "$context/Dockerfile.shell-linux-private-runtime"
+          printf '%s\n' \
+            'ulimit -t 60 && ulimit -u 64 && timeout --kill-after=5 90 env -i PATH=/usr/bin:/bin HOME=/acquire /bin/sh /owned/bootstrap-gentle-shell-private-node.sh --destination /bundle/node --node-archive /node.tgz' \
+            '/bin/bash -c "ulimit -t 240 && ulimit -u 64 && exec /bin/sh /usr/local/bin/shell-linux-node-bootstrap-controls.sh"' \
+            '/bin/bash -c "ulimit -t 240 && ulimit -u 64 && exec /bin/sh /usr/local/bin/shell-linux-private-runtime-guest.sh"' \
+            'ulimit -f 1024 && exec env -i PATH=/usr/bin:/bin HOME=/tmp/bootstrap-fixture /bin/sh /usr/local/bin/bootstrap-gentle-shell-private-node.sh --destination /tmp/bootstrap-parent/rejected --node-archive /node.tgz' \
+            'timeout --kill-after=2 15 env -i HOME="$stage/home" TMPDIR="$stage/tmp" XDG_CONFIG_HOME="$stage/config" XDG_STATE_HOME="$stage/state" PATH="$stage/node/bin:/usr/bin:/bin" NPM_CONFIG_USERCONFIG="$stage/config/user.npmrc" NPM_CONFIG_GLOBALCONFIG="$stage/config/global.npmrc" "$node" --max-old-space-size=256 --version' \
+            'timeout --kill-after=2 15 env -i HOME="$stage/home" TMPDIR="$stage/tmp" XDG_CONFIG_HOME="$stage/config" XDG_STATE_HOME="$stage/state" PATH="$stage/node/bin:/usr/bin:/bin" NPM_CONFIG_USERCONFIG="$stage/config/user.npmrc" NPM_CONFIG_GLOBALCONFIG="$stage/config/global.npmrc" "$node" --max-old-space-size=256 "$npm" --version'
           printf 'Owned data-only commands source=%s\n' "$GITHUB_SHA"
           sha256sum "$context/complete-generated-lock-sri.mjs" "$context/complete-generated-lock-sri.test.mjs" \
             "$context/normalize-private-optional-platform-closure.mjs" \
