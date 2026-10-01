@@ -32,7 +32,7 @@ A test with those properties gets disabled within a month. The solution is to ke
 
 | Suite | Location | Platforms | What it proves |
 |---|---|---|---|
-| Installer E2E | `e2e/docker-test.sh` | Ubuntu, Arch, Fedora (Docker) | Installation, layout, idempotency, optional SDD |
+| Installer E2E | `e2e/docker-test.sh` | Ubuntu, Arch, Fedora (Docker) | Installation, layout, idempotency |
 | Organic Runtime E2E | `e2e/organicruntime/` | Ubuntu, Windows (native runners) | A real agent driving the real CLI through the full work lifecycle |
 
 The installer suite is documented separately in [Docker E2E Testing](./docker-e2e-testing.md). This document covers the Organic Runtime suite.
@@ -55,7 +55,7 @@ Everything except the model's reasoning:
 |---|---|---|
 | OpenCode binary | Yes | Pinned to `versions.OpenCode`; `requireExecutableVersion` fails the test on a mismatch |
 | OpenCode plugin | Yes | `@opencode-ai/plugin` installed with `npm install` at the pinned version |
-| Orchestrator prompt | Yes | Read from `internal/assets/opencode/sdd-orchestrator.md` — the same asset shipped to users |
+| Orchestrator prompt | No | The `organic` agent is defined without a `prompt`; the scripted model turns drive its decisions |
 | `gentle-ai` binary | Yes | Compiled from the working tree, exposed as `GENTLE_AI_TEST_BINARY` |
 | Git repository | Yes | A real repository plus a bare remote; delivery ends in an `update-ref` CAS with exact tree and blob proof |
 | Filesystem effects | Yes | Real files, real commits, isolated `$HOME` with `--pure` and per-test `XDG_*` directories |
@@ -110,7 +110,7 @@ fixture.Server = httptest.NewServer(http.HandlerFunc(fixture.serveHTTP))
 
 `httptest` binds a free port and returns a URL. That URL becomes the `baseURL` above, which is why the configuration is generated at runtime rather than committed.
 
-### Step 3 — the agent is defined with the shipped prompt
+### Step 3 — the agent is defined
 
 ```json
 {
@@ -118,7 +118,6 @@ fixture.Server = httptest.NewServer(http.HandlerFunc(fixture.serveHTTP))
     "organic": {
       "mode": "primary",
       "model": "fixture/fixture",
-      "prompt": "<contents of internal/assets/opencode/sdd-orchestrator.md>",
       "permission": { "bash": "allow", "task": "allow", "edit": "deny" }
     }
   }
