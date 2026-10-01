@@ -127,8 +127,12 @@ if ! (cd "$stage/project" && private_npm ci --offline >"$stage/npm.log" 2>&1); t
 fi
 test "$(sha256sum "$stage/project/package-lock.json" | cut -d ' ' -f1)" = "$before_lock" || fail 'install changed lock'
 # Data-only inventory verifies install output, including lifecycle/native metadata.
-env -i "$node" --input-type=module - "$stage/project" <<'JS'
+normalizer="$(dirname "$0")/normalize-private-optional-platform-closure.mjs"
+env -i "$node" --input-type=module - "$stage/project" "$normalizer" <<'JS'
 import fs from 'node:fs';
+import { pathToFileURL } from 'node:url';
+import path from 'node:path';
+const { normalize } = await import(pathToFileURL(path.resolve(process.argv[3])).href);
 const root = process.argv[2];
 const lock = JSON.parse(fs.readFileSync(`${root}/package-lock.json`));
 const expected = JSON.parse(fs.readFileSync(`${root}/../closure.json`)).sort();
@@ -151,6 +155,11 @@ function walk(modules) {
     }
   }
 }
+walk('node_modules');
+normalize({ root, lock, expectedPaths: expected, actualPaths: actual,
+  platform: { os: process.platform, cpu: process.arch,
+    libc: process.platform === 'linux' ? (process.report.getReport().header.glibcVersionRuntime ? 'glibc' : 'musl') : undefined } });
+actual.length = 0;
 walk('node_modules');
 actual.sort();
 if (JSON.stringify(actual) !== JSON.stringify(expected)) {

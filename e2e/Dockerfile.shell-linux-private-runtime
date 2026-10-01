@@ -1,6 +1,7 @@
 FROM --platform=linux/amd64 debian:bookworm-slim@sha256:f3034a6ec3c1205360777c4aae76234998866ad18806ae62b63a3f84ccad782b AS acquire
 COPY node.tgz /node.tgz
 COPY complete-generated-lock-sri.mjs complete-generated-lock-sri.test.mjs /owned/
+COPY normalize-private-optional-platform-closure.mjs normalize-private-optional-platform-closure.test.mjs /owned/
 RUN chmod 0444 /node.tgz /owned/*.mjs
 # Stock hash/size checks precede archive parsing and every runtime invocation.
 RUN test "$(wc -c < /node.tgz)" = 57224421 && \
@@ -27,6 +28,8 @@ ENV BASH_ENV=/acquire/limits.sh
 # Lifecycle is always disabled; package JavaScript is never executed here.
 RUN ulimit -t 60 && ulimit -u 64 && env -i HOME=/acquire PATH=/bundle/node/bin:/usr/bin:/bin \
     /bundle/node/bin/node --max-old-space-size=256 /owned/complete-generated-lock-sri.test.mjs
+RUN ulimit -t 60 && ulimit -u 64 && env -i HOME=/acquire PATH=/bundle/node/bin:/usr/bin:/bin \
+    /bundle/node/bin/node --max-old-space-size=256 /owned/normalize-private-optional-platform-closure.test.mjs
 RUN ulimit -t 240 && ulimit -u 64 && cd /bundle/project && env -i HOME=/acquire PATH=/bundle/node/bin:/usr/bin:/bin \
     NPM_CONFIG_USERCONFIG=/acquire/user.npmrc NPM_CONFIG_GLOBALCONFIG=/acquire/global.npmrc \
     /bundle/node/bin/node --max-old-space-size=2048 /bundle/node/lib/node_modules/npm/bin/npm-cli.js \
@@ -56,5 +59,6 @@ COPY --from=acquire /bundle /bundle
 COPY --from=acquire /bundle-receipt /bundle-receipt
 COPY --from=acquire /acquire/limits.receipt /acquisition-limits
 COPY shell-linux-guest-proof.sh install-gentle-shell-private.sh shell-linux-private-runtime-guest.sh /usr/local/bin/
-RUN chmod 0444 /usr/local/bin/*.sh
+COPY normalize-private-optional-platform-closure.mjs /usr/local/bin/normalize-private-optional-platform-closure.mjs
+RUN chmod 0444 /usr/local/bin/*.sh /usr/local/bin/normalize-private-optional-platform-closure.mjs
 ENTRYPOINT ["/bin/sh", "/usr/local/bin/shell-linux-private-runtime-guest.sh"]
