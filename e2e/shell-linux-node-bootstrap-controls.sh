@@ -58,6 +58,8 @@ reject 'archive must be regular and physical' --destination /tmp/bootstrap-paren
 printf 'bad\n' > /tmp/archive-small
 reject 'archive size differs' --destination /tmp/bootstrap-parent/rejected --node-archive /tmp/archive-small
 cp /node.tgz /tmp/archive-bad
+# Only the owned private fault fixture is writable, never the accepted archive.
+chmod 0600 /tmp/archive-bad
 printf X | dd of=/tmp/archive-bad bs=1 seek=0 conv=notrunc status=none
 reject 'archive hash differs' --destination /tmp/bootstrap-parent/rejected --node-archive /tmp/archive-bad
 rm /tmp/archive-bad
