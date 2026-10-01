@@ -223,7 +223,7 @@ jobs:
           mkdir -p "$GOMODCACHE"
           go mod download golang.org/x/sys@v0.47.0
 
-      - name: Build authentication tests offline and execute only in broker guest
+      - name: Build private Linux tests offline and execute only in bounded guests
         shell: bash
         env:
           GOMODCACHE: ${{ runner.temp }}/shell-ci/modcache
@@ -240,6 +240,9 @@ jobs:
             internal/shellinstaller/linux_broker_peer_linux_test.go \
             internal/shellinstaller/linux_broker_consent_linux.go \
             internal/shellinstaller/linux_broker_consent_linux_test.go \
+            scripts/private_helpers.go \
+            internal/shellinstaller/private_runtime_linux.go \
+            internal/shellinstaller/private_runtime_linux_test.go \
             | head -c 65536 | tee "$format_diff"
           test ! -s "$format_diff"
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
@@ -260,6 +263,33 @@ jobs:
             --cpus=1 --memory=128m --memory-swap=128m --pids-limit=32 \
             -e HOME=/tmp -e HOST_NETNS="$host_net" -e HOST_MNTNS="$host_mnt" \
             gentle-shell-broker:ci
+
+          go_context="$(mktemp -d "$RUNNER_TEMP/shell-go-backend.XXXXXXXX")"
+          cp "$scratch/shellinstaller.test" e2e/Dockerfile.shell-linux-go-backend "$go_context/"
+          sha256sum "$scratch/shellinstaller.test" scripts/private_helpers.go \
+            internal/shellinstaller/private_runtime_linux.go internal/shellinstaller/private_runtime_linux_test.go \
+            scripts/acquire-gentle-shell-private-bundle.sh scripts/bootstrap-gentle-shell-private-node.sh \
+            scripts/complete-generated-lock-sri.mjs scripts/install-gentle-shell-private.sh \
+            scripts/normalize-private-optional-platform-closure.mjs e2e/Dockerfile.shell-linux-go-backend .github/workflows/shell-linux-first-ci.yml
+          printf 'Go backend source=%s; Node DATA sha256=783130984963db7ba9cbd01089eaf2c2efb055c7c1693c943174b967b3050cb8\n' "$GITHUB_SHA"
+          printf '%s\n' 'env -i PATH="$PATH" HOME="$RUNNER_TEMP/shell-ci/home" TMPDIR="$RUNNER_TEMP/shell-ci/tmp" GOCACHE="$RUNNER_TEMP/shell-ci/gocache" GOMODCACHE="$GOMODCACHE" GOTOOLCHAIN=local GOPROXY=off GOSUMDB=off CGO_ENABLED=0 go test -mod=readonly -c -o "$scratch/shellinstaller.test" ./internal/shellinstaller'
+          printf '%s\n' 'env -i PATH=/usr/bin:/bin HOME=/tmp TMPDIR=/tmp GENTLE_PRIVATE_GUEST=approved /go-backend.test -test.run=^TestPrivate -test.v -test.timeout=900s'
+          bounded() {
+            local output status=0 bytes
+            output="$("$@" 2>&1 | base64 -w0)" || status=$?
+            bytes="$(printf '%s' "$output" | base64 --decode | wc -c)"
+            test "$bytes" -lt 4096 || { printf 'STOP: Go Guest output withheld: bound exceeded.\n'; return 1; }
+            printf '%s' "$output" | base64 --decode
+            return "$status"
+          }
+          bounded timeout --kill-after=5 180 docker build --quiet \
+            -f "$go_context/Dockerfile.shell-linux-go-backend" -t gentle-shell-go-backend:ci "$go_context"
+          bounded timeout --kill-after=5 900 docker run --rm --pull=never \
+            --network default --read-only --user 65532:65532 \
+            --cap-drop=ALL --security-opt=no-new-privileges \
+            --tmpfs /tmp:rw,nosuid,nodev,exec,mode=1777,size=2g \
+            --cpus=1 --memory=3g --memory-swap=3g --pids-limit=64 \
+            gentle-shell-go-backend:ci
 
       - name: Run focused tests with a scrubbed process environment
         shell: bash

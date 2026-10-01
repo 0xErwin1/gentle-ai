@@ -1,0 +1,5 @@
+FROM --platform=linux/amd64 debian:bookworm-slim@sha256:f3034a6ec3c1205360777c4aae76234998866ad18806ae62b63a3f84ccad782b
+COPY --from=gentle-shell-private-runtime:ci /node.tgz /node.tgz
+COPY shellinstaller.test /go-backend.test
+RUN chmod 0555 /go-backend.test && chmod 0444 /node.tgz
+ENTRYPOINT ["/usr/bin/env", "-i", "PATH=/usr/bin:/bin", "HOME=/tmp", "TMPDIR=/tmp", "GENTLE_PRIVATE_GUEST=approved", "/go-backend.test", "-test.run=^TestPrivate", "-test.v", "-test.timeout=900s"]
