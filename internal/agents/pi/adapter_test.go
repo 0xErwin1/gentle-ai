@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 
@@ -416,6 +417,261 @@ func TestProvisionEngramMCPPreservesExactNumberTokens(t *testing.T) {
 	writeTestFile(t, mcpPath, `{"mcpServers":{}}{"x":1}`)
 	if _, _, err := a.ProvisionEngramMCP(home); err == nil || !strings.Contains(err.Error(), "unmarshal pi json file") {
 		t.Fatalf("ProvisionEngramMCP() error = %v, want trailing document rejected", err)
+	}
+}
+
+func TestProvisionEngramMCPWritesNothingOnFreshHome(t *testing.T) {
+	a := NewAdapter()
+	home := t.TempDir()
+
+	changed, paths, err := a.ProvisionEngramMCP(home)
+	if err != nil {
+		t.Fatalf("ProvisionEngramMCP() error = %v", err)
+	}
+	if changed || len(paths) != 0 {
+		t.Fatalf("ProvisionEngramMCP() = (changed %v, paths %v), want no writes (Pi Engram is native-only, not MCP)", changed, paths)
+	}
+	for _, path := range []string{
+		filepath.Join(home, ".pi", "agent", "settings.json"),
+		filepath.Join(home, ".pi", "agent", "npm", "package.json"),
+		filepath.Join(home, ".pi", "agent", "mcp.json"),
+	} {
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Fatalf("stat %q err = %v, want IsNotExist", path, err)
+		}
+	}
+}
+
+func TestProvisionEngramMCPRetiresAdapterAndMigratesLegacyServers(t *testing.T) {
+	a := NewAdapter()
+	home := t.TempDir()
+	agentDir := filepath.Join(home, ".pi", "agent")
+	settingsPath := filepath.Join(agentDir, "settings.json")
+	npmPackagePath := filepath.Join(agentDir, "npm", "package.json")
+	mcpPath := filepath.Join(agentDir, "mcp.json")
+	legacyPath := filepath.Join(agentDir, "mcp-adapter.json")
+
+	mustWrite := func(path, body string) {
+		t.Helper()
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatalf("MkdirAll(%q) error = %v", path, err)
+		}
+		if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+			t.Fatalf("WriteFile(%q) error = %v", path, err)
+		}
+	}
+	mustWrite(settingsPath, `{"theme":"kanagawa","packages":["npm:gentle-pi@2.5.0","npm:pi-mcp-adapter@2.6.0"]}`)
+	mustWrite(npmPackagePath, `{"name":"pi-user","dependencies":{"left-pad":"^1.0.0","pi-mcp-adapter":"^2.6.0"}}`)
+	mustWrite(legacyPath, `{"mcpServers":{"context7":{"command":"npx"},"engram":{"command":"/opt/engram"}}}`)
+
+	changed, paths, err := a.ProvisionEngramMCP(home)
+	if err != nil {
+		t.Fatalf("ProvisionEngramMCP() error = %v", err)
+	}
+	if !changed {
+		t.Fatalf("ProvisionEngramMCP() changed = false, want the adapter retired and servers migrated")
+	}
+	wantPaths := []string{settingsPath, npmPackagePath, mcpPath}
+	if !reflect.DeepEqual(paths, wantPaths) {
+		t.Fatalf("ProvisionEngramMCP() paths = %v, want %v", paths, wantPaths)
+	}
+
+	var settings map[string]any
+	readTestJSON(t, settingsPath, &settings)
+	if got, _ := settings["packages"].([]any); len(got) != 1 || got[0] != "npm:gentle-pi@2.5.0" {
+		t.Fatalf("settings packages = %#v, want only npm:gentle-pi@2.5.0", settings["packages"])
+	}
+	var npmPackage map[string]any
+	readTestJSON(t, npmPackagePath, &npmPackage)
+	dependencies, _ := npmPackage["dependencies"].(map[string]any)
+	if _, present := dependencies["pi-mcp-adapter"]; present {
+		t.Fatalf("npm dependencies = %#v, want pi-mcp-adapter removed", dependencies)
+	}
+	if _, present := dependencies["left-pad"]; !present {
+		t.Fatalf("npm dependencies = %#v, want left-pad preserved", dependencies)
+	}
+
+	var migrated map[string]any
+	readTestJSON(t, mcpPath, &migrated)
+	servers, _ := migrated["mcpServers"].(map[string]any)
+	if servers["context7"] == nil || servers["engram"] == nil {
+		t.Fatalf("mcp.json mcpServers = %#v, want context7 and engram migrated from mcp-adapter.json", servers)
+	}
+	if !reflect.DeepEqual(servers["engram"], map[string]any{"command": "/opt/engram"}) {
+		t.Fatalf("migrated engram server = %#v, want the user's legacy definition untouched", servers["engram"])
+	}
+
+	// mcp-adapter.json is never modified or removed, so the user can roll back.
+	legacyBody, err := os.ReadFile(legacyPath)
+	if err != nil {
+		t.Fatalf("ReadFile(mcp-adapter.json) error = %v", err)
+	}
+	if string(legacyBody) != `{"mcpServers":{"context7":{"command":"npx"},"engram":{"command":"/opt/engram"}}}` {
+		t.Fatalf("mcp-adapter.json = %s, want byte-identical original", legacyBody)
+	}
+
+	// Second run: nothing left to change.
+	secondChanged, secondPaths, err := a.ProvisionEngramMCP(home)
+	if err != nil {
+		t.Fatalf("ProvisionEngramMCP() second error = %v", err)
+	}
+	if secondChanged || len(secondPaths) != 0 {
+		t.Fatalf("ProvisionEngramMCP() second = (changed %v, paths %v), want idempotent no-op", secondChanged, secondPaths)
+	}
+}
+
+func TestProvisionEngramMCPMigrationPreservesExistingMCPServers(t *testing.T) {
+	a := NewAdapter()
+	home := t.TempDir()
+	agentDir := filepath.Join(home, ".pi", "agent")
+	mcpPath := filepath.Join(agentDir, "mcp.json")
+
+	mustWrite := func(path, body string) {
+		t.Helper()
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatalf("MkdirAll(%q) error = %v", path, err)
+		}
+		if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+			t.Fatalf("WriteFile(%q) error = %v", path, err)
+		}
+	}
+	mustWrite(filepath.Join(agentDir, "mcp-adapter.json"), `{"mcpServers":{"context7":{"command":"legacy-npx"},"user-server":{"command":"uvx"}}}`)
+	mustWrite(mcpPath, `{"mcpServers":{"context7":{"command":"user-npx"},"other":{"command":"node"}}}`)
+
+	changed, paths, err := a.ProvisionEngramMCP(home)
+	if err != nil {
+		t.Fatalf("ProvisionEngramMCP() error = %v", err)
+	}
+	if !changed || len(paths) != 1 || paths[0] != mcpPath {
+		t.Fatalf("ProvisionEngramMCP() = (changed %v, paths %v), want only %q written", changed, paths, mcpPath)
+	}
+
+	var migrated map[string]any
+	readTestJSON(t, mcpPath, &migrated)
+	servers, _ := migrated["mcpServers"].(map[string]any)
+	if !reflect.DeepEqual(servers["context7"], map[string]any{"command": "user-npx"}) {
+		t.Fatalf("context7 = %#v, want the existing mcp.json entry to win over the legacy one", servers["context7"])
+	}
+	if !reflect.DeepEqual(servers["user-server"], map[string]any{"command": "uvx"}) {
+		t.Fatalf("user-server = %#v, want the legacy-only entry migrated", servers["user-server"])
+	}
+	if !reflect.DeepEqual(servers["other"], map[string]any{"command": "node"}) {
+		t.Fatalf("other = %#v, want the unrelated native entry preserved", servers["other"])
+	}
+}
+
+func TestProvisionEngramMCPFailsSafelyOnMalformedInput(t *testing.T) {
+	a := NewAdapter()
+	wellFormed := map[string]string{
+		"settings.json":                      `{"packages":["npm:pi-mcp-adapter"]}`,
+		filepath.Join("npm", "package.json"): `{"dependencies":{"pi-mcp-adapter":"^2.6.0"}}`,
+		"mcp-adapter.json":                   `{"mcpServers":{"context7":{"command":"npx"}}}`,
+		"mcp.json":                           `{"mcpServers":{}}`,
+	}
+	malformed := map[string]string{
+		"settings.json":                      `{"packages":`,
+		filepath.Join("npm", "package.json"): `{"dependencies":`,
+		"mcp-adapter.json":                   `{"mcpServers":`,
+		"mcp.json":                           `{"mcpServers":["context7"`,
+	}
+
+	for name := range wellFormed {
+		t.Run(filepath.Base(name), func(t *testing.T) {
+			home := t.TempDir()
+			agentDir := filepath.Join(home, ".pi", "agent")
+			if err := os.MkdirAll(filepath.Join(agentDir, "npm"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			for companion, body := range wellFormed {
+				if companion == name {
+					continue
+				}
+				if err := os.WriteFile(filepath.Join(agentDir, companion), []byte(body), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			malformedBody := malformed[name]
+			path := filepath.Join(agentDir, name)
+			if err := os.WriteFile(path, []byte(malformedBody), 0o644); err != nil {
+				t.Fatal(err)
+			}
+
+			changed, paths, err := a.ProvisionEngramMCP(home)
+			if err == nil {
+				t.Fatalf("ProvisionEngramMCP() with malformed %s = (changed %v, paths %v, nil error), want a fail-closed error", name, changed, paths)
+			}
+			if changed || len(paths) != 0 {
+				t.Fatalf("ProvisionEngramMCP() with malformed %s = (changed %v, paths %v), want no partial writes reported", name, changed, paths)
+			}
+			data, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(data) != malformedBody {
+				t.Fatalf("malformed %s = %s, want byte-identical original (no data loss)", name, data)
+			}
+		})
+	}
+}
+
+func TestProvisionEngramMCPRejectsNonObjectMCPServers(t *testing.T) {
+	a := NewAdapter()
+	home := t.TempDir()
+	agentDir := filepath.Join(home, ".pi", "agent")
+	mcpPath := filepath.Join(agentDir, "mcp.json")
+	if err := os.MkdirAll(agentDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(agentDir, "mcp-adapter.json"), []byte(`{"mcpServers":{"context7":{"command":"npx"}}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	mcpBody := `{"mcpServers":["context7"]}`
+	if err := os.WriteFile(mcpPath, []byte(mcpBody), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	changed, _, err := a.ProvisionEngramMCP(home)
+	if err == nil {
+		t.Fatalf("ProvisionEngramMCP() with non-object mcpServers = nil error, want a fail-closed error")
+	}
+	if changed {
+		t.Fatalf("ProvisionEngramMCP() with non-object mcpServers changed = true, want no writes")
+	}
+	data, err := os.ReadFile(mcpPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != mcpBody {
+		t.Fatalf("mcp.json = %s, want byte-identical original", data)
+	}
+}
+
+func TestProvisionEngramMCPCreatesMCPConfigOnlyForMigration(t *testing.T) {
+	a := NewAdapter()
+	home := t.TempDir()
+	agentDir := filepath.Join(home, ".pi", "agent")
+	if err := os.MkdirAll(filepath.Join(agentDir, "npm"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(agentDir, "settings.json"), []byte(`{"packages":["npm:pi-mcp-adapter@2.6.0"]}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(agentDir, "npm", "package.json"), []byte(`{"dependencies":{"pi-mcp-adapter":"^2.6.0"}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	changed, paths, err := a.ProvisionEngramMCP(home)
+	if err != nil {
+		t.Fatalf("ProvisionEngramMCP() error = %v", err)
+	}
+	if !changed {
+		t.Fatalf("ProvisionEngramMCP() changed = false, want the adapter pruned")
+	}
+	if slices.Contains(paths, filepath.Join(agentDir, "mcp.json")) {
+		t.Fatalf("paths = %v, want no mcp.json created when there is no legacy server to migrate", paths)
+	}
+	if _, err := os.Stat(filepath.Join(agentDir, "mcp.json")); !os.IsNotExist(err) {
+		t.Fatalf("mcp.json stat err = %v, want IsNotExist (created only to hold migrated servers)", err)
 	}
 }
 
