@@ -258,69 +258,90 @@ func TestInjectOpenCodeIsIdempotent(t *testing.T) {
 	}
 }
 
-func TestInjectPiProvisioningCreatesMissingMCPAdapterFiles(t *testing.T) {
+func TestInjectPiProvisioningWritesNothingOnFreshHome(t *testing.T) {
 	home := t.TempDir()
 
 	result, err := Inject(home, piAdapter())
 	if err != nil {
 		t.Fatalf("Inject() error = %v", err)
 	}
-	if !result.Changed {
-		t.Fatalf("Inject() changed = false")
+	if result.Changed || len(result.Files) != 0 {
+		t.Fatalf("Inject() = (changed %v, files %v), want no writes (Pi Engram is native-only, not MCP)", result.Changed, result.Files)
 	}
-
-	settings := readJSONFile(t, filepath.Join(home, ".pi", "agent", "settings.json"))
-	assertNestedStrings(t, settings, []string{"npm:pi-mcp-adapter"}, "packages")
-
-	npmPackage := readJSONFile(t, filepath.Join(home, ".pi", "agent", "npm", "package.json"))
-	assertNestedString(t, npmPackage, "^2.6.0", "dependencies", "pi-mcp-adapter")
+	for _, path := range []string{
+		filepath.Join(home, ".pi", "agent", "settings.json"),
+		filepath.Join(home, ".pi", "agent", "npm", "package.json"),
+		filepath.Join(home, ".pi", "agent", "mcp.json"),
+		filepath.Join(home, ".pi", "agent", "mcp-adapter.json"),
+	} {
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Fatalf("stat %q err = %v, want IsNotExist", path, err)
+		}
+	}
 }
 
-func TestInjectPiProvisioningPreservesUnrelatedContent(t *testing.T) {
+func TestInjectPiProvisioningMigratesMCPAdapterServersWithoutEngram(t *testing.T) {
 	home := t.TempDir()
-	writeFile(t, filepath.Join(home, ".pi", "agent", "settings.json"), `{"theme":"kanagawa","packages":["npm:other@1.0.0"]}`)
-	writeFile(t, filepath.Join(home, ".pi", "agent", "npm", "package.json"), `{"name":"pi-user","dependencies":{"left-pad":"^1.0.0"},"devDependencies":{"vitest":"^1.0.0"}}`)
+	mcpPath := filepath.Join(home, ".pi", "agent", "mcp.json")
+	writeFile(t, filepath.Join(home, ".pi", "agent", "mcp-adapter.json"), `{"mcpServers":{"context7":{"command":"npx"}}}`)
+
+	result, err := Inject(home, piAdapter())
+	if err != nil {
+		t.Fatalf("Inject() error = %v", err)
+	}
+	if !result.Changed || len(result.Files) != 1 || result.Files[0] != mcpPath {
+		t.Fatalf("Inject() = (changed %v, files %v), want only %q written", result.Changed, result.Files, mcpPath)
+	}
+	config := readJSONFile(t, mcpPath)
+	assertNestedString(t, config, "npx", "mcpServers", "context7", "command")
+	if servers, _ := config["mcpServers"].(map[string]any); servers["engram"] != nil {
+		t.Fatalf("mcp.json servers = %#v, want no engram server (Pi Engram is native-only)", servers)
+	}
+}
+
+func TestInjectPiProvisioningMigratesLegacyServersWithoutClobberingNativeEntries(t *testing.T) {
+	home := t.TempDir()
+	writeFile(t, filepath.Join(home, ".pi", "agent", "mcp-adapter.json"), `{"mcpServers":{"context7":{"command":"legacy-npx"}}}`)
+	writeFile(t, filepath.Join(home, ".pi", "agent", "mcp.json"), `{"mcpServers":{"context7":{"command":"user-npx"}}}`)
 
 	_, err := Inject(home, piAdapter())
 	if err != nil {
 		t.Fatalf("Inject() error = %v", err)
 	}
 
+	config := readJSONFile(t, filepath.Join(home, ".pi", "agent", "mcp.json"))
+	assertNestedString(t, config, "user-npx", "mcpServers", "context7", "command")
+}
+
+func TestInjectPiProvisioningRetiresMCPAdapterAndPreservesUnrelatedContent(t *testing.T) {
+	home := t.TempDir()
+	writeFile(t, filepath.Join(home, ".pi", "agent", "settings.json"), `{"theme":"kanagawa","packages":["npm:other@1.0.0","npm:pi-mcp-adapter@2.0.0"]}`)
+	writeFile(t, filepath.Join(home, ".pi", "agent", "npm", "package.json"), `{"name":"pi-user","dependencies":{"left-pad":"^1.0.0","pi-mcp-adapter":"^2.6.0"},"devDependencies":{"vitest":"^1.0.0"}}`)
+
+	first, err := Inject(home, piAdapter())
+	if err != nil {
+		t.Fatalf("Inject() error = %v", err)
+	}
+	if !first.Changed {
+		t.Fatalf("Inject() changed = false, want the adapter retired")
+	}
+
 	settings := readJSONFile(t, filepath.Join(home, ".pi", "agent", "settings.json"))
 	assertNestedString(t, settings, "kanagawa", "theme")
-	assertNestedStringsUnordered(t, settings, []string{"npm:other@1.0.0", "npm:pi-mcp-adapter"}, "packages")
+	assertNestedStrings(t, settings, []string{"npm:other@1.0.0"}, "packages")
 
 	npmPackage := readJSONFile(t, filepath.Join(home, ".pi", "agent", "npm", "package.json"))
 	assertNestedString(t, npmPackage, "pi-user", "name")
 	assertNestedString(t, npmPackage, "^1.0.0", "dependencies", "left-pad")
-	assertNestedString(t, npmPackage, "^2.6.0", "dependencies", "pi-mcp-adapter")
+	assertNestedMissing(t, npmPackage, "dependencies", "pi-mcp-adapter")
 	assertNestedString(t, npmPackage, "^1.0.0", "devDependencies", "vitest")
-}
-
-func TestInjectPiProvisioningCanonicalizesExistingEntriesAndIsIdempotent(t *testing.T) {
-	home := t.TempDir()
-	writeFile(t, filepath.Join(home, ".pi", "agent", "settings.json"), `{"packages":["npm:pi-mcp-adapter@2.0.0"]}`)
-	writeFile(t, filepath.Join(home, ".pi", "agent", "npm", "package.json"), `{"dependencies":{"pi-mcp-adapter":"^2.0.0"}}`)
-
-	first, err := Inject(home, piAdapter())
-	if err != nil {
-		t.Fatalf("Inject() first error = %v", err)
-	}
-	if !first.Changed {
-		t.Fatalf("Inject() first changed = false")
-	}
-
-	settings := readJSONFile(t, filepath.Join(home, ".pi", "agent", "settings.json"))
-	assertNestedStrings(t, settings, []string{"npm:pi-mcp-adapter"}, "packages")
-	npmPackage := readJSONFile(t, filepath.Join(home, ".pi", "agent", "npm", "package.json"))
-	assertNestedString(t, npmPackage, "^2.6.0", "dependencies", "pi-mcp-adapter")
 
 	second, err := Inject(home, piAdapter())
 	if err != nil {
 		t.Fatalf("Inject() second error = %v", err)
 	}
 	if second.Changed {
-		t.Fatalf("Inject() second changed = true")
+		t.Fatalf("Inject() second changed = true, want idempotent no-op")
 	}
 }
 
@@ -335,7 +356,7 @@ func TestInjectPiProvisioningMigratesLegacyObjectPackages(t *testing.T) {
 
 	settings := readJSONFile(t, filepath.Join(home, ".pi", "agent", "settings.json"))
 	assertNestedString(t, settings, "kanagawa", "theme")
-	assertNestedStringsUnordered(t, settings, []string{"npm:other@1.0.0", "npm:pi-mcp-adapter"}, "packages")
+	assertNestedStrings(t, settings, []string{"npm:other@1.0.0"}, "packages")
 }
 
 // TestInjectOpenCodeMigratesFromOldFormat verifies that when a user's
