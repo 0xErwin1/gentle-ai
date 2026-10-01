@@ -1,6 +1,7 @@
 package pi
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/json"
@@ -13,6 +14,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/gentleman-programming/gentle-ai/v3/internal/components/filemerge"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/system"
 )
@@ -555,9 +557,7 @@ func TestMergePiSettingsFileRemovesRetiredCompanionPackages(t *testing.T) {
 		t.Fatalf("WriteFile(settings) error = %v", err)
 	}
 
-	if _, err := prunePiSettingsFile(settingsPath); err != nil {
-		t.Fatalf("prunePiSettingsFile() error = %v", err)
-	}
+	applyPiSettingsPrune(t, settingsPath)
 
 	var settings struct {
 		Packages []string `json:"packages"`
@@ -595,9 +595,7 @@ func TestMergePiSettingsFileRemovesLegacySubagentPackages(t *testing.T) {
 		t.Fatalf("WriteFile(settings) error = %v", err)
 	}
 
-	if _, err := prunePiSettingsFile(settingsPath); err != nil {
-		t.Fatalf("prunePiSettingsFile() error = %v", err)
-	}
+	applyPiSettingsPrune(t, settingsPath)
 
 	var settings struct {
 		Packages []string `json:"packages"`
@@ -786,6 +784,402 @@ func TestProvisionEngramMCPFailsSafelyOnMalformedInput(t *testing.T) {
 			if string(data) != malformedBody {
 				t.Fatalf("malformed %s = %s, want byte-identical original (no data loss)", name, data)
 			}
+			// Every other participating file must also survive byte-for-byte:
+			// a malformed later file must not leave an earlier step (the
+			// adapter pruning) already applied with no migrated servers.
+			for companion, body := range wellFormed {
+				if companion == name {
+					continue
+				}
+				data, err := os.ReadFile(filepath.Join(agentDir, companion))
+				if err != nil {
+					t.Fatal(err)
+				}
+				if string(data) != body {
+					t.Fatalf("companion %s = %s, want byte-identical original after the failed migration", companion, data)
+				}
+			}
+		})
+	}
+}
+
+func TestProvisionEngramMCPRestoresCompanionsWhenALateWriteFails(t *testing.T) {
+	a := NewAdapter()
+	home := t.TempDir()
+	agentDir := filepath.Join(home, ".pi", "agent")
+	settingsPath := filepath.Join(agentDir, "settings.json")
+	npmPackagePath := filepath.Join(agentDir, "npm", "package.json")
+	mcpPath := filepath.Join(agentDir, "mcp.json")
+
+	origSettings := `{"theme":"kanagawa","packages":["npm:gentle-pi@2.5.0","npm:pi-mcp-adapter@2.6.0"]}`
+	origNPM := `{"name":"pi-user","dependencies":{"left-pad":"^1.0.0","pi-mcp-adapter":"^2.6.0"}}`
+	mustWrite := func(path, body string) {
+		t.Helper()
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatalf("MkdirAll(%q) error = %v", path, err)
+		}
+		if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+			t.Fatalf("WriteFile(%q) error = %v", path, err)
+		}
+	}
+	mustWrite(settingsPath, origSettings)
+	mustWrite(npmPackagePath, origNPM)
+	mustWrite(filepath.Join(agentDir, "mcp-adapter.json"), `{"mcpServers":{"context7":{"command":"npx"}}}`)
+
+	restore := writePiJSONFileAtomic
+	writePiJSONFileAtomic = func(path string, content []byte, perm fs.FileMode) (filemerge.WriteResult, error) {
+		if path == mcpPath {
+			return filemerge.WriteResult{}, fmt.Errorf("injected late write failure for %q", path)
+		}
+		return restore(path, content, perm)
+	}
+	t.Cleanup(func() { writePiJSONFileAtomic = restore })
+
+	changed, paths, err := a.ProvisionEngramMCP(home)
+	if err == nil {
+		t.Fatalf("ProvisionEngramMCP() = nil error, want the injected late write failure surfaced")
+	}
+	// Rollback succeeded, so the reported metadata must describe disk: the
+	// migration changed nothing that survives.
+	if changed || len(paths) != 0 {
+		t.Fatalf("ProvisionEngramMCP() = (changed %v, paths %v), want no surviving writes after rollback", changed, paths)
+	}
+	legacyPath := filepath.Join(agentDir, "mcp-adapter.json")
+	for name, want := range map[string]string{
+		settingsPath:   origSettings,
+		npmPackagePath: origNPM,
+		legacyPath:     `{"mcpServers":{"context7":{"command":"npx"}}}`,
+	} {
+		data, err := os.ReadFile(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(data) != want {
+			t.Fatalf("%s = %s, want byte-identical original after rollback", name, data)
+		}
+	}
+	if _, err := os.Stat(mcpPath); !os.IsNotExist(err) {
+		t.Fatalf("mcp.json stat err = %v, want IsNotExist (migration must not create it when it fails)", err)
+	}
+}
+
+func TestProvisionEngramMCPRollbacksAWriteThatLandedDespiteItsError(t *testing.T) {
+	a := NewAdapter()
+	home := t.TempDir()
+	agentDir := filepath.Join(home, ".pi", "agent")
+	settingsPath := filepath.Join(agentDir, "settings.json")
+	npmPackagePath := filepath.Join(agentDir, "npm", "package.json")
+	mcpPath := filepath.Join(agentDir, "mcp.json")
+
+	origSettings := `{"theme":"kanagawa","packages":["npm:gentle-pi@2.5.0","npm:pi-mcp-adapter@2.6.0"]}`
+	origNPM := `{"name":"pi-user","dependencies":{"left-pad":"^1.0.0","pi-mcp-adapter":"^2.6.0"}}`
+	mustWrite := func(path, body string) {
+		t.Helper()
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatalf("MkdirAll(%q) error = %v", path, err)
+		}
+		if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+			t.Fatalf("WriteFile(%q) error = %v", path, err)
+		}
+	}
+	mustWrite(settingsPath, origSettings)
+	mustWrite(npmPackagePath, origNPM)
+	mustWrite(filepath.Join(agentDir, "mcp-adapter.json"), `{"mcpServers":{"context7":{"command":"npx"}}}`)
+
+	restore := writePiJSONFileAtomic
+	writePiJSONFileAtomic = func(path string, content []byte, perm fs.FileMode) (filemerge.WriteResult, error) {
+		if path == mcpPath {
+			// #1676 shape: the rename landed but a later durability step failed,
+			// so the writer reports Changed=true alongside the error.
+			if _, err := restore(path, content, perm); err != nil {
+				t.Fatalf("seed landed write error = %v", err)
+			}
+			return filemerge.WriteResult{Changed: true, Created: true}, fmt.Errorf("injected landed write failure for %q", path)
+		}
+		return restore(path, content, perm)
+	}
+	t.Cleanup(func() { writePiJSONFileAtomic = restore })
+
+	changed, paths, err := a.ProvisionEngramMCP(home)
+	if err == nil {
+		t.Fatalf("ProvisionEngramMCP() = nil error, want the injected landed write failure surfaced")
+	}
+	if changed || len(paths) != 0 {
+		t.Fatalf("ProvisionEngramMCP() = (changed %v, paths %v), want no surviving writes after rollback", changed, paths)
+	}
+	if _, err := os.Stat(mcpPath); !os.IsNotExist(err) {
+		t.Fatalf("mcp.json stat err = %v, want IsNotExist (a landed-but-failed write must still be rolled back)", err)
+	}
+	for path, want := range map[string]string{
+		settingsPath:   origSettings,
+		npmPackagePath: origNPM,
+	} {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(data) != want {
+			t.Fatalf("%s = %s, want byte-identical original after rollback", path, data)
+		}
+	}
+}
+
+func TestProvisionEngramMCPReportsUnrestorablePathsWhenRollbackFails(t *testing.T) {
+	a := NewAdapter()
+	home := t.TempDir()
+	agentDir := filepath.Join(home, ".pi", "agent")
+	settingsPath := filepath.Join(agentDir, "settings.json")
+	npmPackagePath := filepath.Join(agentDir, "npm", "package.json")
+	mcpPath := filepath.Join(agentDir, "mcp.json")
+
+	origSettings := `{"theme":"kanagawa","packages":["npm:gentle-pi@2.5.0","npm:pi-mcp-adapter@2.6.0"]}`
+	origNPM := `{"name":"pi-user","dependencies":{"left-pad":"^1.0.0","pi-mcp-adapter":"^2.6.0"}}`
+	mustWrite := func(path, body string) {
+		t.Helper()
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatalf("MkdirAll(%q) error = %v", path, err)
+		}
+		if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+			t.Fatalf("WriteFile(%q) error = %v", path, err)
+		}
+	}
+	mustWrite(settingsPath, origSettings)
+	mustWrite(npmPackagePath, origNPM)
+	mustWrite(filepath.Join(agentDir, "mcp-adapter.json"), `{"mcpServers":{"context7":{"command":"npx"}}}`)
+
+	restore := writePiJSONFileAtomic
+	writePiJSONFileAtomic = func(path string, content []byte, perm fs.FileMode) (filemerge.WriteResult, error) {
+		if path == mcpPath {
+			return filemerge.WriteResult{}, fmt.Errorf("injected late write failure for %q", path)
+		}
+		// The rollback restore of settings.json replays the exact original
+		// bytes; fail that too so one file stays migrated.
+		if path == settingsPath && bytes.Equal(content, []byte(origSettings)) {
+			return filemerge.WriteResult{}, fmt.Errorf("injected rollback failure for %q", path)
+		}
+		return restore(path, content, perm)
+	}
+	t.Cleanup(func() { writePiJSONFileAtomic = restore })
+
+	changed, paths, err := a.ProvisionEngramMCP(home)
+	if err == nil {
+		t.Fatalf("ProvisionEngramMCP() = nil error, want the combined write and rollback failure surfaced")
+	}
+	if !strings.Contains(err.Error(), settingsPath) {
+		t.Fatalf("ProvisionEngramMCP() error = %v, want it to name the unrestorable path %q", err, settingsPath)
+	}
+	// Truthful metadata: settings.json could not be restored and still holds
+	// the pruned adapter state; npm/package.json was restored.
+	if !changed {
+		t.Fatalf("ProvisionEngramMCP() changed = false, want true while %q keeps migrated bytes", settingsPath)
+	}
+	if !reflect.DeepEqual(paths, []string{settingsPath}) {
+		t.Fatalf("ProvisionEngramMCP() paths = %v, want only the unrestorable %q", paths, settingsPath)
+	}
+	data, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), "pi-mcp-adapter") {
+		t.Fatalf("settings.json = %s, want the pruned state the truthful report describes", data)
+	}
+	npmData, err := os.ReadFile(npmPackagePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(npmData) != origNPM {
+		t.Fatalf("npm/package.json = %s, want byte-identical original after its restore succeeded", npmData)
+	}
+	if _, err := os.Stat(mcpPath); !os.IsNotExist(err) {
+		t.Fatalf("mcp.json stat err = %v, want IsNotExist", err)
+	}
+}
+
+// TestProvisionEngramMCPReportsUncertainDurabilityWhenARestoreLandsButErrors
+// covers the restore-side twin of the #1676 landed-write shape: a rollback
+// restore whose rename lands but whose durability step (parent-dir fsync)
+// fails reports Changed=true alongside the error. Disk already holds the
+// original bytes, so the report must not claim the file still holds migrated
+// bytes — and must not claim a clean, durable restoration either.
+func TestProvisionEngramMCPReportsUncertainDurabilityWhenARestoreLandsButErrors(t *testing.T) {
+	a := NewAdapter()
+	home := t.TempDir()
+	agentDir := filepath.Join(home, ".pi", "agent")
+	settingsPath := filepath.Join(agentDir, "settings.json")
+	npmPackagePath := filepath.Join(agentDir, "npm", "package.json")
+	mcpPath := filepath.Join(agentDir, "mcp.json")
+
+	origSettings := `{"theme":"kanagawa","packages":["npm:gentle-pi@2.5.0","npm:pi-mcp-adapter@2.6.0"]}`
+	origNPM := `{"name":"pi-user","dependencies":{"left-pad":"^1.0.0","pi-mcp-adapter":"^2.6.0"}}`
+	mustWrite := func(path, body string) {
+		t.Helper()
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatalf("MkdirAll(%q) error = %v", path, err)
+		}
+		if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+			t.Fatalf("WriteFile(%q) error = %v", path, err)
+		}
+	}
+	mustWrite(settingsPath, origSettings)
+	mustWrite(npmPackagePath, origNPM)
+	mustWrite(filepath.Join(agentDir, "mcp-adapter.json"), `{"mcpServers":{"context7":{"command":"npx"}}}`)
+
+	restore := writePiJSONFileAtomic
+	writePiJSONFileAtomic = func(path string, content []byte, perm fs.FileMode) (filemerge.WriteResult, error) {
+		if path == mcpPath {
+			return filemerge.WriteResult{}, fmt.Errorf("injected late write failure for %q", path)
+		}
+		// The rollback restore of settings.json replays the exact original
+		// bytes; land it but fail the durability step.
+		if path == settingsPath && bytes.Equal(content, []byte(origSettings)) {
+			if _, err := restore(path, content, perm); err != nil {
+				t.Fatalf("seed landed restore error = %v", err)
+			}
+			return filemerge.WriteResult{Changed: true}, fmt.Errorf("injected restore durability failure for %q", path)
+		}
+		return restore(path, content, perm)
+	}
+	t.Cleanup(func() { writePiJSONFileAtomic = restore })
+
+	changed, paths, err := a.ProvisionEngramMCP(home)
+	if err == nil {
+		t.Fatalf("ProvisionEngramMCP() = nil error, want the restore durability uncertainty surfaced")
+	}
+	if !strings.Contains(err.Error(), settingsPath) {
+		t.Fatalf("ProvisionEngramMCP() error = %v, want it to name the uncertainly restored path %q", err, settingsPath)
+	}
+	if !strings.Contains(err.Error(), "durability") {
+		t.Fatalf("ProvisionEngramMCP() error = %v, want it to report the unconfirmed durability", err)
+	}
+	if strings.Contains(err.Error(), "could not fully roll back") {
+		t.Fatalf("ProvisionEngramMCP() error = %v, want no claim that %q still holds migrated bytes", err, settingsPath)
+	}
+	// Truthful metadata: disk holds the original bytes, so no migrated change
+	// survives and no path may be listed as unrestorable.
+	if changed || len(paths) != 0 {
+		t.Fatalf("ProvisionEngramMCP() = (changed %v, paths %v), want no surviving writes when disk holds the original bytes", changed, paths)
+	}
+	for path, want := range map[string]string{
+		settingsPath:   origSettings,
+		npmPackagePath: origNPM,
+	} {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(data) != want {
+			t.Fatalf("%s = %s, want byte-identical original after the landed restore", path, data)
+		}
+	}
+	if _, err := os.Stat(mcpPath); !os.IsNotExist(err) {
+		t.Fatalf("mcp.json stat err = %v, want IsNotExist", err)
+	}
+}
+
+// TestProvisionEngramMCPSparesAConcurrentlyReplacedCreatedMCPConfig covers
+// rollback removal of a newly created mcp.json when a concurrent writer has
+// already replaced it: the removal must verify the expected bytes and a
+// regular file type before unlinking, never delete what it did not write,
+// and never recurse.
+func TestProvisionEngramMCPSparesAConcurrentlyReplacedCreatedMCPConfig(t *testing.T) {
+	const unrelatedBody = `{"mcpServers":{"unrelated":{"command":"other"}}}`
+
+	for name, replaceWith := range map[string]func(t *testing.T, path string){
+		"unrelated content": func(t *testing.T, path string) {
+			t.Helper()
+			if err := os.WriteFile(path, []byte(unrelatedBody), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		},
+		"non-regular file": func(t *testing.T, path string) {
+			t.Helper()
+			if err := os.Remove(path); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Mkdir(path, 0o755); err != nil {
+				t.Fatal(err)
+			}
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			a := NewAdapter()
+			home := t.TempDir()
+			agentDir := filepath.Join(home, ".pi", "agent")
+			settingsPath := filepath.Join(agentDir, "settings.json")
+			npmPackagePath := filepath.Join(agentDir, "npm", "package.json")
+			mcpPath := filepath.Join(agentDir, "mcp.json")
+
+			origSettings := `{"theme":"kanagawa","packages":["npm:gentle-pi@2.5.0","npm:pi-mcp-adapter@2.6.0"]}`
+			origNPM := `{"name":"pi-user","dependencies":{"left-pad":"^1.0.0","pi-mcp-adapter":"^2.6.0"}}`
+			mustWrite := func(path, body string) {
+				t.Helper()
+				if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+					t.Fatalf("MkdirAll(%q) error = %v", path, err)
+				}
+				if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+					t.Fatalf("WriteFile(%q) error = %v", path, err)
+				}
+			}
+			mustWrite(settingsPath, origSettings)
+			mustWrite(npmPackagePath, origNPM)
+			mustWrite(filepath.Join(agentDir, "mcp-adapter.json"), `{"mcpServers":{"context7":{"command":"npx"}}}`)
+
+			restore := writePiJSONFileAtomic
+			writePiJSONFileAtomic = func(path string, content []byte, perm fs.FileMode) (filemerge.WriteResult, error) {
+				if path == mcpPath {
+					// The migration's write lands, then a concurrent writer
+					// replaces the file before rollback can remove it.
+					if _, err := restore(path, content, perm); err != nil {
+						t.Fatalf("seed landed write error = %v", err)
+					}
+					replaceWith(t, mcpPath)
+					return filemerge.WriteResult{Changed: true, Created: true}, fmt.Errorf("injected landed write failure for %q", path)
+				}
+				return restore(path, content, perm)
+			}
+			t.Cleanup(func() { writePiJSONFileAtomic = restore })
+
+			changed, paths, err := a.ProvisionEngramMCP(home)
+			if err == nil {
+				t.Fatalf("ProvisionEngramMCP() = nil error, want the concurrent replacement surfaced")
+			}
+			if !strings.Contains(err.Error(), mcpPath) {
+				t.Fatalf("ProvisionEngramMCP() error = %v, want it to name the replaced path %q", err, mcpPath)
+			}
+			if strings.Contains(err.Error(), "could not fully roll back") {
+				t.Fatalf("ProvisionEngramMCP() error = %v, want no claim that %q still holds migrated bytes", err, mcpPath)
+			}
+			// The replacement is not the migration's to delete, and it holds no
+			// migrated bytes, so metadata stays clean while the error explains
+			// why removal was skipped.
+			if changed || len(paths) != 0 {
+				t.Fatalf("ProvisionEngramMCP() = (changed %v, paths %v), want no surviving writes after sparing the replacement", changed, paths)
+			}
+			info, err := os.Lstat(mcpPath)
+			if err != nil {
+				t.Fatalf("mcp.json stat err = %v, want the concurrent replacement left in place", err)
+			}
+			if info.Mode().IsRegular() {
+				data, err := os.ReadFile(mcpPath)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if string(data) != unrelatedBody {
+					t.Fatalf("mcp.json = %s, want the unrelated replacement left untouched", data)
+				}
+			}
+			for path, want := range map[string]string{
+				settingsPath:   origSettings,
+				npmPackagePath: origNPM,
+			} {
+				data, err := os.ReadFile(path)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if string(data) != want {
+					t.Fatalf("%s = %s, want byte-identical original after rollback", path, data)
+				}
+			}
 		})
 	}
 }
@@ -848,6 +1242,20 @@ func TestProvisionEngramMCPCreatesMCPConfigOnlyForMigration(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(agentDir, "mcp.json")); !os.IsNotExist(err) {
 		t.Fatalf("mcp.json stat err = %v, want IsNotExist (created only to hold migrated servers)", err)
+	}
+}
+
+func applyPiSettingsPrune(t *testing.T, path string) {
+	t.Helper()
+	plan, err := planPrunePiSettingsFile(path)
+	if err != nil {
+		t.Fatalf("planPrunePiSettingsFile() error = %v", err)
+	}
+	if plan.content == nil {
+		t.Fatalf("planPrunePiSettingsFile() planned no rewrite, want retired packages dropped")
+	}
+	if _, err := writePiJSONFileAtomic(path, plan.content, 0o644); err != nil {
+		t.Fatalf("write pruned settings error = %v", err)
 	}
 }
 
