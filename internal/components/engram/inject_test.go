@@ -1448,6 +1448,23 @@ func TestInjectPiProvisioningMigratesMCPAdapterServersWithoutEngram(t *testing.T
 	}
 }
 
+// TestInjectPiProvisioningMigratesLegacyServersWithoutClobberingNativeEntries
+// verifies that migrating legacy mcp-adapter.json servers preserves the
+// native entries a user already has in mcp.json.
+func TestInjectPiProvisioningMigratesLegacyServersWithoutClobberingNativeEntries(t *testing.T) {
+	home := t.TempDir()
+	writeFile(t, filepath.Join(home, ".pi", "agent", "mcp-adapter.json"), `{"mcpServers":{"context7":{"command":"legacy-npx"}}}`)
+	writeFile(t, filepath.Join(home, ".pi", "agent", "mcp.json"), `{"mcpServers":{"context7":{"command":"user-npx"}}}`)
+
+	_, err := Inject(home, piAdapter())
+	if err != nil {
+		t.Fatalf("Inject() error = %v", err)
+	}
+
+	config := readJSONFile(t, filepath.Join(home, ".pi", "agent", "mcp.json"))
+	assertNestedString(t, config, "user-npx", "mcpServers", "context7", "command")
+}
+
 func TestInjectPiProvisioningRetiresMCPAdapterAndPreservesUnrelatedContent(t *testing.T) {
 	home := t.TempDir()
 	writeFile(t, filepath.Join(home, ".pi", "agent", "settings.json"), `{"theme":"kanagawa","packages":["npm:other@1.0.0","npm:pi-mcp-adapter@2.0.0"]}`)
