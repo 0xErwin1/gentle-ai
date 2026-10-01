@@ -144,13 +144,27 @@ jobs:
             scripts/normalize-private-optional-platform-closure.mjs \
             e2e/normalize-private-optional-platform-closure.test.mjs \
             scripts/bootstrap-gentle-shell-private-node.sh \
-            e2e/shell-linux-node-bootstrap-controls.sh "$context/"
+            e2e/shell-linux-node-bootstrap-controls.sh \
+            scripts/acquire-gentle-shell-private-bundle.sh \
+            e2e/shell-linux-bundle-acquisition-controls.sh "$context/"
           printf 'Owned Node bootstrap commands source=%s archive-bytes=57224421\n' "$GITHUB_SHA"
           sha256sum "$context/bootstrap-gentle-shell-private-node.sh" \
             "$context/shell-linux-node-bootstrap-controls.sh" \
-            "$context/Dockerfile.shell-linux-private-runtime"
+            "$context/acquire-gentle-shell-private-bundle.sh" \
+            "$context/shell-linux-bundle-acquisition-controls.sh" \
+            "$context/Dockerfile.shell-linux-private-runtime" \
+            .github/workflows/shell-linux-first-ci.yml
           printf '%s\n' \
-            'ulimit -t 60 && ulimit -u 64 && timeout --kill-after=5 90 env -i PATH=/usr/bin:/bin HOME=/acquire /bin/sh /owned/bootstrap-gentle-shell-private-node.sh --destination /bundle/node --node-archive /node.tgz' \
+            'ulimit -t 240 && ulimit -u 64 && timeout --kill-after=5 450 env -i PATH=/usr/bin:/bin HOME=/acquire /bin/sh /owned/acquire-gentle-shell-private-bundle.sh --destination /acquire/published --node-archive /node.tgz' \
+            '/bin/bash -c "ulimit -t 240 && ulimit -u 64 && exec /bin/sh /usr/local/bin/shell-linux-bundle-acquisition-controls.sh"' \
+            'timeout --kill-after=5 90 env -i PATH=/usr/bin:/bin HOME="$stage/home" /bin/sh "$bootstrap" --destination "$bundle/node" --node-archive "$archive"' \
+            'ulimit -f 1024 && exec env -i PATH=/usr/bin:/bin HOME=/tmp/bundle-fixture /bin/sh /usr/local/bin/acquire-gentle-shell-private-bundle.sh --destination /tmp/bundle-parent/rejected --node-archive /node.tgz' \
+            '(cd "$bundle/project" && private_npm install --package-lock-only)' \
+            '(cd "$bundle/project" && private_npm ci)' \
+            'find . -type f \( -name package.json -o -name package-lock.json -o -name binding.gyp \) -exec cp --parents -t "$stage/metadata" {} +' \
+            '/bin/bash -o pipefail -c '\''cd "$1" && find node cache project -type f -print0 | LC_ALL=C sort -z | xargs -0 sha256sum'\'' bash "$bundle"' \
+            'timeout --kill-after=5 240 env -i HOME="$stage/home" TMPDIR="$stage/tmp" XDG_CONFIG_HOME="$stage/config" XDG_STATE_HOME="$stage/state" PATH="$bundle/node/bin:/usr/bin:/bin" NPM_CONFIG_USERCONFIG="$stage/config/user.npmrc" NPM_CONFIG_GLOBALCONFIG="$stage/config/global.npmrc" "$node" --max-old-space-size=2048 "$npm" "$@" --ignore-scripts --engine-strict --no-audit --no-fund --registry=https://registry.npmjs.org --cache="$bundle/cache"' \
+            'timeout --kill-after=5 150 env -i HOME="$stage/home" TMPDIR="$stage/tmp" XDG_CONFIG_HOME="$stage/config" XDG_STATE_HOME="$stage/state" PATH="$bundle/node/bin:/usr/bin:/bin" NPM_CONFIG_USERCONFIG="$stage/config/user.npmrc" NPM_CONFIG_GLOBALCONFIG="$stage/config/global.npmrc" "$node" --max-old-space-size=256 "$sri" "$bundle/project/package-lock.json"' \
             '/bin/bash -c "ulimit -t 240 && ulimit -u 64 && exec /bin/sh /usr/local/bin/shell-linux-node-bootstrap-controls.sh"' \
             '/bin/bash -c "ulimit -t 240 && ulimit -u 64 && exec /bin/sh /usr/local/bin/shell-linux-private-runtime-guest.sh"' \
             'ulimit -f 1024 && exec env -i PATH=/usr/bin:/bin HOME=/tmp/bootstrap-fixture /bin/sh /usr/local/bin/bootstrap-gentle-shell-private-node.sh --destination /tmp/bootstrap-parent/rejected --node-archive /node.tgz' \
@@ -161,9 +175,8 @@ jobs:
             "$context/normalize-private-optional-platform-closure.mjs" \
             "$context/normalize-private-optional-platform-closure.test.mjs"
           printf '%s\n' \
-            '/bundle/node/bin/node --max-old-space-size=256 /owned/complete-generated-lock-sri.test.mjs' \
-            '/bundle/node/bin/node --max-old-space-size=256 /owned/complete-generated-lock-sri.mjs /bundle/project/package-lock.json' \
-            '/bundle/node/bin/node --max-old-space-size=256 /owned/normalize-private-optional-platform-closure.test.mjs' \
+            '/acquire/published/bundle/node/bin/node --max-old-space-size=256 /owned/complete-generated-lock-sri.test.mjs' \
+            '/acquire/published/bundle/node/bin/node --max-old-space-size=256 /owned/normalize-private-optional-platform-closure.test.mjs' \
             'normalizer="$(dirname "$0")/normalize-private-optional-platform-closure.mjs"' \
             'env -i "$node" --input-type=module - "$stage/project" "$normalizer"'
           # Capture complete output in memory; reject excess before public printing.
