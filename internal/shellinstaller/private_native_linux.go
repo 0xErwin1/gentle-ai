@@ -117,8 +117,8 @@ func privateNativeAuthority(ctx context.Context, dest string) (string, error) {
 		size      int64
 	}{
 		{"node/bin/node", privateNativeNodeSHA, 0700, privateNativeNodeSize},
-		{"project/node_modules/gentle-pi/scripts/gentle-ai-installer.mjs", privateNativeInstallerSHA, 0644, 40940},
-		{"project/node_modules/gentle-pi/runtime/gentle-ai-binary.mjs", privateNativeResolverSHA, 0644, 15444},
+		{"project/node_modules/gentle-pi/scripts/gentle-ai-installer.mjs", privateNativeInstallerSHA, 0600, 40940},
+		{"project/node_modules/gentle-pi/runtime/gentle-ai-binary.mjs", privateNativeResolverSHA, 0600, 15444},
 		{"project/package.json", "", 0, -1},
 		{"project/package-lock.json", "", 0, -1},
 		{"closure.json", "", 0, -1},

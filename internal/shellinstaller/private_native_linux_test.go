@@ -268,11 +268,11 @@ func TestPrivateNativeInstall(t *testing.T) {
 		mode       os.FileMode
 		content    bool
 	}{
-		{"Node content", "node/bin/node", 0755, true},
+		{"Node content", "node/bin/node", 0700, true},
 		{"Node mode", "node/bin/node", 0644, false},
-		{"supplier content", "project/node_modules/gentle-pi/scripts/gentle-ai-installer.mjs", 0644, true},
+		{"supplier content", "project/node_modules/gentle-pi/scripts/gentle-ai-installer.mjs", 0600, true},
 		{"supplier mode", "project/node_modules/gentle-pi/scripts/gentle-ai-installer.mjs", 0664, false},
-		{"resolver content", "project/node_modules/gentle-pi/runtime/gentle-ai-binary.mjs", 0644, true},
+		{"resolver content", "project/node_modules/gentle-pi/runtime/gentle-ai-binary.mjs", 0600, true},
 		{"metadata content", "project/node_modules/gentle-pi/package.json", 0644, true},
 		{"lock content", "project/package-lock.json", 0600, true},
 		{"closure content", "closure.json", 0600, true},
