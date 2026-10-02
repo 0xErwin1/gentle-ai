@@ -12,8 +12,9 @@ Keep: review-integration.md:220, telemetry legacy `sdd-*` values, negative contr
 - [ ] T4 Verify residual grep + links, open PR, comment on #4556
 
 ## Evidence
-- T1 bcd8a622 docs(sdd): describe ODD in components, trigger rules and Kiro guides
-- T2 3e7ac352 docs(sdd): replace FINALIZE and stale orchestrator prompt claims (testing guide: organic e2e agent has no prompt, so the claim was corrected rather than repathed)
-- T3 5cd89bdc docs(sdd): sweep remaining SDD references from living docs
+- T1 ad0dfa8b docs(sdd): describe ODD in components, trigger rules and Kiro guides
+- T2 3c82b1d1 docs(sdd): replace FINALIZE and stale orchestrator prompt claims (testing guide: organic e2e agent has no prompt, so the claim was corrected rather than repathed)
+- T3 b963e4b5 docs(sdd): sweep remaining SDD references from living docs
+- Rebased onto upstream/main 9dfe17d8 after the v4.0.0 release (clean, no conflicts); ff0834e7 docs(sdd): mark the SDD retirement as shipped in v4.0.0 (verified: e219644b is an ancestor of v4.0.0, no sdd-* assets in the v4.0.0 tree).
 - Checks: git diff --check clean; residual grep hits are banners, legacy paths/values, or negative controls.
 - Follow-ups (code, out of scope): internal/tui/screens/preset.go:21 "Memory + SDD + skills"; internal/catalog/skills.go still lists sdd-* skills.
