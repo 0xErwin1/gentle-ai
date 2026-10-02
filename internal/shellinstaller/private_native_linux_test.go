@@ -366,7 +366,9 @@ func TestPrivateNativeInstall(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()
 	result, err = RunPrivateNativeInstall(ctx, dest)
-	privateMust(t, err)
+	if err != nil {
+		t.Fatalf("native positive: %v; cause=%v; detail=%v", err, errors.Unwrap(err), errors.Unwrap(errors.Unwrap(err)))
+	}
 	if result.State != "NativeInstalled" || result.StateRoot != root || result.Version != "3.7.0" || result.BinarySHA256 != privateNativeBinarySHA || result.Manifest != privateNativeManifest {
 		t.Fatal("public native component result differs")
 	}

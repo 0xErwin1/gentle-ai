@@ -40,7 +40,7 @@ func privateNativeFile(ctx context.Context, path string, mode os.FileMode, size 
 	}
 	info, err := privatePhysical(path)
 	if err != nil || info.Sys().(*syscall.Stat_t).Uid != uint32(os.Getuid()) || (mode != 0 && info.Mode() != mode) || (mode == 0 && info.Mode() != 0600 && info.Mode() != 0644 && info.Mode() != 0755) || info.Size() > 268435456 || (size >= 0 && info.Size() != size) {
-		return "", privateError("source", err)
+		return "", privateError("source", errors.Join(err, fmt.Errorf("native file refused: %s metadata=%v", path, info)))
 	}
 	file, err := os.Open(path)
 	if err != nil {
@@ -116,7 +116,7 @@ func privateNativeAuthority(ctx context.Context, dest string) (string, error) {
 		mode      os.FileMode
 		size      int64
 	}{
-		{"node/bin/node", privateNativeNodeSHA, 0755, privateNativeNodeSize},
+		{"node/bin/node", privateNativeNodeSHA, 0700, privateNativeNodeSize},
 		{"project/node_modules/gentle-pi/scripts/gentle-ai-installer.mjs", privateNativeInstallerSHA, 0644, 40940},
 		{"project/node_modules/gentle-pi/runtime/gentle-ai-binary.mjs", privateNativeResolverSHA, 0644, 15444},
 		{"project/package.json", "", 0, -1},
@@ -244,7 +244,8 @@ func privateNativeState(ctx context.Context, root string) (bool, error) {
 	if len(entries) == 0 {
 		return false, nil
 	}
-	return true, privateNativeReadback(ctx, root)
+	err = privateNativeReadback(ctx, root)
+	return err == nil, err
 }
 
 func privateNativeEnvironment(workspace string) []string {
