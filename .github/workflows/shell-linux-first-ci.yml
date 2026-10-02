@@ -243,6 +243,8 @@ jobs:
             scripts/private_helpers.go \
             internal/shellinstaller/private_runtime_linux.go \
             internal/shellinstaller/private_runtime_linux_test.go \
+            internal/shellinstaller/private_native_linux.go \
+            internal/shellinstaller/private_native_linux_test.go \
             | head -c 65536 | tee "$format_diff"
           test ! -s "$format_diff"
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
@@ -268,12 +270,20 @@ jobs:
           cp "$scratch/shellinstaller.test" e2e/Dockerfile.shell-linux-go-backend "$go_context/"
           sha256sum "$scratch/shellinstaller.test" scripts/private_helpers.go \
             internal/shellinstaller/private_runtime_linux.go internal/shellinstaller/private_runtime_linux_test.go \
+            internal/shellinstaller/private_native_linux.go internal/shellinstaller/private_native_linux_test.go \
             scripts/acquire-gentle-shell-private-bundle.sh scripts/bootstrap-gentle-shell-private-node.sh \
             scripts/complete-generated-lock-sri.mjs scripts/install-gentle-shell-private.sh \
             scripts/normalize-private-optional-platform-closure.mjs e2e/Dockerfile.shell-linux-go-backend .github/workflows/shell-linux-first-ci.yml
           printf 'Go backend source=%s; Node DATA sha256=783130984963db7ba9cbd01089eaf2c2efb055c7c1693c943174b967b3050cb8\n' "$GITHUB_SHA"
           printf '%s\n' 'env -i PATH="$PATH" HOME="$RUNNER_TEMP/shell-ci/home" TMPDIR="$RUNNER_TEMP/shell-ci/tmp" GOCACHE="$RUNNER_TEMP/shell-ci/gocache" GOMODCACHE="$GOMODCACHE" GOTOOLCHAIN=local GOPROXY=off GOSUMDB=off CGO_ENABLED=0 go test -mod=readonly -c -o "$scratch/shellinstaller.test" ./internal/shellinstaller'
           printf '%s\n' 'env -i PATH=/usr/bin:/bin HOME=/tmp TMPDIR=/tmp GENTLE_PRIVATE_GUEST=approved /go-backend.test -test.run=^TestPrivate -test.v -test.timeout=900s'
+          # Native supplier is Guest-only, after independent Node/module pin checks.
+          # No postinstall, updater, Pi launch or global setup command is admitted.
+          printf '%s\n' \
+            'Native Node ELF: bytes=123655872 sha256=41a74efb34cbde5c7632cdac0cf8bd1a14d0b8d73dc1e82755014d9a9ce70f5c' \
+            'Native supplier: installGentleAi({packageRoot}); stock stable source 0d57ec9926847b7363362e5a07d999b464b9cf93a6cffd62b0acc093259df7fb' \
+            'Native resolver: package pin only; stock source cbdf5deac8b7a85ab1253dbd049953aeb192a7d1f7987f9206916ab449c10a92' \
+            'Native version ONLY: <private-package-root>/.gentle-ai/v3.7.0/gentle-ai version; expected gentle-ai 3.7.0 plus newline; Ready=false'
           bounded() {
             local output status=0 bytes
             output="$("$@" 2>&1 | base64 -w0)" || status=$?
@@ -293,18 +303,18 @@ jobs:
 
           # Add live non-root membership qualification, not a second fault-suite
           # replacement. The first private-namespace run still executes ALL tests.
-          # Repeat every mapping DATA control and the complete cold API pipeline.
+          # Repeat mapping controls and full warm, cold and native public pipelines.
           bounded printf '%s\n' \
             "Host-like Go Guest candidate source=$GITHUB_SHA; require live non-root membership; kernel limits unchanged" \
-            'timeout --kill-after=5 900 docker run --rm --pull=never --cgroupns=host --network default --read-only --user 65532:65532 --cap-drop=ALL --security-opt=no-new-privileges --tmpfs /tmp:rw,nosuid,nodev,exec,mode=1777,size=2g --cpus=1 --memory=3g --memory-swap=3g --pids-limit=64 gentle-shell-go-backend:ci -private-cgroup-non-root=true -test.run=^TestPrivate(CgroupMapping|Install|ColdInstall)$' \
-            'Fixed ENTRYPOINT env-i retains exactly PATH HOME TMPDIR GENTLE_PRIVATE_GUEST; appended test.run selects mapping and full install; live-cgroup-member must be non-root'
+            'timeout --kill-after=5 900 docker run --rm --pull=never --cgroupns=host --network default --read-only --user 65532:65532 --cap-drop=ALL --security-opt=no-new-privileges --tmpfs /tmp:rw,nosuid,nodev,exec,mode=1777,size=2g --cpus=1 --memory=3g --memory-swap=3g --pids-limit=64 gentle-shell-go-backend:ci -private-cgroup-non-root=true -test.run=^TestPrivate(CgroupMapping|Install|ColdInstall|NativeInstall)$' \
+            'Fixed ENTRYPOINT env-i retains exactly PATH HOME TMPDIR GENTLE_PRIVATE_GUEST; appended test.run selects mapping and full warm/cold/native install; live-cgroup-member must be non-root'
           bounded timeout --kill-after=5 900 docker run --rm --pull=never \
             --cgroupns=host --network default --read-only --user 65532:65532 \
             --cap-drop=ALL --security-opt=no-new-privileges \
             --tmpfs /tmp:rw,nosuid,nodev,exec,mode=1777,size=2g \
             --cpus=1 --memory=3g --memory-swap=3g --pids-limit=64 \
             gentle-shell-go-backend:ci -private-cgroup-non-root=true \
-            '-test.run=^TestPrivate(CgroupMapping|Install|ColdInstall)$'
+            '-test.run=^TestPrivate(CgroupMapping|Install|ColdInstall|NativeInstall)$'
 
       - name: Run focused tests with a scrubbed process environment
         shell: bash
