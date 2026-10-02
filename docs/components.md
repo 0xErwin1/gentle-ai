@@ -21,7 +21,7 @@
 
 ODD (Organic Driven Development) is shared routing guidance, not a separate component to install. It is the only implementation workflow for direct and delegated work. See [ODD and recovery](usage.md#organic-driven-development-odd).
 
-> **Since v4 (unreleased):** the SDD (Spec-Driven Development) component and its `sdd-*` skills are retired in favor of ODD. A legacy `sdd` selection persisted in state is still read, but install and sync no longer write its assets.
+> **Since v4.0.0:** the SDD (Spec-Driven Development) component and its `sdd-*` skills are retired in favor of ODD. A legacy `sdd` selection persisted in state is still read, but install and sync no longer write its assets.
 
 ## Primary remote-authorization guidance
 

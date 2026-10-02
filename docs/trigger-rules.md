@@ -10,7 +10,7 @@ the actions that benefit from fresh context, and uses [Organic Driven Developmen
 (ODD)](usage.md#organic-driven-development-odd) for every implementation request.
 Native providers own verification, review mechanics, and lifecycle authority; ordinary repository policy owns delivery.
 
-> **Since v4 (unreleased):** SDD (Spec-Driven Development) is retired. ODD is
+> **Since v4.0.0:** SDD (Spec-Driven Development) is retired. ODD is
 > the only implementation workflow; there is no optional SDD route.
 
 ## Quick path

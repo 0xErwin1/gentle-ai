@@ -40,7 +40,7 @@ In practice: **the installer detects Kiro from `~/.kiro`**, not from `PATH`. If 
 
 ## ODD Execution Model
 
-> **Since v4 (unreleased):** SDD (Spec-Driven Development) is retired in favor of [ODD](usage.md#organic-driven-development-odd). gentle-ai no longer installs `sdd-*` Kiro agents and no longer routes work through `.kiro/specs/`. Existing `sdd-*` agent files from earlier installs are left in place.
+> **Since v4.0.0:** SDD (Spec-Driven Development) is retired in favor of [ODD](usage.md#organic-driven-development-odd). gentle-ai no longer installs `sdd-*` Kiro agents and no longer routes work through `.kiro/specs/`. Existing `sdd-*` agent files from earlier installs are left in place.
 
 Kiro runs with **native sub-agent delegation** via `~/.kiro/agents/`.
 
