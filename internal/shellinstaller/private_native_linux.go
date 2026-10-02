@@ -39,7 +39,7 @@ func privateNativeFile(ctx context.Context, path string, mode os.FileMode, size 
 		return "", err
 	}
 	info, err := privatePhysical(path)
-	if err != nil || info.Sys().(*syscall.Stat_t).Uid != uint32(os.Getuid()) || (mode != 0 && info.Mode() != mode) || (mode == 0 && info.Mode() != 0600 && info.Mode() != 0644 && info.Mode() != 0755) || info.Size() > 268435456 || (size >= 0 && info.Size() != size) {
+	if err != nil || info.Sys().(*syscall.Stat_t).Uid != uint32(os.Getuid()) || (mode != 0 && info.Mode() != mode) || (mode == 0 && info.Mode() != 0600 && info.Mode() != 0644 && info.Mode() != 0700 && info.Mode() != 0755) || info.Size() > 268435456 || (size >= 0 && info.Size() != size) {
 		return "", privateError("source", errors.Join(err, fmt.Errorf("native file refused: %s metadata=%v", path, info)))
 	}
 	file, err := os.Open(path)
