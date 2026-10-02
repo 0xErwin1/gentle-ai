@@ -69,3 +69,17 @@ If #4701 lands first, refresh main/forms/workflows and STOP for scope/budget rea
 Old 870-target migration plan is STALE: refetch and regenerate only in a future authorized task; no migration here.
 T3 server-owned runtime version/digest enforcement belongs to the external control center, not these docs.
 Engram locator: odd/github-issue-taxonomy-standardization/tasks; mirror pending: topic lookup timed out twice; read-only diagnostics OK, no save attempted.
+
+## PR #5207 authorized review follow-up — new candidate
+
+Human relay: “ok, aplica el cambio que sugirió”; source/tests only, no delivery/native review authority.
+Scope: automatic preservation versus exact human-authorized type correction; original 16 surfaces minus forms/template, no runtime/workflow or 870-target migration. Historical lines 1–71 remain frozen.
+Forecast: follow-up 80–120 changed lines; conservative full PR 346–386, hard cap 400 including mirrors/tests/ODD.
+RED/GREEN: `GOTOOLCHAIN=local GOPROXY=off GOSUMDB=off go test -count=1 ./internal/assets/... ./internal/components/skills/... ./internal/catalog/...`
+RED: new TestIssueTaxonomyHumanReclassification failed for absent clarification/scenarios; other packages passed. Initial GREEN: all three packages passed (assets 11.875s, skills 0.103s, catalog 0.005s); final writer count=1 run passed (assets 4.948s, skills 0.100s, catalog 0.004s). Both timings are proven by the writer's recorded transcript, not a new baseline.
+Coverage: wrong type automatic/no authority DEFER; explicit named replacement; multiple automatic DEFER, complete named resolution allowed/incomplete STOP; unknown/target/capability/pre-state STOP. These pin docs, not a runtime engine; CLI/privacy/control fingerprints retained; canonical version 1.6, triage byte parity.
+Runtime harness: N/A — authored docs/assets only. Rollback: this follow-up in the 13 currently authorized surfaces only, preserving the original candidate.
+Actual after quality clarification: follow-up 96 = 82 additions + 14 deletions / 13 files; full PR 334 = 317 + 17 / original 16 files (66 lines headroom). Diff check, Go formatting, triage parity, frozen-history comparison, unchanged HEAD and empty index passed; no untracked files.
+Pending: fresh independent review and separately authorized delivery; burned review-d3a883fc6e869af0 is not reused/repaired. No GitHub label changes, commit/push/publication or native review. Engram mirror remains pending under parent's local fallback, no retries/save.
+Quality follow-up forecast: 8–14 additional changed lines, full PR ≤344; only new follow-up text and explicit post-attempt unknown/unavailable/mismatched readback decision row/assertion changed.
+Quality RED/GREEN: same fresh offline count=1 command above; RED failed solely for missing dedicated row (assets 5.059s); GREEN passed all three packages (assets 14.119s, skills 0.106s, catalog 0.004s). Final metadata-snapshot validation is reported separately; no runtime/GitHub action or new authority.

@@ -65,7 +65,7 @@ This reviewed catalog applies only to `github.com/Gentleman-Programming/gentle-a
 
 ### Type Labels (Issues and PRs)
 
-Issues may recommend zero or one type, abstaining when evidence is unclear; PRs require exactly one under existing CI. Preserve every existing `type:*` and unrelated label; multiple type labels require a human decision, not automatic replacement. Classification does not grant status or priority authority.
+Issues may recommend zero or one type, abstaining when evidence is unclear; PRs require exactly one under existing CI. During automatic classification: Preserve every existing `type:*` and unrelated label; multiple type labels defer to the human, not automatic replacement. Explicit human-authorized type correction follows the [canonical delegated gates](internal/assets/skills/issue-creation/references/delegated-workflow-actions.md), not an automatic overwrite. Classification does not grant status or priority authority.
 
 | Label | Description |
 |-------|-------------|
