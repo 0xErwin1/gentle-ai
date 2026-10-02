@@ -40,6 +40,8 @@ gh pr edit "$NUMBER" --repo "$TARGET" --remove-label "size:exception"
 
 ## Ordinary bounded action and read-back
 
+Before an ordinary label action, apply the canonical skill's approved catalog gate when required by target policy; existing inventory is not permission, unknown names stop, and catalog membership never grants instruction or capability. Preserve every existing type, priority and unrelated label; multiple type labels or conflicting classification require a human decision without overwrite. Classification is not status/priority authority; protected labels remain excluded from this path.
+
 For a classified ordinary label only, make exactly one bounded mutation attempt with no blind retry:
 
 ```bash

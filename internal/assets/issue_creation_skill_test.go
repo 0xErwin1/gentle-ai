@@ -28,7 +28,7 @@ func TestIssueCreationSkillPublicationContract(t *testing.T) {
 		{"delegated workflow mutation", []string{"Before ANY post-publication workflow mutation", "current direct human instruction", "read `references/delegated-workflow-actions.md` completely and follow it"}},
 		{"comment parent identity", []string{"returned comment's `issue_url`", "issue `$NUMBER` in `$REPO` on `$HOST`", "absent or mismatched parent identity is `unknown`", "Clean up and stop all mutations and retries"}},
 		{"candidate target identity", []string{"returned candidate number and URL in `DISCOVERY_FILE`", "`$CANDIDATE_NUMBER` in `$REPO` on `$HOST` before classification", "a mismatch is `unknown`"}},
-		{"canonical version", []string{"version: \"1.4\""}},
+		{"canonical version", []string{"version: \"1.5\""}},
 	}
 
 	for _, contract := range contracts {
