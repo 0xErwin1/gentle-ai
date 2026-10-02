@@ -591,19 +591,45 @@ func TestPrivateColdData(t *testing.T) {
 		wantOK bool
 	}{
 		{"valid", func(*http.Response, *privateColdBody, *privateColdSink, context.CancelFunc) {}, true},
-		{"status", func(r *http.Response, _ *privateColdBody, _ *privateColdSink, _ context.CancelFunc) { r.StatusCode = 302 }, false},
-		{"encoding", func(r *http.Response, _ *privateColdBody, _ *privateColdSink, _ context.CancelFunc) { r.Header.Set("Content-Encoding", "gzip") }, false},
-		{"duplicate encoding", func(r *http.Response, _ *privateColdBody, _ *privateColdSink, _ context.CancelFunc) { r.Header["Content-Encoding"] = []string{"identity", "gzip"} }, false},
-		{"decoded", func(r *http.Response, _ *privateColdBody, _ *privateColdSink, _ context.CancelFunc) { r.Uncompressed = true }, false},
-		{"declared length", func(r *http.Response, _ *privateColdBody, _ *privateColdSink, _ context.CancelFunc) { r.ContentLength++ }, false},
-		{"unknown length", func(r *http.Response, _ *privateColdBody, _ *privateColdSink, _ context.CancelFunc) { r.ContentLength = -1 }, false},
-		{"oversize", func(_ *http.Response, b *privateColdBody, _ *privateColdSink, _ context.CancelFunc) { b.Reader = bytes.NewReader(append(append([]byte(nil), fixture...), 'x')) }, false},
-		{"truncated", func(_ *http.Response, b *privateColdBody, _ *privateColdSink, _ context.CancelFunc) { b.Reader = bytes.NewReader(fixture[:len(fixture)-1]) }, false},
-		{"hash", func(_ *http.Response, b *privateColdBody, _ *privateColdSink, _ context.CancelFunc) { b.Reader = bytes.NewReader(bytes.Repeat([]byte{'x'}, len(fixture))) }, false},
-		{"read", func(_ *http.Response, b *privateColdBody, _ *privateColdSink, _ context.CancelFunc) { b.Reader = privateColdReader{fault} }, false},
-		{"write", func(_ *http.Response, _ *privateColdBody, s *privateColdSink, _ context.CancelFunc) { s.writeErr = fault }, false},
-		{"body close", func(_ *http.Response, b *privateColdBody, _ *privateColdSink, _ context.CancelFunc) { b.closeErr = fault }, false},
-		{"file close", func(_ *http.Response, _ *privateColdBody, s *privateColdSink, _ context.CancelFunc) { s.closeErr = fault }, false},
+		{"status", func(r *http.Response, _ *privateColdBody, _ *privateColdSink, _ context.CancelFunc) {
+			r.StatusCode = 302
+		}, false},
+		{"encoding", func(r *http.Response, _ *privateColdBody, _ *privateColdSink, _ context.CancelFunc) {
+			r.Header.Set("Content-Encoding", "gzip")
+		}, false},
+		{"duplicate encoding", func(r *http.Response, _ *privateColdBody, _ *privateColdSink, _ context.CancelFunc) {
+			r.Header["Content-Encoding"] = []string{"identity", "gzip"}
+		}, false},
+		{"decoded", func(r *http.Response, _ *privateColdBody, _ *privateColdSink, _ context.CancelFunc) {
+			r.Uncompressed = true
+		}, false},
+		{"declared length", func(r *http.Response, _ *privateColdBody, _ *privateColdSink, _ context.CancelFunc) {
+			r.ContentLength++
+		}, false},
+		{"unknown length", func(r *http.Response, _ *privateColdBody, _ *privateColdSink, _ context.CancelFunc) {
+			r.ContentLength = -1
+		}, false},
+		{"oversize", func(_ *http.Response, b *privateColdBody, _ *privateColdSink, _ context.CancelFunc) {
+			b.Reader = bytes.NewReader(append(append([]byte(nil), fixture...), 'x'))
+		}, false},
+		{"truncated", func(_ *http.Response, b *privateColdBody, _ *privateColdSink, _ context.CancelFunc) {
+			b.Reader = bytes.NewReader(fixture[:len(fixture)-1])
+		}, false},
+		{"hash", func(_ *http.Response, b *privateColdBody, _ *privateColdSink, _ context.CancelFunc) {
+			b.Reader = bytes.NewReader(bytes.Repeat([]byte{'x'}, len(fixture)))
+		}, false},
+		{"read", func(_ *http.Response, b *privateColdBody, _ *privateColdSink, _ context.CancelFunc) {
+			b.Reader = privateColdReader{fault}
+		}, false},
+		{"write", func(_ *http.Response, _ *privateColdBody, s *privateColdSink, _ context.CancelFunc) {
+			s.writeErr = fault
+		}, false},
+		{"body close", func(_ *http.Response, b *privateColdBody, _ *privateColdSink, _ context.CancelFunc) {
+			b.closeErr = fault
+		}, false},
+		{"file close", func(_ *http.Response, _ *privateColdBody, s *privateColdSink, _ context.CancelFunc) {
+			s.closeErr = fault
+		}, false},
 		{"cancel", func(_ *http.Response, _ *privateColdBody, _ *privateColdSink, cancel context.CancelFunc) { cancel() }, false},
 		{"cancel during read", func(_ *http.Response, b *privateColdBody, _ *privateColdSink, cancel context.CancelFunc) {
 			reader := bytes.NewReader(fixture)
@@ -612,22 +638,46 @@ func TestPrivateColdData(t *testing.T) {
 				return reader.Read(p)
 			})
 		}, false},
-		{"method", func(r *http.Response, _ *privateColdBody, _ *privateColdSink, _ context.CancelFunc) { r.Request.Method = "POST" }, false},
-		{"origin", func(r *http.Response, _ *privateColdBody, _ *privateColdSink, _ context.CancelFunc) { r.Request.URL.Host = "example.com" }, false},
-		{"path", func(r *http.Response, _ *privateColdBody, _ *privateColdSink, _ context.CancelFunc) { r.Request.URL.Path += "/" }, false},
-		{"query", func(r *http.Response, _ *privateColdBody, _ *privateColdSink, _ context.CancelFunc) { r.Request.URL.RawQuery = "x=1" }, false},
-		{"request host", func(r *http.Response, _ *privateColdBody, _ *privateColdSink, _ context.CancelFunc) { r.Request.Host = "example.com" }, false},
-		{"scheme", func(r *http.Response, _ *privateColdBody, _ *privateColdSink, _ context.CancelFunc) { r.Request.URL.Scheme = "http" }, false},
-		{"raw path", func(r *http.Response, _ *privateColdBody, _ *privateColdSink, _ context.CancelFunc) { r.Request.URL.RawPath = r.Request.URL.Path }, false},
-		{"userinfo", func(r *http.Response, _ *privateColdBody, _ *privateColdSink, _ context.CancelFunc) { r.Request.URL.User = url.User("synthetic") }, false},
-		{"fragment", func(r *http.Response, _ *privateColdBody, _ *privateColdSink, _ context.CancelFunc) { r.Request.URL.Fragment = "x" }, false},
-		{"SNI", func(r *http.Response, _ *privateColdBody, _ *privateColdSink, _ context.CancelFunc) { r.TLS.ServerName = "example.com" }, false},
-		{"unverified", func(r *http.Response, _ *privateColdBody, _ *privateColdSink, _ context.CancelFunc) { r.TLS.VerifiedChains = nil }, false},
+		{"method", func(r *http.Response, _ *privateColdBody, _ *privateColdSink, _ context.CancelFunc) {
+			r.Request.Method = "POST"
+		}, false},
+		{"origin", func(r *http.Response, _ *privateColdBody, _ *privateColdSink, _ context.CancelFunc) {
+			r.Request.URL.Host = "example.com"
+		}, false},
+		{"path", func(r *http.Response, _ *privateColdBody, _ *privateColdSink, _ context.CancelFunc) {
+			r.Request.URL.Path += "/"
+		}, false},
+		{"query", func(r *http.Response, _ *privateColdBody, _ *privateColdSink, _ context.CancelFunc) {
+			r.Request.URL.RawQuery = "x=1"
+		}, false},
+		{"request host", func(r *http.Response, _ *privateColdBody, _ *privateColdSink, _ context.CancelFunc) {
+			r.Request.Host = "example.com"
+		}, false},
+		{"scheme", func(r *http.Response, _ *privateColdBody, _ *privateColdSink, _ context.CancelFunc) {
+			r.Request.URL.Scheme = "http"
+		}, false},
+		{"raw path", func(r *http.Response, _ *privateColdBody, _ *privateColdSink, _ context.CancelFunc) {
+			r.Request.URL.RawPath = r.Request.URL.Path
+		}, false},
+		{"userinfo", func(r *http.Response, _ *privateColdBody, _ *privateColdSink, _ context.CancelFunc) {
+			r.Request.URL.User = url.User("synthetic")
+		}, false},
+		{"fragment", func(r *http.Response, _ *privateColdBody, _ *privateColdSink, _ context.CancelFunc) {
+			r.Request.URL.Fragment = "x"
+		}, false},
+		{"SNI", func(r *http.Response, _ *privateColdBody, _ *privateColdSink, _ context.CancelFunc) {
+			r.TLS.ServerName = "example.com"
+		}, false},
+		{"unverified", func(r *http.Response, _ *privateColdBody, _ *privateColdSink, _ context.CancelFunc) {
+			r.TLS.VerifiedChains = nil
+		}, false},
 		{"chain leaf mismatch", func(r *http.Response, _ *privateColdBody, _ *privateColdSink, _ context.CancelFunc) {
 			_, different := privateColdCertificate(t, "nodejs.org")
 			r.TLS.VerifiedChains = [][]*x509.Certificate{{different}}
 		}, false},
-		{"old TLS", func(r *http.Response, _ *privateColdBody, _ *privateColdSink, _ context.CancelFunc) { r.TLS.Version = tls.VersionTLS11 }, false},
+		{"old TLS", func(r *http.Response, _ *privateColdBody, _ *privateColdSink, _ context.CancelFunc) {
+			r.TLS.Version = tls.VersionTLS11
+		}, false},
 		{"no TLS", func(r *http.Response, _ *privateColdBody, _ *privateColdSink, _ context.CancelFunc) { r.TLS = nil }, false},
 	}
 	// No per-success logs: every assertion executes under the unchanged raw 4KiB bound.
