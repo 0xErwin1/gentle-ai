@@ -24,6 +24,8 @@ func renderUpgradeReportForTest(results []upgrade.ToolUpgradeResult, dryRun bool
 // error, outputs relevant messaging, and does NOT attempt any real installation.
 // The environment has no tools installed, so no upgrades are available.
 func TestRunArgs_UpgradeDryRun(t *testing.T) {
+	origDetect := detectSystem
+	t.Cleanup(func() { detectSystem = origDetect })
 	var buf bytes.Buffer
 	// RunArgs calls system.Detect which may fail in headless CI — we rely on the
 	// subcommand path being short-circuited before the TUI is launched.
@@ -55,6 +57,8 @@ func TestRunArgs_UpgradeDryRun(t *testing.T) {
 // TestRunArgs_UpgradeNoArgs runs `gentle-ai upgrade` without flags.
 // With no updates available in the test environment, it should exit cleanly.
 func TestRunArgs_UpgradeNoArgs(t *testing.T) {
+	origDetect := detectSystem
+	t.Cleanup(func() { detectSystem = origDetect })
 	var buf bytes.Buffer
 	err := RunArgs([]string{"upgrade"}, &buf)
 	// Allow error only if it's a network/check failure, not a missing command error.
@@ -72,6 +76,8 @@ func TestRunArgs_UpgradeNoArgs(t *testing.T) {
 // TestRunArgs_UpgradeToolFilter verifies that `gentle-ai upgrade engram` filters
 // to only check/upgrade engram.
 func TestRunArgs_UpgradeToolFilter(t *testing.T) {
+	origDetect := detectSystem
+	t.Cleanup(func() { detectSystem = origDetect })
 	var buf bytes.Buffer
 	err := RunArgs([]string{"upgrade", "engram"}, &buf)
 	if err != nil {
@@ -93,6 +99,8 @@ func TestRunArgs_UpgradeToolFilter(t *testing.T) {
 // TestRunArgs_UpgradeOutput_BinariesOnly verifies the output messaging states
 // that upgrade is binary-only and does not re-run install/sync.
 func TestRunArgs_UpgradeOutput_BinariesOnly(t *testing.T) {
+	origDetect := detectSystem
+	t.Cleanup(func() { detectSystem = origDetect })
 	var buf bytes.Buffer
 	err := RunArgs([]string{"upgrade", "--dry-run"}, &buf)
 	if err != nil {
