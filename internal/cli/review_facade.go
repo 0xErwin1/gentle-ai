@@ -2236,16 +2236,11 @@ func runReviewFacadeStart(ctx context.Context, args []string, stdout io.Writer) 
 	}
 	snapshot, err := reviewFacadeBuildStartSnapshot(ctx, reviewtransaction.SnapshotBuilder{Repo: root}, target)
 	if err != nil {
-		// Only map genuine Build failures to the typed pre-authority refusal.
-		// Test-injected or externally-fused faults must pass through as
-		// `operation_outcome_unknown` so the defect-report machinery is
-		// exercised in tests.  BuildFailed is the Build() wrapper type that
-		// distinguishes real Build errors from injected ones.
-		var bf *reviewtransaction.BuildFailed
-		if errors.As(err, &bf) {
-			return &reviewStartContextError{Cause: err}
-		}
-		return err
+		// Map Build failures (including snapshot.go empty-tree guards) to the
+		// typed pre-authority refusal so the handler reports
+		// MutationOutcome: review MutationNotStarted instead of an untyped
+		// `unknown` (issue start-candidate-context-failure).
+		return &reviewStartContextError{Cause: err}
 	}
 	if negotiated && snapshot.Identity != *targetIdentity {
 		return reviewNegotiatedStaleTargetRefusal(*targetIdentity, strings.TrimSpace(*targetEvidence), snapshot, consentMode, root)
