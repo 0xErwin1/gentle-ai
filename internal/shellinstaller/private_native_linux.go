@@ -123,7 +123,7 @@ func privateNativeAuthority(ctx context.Context, dest string) (string, error) {
 		{"project/package-lock.json", "", 0, -1},
 		{"closure.json", "", 0, -1},
 		{"node/lib/node_modules/npm/package.json", "", 0, -1},
-		{"node/lib/node_modules/npm/bin/npm-cli.js", "", 0, -1},
+		{"node/lib/node_modules/npm/bin/npm-cli.js", "", 0700, -1},
 		{"node/BOOTSTRAP-PROVENANCE", "", 0, -1},
 		{"node/BOOTSTRAP-SHA256SUMS", "", 0, -1},
 		{"SHA256SUMS", "", 0, -1},
