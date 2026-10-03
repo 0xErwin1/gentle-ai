@@ -90,17 +90,23 @@ def run(args, cwd=None, extra=None, timeout=180, good=True, stdout_only=False):
         child.communicate(timeout=3)
         raise RuntimeError('owned command deadline; raw output withheld')
     raw = out + error
-    require(len(raw) < 4096 and b'\0' not in raw, 'whole raw command output withheld: byte/NUL bound')
+    names = {pathlib.Path(arg).name for arg in args[:2]}
+    stock = next((name for name in ['pnpm', 'pnpm.mjs', 'npm-cli.js', 'pi', 'cli.js'] if name in names), 'stock')
+    evidence = {
+        'kind': 'tests' if args[0] == TESTS else 'supervisor' if args[0] == SUPERVISOR else stock,
+        'operation': next((op for op in ['check', 'install', 'recover', 'internal-install', 'internal-run', 'internal-verify', 'ci', 'add', 'list', 'update', 'bin', '--version'] if op in args), 'stock'),
+        'inspect': '--inspect' in args, 'force': '--force' in args, 'lockOnly': '--package-lock-only' in args,
+        'exit': child.returncode, 'expectedSuccess': good, 'rawBytes': len(raw), 'rawSHA256': hashlib.sha256(raw).hexdigest(),
+    }
+    if len(raw) >= 4096 or b'\0' in raw:
+        COMMAND_FAILURE = {**evidence, 'nulBytes': raw.count(b'\0'),
+                           'stdoutBytes': len(out), 'stdoutSHA256': hashlib.sha256(out).hexdigest(),
+                           'stderrBytes': len(error), 'stderrSHA256': hashlib.sha256(error).hexdigest()}
+        raise RuntimeError('whole raw command output withheld: byte/NUL bound')
     text = raw.decode('utf-8', 'strict')
     if (child.returncode == 0) != good:
-        COMMAND_FAILURE = {
-            'kind': 'tests' if args[0] == TESTS else 'supervisor' if args[0] == SUPERVISOR else 'stock',
-            'operation': next((op for op in ['check', 'install', 'recover', 'internal-install', 'internal-run', 'internal-verify'] if op in args), 'stock'),
-            'inspect': '--inspect' in args, 'exit': child.returncode, 'expectedSuccess': good,
-            'rawBytes': len(raw), 'rawSHA256': hashlib.sha256(raw).hexdigest(),
-            'stdoutBase64': base64.b64encode(out).decode('ascii'),
-            'stderrBase64': base64.b64encode(error).decode('ascii'),
-        }
+        COMMAND_FAILURE = {**evidence, 'stdoutBase64': base64.b64encode(out).decode('ascii'),
+                           'stderrBase64': base64.b64encode(error).decode('ascii')}
         raise RuntimeError('command outcome differs; bounded complete failure evidence')
     return out.decode('utf-8', 'strict') if stdout_only else text
 
@@ -640,7 +646,8 @@ except Exception as error:
     if 'alanBackendProbe' in REPORT:
         message['alanBackendProbe'] = REPORT['alanBackendProbe']
     if COMMAND_FAILURE is not None:
-        message.update(commandFailure=COMMAND_FAILURE, rawStockOutput='complete-base64')
+        complete = 'stdoutBase64' in COMMAND_FAILURE and 'stderrBase64' in COMMAND_FAILURE
+        message.update(commandFailure=COMMAND_FAILURE, rawStockOutput='complete-base64' if complete else 'withheld')
     output = (json.dumps(message, sort_keys=True) + '\n').encode()
     if len(output) >= 4096:
         message = {'functionalReady': False, 'reason': 'entire command failure output withheld at original Guest bound', 'rawStockOutput': 'withheld', 'bytes': len(output), 'sha256': hashlib.sha256(output).hexdigest()}
