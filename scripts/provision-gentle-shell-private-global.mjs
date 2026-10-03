@@ -209,6 +209,14 @@ if (action === 'restore') {
   if (action === 'install') {
     stockNpm(['ci', '--ignore-scripts', '--engine-strict', '--no-audit', '--no-fund', '--min-release-age=0', '--registry=https://registry.npmjs.org/']);
   }
+  const retainedRoot = path.join(source, '.gentle-shell-optional');
+  const retainedManifest = path.join(source, '.gentle-shell-optional.json');
+  function matches(rule, value) {
+    if (rule === undefined) return true;
+    if (!Array.isArray(rule) || rule.some(item => typeof item !== 'string' || !/^!?[a-z0-9_]+$/.test(item))) reject('platform rule');
+    return !rule.includes(`!${value}`) && !rule.includes('!any') && (!rule.some(item => !item.startsWith('!')) || rule.includes(value) || rule.includes('any'));
+  }
+  const applicable = record => [matches(record.os, 'linux'), matches(record.cpu, 'x64'), matches(record.libc, 'glibc')].every(Boolean);
   if (action === 'install') {
     const actual = [];
     function acquiredPackages(directory) {
@@ -227,14 +235,27 @@ if (action === 'restore') {
       }
     }
     acquiredPackages(path.join(source, 'node_modules'));
-    const matches = (rule, value) => {
-      if (rule === undefined) return true;
-      if (!Array.isArray(rule) || rule.some(item => typeof item !== 'string' || !/^!?[a-z0-9_]+$/.test(item))) reject('platform rule');
-      return !rule.includes(`!${value}`) && !rule.includes('!any') && (!rule.some(item => !item.startsWith('!')) || rule.includes(value) || rule.includes('any'));
-    };
-    const expected = Object.entries(lock.packages).filter(([key, record]) => key && (!record.optional || (matches(record.os, 'linux') && matches(record.cpu, 'x64') && matches(record.libc, 'glibc')))).map(([key]) => key);
+    const expected = Object.entries(lock.packages).filter(([key, record]) => key && (!record.optional || applicable(record))).map(([key]) => key);
     const { normalize } = await import(pathToFileURL(path.join(root, 'normalize-private-optional-platform-closure.mjs')).href);
-    normalize({ root: source, lock, expectedPaths: expected, actualPaths: actual, platform: { os: 'linux', cpu: 'x64', libc: 'glibc' } });
+    absent(retainedRoot);
+    fs.mkdirSync(retainedRoot, { mode: 0o700 });
+    // Preserve acquired sources in this unpublished stage; never normalize the global prefix.
+    const removed = normalize({ root: source, lock, expectedPaths: expected, actualPaths: actual, platform: { os: 'linux', cpu: 'x64', libc: 'glibc' } }, { remove: absolute => {
+      const saved = path.join(retainedRoot, path.relative(source, absolute));
+      absent(saved);
+      fs.mkdirSync(path.dirname(saved), { recursive: true, mode: 0o700 });
+      fs.renameSync(absolute, saved);
+      sync(path.dirname(absolute));
+      sync(path.dirname(saved));
+    } });
+    syncTree(retainedRoot);
+    writeExclusive(retainedManifest, `${JSON.stringify({ paths: removed, sha256: inventory(retainedRoot) })}\n`);
+  }
+  const retained = JSON.parse(read(retainedManifest));
+  if (!Array.isArray(retained.paths) || retained.paths.length > 4096 || new Set(retained.paths).size !== retained.paths.length || inventory(retainedRoot) !== retained.sha256) reject('retained acquisition inventory differs');
+  for (const key of retained.paths) {
+    const record = lock.packages[key];
+    if (typeof key !== 'string' || !/^node_modules\/(?:@?[a-z0-9][a-z0-9._-]*\/)*[a-z0-9][a-z0-9._-]*$/.test(key) || !record || record.optional !== true || applicable(record) || Object.keys(pins).some(name => key === `node_modules/${name}`)) reject('retained acquisition is not locked nonapplicable optional');
   }
   const authority = new Map();
   for (const [relative, entry] of Object.entries(lock.packages)) {
@@ -244,10 +265,12 @@ if (action === 'restore') {
     const canonical = `https://registry.npmjs.org/${name}/-/${name.split('/').at(-1)}-${entry.version}.tgz`;
     if (!packageName.test(name) || entry.resolved !== canonical || !/^sha512-[A-Za-z0-9+/]{86}==$/.test(entry.integrity)) reject('source integrity');
     if (name === '@earendil-works/pi-tui' && entry.version === '0.99.2' && entry.integrity !== priorTui) reject('independent nested prior TUI pin');
-    const metadata = path.join(source, relative, 'package.json');
+    let metadata = path.join(source, relative, 'package.json');
     if (!fs.existsSync(metadata)) {
-      if (!entry.optional) reject('required acquired metadata absent');
-      continue;
+      if (entry.optional !== true) reject('required acquired metadata absent');
+      if (applicable(entry) || !retained.paths.some(key => relative === key || relative.startsWith(`${key}/`))) continue;
+      metadata = path.join(retainedRoot, relative, 'package.json');
+      if (!fs.existsSync(metadata)) reject('retained acquired metadata absent');
     }
     const bytes = read(metadata);
     const identity = JSON.parse(bytes);
