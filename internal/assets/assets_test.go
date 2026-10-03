@@ -1559,7 +1559,7 @@ func TestOpenCodeGenericAgentsReadTheFeatureSpecByReference(t *testing.T) {
 
 	want := map[string][]string{
 		"opencode/agents/gentle-ai-worker.md":  {"until `## Log`", "`## Specs` are authoritative over any summary in the handoff", "which `S#` the change covers"},
-		"opencode/agents/gentle-ai-verify.md":  {"verbatim user entries in `## Log`", "verdict per `S#`", "compare the exact output and error text", "isolated state"},
+		"opencode/agents/gentle-ai-verify.md":  {"execute only exact test, build, lint, or spec example commands explicitly authorized by the parent", "verbatim user entries in `## Log`", "verdict per `S#`", "compare the exact output and error text", "isolated state"},
 		"opencode/agents/gentle-ai-explore.md": {"until `## Log`"},
 	}
 	for path, clauses := range want {
