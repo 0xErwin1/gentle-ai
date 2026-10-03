@@ -493,7 +493,9 @@ Every event carries:
   another tool
 - the `gentle-ai` version, `os`, and `arch` (the same values `--version`
   effectively describes)
-- the agents and components you have installed (e.g. `claude-code`, `engram`)
+- the agents and components you have installed (e.g. `claude-code`, `engram`;
+  a selection persisted before v4.0.0 can still report the legacy `sdd`
+  component)
 - whether receipt-driven development (RDD) is enabled
 - on `heartbeat` only, counters since the previous successful send: `syncs`,
   `sdd_phase_runs`, `reviews_approved`, `reviews_correction`,
