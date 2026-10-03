@@ -61,7 +61,7 @@ Everything except the model's reasoning:
 | Filesystem effects | Yes | Real files, real commits, isolated `$HOME` with `--pure` and per-test `XDG_*` directories |
 | Model reasoning | **No** | A local HTTP server returning a scripted sequence |
 
-Because the prompt is loaded from the shipped asset, changing that asset changes what the E2E exercises. There is no test-only copy to drift out of sync.
+Because the agent has no prompt, this suite does not cover the shipped orchestrator prompt. Changing that asset does not change what the E2E exercises.
 
 ### The journeys
 
@@ -182,7 +182,7 @@ Go test
  ├─ start httptest server                → http://127.0.0.1:<port>
  ├─ compile gentle-ai                    → GENTLE_AI_TEST_BINARY
  ├─ create a real Git repo + bare remote + isolated $HOME
- ├─ write the OpenCode config pointing at that URL, with the shipped prompt
+ ├─ write the OpenCode config pointing at that URL (the organic agent has no prompt)
  └─ exec: opencode run --agent organic ...
        │
        │  POST /v1/chat/completions { messages, tools }
@@ -260,7 +260,7 @@ The complement is the platform unit tests. The Windows job runs a curated set of
 
 The approach generalizes to any agent-driven system:
 
-1. **Keep the runtime real.** Same binary, same version pin, same shipped prompt, same permissions.
+1. **Keep the runtime real.** Same binary, same version pin, same permissions.
 2. **Replace only the reasoning.** Serve the model protocol from a local server with a scripted sequence.
 3. **Make the fixture adversarial.** Assert on the incoming request, not just the outgoing response. Fail when evidence arrives out of order.
 4. **Fake nothing else.** Real filesystem, real Git, real TLS. Anything that can be deterministic should stay real.
