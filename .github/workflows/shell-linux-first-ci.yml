@@ -386,6 +386,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          trap 'failed=$?; printf "LAB-PREP-STOP line=%s exit=%s db=%s key=%s lookup=%s\n" "$LINENO" "$failed" "${kind:-none}" "${key:-none}" "${status:-none}" >&2' ERR
           test "$(uname -m)" = x86_64
           test "$(cat /proc/1/comm)" = systemd
           test ! -e /work
