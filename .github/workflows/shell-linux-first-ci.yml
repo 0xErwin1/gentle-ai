@@ -431,7 +431,9 @@ jobs:
           printf '[Service]\nDelegate=cpu memory pids\nMemoryMax=3221225472\nMemorySwapMax=0\nCPUQuota=100%%\nCPUQuotaPeriodSec=100ms\nTasksMax=64\nNoNewPrivileges=yes\nCapabilityBoundingSet=\nProtectSystem=strict\nReadWritePaths=/work /tmp /run/user/1002\nProtectProc=invisible\n' | sudo -n tee /etc/systemd/system/user@1002.service.d/gentle-lab.conf >/dev/null
           sudo -n systemctl daemon-reload
           sudo -n systemctl start user-runtime-dir@1002.service user@1002.service
-          test -S /run/user/1002/systemd/private && test -S /run/user/1002/bus
+          sudo -n systemctl show user@1002.service --no-pager -p ActiveState -p SubState -p Result -p MainPID
+          test -S /run/user/1002/systemd/private
+          test -S /run/user/1002/bus
 
       - name: Compile only after physical worker isolation then qualify full Guest
         shell: bash
