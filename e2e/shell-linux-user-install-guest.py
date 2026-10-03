@@ -32,6 +32,7 @@ TESTS = '/usr/local/bin/user-install.test'
 FIXTURE = pathlib.Path('/fixture')
 MODE = sys.argv[1] if len(sys.argv) == 2 else 'full'
 REPORT = {}
+COMMAND_FAILURE = None
 FAULT = ''
 FAULT_SEEN = threading.Event()
 FAULT_RELEASE = threading.Event()
@@ -77,6 +78,7 @@ def kernel():
 
 
 def run(args, cwd=None, extra=None, timeout=180, good=True, stdout_only=False):
+    global COMMAND_FAILURE
     env = {'PATH': '/usr/local/bin:/usr/bin:/bin:/work/personal/prefix/bin', 'HOME': str(WORK / 'home'), 'TMPDIR': str(WORK / 'tmp'),
            'PYTHONDONTWRITEBYTECODE': '1', 'TERM': 'xterm-256color'}
     env.update(extra or {})
@@ -90,7 +92,16 @@ def run(args, cwd=None, extra=None, timeout=180, good=True, stdout_only=False):
     raw = out + error
     require(len(raw) < 4096 and b'\0' not in raw, 'whole raw command output withheld: byte/NUL bound')
     text = raw.decode('utf-8', 'strict')
-    require((child.returncode == 0) == good, 'command outcome differs; kind=' + ('tests' if args[0] == TESTS else 'supervisor' if args[0] == SUPERVISOR else 'stock') + f'; exit={child.returncode}; expected_success={good}; raw output withheld')
+    if (child.returncode == 0) != good:
+        COMMAND_FAILURE = {
+            'kind': 'tests' if args[0] == TESTS else 'supervisor' if args[0] == SUPERVISOR else 'stock',
+            'operation': next((op for op in ['check', 'install', 'recover', 'internal-install', 'internal-run', 'internal-verify'] if op in args), 'stock'),
+            'inspect': '--inspect' in args, 'exit': child.returncode, 'expectedSuccess': good,
+            'rawBytes': len(raw), 'rawSHA256': hashlib.sha256(raw).hexdigest(),
+            'stdoutBase64': base64.b64encode(out).decode('ascii'),
+            'stderrBase64': base64.b64encode(error).decode('ascii'),
+        }
+        raise RuntimeError('command outcome differs; bounded complete failure evidence')
     return out.decode('utf-8', 'strict') if stdout_only else text
 
 
@@ -530,7 +541,12 @@ try:
     main()
 except Exception as error:
     message = {'functionalReady': False, 'errorType': type(error).__name__, 'reason': str(error)[:240], 'rawStockOutput': 'withheld'}
+    if COMMAND_FAILURE is not None:
+        message.update(commandFailure=COMMAND_FAILURE, rawStockOutput='complete-base64')
     output = (json.dumps(message, sort_keys=True) + '\n').encode()
+    if len(output) >= 4096:
+        message = {'functionalReady': False, 'reason': 'entire command failure output withheld at original Guest bound', 'rawStockOutput': 'withheld', 'bytes': len(output), 'sha256': hashlib.sha256(output).hexdigest()}
+        output = (json.dumps(message, sort_keys=True) + '\n').encode()
     if len(output) < 4096:
         sys.stdout.buffer.write(output)
     sys.exit(1)
