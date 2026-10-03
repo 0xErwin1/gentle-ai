@@ -107,13 +107,15 @@ The full Guest path now attempts these controls only with an existing real
 manager and bus. Any failed/missing assertion refuses qualification; merely
 writing the path, or a successful direct-only run, is not functional readiness.
 
-## Disposable VM qualification — not run
+## Disposable VM qualification — not qualified
 
 The separate `user-vm-laboratory` CI job targets Ubuntu 24.04 amd64 on the fork's
 existing feature-branch trigger, not privileged Docker or your machine.
 Privileged setup is explicitly laboratory preparation before installer entry:
-it rejects an active UID1000 manager or occupied laboratory paths, prepares a
-bounded read-only manager and workers, and verifies physical worker isolation
+it rejects an active UID1000 manager or occupied laboratory paths. It requires
+UID/GID1000 and the account/group name `gentle-lab` to be free, then creates only
+that fresh Guest's no-login account. It prepares a bounded read-only manager
+and workers, and verifies physical worker isolation
 before compiling candidate Go. No credentials are forwarded to those workers.
 Go and Node archives are independently size/hash checked before use.
 
@@ -125,8 +127,12 @@ unknown-cohort refusal/recovery, and a post-publication Node-mode readback fault
 Blank-project and fixture-origin observations are scoped checks, not whole-network
 attestation or a zero-write promise for arbitrary existing Pi projects.
 
-The job has **not been launched**, and its setup, manager, compiler and suite are
-unqualified. Output is strict UTF-8, lossless base64 with newline/NUL accounting;
+The first lab attempt failed before worker compilation: the assumed `ubuntu`
+account was absent. Revised setup, manager, compiler and suite remain unqualified.
+A parallel legacy job compiled the new package outside the approved laboratory;
+that execution is not admitted as qualification. Legacy source is now pinned to
+qualified commit `322de52a3739ebe4fb0c2b04546d3af642be51ea`, excluding new User code.
+Output is strict UTF-8, lossless base64 with newline/NUL accounting;
 entire Guest output is withheld at 4,096 bytes or above. No skipped manager test
 can produce full readiness. Functional checks and source formatting remain due.
 
