@@ -13,6 +13,7 @@ S6. The shipped OpenCode `gentle-ai-worker`, `gentle-ai-verify`, and `gentle-ai-
 ## Tasks
 - [x] T1 (S2-S5) inline · canonical routing.go + routing_test.go + docs/usage.md · RED→GREEN · 6c664915
 - [x] T2 (S6) inline · internal/assets/opencode/agents/gentle-ai-{worker,verify,explore}.md + assets test · RED→GREEN · commit "feat(agents): have OpenCode generic agents read the feature spec by reference"
+- [x] T4 (S5) inline · review follow-ups: guard verify examples in the canon (authorized, isolated state) and pin docs/usage.md to the contract · RED→GREEN · this commit
 - [ ] T3 (S1) pending merge · in gentle-pi, `npm run mirror:odd-routing` to regenerate `fixtures/odd-routing-canonical.md`
 
 ## Log
@@ -28,3 +29,5 @@ L5 2026-10-03 T2 evidence (risk: medium, shipped agent prompts):
    GREEN: the three #1713 sentences ported verbatim from gentle-pi; runtime-specific differences (OpenCode `task` tool, codegraph lifecycle, handoff size wording) kept. `go test ./...` 80 packages ok; `gofmt -l` clean.
    Follow-up for gentle-pi: its always-on step 6 example nests backticks (`... (read until `## Log`) ...`), which breaks the inline code span; T3's PR can adopt this canon wording.
 L6 2026-10-03 next: push + PR to Gentleman-Programming/gentle-ai need user authorization; then T3 in gentle-pi.
+L7 2026-10-03 RDD: lineage review-27a499d50fc565d6 (risk medium, 8 files, 107 lines) granted by the user, approved, acknowledged. Findings: R3-verify-examples-unguarded-in-canon (WARNING, step 6 told verify to run examples unconditionally; every runtime renders it) and R3-usage-doc-untested (SUGGESTION).
+   T4 evidence: RED on 17 agents for the guarded clause and on docs/usage.md; GREEN after the fix. gentle-pi's merged always-on step 6 carries the same unguarded wording: fix it in T3's PR together with the nested-backtick example.

@@ -3,6 +3,8 @@ package agentguidance
 import (
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"unicode"
@@ -210,6 +212,7 @@ func TestRenderRoutingOrganicTaskContinuity(t *testing.T) {
 			"read until `## Log`",
 			"Without a feature document, include the user's request verbatim",
 			"a verdict per `S#`",
+			"runs the spec's examples the parent authorized, against isolated state when they mutate data",
 			"reproduce it before deciding it already works",
 		}},
 		{"default applicable test-first policy", []string{
@@ -777,4 +780,30 @@ func routingSemantics(rendered string) []string {
 		}
 	}
 	return facts
+}
+
+// The user-facing usage guide describes the same spec-by-reference contract the
+// canonical routing renders, so it cannot drift silently (review follow-up).
+func TestUsageGuideDescribesTheSpecByReferenceFeatureDocument(t *testing.T) {
+	t.Parallel()
+
+	body, err := os.ReadFile(filepath.Join("..", "..", "..", "docs", "usage.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, clause := range []string{
+		"`## Specs`",
+		"`## Tasks`",
+		"`## Log`",
+		"exact strings, error messages, and examples verbatim",
+		"`L1` is your original request verbatim",
+		"A requirement change rewrites only the affected spec and reopens only its task",
+		"never a paraphrase of your request",
+		"runs the spec's examples you authorized, against isolated state when they mutate data",
+		"reproduced before anyone decides it already works",
+	} {
+		if !strings.Contains(string(body), clause) {
+			t.Errorf("docs/usage.md is missing %q", clause)
+		}
+	}
 }
