@@ -3,6 +3,8 @@ package agentguidance
 import (
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"unicode"
@@ -177,20 +179,41 @@ func TestRenderRoutingOrganicTaskContinuity(t *testing.T) {
 			"odd/<feature-name>/tasks",
 			"current project",
 			"full current document and repository-relative file locator",
-			"stable task IDs, authorized scope, acceptance criteria, and applicable checks",
+			"stable task IDs",
+			"authorized scope, acceptance criteria, and applicable checks",
 			"Reuse the same feature identity; never overwrite another feature",
 		}},
 		{"unified intent and implementation handoff", []string{
 			"one feature document, not a separate plan file or topic",
-			"objective, problem, why, scope, constraints",
-			"progress, verification evidence, and next step",
-			"concise rationale for meaningful accepted changes",
-			"Routine corrections stay with their tasks; no exhaustive decision journal",
+			"verification evidence, progress, and next step",
+			"rationale for meaningful accepted changes",
+			"Routine corrections stay brief; no exhaustive decision journal",
 			"Accepted user, review, or verification changes",
 			"add genuinely new tasks or reopen invalidated items with a reason",
 			"Findings alone never authorize scope expansion or automatic acceptance",
 			"Before implementation or resume, the parent reads both the actual file and full observation",
-			"passes the locator and relevant context; workers read the document before edits",
+			"passes the locator, task IDs, and linked `S#`; workers read the document until `## Log` before edits",
+		}},
+		// Gentleman-Programming/gentle-shell#1713: handoffs paraphrased the user's
+		// request and the feature document summarized it. The document is now the
+		// specification subagents read by reference, in a fixed order.
+		{"feature document is the verbatim specification read by reference", []string{
+			"specification subagents read by reference",
+			"stable content first and the growing log last",
+			"`## Specs`",
+			"`## Tasks`",
+			"`## Log`",
+			"exact strings, error messages, and examples verbatim",
+			"never summarize or reword those fragments",
+			"Do not add requirements the user never asked for",
+			"`L1` holds the user's original request verbatim",
+			"rewrites only the affected `S#`, and reopens only its linked task",
+			"Hand off by reference, never by paraphrase",
+			"read until `## Log`",
+			"Without a feature document, include the user's request verbatim",
+			"a verdict per `S#`",
+			"runs the spec's examples the parent authorized, against isolated state when they mutate data",
+			"reproduce it before deciding it already works",
 		}},
 		{"default applicable test-first policy", []string{
 			"relevant runnable deterministic test and clear expected outcome",
@@ -757,4 +780,30 @@ func routingSemantics(rendered string) []string {
 		}
 	}
 	return facts
+}
+
+// The user-facing usage guide describes the same spec-by-reference contract the
+// canonical routing renders, so it cannot drift silently (review follow-up).
+func TestUsageGuideDescribesTheSpecByReferenceFeatureDocument(t *testing.T) {
+	t.Parallel()
+
+	body, err := os.ReadFile(filepath.Join("..", "..", "..", "docs", "usage.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, clause := range []string{
+		"`## Specs`",
+		"`## Tasks`",
+		"`## Log`",
+		"exact strings, error messages, and examples verbatim",
+		"`L1` is your original request verbatim",
+		"A requirement change rewrites only the affected spec and reopens only its task",
+		"never a paraphrase of your request",
+		"runs the spec's examples you authorized, against isolated state when they mutate data",
+		"reproduced before anyone decides it already works",
+	} {
+		if !strings.Contains(string(body), clause) {
+			t.Errorf("docs/usage.md is missing %q", clause)
+		}
+	}
 }
