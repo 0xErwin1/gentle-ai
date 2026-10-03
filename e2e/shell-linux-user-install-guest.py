@@ -466,8 +466,12 @@ def alan_pnpm_backend_probe():
         require(len(owners) == 1 and set(owners[0]['dependencies']) == set(pins), 'pnpm stack owner is ambiguous')
         project = pathlib.Path(owners[0]['path']).resolve(strict=True)
         require(project.is_relative_to(home) and project.stat().st_uid == 1002, 'pnpm project escapes selected home')
-        lock_path = project / 'pnpm-lock.yaml'
-        require(lock_path.stat().st_size <= 33554432, 'pnpm lock byte bound')
+        candidates = [project / 'pnpm-lock.yaml', project / 'node_modules/.pnpm/lock.yaml']
+        locks = [item for item in candidates if item.is_file() and not item.is_symlink()]
+        require(len(locks) == 1, 'pnpm persisted global lock absent or ambiguous')
+        lock_path = locks[0].resolve(strict=True)
+        status = lock_path.stat()
+        require(lock_path.is_relative_to(home) and status.st_uid == 1002 and status.st_mode & 0o022 == 0 and status.st_size <= 33554432, 'pnpm lock ownership/byte bound')
         text = lock_path.read_text(encoding='utf-8', errors='strict')
         result = {}
         for name, (expected, sri) in pins.items():
