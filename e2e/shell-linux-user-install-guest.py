@@ -399,55 +399,98 @@ def pty_status(binding, project, command=None, extra=None, installer=None, cance
         os.close(master)
 
 
-def alan_npm_backend_probe():
-    """Reuse Alan PR1703's persisted npm pin; no browser or live-prefix changes."""
-    root = WORK / 'reuse-npm-backend'
+def alan_pnpm_backend_probe():
+    """Reuse Alan's stock pnpm backend and prove Pi's own updater, not an adapter."""
+    root = WORK / 'reuse-pnpm-backend'
     root.mkdir(mode=0o700)
-    for name in ['runtime', 'home', 'tmp', 'config', 'state', 'agent', 'project', 'tooling']:
+    for name in ['runtime', 'home', 'tmp', 'config', 'agent', 'tooling', 'pnpm']:
         (root / name).mkdir(mode=0o700)
     for name in ['user.npmrc', 'global.npmrc']:
         (root / 'config' / name).write_bytes(b'')
     run(['/bin/sh', '/work/src/scripts/bootstrap-gentle-shell-private-node.sh', '--destination', str(root / 'runtime/node'), '--node-archive', str(FIXTURE / 'node.tgz')], timeout=180)
     node = root / 'runtime/node/bin/node'
-    npm = root / 'runtime/node/lib/node_modules/npm'
+    npm = root / 'runtime/node/lib/node_modules/npm/bin/npm-cli.js'
     tool = root / 'tooling'
-    version = '11.19.0'  # Alan's installer-preflight.mjs at 5ed499ade6c93733990e0298052df477428a90be.
-    integrity = 'sha512-SDd/hHg3KqHE5Ht2NHWxNYNtqCQ2pXAPLl6OtQhPyED5PHsRfrOtO199MZTIG2cQoQ1ZRI9t28shrD+2cr3AAw=='
-    (tool / 'package.json').write_text(json.dumps({'name': 'gentle-owned-npm-probe', 'version': '1.0.0', 'private': True, 'dependencies': {'npm': version}}))
+    version = '11.1.1'  # Alan's installer-downloads.mjs at 5ed499ade6c93733990e0298052df477428a90be.
+    integrity = 'sha512-0f319zxhe2T6GlaoHDyN/g6WbjOmAQqiVrUXrne+Idk+Ba/8DeGoOw5PKdVp9otEaujwaM1yR8C7PfD7TXvfmg=='
+    (tool / 'package.json').write_text(json.dumps({'name': 'gentle-owned-pnpm-probe', 'version': '1.0.0', 'private': True, 'dependencies': {'pnpm': version}}))
     env = {'HOME': str(root / 'home'), 'TMPDIR': str(root / 'tmp'), 'PATH': str(node.parent) + ':/usr/bin:/bin',
            'NODE_USE_SYSTEM_CA': '1', 'NPM_CONFIG_USERCONFIG': str(root / 'config/user.npmrc'),
            'NPM_CONFIG_GLOBALCONFIG': str(root / 'config/global.npmrc'), 'NPM_CONFIG_CACHE': str(root / 'tool-cache'),
            'NPM_CONFIG_PREFIX': str(tool), 'NPM_CONFIG_IGNORE_SCRIPTS': 'true', 'npm_config_ignore_scripts': 'true'}
     flags = ['--ignore-scripts', '--engine-strict', '--no-audit', '--no-fund', '--min-release-age=0', '--registry=https://registry.npmjs.org/', '--loglevel=error']
-    run([str(node), str(npm / 'bin/npm-cli.js'), 'install', '--package-lock-only'] + flags, cwd=tool, extra=env)
+    run([str(node), str(npm), 'install', '--package-lock-only'] + flags, cwd=tool, extra=env)
     lock_bytes = (tool / 'package-lock.json').read_bytes()
-    require(len(lock_bytes) <= 33554432, 'npm probe lock bound')
+    require(len(lock_bytes) <= 33554432, 'pnpm probe lock bound')
     lock = json.loads(lock_bytes)
-    entry = lock.get('packages', {}).get('node_modules/npm', {})
-    require(lock.get('lockfileVersion') == 3 and lock['packages']['']['dependencies'] == {'npm': version}, 'npm probe seed differs')
-    require(entry.get('version') == version and entry.get('integrity') == integrity and entry.get('resolved') == 'https://registry.npmjs.org/npm/-/npm-11.19.0.tgz', 'independent npm probe pin differs')
-    require(all(key in {'', 'node_modules/npm'} or (key.startswith('node_modules/npm/node_modules/') and record.get('inBundle') is True) for key, record in lock['packages'].items()), 'npm probe has unpinned external dependencies')
-    run([str(node), str(npm / 'bin/npm-cli.js'), 'ci'] + flags, cwd=tool, extra=env)
-    require((tool / 'package-lock.json').read_bytes() == lock_bytes, 'npm probe lock changed')
-    acquired = tool / 'node_modules/npm'
-    require(json.loads((acquired / 'package.json').read_bytes())['version'] == version, 'npm probe package identity')
-    require(run([str(node), str(acquired / 'bin/npm-cli.js'), '--version'], extra=env).strip() == version, 'acquired stock npm did not execute')
-    # Replace only this disposable, unpublished probe runtime; retain its old npm.
-    npm.rename(root / 'stock-bootstrap-npm')
-    shutil.copytree(acquired, npm, symlinks=False)
-    for name in ['complete-generated-lock-sri.mjs', 'normalize-private-optional-platform-closure.mjs']:
-        shutil.copyfile(WORK / 'src/scripts' / name, root / name)
-        os.chmod(root / name, 0o400)
-    shutil.copyfile(WORK / 'src/scripts/provision-gentle-shell-private-global.mjs', root / 'provision.mjs')
-    os.chmod(root / 'provision.mjs', 0o400)
-    prefix = root / 'prefix'
-    # Exact existing five-root integrity, byte, dependency and native checks; no normalization of live trees.
-    run([str(node), str(root / 'provision.mjs'), str(root), str(prefix), str(root / 'agent'), str(prefix), str(root), 'separate', 'install'], extra=env, timeout=remaining())
-    graph = json.loads((root / 'state/global-graph.json').read_bytes())
-    require(graph and not any(item['name'] == '@esbuild/aix-ppc64' for item in graph), 'nonapplicable AIX package survived full authenticated readback')
-    cli = prefix / 'lib/node_modules/@earendil-works/pi-coding-agent/dist/cli.js'
-    require(run([str(node), str(cli), '--version'], extra={**env, 'PI_CODING_AGENT_DIR': str(root / 'agent')}).strip() == '1.0.0', 'probe stock Pi version differs')
-    REPORT['alanBackendProbe'] = {'npm': version, 'authenticatedGlobalPackages': len(graph), 'pi': '1.0.0', 'functionalReady': False}
+    entry = lock.get('packages', {}).get('node_modules/pnpm', {})
+    require(lock.get('lockfileVersion') == 3 and lock['packages']['']['dependencies'] == {'pnpm': version}, 'pnpm probe seed differs')
+    require(entry.get('version') == version and entry.get('integrity') == integrity and entry.get('resolved') == 'https://registry.npmjs.org/pnpm/-/pnpm-11.1.1.tgz', 'independent pnpm probe pin differs')
+    require(all(key in {'', 'node_modules/pnpm'} or (key.startswith('node_modules/pnpm/node_modules/') and record.get('inBundle') is True) for key, record in lock['packages'].items()), 'pnpm probe has unpinned external dependencies')
+    run([str(node), str(npm), 'ci'] + flags, cwd=tool, extra=env)
+    require((tool / 'package-lock.json').read_bytes() == lock_bytes, 'pnpm probe lock changed')
+    package = tool / 'node_modules/pnpm'
+    metadata = json.loads((package / 'package.json').read_bytes())
+    require(metadata['name'] == 'pnpm' and metadata['version'] == version and metadata['engines']['node'] == '>=22.13', 'pnpm probe package identity/engine')
+    cli = package / 'bin/pnpm.mjs'
+    require(run([str(node), str(cli), '--version'], extra=env).strip() == version, 'acquired stock pnpm did not execute')
+    home = root / 'pnpm'
+    binaries = home / 'bin'
+    binaries.mkdir(mode=0o700)
+    wrapper = binaries / 'pnpm'
+    wrapper.write_text(f'#!/bin/sh\nexec \'{node}\' \'{cli}\' "$@"\n')
+    os.chmod(wrapper, 0o700)  # A stock program binding, not an updater implementation.
+    env.pop('NPM_CONFIG_PREFIX')
+    env.update(PNPM_HOME=str(home), PATH=str(binaries) + ':' + env['PATH'], PI_CODING_AGENT_DIR=str(root / 'agent'),
+               npm_config_store_dir=str(root / 'store'), npm_config_engine_strict='true', npm_config_reporter='silent')
+    require(run([str(wrapper), 'bin', '-g'], extra=env).strip() == str(binaries), 'pnpm global-bin selection differs')
+    pins = {
+        'gentle-pi': ('4.0.0', 'sha512-ZG/diWBSKPfjU4MjiHVUXxHWQvDSRS2dvpPCma4ZINuV+8UGdZAPHca6vcK27FLAAG7crlJpwdWOcwVNW4rh/Q=='),
+        '@earendil-works/pi-coding-agent': ('0.99.2', 'sha512-6R1BZ2N77CrVcGf3eC2KovTz1Q4RYiAeydvVWQT546N2fi1nBc81aURlbOZCgruWoW9VY/UrLzDynF4YTolpoA=='),
+        '@earendil-works/pi-tui': ('1.0.0', 'sha512-JsT7kXnpZA2YOtQu6RyriyxEO0eJIzPyfiH09bH+OLN5+s18HYkwaUD/tBkjhnSfMu6/50CQPRYJagzSP6HdPw=='),
+        '@heyhuynhgiabuu/pi-pretty': ('0.6.27', 'sha512-4Jj+n6ZBFdn979fWAA3nMcJ45Q5qtcLeq1Pe6+Oo2LDIpDhqv7heoTKkBpq9G74/pNYc0EaXR28pssQ5Wbc5bg=='),
+        'typebox': ('1.3.27', 'sha512-zu+jc1pcy4UiNThxikUr36f0Rybk9PEeCg/NE6adeWr/SKsdNO4EzZHYRDlv2YCVAfj3Odq3dESSo/jNyoBXzA=='),
+    }
+    run([str(wrapper), 'add', '-g', '--ignore-scripts', '--config.minimumReleaseAge=0', '--registry=https://registry.npmjs.org/'] + [f'{name}@{pin[0]}' for name, pin in pins.items()], extra=env, timeout=remaining())
+
+    def cohort():
+        projects = json.loads(run([str(wrapper), 'list', '-g', '--depth', '0', '--json'], extra=env, stdout_only=True))
+        require(isinstance(projects, list), 'pnpm project listing shape')
+        owners = [project for project in projects if 'gentle-pi' in project.get('dependencies', {})]
+        require(len(owners) == 1 and set(owners[0]['dependencies']) == set(pins), 'pnpm stack owner is ambiguous')
+        project = pathlib.Path(owners[0]['path']).resolve(strict=True)
+        require(project.is_relative_to(home) and project.stat().st_uid == 1002, 'pnpm project escapes selected home')
+        lock_path = project / 'pnpm-lock.yaml'
+        require(lock_path.stat().st_size <= 33554432, 'pnpm lock byte bound')
+        text = lock_path.read_text(encoding='utf-8', errors='strict')
+        result = {}
+        for name, (expected, sri) in pins.items():
+            item = owners[0]['dependencies'][name]
+            location = pathlib.Path(item['path']).resolve(strict=True)
+            require(location.is_relative_to(home) and location.stat().st_uid == 1002 and item['version'] == expected and sri in text, 'pnpm root identity/integrity differs')
+            metadata = json.loads((location / 'package.json').read_bytes())
+            require(metadata['name'] == name and metadata['version'] == expected, 'pnpm root metadata differs')
+            result[name] = location
+        count = 0
+        for metadata in home.rglob('package.json'):
+            count += 1
+            require(count <= 4096 and metadata.parent.name != 'aix-ppc64', 'pnpm package bound/nonapplicable AIX package')
+        return result
+
+    roots = cohort()
+    pi = roots['@earendil-works/pi-coding-agent'] / 'dist/cli.js'
+    require('/pnpm/' in str(pi) and run([str(node), str(pi), '--version'], extra=env).strip() == '0.99.2', 'prior Pi did not execute from recognized pnpm layout')
+    identity = (home.stat().st_dev, home.stat().st_ino)
+    run([str(node), str(pi), 'update', '--self'], extra=env, timeout=180)
+    pins['@earendil-works/pi-coding-agent'] = ('1.0.0', 'sha512-/FtbxoSQU/mEv1QnichJjRjqteqaIaMWxmhB4G367+MwZfX7/DI5B9YAg5lqbN7nztFskBEtUSZ+FlmMBECtMw==')
+    roots = cohort()
+    pi = roots['@earendil-works/pi-coding-agent'] / 'dist/cli.js'
+    require(run([str(node), str(pi), '--version'], extra=env).strip() == '1.0.0', 'stock pnpm prior-to-next update did not execute')
+    run([str(node), str(pi), 'update', '--self', '--force'], extra=env, timeout=180)
+    roots = cohort()
+    require((home.stat().st_dev, home.stat().st_ino) == identity, 'stock updater replaced selected pnpm home')
+    require(run([str(node), str(roots['@earendil-works/pi-coding-agent'] / 'dist/cli.js'), '--version'], extra=env).strip() == '1.0.0', 'stock pnpm forced reinstall did not execute')
+    REPORT['alanBackendProbe'] = {'pnpm': version, 'stockUpgrade': '0.99.2 to 1.0.0', 'stockForce': True, 'independentlyPinnedRoots': len(pins), 'functionalReady': False}
 
 
 def main():
@@ -471,7 +514,7 @@ def main():
         personal = WORK / 'personal'
         (personal / 'sentinel').write_bytes(b'personal Pi must remain unchanged\n')
         before = physical_inventory(personal)
-        alan_npm_backend_probe()
+        alan_pnpm_backend_probe()
         require(physical_inventory(personal) == before, 'Alan backend probe changed personal Pi')
         FAULT = 'node-sri'
         bad = WORK / 'parents/refused-node'

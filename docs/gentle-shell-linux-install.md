@@ -137,8 +137,8 @@ entire Guest output is withheld at 4,096 bytes or above. No skipped manager test
 can produce full readiness. Functional checks and source formatting remain due.
 
 The installer remains inside the Gentle AI TUI, not a browser wizard.
-The Guest probes Alan PR1703's pinned stock npm 11.19.0 in a new private, unpublished runtime, with all existing global authentication checks unchanged.
-This experimental backend reuse is not functional qualification and introduces no second updater.
+The Guest probes Alan PR1703's independently pinned pnpm 11.1.1 in a new private home, including Pi's recognized pnpm layout and its own prior→next/forced self-updates.
+Root-only backend evidence is not full startup/native/PTY/shared-recovery qualification; production authentication checks remain unchanged and there is no second updater.
 
 ## Acceptance checklist — pending
 
