@@ -493,7 +493,9 @@ Every event carries:
   another tool
 - the `gentle-ai` version, `os`, and `arch` (the same values `--version`
   effectively describes)
-- the agents and components you have installed (e.g. `claude-code`, `sdd`)
+- the agents and components you have installed (e.g. `claude-code`, `engram`;
+  a selection persisted before v4.0.0 can still report the legacy `sdd`
+  component)
 - whether receipt-driven development (RDD) is enabled
 - on `heartbeat` only, counters since the previous successful send: `syncs`,
   `sdd_phase_runs`, `reviews_approved`, `reviews_correction`,
@@ -539,7 +541,7 @@ first, and only then opportunistically check whether a heartbeat is due —
 the same 24-hour limit and failure backoff apply, so this adds at most one
 send per day even for a host that finishes many reviews in a
 row. This is what lets a host such as Gentle Pi, which drives gentle-ai only
-through `review ...` and `sdd-attempt ...` and never through
+through `review ...` and never through
 `install`/`update`/`sync`, still send a heartbeat.
 
 Historical `sdd_phase_runs` counters remain readable, but retired attempt commands no longer increment them.
@@ -581,7 +583,7 @@ gentle-ai telemetry trigger [--json]
   check `install`/`update`/`sync` already run internally (enrollment,
   install-once, the 24-hour heartbeat limit, the failure backoff, and every
   kill switch all apply). A host that only ever drives gentle-ai through
-  `review ...` or `sdd-attempt ...` — Gentle Pi, for example — can call this
+  `review ...` — Gentle Pi, for example — can call this
   once per session to still get a heartbeat instead of never sending one.
   Finishing a native review already
   triggers this internally too, so `trigger` mainly matters for a host that
