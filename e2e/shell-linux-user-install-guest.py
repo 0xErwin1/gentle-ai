@@ -522,7 +522,9 @@ def alan_pnpm_backend_probe():
             require(location.is_relative_to(home) and location.stat().st_uid == 1002 and item['version'] == expected and sri in text, 'pnpm root identity/integrity differs')
             metadata = json.loads((location / 'package.json').read_bytes())
             require(metadata['name'] == name and metadata['version'] == expected, 'pnpm root metadata differs')
-            result[name] = location
+            # Keep pnpm's global entrypoint for Pi's stock ownership check;
+            # the physical path, metadata and receipts were checked above.
+            result[name] = reported
         if 'pnpmReceiptControls' not in REPORT:
             controls = home / 'receipt-controls'
             for directory in [controls, controls / 'node_modules', controls / 'node_modules/.pnpm']:
