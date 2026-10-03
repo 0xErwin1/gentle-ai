@@ -444,7 +444,7 @@ def alan_pnpm_backend_probe():
     binaries = home / 'bin'
     binaries.mkdir(mode=0o700)
     wrapper = binaries / 'pnpm'
-    wrapper.write_text(f'#!/bin/sh\nexec \'{node}\' \'{cli}\' "$@"\n')
+    wrapper.write_text(f'#!/bin/sh\nexec \'{node}\' \'{cli}\' --reporter=silent "$@"\n')
     os.chmod(wrapper, 0o700)  # A stock program binding, not an updater implementation.
     env.pop('NPM_CONFIG_PREFIX')
     env.update(PNPM_HOME=str(home), PATH=str(binaries) + ':' + env['PATH'], PI_CODING_AGENT_DIR=str(root / 'agent'),
