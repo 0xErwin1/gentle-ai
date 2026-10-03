@@ -391,21 +391,21 @@ jobs:
           test "$(cat /proc/1/comm)" = systemd
           test ! -e /work
           test ! -e /fixture
-          if systemctl is-active --quiet user@1000.service; then exit 1; fi
+          if systemctl is-active --quiet user@1002.service; then exit 1; fi
           for kind in passwd group; do
-            for key in 1000 gentle-lab; do
+            for key in 1002 gentle-lab; do
               status=0
               getent "$kind" "$key" >/dev/null || status=$?
               test "$status" = 2
             done
           done
-          sudo -n groupadd --gid 1000 gentle-lab
-          sudo -n useradd --uid 1000 --gid 1000 --no-create-home --home-dir /work --shell /usr/sbin/nologin gentle-lab
-          test "$(id -u gentle-lab)" = 1000
-          test "$(id -g gentle-lab)" = 1000
-          sudo -n install -d -o 1000 -g 1000 -m 0700 /work
+          sudo -n groupadd --gid 1002 gentle-lab
+          sudo -n useradd --uid 1002 --gid 1002 --no-create-home --home-dir /work --shell /usr/sbin/nologin gentle-lab
+          test "$(id -u gentle-lab)" = 1002
+          test "$(id -g gentle-lab)" = 1002
+          sudo -n install -d -o 1002 -g 1002 -m 0700 /work
           sudo -n install -d -m 0755 /fixture /fixture/go /work/src
-          sudo -n chown 1000:1000 /work/src
+          sudo -n chown 1002:1002 /work/src
           git archive HEAD | sudo -n -u gentle-lab tar -xf - -C /work/src
           sudo -n install -m 0444 e2e/shell-linux-user-install-guest.py /fixture/harness.py
           curl --noproxy '*' --proto '=https' --max-redirs 0 --fail --silent --show-error --connect-timeout 10 --max-time 180 --max-filesize 59844667 -o "$RUNNER_TEMP/go.data" https://dl.google.com/go/go1.25.10.linux-amd64.tar.gz
@@ -421,17 +421,17 @@ jobs:
           printf 'subjectAltName=DNS:nodejs.org,DNS:registry.npmjs.org,DNS:github.com,DNS:release-assets.githubusercontent.com,DNS:pi.dev\n' | sudo -n tee /fixture/server.ext >/dev/null
           sudo -n openssl x509 -req -in /fixture/server.csr -CA /usr/local/share/ca-certificates/gentle-guest.crt -CAkey /fixture/ca.key -CAcreateserial -days 2 -extfile /fixture/server.ext -out /fixture/server.crt 2>/dev/null
           sudo -n rm /fixture/ca.key /fixture/server.csr /fixture/server.ext
-          sudo -n chown 1000:1000 /fixture/server.key
+          sudo -n chown 1002:1002 /fixture/server.key
           sudo -n chmod 0400 /fixture/server.key
           sudo -n update-ca-certificates >/dev/null
           sudo -n sysctl -q -w net.ipv4.ip_unprivileged_port_start=0
           printf '127.0.0.1 nodejs.org registry.npmjs.org github.com release-assets.githubusercontent.com pi.dev\n' | sudo -n tee -a /etc/hosts >/dev/null
-          sudo -n install -d /etc/systemd/system/user@1000.service.d
-          test ! -e /etc/systemd/system/user@1000.service.d/gentle-lab.conf
-          printf '[Service]\nDelegate=cpu memory pids\nMemoryMax=3221225472\nMemorySwapMax=0\nCPUQuota=100%%\nCPUQuotaPeriodSec=100ms\nTasksMax=64\nNoNewPrivileges=yes\nCapabilityBoundingSet=\nProtectSystem=strict\nReadWritePaths=/work /tmp /run/user/1000\nProtectProc=invisible\n' | sudo -n tee /etc/systemd/system/user@1000.service.d/gentle-lab.conf >/dev/null
+          sudo -n install -d /etc/systemd/system/user@1002.service.d
+          test ! -e /etc/systemd/system/user@1002.service.d/gentle-lab.conf
+          printf '[Service]\nDelegate=cpu memory pids\nMemoryMax=3221225472\nMemorySwapMax=0\nCPUQuota=100%%\nCPUQuotaPeriodSec=100ms\nTasksMax=64\nNoNewPrivileges=yes\nCapabilityBoundingSet=\nProtectSystem=strict\nReadWritePaths=/work /tmp /run/user/1002\nProtectProc=invisible\n' | sudo -n tee /etc/systemd/system/user@1002.service.d/gentle-lab.conf >/dev/null
           sudo -n systemctl daemon-reload
-          sudo -n systemctl start user-runtime-dir@1000.service user@1000.service
-          test -S /run/user/1000/systemd/private && test -S /run/user/1000/bus
+          sudo -n systemctl start user-runtime-dir@1002.service user@1002.service
+          test -S /run/user/1002/systemd/private && test -S /run/user/1002/bus
 
       - name: Compile only after physical worker isolation then qualify full Guest
         shell: bash
@@ -439,14 +439,14 @@ jobs:
           set -euo pipefail
           umask 077
           worker() {
-            timeout --kill-after=5 900 sudo -n -u gentle-lab /usr/bin/env -i HOME=/work XDG_RUNTIME_DIR=/run/user/1000 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus \
+            timeout --kill-after=5 900 sudo -n -u gentle-lab /usr/bin/env -i HOME=/work XDG_RUNTIME_DIR=/run/user/1002 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1002/bus \
               /usr/bin/systemd-run --user --quiet --wait --collect --service-type=exec --expand-environment=no \
               --unit="$1" --working-directory=/work/src --pipe \
               --property=MemoryMax=3221225472 --property=MemorySwapMax=0 --property=CPUQuota=100% \
               --property=CPUQuotaPeriodSec=100ms --property=TasksMax=64 --property=NoNewPrivileges=yes \
               --property=UMask=0077 --property=KillMode=control-group --property=TimeoutStopSec=2s --property=RuntimeMaxSec=880 --property=LimitFSIZE=256M \
               /usr/bin/env -i PATH=/fixture/go/bin:/usr/local/bin:/usr/bin:/bin HOME=/work TMPDIR=/tmp \
-              XDG_RUNTIME_DIR=/run/user/1000 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus \
+              XDG_RUNTIME_DIR=/run/user/1002 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1002/bus \
               GOTOOLCHAIN=local GOMAXPROCS=1 CGO_ENABLED=0 GOCACHE=/work/gocache GOMODCACHE=/work/gomod "$2" "${@:3}"
           }
           sudo -n -u gentle-lab /usr/bin/env -i /usr/bin/python3 -c 'import pathlib; p=pathlib.Path("/work/build.sh"); p.write_text("set -eu\n/usr/bin/python3 -B /fixture/harness.py probe\ngo build -mod=readonly -p 1 -o /work/supervisor ./cmd/gentle-ai\ngo test -mod=readonly -p 1 -c -o /work/user-install.test ./internal/shellinstaller\ngofmt -d internal/shellinstaller/user_install*.go internal/cli/shell_install.go internal/cli/shell_install_test.go internal/app/app.go internal/app/shell_install_test.go scripts/user_helpers.go > /work/gofmt.data\n")'

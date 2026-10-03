@@ -57,7 +57,7 @@ def remaining():
 
 
 def kernel():
-    require(os.getuid() == 1000 and os.uname().machine == 'x86_64', 'real UID1000/linuxamd64 required')
+    require(os.getuid() == 1002 and os.uname().machine == 'x86_64', 'real UID1002/linuxamd64 required')
     status = pathlib.Path('/proc/self/status').read_text()
     for key in ['CapInh', 'CapPrm', 'CapEff', 'CapAmb', 'CapBnd']:
         require(f'{key}:\t0000000000000000' in status, 'capability present')
@@ -101,7 +101,7 @@ def physical_inventory(root):
         for name in sorted(directories + files):
             p = pathlib.Path(parent) / name
             info = p.lstat()
-            require(info.st_uid == 1000, 'foreign fixture object')
+            require(info.st_uid == 1002, 'foreign fixture object')
             relative = str(p.relative_to(root))
             result.append((relative, 'metadata', info.st_mode, info.st_uid, info.st_gid, info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns))
             if stat.S_ISLNK(info.st_mode):
@@ -256,7 +256,7 @@ def acquisition_fault(target, cleanup=False):
     try:
         require(FAULT_SEEN.wait(timeout=min(20, remaining())), 'actual cold acquisition not observed')
         stages = list(target.parent.glob('.gentle-user-*'))
-        require(len(stages) == 1 and stages[0].is_dir() and stages[0].lstat().st_uid == 1000, 'owned acquisition stage differs')
+        require(len(stages) == 1 and stages[0].is_dir() and stages[0].lstat().st_uid == 1002, 'owned acquisition stage differs')
         stage = stages[0]
         if cleanup:
             os.chmod(stage, 0o500)  # Real owned-filesystem cleanup refusal, not a mocked return.
@@ -296,7 +296,7 @@ def publication_fault(target, shared):
         while not stop.wait(0.002):
             if node.exists():
                 info = node.lstat()
-                if stat.S_ISREG(info.st_mode) and info.st_uid == 1000:
+                if stat.S_ISREG(info.st_mode) and info.st_uid == 1002:
                     os.chmod(node, 0o600)
                     changed.set()
                 return
@@ -396,7 +396,7 @@ def main():
         print(json.dumps({'physicalWorker': REPORT['kernel'], 'functionalReady': False}, sort_keys=True))
         return
     if MODE == 'full':
-        require(pathlib.Path('/run/user/1000/systemd/private').is_socket() and pathlib.Path('/run/user/1000/bus').is_socket(), 'STOP: pre-existing delegated manager and bus unavailable')
+        require(pathlib.Path('/run/user/1002/systemd/private').is_socket() and pathlib.Path('/run/user/1002/bus').is_socket(), 'STOP: pre-existing delegated manager and bus unavailable')
     kernel()
     require(not any(key in os.environ for key in ['GITHUB_TOKEN', 'NPM_TOKEN', 'AWS_ACCESS_KEY_ID', 'SSH_AUTH_SOCK']), 'credentials present')
     for name in ['home', 'tmp', 'project', 'personal', 'parents']:
@@ -490,7 +490,7 @@ def main():
         pty_status(shared / 'bin/pi', WORK / 'project')
         REPORT['manager'] = 'UNQUALIFIED: real externally provided delegated manager required'
         if MODE == 'full':
-            runtime = pathlib.Path('/run/user/1000')
+            runtime = pathlib.Path('/run/user/1002')
             require(stat.S_ISSOCK((runtime / 'systemd/private').stat().st_mode), 'pre-existing user manager socket unavailable')
             manager_env = {'GENTLE_USER_MANAGER_GUEST': 'approved', 'GENTLE_USER_SUPERVISOR': SUPERVISOR,
                            'GENTLE_USER_INSTALLED': str(shared), 'GENTLE_USER_PROJECT': str(WORK / 'project'),

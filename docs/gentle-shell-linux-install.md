@@ -112,9 +112,9 @@ writing the path, or a successful direct-only run, is not functional readiness.
 The separate `user-vm-laboratory` CI job targets Ubuntu 24.04 amd64 on the fork's
 existing feature-branch trigger, not privileged Docker or your machine.
 Privileged setup is explicitly laboratory preparation before installer entry:
-it rejects an active UID1000 manager or occupied laboratory paths. It requires
-UID/GID1000 and the account/group name `gentle-lab` to be free, then creates only
-that fresh Guest's no-login account. It prepares a bounded read-only manager
+it rejects an active UID1002 manager or occupied laboratory paths. It requires
+UID/GID1002 and the account/group name `gentle-lab` to be free, then creates only
+that fresh Guest's no-login account; occupied UID1000 is not touched or qualified. It prepares a bounded read-only manager
 and workers, and verifies physical worker isolation
 before compiling candidate Go. No credentials are forwarded to those workers.
 Go and Node archives are independently size/hash checked before use.
@@ -139,7 +139,7 @@ can produce full readiness. Functional checks and source formatting remain due.
 ## Acceptance checklist — pending
 
 - [ ] Source-built CLI, dedicated TUI and both physical installation modes.
-- [ ] Actual UID1000 global installation and independently authenticated graph.
+- [ ] Actual UID1002 global installation and independently authenticated graph.
 - [ ] Full startup source closure, real PTY Pi startup and Gentle extension load.
 - [ ] Personal Pi preservation and explicit shared selection/consent.
 - [ ] Real stock prior/next upgrade and forced reinstall; both bindings survive.
