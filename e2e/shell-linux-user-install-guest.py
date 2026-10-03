@@ -466,44 +466,51 @@ def alan_pnpm_backend_probe():
         require(len(owners) == 1 and set(owners[0]['dependencies']) == set(pins), 'pnpm stack owner is ambiguous')
         project = pathlib.Path(owners[0]['path']).resolve(strict=True)
         require(project.is_relative_to(home) and project.stat().st_uid == 1002, 'pnpm project escapes selected home')
-        candidates = [project / 'pnpm-lock.yaml', project / 'node_modules/.pnpm/lock.yaml']
-        locks = [item for item in candidates if item.is_file() and not item.is_symlink()]
-        if len(locks) != 1:
-            def relative(item):
-                return str(item.relative_to(root)) if item.is_relative_to(root) else 'outside-owned-probe'
+        def lock_text(project):
+            require(project.is_relative_to(home) and project.stat().st_uid == 1002, 'pnpm root project escapes selected home')
+            candidates = [project / 'pnpm-lock.yaml', project / 'node_modules/.pnpm/lock.yaml']
+            locks = [item for item in candidates if item.is_file() and not item.is_symlink()]
+            if len(locks) != 1:
+                def relative(item):
+                    return str(item.relative_to(root)) if item.is_relative_to(root) else 'outside-owned-probe'
 
-            def entry(item):
-                try:
-                    status = item.lstat()
-                except FileNotFoundError:
-                    return {'kind': 'absent'}
-                kind = 'link' if stat.S_ISLNK(status.st_mode) else 'file' if stat.S_ISREG(status.st_mode) else 'directory' if stat.S_ISDIR(status.st_mode) else 'other'
-                return {'kind': kind, 'uid': status.st_uid, 'mode': oct(stat.S_IMODE(status.st_mode)), 'bytes': status.st_size}
+                def entry(item):
+                    try:
+                        status = item.lstat()
+                    except FileNotFoundError:
+                        return {'kind': 'absent'}
+                    kind = 'link' if stat.S_ISLNK(status.st_mode) else 'file' if stat.S_ISREG(status.st_mode) else 'directory' if stat.S_ISDIR(status.st_mode) else 'other'
+                    return {'kind': kind, 'uid': status.st_uid, 'mode': oct(stat.S_IMODE(status.st_mode)), 'bytes': status.st_size}
 
-            layout = {'project': relative(project), 'locks': {relative(item): entry(item) for item in candidates}, 'roots': {}, 'directories': {}}
-            for name, item in owners[0]['dependencies'].items():
-                reported = pathlib.Path(item['path'])
-                layout['roots'][name] = {'reported': relative(reported), 'resolved': relative(reported.resolve(strict=True))}
-            for directory in [project, project / 'node_modules', project / 'node_modules/.pnpm']:
-                details = entry(directory)
-                if details['kind'] == 'directory' and directory.resolve(strict=True).is_relative_to(home) and details['uid'] == 1002:
-                    names = sorted(item.name for item in directory.iterdir())
-                    require(all(b'\0' not in name.encode('utf-8', 'strict') for name in names), 'pnpm layout name encoding')
-                    raw = json.dumps(names, separators=(',', ':')).encode('utf-8')
-                    details.update(entries=len(names), namesBytes=len(raw), namesSHA256=hashlib.sha256(raw).hexdigest())
-                    details['names'] = names if len(raw) <= 512 else 'whole vector withheld'
-                layout['directories'][relative(directory)] = details
-            raw = json.dumps(layout, sort_keys=True, separators=(',', ':')).encode('utf-8')
-            REPORT['pnpmLayout'] = layout if len(raw) <= 3072 else {'withheld': True, 'bytes': len(raw), 'sha256': hashlib.sha256(raw).hexdigest()}
-            raise RuntimeError('pnpm persisted global lock absent or ambiguous')
-        lock_path = locks[0].resolve(strict=True)
-        status = lock_path.stat()
-        require(lock_path.is_relative_to(home) and status.st_uid == 1002 and status.st_mode & 0o022 == 0 and status.st_size <= 33554432, 'pnpm lock ownership/byte bound')
-        text = lock_path.read_text(encoding='utf-8', errors='strict')
+                layout = {'project': relative(project), 'locks': {relative(item): entry(item) for item in candidates}, 'roots': {}, 'directories': {}}
+                for name, item in owners[0]['dependencies'].items():
+                    reported = pathlib.Path(item['path'])
+                    layout['roots'][name] = {'reported': relative(reported), 'resolved': relative(reported.resolve(strict=True))}
+                for directory in [project, project / 'node_modules', project / 'node_modules/.pnpm']:
+                    details = entry(directory)
+                    if details['kind'] == 'directory' and directory.resolve(strict=True).is_relative_to(home) and details['uid'] == 1002:
+                        names = sorted(item.name for item in directory.iterdir())
+                        require(all(b'\0' not in name.encode('utf-8', 'strict') for name in names), 'pnpm layout name encoding')
+                        raw = json.dumps(names, separators=(',', ':')).encode('utf-8')
+                        details.update(entries=len(names), namesBytes=len(raw), namesSHA256=hashlib.sha256(raw).hexdigest())
+                        details['names'] = names if len(raw) <= 512 else 'whole vector withheld'
+                    layout['directories'][relative(directory)] = details
+                raw = json.dumps(layout, sort_keys=True, separators=(',', ':')).encode('utf-8')
+                REPORT['pnpmLayout'] = layout if len(raw) <= 3072 else {'withheld': True, 'bytes': len(raw), 'sha256': hashlib.sha256(raw).hexdigest()}
+                raise RuntimeError('pnpm persisted global lock absent or ambiguous')
+            lock_path = locks[0].resolve(strict=True)
+            status = lock_path.stat()
+            require(lock_path.is_relative_to(home) and status.st_uid == 1002 and status.st_mode & 0o022 == 0 and status.st_size <= 33554432, 'pnpm lock ownership/byte bound')
+            return lock_path.read_text(encoding='utf-8', errors='strict')
+
         result = {}
         for name, (expected, sri) in pins.items():
             item = owners[0]['dependencies'][name]
-            location = pathlib.Path(item['path']).resolve(strict=True)
+            reported = pathlib.Path(item['path'])
+            context = reported.parents[len(name.split('/'))]
+            require(reported == context / 'node_modules' / name, 'pnpm reported root placement differs')
+            text = lock_text(context.resolve(strict=True))
+            location = reported.resolve(strict=True)
             require(location.is_relative_to(home) and location.stat().st_uid == 1002 and item['version'] == expected and sri in text, 'pnpm root identity/integrity differs')
             metadata = json.loads((location / 'package.json').read_bytes())
             require(metadata['name'] == name and metadata['version'] == expected, 'pnpm root metadata differs')
