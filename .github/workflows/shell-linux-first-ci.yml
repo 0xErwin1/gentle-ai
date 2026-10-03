@@ -460,7 +460,7 @@ jobs:
           raw=pathlib.Path(sys.argv[1]).read_bytes()
           if sys.argv[2]=='0':
               print('BUILD-EXIT0-RAW-SHA256:'+hashlib.sha256(raw).hexdigest()+':'+str(len(raw)))
-          elif len(raw)<4096 and b'\0' not in raw:
+          if len(raw)<4096 and b'\0' not in raw:
               raw.decode('utf-8','strict')
               print('BUILD-RAW-BASE64:'+base64.b64encode(raw).decode('ascii'))
           else:
@@ -469,7 +469,7 @@ jobs:
           PY
           sudo -n install -m 0555 /work/supervisor /usr/local/bin/supervisor
           sudo -n install -m 0555 /work/user-install.test /usr/local/bin/user-install.test
-          /usr/bin/python3 - <<'PY'
+          sudo -n -u gentle-lab /usr/bin/env -i /usr/bin/python3 - <<'PY'
           import pathlib,base64,hashlib
           raw=pathlib.Path('/work/gofmt.data').read_bytes()
           if len(raw)<4096 and b'\0' not in raw:
