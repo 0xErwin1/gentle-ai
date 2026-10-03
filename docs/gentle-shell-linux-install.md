@@ -136,6 +136,10 @@ Output is strict UTF-8, lossless base64 with newline/NUL accounting;
 entire Guest output is withheld at 4,096 bytes or above. No skipped manager test
 can produce full readiness. Functional checks and source formatting remain due.
 
+The installer remains inside the Gentle AI TUI, not a browser wizard.
+The Guest probes Alan PR1703's pinned stock npm 11.19.0 in a new private, unpublished runtime, with all existing global authentication checks unchanged.
+This experimental backend reuse is not functional qualification and introduces no second updater.
+
 ## Acceptance checklist — pending
 
 - [ ] Source-built CLI, dedicated TUI and both physical installation modes.
