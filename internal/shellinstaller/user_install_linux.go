@@ -560,8 +560,8 @@ func RunUserInstall(ctx context.Context, req UserInstallRequest) (result UserIns
 	}
 	cmd := exec.CommandContext(ctx, node, helperPath, root, prefix, agent, finalPrefix, req.Destination, req.Mode, "install")
 	cmd.Dir, cmd.Env = filepath.Join(root, "project"), userEnvironment(root, prefix, agent)
-	if _, err = privateRun(ctx, cmd, cancel); err != nil {
-		return result, err
+	if output, err := privateRun(ctx, cmd, cancel); err != nil {
+		return result, fmt.Errorf("global provisioning: %w; bounded output: %s", err, output)
 	}
 	pkg := filepath.Join(prefix, "lib/node_modules/gentle-pi")
 	for _, source := range []struct{ name, pin string }{{"scripts/gentle-ai-installer.mjs", userInstallerSHA}, {"runtime/gentle-ai-binary.mjs", privateNativeResolverSHA}} {
@@ -571,8 +571,8 @@ func RunUserInstall(ctx context.Context, req UserInstallRequest) (result UserIns
 	}
 	cmd = exec.CommandContext(ctx, node, "--input-type=module", "-e", privateNativeInvoke)
 	cmd.Dir, cmd.Env = pkg, userEnvironment(root, prefix, agent)
-	if _, err = privateRun(ctx, cmd, cancel); err != nil {
-		return result, err
+	if output, err := privateRun(ctx, cmd, cancel); err != nil {
+		return result, fmt.Errorf("native supplier: %w; bounded output: %s", err, output)
 	}
 	if err = userNativeReadback(ctx, filepath.Join(pkg, ".gentle-ai")); err != nil {
 		return result, err
@@ -712,7 +712,14 @@ func userBootstrap(ctx context.Context, root, workspace string) error {
 			return err
 		}
 	}
-	return privatePhase(ctx, root, "bootstrap-gentle-shell-private-node.sh", 120*time.Second, "--destination", filepath.Join(root, "runtime/node"), "--node-archive", archive)
+	ctx, cancel := context.WithTimeout(ctx, 120*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "/bin/sh", filepath.Join(root, "bootstrap-gentle-shell-private-node.sh"), "--destination", filepath.Join(root, "runtime/node"), "--node-archive", archive)
+	cmd.Dir, cmd.Env = root, []string{"PATH=/usr/bin:/bin", "HOME=" + root, "TMPDIR=" + root}
+	if output, err := privateRun(ctx, cmd, cancel); err != nil {
+		return fmt.Errorf("Node bootstrap: %w; bounded output: %s", err, output)
+	}
+	return nil
 }
 
 func userSourceFile(ctx context.Context, path string, size int64, pin string) (string, error) {

@@ -92,7 +92,12 @@ function stockNpm(args, cwd = source) {
     cwd, env, shell: false, timeout: 180000, killSignal: 'SIGKILL',
     maxBuffer: 8388608, encoding: 'utf8',
   });
-  if (child.error || child.signal || child.status !== 0) reject('stock npm failed; preserve uncertainty');
+  if (child.error || child.signal || child.status !== 0) {
+    const output = (child.stdout ?? '') + (child.stderr ?? '');
+    const detail = Buffer.byteLength(output) < 1024 && !output.includes('\0') && !output.includes('\ufffd')
+      ? output : `entire npm output withheld; bytes=${Buffer.byteLength(output)}; sha256=${digest(Buffer.from(output))}`;
+    reject(`stock npm ${args[0]} failed; status=${child.status}; signal=${child.signal}; error=${child.error?.code ?? ''}; ${detail}`);
+  }
   return child.stdout;
 }
 function inventory(directory) {
