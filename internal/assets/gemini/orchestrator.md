@@ -62,12 +62,13 @@ Core principle: **does this inflate the parent context without need?** If yes, u
 | Action | Direct inline | Delegated direct worker |
 |--------|---------------|-------------------------|
 | Decide/verify within the inline evidence budget | ✅ one bounded batch | — |
-| Larger evidence, sequential exploration, or long-session mapping | — | ✅ one read-only explorer |
-| Read as preparation for writing | — | ✅ together with the write |
-| Write one mechanical, already-understood file | ✅ | — |
-| Write 2+ non-trivial files | — | ✅ one writer |
+| Understanding beyond the inline evidence budget, or long sequential exploration | — | ✅ one read-only explorer, then re-evaluate task size |
+| Read as preparation for a large task's write | — | ✅ together with the write |
+| Write a small task (one understood change, any number of files) | ✅ | — |
+| Write a large (tracked) task | — | ✅ one writer per task |
 | Bash for state (`git`, `gh`) | ✅ | — |
-| Tests, builds, installs, or native review actions | allowed as a bounded action | ✅ fresh per-action worker without changing route |
+| Focused test and suite of the change being made | ✅ once each | — |
+| High-risk change, or long suites, builds, installs, or native review actions of a large task | — | ✅ independent verifier or fresh per-action worker |
 
 Use Gemini's native bounded worker for delegated-direct work.
 
@@ -78,12 +79,13 @@ Keep one writer and a short synthesized handoff. Delegation is mandatory at the 
 These are parent-orchestrator routing boundaries. Use the smallest useful topology and keep the safety machinery behind the outcome-first interaction. Do not pass these rules to child agents as permission to orchestrate.
 
 1. **Evidence budget rule**: decide or verify inline with one parallel batch, at most 3 calls and approximately 10k tokens. Use bounded search/line ranges, not whole large files.
-2. **Mapping rule**: larger evidence, more than approximately 5 sequential lookups, or long-session mapping require one read-only explorer. Return at most approximately 2k tokens with path:line evidence and one parent spot check. Do not reread the entire mapped evidence.
-   - Keep parent bash output bounded to counts, --stat, tail, or summaries. Delegate full suites and builds; return concise observed results, including failures.
+2. **Mapping rule**: understanding that needs more evidence or more than approximately 5 sequential lookups requires one read-only explorer; with its handoff, re-evaluate task size. Return at most approximately 2k tokens with path:line evidence and one parent spot check. Do not reread the entire mapped evidence.
+   - Keep parent bash output bounded to counts, --stat, tail, or summaries. On a large task, delegate long suites and builds; return concise observed results, including failures.
    - The approximately 150k parent-context backstop is advisory guidance, not mechanically observed or enforced. Pause and delegate the next bounded unit; do not claim runtime telemetry or enforcement.
-3. **Write rule**: keep one mechanical, already-understood file inline only when it needs no research or unresolved design work; delegate one writer for 2+ non-trivial files.
-4. **Context rule**: delegate reading that prepares a write and broad research/context compression.
+3. **Write rule**: a small task's writes stay inline, even across files; a large task delegates one writer per task. File count never fires this rule.
+4. **Context rule**: on a large task, delegate reading that prepares a write and broad research/context compression.
 5. **Per-action rule**: tests, builds, installs, and native review actors may use fresh workers without changing the implementation route.
+6. **Verification rule**: a high-risk change (Task Size list) gets an independent verifier after the change's own checks; otherwise the change's own focused test and suite run inline.
 
 #### Delegated Verification Gate (MANDATORY)
 

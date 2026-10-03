@@ -44,6 +44,7 @@ const (
 // share into its ODD-only form. Whole sections are handled separately.
 var nonRDDReplacements = strings.NewReplacer(
 	"| Tests, builds, installs, or native review actions |", "| Tests, builds, installs, or verification actions |",
+	"| High-risk change, or long suites, builds, installs, or native review actions of a large task |", "| High-risk change, or long suites, builds, installs, or verification actions of a large task |",
 	"tests, builds, installs, and native review actors may use fresh workers", "tests, builds, installs, and verification actors may use fresh workers",
 	"run applicable tests, builds, and native review actions as bounded steps", "run applicable tests, builds, and verification actions as bounded steps",
 	"- Let the native review and delivery providers select checking and delivery actions; repeated gates reuse exact authority and never reopen review for unchanged content.", "- Let the user and ordinary repository policy decide delivery; do not infer authorization from checking output.",

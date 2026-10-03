@@ -78,13 +78,13 @@ func TestInstalledEvidenceBudgetGuidance(t *testing.T) {
 			for _, want := range []string{
 				"one parallel batch", "at most 3 calls", "approximately 10k tokens",
 				"bounded search/line ranges", "not whole large files",
-				"more than approximately 5 sequential lookups", "long-session mapping",
+				"more than approximately 5 sequential lookups", "re-evaluate task size",
 				"one read-only explorer", "at most approximately 2k tokens", "path:line",
 				"one parent spot check", "Do not reread the entire mapped evidence",
-				"counts, --stat, tail, or summaries", "Delegate full suites and builds",
+				"counts, --stat, tail, or summaries", "delegate long suites and builds",
 				"approximately 150k", "not mechanically observed or enforced",
-				"2+ non-trivial files", "reading that prepares a write", "broad research",
-				"one mechanical, already-understood file", "no research", "unresolved design",
+				"a large task delegates one writer per task", "reading that prepares a write", "broad research",
+				"a small task's writes stay inline", "File count never fires this rule",
 			} {
 				if !strings.Contains(prompt, want) {
 					t.Errorf("installed guidance missing %q", want)

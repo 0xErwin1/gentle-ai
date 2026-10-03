@@ -386,7 +386,7 @@ func TestOrchestratorsProjectOrganicRouting(t *testing.T) {
 			"Mandatory Delegation Triggers",
 			"Evidence budget rule", "one parallel batch",
 			"Mapping rule", "one read-only explorer",
-			"Write rule", "2+ non-trivial files",
+			"Write rule", "a large task delegates one writer per task",
 			"Context rule", "reading that prepares a write", "broad research",
 			"Mandatory Delegation Triggers", "delegated direct",
 		} {

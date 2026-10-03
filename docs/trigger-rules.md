@@ -28,8 +28,8 @@ verification cost or external side effects, accepted residual risk, or delivery.
 
 | Route | Use it when | What happens |
 |---|---|---|
-| **Direct inline** | Deciding or verifying requires **1–3 files**; or the change is **one mechanical, already-understood file** with no research or unresolved design decision. | Keep the bounded action inline. |
-| **Delegated direct** | Understanding requires **4+ files**; reading prepares a write; broad research is needed; or a writer must change **2+ non-trivial files**. | Delegate the narrow exploration and/or one writer needed for that action. |
+| **Direct inline** | The task is **small**: understood within the inline evidence budget, risk contained, and resumable from the request plus `git diff`, whatever the number of files. | Read, edit, and run the focused test and suite inline. |
+| **Delegated direct** | Understanding exceeds the inline evidence budget; or the task is **large** (its resume test fails), so reading that prepares a write, broad research, and the writer delegate; or the change is **high risk** and needs an independent verifier. File count never decides it. | Delegate the narrow exploration and/or one writer needed for that action. |
 | **Optional SDD** | The user explicitly wants separate proposal, spec, design, tasks, and verification artifacts. | Select only after an explicit request or accepted proposal, never from size, ambiguity, or risk alone. |
 
 The file counts describe the context needed for the current action, not a risk
