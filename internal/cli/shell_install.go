@@ -52,7 +52,7 @@ func RunShell(args []string, stdout io.Writer) (resultErr error) {
 	defer func() {
 		var failure *shellinstaller.PrivateRuntimeError
 		if errors.As(resultErr, &failure) && (failure.Workspace != "" || failure.Destination != "") {
-			resultErr = fmt.Errorf("%w\nPreserve evidence: workspace=%q destination/unit=%q\nFor shared installation recovery, inspect ROOT=workspace/installed or published destination with gentle-ai shell recover ROOT inspect", resultErr, failure.Workspace, failure.Destination)
+			resultErr = fmt.Errorf("%w\nBounded failure cause: %v\nPreserve evidence: workspace=%q destination/unit=%q\nFor shared installation recovery, inspect ROOT=workspace/installed or published destination with gentle-ai shell recover ROOT inspect", resultErr, failure.Cause, failure.Workspace, failure.Destination)
 		}
 	}()
 	if len(args) == 0 {
