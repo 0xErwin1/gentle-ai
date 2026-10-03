@@ -8,8 +8,10 @@ import (
 	"io"
 )
 
-func UserKernelCheck() error { return errors.New("Gentle Shell user installation requires Linux amd64") }
-func ValidateUserInstall(UserInstallRequest) error { return UserKernelCheck() }
+func UserKernelCheck() error {
+	return errors.New("Gentle Shell user installation requires Linux amd64")
+}
+func ValidateUserInstall(UserInstallRequest) error          { return UserKernelCheck() }
 func InspectUserInstall(UserInstallRequest) (string, error) { return "", UserKernelCheck() }
 func RunUserInstall(context.Context, UserInstallRequest) (UserInstallResult, error) {
 	return UserInstallResult{}, UserKernelCheck()

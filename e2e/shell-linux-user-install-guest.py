@@ -90,7 +90,7 @@ def run(args, cwd=None, extra=None, timeout=180, good=True, stdout_only=False):
     raw = out + error
     require(len(raw) < 4096 and b'\0' not in raw, 'whole raw command output withheld: byte/NUL bound')
     text = raw.decode('utf-8', 'strict')
-    require((child.returncode == 0) == good, 'command outcome differs; raw output withheld')
+    require((child.returncode == 0) == good, 'command outcome differs; kind=' + ('tests' if args[0] == TESTS else 'supervisor' if args[0] == SUPERVISOR else 'stock') + f'; exit={child.returncode}; expected_success={good}; raw output withheld')
     return out.decode('utf-8', 'strict') if stdout_only else text
 
 

@@ -354,7 +354,7 @@ func userService(ctx context.Context, self string, args []string, stdin io.Reade
 }
 
 type userUnitEvidence struct {
-	Path string
+	Path     string
 	Dev, Ino uint64
 }
 

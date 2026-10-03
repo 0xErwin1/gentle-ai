@@ -104,15 +104,15 @@ func shellEntryValues(req shellinstaller.UserInstallRequest) []string {
 type shellInstallDone struct{ err error }
 
 type shellInstallModel struct {
-	ctx      context.Context
-	cancel   context.CancelFunc
-	self     string
-	stdout   io.Writer
-	req      shellinstaller.UserInstallRequest
-	field    int
-	review   bool
-	busy     bool
-	err      error
+	ctx    context.Context
+	cancel context.CancelFunc
+	self   string
+	stdout io.Writer
+	req    shellinstaller.UserInstallRequest
+	field  int
+	review bool
+	busy   bool
+	err    error
 }
 
 func (m shellInstallModel) Init() tea.Cmd { return nil }
