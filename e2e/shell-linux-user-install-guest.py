@@ -470,7 +470,7 @@ def alan_pnpm_backend_probe():
             require(project.is_relative_to(home) and project.stat().st_uid == 1002, 'pnpm root project escapes selected home')
             candidates = [project / 'pnpm-lock.yaml', project / 'node_modules/.pnpm/lock.yaml']
             locks = [item for item in candidates if item.is_file() and not item.is_symlink()]
-            if len(locks) != 1:
+            if not locks or any(os.path.lexists(item) and item not in locks for item in candidates):
                 def relative(item):
                     return str(item.relative_to(root)) if item.is_relative_to(root) else 'outside-owned-probe'
 
@@ -498,10 +498,18 @@ def alan_pnpm_backend_probe():
                 raw = json.dumps(layout, sort_keys=True, separators=(',', ':')).encode('utf-8')
                 REPORT['pnpmLayout'] = layout if len(raw) <= 3072 else {'withheld': True, 'bytes': len(raw), 'sha256': hashlib.sha256(raw).hexdigest()}
                 raise RuntimeError('pnpm persisted global lock absent or ambiguous')
-            lock_path = locks[0].resolve(strict=True)
-            status = lock_path.stat()
-            require(lock_path.is_relative_to(home) and status.st_uid == 1002 and status.st_mode & 0o022 == 0 and status.st_size <= 33554432, 'pnpm lock ownership/byte bound')
-            return lock_path.read_text(encoding='utf-8', errors='strict')
+            copies = []
+            for item in locks:
+                lock_path = item.resolve(strict=True)
+                require(lock_path.is_relative_to(home), 'pnpm lock escapes selected home')
+                with os.fdopen(os.open(lock_path, os.O_RDONLY | os.O_NOFOLLOW), 'rb') as stream:
+                    status = os.fstat(stream.fileno())
+                    require(stat.S_ISREG(status.st_mode) and status.st_uid == 1002 and status.st_mode & 0o022 == 0 and status.st_size <= 33554432, 'pnpm lock ownership/byte bound')
+                    raw = stream.read(33554433)
+                require(len(raw) == status.st_size and len(raw) <= 33554432 and b'\0' not in raw, 'pnpm lock changed or exceeds byte/NUL bound')
+                copies.append(raw)
+            require(all(copy == copies[0] for copy in copies), 'pnpm persisted global lock copies differ')
+            return copies[0].decode('utf-8', errors='strict')
 
         result = {}
         for name, (expected, sri) in pins.items():
@@ -515,6 +523,24 @@ def alan_pnpm_backend_probe():
             metadata = json.loads((location / 'package.json').read_bytes())
             require(metadata['name'] == name and metadata['version'] == expected, 'pnpm root metadata differs')
             result[name] = location
+        if 'pnpmReceiptControls' not in REPORT:
+            controls = home / 'receipt-controls'
+            for directory in [controls, controls / 'node_modules', controls / 'node_modules/.pnpm']:
+                directory.mkdir(mode=0o700)
+            public = controls / 'pnpm-lock.yaml'
+            hidden = controls / 'node_modules/.pnpm/lock.yaml'
+            public.write_bytes(b'receipt\n')
+            require(lock_text(controls) == 'receipt\n', 'pnpm single receipt control')
+            hidden.write_bytes(b'receipt\n')
+            require(lock_text(controls) == 'receipt\n', 'pnpm matching receipt control')
+            hidden.write_bytes(b'changed\n')
+            try:
+                lock_text(controls)
+            except RuntimeError as error:
+                require(str(error) == 'pnpm persisted global lock copies differ', 'pnpm conflict refused for wrong reason')
+            else:
+                raise RuntimeError('pnpm conflicting receipt accepted')
+            REPORT['pnpmReceiptControls'] = {'single': True, 'matching': True, 'conflictRefused': True}
         count = 0
         for metadata in home.rglob('package.json'):
             count += 1
