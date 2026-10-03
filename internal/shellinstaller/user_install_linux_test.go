@@ -101,6 +101,48 @@ func TestUserPhysicalSelection(t *testing.T) {
 	}
 }
 
+func TestUserInventoryAggregateBound(t *testing.T) {
+	if testing.Short() {
+		t.Skip("inventory boundaries hash sparse GiB-scale fixtures")
+	}
+	for _, tc := range []struct {
+		name  string
+		count int
+		size  int64
+		bad   bool
+	}{
+		{"above former aggregate", 9, 32 << 20, false},
+		{"exact authorized aggregate", 32, 32 << 20, false},
+		{"above authorized aggregate", 33, 32 << 20, true},
+		{"individual file remains bounded", 1, (32 << 20) + 1, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			for i := 0; i < tc.count; i++ {
+				file, err := os.CreateTemp(root, "part-")
+				if err != nil {
+					t.Fatal(err)
+				}
+				err = file.Truncate(tc.size)
+				if closeErr := file.Close(); err != nil || closeErr != nil {
+					t.Fatal(errors.Join(err, closeErr))
+				}
+			}
+			stamp, err := userTreeStamp(root)
+			if (err != nil) != tc.bad {
+				t.Fatalf("inventory = %v, rejected want %v", err, tc.bad)
+			}
+			if tc.bad {
+				if !strings.Contains(err.Error(), "byte bound") {
+					t.Fatalf("unrelated refusal: %v", err)
+				}
+			} else if again, err := userTreeStamp(root); err != nil || len(stamp) != 64 || again != stamp {
+				t.Fatalf("unchanged inventory stamp differs: %v", err)
+			}
+		})
+	}
+}
+
 func TestUserKernelStatus(t *testing.T) {
 	qualified := "Uid:\t1000\t1000\t1000\t1000\nCapInh:\t0000000000000000\nCapPrm:\t0000000000000000\nCapEff:\t0000000000000000\nCapAmb:\t0000000000000000\nNoNewPrivs:\t1\n"
 	for _, tc := range []struct {

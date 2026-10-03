@@ -120,7 +120,7 @@ function inventory(directory) {
       if (!info.isFile()) reject('inventory special file');
       const raw = read(absolute);
       bytes += raw.length;
-      if (bytes > 268435456) reject('inventory aggregate bound');
+      if (bytes > 1073741824) reject('inventory aggregate bound');
       records.push([relative, 'file', info.mode & 0o777, digest(raw)]);
     }
   }

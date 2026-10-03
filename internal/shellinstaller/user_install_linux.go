@@ -153,7 +153,7 @@ func userTreeStamp(root string) (string, error) {
 			}
 		case info.Mode().IsRegular():
 			total += info.Size()
-			if info.Mode().Perm()&0022 != 0 || info.Size() > 32<<20 || total > 256<<20 {
+			if info.Mode().Perm()&0022 != 0 || info.Size() > 32<<20 || total > 1024<<20 {
 				return errors.New("selection file permissions or byte bound")
 			}
 			fd, err := unix.Open(path, unix.O_RDONLY|unix.O_NOFOLLOW|unix.O_NONBLOCK|unix.O_CLOEXEC, 0)
