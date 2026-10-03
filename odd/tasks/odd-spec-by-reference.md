@@ -11,8 +11,8 @@ S5. Verify reads the whole document, runs the spec's examples (isolated state wh
 S6. The shipped OpenCode `gentle-ai-worker`, `gentle-ai-verify`, and `gentle-ai-explore` agents match gentle-pi's merged wording.
 
 ## Tasks
-- [x] T1 (S2-S5) inline · canonical routing.go + routing_test.go + docs/usage.md · RED→GREEN · see L4
-- [ ] T2 (S6) inline · internal/assets/opencode/agents/gentle-ai-{worker,verify,explore}.md + assets test
+- [x] T1 (S2-S5) inline · canonical routing.go + routing_test.go + docs/usage.md · RED→GREEN · 6c664915
+- [x] T2 (S6) inline · internal/assets/opencode/agents/gentle-ai-{worker,verify,explore}.md + assets test · RED→GREEN · commit "feat(agents): have OpenCode generic agents read the feature spec by reference"
 - [ ] T3 (S1) pending merge · in gentle-pi, `npm run mirror:odd-routing` to regenerate `fixtures/odd-routing-canonical.md`
 
 ## Log
@@ -23,3 +23,8 @@ L4 2026-10-03 T1 evidence (risk: medium, canonical prompt contract for every age
    RED: TestRenderRoutingOrganicTaskContinuity failed for all 17 catalog agents on the new spec-by-reference clauses.
    GREEN: `go test ./internal/components/agentguidance/ ./internal/assets/` ok; `go test ./...` 80 packages ok; `go vet` and `gofmt -l` clean.
    Decision: the handoff example is `Spec: odd/tasks/<feature>.md, T2, S3-S4` and "read until `## Log`" is stated outside the code span (backticks cannot nest; gentle-pi's always-on example nests them).
+L5 2026-10-03 T2 evidence (risk: medium, shipped agent prompts):
+   RED: TestOpenCodeGenericAgentsReadTheFeatureSpecByReference missing all 8 clauses.
+   GREEN: the three #1713 sentences ported verbatim from gentle-pi; runtime-specific differences (OpenCode `task` tool, codegraph lifecycle, handoff size wording) kept. `go test ./...` 80 packages ok; `gofmt -l` clean.
+   Follow-up for gentle-pi: its always-on step 6 example nests backticks (`... (read until `## Log`) ...`), which breaks the inline code span; T3's PR can adopt this canon wording.
+L6 2026-10-03 next: push + PR to Gentleman-Programming/gentle-ai need user authorization; then T3 in gentle-pi.

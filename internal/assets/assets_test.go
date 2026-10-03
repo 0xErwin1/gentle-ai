@@ -1550,3 +1550,27 @@ func TestODDOrchestratorAssetsScopedToParent(t *testing.T) {
 		})
 	}
 }
+
+// Gentleman-Programming/gentle-shell#1713: the generic workers read the ODD
+// feature document as the specification, by reference, instead of a
+// paraphrase of the user's request; verify grounds its verdict in each spec.
+func TestOpenCodeGenericAgentsReadTheFeatureSpecByReference(t *testing.T) {
+	t.Parallel()
+
+	want := map[string][]string{
+		"opencode/agents/gentle-ai-worker.md":  {"until `## Log`", "`## Specs` are authoritative over any summary in the handoff", "which `S#` the change covers"},
+		"opencode/agents/gentle-ai-verify.md":  {"verbatim user entries in `## Log`", "verdict per `S#`", "compare the exact output and error text", "isolated state"},
+		"opencode/agents/gentle-ai-explore.md": {"until `## Log`"},
+	}
+	for path, clauses := range want {
+		body, err := FS.ReadFile(path)
+		if err != nil {
+			t.Fatalf("ReadFile(%s) error = %v", path, err)
+		}
+		for _, clause := range clauses {
+			if !strings.Contains(string(body), clause) {
+				t.Errorf("%s is missing %q", path, clause)
+			}
+		}
+	}
+}
