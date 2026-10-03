@@ -354,3 +354,119 @@ jobs:
             printf 'STOP: synthetic tests are not gofmt-clean; full diff above.\n' >&2
             exit 1
           fi
+
+  user-vm-laboratory:
+    if: github.repository == 'decode2/gentle-ai' && github.ref == 'refs/heads/feat/shell-linux-runtime-35'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - name: Bind public source without repository credentials
+        shell: bash
+        env:
+          SOURCE_SHA: ${{ github.sha }}
+          GIT_TERMINAL_PROMPT: '0'
+          GIT_CONFIG_NOSYSTEM: '1'
+          GIT_CONFIG_GLOBAL: /dev/null
+          GIT_ASKPASS: /bin/false
+        run: |
+          set -euo pipefail
+          [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          test ! -e .git
+          git init -q
+          git -c credential.helper= -c http.followRedirects=false fetch --no-tags --depth=1 https://github.com/decode2/gentle-ai.git "$SOURCE_SHA"
+          test "$(git rev-parse FETCH_HEAD)" = "$SOURCE_SHA"
+          git checkout --detach FETCH_HEAD
+
+      # Privileged preparation belongs only to this fresh hosted VM, not the installer.
+      - name: Prepare real delegated manager and read-only laboratory
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(uname -m)" = x86_64
+          test "$(cat /proc/1/comm)" = systemd
+          test "$(id -u ubuntu)" = 1000 && test "$(id -g ubuntu)" = 1000
+          test ! -e /work && test ! -e /fixture
+          if systemctl is-active --quiet user@1000.service; then exit 1; fi
+          sudo -n install -d -o 1000 -g 1000 -m 0700 /work
+          sudo -n install -d -m 0755 /fixture /fixture/go /work/src
+          sudo -n chown 1000:1000 /work/src
+          git archive HEAD | sudo -n -u ubuntu tar -xf - -C /work/src
+          sudo -n install -m 0444 e2e/shell-linux-user-install-guest.py /fixture/harness.py
+          curl --noproxy '*' --proto '=https' --max-redirs 0 --fail --silent --show-error --connect-timeout 10 --max-time 180 --max-filesize 59844667 -o "$RUNNER_TEMP/go.data" https://dl.google.com/go/go1.25.10.linux-amd64.tar.gz
+          test "$(stat -c %s "$RUNNER_TEMP/go.data")" = 59844667
+          printf '%s  %s\n' 42d4f7a32316aa66591eca7e89867256057a4264451aca10570a715b3637ba70 "$RUNNER_TEMP/go.data" | sha256sum -c -
+          sudo -n tar --no-same-owner --no-same-permissions --strip-components=1 -xzf "$RUNNER_TEMP/go.data" -C /fixture/go
+          curl --noproxy '*' --proto '=https' --max-redirs 0 --fail --silent --show-error --connect-timeout 10 --max-time 180 --max-filesize 57224421 -o "$RUNNER_TEMP/node.data" https://nodejs.org/dist/v24.18.0/node-v24.18.0-linux-x64.tar.gz
+          test "$(stat -c %s "$RUNNER_TEMP/node.data")" = 57224421
+          printf '%s  %s\n' 783130984963db7ba9cbd01089eaf2c2efb055c7c1693c943174b967b3050cb8 "$RUNNER_TEMP/node.data" | sha256sum -c -
+          sudo -n install -m 0444 "$RUNNER_TEMP/node.data" /fixture/node.tgz
+          sudo -n openssl req -x509 -newkey rsa:2048 -nodes -days 2 -subj /CN=Gentle-Guest-Test-CA -keyout /fixture/ca.key -out /usr/local/share/ca-certificates/gentle-guest.crt 2>/dev/null
+          sudo -n openssl req -newkey rsa:2048 -nodes -subj /CN=nodejs.org -keyout /fixture/server.key -out /fixture/server.csr 2>/dev/null
+          printf 'subjectAltName=DNS:nodejs.org,DNS:registry.npmjs.org,DNS:github.com,DNS:release-assets.githubusercontent.com,DNS:pi.dev\n' | sudo -n tee /fixture/server.ext >/dev/null
+          sudo -n openssl x509 -req -in /fixture/server.csr -CA /usr/local/share/ca-certificates/gentle-guest.crt -CAkey /fixture/ca.key -CAcreateserial -days 2 -extfile /fixture/server.ext -out /fixture/server.crt 2>/dev/null
+          sudo -n rm /fixture/ca.key /fixture/server.csr /fixture/server.ext
+          sudo -n chown 1000:1000 /fixture/server.key
+          sudo -n chmod 0400 /fixture/server.key
+          sudo -n update-ca-certificates >/dev/null
+          sudo -n sysctl -q -w net.ipv4.ip_unprivileged_port_start=0
+          printf '127.0.0.1 nodejs.org registry.npmjs.org github.com release-assets.githubusercontent.com pi.dev\n' | sudo -n tee -a /etc/hosts >/dev/null
+          sudo -n install -d /etc/systemd/system/user@1000.service.d
+          test ! -e /etc/systemd/system/user@1000.service.d/gentle-lab.conf
+          printf '[Service]\nDelegate=cpu memory pids\nMemoryMax=3221225472\nMemorySwapMax=0\nCPUQuota=100%%\nCPUQuotaPeriodSec=100ms\nTasksMax=64\nNoNewPrivileges=yes\nCapabilityBoundingSet=\nProtectSystem=strict\nReadWritePaths=/work /tmp /run/user/1000\nProtectProc=invisible\n' | sudo -n tee /etc/systemd/system/user@1000.service.d/gentle-lab.conf >/dev/null
+          sudo -n systemctl daemon-reload
+          sudo -n systemctl start user-runtime-dir@1000.service user@1000.service
+          test -S /run/user/1000/systemd/private && test -S /run/user/1000/bus
+
+      - name: Compile only after physical worker isolation then qualify full Guest
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          worker() {
+            timeout --kill-after=5 900 sudo -n -u ubuntu /usr/bin/env -i HOME=/work XDG_RUNTIME_DIR=/run/user/1000 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus \
+              /usr/bin/systemd-run --user --quiet --wait --collect --service-type=exec --expand-environment=no \
+              --unit="$1" --working-directory=/work/src --pipe \
+              --property=MemoryMax=3221225472 --property=MemorySwapMax=0 --property=CPUQuota=100% \
+              --property=CPUQuotaPeriodSec=100ms --property=TasksMax=64 --property=NoNewPrivileges=yes \
+              --property=UMask=0077 --property=KillMode=control-group --property=TimeoutStopSec=2s --property=RuntimeMaxSec=880 --property=LimitFSIZE=256M \
+              /usr/bin/env -i PATH=/fixture/go/bin:/usr/local/bin:/usr/bin:/bin HOME=/work TMPDIR=/tmp \
+              XDG_RUNTIME_DIR=/run/user/1000 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus \
+              GOTOOLCHAIN=local GOMAXPROCS=1 CGO_ENABLED=0 GOCACHE=/work/gocache GOMODCACHE=/work/gomod "$2" "${@:3}"
+          }
+          sudo -n -u ubuntu /usr/bin/env -i /usr/bin/python3 -c 'import pathlib; p=pathlib.Path("/work/build.sh"); p.write_text("set -eu\n/usr/bin/python3 -B /fixture/harness.py probe\ngo build -mod=readonly -p 1 -o /work/supervisor ./cmd/gentle-ai\ngo test -mod=readonly -p 1 -c -o /work/user-install.test ./internal/shellinstaller\ngofmt -d internal/shellinstaller/user_install*.go internal/cli/shell_install.go internal/cli/shell_install_test.go internal/app/app.go internal/app/shell_install_test.go scripts/user_helpers.go > /work/gofmt.data\n")'
+          build_status=0
+          worker gentle-lab-build /bin/bash /work/build.sh >"$RUNNER_TEMP/user-build.raw" 2>&1 || build_status=$?
+          /usr/bin/python3 - "$RUNNER_TEMP/user-build.raw" "$build_status" <<'PY'
+          import pathlib,sys,base64,hashlib
+          raw=pathlib.Path(sys.argv[1]).read_bytes()
+          if sys.argv[2]=='0':
+              print('BUILD-EXIT0-RAW-SHA256:'+hashlib.sha256(raw).hexdigest()+':'+str(len(raw)))
+          elif len(raw)<4096 and b'\0' not in raw:
+              raw.decode('utf-8','strict')
+              print('BUILD-RAW-BASE64:'+base64.b64encode(raw).decode('ascii'))
+          else:
+              print('BUILD-RAW-WITHHELD:'+str(len(raw))+':'+hashlib.sha256(raw).hexdigest())
+          raise SystemExit(int(sys.argv[2]))
+          PY
+          sudo -n install -m 0555 /work/supervisor /usr/local/bin/supervisor
+          sudo -n install -m 0555 /work/user-install.test /usr/local/bin/user-install.test
+          /usr/bin/python3 - <<'PY'
+          import pathlib,base64,hashlib
+          raw=pathlib.Path('/work/gofmt.data').read_bytes()
+          if len(raw)<4096 and b'\0' not in raw:
+              raw.decode('utf-8','strict')
+              print('FORMAT-DATA-BASE64:'+base64.b64encode(raw).decode('ascii'))
+          else:
+              print('FORMAT-DATA-WITHHELD:'+str(len(raw))+':'+hashlib.sha256(raw).hexdigest())
+          PY
+          status=0
+          worker gentle-lab-full /usr/bin/python3 -B /fixture/harness.py full >"$RUNNER_TEMP/user-guest.raw" 2>&1 || status=$?
+          /usr/bin/python3 - "$RUNNER_TEMP/user-guest.raw" "$status" <<'PY'
+          import pathlib,sys,base64
+          raw=pathlib.Path(sys.argv[1]).read_bytes()
+          if len(raw)>=4096 or b'\0' in raw:
+              raise SystemExit('STOP: entire Guest output withheld at byte/NUL bound')
+          raw.decode('utf-8','strict')
+          print('GUEST-RAW-BASE64:'+base64.b64encode(raw).decode('ascii'))
+          raise SystemExit(int(sys.argv[2]))
+          PY

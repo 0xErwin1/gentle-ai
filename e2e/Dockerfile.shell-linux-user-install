@@ -1,0 +1,23 @@
+FROM --platform=linux/amd64 debian:bookworm-slim@sha256:f3034a6ec3c1205360777c4aae76234998866ad18806ae62b63a3f84ccad782b
+RUN apt-get update \
+    && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends ca-certificates python3 openssl coreutils findutils tar gzip git \
+    && apt-get clean && rm -rf /var/lib/apt/lists/* \
+    && install -d -m 0755 /fixture \
+    && openssl req -x509 -newkey rsa:2048 -nodes -days 2 -subj /CN=Gentle-Guest-Test-CA \
+       -keyout /fixture/ca.key -out /usr/local/share/ca-certificates/gentle-guest.crt \
+    && openssl req -newkey rsa:2048 -nodes -subj /CN=nodejs.org \
+       -keyout /fixture/server.key -out /fixture/server.csr \
+    && printf 'subjectAltName=DNS:nodejs.org,DNS:registry.npmjs.org,DNS:github.com,DNS:release-assets.githubusercontent.com,DNS:pi.dev\n' > /fixture/server.ext \
+    && openssl x509 -req -in /fixture/server.csr -CA /usr/local/share/ca-certificates/gentle-guest.crt \
+       -CAkey /fixture/ca.key -CAcreateserial -days 2 -extfile /fixture/server.ext -out /fixture/server.crt \
+    && update-ca-certificates \
+    && rm /fixture/ca.key /fixture/server.csr /fixture/server.ext \
+    && chown 1000:1000 /fixture/server.key && chmod 0400 /fixture/server.key
+COPY --from=gentle-shell-private-runtime:ci /node.tgz /fixture/node.tgz
+COPY supervisor user-install.test /usr/local/bin/
+COPY e2e/shell-linux-user-install-guest.py /fixture/harness.py
+RUN chmod 0555 /usr/local/bin/supervisor /usr/local/bin/user-install.test \
+    && chmod 0444 /fixture/node.tgz /fixture/harness.py /fixture/server.crt
+USER 1000:1000
+ENV PYTHONDONTWRITEBYTECODE=1
+ENTRYPOINT ["/usr/bin/env", "-i", "PATH=/usr/local/bin:/usr/bin:/bin", "HOME=/work/home", "TMPDIR=/work/tmp", "PYTHONDONTWRITEBYTECODE=1", "/usr/bin/python3", "-B", "/fixture/harness.py"]
