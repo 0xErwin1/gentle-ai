@@ -432,8 +432,9 @@ jobs:
           sudo -n systemctl daemon-reload
           sudo -n systemctl start user-runtime-dir@1002.service user@1002.service
           sudo -n systemctl show user@1002.service --no-pager -p ActiveState -p SubState -p Result -p MainPID
-          test -S /run/user/1002/systemd/private
-          test -S /run/user/1002/bus
+          sudo -n stat -c 'LAB-RUNTIME-MODE=%a UID=%u GID=%g' /run/user/1002
+          sudo -n -u gentle-lab /usr/bin/test -S /run/user/1002/systemd/private
+          sudo -n -u gentle-lab /usr/bin/test -S /run/user/1002/bus
 
       - name: Compile only after physical worker isolation then qualify full Guest
         shell: bash
