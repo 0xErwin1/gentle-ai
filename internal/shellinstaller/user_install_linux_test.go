@@ -297,6 +297,17 @@ func TestUserSupervisorPreimages(t *testing.T) {
 	if _, err := userSupervisorSHA(context.Background(), path); err == nil {
 		t.Fatal("group-writable controller accepted")
 	}
+	if err := os.Chmod(path, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(filepath.Dir(path), 0770); err != nil {
+		t.Fatal(err)
+	}
+	_, err = userSupervisorSHA(context.Background(), path)
+	var failure *PrivateRuntimeError
+	if !errors.As(err, &failure) || failure.Kind != "source" || failure.Cause == nil || !strings.Contains(failure.Cause.Error(), "supervisor ancestor refused") {
+		t.Fatalf("unsafe controller ancestor lost refusal cause: %v", err)
+	}
 }
 
 func TestUserSharedConsentBindsFiles(t *testing.T) {

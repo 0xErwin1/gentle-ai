@@ -535,11 +535,11 @@ func RunUserInstall(ctx context.Context, req UserInstallRequest) (result UserIns
 		}
 	}
 	if err = userBootstrap(ctx, root, workspace); err != nil {
-		return result, err
+		return result, fmt.Errorf("runtime acquisition: %w", err)
 	}
 	node := filepath.Join(root, "runtime/node/bin/node")
 	if _, err = privateNativeFile(ctx, node, 0700, privateNativeNodeSize, privateNativeNodeSHA); err != nil {
-		return result, err
+		return result, fmt.Errorf("bootstrap Node readback: %w", err)
 	}
 	helper, err := assets.ReadUserHelper()
 	if err != nil {
@@ -566,7 +566,7 @@ func RunUserInstall(ctx context.Context, req UserInstallRequest) (result UserIns
 	pkg := filepath.Join(prefix, "lib/node_modules/gentle-pi")
 	for _, source := range []struct{ name, pin string }{{"scripts/gentle-ai-installer.mjs", userInstallerSHA}, {"runtime/gentle-ai-binary.mjs", privateNativeResolverSHA}} {
 		if _, err = userSourceFile(ctx, filepath.Join(pkg, source.name), -1, source.pin); err != nil {
-			return result, err
+			return result, fmt.Errorf("authenticate native supplier %q: %w", source.name, err)
 		}
 	}
 	cmd = exec.CommandContext(ctx, node, "--input-type=module", "-e", privateNativeInvoke)
@@ -575,10 +575,10 @@ func RunUserInstall(ctx context.Context, req UserInstallRequest) (result UserIns
 		return result, fmt.Errorf("native supplier: %w; bounded output: %s", err, output)
 	}
 	if err = userNativeReadback(ctx, filepath.Join(pkg, ".gentle-ai")); err != nil {
-		return result, err
+		return result, fmt.Errorf("native supplier readback: %w", err)
 	}
 	if err = userVerifyGlobal(ctx, root, prefix, agent, finalPrefix, req.Destination, req.Mode); err != nil {
-		return result, err
+		return result, fmt.Errorf("post-native global readback: %w", err)
 	}
 	self, err := os.Executable()
 	if err != nil {
@@ -586,7 +586,7 @@ func RunUserInstall(ctx context.Context, req UserInstallRequest) (result UserIns
 	}
 	selfSHA, err := userCopySupervisor(ctx, self, filepath.Join(root, "supervisor"))
 	if err != nil {
-		return result, err
+		return result, fmt.Errorf("supervisor provenance: %w", err)
 	}
 	manifest := userManifest{Schema: userSchema, Destination: req.Destination, Prefix: finalPrefix, Agent: finalAgent, Mode: req.Mode, SupervisorSHA: selfSHA, NodeSHA: privateNativeNodeSHA}
 	manifest.PrefixIdentity, err = userIdentity(prefix)
@@ -729,9 +729,13 @@ func userSourceFile(ctx context.Context, path string, size int64, pin string) (s
 	}
 	mode := info.Mode()
 	if mode != 0600 && mode != 0644 && mode != 0700 && mode != 0755 {
-		return "", privateError("source", nil)
+		return "", privateError("source", fmt.Errorf("supplier mode refused: name=%q mode=%#o", filepath.Base(path), mode.Perm()))
 	}
-	return privateNativeFile(ctx, path, mode, size, pin)
+	stamp, err := privateNativeFile(ctx, path, mode, size, pin)
+	if err != nil {
+		return "", fmt.Errorf("supplier file %q independent readback: %w", filepath.Base(path), err)
+	}
+	return stamp, nil
 }
 
 func userVerifyGlobal(ctx context.Context, root, prefix, agent, finalPrefix, finalRoot, mode string) error {
@@ -791,7 +795,7 @@ func userSupervisorSHA(ctx context.Context, source string) (string, error) {
 		owner := st.Sys().(*syscall.Stat_t).Uid
 		trustedTmp := current == "/tmp" && owner == 0 && st.Mode()&os.ModeSticky != 0
 		if (owner != 0 && owner != uint32(os.Getuid())) || (st.Mode().Perm()&0022 != 0 && !trustedTmp) {
-			return "", privateError("source", nil)
+			return "", privateError("source", fmt.Errorf("supervisor ancestor refused: path=%q owner=%d mode=%#o", current, owner, st.Mode().Perm()))
 		}
 		if current == "/" {
 			break
