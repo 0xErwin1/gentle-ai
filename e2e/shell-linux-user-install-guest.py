@@ -468,7 +468,34 @@ def alan_pnpm_backend_probe():
         require(project.is_relative_to(home) and project.stat().st_uid == 1002, 'pnpm project escapes selected home')
         candidates = [project / 'pnpm-lock.yaml', project / 'node_modules/.pnpm/lock.yaml']
         locks = [item for item in candidates if item.is_file() and not item.is_symlink()]
-        require(len(locks) == 1, 'pnpm persisted global lock absent or ambiguous')
+        if len(locks) != 1:
+            def relative(item):
+                return str(item.relative_to(root)) if item.is_relative_to(root) else 'outside-owned-probe'
+
+            def entry(item):
+                try:
+                    status = item.lstat()
+                except FileNotFoundError:
+                    return {'kind': 'absent'}
+                kind = 'link' if stat.S_ISLNK(status.st_mode) else 'file' if stat.S_ISREG(status.st_mode) else 'directory' if stat.S_ISDIR(status.st_mode) else 'other'
+                return {'kind': kind, 'uid': status.st_uid, 'mode': oct(stat.S_IMODE(status.st_mode)), 'bytes': status.st_size}
+
+            layout = {'project': relative(project), 'locks': {relative(item): entry(item) for item in candidates}, 'roots': {}, 'directories': {}}
+            for name, item in owners[0]['dependencies'].items():
+                reported = pathlib.Path(item['path'])
+                layout['roots'][name] = {'reported': relative(reported), 'resolved': relative(reported.resolve(strict=True))}
+            for directory in [project, project / 'node_modules', project / 'node_modules/.pnpm']:
+                details = entry(directory)
+                if details['kind'] == 'directory' and directory.resolve(strict=True).is_relative_to(home) and details['uid'] == 1002:
+                    names = sorted(item.name for item in directory.iterdir())
+                    require(all(b'\0' not in name.encode('utf-8', 'strict') for name in names), 'pnpm layout name encoding')
+                    raw = json.dumps(names, separators=(',', ':')).encode('utf-8')
+                    details.update(entries=len(names), namesBytes=len(raw), namesSHA256=hashlib.sha256(raw).hexdigest())
+                    details['names'] = names if len(raw) <= 512 else 'whole vector withheld'
+                layout['directories'][relative(directory)] = details
+            raw = json.dumps(layout, sort_keys=True, separators=(',', ':')).encode('utf-8')
+            REPORT['pnpmLayout'] = layout if len(raw) <= 3072 else {'withheld': True, 'bytes': len(raw), 'sha256': hashlib.sha256(raw).hexdigest()}
+            raise RuntimeError('pnpm persisted global lock absent or ambiguous')
         lock_path = locks[0].resolve(strict=True)
         status = lock_path.stat()
         require(lock_path.is_relative_to(home) and status.st_uid == 1002 and status.st_mode & 0o022 == 0 and status.st_size <= 33554432, 'pnpm lock ownership/byte bound')
@@ -647,6 +674,8 @@ try:
     main()
 except Exception as error:
     message = {'functionalReady': False, 'errorType': type(error).__name__, 'reason': str(error)[:240], 'rawStockOutput': 'withheld'}
+    if 'pnpmLayout' in REPORT:
+        message['pnpmLayout'] = REPORT['pnpmLayout']
     if 'alanBackendProbe' in REPORT:
         message['alanBackendProbe'] = REPORT['alanBackendProbe']
     if COMMAND_FAILURE is not None:
