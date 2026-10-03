@@ -307,7 +307,7 @@ if (action === 'restore') {
     const bytes = read(path.join(directory, 'package.json'));
     const metadata = JSON.parse(bytes);
     const acquired = authority.get(`${metadata.name}@${metadata.version}`);
-    if (!acquired || !bytes.equals(acquired.bytes)) reject('global package lacks authenticated metadata');
+    if (!acquired || !bytes.equals(acquired.bytes)) reject(`global package lacks authenticated metadata: ${JSON.stringify({ name: metadata.name, version: metadata.version, placement: path.relative(prefix, directory), actualSHA256: digest(bytes), acquiredSHA256: acquired ? digest(acquired.bytes) : null })}`);
     sourceBytes(directory, acquired.source, metadata.name === 'gentle-pi');
     observed.push({ directory: path.relative(prefix, directory), name: metadata.name, version: metadata.version, integrity: acquired.integrity });
     const nested = path.join(directory, 'node_modules');
