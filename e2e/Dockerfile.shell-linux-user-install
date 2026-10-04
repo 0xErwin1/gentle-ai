@@ -14,9 +14,9 @@ RUN apt-get update \
     && rm /fixture/ca.key /fixture/server.csr /fixture/server.ext \
     && chown 1002:1002 /fixture/server.key && chmod 0400 /fixture/server.key
 COPY --from=gentle-shell-private-runtime:ci /node.tgz /fixture/node.tgz
-COPY supervisor user-install.test /usr/local/bin/
+COPY supervisor user-install.test /fixture/
 COPY e2e/shell-linux-user-install-guest.py /fixture/harness.py
-RUN chmod 0555 /usr/local/bin/supervisor /usr/local/bin/user-install.test \
+RUN chmod 0555 /fixture/supervisor /fixture/user-install.test \
     && chmod 0444 /fixture/node.tgz /fixture/harness.py /fixture/server.crt
 USER 1002:1002
 ENV PYTHONDONTWRITEBYTECODE=1

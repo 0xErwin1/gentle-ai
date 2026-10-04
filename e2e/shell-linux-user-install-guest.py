@@ -27,8 +27,8 @@ import termios
 START = time.monotonic()
 CEILING = 850
 WORK = pathlib.Path('/work')
-SUPERVISOR = '/usr/local/bin/supervisor'
-TESTS = '/usr/local/bin/user-install.test'
+SUPERVISOR = '/fixture/supervisor'
+TESTS = '/fixture/user-install.test'
 FIXTURE = pathlib.Path('/fixture')
 MODE = sys.argv[1] if len(sys.argv) == 2 else 'full'
 REPORT = {}
@@ -576,6 +576,14 @@ def main():
         require(pathlib.Path('/run/user/1002/systemd/private').is_socket() and pathlib.Path('/run/user/1002/bus').is_socket(), 'STOP: pre-existing delegated manager and bus unavailable')
     kernel()
     require(not any(key in os.environ for key in ['GITHUB_TOKEN', 'NPM_TOKEN', 'AWS_ACCESS_KEY_ID', 'SSH_AUTH_SOCK']), 'credentials present')
+    for tool in (SUPERVISOR, TESTS):
+        binary = pathlib.Path(tool)
+        info = binary.lstat()
+        require(stat.S_ISREG(info.st_mode) and info.st_uid == 0 and info.st_gid == 0 and stat.S_IMODE(info.st_mode) == 0o555 and 0 < info.st_size <= 268435456 and binary.resolve(strict=True) == binary, 'fixture binary provenance differs')
+        for parent in binary.parents:
+            info = parent.lstat()
+            require(stat.S_ISDIR(info.st_mode) and info.st_uid == 0 and info.st_gid == 0 and info.st_mode & 0o022 == 0 and parent.resolve(strict=True) == parent, 'fixture binary ancestor provenance differs')
+    REPORT['fixtureProvenance'] = 'exclusive root-owned canonical fixture binaries and complete nonwritable ancestor chains'
     for name in ['home', 'tmp', 'project', 'personal', 'parents']:
         (WORK / name).mkdir(mode=0o700, parents=True, exist_ok=False)
     server = tls_fixture()
