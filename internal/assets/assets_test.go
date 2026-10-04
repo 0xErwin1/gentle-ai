@@ -1563,6 +1563,82 @@ func TestODDOrchestratorAssetsScopedToParent(t *testing.T) {
 	}
 }
 
+// Gentleman-Programming/gentle-shell#1731: the worker tests each requested
+// rule plus only the touched existing behavior, the verifier probes the spec
+// itself in a scratch copy with a fixed severity bar, and both bound
+// corrections instead of looping.
+func TestOpenCodeGenericAgentsCarryDelegateForReasonDiscipline(t *testing.T) {
+	t.Parallel()
+
+	want := map[string][]string{
+		"opencode/agents/gentle-ai-worker.md": {
+			// S6: RED per requested rule, PRESERVE for touched behavior, no padding, docs.
+			"add behavior-level tests for each requested rule",
+			"covers the cases the rule itself names",
+			"through the public interface",
+			"update the help text and docs that describe it",
+			"3. PRESERVE",
+			"add one test proving its previous behavior still holds; add no other cases",
+			"counts as touched when it shares the code you changed",
+			"they need no RED run",
+			"PRESERVE/REFACTOR",
+			// S8: bounded self-correction.
+			"one correction attempt per failing check, and a second only if the same check still fails",
+			"return `status: partial` with the failing command and its output",
+		},
+		"opencode/agents/gentle-ai-verify.md": {
+			// S7: read-only scope, spec-derived probes, first-launch scratch copy.
+			"Read-only means no edits to the repository or its git state",
+			"## Spec-derived probes",
+			"Verify the request, not the writer's work",
+			"**Own probes.**", "**Invariants.**", "**Interactions.**", "**Build and scope.**", "**Every item.**", "**Durable probes.**",
+			"Probe on your first launch",
+			"`mktemp -d` under the system temp directory, never inside the workspace",
+			"leave no new file in the workspace (check `git status` before and after)",
+			"No network, no installs",
+			// S7: severity bar.
+			"## Severity",
+			"reproduce it at the baseline",
+			"pre-existing advisory, never a blocker",
+			"outside the realistic domain",
+			"Silently ignoring an option or value the user passed explicitly, with a success exit, is always a blocker",
+			"An unrequested change to the output, error text, or line numbering of a command that existed at the baseline is change-caused and a blocker",
+			// S8: one correction batch, one bounded recheck.
+			"one correction batch and one recheck limited to the reported blockers",
+			"a second correction only when the recheck shows the same blocker still failing, never for a new finding",
+			"never start a new full sweep",
+		},
+	}
+	for path, clauses := range want {
+		body, err := FS.ReadFile(path)
+		if err != nil {
+			t.Fatalf("ReadFile(%s) error = %v", path, err)
+		}
+		for _, clause := range clauses {
+			if !strings.Contains(string(body), clause) {
+				t.Errorf("%s is missing %q", path, clause)
+			}
+		}
+	}
+
+	// S9: Pi/Node-only scratch details and the retired TRIANGULATE step stay out.
+	retired := map[string][]string{
+		"opencode/agents/gentle-ai-worker.md": {"TRIANGULATE"},
+		"opencode/agents/gentle-ai-verify.md": {"NODE_COMPILE_CACHE", "NO_UPDATE_NOTIFIER", "--reflink"},
+	}
+	for path, phrases := range retired {
+		body, err := FS.ReadFile(path)
+		if err != nil {
+			t.Fatalf("ReadFile(%s) error = %v", path, err)
+		}
+		for _, phrase := range phrases {
+			if strings.Contains(string(body), phrase) {
+				t.Errorf("%s still contains %q", path, phrase)
+			}
+		}
+	}
+}
+
 // Gentleman-Programming/gentle-shell#1713: the generic workers read the ODD
 // feature document as the specification, by reference, instead of a
 // paraphrase of the user's request; verify grounds its verdict in each spec.
