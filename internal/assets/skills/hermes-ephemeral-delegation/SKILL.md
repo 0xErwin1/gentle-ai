@@ -12,7 +12,7 @@ metadata:
 Load this skill when you are acting as the parent orchestrator and the work ahead falls into any of these categories:
 
 - Broad exploration (4+ files to understand, codebase mapping, approach comparison)
-- A large (tracked) task: its resume test fails, so one writer per task
+- A writer reason: 2+ independent units launched together, or the context backstop; a large task alone is tracked, not delegated
 - A high-risk change that needs an independent verifier, or a large task's long suites and builds
 - Fresh adversarial review (diffs, PR readiness, incident audit)
 - Multi-step debugging that would flood the parent context
@@ -32,7 +32,7 @@ Do NOT load this skill if you are already inside a delegated child task — you 
 | Situation | Action |
 |-----------|--------|
 | Need to read 4+ files to understand | Delegate a narrow exploration worker |
-| A large (tracked) task | Delegate a single writer per task with the full mission |
+| A large (tracked) task | Track it; delegate a writer only for a reason (parallel units or context) with the full mission |
 | A small task's focused test and suite | Run inline, once each |
 | A high-risk change or a large task's long suites | Delegate an executor |
 | Need an adversarial review of a diff | Delegate a fresh-context reviewer |

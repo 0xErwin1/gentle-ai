@@ -3,6 +3,8 @@ package agentguidance
 import (
 	"strings"
 	"testing"
+
+	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
 )
 
 // gentleShellParityHeadings lists every orchestrator section each non-Pi
@@ -83,7 +85,7 @@ func TestInstalledEvidenceBudgetGuidance(t *testing.T) {
 				"one parent spot check", "Do not reread the entire mapped evidence",
 				"counts, --stat, tail, or summaries", "delegate long suites and builds",
 				"approximately 150k", "not mechanically observed or enforced",
-				"a large task delegates one writer per task", "reading that prepares a write", "broad research",
+				"delegate a writer only for a named reason", "reading that prepares a write", "broad research",
 				"a small task's writes stay inline", "File count never fires this rule",
 			} {
 				if !strings.Contains(prompt, want) {
@@ -136,6 +138,67 @@ func TestInstalledOrchestratorHasGentleShellParity(t *testing.T) {
 			for _, forbidden := range gentleShellOnlyContent {
 				if strings.Contains(prompt, forbidden) {
 					t.Errorf("installed prompt carries Gentle Shell-only content %q", forbidden)
+				}
+			}
+		})
+	}
+}
+
+// gentle-shell#1731: every installed orchestrator delegates a writer only for a
+// named reason, routes parallel writers through one rule, explores only to
+// decide or route, and bounds verification timing and corrections.
+func TestInstalledOrchestratorDelegatesForReason(t *testing.T) {
+	t.Parallel()
+
+	for _, agent := range orchestratorRuntimes(t) {
+		t.Run(string(agent), func(t *testing.T) {
+			t.Parallel()
+
+			result, err := InjectRoutingWithOptions(t.TempDir(), agent, RoutingOptions{})
+			if err != nil {
+				t.Fatalf("InjectRouting(%q) error = %v", agent, err)
+			}
+			prompt := deliveredGuidance(t, result.Files[0])
+
+			required := []string{
+				// S1 writer by reason.
+				"**Write rule**: a small task's writes stay inline, even across files; delegate a writer only for a named reason",
+				"Never for size, a large task alone, file count, or a price ratio; without a reason the parent writes inline, following its logbook.",
+				"Write a large (tracked) task with no Write rule reason",
+				"Write a unit with a Write rule reason",
+				"one bounded writer per unit",
+				"implementing a unit with a writer reason (writer)",
+				// S2 parallel writers.
+				"parallel writers follow the **Parallel writers** rule under `## Implementation Routing`",
+				"Parallel writers follow the **Parallel writers** rule under `## Implementation Routing`: another repository's work goes in a fresh worktree based on its main",
+				// S5 explore only to decide or route.
+				"never explore files you will read anyway before writing inline",
+				// S8 verification timing and bounds.
+				"**Verification timing**: when the same model wrote several deliveries of one feature inline, run one independent verifier at the feature's end",
+				"verify per unit only when that unit is really high risk",
+				"always when a smaller-model profile wrote the code",
+				"**Correction bounds**: verifier blockers get one correction batch that fixes every reported blocker, then one recheck limited to those blockers",
+				"A second correction runs only when the recheck shows the same blocker still failing; a new finding never earns one.",
+				"A writer's self-review follows the same bound, then reports `partial`.",
+			}
+			if !model.SupportsReceiptDrivenDevelopment(agent) {
+				required = append(required, "One verified change permits at most one scoped correction, and a second only when the recheck shows the same blocker still failing")
+			}
+			for _, want := range required {
+				if !strings.Contains(prompt, want) {
+					t.Errorf("installed orchestrator for %q is missing %q", agent, want)
+				}
+			}
+			for _, retired := range []string{
+				"a large task delegates one writer per task",
+				"one writer per task",
+				"Use a single writer thread",
+				"Keep writes single-threaded",
+				"Preserve one writer thread",
+				"implementing a large tracked task",
+			} {
+				if strings.Contains(prompt, retired) {
+					t.Errorf("installed orchestrator for %q keeps retired %q", agent, retired)
 				}
 			}
 		})

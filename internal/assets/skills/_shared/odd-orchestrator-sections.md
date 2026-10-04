@@ -18,19 +18,23 @@ The `on` branch below holds only while the native review reaches a terminal outc
 - **RDD on**: the bounded writer runs the parent-authorized `## Verification` commands in the foreground and reports `<command>: <observed result>`; that report is the verification of record, and the native review is the independent check. A separate verifier stays on-demand only — the writer reported `partial` or `blocked`, an expensive or external check the parent wants run on a cheaper profile, or a parent spot check. A passive candidate needs only the parent's structural readback.
 - **RDD off or unknown**: after the writer returns, the parent runs `gentle-ai review assess` over the writer's diff and follows the tier — passive: structural readback only; medium: writer self-verification, with a separate verifier only when the writer ran on a small-model profile (low effort or a mini model); high or unassessable: writer self-verification plus an independent verifier. `unknown` never lowers a tier, and the small-model bias raises the tier by one for verification purposes.
 - The parent spot check — re-running one reported command before delivery — stays in every tier.
+- **Verification timing**: when the same model wrote several deliveries of one feature inline, run one independent verifier at the feature's end instead of one per delivery; verify per unit only when that unit is really high risk (its Risk line or the assessment of its actual diff) and always when a smaller-model profile wrote the code.
+- **Correction bounds**: verifier blockers get one correction batch that fixes every reported blocker, then one recheck limited to those blockers, never a new full sweep. A second correction runs only when the recheck shows the same blocker still failing; a new finding never earns one. Blockers still open after that become one **Needs your decision** result. A writer's self-review follows the same bound, then reports `partial`.
 - The writer receives `## Verification` naming the exact commands to run, and may receive `## Known environmental failures` naming exact test names or command lines already failing on the base as evidence; any other failing required command still forces `partial`.
-- Exploration stays a separate delegation only when the parent needs the map to decide or route; reading that prepares a write belongs to the writer doing that write.
+- Exploration stays a separate delegation only when the parent needs the map to decide or route; reading that prepares a write belongs to whoever makes that write, and the parent never explores files it will read anyway before writing inline.
 <!-- sdd-orchestrator-section:Delegated Verification Gate (MANDATORY):end -->
 
 <!-- sdd-orchestrator-section:Delegated Verification Gate (MANDATORY) (ODD only):start -->
-Verification of a delegated writer's work is proportionate to the risk of the change, judged from what it touches: **passive** (documentation, images, or comments with no executable effect), **medium** (an ordinary behavior change covered by focused tests), or **high** (any item of the high-risk list in the routing block's Task Size section: data or irreversible effects, security, contracts others consume, concurrency, delivery or environment, or no test that would catch a regression). Count an unclear change as high only when a bounded look cannot tell whether the list applies.
+Verification of a delegated writer's work is proportionate to the risk of the change, judged from what it touches: **passive** (documentation, images, or comments with no executable effect), **medium** (an ordinary behavior change covered by focused tests), or **high** (any item of the high-risk list in the routing block's Task Size section: changing or deleting existing stored data or other irreversible effects, security, changing or removing contracts others already consume, concurrency, delivery or environment, or no test that would catch a regression). Count an unclear change as high only when a bounded look cannot tell whether the list applies.
 
 - **Passive**: structural readback only.
 - **Medium**: writer self-verification — the bounded writer runs the parent-authorized `## Verification` commands in the foreground and reports `<command>: <observed result>`. Add a separate verifier only when the writer ran on a small-model profile (low effort or a mini model).
 - **High or unclear**: writer self-verification plus an independent verifier — a fresh read-only worker that re-runs the verification commands and inspects the diff without the writer's context. The small-model bias raises the tier by one for verification purposes.
 - The parent spot check — re-running one reported command before delivery — stays in every tier.
+- **Verification timing**: when the same model wrote several deliveries of one feature inline, run one independent verifier at the feature's end instead of one per delivery; verify per unit only when that unit is really high risk (its Risk line or the assessment of its actual diff) and always when a smaller-model profile wrote the code.
+- **Correction bounds**: verifier blockers get one correction batch that fixes every reported blocker, then one recheck limited to those blockers, never a new full sweep. A second correction runs only when the recheck shows the same blocker still failing; a new finding never earns one. Blockers still open after that become one **Needs your decision** result. A writer's self-review follows the same bound, then reports `partial`.
 - The writer receives `## Verification` naming the exact commands to run, and may receive `## Known environmental failures` naming exact test names or command lines already failing on the base as evidence; any other failing required command still forces `partial`.
-- Exploration stays a separate delegation only when the parent needs the map to decide or route; reading that prepares a write belongs to the writer doing that write.
+- Exploration stays a separate delegation only when the parent needs the map to decide or route; reading that prepares a write belongs to whoever makes that write, and the parent never explores files it will read anyway before writing inline.
 <!-- sdd-orchestrator-section:Delegated Verification Gate (MANDATORY) (ODD only):end -->
 
 <!-- sdd-orchestrator-section:Native Checking Contract (ODD only):start -->
@@ -38,8 +42,8 @@ Verification of a delegated writer's work is proportionate to the risk of the ch
 - A passive ordinary document or image needs structural readback, not an artificial semantic-verification subagent. Active, mixed, operational, executable, mode-changing, or unknown content gets functional verification at the tier the Delegated Verification Gate assigns.
 - For a trivial passive documentation-only edit, structural readback is the complete proportional check; do not open a separate semantic-verification ceremony.
 - If an applicable verifier is unavailable, report it as unavailable; never invent a pass, retry indefinitely, or escalate into extra ceremony.
-- An applicable quick check runs once. Long or very-long work gets one cost/side-effect forecast before launch. Unavailable, partial, declined, or exhausted proof becomes one actionable **Needs your decision** result.
-- Functional proof and independent verification both project as **Checking**. One verified change permits at most one scoped correction; there is no loop-until-clean behavior.
+- An applicable quick check runs once. Long or very-long work gets one cost/side-effect forecast before launch. Unavailable, partial, declined, or exhausted proof becomes one actionable **Needs your decision** result naming the open blockers or missing proof; that result is a valid stop, hedged wording is not.
+- Functional proof and independent verification both project as **Checking**. One verified change permits at most one scoped correction, and a second only when the recheck shows the same blocker still failing; there is no loop-until-clean behavior.
 - Commit, push, PR, direct-main, emergency, and release gates follow ordinary repository policy; checking output never authorizes delivery.
 <!-- sdd-orchestrator-section:Native Checking Contract (ODD only):end -->
 
@@ -87,23 +91,25 @@ Route ODD work through the smallest harness that is safe. "Smallest" means minim
 
 Use inline execution when the task is small by the Task Size section of the routing block: read, edit (one understood change may span files), run its focused test and suite once each, or bash for state. Keep the ODD path proportionate. When a mechanism's own trigger fires, turn on only that mechanism, then re-evaluate.
 
-Inline evidence uses one parallel batch, at most 3 calls and approximately 10k tokens. Use bounded search/line ranges rather than whole large files. These are evidence limits, not file-count routing rules; on a large task, preparation for writing and broad research still delegate.
+Inline evidence uses one parallel batch, at most 3 calls and approximately 10k tokens. Use bounded search/line ranges rather than whole large files. These are evidence limits, not file-count routing rules; preparation for a delegated write and broad research still delegate, and an inline write reads inline.
 
 #### 2. Simple Delegation
 
-Delegate when a mechanism's own trigger fires, within the ODD workflow: understanding an unfamiliar module beyond the inline batch budget (explore), implementing a large tracked task (writer), or checking a high-risk change (independent verifier).
+Delegate when a mechanism's own trigger fires, within the ODD workflow: understanding an unfamiliar module beyond the inline batch budget (explore), implementing a unit with a writer reason (writer), or checking a high-risk change (independent verifier). A writer reason is parallel units launched together or the context backstop, never size, a large task alone, file count, or a price ratio; without one, the parent writes inline, following its logbook.
 
-Route exploration to a read-only exploration worker, a large task's implementation to one writer, and high-risk verification to a verification worker, all through the runtime's subagent/delegation mechanism. The delegation trigger stays mandatory; a missing named worker changes the runtime used, not the requirement to delegate. If no delegation mechanism is available, follow this runtime's documented degradation path, or stop and explain the blocker instead of silently continuing inline.
+Route exploration to a read-only exploration worker, each unit with a writer reason to one bounded writer, and high-risk verification to a verification worker, all through the runtime's subagent/delegation mechanism. The delegation trigger stays mandatory; a missing named worker changes the runtime used, not the requirement to delegate. If no delegation mechanism is available, follow this runtime's documented degradation path, or stop and explain the blocker instead of silently continuing inline.
 
 Understanding that needs more evidence or more than approximately 5 sequential lookups requires one read-only explorer; with its handoff, re-evaluate task size. Return at most approximately 2k tokens with path:line evidence and one parent spot check. Do not reread the entire mapped evidence.
 
 Keep parent bash output bounded to counts, --stat, tail, or summaries. On a large task, delegate long suites and builds; return concise observed results, including failures. The approximately 150k parent-context backstop is advisory guidance, not mechanically observed or enforced; pause and delegate the next bounded unit without claiming runtime telemetry or enforcement.
 
-Default balanced pattern for bounded implementation:
+Default pattern for authorized implementation:
 
 ```text
-parent clarifies and checks git → one worker writes when authorized → focused verification → parent reports
+parent clarifies and checks git → parent writes inline following the logbook → focused test and suite inline → parent reports
 ```
+
+With a writer reason, one bounded worker per unit writes instead, followed by one seam check when units ran in parallel.
 
 ### Canonical Lightweight Workflows
 
@@ -176,7 +182,7 @@ Keep this lightweight: loading a skill should improve the immediate task, not fo
 
 - Never commit unless the user explicitly asks, except the work-unit commits that authorized substantial ODD implementation makes on its feature branch under `## Implementation Routing`.
 - Ask before destructive git operations, publishing, or irreversible file changes.
-- Keep writes single-threaded unless isolated worktrees are explicitly approved.
+- Parallel writers follow the **Parallel writers** rule under `## Implementation Routing`: another repository's work goes in a fresh worktree based on its main; parallel units in the same local repository share the tree only with declared disjoint edit surfaces, the parent owning git; units that need the same file use isolated worktrees.
 - Preserve human control: user decisions beat agent momentum.
 <!-- sdd-orchestrator-section:Orchestrator Routing and Delivery:end -->
 

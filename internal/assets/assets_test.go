@@ -386,7 +386,8 @@ func TestOrchestratorsProjectOrganicRouting(t *testing.T) {
 			"Mandatory Delegation Triggers",
 			"Evidence budget rule", "one parallel batch",
 			"Mapping rule", "one read-only explorer",
-			"Write rule", "a large task delegates one writer per task",
+			"Write rule", "delegate a writer only for a named reason",
+			"parallel writers follow the **Parallel writers** rule under `## Implementation Routing`",
 			"Context rule", "reading that prepares a write", "broad research",
 			"Mandatory Delegation Triggers", "delegated direct",
 		} {
@@ -400,6 +401,17 @@ func TestOrchestratorsProjectOrganicRouting(t *testing.T) {
 		} {
 			if strings.Contains(content, retired) {
 				t.Fatalf("%s retained prompt-owned review ceremony %q", path, retired)
+			}
+		}
+		// gentle-shell#1731: writers are delegated for a reason, and parallel
+		// writers follow one rule instead of a single-writer ban.
+		for _, retired := range []string{
+			"a large task delegates one writer per task", "one writer per task",
+			"Use a single writer thread", "Preserve one writer thread",
+			"Keep one writer and", "Keep one writer.", "Keep one writer;",
+		} {
+			if strings.Contains(content, retired) {
+				t.Fatalf("%s retained size-based or single-writer routing %q", path, retired)
 			}
 		}
 
