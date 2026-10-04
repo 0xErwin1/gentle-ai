@@ -408,6 +408,20 @@ def pty_status(binding, project, command=None, extra=None, installer=None, cance
                 valid_utf8 = True
             except UnicodeError:
                 valid_utf8 = False
+            try:
+                foreground = os.tcgetpgrp(master)
+                lflags = termios.tcgetattr(master)[3]
+                with open(f'/proc/{foreground}/stat', 'rb') as stream:
+                    process_stat = stream.read(4097)
+                require(len(process_stat) <= 4096, 'foreground metadata bound')
+                REPORT['ptyKernel'] = {
+                    'node': os.readlink(f'/proc/{foreground}/exe') == str(binding.parent.parent / 'runtime/node/bin/node'),
+                    'project': os.readlink(f'/proc/{foreground}/cwd') == str(project),
+                    'canonical': bool(lflags & termios.ICANON), 'echo': bool(lflags & termios.ECHO),
+                    'stopped': process_stat.rpartition(b') ')[2][:1] in (b'T', b't'),
+                }
+            except (OSError, termios.error):
+                REPORT['ptyKernel'] = {'unavailable': True}
             REPORT['ptyFailure'] = {
                 'binding': binding.name, 'observation': 'buffer at failed check, not complete process stream',
                 'bytes': len(snapshot), 'sha256': hashlib.sha256(snapshot).hexdigest(),
@@ -415,6 +429,8 @@ def pty_status(binding, project, command=None, extra=None, installer=None, cance
                 'commandSent': sent, 'registrationObserved': b'el Gentleman package is active.' in snapshot,
                 'extensionLoadError': b'Failed to load extension' in snapshot,
                 'noModelsMessage': b'No models available.' in snapshot,
+                'startupBusyMessage': b'Startup is still in progress' in snapshot,
+                'noModelSelectedMessage': b'No model selected.' in snapshot,
                 'unknownCommandMessage': b'Unknown command:' in snapshot,
                 'commandEchoObserved': b'/gentle:status' in snapshot,
                 'gentlePrefixObserved': b'el Gentleman' in snapshot,
