@@ -420,6 +420,16 @@ def pty_status(binding, project, command=None, extra=None, installer=None, cance
                     'canonical': bool(lflags & termios.ICANON), 'echo': bool(lflags & termios.ECHO),
                     'stopped': process_stat.rpartition(b') ')[2][:1] in (b'T', b't'),
                 }
+                # Linux TIOCGPTPEER opens this master's slave without a pathname or controlling-tty change.
+                peer = fcntl.ioctl(master, 0x5441, os.O_RDONLY | os.O_NOCTTY | os.O_NONBLOCK)
+                try:
+                    peer_identity = os.fstat(peer)
+                    input_identity = os.stat(f'/proc/{foreground}/fd/0')
+                    same_terminal = stat.S_ISCHR(input_identity.st_mode) and (input_identity.st_dev, input_identity.st_ino) == (peer_identity.st_dev, peer_identity.st_ino)
+                    queued_input = struct.unpack('i', fcntl.ioctl(peer, termios.FIONREAD, b'\0' * 4))[0] > 0
+                finally:
+                    os.close(peer)
+                REPORT['ptyKernel'].update(stdinSameTTY=same_terminal, inputQueued=queued_input)
             except (OSError, termios.error):
                 REPORT['ptyKernel'] = {'unavailable': True}
             REPORT['ptyFailure'] = {
