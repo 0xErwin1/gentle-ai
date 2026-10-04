@@ -629,7 +629,8 @@ def main():
         native = pathlib.Path(manifest['Prefix']) / 'lib/node_modules/gentle-pi/.gentle-ai/v4.0.0/gentle-ai'
         require('4.0.0' in run([str(native), '--version']), 'authenticated native v4 did not execute')
         backend = json.loads(run([str(native), 'review', 'status', '--contract', 'gentle-ai.review-integration/v2', '--cwd', str(WORK / 'project'), '--projection', 'workspace', '--next-transition'], cwd=WORK / 'project', timeout=35, stdout_only=True))
-        require(backend.get('contract') == 'gentle-ai.review-integration/v2' and backend.get('operation') == 'review.status' and backend.get('applicability') == 'current_target', 'native read-only negotiated status identity differs')
+        require(backend.get('contract') == 'gentle-ai.review-integration/v2' and backend.get('operation') == 'review.status' and backend.get('applicability') == 'unrelated', 'native read-only negotiated status identity differs')
+        require(backend.get('authority') is None and backend.get('candidates') == [], 'fresh native status unexpectedly contains review authority')
         require(backend.get('schema') in {'gentle-ai.review-integration.status/v' + str(v) for v in [3, 5, 6, 7, 8, 9]}, 'unsupported native status schema')
         REPORT['nativeBackend'] = backend['schema']
         pty_status(target / 'bin/gentle-shell', WORK / 'project')
@@ -719,6 +720,8 @@ except Exception as error:
     message = {'functionalReady': False, 'errorType': type(error).__name__, 'reason': str(error)[:240], 'rawStockOutput': 'withheld'}
     if 'pnpmLayout' in REPORT:
         message['pnpmLayout'] = REPORT['pnpmLayout']
+    if 'nativeBackend' in REPORT:
+        message['nativeBackend'] = REPORT['nativeBackend']
     if 'alanBackendProbe' in REPORT:
         message['alanBackendProbe'] = REPORT['alanBackendProbe']
     if COMMAND_FAILURE is not None:
