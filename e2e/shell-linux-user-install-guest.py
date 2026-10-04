@@ -111,7 +111,7 @@ def run(args, cwd=None, extra=None, timeout=180, good=True, stdout_only=False):
     return out.decode('utf-8', 'strict') if stdout_only else text
 
 
-def physical_inventory(root):
+def physical_inventory(root, details=None):
     info = root.lstat()
     result = [('.', 'metadata', info.st_mode, info.st_uid, info.st_gid, info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns)]
     for parent, directories, files in os.walk(root, followlinks=False):
@@ -127,6 +127,8 @@ def physical_inventory(root):
                 result.append((relative, 'file', hashlib.sha256(p.read_bytes()).hexdigest()))
             else:
                 require(stat.S_ISDIR(info.st_mode), 'nonphysical fixture')
+    if details is not None:
+        details.extend(result)
     return hashlib.sha256(json.dumps(sorted(result)).encode()).hexdigest()
 
 
@@ -331,7 +333,8 @@ def publication_fault(target, shared):
 
 
 def pty_status(binding, project, command=None, extra=None, installer=None, cancel_installer=False, opening_only=False):
-    project_before, requests_before = physical_inventory(project), len(REQUEST_ORIGINS)
+    project_before_entries = []
+    project_before, requests_before = physical_inventory(project, project_before_entries), len(REQUEST_ORIGINS)
     master, slave = os.openpty()
     fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack('HHHH', 18, 72, 0, 0))
 
@@ -407,7 +410,22 @@ def pty_status(binding, project, command=None, extra=None, installer=None, cance
             require(confirmed and b'GUEST-STATUS:0' in raw, 'installer TUI did not settle successfully')
             REPORT['installerCancel' if cancel_installer else 'installerTUI'] = 'actual PTY idle cancellation' if cancel_installer else 'actual PTY physical review, typed confirmation and settled idempotent install'
         child.wait(timeout=5)
-        require(physical_inventory(project) == project_before, 'fixture blank caller project changed during launch')
+        project_after_entries = []
+        project_after = physical_inventory(project, project_after_entries)
+        if project_after != project_before:
+            before = {(row[0], row[1]): row[2:] for row in project_before_entries}
+            after = {(row[0], row[1]): row[2:] for row in project_after_entries}
+            changed = [key for key in sorted(set(before) | set(after)) if before.get(key) != after.get(key)]
+            delta = [{'path': key[0], 'kind': key[1], 'before': before.get(key), 'after': after.get(key)} for key in changed]
+            data = json.dumps(delta, sort_keys=True, separators=(',', ':')).encode()
+            entries = [{'path': key[0], 'kind': key[1], 'change': 'created' if key not in before else 'removed' if key not in after else 'modified'} for key in changed]
+            names = json.dumps(entries, sort_keys=True, separators=(',', ':')).encode()
+            REPORT['projectMutation'] = {'changedRecords': len(delta), 'bytes': len(data), 'sha256': hashlib.sha256(data).hexdigest(),
+                                         'metadataFields': ['mode', 'uid', 'gid', 'dev', 'inode', 'size', 'mtime_ns', 'ctime_ns'],
+                                         'wholeDelta': delta if len(data) <= 1024 else 'withheld',
+                                         'entriesBytes': len(names), 'entriesSHA256': hashlib.sha256(names).hexdigest(),
+                                         'wholeEntries': entries if len(names) <= 1024 else 'withheld'}
+        require(project_after == project_before, 'fixture blank caller project changed during launch')
         if command is None:
             require(set(REQUEST_ORIGINS[requests_before:]) <= {'pi.dev'}, 'ordinary launch requested installer/package artifacts')
             REPORT['ordinaryStartup'] = 'blank caller project preserved; fixture-origin installer/package requests absent (not whole-network attestation)'
@@ -826,6 +844,8 @@ except Exception as error:
         message['pnpmLayout'] = REPORT['pnpmLayout']
     if 'ptyFailure' in REPORT:
         message['ptyFailure'] = REPORT['ptyFailure']
+    if 'projectMutation' in REPORT:
+        message['projectMutation'] = REPORT['projectMutation']
     if 'nativeBackend' in REPORT:
         message['nativeBackend'] = REPORT['nativeBackend']
     if 'alanBackendProbe' in REPORT:
