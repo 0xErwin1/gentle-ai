@@ -398,6 +398,26 @@ def pty_status(binding, project, command=None, extra=None, installer=None, cance
             require(set(REQUEST_ORIGINS[requests_before:]) <= {'pi.dev'}, 'ordinary launch requested installer/package artifacts')
             REPORT['ordinaryStartup'] = 'blank caller project preserved; fixture-origin installer/package requests absent (not whole-network attestation)'
         REPORT.setdefault('pty', []).append({'binding': binding.name, 'rawBytes': len(raw), 'rawSHA256': hashlib.sha256(raw).hexdigest(), 'nulBytes': raw.count(0), 'GentleRegistered': installer is None, 'foregroundCWD': observed_cwd, 'callerForegroundRestored': True})
+    except Exception:
+        if installer is None and command is None:
+            snapshot = bytes(raw)
+            try:
+                snapshot.decode('utf-8', 'strict')
+                valid_utf8 = True
+            except UnicodeError:
+                valid_utf8 = False
+            REPORT['ptyFailure'] = {
+                'binding': binding.name, 'observation': 'buffer at failed check, not complete process stream',
+                'bytes': len(snapshot), 'sha256': hashlib.sha256(snapshot).hexdigest(),
+                'nulBytes': snapshot.count(0), 'strictUTF8': valid_utf8,
+                'commandSent': sent, 'registrationObserved': b'el Gentleman package is active.' in snapshot,
+                'installerObserved': b'Gentle Shell Linux user installer' in snapshot,
+                'statusObserved': b'GUEST-STATUS:' in snapshot, 'exit': child.poll(),
+                'deadlineExpired': time.monotonic() >= deadline, 'foregroundCWD': observed_cwd,
+            }
+            if valid_utf8 and b'\0' not in snapshot and len(snapshot) < 4096:
+                REPORT['ptyFailureBuffer'] = base64.b64encode(snapshot).decode('ascii')
+        raise
     finally:
         if child.poll() is None:
             os.killpg(child.pid, signal.SIGKILL)
@@ -720,6 +740,8 @@ except Exception as error:
     message = {'functionalReady': False, 'errorType': type(error).__name__, 'reason': str(error)[:240], 'rawStockOutput': 'withheld'}
     if 'pnpmLayout' in REPORT:
         message['pnpmLayout'] = REPORT['pnpmLayout']
+    if 'ptyFailure' in REPORT:
+        message['ptyFailure'] = REPORT['ptyFailure']
     if 'nativeBackend' in REPORT:
         message['nativeBackend'] = REPORT['nativeBackend']
     if 'alanBackendProbe' in REPORT:
@@ -727,6 +749,10 @@ except Exception as error:
     if COMMAND_FAILURE is not None:
         complete = 'stdoutBase64' in COMMAND_FAILURE and 'stderrBase64' in COMMAND_FAILURE
         message.update(commandFailure=COMMAND_FAILURE, rawStockOutput='complete-base64' if complete else 'withheld')
+    if 'ptyFailureBuffer' in REPORT:
+        candidate = {**message, 'observedTTYBufferBase64': REPORT['ptyFailureBuffer']}
+        if len((json.dumps(candidate, sort_keys=True) + '\n').encode()) < 4096:
+            message = candidate
     output = (json.dumps(message, sort_keys=True) + '\n').encode()
     if len(output) >= 4096:
         message = {'functionalReady': False, 'reason': 'entire command failure output withheld at original Guest bound', 'rawStockOutput': 'withheld', 'bytes': len(output), 'sha256': hashlib.sha256(output).hexdigest()}
