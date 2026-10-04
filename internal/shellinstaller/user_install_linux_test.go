@@ -190,9 +190,10 @@ func TestUserServiceLiteral(t *testing.T) {
 }
 
 func TestUserEnvironmentSealed(t *testing.T) {
+	t.Setenv("GENTLE_PI_NO_SKILL_REGISTRY", "0")
 	env := userEnvironment("/owned/shell", "/owned/prefix", "/owned/agent")
 	for _, literal := range []string{
-		"HOME=/owned/shell/home", "TMPDIR=/owned/shell/tmp", "PI_CODING_AGENT_DIR=/owned/agent",
+		"HOME=/owned/shell/home", "TMPDIR=/owned/shell/tmp", "PI_CODING_AGENT_DIR=/owned/agent", "GENTLE_PI_NO_SKILL_REGISTRY=1",
 		"NPM_CONFIG_IGNORE_SCRIPTS=true", "npm_config_ignore_scripts=true", "NPM_CONFIG_PREFIX=/owned/prefix", "NODE_USE_SYSTEM_CA=1",
 	} {
 		if !containsUserEnv(env, literal) {

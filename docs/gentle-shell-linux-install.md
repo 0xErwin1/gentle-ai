@@ -109,6 +109,16 @@ The full Guest path now attempts these controls only with an existing real
 manager and bus. Any failed/missing assertion refuses qualification; merely
 writing the path, or a successful direct-only run, is not functional readiness.
 
+## Project-preserving startup
+
+Owned launches seal `GENTLE_PI_NO_SKILL_REGISTRY=1`, a supported opt-out in
+pinned Gentle 4.0.0. It skips automatic `.atl/` skill-registry refresh and
+watchers, not Pi's normal skill loading. Explicit `/skill-registry:refresh`
+can still intentionally write the registry in the caller's project.
+The opt-out targets the startup writes observed at `3e07a1179`; the unchanged
+blank-project smoke must still pass on the corrected revision before claiming
+preservation. No caller arguments, personal settings or package sources change.
+
 ## Limited MVP smoke — result pending
 
 The named `MVP Separate smoke` job compiles the exact workflow `github.sha`
