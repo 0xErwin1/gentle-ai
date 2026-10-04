@@ -365,7 +365,9 @@ def pty_status(binding, project, command=None, extra=None, installer=None, cance
                     break
                 raw.extend(part)
                 require(len(raw) <= 65536, 'whole PTY capture bound')
-                if not sent and (installer is None or b'Gentle Shell Linux user installer' in raw):
+                # Credentialless Pi emits this fallback after installing its editor submit handler.
+                input_ready = b'No models available.' in raw if installer is None else b'Gentle Shell Linux user installer' in raw
+                if not sent and input_ready:
                     if installer is not None:
                         os.write(master, b'\x1b' if cancel_installer else (str(installer) + '\r').encode())
                         confirmed = cancel_installer
