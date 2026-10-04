@@ -1,14 +1,14 @@
 # Gentle Shell on Linux
 
-**This is an unqualified source candidate, not a released installation guide.**
+**This is a source candidate with limited MVP acceptance, not a released installation guide.**
 The released Gentle AI 3.7.0 binary does not contain this new installer route.
-Use only a separately authorized source-built candidate in a bounded Guest
-until the functional checklist below passes. Source review is not readiness.
+Use only a separately authorized source-built candidate in a bounded Guest.
+Installation and UI opening do not establish full qualification or release readiness.
 
 The approved target is ordinary Pi 1.0.0 with Gentle/native 4.0.0 on top.
 The source now composes independently pinned modern roots through stock npm,
 using the unchanged Node-only bootstrap rather than legacy composite authority.
-This replacement is uncompiled and unexecuted; it is not qualification.
+Installation and warm UI opening were observed; the full journey still failed.
 Gentle Shell does not fork Pi, replace its updater, or modify PATH or shell files.
 
 ## Select the installation
@@ -46,14 +46,15 @@ Shared mode additionally requires `--prefix /owned/selected-prefix` and
 roots must be physically owned and private; aliases and collisions refuse.
 Shared confirmation now binds both selected file trees, not just directories.
 Inspection bounds each tree to 250,000 entries, 32 MiB per regular file and
-256 MiB total. Foreign owners, writable objects, special files, escaping links
+1 GiB total. Foreign owners, writable objects, special files, escaping links
 and changed preimages refuse. This inventory is not a recovery backup.
 
 Normal launches have no installer menu. `TARGET/bin/gentle-shell install`
 reopens the dedicated installer; other arguments go to the selected stock Pi.
 The source now preserves the caller's project directory in both direct and
 manager routes; installer staging is not the ordinary coding directory.
-Terminal handoff and restoration are implemented but still need real PTY tests.
+The limited smoke asserts caller CWD and foreground restoration for its UI openings;
+the full launch, signal and manager journey remains deferred.
 
 ## Execution boundary
 
@@ -83,7 +84,8 @@ Its TEST-only TLS release API selects 1.0.0; it does not establish public latest
 or provide a production version override. Fixture preparation is not an updater.
 Prelaunch and postlaunch readback accept only complete known prior/modern graphs;
 unknown versions, bytes or placement refuse and retain recovery evidence.
-These controls are authored, not executed. Package lifecycles remain disabled.
+The production npm update/force/recovery journey remains deferred.
+Package lifecycles remain disabled.
 
 Foreign destinations and native locks, stages, backups or tombstones refuse.
 Do not delete uncertain shared workspaces or published evidence to retry.
@@ -107,7 +109,30 @@ The full Guest path now attempts these controls only with an existing real
 manager and bus. Any failed/missing assertion refuses qualification; merely
 writing the path, or a successful direct-only run, is not functional readiness.
 
-## Disposable VM qualification — not qualified
+## Limited MVP smoke — result pending
+
+The named `MVP Separate smoke` job compiles the exact workflow `github.sha`
+only after physical worker isolation. Its Guest `smoke` mode seeds an authenticated
+published personal Pi prefix, agent settings and shell configuration, then checks:
+
+- Cold Separate installation through the advertised inspect/confirm CLI route.
+- Pi 1.0.0, Gentle 4.0.0 and the pinned native 4.0.0 ELF hash and execution.
+- Physical review/confirmation through the existing installer TUI on that installed target.
+- Actual Gentle editor opening through both owned bindings, without a model or API key.
+- Unchanged personal prefix, HOME/configuration and blank caller project.
+- Caller CWD, successful exit, terminal foreground restoration and source formatting.
+
+A successful receipt has `mvpSmoke.outcome: PASS` and the exact `sourceSHA`,
+while `functionalReady` stays **false**. Until that job actually succeeds,
+no smoke PASS is claimed. This is not a replacement for required PR checks.
+The UI-opening marker is Gentle's empty-editor hint plus Pi's completed
+credentialless startup fallback, not the missing `/gentle:status` response.
+Cold **first-install TUI**, command registration, full provider/startup closure,
+Shared, production update/force, manager termination and recovery remain debt.
+The `full` Guest mode and its assertions remain available but are not run by
+this limited smoke job. No existing safety, resource or output bounds are relaxed.
+
+## Disposable VM full qualification — deferred
 
 The separate `user-vm-laboratory` CI job targets Ubuntu 24.04 amd64 on the fork's
 existing feature-branch trigger, not privileged Docker or your machine.
@@ -127,20 +152,20 @@ unknown-cohort refusal/recovery, and a post-publication Node-mode readback fault
 Blank-project and fixture-origin observations are scoped checks, not whole-network
 attestation or a zero-write promise for arbitrary existing Pi projects.
 
-The first lab attempt failed before worker compilation: the assumed `ubuntu`
-account was absent. Revised setup, manager, compiler and suite remain unqualified.
-A parallel legacy job compiled the new package outside the approved laboratory;
-that execution is not admitted as qualification. Legacy source is now pinned to
-qualified commit `322de52a3739ebe4fb0c2b04546d3af642be51ea`, excluding new User code.
+The historical first lab attempt failed before worker compilation; later runs
+observed Separate installation and warm UI opening inside the bounded laboratory.
+The full journey at `3c863f6` still failed at command-registration observation.
+The baseline job pins `322de52a3739ebe4fb0c2b04546d3af642be51ea` and asserts
+User installer sources are absent. Its results do not validate the final candidate.
 Output is strict UTF-8, lossless base64 with newline/NUL accounting;
 entire Guest output is withheld at 4,096 bytes or above. No skipped manager test
 can produce full readiness. Functional checks and source formatting remain due.
 
 The installer remains inside the Gentle AI TUI, not a browser wizard.
-The Guest probes Alan PR1703's independently pinned pnpm 11.1.1 in a new private home, including Pi's recognized pnpm layout and its own prior→next/forced self-updates.
+The full Guest mode retains Alan PR1703's pinned pnpm experiment; the MVP smoke does not run it.
 Root-only backend evidence is not full startup/native/PTY/shared-recovery qualification; production authentication checks remain unchanged and there is no second updater.
 
-## Acceptance checklist — pending
+## Full qualification checklist — deferred
 
 - [ ] Source-built CLI, dedicated TUI and both physical installation modes.
 - [ ] Actual UID1002 global installation and independently authenticated graph.
@@ -152,4 +177,4 @@ Root-only backend evidence is not full startup/native/PTY/shared-recovery qualif
 - [ ] Existing delegated manager: real controllers, PTY and signal propagation.
 - [ ] All historical private-install controls, non-root cases and formatting pass.
 
-**No `Ready` claim is supported while any applicable item is pending.**
+**The limited MVP smoke cannot mark this full checklist passed or support a `Ready` claim.**

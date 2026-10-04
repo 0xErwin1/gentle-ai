@@ -330,7 +330,7 @@ def publication_fault(target, shared):
             os.chmod(node, 0o700)
 
 
-def pty_status(binding, project, command=None, extra=None, installer=None, cancel_installer=False):
+def pty_status(binding, project, command=None, extra=None, installer=None, cancel_installer=False, opening_only=False):
     project_before, requests_before = physical_inventory(project), len(REQUEST_ORIGINS)
     master, slave = os.openpty()
     fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack('HHHH', 18, 72, 0, 0))
@@ -351,6 +351,7 @@ def pty_status(binding, project, command=None, extra=None, installer=None, cance
     deadline = time.monotonic() + min(45, remaining())
     sent = False
     typed = False
+    expected = b'type, or / for commands' if opening_only else b'el Gentleman package is active.'
     confirmed = False
     stopped = False
     observed_cwd = ''
@@ -368,7 +369,7 @@ def pty_status(binding, project, command=None, extra=None, installer=None, cance
                 require(len(raw) <= 65536, 'whole PTY capture bound')
                 # Credentialless Pi emits this fallback after installing its editor submit handler.
                 input_ready = b'No models available.' in raw if installer is None else b'Gentle Shell Linux user installer' in raw
-                if not typed and input_ready:
+                if not typed and input_ready and not opening_only:
                     if installer is not None:
                         os.write(master, b'\x1b' if cancel_installer else (str(installer) + '\r').encode())
                         confirmed = cancel_installer
@@ -383,10 +384,13 @@ def pty_status(binding, project, command=None, extra=None, installer=None, cance
                 if installer is not None and not confirmed and b'Confirm this physical selection' in raw:
                     os.write(master, b'y')
                     confirmed = True
-                if installer is None and b'el Gentleman package is active.' in raw and not stopped:
+                if installer is None and expected in raw and (input_ready or not opening_only) and not stopped:
                     foreground = os.tcgetpgrp(master)
                     observed_cwd = os.readlink(f'/proc/{foreground}/cwd')
                     require(observed_cwd == str(project), 'actual foreground caller CWD differs')
+                    if opening_only:
+                        require(os.readlink(f'/proc/{foreground}/exe') == str(binding.parent.parent / 'runtime/node/bin/node'), 'actual foreground private Node differs')
+                        require(b'Failed to load extension' not in raw, 'Gentle startup extension failure')
                     os.write(master, b'\x03\x03')
                     stopped = True
                 if b'GUEST-STATUS:' in raw:
@@ -395,7 +399,9 @@ def pty_status(binding, project, command=None, extra=None, installer=None, cance
                     os.write(master, b'finish\n')
                     break
         if installer is None:
-            require(b'el Gentleman package is active.' in raw, 'actual Gentle command registration not observed')
+            require(expected in raw, 'actual Gentle UI opening not observed' if opening_only else 'actual Gentle command registration not observed')
+            if opening_only:
+                require(stopped and b'GUEST-STATUS:0' in raw, 'Gentle opening did not settle successfully')
             require(b'Gentle Shell Linux user installer' not in raw, 'ordinary launch opened installer')
         else:
             require(confirmed and b'GUEST-STATUS:0' in raw, 'installer TUI did not settle successfully')
@@ -405,7 +411,7 @@ def pty_status(binding, project, command=None, extra=None, installer=None, cance
         if command is None:
             require(set(REQUEST_ORIGINS[requests_before:]) <= {'pi.dev'}, 'ordinary launch requested installer/package artifacts')
             REPORT['ordinaryStartup'] = 'blank caller project preserved; fixture-origin installer/package requests absent (not whole-network attestation)'
-        REPORT.setdefault('pty', []).append({'binding': binding.name, 'rawBytes': len(raw), 'rawSHA256': hashlib.sha256(raw).hexdigest(), 'nulBytes': raw.count(0), 'GentleRegistered': installer is None, 'foregroundCWD': observed_cwd, 'callerForegroundRestored': True})
+        REPORT.setdefault('pty', []).append({'binding': binding.name, 'rawBytes': len(raw), 'rawSHA256': hashlib.sha256(raw).hexdigest(), 'nulBytes': raw.count(0), 'GentleRegistered': installer is None and not opening_only, 'GentleUIOpened': opening_only, 'foregroundCWD': observed_cwd, 'callerForegroundRestored': True})
     except Exception:
         if installer is None and command is None:
             snapshot = bytes(raw)
@@ -626,14 +632,44 @@ def alan_pnpm_backend_probe():
     REPORT['alanBackendProbe'] = {'pnpm': version, 'stockUpgrade': '0.99.2 to 1.0.0', 'stockForce': True, 'independentlyPinnedRoots': len(pins), 'functionalReady': False}
 
 
+def mvp_smoke(personal):
+    source = os.environ.get('GENTLE_GUEST_SOURCE_SHA', '')
+    require(len(source) == 40 and all(c in '0123456789abcdef' for c in source), 'exact candidate source revision missing')
+    seed = install(WORK / 'parents/personal-seed')
+    shutil.copytree(seed['Prefix'], personal / 'prefix', symlinks=True)
+    personal_agent = WORK / 'home/.pi/agent'
+    personal_agent.mkdir(mode=0o700, parents=True)
+    (personal_agent / 'settings.json').write_text('{"theme":"personal-preserved","packages":[]}\n')
+    for name in ['.bashrc', '.profile', '.zshrc']:
+        (WORK / 'home' / name).write_text('# personal shell configuration must remain unchanged\n')
+    protected = [personal, WORK / 'home']
+    before = [physical_inventory(root) for root in protected]
+    target = WORK / 'parents/mvp-separate'
+    require(not target.exists(), 'smoke target is not cold')
+    manifest = install(target)
+    require(manifest['Mode'] == 'separate', 'smoke installed a different mode')
+    prefix = pathlib.Path(manifest['Prefix'])
+    require(run([str(target / 'bin/pi'), '--version']).strip() == '1.0.0', 'authenticated Pi version differs')
+    require(json.loads((prefix / 'lib/node_modules/gentle-pi/package.json').read_text())['version'] == '4.0.0', 'authenticated Gentle version differs')
+    native = prefix / 'lib/node_modules/gentle-pi/.gentle-ai/v4.0.0/gentle-ai'
+    require(hashlib.sha256(native.read_bytes()).hexdigest() == '50ba217b5138c1a9c7d5bf2f79931b1bb89b89c4cf650dcd7ee037657c88158d', 'authenticated native bytes differ')
+    require('4.0.0' in run([str(native), '--version']), 'authenticated native v4 did not execute')
+    pty_status(pathlib.Path(SUPERVISOR), WORK / 'project', [SUPERVISOR, 'shell', 'install'], installer=target)
+    for name in ['gentle-shell', 'pi']:
+        pty_status(target / 'bin' / name, WORK / 'project', opening_only=True)
+    require(before == [physical_inventory(root) for root in protected], 'personal Pi, agent or shell configuration changed')
+    require((WORK / 'gofmt.data').is_file() and (WORK / 'gofmt.data').stat().st_size == 0, 'candidate source formatting differs')
+    REPORT.update(functionalReady=False, mvpSmoke={'outcome': 'PASS', 'sourceSHA': source, 'pi': '1.0.0', 'gentle': '4.0.0', 'native': '4.0.0', 'personalPiAndShellPreserved': True, 'coldInstallerTUI': 'deferred', 'fullJourney': 'deferred'})
+
+
 def main():
     global FAULT
-    require(MODE in {'probe', 'direct', 'full'}, 'explicit qualification mode')
+    require(MODE in {'probe', 'direct', 'full', 'smoke'}, 'explicit qualification mode')
     if MODE == 'probe':
         kernel()
         print(json.dumps({'physicalWorker': REPORT['kernel'], 'functionalReady': False}, sort_keys=True))
         return
-    if MODE == 'full':
+    if MODE in {'full', 'smoke'}:
         require(pathlib.Path('/run/user/1002/systemd/private').is_socket() and pathlib.Path('/run/user/1002/bus').is_socket(), 'STOP: pre-existing delegated manager and bus unavailable')
     kernel()
     require(not any(key in os.environ for key in ['GITHUB_TOKEN', 'NPM_TOKEN', 'AWS_ACCESS_KEY_ID', 'SSH_AUTH_SOCK']), 'credentials present')
@@ -655,6 +691,9 @@ def main():
         personal = WORK / 'personal'
         (personal / 'sentinel').write_bytes(b'personal Pi must remain unchanged\n')
         before = physical_inventory(personal)
+        if MODE == 'smoke':
+            mvp_smoke(personal)
+            return
         alan_pnpm_backend_probe()
         require(physical_inventory(personal) == before, 'Alan backend probe changed personal Pi')
         FAULT = 'node-sri'
@@ -777,6 +816,10 @@ def main():
 
 try:
     main()
+    if MODE == 'smoke':
+        output = (json.dumps(REPORT, sort_keys=True, separators=(',', ':')) + '\n').encode()
+        require(len(output) < 4096, 'entire raw Guest report withheld above bound')
+        sys.stdout.buffer.write(output)
 except Exception as error:
     message = {'functionalReady': False, 'errorType': type(error).__name__, 'reason': str(error)[:240], 'rawStockOutput': 'withheld'}
     if 'pnpmLayout' in REPORT:
