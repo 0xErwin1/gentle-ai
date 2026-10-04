@@ -423,6 +423,7 @@ def pty_status(binding, project, command=None, extra=None, installer=None, cance
             except (OSError, termios.error):
                 REPORT['ptyKernel'] = {'unavailable': True}
             REPORT['ptyFailure'] = {
+                'kernel': REPORT['ptyKernel'],
                 'binding': binding.name, 'observation': 'buffer at failed check, not complete process stream',
                 'bytes': len(snapshot), 'sha256': hashlib.sha256(snapshot).hexdigest(),
                 'nulBytes': snapshot.count(0), 'strictUTF8': valid_utf8,
