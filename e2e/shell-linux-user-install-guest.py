@@ -31,8 +31,6 @@ SUPERVISOR = '/fixture/supervisor'
 TESTS = '/fixture/user-install.test'
 FIXTURE = pathlib.Path('/fixture')
 MODE = sys.argv[1] if len(sys.argv) == 2 else 'full'
-# Explicit one-VM diagnostic grant; the workflow arms only its next first attempt.
-PTY_DIAGNOSTIC_ONCE = sys.argv[1:] == ['full', 'pty-diagnostic-once-12k']
 REPORT = {}
 COMMAND_FAILURE = None
 FAULT = ''
@@ -352,6 +350,7 @@ def pty_status(binding, project, command=None, extra=None, installer=None, cance
     raw = bytearray()
     deadline = time.monotonic() + min(45, remaining())
     sent = False
+    typed = False
     confirmed = False
     stopped = False
     observed_cwd = ''
@@ -369,12 +368,17 @@ def pty_status(binding, project, command=None, extra=None, installer=None, cance
                 require(len(raw) <= 65536, 'whole PTY capture bound')
                 # Credentialless Pi emits this fallback after installing its editor submit handler.
                 input_ready = b'No models available.' in raw if installer is None else b'Gentle Shell Linux user installer' in raw
-                if not sent and input_ready:
+                if not typed and input_ready:
                     if installer is not None:
                         os.write(master, b'\x1b' if cancel_installer else (str(installer) + '\r').encode())
                         confirmed = cancel_installer
+                        sent = True
                     else:
-                        os.write(master, b'\r/gentle:status\r')
+                        command_text = b'/gentle:status'
+                        require(os.write(master, command_text) == len(command_text), 'incomplete PTY command typing')
+                    typed = True
+                if installer is None and typed and not sent and b'/gentle:status' in raw:
+                    require(os.write(master, b'\r') == 1, 'incomplete PTY command submission')
                     sent = True
                 if installer is not None and not confirmed and b'Confirm this physical selection' in raw:
                     os.write(master, b'y')
@@ -439,7 +443,7 @@ def pty_status(binding, project, command=None, extra=None, installer=None, cance
                 'binding': binding.name, 'observation': 'buffer at failed check, not complete process stream',
                 'bytes': len(snapshot), 'sha256': hashlib.sha256(snapshot).hexdigest(),
                 'nulBytes': snapshot.count(0), 'strictUTF8': valid_utf8,
-                'commandSent': sent, 'registrationObserved': b'el Gentleman package is active.' in snapshot,
+                'typingSent': typed, 'commandSent': sent, 'registrationObserved': b'el Gentleman package is active.' in snapshot,
                 'extensionLoadError': b'Failed to load extension' in snapshot,
                 'noModelsMessage': b'No models available.' in snapshot,
                 'startupBusyMessage': b'Startup is still in progress' in snapshot,
@@ -452,7 +456,7 @@ def pty_status(binding, project, command=None, extra=None, installer=None, cance
                 'statusObserved': b'GUEST-STATUS:' in snapshot, 'exit': child.poll(),
                 'deadlineExpired': time.monotonic() >= deadline, 'foregroundCWD': observed_cwd,
             }
-            if valid_utf8 and b'\0' not in snapshot and len(snapshot) < (12288 if PTY_DIAGNOSTIC_ONCE else 4096):
+            if valid_utf8 and b'\0' not in snapshot and len(snapshot) < 4096:
                 REPORT['ptyFailureBuffer'] = base64.b64encode(snapshot).decode('ascii')
         raise
     finally:
@@ -786,15 +790,14 @@ except Exception as error:
     if COMMAND_FAILURE is not None:
         complete = 'stdoutBase64' in COMMAND_FAILURE and 'stderrBase64' in COMMAND_FAILURE
         message.update(commandFailure=COMMAND_FAILURE, rawStockOutput='complete-base64' if complete else 'withheld')
-    failure_limit = 16384 if PTY_DIAGNOSTIC_ONCE and 'ptyFailureBuffer' in REPORT else 4096
     if 'ptyFailureBuffer' in REPORT:
         candidate = {**message, 'observedTTYBufferBase64': REPORT['ptyFailureBuffer']}
-        if len((json.dumps(candidate, sort_keys=True) + '\n').encode()) < failure_limit:
+        if len((json.dumps(candidate, sort_keys=True) + '\n').encode()) < 4096:
             message = candidate
     output = (json.dumps(message, sort_keys=True) + '\n').encode()
-    if len(output) >= failure_limit:
-        message = {'functionalReady': False, 'reason': 'entire command failure output withheld at active Guest bound', 'rawStockOutput': 'withheld', 'bytes': len(output), 'sha256': hashlib.sha256(output).hexdigest()}
+    if len(output) >= 4096:
+        message = {'functionalReady': False, 'reason': 'entire command failure output withheld at original Guest bound', 'rawStockOutput': 'withheld', 'bytes': len(output), 'sha256': hashlib.sha256(output).hexdigest()}
         output = (json.dumps(message, sort_keys=True) + '\n').encode()
-    if len(output) < failure_limit:
+    if len(output) < 4096:
         sys.stdout.buffer.write(output)
     sys.exit(1)
