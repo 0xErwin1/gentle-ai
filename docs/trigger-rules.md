@@ -33,9 +33,11 @@ verification cost or external side effects, accepted residual risk, or delivery.
 | **Direct inline** | The task is **small**: understood within the inline evidence budget, risk contained, and resumable from the request plus `git diff`, whatever the number of files. | Read, edit, and run the focused test and suite inline. |
 | **Delegated direct** | Understanding exceeds the inline evidence budget; or the task is **large** (its resume test fails), so reading that prepares a write, broad research, and the writer delegate; or the change is **high risk** and needs an independent verifier. File count never decides it. | Delegate the narrow exploration and/or one writer needed for that action. |
 
-The file counts describe the context needed for the current action, not a risk
-score. Risk may strengthen native verification or review, but it does not
-change the implementation route.
+File count never decides the route or the task size. High risk takes a task
+out of the small path and adds an independent verifier after the change's own
+checks. The feature document and the delegated writer still come only from a
+failed resume test. When receipt-driven development is on and native assess returns a
+risk tier, that tier wins; the agent may only raise it.
 
 Delegation also applies per action. Tests, builds, installs, and native review
 actors may use fresh workers without changing the implementation route.

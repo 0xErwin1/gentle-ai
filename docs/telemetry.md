@@ -27,7 +27,7 @@ never retry or retain failed input. The command itself runs synchronously for on
 bounded stdin read followed by one HTTP attempt and never spawns itself. No `ingest`, `flush`, or `capabilities` route
 remains. Unsupported older binaries must fail closed, not fall back to intake.
 
-The unreleased [aggregate schema](../contracts/telemetry/runtime/v1/schemas/aggregate.schema.json)
+The [aggregate schema](../contracts/telemetry/runtime/v1/schemas/aggregate.schema.json)
 requires exactly `schema`, `registry`, `host`, and `rows`. **Remove `batch_id` from
 Pi's mirrored schema and producer.** No source/session/task/install/user identity
 is accepted. Example single response observation:
@@ -114,7 +114,7 @@ private), and empty input becomes `unknown/unknown`.
 Canonical `agent_class` values are:
 
 - Fixed classes: `orchestrator`, `worker`, `explore`, `verify`, `unknown`
-- SDD agents: `sdd-init`, `sdd-explore`, `sdd-research`, `sdd-propose`, `sdd-spec`, `sdd-design`, `sdd-tasks`, `sdd-apply`, `sdd-verify`, `sdd-archive`, `sdd-onboard`, `sdd-status`, `sdd-sync`
+- Legacy SDD agents (SDD was retired in v4.0.0; the aggregate schema still accepts these values): `sdd-init`, `sdd-explore`, `sdd-research`, `sdd-propose`, `sdd-spec`, `sdd-design`, `sdd-tasks`, `sdd-apply`, `sdd-verify`, `sdd-archive`, `sdd-onboard`, `sdd-status`, `sdd-sync`
 - Judgment Day agents: `jd-judge-a`, `jd-judge-b`, `jd-fix-agent`
 - Review agents: `review-risk`, `review-readability`, `review-reliability`, `review-resilience`, `review-refuter`, `review-validator`
 
@@ -261,7 +261,7 @@ and never blocks the send.
 
 Install/sync still reconcile the dedicated `plugins/telemetry-runtime.ts` and
 `.gentle-ai-telemetry-runtime.json` ownership manifest for selected OpenCode,
-independently of SDD and using the existing scope/XDG resolution. These are static
+independently of any workflow and using the existing scope/XDG resolution. These are static
 installation assets, **not metric state**. Managed byte/hash/mode checks, guarded
 rollback, unowned/edited-file preservation, and validated-pair uninstall remain
 unchanged. Each managed plugin asset change must append the immediately previous

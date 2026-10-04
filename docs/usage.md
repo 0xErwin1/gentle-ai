@@ -299,7 +299,7 @@ brew upgrade engram
 
 If you choose to install several tools from this tap, run `brew trust gentleman-programming/tap` instead. This broader option trusts all current and future formulas, casks, and external commands published in the tap.
 
-**Self-update prompt behavior** (changed in v1.x slice 5 — `GENTLE_AI_CONFIRM_UPDATE` removed):
+**Self-update prompt behavior:**
 
 | Situation | Behavior |
 |-----------|----------|
@@ -308,7 +308,7 @@ If you choose to install several tools from this tap, run `brew trust gentleman-
 | `GENTLE_AI_YES=1` | Auto-accepts without prompting (for scripted upgrades). This variable is inherited by subprocesses, so scope it to a single invocation when needed (e.g. `GENTLE_AI_YES=1 gentle-ai …`). |
 | `GENTLE_AI_NO_SELF_UPDATE=1` | Skips the self-update check entirely. |
 
-`GENTLE_AI_CONFIRM_UPDATE` was removed in slice 5. It is now ignored if set.
+`GENTLE_AI_CONFIRM_UPDATE` was removed. It is now ignored if set.
 
 `GENTLE_AI_SELF_UPDATE_DONE` is an internal loop guard and should not be set manually.
 
@@ -343,6 +343,17 @@ gentle-ai --version
 gentle-ai -v
 ```
 
+### Other commands
+
+| Command | Purpose | Docs |
+|---------|---------|------|
+| `restore [--list \| latest \| <id>] [--yes]` | Restore managed config from a backup snapshot | [Rollback](rollback.md) |
+| `telemetry` | Manage telemetry consent (`status`, `enable`, `disable`) and runtime events | [Telemetry](telemetry.md) |
+| `review` | Receipt-Driven Development review lifecycle, including `review assess` and `review mode` | [Review Integration](review-integration.md) |
+| `codegraph init --cwd <project-root>` | Validate a project root, then initialize its CodeGraph index (used by generated agent guidance) | [Components](components.md) |
+| `skill-registry list [--json]` | List the resolved, deduplicated skill set | [Skill Registry](skill-registry.md) |
+| `uninstall opencode-plugin <id> [--yes]` | Remove one managed OpenCode community plugin | — |
+
 ---
 
 ## CLI Flags (install)
@@ -355,6 +366,9 @@ gentle-ai -v
 | `--persona`                   | Persona mode: `gentleman`, `neutral`, `custom` (`custom` keeps your existing persona unmanaged)                   |
 | `--preset`                    | Preset: `full-gentleman`, `ecosystem-only`, `minimal`, `custom` (`custom` means manual component/skill selection) |
 | `--scope`                     | Install scope for agent-scoped files: `global` (default, writes to each selected agent's global config directory) or `workspace` (writes to the current project root). Also settable via `GENTLE_AI_INSTALL_SCOPE` env var for CI/non-interactive use. |
+| `--channel`                   | Release channel: `stable` (default), `beta`, or `nightly` (alias for `beta`). Also settable via `GENTLE_AI_CHANNEL`. |
+| `--opencode-background-subagents` | OpenCode background subagents: `auto`, `on`, or `off`. Also settable via `GENTLE_AI_OPENCODE_BACKGROUND_SUBAGENTS`. See [below](#background-subagent-flags). |
+| `--pi-background-subagents`   | Pi background-subagent policy projected for `gentle-pi`: `auto`, `on`, or `off`. Also settable via `GENTLE_AI_PI_BACKGROUND_SUBAGENTS`. |
 | `--dry-run`                   | Preview the install plan without applying changes                                                                 |
 
 ## CLI Flags (sync)
@@ -363,10 +377,18 @@ gentle-ai -v
 | ------------------------ | ---------------------------------------------------------------------------------------------------- |
 | `--agent`, `--agents`    | Agents to sync (defaults to all installed agents)                                                    |
 | `--skill`, `--skills`    | Skills to sync (comma-separated; defaults to selected preset skills)                                  |
-| `--strict-tdd`           | Enable Strict TDD Mode for ODD (sync only)                                                           |
 | `--include-permissions`  | Include permissions sync (opt-in)                                                                    |
 | `--include-theme`        | Include theme sync (opt-in)                                                                          |
+| `--scope`                | `global` (default) or `workspace`; `workspace` refreshes only workspace-scoped files. Also settable via `GENTLE_AI_INSTALL_SCOPE`. |
+| `--opencode-background-subagents` | Same as install: `auto`, `on`, or `off`                                                     |
+| `--pi-background-subagents` | Same as install: `auto`, `on`, or `off`                                                           |
 | `--dry-run`              | Preview the sync plan without applying changes                                                       |
+
+`--strict-tdd` was retired in v4.0.0: ODD uses applicable test-first development by default, and sync rejects the flag.
+
+### Background-subagent flags
+
+For both flags, the first value set wins: the CLI flag, then a non-empty env var, then the previously saved `on`/`off` choice, then `auto`. `auto` reuses a saved choice and never enables background subagents by itself; when nothing is saved, a non-interactive run resolves `auto` to `off`. Only an explicit `on` or `off` is saved for later runs.
 
 For OpenCode background execution, see [Native OpenCode background subagents](opencode-profiles.md).
 
