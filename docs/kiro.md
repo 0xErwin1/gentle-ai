@@ -44,7 +44,7 @@ In practice: **the installer detects Kiro from `~/.kiro`**, not from `PATH`. If 
 
 Kiro runs with **native sub-agent delegation** via `~/.kiro/agents/`.
 
-The ODD orchestrator stays in the steering file. It keeps understood work inline and delegates bounded delegated-direct work to Kiro's native subagents, with one writer at a time. Engram™ provides cross-session persistence when available.
+The ODD orchestrator stays in the steering file. It keeps work inline by default and delegates to Kiro's native subagents only for a named reason: an exploration map, parallel writers on disjoint edit surfaces, the context backstop, or independent verification of a high-risk change. Engram™ provides cross-session persistence when available.
 
 The `jd-*` agents run the [Judgment Day](components.md#skills) adversarial review: two blind judges and one fix agent.
 
