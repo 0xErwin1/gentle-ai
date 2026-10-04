@@ -113,7 +113,7 @@ The following checks run automatically on this PR:
 - [ ] Go format passes (`go run ./internal/gofmtcheck`)
 - [ ] E2E tests pass (`cd e2e && ./docker-test.sh`)
 - [ ] Benchmark validation completed, or this change is not applicable to the benchmark (explain why in the Test Plan).
-- [ ] I have updated documentation if necessary
+- [ ] If behavior changed, docs in `docs/` are updated in the same PR (reference docs track `main`)
 - [ ] My commits follow [Conventional Commits](https://www.conventionalcommits.org/) format
 - [ ] I understand, reviewed, and take responsibility for the complete submission
 - [ ] I selected exactly one AI-assistance option and, if material assistance was used, completed all applicable declaration fields
