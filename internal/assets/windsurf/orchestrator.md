@@ -159,7 +159,7 @@ This is a self-correction mechanism. Do NOT ignore fallback reports — they ind
 
 ### ODD Work and Memory Context
 
-Because Windsurf has no subagents, read and write bounded authorized ODD work directly. Preserve unrelated working-tree changes, apply the configured TDD mode and exact runner, run applicable checks, and report observed results.
+Because Windsurf has no subagents, read and write bounded authorized ODD work directly. Preserve unrelated working-tree changes, apply the applicable test-first policy and runner from `## Implementation Routing`, run applicable checks, and report observed results.
 
 Search engram (`mem_search`) for relevant prior context when available. Save significant verified discoveries, decisions, or bug fixes via `mem_save`; do not rely solely on conversation history for cross-session continuity.
 

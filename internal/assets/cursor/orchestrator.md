@@ -177,7 +177,7 @@ Sub-agents run in fresh, isolated context windows with NO shared memory. The orc
 
 #### ODD Implementation Context
 
-Pass the authorized edit surfaces, acceptance criteria, configured TDD mode and exact runner, applicable verification commands, and relevant prior context explicitly to bounded implementation workers. Workers preserve unrelated working-tree changes and return observed outcomes and checks. Keep one writer per unit.
+Pass the authorized edit surfaces, acceptance criteria, the applicable test-first policy and runner from `## Implementation Routing`, applicable verification commands, and relevant prior context explicitly to bounded implementation workers. Workers preserve unrelated working-tree changes and return observed outcomes and checks. Keep one writer per unit.
 
 ### State and Conventions
 

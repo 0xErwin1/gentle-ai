@@ -185,4 +185,4 @@ Sub-agents get a fresh context with NO memory. The orchestrator controls context
 - Write context: sub-agent MUST save significant discoveries, decisions, or bug fixes to engram via `mem_save` before returning.
 - Always add to the sub-agent prompt: `"If you make important discoveries, decisions, or fix bugs, save them to engram via mem_save with project: '{project}'."`
 
-Forward the configured TDD mode, its source, and the exact runner to every implementation delegate. When strict TDD is active, require observed RED → GREEN → REFACTOR; do not infer the mode from test presence.
+Forward the applicable test-first policy and runner from `## Implementation Routing` to every implementation delegate. When that policy applies, require observed RED → GREEN → REFACTOR; do not infer applicability from test presence alone.

@@ -189,7 +189,7 @@ Sub-agents get a fresh context with NO memory. The orchestrator controls context
 
 #### ODD Implementation Context
 
-For bounded implementation workers, pass the authorized edit surfaces, acceptance criteria, configured TDD mode and exact runner, applicable verification commands, and relevant prior context explicitly. Workers preserve unrelated working-tree changes and return observed outcomes and checks. Keep one writer per unit.
+For bounded implementation workers, pass the authorized edit surfaces, acceptance criteria, the applicable test-first policy and runner from `## Implementation Routing`, applicable verification commands, and relevant prior context explicitly. Workers preserve unrelated working-tree changes and return observed outcomes and checks. Keep one writer per unit.
 
 ### State and Conventions
 

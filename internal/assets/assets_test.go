@@ -1662,3 +1662,49 @@ func TestOpenCodeGenericAgentsReadTheFeatureSpecByReference(t *testing.T) {
 		}
 	}
 }
+
+// #1731 parity: the Hermes delegation skill and the shared persistence contract
+// delegate for a named reason, never for file count, and forward the routing
+// block's test-first policy instead of a strict TDD mode.
+func TestDelegationSkillsDelegateForReasonAndForwardTestDiscipline(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		path     string
+		required []string
+		retired  []string
+	}{
+		{
+			path: "skills/hermes-ephemeral-delegation/SKILL.md",
+			required: []string{
+				"a named reason",
+				"the applicable test-first policy and runner from `## Implementation Routing`",
+				"Write one RED test per requested rule",
+				"the **Verify handoff** from the Delegated Verification Gate",
+			},
+			retired: []string{"4+ files", "multi-file reads", "TDD mode", "strict TDD"},
+		},
+		{
+			path:     "skills/_shared/persistence-contract.md",
+			required: []string{"the applicable test-first policy and runner from `## Implementation Routing`"},
+			retired:  []string{"TDD mode", "strict TDD"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.path, func(t *testing.T) {
+			t.Parallel()
+
+			body := MustRead(tt.path)
+			for _, want := range tt.required {
+				if !strings.Contains(body, want) {
+					t.Errorf("%s is missing %q", tt.path, want)
+				}
+			}
+			for _, retired := range tt.retired {
+				if strings.Contains(body, retired) {
+					t.Errorf("%s keeps retired %q", tt.path, retired)
+				}
+			}
+		})
+	}
+}

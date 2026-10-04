@@ -924,6 +924,17 @@ func TestRenderRoutingDelegatesForReason(t *testing.T) {
 		}, []string{
 			"On a small task the parent reads and writes inline",
 		}},
+		{"S6 test discipline", []string{
+			"Write one RED test per requested rule",
+			"For every existing command or option the change touches, add one test proving its previous behavior still holds",
+			"add no other cases",
+			"An existing behavior counts as touched when it shares the code you changed (options, parsers, helpers, validation)",
+			"Each test asserts every observable effect of the rule (output, exit code, persisted data), covers the cases the rule itself names, and goes through the public interface",
+			"When you add or change a command, option, or message, update the help text and docs",
+		}, []string{
+			"configured TDD mode",
+			"strict TDD is active",
+		}},
 	}
 
 	for _, agent := range catalog.AllAgents() {

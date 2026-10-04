@@ -170,7 +170,7 @@ This is a self-correction mechanism. Do NOT ignore fallback reports — they ind
 
 ### ODD Work and Memory Context
 
-Pass authorized edit surfaces, acceptance criteria, configured TDD mode and exact runner, applicable verification commands, and relevant prior context explicitly to bounded Kiro workers. Workers preserve unrelated working-tree changes and return observed outcomes and checks. Keep one writer per unit.
+Pass authorized edit surfaces, acceptance criteria, the applicable test-first policy and runner from `## Implementation Routing`, applicable verification commands, and relevant prior context explicitly to bounded Kiro workers. Workers preserve unrelated working-tree changes and return observed outcomes and checks. Keep one writer per unit.
 
 Search engram (`mem_search`) for relevant prior context when available. Save significant verified discoveries, decisions, or bug fixes via `mem_save`; do not rely solely on conversation history for cross-session continuity.
 

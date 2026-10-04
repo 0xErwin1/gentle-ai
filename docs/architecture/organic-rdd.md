@@ -84,8 +84,8 @@ The organic implementation route, with RDD entering at the end over the frozen c
 ```mermaid
 flowchart TD
     A["User requests a change<br/>(Claude Code · OpenCode · Codex...)"] --> B{"Implementation<br/>route"}
-    B -->|"decide/verify<br/>1–3 files"| C["Direct inline"]
-    B -->|"4+ file exploration<br/>or 2+ non-trivial writes"| D["Delegated direct<br/>(one bounded worker)"]
+    B -->|"understood work,<br/>or no named reason"| C["Direct inline"]
+    B -->|"map needed to decide,<br/>parallel units, or context backstop"| D["Delegated direct<br/>(one bounded worker per unit)"]
     C --> E["Implementation + tests"]
     D --> E
     E --> F{"RDD enabled?<br/>(user-owned, opt-out)"}

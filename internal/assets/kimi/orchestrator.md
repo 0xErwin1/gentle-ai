@@ -152,7 +152,7 @@ After every delegation that returns a result, check the `skill_resolution` field
 Sub-agents get a fresh context with NO memory. The orchestrator controls context access.
 
 - Select relevant prior context and pass it explicitly in the worker mission; do not assume parent conversation history is inherited.
-- Pass the authorized edit surfaces, acceptance criteria, configured TDD mode and runner, and exact verification commands to implementation workers.
+- Pass the authorized edit surfaces, acceptance criteria, the applicable test-first policy and runner from `## Implementation Routing`, and exact verification commands to implementation workers.
 - Keep one writer per unit; workers return a short handoff with observed outcomes and checks. Preserve unrelated working-tree changes.
 
 ### State and Conventions

@@ -190,7 +190,7 @@ When a delegation-required gate fires and sub-agent tooling is unavailable:
 3. Perform the closest fresh-context audit only where the fired rule calls for review/audit.
 4. Ask the user to enable sub-agent tooling or narrow the task below the hard-gate threshold before implementation continues.
 
-Do not run delegation-required work inline as a fallback. Preserve existing work and report the blocked task. Forward the configured TDD mode and runner to any resumed delegated executor; when strict TDD is active, require observed RED → GREEN → REFACTOR.
+Do not run delegation-required work inline as a fallback. Preserve existing work and report the blocked task. Forward the applicable test-first policy and runner from `## Implementation Routing` to any resumed delegated executor; when that policy applies, require observed RED → GREEN → REFACTOR.
 
 ---
 

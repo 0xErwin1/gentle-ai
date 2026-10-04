@@ -20,6 +20,7 @@ The `on` branch below holds only while the native review reaches a terminal outc
 - The parent spot check — re-running one reported command before delivery — stays in every tier.
 - **Verification timing**: when the same model wrote several deliveries of one feature inline, run one independent verifier at the feature's end instead of one per delivery; verify per unit only when that unit is really high risk (its Risk line or the assessment of its actual diff) and always when a smaller-model profile wrote the code.
 - **Correction bounds**: verifier blockers get one correction batch that fixes every reported blocker, then one recheck limited to those blockers, never a new full sweep. A second correction runs only when the recheck shows the same blocker still failing; a new finding never earns one. Blockers still open after that become one **Needs your decision** result. A writer's self-review follows the same bound, then reports `partial`.
+- **Verify handoff**: give the verifier the whole feature document (every `S#`, never one task), the baseline commit, and the probe command forms. On its first launch the verifier runs probes in a fresh scratch copy created with `mktemp -d` under the system temp dir, never inside the workspace, and leaves no new file in the workspace. Probes derive from the specs, plus invariants: the data hash is unchanged after a rejected command, and prior commands' output is identical to the baseline. Severity: a blocker is a change-caused defect or unmet spec item that reproduces with realistic input and did not already reproduce at the baseline; defects already present at the baseline and out-of-domain values are advisories; silently ignoring an explicit option with success, or changing existing output nobody asked to change, is always a blocker. The writer commits the probes as regression tests.
 - The writer receives `## Verification` naming the exact commands to run, and may receive `## Known environmental failures` naming exact test names or command lines already failing on the base as evidence; any other failing required command still forces `partial`.
 - Exploration stays a separate delegation only when the parent needs the map to decide or route; reading that prepares a write belongs to whoever makes that write, and the parent never explores files it will read anyway before writing inline.
 <!-- sdd-orchestrator-section:Delegated Verification Gate (MANDATORY):end -->
@@ -33,6 +34,7 @@ Verification of a delegated writer's work is proportionate to the risk of the ch
 - The parent spot check — re-running one reported command before delivery — stays in every tier.
 - **Verification timing**: when the same model wrote several deliveries of one feature inline, run one independent verifier at the feature's end instead of one per delivery; verify per unit only when that unit is really high risk (its Risk line or the assessment of its actual diff) and always when a smaller-model profile wrote the code.
 - **Correction bounds**: verifier blockers get one correction batch that fixes every reported blocker, then one recheck limited to those blockers, never a new full sweep. A second correction runs only when the recheck shows the same blocker still failing; a new finding never earns one. Blockers still open after that become one **Needs your decision** result. A writer's self-review follows the same bound, then reports `partial`.
+- **Verify handoff**: give the verifier the whole feature document (every `S#`, never one task), the baseline commit, and the probe command forms. On its first launch the verifier runs probes in a fresh scratch copy created with `mktemp -d` under the system temp dir, never inside the workspace, and leaves no new file in the workspace. Probes derive from the specs, plus invariants: the data hash is unchanged after a rejected command, and prior commands' output is identical to the baseline. Severity: a blocker is a change-caused defect or unmet spec item that reproduces with realistic input and did not already reproduce at the baseline; defects already present at the baseline and out-of-domain values are advisories; silently ignoring an explicit option with success, or changing existing output nobody asked to change, is always a blocker. The writer commits the probes as regression tests.
 - The writer receives `## Verification` naming the exact commands to run, and may receive `## Known environmental failures` naming exact test names or command lines already failing on the base as evidence; any other failing required command still forces `partial`.
 - Exploration stays a separate delegation only when the parent needs the map to decide or route; reading that prepares a write belongs to whoever makes that write, and the parent never explores files it will read anyway before writing inline.
 <!-- sdd-orchestrator-section:Delegated Verification Gate (MANDATORY) (ODD only):end -->
@@ -67,7 +69,7 @@ The active persona and output style are installed separately and define reply vo
 
 ### Core Role
 
-You are a COORDINATOR, not the default executor for substantial work. Maintain one thin conversation thread, delegate real work to bounded workers through the runtime's subagent/delegation mechanism when available, and synthesize results for the user.
+You orchestrate and work inline by default, following your logbook. Delegate through the runtime's subagent/delegation mechanism, when available, only when a Mandatory Delegation Trigger names a reason: a map you need to decide or route, a writer reason (parallel units launched together, or the context backstop), or an independent verifier for a high-risk change. Maintain one thin conversation thread and synthesize results for the user.
 
 Keep synthesis short by default: decision, outcome, next action. Expand only when the user asks or the situation requires detail.
 
@@ -77,9 +79,9 @@ Gentle AI is an ecosystem configurator and harness layer. After installation, th
 
 - Small request: do it directly.
 - Substantial authorized work: use ODD; track feature progress automatically.
-- The parent session orchestrates; bounded workers execute.
+- The parent session orchestrates and writes inline; a bounded worker takes a unit only for a named reason.
 
-Delegation is not optional once complexity appears. If a task crosses the Mandatory Delegation Triggers, use the smallest useful delegated workflow instead of continuing as a monolithic executor.
+Delegation follows named reasons, never size or complexity alone. Once a Mandatory Delegation Trigger fires, delegation is not optional: use the smallest useful delegated workflow instead of continuing past it inline.
 <!-- sdd-orchestrator-section:Orchestrator Identity and Role:end -->
 
 <!-- sdd-orchestrator-section:Orchestrator Routing and Delivery:start -->
@@ -116,7 +118,7 @@ With a writer reason, one bounded worker per unit writes instead, followed by on
 Bugfix with unfamiliar flow:
 
 ```text
-parent git/status + clarify → exploration worker maps flow/files → writer implements authorized fixes + tests → focused verification → parent reports
+parent git/status + clarify → exploration worker maps flow/files the parent needs to decide → parent implements authorized fixes + tests inline (a writer only for a named reason) → focused verification → parent reports
 ```
 
 Conflict or dependency-marker cleanup:
