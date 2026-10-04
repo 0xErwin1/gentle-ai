@@ -483,11 +483,16 @@ jobs:
               print('FORMAT-DATA-WITHHELD:'+str(len(raw))+':'+hashlib.sha256(raw).hexdigest())
           PY
           status=0
-          worker gentle-lab-full /usr/bin/python3 -B /fixture/harness.py full >"$RUNNER_TEMP/user-guest.raw" 2>&1 || status=$?
-          /usr/bin/python3 - "$RUNNER_TEMP/user-guest.raw" "$status" <<'PY'
+          diagnostic=()
+          if [[ "$GITHUB_RUN_NUMBER" = 101 && "$GITHUB_RUN_ATTEMPT" = 1 ]]; then
+            diagnostic=(pty-diagnostic-once-12k)
+          fi
+          worker gentle-lab-full /usr/bin/python3 -B /fixture/harness.py full "${diagnostic[@]}" >"$RUNNER_TEMP/user-guest.raw" 2>&1 || status=$?
+          /usr/bin/python3 - "$RUNNER_TEMP/user-guest.raw" "$status" "${diagnostic[0]:-none}" <<'PY'
           import pathlib,sys,base64
           raw=pathlib.Path(sys.argv[1]).read_bytes()
-          if len(raw)>=4096 or b'\0' in raw:
+          limit=16384 if sys.argv[3]=='pty-diagnostic-once-12k' else 4096
+          if len(raw)>=limit or b'\0' in raw:
               raise SystemExit('STOP: entire Guest output withheld at byte/NUL bound')
           raw.decode('utf-8','strict')
           print('GUEST-RAW-BASE64:'+base64.b64encode(raw).decode('ascii'))

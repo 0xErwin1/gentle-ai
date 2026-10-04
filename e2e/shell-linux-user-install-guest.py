@@ -31,6 +31,8 @@ SUPERVISOR = '/fixture/supervisor'
 TESTS = '/fixture/user-install.test'
 FIXTURE = pathlib.Path('/fixture')
 MODE = sys.argv[1] if len(sys.argv) == 2 else 'full'
+# Explicit one-VM diagnostic grant; the workflow arms only its next first attempt.
+PTY_DIAGNOSTIC_ONCE = sys.argv[1:] == ['full', 'pty-diagnostic-once-12k']
 REPORT = {}
 COMMAND_FAILURE = None
 FAULT = ''
@@ -450,7 +452,7 @@ def pty_status(binding, project, command=None, extra=None, installer=None, cance
                 'statusObserved': b'GUEST-STATUS:' in snapshot, 'exit': child.poll(),
                 'deadlineExpired': time.monotonic() >= deadline, 'foregroundCWD': observed_cwd,
             }
-            if valid_utf8 and b'\0' not in snapshot and len(snapshot) < 4096:
+            if valid_utf8 and b'\0' not in snapshot and len(snapshot) < (12288 if PTY_DIAGNOSTIC_ONCE else 4096):
                 REPORT['ptyFailureBuffer'] = base64.b64encode(snapshot).decode('ascii')
         raise
     finally:
@@ -784,14 +786,15 @@ except Exception as error:
     if COMMAND_FAILURE is not None:
         complete = 'stdoutBase64' in COMMAND_FAILURE and 'stderrBase64' in COMMAND_FAILURE
         message.update(commandFailure=COMMAND_FAILURE, rawStockOutput='complete-base64' if complete else 'withheld')
+    failure_limit = 16384 if PTY_DIAGNOSTIC_ONCE and 'ptyFailureBuffer' in REPORT else 4096
     if 'ptyFailureBuffer' in REPORT:
         candidate = {**message, 'observedTTYBufferBase64': REPORT['ptyFailureBuffer']}
-        if len((json.dumps(candidate, sort_keys=True) + '\n').encode()) < 4096:
+        if len((json.dumps(candidate, sort_keys=True) + '\n').encode()) < failure_limit:
             message = candidate
     output = (json.dumps(message, sort_keys=True) + '\n').encode()
-    if len(output) >= 4096:
-        message = {'functionalReady': False, 'reason': 'entire command failure output withheld at original Guest bound', 'rawStockOutput': 'withheld', 'bytes': len(output), 'sha256': hashlib.sha256(output).hexdigest()}
+    if len(output) >= failure_limit:
+        message = {'functionalReady': False, 'reason': 'entire command failure output withheld at active Guest bound', 'rawStockOutput': 'withheld', 'bytes': len(output), 'sha256': hashlib.sha256(output).hexdigest()}
         output = (json.dumps(message, sort_keys=True) + '\n').encode()
-    if len(output) < 4096:
+    if len(output) < failure_limit:
         sys.stdout.buffer.write(output)
     sys.exit(1)
