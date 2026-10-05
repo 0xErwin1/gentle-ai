@@ -44,10 +44,6 @@ func userBinding(root, name string) string {
 	return binding
 }
 
-func userEntryArgs(req UserInstallRequest) []string {
-	return []string{"internal-install", req.Destination, req.Mode, req.SharedPrefix, req.SharedAgent, req.Confirmation}
-}
-
 func UserInstallFromEntry(args []string) (UserInstallRequest, error) {
 	if len(args) != 5 {
 		return UserInstallRequest{}, fmt.Errorf("invalid internal install arguments")

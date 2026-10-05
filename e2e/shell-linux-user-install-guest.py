@@ -394,7 +394,8 @@ def pty_status(binding, project, command=None, extra=None, installer=None, cance
                     if opening_only:
                         require(os.readlink(f'/proc/{foreground}/exe') == str(binding.parent.parent / 'runtime/node/bin/node'), 'actual foreground private Node differs')
                         require(b'Failed to load extension' not in raw, 'Gentle startup extension failure')
-                    os.write(master, b'\x03\x03')
+                    stop_key = b'\x04' if opening_only else b'\x03\x03'
+                    require(os.write(master, stop_key) == len(stop_key), 'incomplete PTY exit input')
                     stopped = True
                 if b'GUEST-STATUS:' in raw:
                     require(b'GUEST-STATUS:0' in raw, 'interactive child failed; evidence retained')
@@ -486,6 +487,7 @@ def pty_status(binding, project, command=None, extra=None, installer=None, cance
                 'gentlePrefixObserved': b'el Gentleman' in snapshot,
                 'activeSuffixObserved': b'package is active.' in snapshot,
                 'installerObserved': b'Gentle Shell Linux user installer' in snapshot,
+                'openingObserved': opening_only and expected in snapshot, 'exitInputSent': stopped,
                 'statusObserved': b'GUEST-STATUS:' in snapshot, 'exit': child.poll(),
                 'deadlineExpired': time.monotonic() >= deadline, 'foregroundCWD': observed_cwd,
             }

@@ -162,6 +162,22 @@ Shared, production update/force, manager termination and recovery remain debt.
 The `full` Guest mode and its assertions remain available but are not run by
 this limited smoke job. No existing safety, resource or output bounds are relaxed.
 
+## Retained preview APIs — explicit deadcode debt
+
+The human-approved deadcode exception adds exactly 97 retained protected-preview
+and prior private-installer symbols to `.deadcode-baseline.txt`. These APIs are
+not reached by the production MVP; this is retained implementation debt, not a
+call-graph false positive or evidence of production integration. Their code and
+existing tests remain intact. The unused MVP helper `userEntryArgs` is removed,
+not exempted. The ratchet script is unchanged and still rejects other new entries.
+The exact sorted exception manifest SHA-256 is
+`ef752d43ea3a468cfdf837b88d974dbb5a15f6d62938dce12b3422fba8da18b5`.
+
+The opening-only smoke uses stock Pi 1.0.0's `Ctrl+D` exit from its empty editor,
+not two `Ctrl+C` clear actions. Complete input delivery, exit zero, caller
+foreground restoration and the unchanged 45-second deadline remain mandatory.
+A fresh exact-head smoke must pass; this change alone is not runtime proof.
+
 ## Disposable VM full qualification — deferred
 
 The separate `user-vm-laboratory` CI job targets Ubuntu 24.04 amd64 on the fork's
