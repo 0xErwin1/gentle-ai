@@ -1,5 +1,7 @@
 #!/bin/sh
 # Compilation/syntax only. Never Windows 11 runtime or user-delivery evidence.
+# stdout is exclusively inert artifact DATA; diagnostics stay on stderr.
+exec 3>&1 1>&2
 set -eu
 stop() { printf 'STOP: %s\n' "$1" >&2; exit 1; }
 test "$(id -u)" = 65532 && test "$(id -g)" = 65532 || stop 'unprivileged Guest identity'
@@ -70,3 +72,10 @@ GOOS=windows GOARCH=amd64 go build -o /tmp/windows-gentle-ai.exe ./cmd/gentle-ai
 node --check scripts/provision-gentle-shell-windows.mjs > /tmp/check.log 2>&1 || { diagnostic; stop 'JavaScript syntax'; }
 printf 'PASS: bounded Linux Guest syntax/Windows crosscompile only; normalized formatted source, NOT Win11 runtime qualification or deliverability.\n'
 test ! -s /tmp/format-names || { printf 'STOP: original candidate needs Guest-generated formatting; original format check NOT PASS.\n'; exit 1; }
+cd /tmp
+cp /source-commit.txt source-commit.txt
+sha256sum windows-gentle-ai.exe windows-shellinstaller.test.exe windows-cli.test.exe > SHA256SUMS
+bytes=$(wc -c windows-gentle-ai.exe windows-shellinstaller.test.exe windows-cli.test.exe | awk 'END {print $1}')
+test "$bytes" -le 268435456 || stop 'whole Windows artifact payload exceeds 256 MiB'
+# Export while tmpfs is still mounted; never parse/extract this archive on host.
+tar -cf - windows-gentle-ai.exe windows-shellinstaller.test.exe windows-cli.test.exe SHA256SUMS source-commit.txt >&3
