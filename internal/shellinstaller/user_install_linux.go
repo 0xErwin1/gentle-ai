@@ -3,6 +3,9 @@
 package shellinstaller
 
 import (
+	"archive/tar"
+	"bytes"
+	"compress/gzip"
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
@@ -10,6 +13,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -580,6 +584,9 @@ func RunUserInstall(ctx context.Context, req UserInstallRequest) (result UserIns
 	if err = userVerifyGlobal(ctx, root, prefix, agent, finalPrefix, req.Destination, req.Mode); err != nil {
 		return result, fmt.Errorf("post-native global readback: %w", err)
 	}
+	if err = userTools(ctx, root, agent, true); err != nil {
+		return result, privateError("source", err)
+	}
 	self, err := os.Executable()
 	if err != nil {
 		return result, err
@@ -722,6 +729,143 @@ func userBootstrap(ctx context.Context, root, workspace string) error {
 	return nil
 }
 
+// Fixed acquisition pins, not mutable latest or independently published checksums.
+// Only this exact regular member is copied; no other archive path is materialized.
+func userToolMember(ctx context.Context, data []byte, pin, member string) ([]byte, error) {
+	if ctx.Err() != nil || len(data) > 32<<20 || fmt.Sprintf("%x", sha256.Sum256(data)) != pin || filepath.IsAbs(member) || filepath.Clean(member) != member || strings.HasPrefix(member, "../") {
+		return nil, privateError("source", ctx.Err())
+	}
+	gz, err := gzip.NewReader(bytes.NewReader(data))
+	if err != nil {
+		return nil, err
+	}
+	decoded, err := io.ReadAll(io.LimitReader(gz, (32<<20)+1))
+	if err = errors.Join(err, gz.Close(), ctx.Err()); err != nil || len(decoded) > 32<<20 {
+		return nil, privateError("source", err)
+	}
+	reader := tar.NewReader(bytes.NewReader(decoded))
+	var selected []byte
+	for i := 0; ; i++ {
+		h, err := reader.Next()
+		if err == io.EOF && len(selected) > 0 && ctx.Err() == nil {
+			return selected, nil
+		}
+		if err != nil || i >= 4096 || ctx.Err() != nil {
+			return nil, privateError("source", errors.Join(err, ctx.Err()))
+		}
+		if h.Name != member {
+			continue
+		}
+		if selected != nil || (h.Typeflag != tar.TypeReg && h.Typeflag != tar.TypeRegA) || h.Size <= 0 || h.Size > 32<<20 {
+			return nil, privateError("source", nil)
+		}
+		selected, err = io.ReadAll(reader)
+		if err != nil || int64(len(selected)) != h.Size {
+			return nil, privateError("source", err)
+		}
+	}
+}
+
+func userToolWrite(path string, data []byte, mode os.FileMode) error {
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, mode)
+	if err != nil {
+		return err
+	}
+	n, writeErr := file.Write(data)
+	err = errors.Join(writeErr, file.Sync(), file.Close())
+	if n != len(data) || err != nil {
+		return privateError("source", err)
+	}
+	return nil
+}
+
+// Stock Pi prefers agent/bin before probing PATH or downloading helpers.
+// Retained archive authority also verifies every ordinary launch and idempotence.
+func userTools(ctx context.Context, root, agent string, install bool) error {
+	archives, bin := filepath.Join(root, "runtime/tools"), filepath.Join(agent, "bin")
+	for _, dir := range []string{archives, bin} {
+		if install {
+			if err := os.Mkdir(dir, 0700); err != nil && !errors.Is(err, os.ErrExist) {
+				return err
+			}
+		}
+		if err := privateNativeDirectory(dir); err != nil {
+			return err
+		}
+	}
+	var client *http.Client
+	if install {
+		var err error
+		client, err = privateColdClient()
+		if err != nil {
+			return err
+		}
+		transport := client.Transport.(*http.Transport)
+		transport.TLSClientConfig = transport.TLSClientConfig.Clone()
+		transport.TLSClientConfig.ServerName = "" // Verify each actual HTTPS host.
+		client.CheckRedirect = func(req *http.Request, via []*http.Request) error {
+			if len(via) > 4 || req.URL.Scheme != "https" || req.URL.User != nil || req.URL.Fragment != "" || req.URL.Host != "release-assets.githubusercontent.com" {
+				return privateError("acquisition", nil)
+			}
+			return nil
+		}
+		defer client.CloseIdleConnections()
+	}
+	for _, source := range []struct {
+		name, repo, tag, stem, pin string
+		size                       int64
+	}{
+		{"fd", "sharkdp/fd", "v10.5.0", "fd-v10.5.0-x86_64-unknown-linux-musl", "761c72dc8e120d85b22292063be8a796e2eeb20eb3e4f38b8fa2343ccf3514a7", 1573549},
+		{"rg", "BurntSushi/ripgrep", "15.2.0", "ripgrep-15.2.0-x86_64-unknown-linux-musl", "33e15bcf1624b25cdd2a55813a47a2f95dbe126268203e76aa6a585d1e7b149c", 2265718},
+	} {
+		archive := filepath.Join(archives, source.name+".tgz")
+		if install {
+			url := "https://github.com/" + source.repo + "/releases/download/" + source.tag + "/" + source.stem + ".tar.gz"
+			req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+			if err != nil {
+				return err
+			}
+			response, err := client.Do(req)
+			if err != nil {
+				return privateError("acquisition", err)
+			}
+			encoding := response.Header.Values("Content-Encoding")
+			if response.StatusCode != 200 || response.ContentLength != source.size || response.Uncompressed || response.TLS == nil || len(response.TLS.VerifiedChains) == 0 || len(encoding) > 1 || (len(encoding) == 1 && encoding[0] != "" && encoding[0] != "identity") {
+				return privateError("acquisition", errors.Join(response.Body.Close(), errors.New("helper response refused")))
+			}
+			data, readErr := io.ReadAll(io.LimitReader(response.Body, source.size+1))
+			err = errors.Join(readErr, response.Body.Close(), ctx.Err())
+			if err != nil || int64(len(data)) != source.size || fmt.Sprintf("%x", sha256.Sum256(data)) != source.pin {
+				return privateError("acquisition", err)
+			}
+			if err := userToolWrite(archive, data, 0600); err != nil {
+				return err
+			}
+		}
+		if _, err := privateNativeFile(ctx, archive, 0600, source.size, source.pin); err != nil {
+			return err
+		}
+		data, err := os.ReadFile(archive)
+		if err != nil {
+			return err
+		}
+		tool, err := userToolMember(ctx, data, source.pin, source.stem+"/"+source.name)
+		if err != nil {
+			return err
+		}
+		path := filepath.Join(bin, source.name)
+		if install {
+			if err := userToolWrite(path, tool, 0700); err != nil {
+				return err
+			}
+		}
+		if _, err := privateNativeFile(ctx, path, 0700, int64(len(tool)), fmt.Sprintf("%x", sha256.Sum256(tool))); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func userSourceFile(ctx context.Context, path string, size int64, pin string) (string, error) {
 	info, err := privatePhysical(path)
 	if err != nil {
@@ -856,6 +1000,9 @@ func userReadManifest(ctx context.Context, root string) (userManifest, error) {
 		if _, err := privateNativeFile(ctx, filepath.Join(root, source.path), 0700, -1, source.pin); err != nil {
 			return manifest, err
 		}
+	}
+	if err := userTools(ctx, root, manifest.Agent, false); err != nil {
+		return manifest, privateError("source", err)
 	}
 	return manifest, nil
 }

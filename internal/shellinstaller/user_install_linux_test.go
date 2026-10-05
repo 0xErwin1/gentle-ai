@@ -3,9 +3,14 @@
 package shellinstaller
 
 import (
+	"archive/tar"
+	"bytes"
+	"compress/gzip"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
@@ -487,5 +492,105 @@ func TestUserDelegatedManagerIntegration(t *testing.T) {
 	defer cancel()
 	if err := userService(ctx, self, []string{"internal-check"}, os.Stdin, os.Stdout, os.Stderr); err != nil {
 		t.Fatalf("real inner kernel qualification through user manager: %v", err)
+	}
+}
+
+// Synthetic archive DATA only, never a runnable helper or execution witness.
+func userToolFixture(t *testing.T, kind byte, copies int, size int) []byte {
+	t.Helper()
+	var archive bytes.Buffer
+	gz := gzip.NewWriter(&archive)
+	tw := tar.NewWriter(gz)
+	for i := 0; i < copies; i++ {
+		h := &tar.Header{Name: "fixed/tool", Typeflag: kind, Mode: 0700, Size: int64(size)}
+		if kind != tar.TypeReg {
+			h.Size, h.Linkname = 0, "elsewhere"
+		}
+		if err := tw.WriteHeader(h); err != nil {
+			t.Fatal(err)
+		}
+		if h.Size > 0 {
+			if _, err := tw.Write(make([]byte, size)); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	if err := errors.Join(tw.Close(), gz.Close()); err != nil {
+		t.Fatal(err)
+	}
+	return archive.Bytes()
+}
+
+func TestUserToolArchiveAuthority(t *testing.T) {
+	good := userToolFixture(t, tar.TypeReg, 1, 16)
+	for _, tc := range []struct {
+		name, member string
+		data         []byte
+		badPin       bool
+		bad          bool
+	}{
+		{"regular", "fixed/tool", good, false, false},
+		{"wrong pin", "fixed/tool", good, true, true},
+		{"missing member", "fixed/missing", good, false, true},
+		{"path escape", "../tool", good, false, true},
+		{"duplicate", "fixed/tool", userToolFixture(t, tar.TypeReg, 2, 16), false, true},
+		{"link", "fixed/tool", userToolFixture(t, tar.TypeSymlink, 1, 0), false, true},
+		{"truncated", "fixed/tool", good[:len(good)-1], false, true},
+		{"inflation", "fixed/tool", userToolFixture(t, tar.TypeReg, 1, (32<<20)+1), false, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			pin := fmt.Sprintf("%x", sha256.Sum256(tc.data))
+			if tc.badPin {
+				pin = strings.Repeat("0", 64)
+			}
+			data, err := userToolMember(context.Background(), tc.data, pin, tc.member)
+			if (err != nil) != tc.bad || (!tc.bad && !bytes.Equal(data, make([]byte, 16))) {
+				t.Fatalf("archive authority: err=%v bytes=%d", err, len(data))
+			}
+		})
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := userToolMember(ctx, good, fmt.Sprintf("%x", sha256.Sum256(good)), "fixed/tool"); err == nil {
+		t.Fatal("canceled archive admitted")
+	}
+}
+
+func TestUserToolExclusivePhysicalReadback(t *testing.T) {
+	path, data := filepath.Join(t.TempDir(), "tool"), []byte("synthetic DATA only")
+	if err := userToolWrite(path, data, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := userToolWrite(path, []byte("replacement"), 0700); err == nil {
+		t.Fatal("occupied tool overwritten")
+	}
+	pin := fmt.Sprintf("%x", sha256.Sum256(data))
+	if _, err := privateNativeFile(context.Background(), path, 0700, int64(len(data)), pin); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, bytes.Repeat([]byte{'X'}, len(data)), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := privateNativeFile(context.Background(), path, 0700, int64(len(data)), pin); err == nil {
+		t.Fatal("helper byte drift admitted")
+	}
+	if err := os.WriteFile(path, data, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(path, 0644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := privateNativeFile(context.Background(), path, 0700, int64(len(data)), pin); err == nil {
+		t.Fatal("helper mode drift admitted")
+	}
+	if err := os.Chmod(path, 0700); err != nil {
+		t.Fatal(err)
+	}
+	alias := path + "-alias"
+	if err := os.Symlink(path, alias); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := privateNativeFile(context.Background(), alias, 0700, int64(len(data)), pin); err == nil {
+		t.Fatal("helper alias admitted")
 	}
 }

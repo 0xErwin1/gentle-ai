@@ -119,6 +119,26 @@ The opt-out targets the startup writes observed at `3e07a1179`; the unchanged
 blank-project smoke must still pass on the corrected revision before claiming
 preservation. No caller arguments, personal settings or package sources change.
 
+## Cold search helpers — runtime proof pending
+
+Stock Pi 1.0.0 opens its UI by ensuring `fd` and `rg`; missing helpers trigger
+release lookups and downloads. Cold installation now supplies fixed Linux amd64
+musl archives to the owned agent's standard `bin/`, without changing stock Pi:
+
+| Helper | Fixed release | Archive SHA-256 |
+| --- | --- | --- |
+| fd | 10.5.0 | `761c72dc8e120d85b22292063be8a796e2eeb20eb3e4f38b8fa2343ccf3514a7` |
+| rg | 15.2.0 | `33e15bcf1624b25cdd2a55813a47a2f95dbe126268203e76aa6a585d1e7b149c` |
+
+These are hashes of human-authorized, credentialless HTTPS acquisition, not
+independently published checksums or signature claims. Before extraction, the
+installer checks exact archive bytes/hash, TLS, ownership and bounds; every
+launch rechecks the retained archive and the exact physical helper bytes/mode.
+Existing helper collisions are refused, never overwritten. Earlier installations
+without these archives fail closed; no silent migration is claimed. The startup
+network guard remains unchanged, `PI_OFFLINE` is not sealed, and the stock updater
+is retained. Final-head Guest evidence is still required before claiming MVP PASS.
+
 ## Limited MVP smoke — result pending
 
 The named `MVP Separate smoke` job compiles the exact workflow `github.sha`

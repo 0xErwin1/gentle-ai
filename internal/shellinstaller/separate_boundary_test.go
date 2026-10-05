@@ -131,8 +131,8 @@ func TestSeparateBoundaryNeverTrustsClaimedVerificationOrApproval(t *testing.T) 
 		ClaimedApproved:           true,
 		ClaimedReady:              true,
 		ClaimedExecutable:         true,
-		ResolverEnvGentleShellPi:   true,
-		InheritedPiCodingAgentDir:  true,
+		ResolverEnvGentleShellPi:  true,
+		InheritedPiCodingAgentDir: true,
 	}
 	result := assertSeparateRefusal(t, profile, selectors)
 	want := RejectSeparateClaimedAuthority | RejectSeparateResolverEnv | RejectSeparateInheritedPiDir
