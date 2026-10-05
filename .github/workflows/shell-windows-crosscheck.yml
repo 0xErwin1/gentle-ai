@@ -37,9 +37,26 @@ jobs:
       - name: Compile inside credentialless physically bounded Guest, not Windows qualification
         run: |
           set -euo pipefail
-          timeout --kill-after=5 900 docker run --rm --pull=never --network bridge \
+          cid="$(docker create --pull=never --network bridge \
             --read-only --user 65532:65532 --cap-drop=ALL --security-opt=no-new-privileges \
             --cpus=1 --memory=3g --memory-swap=3g --pids-limit=64 \
             -e HOST_NETNS="$(stat -Lc %i /proc/self/ns/net)" -e HOST_MNTNS="$(stat -Lc %i /proc/self/ns/mnt)" \
             --tmpfs /tmp:rw,exec,nosuid,nodev,mode=1777,size=2g \
-            gentle-windows-crosscheck:ci
+            gentle-windows-crosscheck:ci)"
+          trap 'docker rm --force "$cid" >/dev/null' EXIT
+          timeout --kill-after=5 900 docker start --attach "$cid"
+          test "$(docker inspect --format '{{.State.ExitCode}}' "$cid")" = 0
+          mkdir -m 700 "$RUNNER_TEMP/windows-candidate"
+          for artifact in windows-gentle-ai.exe windows-shellinstaller.test.exe windows-cli.test.exe; do
+            docker cp "$cid:/tmp/$artifact" "$RUNNER_TEMP/windows-candidate/$artifact"
+          done
+          printf '%s\n' "${{ github.sha }}" > "$RUNNER_TEMP/windows-candidate/source-commit.txt"
+          (cd "$RUNNER_TEMP/windows-candidate" && sha256sum *.exe > SHA256SUMS)
+      - name: Export inert exact-head binaries for isolated Windows qualification
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: windows-candidate-${{ github.sha }}
+          path: ${{ runner.temp }}/windows-candidate
+          retention-days: 7
+          compression-level: 0
+          if-no-files-found: error

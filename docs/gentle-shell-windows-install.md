@@ -53,6 +53,10 @@ The old Linux controls and frozen Linux work are unchanged.
 `shell-windows-crosscheck.yml` runs formatting, portable TUI tests, JavaScript
 syntax and Windows cross-compilation in a bounded Linux Guest. It explicitly
 does **not** run Windows, establish a Windows laboratory or qualify this feature.
+After successful checks it exports the exact-head Windows product and test
+executables with a source-commit record and SHA256 manifest. These are inert
+qualification artifacts, not a signed release: extract and execute them only
+inside the qualified isolated Windows Guest, never on the operator's system.
 Shared, update, force/recovery, Darwin, registration and the full Ready contract
 are outside this minimum change.
 
