@@ -18,7 +18,7 @@ import (
 
 type userWindowsArtifact struct {
 	URL, SHA, Archive, Prefix string
-	Bound, Size              int64
+	Bound, Size               int64
 }
 
 var userWindowsArtifacts = []userWindowsArtifact{

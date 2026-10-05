@@ -83,6 +83,7 @@ func RunShell(args []string, stdout io.Writer) error {
 		_, err = fmt.Fprintf(stdout, "Confirmation: %s\nCommands: %s, %s\n", token, filepath.Join(req.Destination, "bin/gentle-shell.cmd"), filepath.Join(req.Destination, "bin/pi.cmd"))
 		return err
 	}
+	// guard:population windows-separate-confirmation fail-closed: legitimate explicit installations carry the current token from the owned physical selection; missing or mismatched confirmations remain excluded without starting a worker
 	if req.Confirmation != token {
 		return errors.New("inspect the physical selection first with --inspect, then pass its --confirm SHA256; run gentle-ai shell install --help for selection flags or gentle-ai shell install for interactive review")
 	}

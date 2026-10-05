@@ -161,7 +161,13 @@ func userWindowsWrite(path string, data []byte) error {
 }
 
 func userWindowsRead(path string, bound int64) ([]byte, error) {
-	before, err := userWindowsIdentity(path, true)
+	return userWindowsReadTrusted(path, bound, true)
+}
+
+// The currently invoked installer image may be installed by an OS custodian.
+// Owned installation data always requires the stricter current-SID selection.
+func userWindowsReadTrusted(path string, bound int64, selected bool) ([]byte, error) {
+	before, err := userWindowsIdentity(path, selected)
 	if err != nil {
 		return nil, err
 	}
@@ -171,7 +177,7 @@ func userWindowsRead(path string, bound int64) ([]byte, error) {
 	}
 	data, readErr := io.ReadAll(io.LimitReader(file, bound+1))
 	closeErr := file.Close()
-	after, identityErr := userWindowsIdentity(path, true)
+	after, identityErr := userWindowsIdentity(path, selected)
 	if err := errors.Join(readErr, closeErr, identityErr); err != nil {
 		return nil, err
 	}

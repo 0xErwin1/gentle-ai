@@ -65,6 +65,7 @@ diagnostic() {
 go mod download > /tmp/check.log 2>&1 || { diagnostic; stop 'authenticated module acquisition'; }
 go test -timeout=90s -run '^TestWindowsShellInstall' ./internal/cli > /tmp/check.log 2>&1 || { diagnostic; stop 'portable TUI tests'; }
 GOOS=windows GOARCH=amd64 go test -c -o /tmp/windows-shellinstaller.test.exe ./internal/shellinstaller > /tmp/check.log 2>&1 || { diagnostic; stop 'Windows test compile'; }
+GOOS=windows GOARCH=amd64 go test -c -o /tmp/windows-cli.test.exe ./internal/cli > /tmp/check.log 2>&1 || { diagnostic; stop 'Windows CLI test compile'; }
 GOOS=windows GOARCH=amd64 go build -o /tmp/windows-gentle-ai.exe ./cmd/gentle-ai > /tmp/check.log 2>&1 || { diagnostic; stop 'Windows product compile'; }
 node --check scripts/provision-gentle-shell-windows.mjs > /tmp/check.log 2>&1 || { diagnostic; stop 'JavaScript syntax'; }
 printf 'PASS: bounded Linux Guest syntax/Windows crosscompile only; normalized formatted source, NOT Win11 runtime qualification or deliverability.\n'

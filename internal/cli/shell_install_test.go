@@ -34,14 +34,22 @@ func TestWindowsShellInstallReusesEditReviewAndSettledCancellation(t *testing.T)
 	m := shellInstallModel{ctx: ctx, cancel: cancel, stdout: io.Discard, req: shellinstaller.UserInstallRequest{Mode: "separate"}}
 	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("C:\\owned\\shell")})
 	m = next.(shellInstallModel)
-	if cmd != nil || m.review || m.busy { t.Fatal("typing performed installation effects") }
+	if cmd != nil || m.review || m.busy {
+		t.Fatal("typing performed installation effects")
+	}
 	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab})
 	next, _ = next.(shellInstallModel).Update(tea.KeyMsg{Type: tea.KeyRight})
 	m = next.(shellInstallModel)
-	if m.req.Mode != "separate" || !strings.Contains(m.View(), "gentle-shell.cmd") || !strings.Contains(m.View(), "pi.cmd") { t.Fatal("Windows offered unsupported Shared or hid owned commands") }
+	if m.req.Mode != "separate" || !strings.Contains(m.View(), "gentle-shell.cmd") || !strings.Contains(m.View(), "pi.cmd") {
+		t.Fatal("Windows offered unsupported Shared or hid owned commands")
+	}
 	m.busy = true
 	next, cmd = m.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
-	if cmd != nil || ctx.Err() == nil || !next.(shellInstallModel).busy { t.Fatal("cancel abandoned the installer worker") }
+	if cmd != nil || ctx.Err() == nil || !next.(shellInstallModel).busy {
+		t.Fatal("cancel abandoned the installer worker")
+	}
 	next, cmd = next.(shellInstallModel).Update(shellInstallDone{context.Canceled})
-	if cmd == nil || next.(shellInstallModel).busy || next.(shellInstallModel).err != context.Canceled { t.Fatal("cancellation did not await actual completion") }
+	if cmd == nil || next.(shellInstallModel).busy || next.(shellInstallModel).err != context.Canceled {
+		t.Fatal("cancellation did not await actual completion")
+	}
 }

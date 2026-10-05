@@ -24,7 +24,7 @@ const userWindowsSchema = "gentle-shell-windows-separate/v1"
 
 type userWindowsManifest struct {
 	Schema, Destination, SID, Identity, SupervisorSHA string
-	PrefixIdentity, AgentIdentity                    string
+	PrefixIdentity, AgentIdentity                     string
 }
 
 func UserKernelCheck() error {
@@ -254,7 +254,9 @@ func RunUserInstall(ctx context.Context, req UserInstallRequest) (result UserIns
 		}
 		if i < 2 {
 			directory := "node"
-			if i == 1 { directory = "go" }
+			if i == 1 {
+				directory = "go"
+			}
 			if _, err := userWindowsZIP(ctx, data, artifact, filepath.Join(stage, "runtime", directory), ""); err != nil {
 				return result, err
 			}
@@ -275,35 +277,67 @@ func RunUserInstall(ctx context.Context, req UserInstallRequest) (result UserIns
 		}
 	}
 	helper, err := assets.ReadWindowsUserHelper()
-	if err != nil { return result, err }
-	if err := userWindowsWrite(filepath.Join(stage, "provision.mjs"), helper); err != nil { return result, err }
-	lockHelper, err := assets.ReadPrivateHelper("complete-generated-lock-sri.mjs")
-	if err != nil { return result, err }
-	if err := userWindowsWrite(filepath.Join(stage, "complete-generated-lock-sri.mjs"), lockHelper); err != nil { return result, err }
-	self, err := os.Executable()
-	if err != nil { return result, err }
-	image, err := userWindowsRead(self, 256<<20)
-	if err != nil { return result, err }
-	if err := userWindowsWrite(filepath.Join(stage, "supervisor.exe"), image); err != nil { return result, err }
-	if err := userWindowsProvision(ctx, stage, "install", io.Discard, io.Discard); err != nil { return result, err }
-	for _, product := range []string{"pi", "gentle-shell"} {
-		if err := userWindowsWrite(filepath.Join(stage, "bin", product+".cmd"), userWindowsBinding(req.Destination, product)); err != nil { return result, err }
+	if err != nil {
+		return result, err
 	}
-	if err := userWindowsInventory(stage); err != nil { return result, err }
+	if err := userWindowsWrite(filepath.Join(stage, "provision.mjs"), helper); err != nil {
+		return result, err
+	}
+	lockHelper, err := assets.ReadPrivateHelper("complete-generated-lock-sri.mjs")
+	if err != nil {
+		return result, err
+	}
+	if err := userWindowsWrite(filepath.Join(stage, "complete-generated-lock-sri.mjs"), lockHelper); err != nil {
+		return result, err
+	}
+	self, err := os.Executable()
+	if err != nil {
+		return result, err
+	}
+	image, err := userWindowsReadTrusted(self, 256<<20, false)
+	if err != nil {
+		return result, err
+	}
+	if err := userWindowsWrite(filepath.Join(stage, "supervisor.exe"), image); err != nil {
+		return result, err
+	}
+	if err := userWindowsProvision(ctx, stage, "install", io.Discard, io.Discard); err != nil {
+		return result, err
+	}
+	for _, product := range []string{"pi", "gentle-shell"} {
+		if err := userWindowsWrite(filepath.Join(stage, "bin", product+".cmd"), userWindowsBinding(req.Destination, product)); err != nil {
+			return result, err
+		}
+	}
+	if err := userWindowsInventory(stage); err != nil {
+		return result, err
+	}
 	observed, err := InspectUserInstall(req)
-	if err != nil || observed != req.Confirmation { return result, errors.Join(err, errors.New("Windows selection changed before publication")) }
+	if err != nil || observed != req.Confirmation {
+		return result, errors.Join(err, errors.New("Windows selection changed before publication"))
+	}
 	prefixID, err := userWindowsIdentity(filepath.Join(stage, "prefix"), true)
-	if err != nil { return result, err }
+	if err != nil {
+		return result, err
+	}
 	agentID, err := userWindowsIdentity(filepath.Join(stage, "agent"), true)
-	if err != nil { return result, err }
+	if err != nil {
+		return result, err
+	}
 	sid, err := userWindowsSID()
-	if err != nil { return result, err }
+	if err != nil {
+		return result, err
+	}
 	manifest := userWindowsManifest{userWindowsSchema, req.Destination, sid, stageIdentity, userWindowsSHA(image), prefixID, agentID}
 	encoded, _ := json.Marshal(manifest)
-	if err := userWindowsWrite(filepath.Join(stage, "manifest.json"), append(encoded, '\n')); err != nil { return result, err }
+	if err := userWindowsWrite(filepath.Join(stage, "manifest.json"), append(encoded, '\n')); err != nil {
+		return result, err
+	}
 	from, _ := windows.UTF16PtrFromString(stage)
 	to, _ := windows.UTF16PtrFromString(req.Destination)
-	if err := windows.MoveFileEx(from, to, windows.MOVEFILE_WRITE_THROUGH); err != nil { return result, err } // No replace-existing flag.
+	if err := windows.MoveFileEx(from, to, windows.MOVEFILE_WRITE_THROUGH); err != nil {
+		return result, err
+	} // No replace-existing flag.
 	published = true
 	if err := userWindowsVerify(ctx, req.Destination, io.Discard, io.Discard); err != nil {
 		return result, errors.Join(err, errors.New("published Windows installation remains unqualified; preserved, no success reported"))

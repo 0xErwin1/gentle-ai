@@ -8,6 +8,7 @@ import (
 )
 
 // Stock Windows composition reuses the bounded portable SRI completion helper.
+//
 //go:embed provision-gentle-shell-windows.mjs complete-generated-lock-sri.mjs
 var windowsUserHelpers embed.FS
 
