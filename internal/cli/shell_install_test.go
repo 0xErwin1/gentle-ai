@@ -63,7 +63,14 @@ func TestShellInstallConfirmationRefusalHasNoEffects(t *testing.T) {
 	if runtime.GOOS != "linux" || runtime.GOARCH != "amd64" {
 		t.Skip("physical user selection is Linux amd64 only")
 	}
-	target := filepath.Join(t.TempDir(), "shell")
+	parent := t.TempDir()
+	if err := os.Chmod(parent, 0700); err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(parent, "shell")
+	if _, err := shellinstaller.InspectUserInstall(shellinstaller.UserInstallRequest{Destination: target, Mode: "separate"}); err != nil {
+		t.Fatalf("invalid physical selection fixture: %v", err)
+	}
 	err := RunShell([]string{"install", "--target", target, "--confirm", "not-confirmed"}, io.Discard)
 	if err == nil || !strings.Contains(err.Error(), "gentle-ai shell install --help") || !strings.Contains(err.Error(), "--inspect") || !strings.Contains(err.Error(), "--confirm") {
 		t.Fatalf("unconfirmed selection lacks the safe continuation: %v", err)
