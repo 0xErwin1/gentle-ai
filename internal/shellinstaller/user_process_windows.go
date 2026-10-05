@@ -91,7 +91,7 @@ func userWindowsStart(command *exec.Cmd) (func() error, error) {
 	refuse := func(cause error) (func() error, error) {
 		stop := release()
 		kill := command.Process.Kill() // Covers failure before job assignment.
-		wait := command.Wait()        // Never leave a suspended child unreaped.
+		wait := command.Wait()         // Never leave a suspended child unreaped.
 		return nil, errors.Join(cause, stop, kill, wait)
 	}
 	process, err := windows.OpenProcess(windows.PROCESS_SET_QUOTA|windows.PROCESS_TERMINATE|windows.PROCESS_SUSPEND_RESUME, false, uint32(command.Process.Pid))
