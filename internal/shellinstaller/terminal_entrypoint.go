@@ -17,7 +17,7 @@ type ExistingPiIntent string
 
 const (
 	ExistingPiReplaceAfterBoundConsent ExistingPiIntent = "replace-after-instance-consent-and-rollback"
-	ExistingPiPreserve                  ExistingPiIntent = "leave-existing-pi-untouched"
+	ExistingPiPreserve                 ExistingPiIntent = "leave-existing-pi-untouched"
 )
 
 // PiInstallationIntent describes where a future Pi would live, not an install.

@@ -46,11 +46,11 @@ func TestProfile(t *testing.T) {
 
 func TestProfileCommandModeIntentIsNotInstallAuthority(t *testing.T) {
 	cases := []struct {
-		name         string
-		channel      Channel
-		entryPoint   TerminalEntryPoint
-		wantEffect   CommandModeEffect
-		validateOK   bool
+		name       string
+		channel    Channel
+		entryPoint TerminalEntryPoint
+		wantEffect CommandModeEffect
+		validateOK bool
 	}{
 		{"Stable Pi", ChannelStable, TerminalEntryPointPi,
 			CommandModeEffect{ExistingPiReplaceAfterBoundConsent, PiInstallationReplaceExisting}, true},

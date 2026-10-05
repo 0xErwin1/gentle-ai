@@ -35,8 +35,8 @@ func TestSeparateBoundaryDefaultAndBothChannelsRemainRefused(t *testing.T) {
 			}
 			proposed := assertSeparateRefusal(t, profile, SeparateBoundarySelectors{
 				ProposedExecutable: "/opt/gentle-shell/bin/pi",
-				ProposedHome: "/opt/gentle-shell/home",
-				ProposedLoad: "/opt/gentle-shell/load",
+				ProposedHome:       "/opt/gentle-shell/home",
+				ProposedLoad:       "/opt/gentle-shell/load",
 			})
 			if proposed.Requirements != base.Requirements || proposed.Rejected != 0 {
 				t.Fatalf("absolute proposal manufactured evidence: %#v", proposed)
@@ -122,17 +122,17 @@ func TestSeparateBoundaryRefusesEachClaimedPositiveIndependently(t *testing.T) {
 func TestSeparateBoundaryNeverTrustsClaimedVerificationOrApproval(t *testing.T) {
 	profile := Profile{Channel: ChannelMain, TerminalEntryPoint: TerminalEntryPointGentleShell}
 	selectors := SeparateBoundarySelectors{
-		ProposedExecutable: "/isolated/bin/gentle-shell",
-		ProposedHome: "/isolated/home",
-		ProposedLoad: "/isolated/modules",
+		ProposedExecutable:        "/isolated/bin/gentle-shell",
+		ProposedHome:              "/isolated/home",
+		ProposedLoad:              "/isolated/modules",
 		ClaimedVerifiedExecutable: "verified",
-		ClaimedVerifiedHome: "verified",
-		ClaimedVerifiedLoad: "verified",
-		ClaimedApproved: true,
-		ClaimedReady: true,
-		ClaimedExecutable: true,
-		ResolverEnvGentleShellPi: true,
-		InheritedPiCodingAgentDir: true,
+		ClaimedVerifiedHome:       "verified",
+		ClaimedVerifiedLoad:       "verified",
+		ClaimedApproved:           true,
+		ClaimedReady:              true,
+		ClaimedExecutable:         true,
+		ResolverEnvGentleShellPi:   true,
+		InheritedPiCodingAgentDir:  true,
 	}
 	result := assertSeparateRefusal(t, profile, selectors)
 	want := RejectSeparateClaimedAuthority | RejectSeparateResolverEnv | RejectSeparateInheritedPiDir

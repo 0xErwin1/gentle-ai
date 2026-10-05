@@ -132,11 +132,11 @@ func CompareGentleShellStableClaim(selector GentleShellSourceSelection,
 // GentleShellArchiveComparison contains measured DATA only. Matched is NOT a
 // signature, publisher authentication, consent or permission to install.
 type GentleShellArchiveComparison struct {
-	Kind          string
-	ByteLength    int64
+	Kind           string
+	ByteLength     int64
 	MeasuredSHA256 string
-	MeasuredSRI   string
-	Matched       bool
+	MeasuredSRI    string
+	Matched        bool
 }
 
 // CompareGentleShellStableArchive reads at most expected bytes + ONE probe

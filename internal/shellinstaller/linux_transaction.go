@@ -84,9 +84,9 @@ type LinuxTransactionData struct {
 // LinuxJournalDemand describes what a future host must validate/persist; it
 // does not grant permission to perform an effect, or attest that one occurred.
 type LinuxJournalDemand struct {
-	Kind                    string
-	Action                  LinuxJournalAction
-	RequiresProtectedHost   bool
+	Kind                     string
+	Action                   LinuxJournalAction
+	RequiresProtectedHost    bool
 	RequiresPersistedJournal bool
 }
 
@@ -193,12 +193,12 @@ const (
 
 // An inverse is a conditional selection, not deletion or restoration.
 type LinuxInverseSelection struct {
-	Action              LinuxInverseAction
-	JournalAction       LinuxJournalAction
-	ExpectedPostimage   LinuxJournalObject // exact CAS against live host object
-	RestorePreimage     LinuxJournalObject // empty for separate create-only mode
-	CreatedClaimSHA256  string // unverified, separately authenticated by host
-	ExistingInstanceID  string
+	Action             LinuxInverseAction
+	JournalAction      LinuxJournalAction
+	ExpectedPostimage  LinuxJournalObject // exact CAS against live host object
+	RestorePreimage    LinuxJournalObject // empty for separate create-only mode
+	CreatedClaimSHA256 string             // unverified, separately authenticated by host
+	ExistingInstanceID string
 }
 
 type LinuxInversePlan struct {

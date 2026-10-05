@@ -4,7 +4,7 @@ package shellinstaller
 // launcher, instance, authorization or filesystem observations by this package.
 // Presence is explicit so an empty observed value cannot bypass a rejection.
 type SeparateBoundarySelectors struct {
-	ResolverEnvGentleShellPi          bool // GENTLE_SHELL_PI from the 3.7.0 resolver.
+	ResolverEnvGentleShellPi         bool // GENTLE_SHELL_PI from the 3.7.0 resolver.
 	OptionalPeerWithoutPhysicalProof bool
 	PathFallback                     bool
 	LinkFlag                         bool
@@ -12,19 +12,19 @@ type SeparateBoundarySelectors struct {
 	ExplicitPath                     bool
 	HomeFlag                         bool
 	GentleShellHomeEnv               bool
-	InheritedPiCodingAgentDir       bool
+	InheritedPiCodingAgentDir        bool
 	UnresolvedDefaultHome            bool
-	LifecyclePostinstall            bool
-	LauncherAutoProvision           bool
-	ProposedExecutable              string
-	ProposedHome                    string
-	ProposedLoad                    string
-	ClaimedVerifiedExecutable       string
-	ClaimedVerifiedHome             string
-	ClaimedVerifiedLoad             string
-	ClaimedApproved                 bool
-	ClaimedReady                    bool
-	ClaimedExecutable               bool
+	LifecyclePostinstall             bool
+	LauncherAutoProvision            bool
+	ProposedExecutable               string
+	ProposedHome                     string
+	ProposedLoad                     string
+	ClaimedVerifiedExecutable        string
+	ClaimedVerifiedHome              string
+	ClaimedVerifiedLoad              string
+	ClaimedApproved                  bool
+	ClaimedReady                     bool
+	ClaimedExecutable                bool
 }
 
 // Every bit is an observed reason to refuse, not evidence when absent.
@@ -51,14 +51,14 @@ const (
 type SeparateRequirement string
 
 const (
-	RequireSeparateSource          SeparateRequirement = "independent-channel-source"
-	RequireSeparatePhysicalPeer    SeparateRequirement = "physical-instance-proof"
-	RequireSeparateBoundConsent    SeparateRequirement = "instance-bound-consent"
-	RequireSeparateExecutable      SeparateRequirement = "independent-dedicated-executable"
-	RequireSeparateHome            SeparateRequirement = "independent-dedicated-home"
-	RequireSeparateLoad            SeparateRequirement = "independent-load-witness"
-	RequireSeparateRollback        SeparateRequirement = "rollback-and-quarantine"
-	RequireSeparateReady           SeparateRequirement = "independent-ready-witness"
+	RequireSeparateSource       SeparateRequirement = "independent-channel-source"
+	RequireSeparatePhysicalPeer SeparateRequirement = "physical-instance-proof"
+	RequireSeparateBoundConsent SeparateRequirement = "instance-bound-consent"
+	RequireSeparateExecutable   SeparateRequirement = "independent-dedicated-executable"
+	RequireSeparateHome         SeparateRequirement = "independent-dedicated-home"
+	RequireSeparateLoad         SeparateRequirement = "independent-load-witness"
+	RequireSeparateRollback     SeparateRequirement = "rollback-and-quarantine"
+	RequireSeparateReady        SeparateRequirement = "independent-ready-witness"
 )
 
 type SeparateBoundaryRefusalKind string

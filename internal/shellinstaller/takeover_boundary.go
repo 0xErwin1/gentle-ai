@@ -3,19 +3,19 @@ package shellinstaller
 // PiTakeoverClaims are caller-authored assertions, never physical observations,
 // consent, or verified rollback evidence. Even an empty proof list is a claim.
 type PiTakeoverClaims struct {
-	ExistingExecutable     string
-	ExistingHome           string
-	PhysicalInstanceID     string
-	SourceDigest           string
-	ExactActions           string
-	ConsentBinding        string
-	RollbackSnapshot      string
-	InstalledBytes        string
-	ExecutedLoad          string
-	ClaimedMissingProofs  []string
-	ClaimedApproved       bool
-	ClaimedReady          bool
-	ClaimedExecutable     bool
+	ExistingExecutable   string
+	ExistingHome         string
+	PhysicalInstanceID   string
+	SourceDigest         string
+	ExactActions         string
+	ConsentBinding       string
+	RollbackSnapshot     string
+	InstalledBytes       string
+	ExecutedLoad         string
+	ClaimedMissingProofs []string
+	ClaimedApproved      bool
+	ClaimedReady         bool
+	ClaimedExecutable    bool
 }
 
 type PiTakeoverReject uint8
@@ -31,14 +31,14 @@ type PiTakeoverRequirement string
 
 const (
 	RequireTakeoverSourceAndToolchain PiTakeoverRequirement = "independent-source-and-toolchain"
-	RequireTakeoverPhysicalInstance  PiTakeoverRequirement = "existing-physical-pi-instance"
-	RequireTakeoverExactActions      PiTakeoverRequirement = "exact-action-scope"
-	RequireTakeoverBoundConsent      PiTakeoverRequirement = "fresh-instance-source-actions-rollback-bound-consent"
-	RequireTakeoverRollback          PiTakeoverRequirement = "audited-restorable-snapshot"
-	RequireTakeoverDrift             PiTakeoverRequirement = "pre-apply-instance-and-source-drift-recheck"
-	RequireTakeoverInstalledBytes    PiTakeoverRequirement = "installed-byte-identity"
-	RequireTakeoverExecutedLoad      PiTakeoverRequirement = "executed-byte-and-load-witness"
-	RequireTakeoverReady             PiTakeoverRequirement = "independent-ready-verification"
+	RequireTakeoverPhysicalInstance   PiTakeoverRequirement = "existing-physical-pi-instance"
+	RequireTakeoverExactActions       PiTakeoverRequirement = "exact-action-scope"
+	RequireTakeoverBoundConsent       PiTakeoverRequirement = "fresh-instance-source-actions-rollback-bound-consent"
+	RequireTakeoverRollback           PiTakeoverRequirement = "audited-restorable-snapshot"
+	RequireTakeoverDrift              PiTakeoverRequirement = "pre-apply-instance-and-source-drift-recheck"
+	RequireTakeoverInstalledBytes     PiTakeoverRequirement = "installed-byte-identity"
+	RequireTakeoverExecutedLoad       PiTakeoverRequirement = "executed-byte-and-load-witness"
+	RequireTakeoverReady              PiTakeoverRequirement = "independent-ready-verification"
 )
 
 type PiTakeoverRefusalKind string

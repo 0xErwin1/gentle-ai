@@ -39,7 +39,7 @@ FAULT_RELEASE = threading.Event()
 CACHE = {}
 CACHE_BYTES = 0
 CACHE_LOCK = threading.Lock()
-REQUEST_ORIGINS = []
+REQUESTS = []
 PUBLIC_IPS = {}
 ALLOW = {'registry.npmjs.org', 'nodejs.org', 'github.com', 'release-assets.githubusercontent.com', 'pi.dev'}
 NODE_SHA = '783130984963db7ba9cbd01089eaf2c2efb055c7c1693c943174b967b3050cb8'
@@ -187,8 +187,8 @@ class Mirror(http.server.BaseHTTPRequestHandler):
         try:
             host = self.headers.get('Host', '').split(':')[0].lower()
             require(host in ALLOW and len(self.path) <= 4096, 'fixture request origin/path')
-            require(len(REQUEST_ORIGINS) < 4096, 'fixture request observation bound')
-            REQUEST_ORIGINS.append(host)
+            require(len(REQUESTS) < 4096, 'fixture request observation bound')
+            REQUESTS.append((host, hashlib.sha256(self.path.encode()).hexdigest()))
             if host == 'nodejs.org':
                 require(self.path == '/dist/v24.18.0/node-v24.18.0-linux-x64.tar.gz', 'Node path')
                 raw = (FIXTURE / 'node.tgz').read_bytes()
@@ -334,7 +334,7 @@ def publication_fault(target, shared):
 
 def pty_status(binding, project, command=None, extra=None, installer=None, cancel_installer=False, opening_only=False):
     project_before_entries = []
-    project_before, requests_before = physical_inventory(project, project_before_entries), len(REQUEST_ORIGINS)
+    project_before, requests_before = physical_inventory(project, project_before_entries), len(REQUESTS)
     master, slave = os.openpty()
     fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack('HHHH', 18, 72, 0, 0))
 
@@ -427,7 +427,16 @@ def pty_status(binding, project, command=None, extra=None, installer=None, cance
                                          'wholeEntries': entries if len(names) <= 1024 else 'withheld'}
         require(project_after == project_before, 'fixture blank caller project changed during launch')
         if command is None:
-            require(set(REQUEST_ORIGINS[requests_before:]) <= {'pi.dev'}, 'ordinary launch requested installer/package artifacts')
+            requests = REQUESTS[requests_before:]
+            observed = sorted(set(requests))
+            origins = {host for host, _ in observed}
+            if not origins <= {'pi.dev'}:
+                data = json.dumps(observed, separators=(',', ':')).encode()
+                REPORT['ordinaryRequestFailure'] = {'requestCount': len(requests), 'uniqueCount': len(observed),
+                                                    'fields': ['origin', 'requestTargetSHA256'], 'bytes': len(data),
+                                                    'sha256': hashlib.sha256(data).hexdigest(),
+                                                    'wholeUnique': observed if len(data) <= 1024 else 'withheld'}
+            require(origins <= {'pi.dev'}, 'ordinary launch requested installer/package artifacts')
             REPORT['ordinaryStartup'] = 'blank caller project preserved; fixture-origin installer/package requests absent (not whole-network attestation)'
         REPORT.setdefault('pty', []).append({'binding': binding.name, 'rawBytes': len(raw), 'rawSHA256': hashlib.sha256(raw).hexdigest(), 'nulBytes': raw.count(0), 'GentleRegistered': installer is None and not opening_only, 'GentleUIOpened': opening_only, 'foregroundCWD': observed_cwd, 'callerForegroundRestored': True})
     except Exception:
@@ -846,6 +855,8 @@ except Exception as error:
         message['ptyFailure'] = REPORT['ptyFailure']
     if 'projectMutation' in REPORT:
         message['projectMutation'] = REPORT['projectMutation']
+    if 'ordinaryRequestFailure' in REPORT:
+        message['ordinaryRequestFailure'] = REPORT['ordinaryRequestFailure']
     if 'nativeBackend' in REPORT:
         message['nativeBackend'] = REPORT['nativeBackend']
     if 'alanBackendProbe' in REPORT:
