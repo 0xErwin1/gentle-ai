@@ -3,13 +3,15 @@ package agentguidance
 import (
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"unicode"
 
-	"github.com/gentleman-programming/gentle-ai/v3/internal/agents/capabilitymanifest"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/catalog"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/capabilitymanifest"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/catalog"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
 )
 
 func TestRoutingIncludesApplicableTestFirstPolicy(t *testing.T) {
@@ -29,10 +31,11 @@ func TestRoutingIncludesApplicableTestFirstPolicy(t *testing.T) {
 	}
 }
 
-// supportedAgentCount guards the catalog itself: routing is unconditional for
-// every supported adapter, so a silently shrinking catalog must fail here
-// instead of quietly reducing coverage of the table-driven tests below.
-const supportedAgentCount = 16
+// supportedAgentCount guards the catalog itself: routing renders for every
+// supported adapter (including the catalog-only Conductor, which simply never
+// gets written), so a silently shrinking catalog must fail here instead of
+// quietly reducing coverage of the table-driven tests below.
+const supportedAgentCount = 17
 
 // retiredRemoteControlPlaneVocabulary is the wire and ceremony vocabulary the
 // organic routing projection must never carry. Rendering any of these would
@@ -116,9 +119,13 @@ func TestRenderRoutingSucceedsForEverySupportedAgent(t *testing.T) {
 			// The rendered thresholds must come from the canonical manifest, not
 			// from prose invented by the renderer.
 			for _, want := range []string{
-				fmt.Sprintf("%d–%d files", routing.DirectInline.MinUnderstandingFiles, routing.DirectInline.MaxUnderstandingFiles),
-				fmt.Sprintf("%d+ files", routing.DelegatedDirect.MappingMinUnderstandingFiles),
-				fmt.Sprintf("%d+ non-trivial files", routing.DelegatedDirect.WriterMinNonTrivialFiles),
+				fmt.Sprintf("one parallel batch (%d maximum)", routing.DirectInline.MaxEvidenceBatches),
+				fmt.Sprintf("at most %d calls", routing.DirectInline.MaxEvidenceCalls),
+				fmt.Sprintf("approximately %dk tokens", routing.DirectInline.ApproxEvidenceTokens/1000),
+				fmt.Sprintf("more than approximately %d sequential lookups", routing.DelegatedDirect.ApproxSequentialLookupLimit),
+				fmt.Sprintf("at most approximately %dk tokens", routing.DelegatedDirect.ApproxHandoffTokens/1000),
+				fmt.Sprintf("one parent spot check (%d maximum)", routing.DelegatedDirect.MaxParentSpotChecks),
+				fmt.Sprintf("approximately %dk parent-context tokens", routing.DelegatedDirect.ApproxParentContextTokens/1000),
 			} {
 				if !strings.Contains(rendered, want) {
 					t.Fatalf("RenderRouting(%q) is missing canonical threshold %q:\n%s", agent.ID, want, rendered)
@@ -137,11 +144,11 @@ func TestRenderRoutingOrganicTaskContinuity(t *testing.T) {
 		name    string
 		clauses []string
 	}{
-		{"authorized substantial work", []string{
+		{"authorized large work", []string{
 			"Explore the existing code and requirements first",
-			"For substantial authorized implementation, automatically create",
+			"For large authorized implementation, automatically create",
 			"without a task or storage permission prompt",
-			"Small, understood work creates no durable task artifacts",
+			"small work creates no durable task artifacts",
 		}},
 		{"optional research within ODD", []string{
 			"Recommend optional research only for a named uncertainty",
@@ -171,20 +178,41 @@ func TestRenderRoutingOrganicTaskContinuity(t *testing.T) {
 			"odd/<feature-name>/tasks",
 			"current project",
 			"full current document and repository-relative file locator",
-			"stable task IDs, authorized scope, acceptance criteria, and applicable checks",
+			"stable task IDs",
+			"authorized scope, acceptance criteria, and applicable checks",
 			"Reuse the same feature identity; never overwrite another feature",
 		}},
 		{"unified intent and implementation handoff", []string{
 			"one feature document, not a separate plan file or topic",
-			"objective, problem, why, scope, constraints",
-			"progress, verification evidence, and next step",
-			"concise rationale for meaningful accepted changes",
-			"Routine corrections stay with their tasks; no exhaustive decision journal",
+			"verification evidence, progress, and next step",
+			"rationale for meaningful accepted changes",
+			"Routine corrections stay brief; no exhaustive decision journal",
 			"Accepted user, review, or verification changes",
 			"add genuinely new tasks or reopen invalidated items with a reason",
 			"Findings alone never authorize scope expansion or automatic acceptance",
 			"Before implementation or resume, the parent reads both the actual file and full observation",
-			"passes the locator and relevant context; workers read the document before edits",
+			"passes the locator, task IDs, and linked `S#`; workers read the document until `## Log` before edits",
+		}},
+		// Gentleman-Programming/gentle-shell#1713: handoffs paraphrased the user's
+		// request and the feature document summarized it. The document is now the
+		// specification subagents read by reference, in a fixed order.
+		{"feature document is the verbatim specification read by reference", []string{
+			"specification subagents read by reference",
+			"stable content first and the growing log last",
+			"`## Specs`",
+			"`## Tasks`",
+			"`## Log`",
+			"exact strings, error messages, and examples verbatim",
+			"never summarize or reword those fragments",
+			"Do not add requirements the user never asked for",
+			"`L1` holds the user's original request verbatim",
+			"rewrites only the affected `S#`, and reopens only its linked task",
+			"Hand off by reference, never by paraphrase",
+			"read until `## Log`",
+			"Without a feature document, include the user's request verbatim",
+			"a verdict per `S#`",
+			"runs the spec's examples the parent authorized, against isolated state when they mutate data",
+			"reproduce it before deciding it already works",
 		}},
 		{"default applicable test-first policy", []string{
 			"relevant runnable deterministic test and clear expected outcome",
@@ -275,7 +303,7 @@ func TestRenderRoutingOrganicTaskContinuity(t *testing.T) {
 			"Medium/high relays the existing candidate consent",
 			"native review runs only on grant",
 			"a decline continues under ordinary policy",
-			"Do not substitute model judgment, task size, or defect severity for prospective candidate risk",
+			"Do not substitute model judgment, task size, or defect severity to lower prospective candidate risk",
 			"never infer low risk from a failed assessment",
 			"When RDD is disabled, do not start or prompt for RDD; ordinary checks remain",
 		}},
@@ -332,7 +360,7 @@ func TestRenderRoutingClosesEachTaskWithAWorkUnitCommitAndReviewsIt(t *testing.T
 			"tests and docs alongside the behavior",
 			"using a Conventional Commit message",
 			"record the commit identity in the feature document as evidence",
-			"Work-unit commits on the feature branch are part of authorized substantial ODD implementation",
+			"Work-unit commits on the feature branch are part of authorized large ODD implementation",
 			"push, pull request creation, and merge remain the user's decisions under ordinary repository policy",
 		}},
 		{"delivery strategy vocabulary and skill resolution", []string{
@@ -386,9 +414,9 @@ func TestRenderRoutingClosesEachTaskWithAWorkUnitCommitAndReviewsIt(t *testing.T
 		{"verify each work unit by risk", []string{
 			"Verification covers a work-unit commit or a PR slice, never a TODO checkbox and never the accumulated feature branch.",
 			"Verify each work-unit commit in proportion to its risk",
-			"an added independent verifier for high-risk or unclear changes",
+			"an added independent verifier for high-risk changes by the Task Size list",
 			"Record per task the risk tier you applied and the checks you observed",
-			"treat an unclear change as high risk",
+			"count an unclear change as high only when a bounded look cannot tell whether the list applies",
 		}},
 	}
 
@@ -523,6 +551,13 @@ func TestRenderRoutingObeysTheUserOnReviewMode(t *testing.T) {
 	}
 }
 
+func routingVocabularyForGuard(block, forbidden string) string {
+	if forbidden == "token" {
+		return routingBlockWithoutEvidenceSizes(block)
+	}
+	return block
+}
+
 func TestRenderRoutingOmitsRetiredRemoteControlPlaneVocabulary(t *testing.T) {
 	t.Parallel()
 
@@ -536,7 +571,9 @@ func TestRenderRoutingOmitsRetiredRemoteControlPlaneVocabulary(t *testing.T) {
 				if err != nil {
 					t.Fatalf("RenderRouting(%q) error = %v", agent.ID, err)
 				}
-				if strings.Contains(strings.ToLower(rendered), needle) {
+				// Evidence sizes are not retired remote authorization tokens.
+				checked := routingVocabularyForGuard(rendered, forbidden)
+				if strings.Contains(strings.ToLower(checked), needle) {
 					t.Fatalf("RenderRouting(%q) leaks retired vocabulary %q:\n%s", agent.ID, forbidden, rendered)
 				}
 			}
@@ -643,7 +680,7 @@ func TestRenderRoutingOpensWithTheODDProtocol(t *testing.T) {
 			}
 
 			for _, want := range []string{
-				"two or more meaningful implementation steps",
+				"Size the task by the Task Size section below",
 				"before the first source write",
 				"Tell the user in one line which feature document was created and how many tasks it holds",
 				"Never describe this workflow only when asked about it: run it.",
@@ -673,8 +710,6 @@ func TestRenderRoutingOpensWithTheODDProtocol(t *testing.T) {
 func TestRenderRoutingMakesDelegationMandatory(t *testing.T) {
 	t.Parallel()
 
-	routing := capabilitymanifest.CanonicalImplementationRouting()
-
 	for _, agent := range catalog.AllAgents() {
 		t.Run(string(agent.ID), func(t *testing.T) {
 			t.Parallel()
@@ -689,12 +724,11 @@ func TestRenderRoutingMakesDelegationMandatory(t *testing.T) {
 				"These triggers are mandatory, not advisory",
 				"stop and delegate through the runtime's subagent mechanism",
 				"executing past a fired trigger inline is a routing defect",
-				fmt.Sprintf("**Mapping trigger:** when understanding the work requires %d or more files", routing.DelegatedDirect.MappingMinUnderstandingFiles),
-				fmt.Sprintf("**Writer trigger:** when implementation touches %d or more non-trivial files", routing.DelegatedDirect.WriterMinNonTrivialFiles),
-				"A mechanical second-file edit does not fire this trigger solely because an earlier file was touched; count non-trivial files in the current work",
+				"**Mapping trigger:** when understanding exceeds the inline batch budget",
+				"**Writer trigger:** a large task delegates one bounded writer per task; file count never fires this trigger",
 				"**Preparation trigger:**",
 				"**Long-session backstop:**",
-				"pause and delegate the next bounded unit of work",
+				"pause and delegate the next bounded unit",
 				"**Route declaration:**",
 				"record the chosen route per task",
 				"so skipped delegation is observable instead of silent",
@@ -742,4 +776,94 @@ func routingSemantics(rendered string) []string {
 		}
 	}
 	return facts
+}
+
+// The user-facing usage guide describes the same spec-by-reference contract the
+// canonical routing renders, so it cannot drift silently (review follow-up).
+func TestUsageGuideDescribesTheSpecByReferenceFeatureDocument(t *testing.T) {
+	t.Parallel()
+
+	body, err := os.ReadFile(filepath.Join("..", "..", "..", "docs", "usage.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, clause := range []string{
+		"`## Specs`",
+		"`## Tasks`",
+		"`## Log`",
+		"exact strings, error messages, and examples verbatim",
+		"`L1` is your original request verbatim",
+		"A requirement change rewrites only the affected spec and reopens only its task",
+		"never a paraphrase of your request",
+		"runs the spec's examples you authorized, against isolated state when they mutate data",
+		"reproduced before anyone decides it already works",
+	} {
+		if !strings.Contains(string(body), clause) {
+			t.Errorf("docs/usage.md is missing %q", clause)
+		}
+	}
+}
+
+// gentle-shell#1494: task size is decided by understanding, contained risk,
+// and whether the work can be resumed from the diff, never by counting files,
+// commands, fixes, or a requested todo list. Each mechanism turns on only by
+// its own trigger, and the agent may raise assess risk but never lower it.
+func TestRenderRoutingSizesTasksByUnderstandingRiskAndResumability(t *testing.T) {
+	t.Parallel()
+
+	for _, agent := range catalog.AllAgents() {
+		t.Run(string(agent.ID), func(t *testing.T) {
+			t.Parallel()
+
+			rendered, err := RenderRouting(agent.ID)
+			if err != nil {
+				t.Fatalf("RenderRouting(%q) error = %v", agent.ID, err)
+			}
+			for _, want := range []string{
+				"### Task Size",
+				"**Understood**",
+				"no product or design decision is open",
+				"**Contained risk**",
+				"**Resumable from the diff**",
+				"the original request and `git diff` alone",
+				"A task is **large** only when the resume test fails",
+				"The number of files, commands or tests, fixes, or a requested todo list never decides size",
+				"run the focused test and the suite inline, once each",
+				"observe RED inline before the fix",
+				"No explore, worker, or verifier",
+				"**High risk**",
+				"(1) data or irreversible effects",
+				"(6) no test would catch a regression",
+				"only when a bounded look cannot tell whether (1)-(5) apply",
+				"**Ask trigger:**",
+				"**Verification trigger:**",
+				"**Tracking trigger:**",
+				"file count never fires this trigger",
+				"re-evaluate task size",
+			} {
+				if !strings.Contains(rendered, want) {
+					t.Fatalf("RenderRouting(%q) is missing task-size clause %q", agent.ID, want)
+				}
+			}
+			for _, retired := range []string{
+				"two or more meaningful implementation steps",
+				"non-trivial files",
+				"Substantial means coordinated steps",
+			} {
+				if strings.Contains(rendered, retired) {
+					t.Fatalf("RenderRouting(%q) keeps retired count-based sizing %q", agent.ID, retired)
+				}
+			}
+			if model.SupportsReceiptDrivenDevelopment(agent.ID) {
+				for _, want := range []string{
+					"--escalate-item <1-6> --escalate-reason",
+					"never lower it",
+				} {
+					if !strings.Contains(rendered, want) {
+						t.Fatalf("RenderRouting(%q) is missing agent escalation clause %q", agent.ID, want)
+					}
+				}
+			}
+		})
+	}
 }

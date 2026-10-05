@@ -29,6 +29,7 @@ var coreJourneyReviewModes = map[string]ReviewPrecondition{
 	"j14-abandon-needs-a-hand-built-token":                                      reviewOptedIn,
 	"j15-linked-worktree":                                                       reviewOptedIn,
 	"j16-detached-head":                                                         reviewOptedIn,
+	"j1658-native-status-recovery-executes-without-authored-authorization":      reviewOptedIn,
 	"j17-bare-repository":                                                       reviewOptedIn,
 	"j18-space-and-non-ascii-path":                                              reviewOptedIn,
 	"j19-submodule-gitlink":                                                     reviewOptedIn,
@@ -99,6 +100,7 @@ var coreJourneyReviewModes = map[string]ReviewPrecondition{
 	"j123-rejected-provider-validator-starts-fresh-high-risk-review":            reviewOptedIn,
 	"j125-claude-code-stop-hook-reminds-once-per-candidate":                     reviewOptedIn,
 	"j126-selected-untracked-terminal-status-resumes-without-flags":             reviewOptedIn,
+	"j2995-selector-scoped-historical-disposition-quarantine":                   reviewOptedIn,
 }
 
 func declareCoreJourneyReviewModes(journeys []Journey) []Journey {

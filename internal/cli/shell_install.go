@@ -12,7 +12,7 @@ import (
 	"syscall"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/shellinstaller"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/shellinstaller"
 )
 
 const shellInstallHelp = `gentle-ai shell install --target /owned/private-parent/shell --mode separate

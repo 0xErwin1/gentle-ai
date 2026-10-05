@@ -1,6 +1,6 @@
 package cli
 
-import "github.com/gentleman-programming/gentle-ai/v3/internal/shellinstaller"
+import "github.com/gentleman-programming/gentle-ai/v4/internal/shellinstaller"
 
 // ShellCandidateRefusalKind cannot represent an approval or execution state.
 type ShellCandidateRefusalKind string

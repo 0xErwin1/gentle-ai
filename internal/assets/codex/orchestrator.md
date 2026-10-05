@@ -16,7 +16,7 @@ Bind this to the dedicated orchestrator agent or rule only. Do NOT apply it to d
 
 These rules apply to **all non-trivial work**. Delegation is context compression: keep the main conversation thin, delegate heavy reading/writing/testing/review work, and synthesize results for the user.
 
-Crossing a threshold selects **delegated direct** work under ODD. Implementation runs as **direct inline** or **delegated direct**; size, file count, or risk do not create another workflow.
+A fired mechanism trigger selects **delegated direct** work under ODD; task size comes from the Task Size section of the routing block. Implementation runs as **direct inline** or **delegated direct**; size, file count, or risk do not create another workflow.
 
 Core principle: **does this inflate my context without need?** If yes -> delegate. If no -> do it inline.
 
@@ -65,30 +65,34 @@ When it is ours, never offer to switch to, inspect, modify, or directly repair t
 
 | Action | Inline | Delegate |
 |--------|--------|----------|
-| Read to decide/verify (1-3 files) | Yes | No |
-| Read to explore/understand (4+ files) | No | Yes |
-| Read as preparation for writing | No | Yes, together with the write |
-| Write atomic (one file, mechanical, already understood) | Yes | No |
-| Write with analysis (multiple files, new logic) | No | Yes |
+| Decide/verify within the inline evidence budget | Yes, one bounded batch | No |
+| Understanding beyond the inline evidence budget, or long sequential exploration | No | Yes, one read-only explorer, then re-evaluate task size |
+| Read as preparation for a large task's write | No | Yes, together with the write |
+| Write a small task (one understood change, any number of files) | Yes | No |
+| Write a large (tracked) task | No | Yes, one writer per task |
 | Bash for state (`git`, `gh`) | Yes | No |
-| Bash for execution (`test`, `build`, `install`, external tooling) | No | Yes |
+| Focused test and suite of the change being made | Yes, once each | No |
+| High-risk change, or long suites, builds, installs, or external tooling of a large task | No | Yes |
 
 Anti-patterns that always inflate context without need:
 
-- Reading 4+ files to understand the codebase inline -> delegate a narrow exploration.
-- Writing a feature across multiple files inline -> delegate a writer.
-- Running tests/builds/installers inline -> delegate verification when tooling permits.
+- Gathering evidence beyond the inline batch budget -> delegate one read-only explorer.
+- Writing a large (tracked) task inline -> delegate one writer per task.
+- Delegating a small task's focused test or suite -> run it inline; delegate verification only for high-risk changes or a large task's long suites.
 - Reading files as preparation for edits, then editing -> delegate the whole thing together.
 
 #### Mandatory Delegation Triggers
 
 These are parent-orchestrator routing boundaries. Use the smallest useful topology and keep the safety machinery behind the outcome-first interaction. Do not pass these rules to child agents as permission to orchestrate.
 
-1. **Bounded read rule**: read 1–3 files inline to decide or verify.
-2. **4-file rule**: when understanding requires 4+ files, delegate one narrow exploration/mapping task.
-3. **Write rule**: keep one mechanical, already-understood file inline only when it needs no research or unresolved design work; delegate one writer for 2+ non-trivial files.
-4. **Context rule**: delegate reading that prepares a write and broad research/context compression.
+1. **Evidence budget rule**: decide or verify inline with one parallel batch, at most 3 calls and approximately 10k tokens. Use bounded search/line ranges, not whole large files.
+2. **Mapping rule**: understanding that needs more evidence or more than approximately 5 sequential lookups requires one read-only explorer; with its handoff, re-evaluate task size. Return at most approximately 2k tokens with path:line evidence and one parent spot check. Do not reread the entire mapped evidence.
+   - Keep parent bash output bounded to counts, --stat, tail, or summaries. On a large task, delegate long suites and builds; return concise observed results, including failures.
+   - The approximately 150k parent-context backstop is advisory guidance, not mechanically observed or enforced. Pause and delegate the next bounded unit; do not claim runtime telemetry or enforcement.
+3. **Write rule**: a small task's writes stay inline, even across files; a large task delegates one writer per task. File count never fires this rule.
+4. **Context rule**: on a large task, delegate reading that prepares a write and broad research/context compression.
 5. **Per-action rule**: tests, builds, installs, and native review actors may use fresh workers without changing the implementation route.
+6. **Verification rule**: a high-risk change (Task Size list) gets an independent verifier after the change's own checks; otherwise the change's own focused test and suite run inline.
 
 #### Delegated Verification Gate (MANDATORY)
 

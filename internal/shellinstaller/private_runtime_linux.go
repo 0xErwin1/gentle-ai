@@ -26,7 +26,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
-	assets "github.com/gentleman-programming/gentle-ai/v3/scripts"
+	assets "github.com/gentleman-programming/gentle-ai/v4/scripts"
 	"golang.org/x/sys/unix"
 )
 

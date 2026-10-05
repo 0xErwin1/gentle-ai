@@ -23,7 +23,7 @@ The `on` branch below holds only while the native review reaches a terminal outc
 <!-- sdd-orchestrator-section:Delegated Verification Gate (MANDATORY):end -->
 
 <!-- sdd-orchestrator-section:Delegated Verification Gate (MANDATORY) (ODD only):start -->
-Verification of a delegated writer's work is proportionate to the risk of the change, judged from what it touches: **passive** (documentation, images, or comments with no executable effect), **medium** (an ordinary behavior change covered by focused tests), or **high** (security, credentials, data loss, concurrency, migrations, installers, public contracts, or anything unclear). When the tier is unclear, treat the change as high.
+Verification of a delegated writer's work is proportionate to the risk of the change, judged from what it touches: **passive** (documentation, images, or comments with no executable effect), **medium** (an ordinary behavior change covered by focused tests), or **high** (any item of the high-risk list in the routing block's Task Size section: data or irreversible effects, security, contracts others consume, concurrency, delivery or environment, or no test that would catch a regression). Count an unclear change as high only when a bounded look cannot tell whether the list applies.
 
 - **Passive**: structural readback only.
 - **Medium**: writer self-verification — the bounded writer runs the parent-authorized `## Verification` commands in the foreground and reports `<command>: <observed result>`. Add a separate verifier only when the writer ran on a small-model profile (low effort or a mini model).
@@ -85,13 +85,19 @@ Route ODD work through the smallest harness that is safe. "Smallest" means minim
 
 #### 1. Inline Direct
 
-Use inline execution when the task is small, mechanical, and the parent already has enough context: a typo, rename, one-file mechanical edit, a small known bug, focused verification over 1–3 files, or bash for state. Keep the ODD path proportionate. Do not use this exception to avoid delegation after the task stops being small.
+Use inline execution when the task is small by the Task Size section of the routing block: read, edit (one understood change may span files), run its focused test and suite once each, or bash for state. Keep the ODD path proportionate. When a mechanism's own trigger fires, turn on only that mechanism, then re-evaluate.
+
+Inline evidence uses one parallel batch, at most 3 calls and approximately 10k tokens. Use bounded search/line ranges rather than whole large files. These are evidence limits, not file-count routing rules; on a large task, preparation for writing and broad research still delegate.
 
 #### 2. Simple Delegation
 
-Delegate when work would inflate parent context or requires focused exploration, validation, or multi-file implementation, within the ODD workflow. Examples include understanding an unfamiliar module, inspecting 4+ files, investigating a failing test, implementing a bounded multi-file change, or running focused tests/builds.
+Delegate when a mechanism's own trigger fires, within the ODD workflow: understanding an unfamiliar module beyond the inline batch budget (explore), implementing a large tracked task (writer), or checking a high-risk change (independent verifier).
 
-Route exploration to a read-only exploration worker, bounded implementation to one writer, and command-running verification to a verification worker, all through the runtime's subagent/delegation mechanism. The delegation trigger stays mandatory; a missing named worker changes the runtime used, not the requirement to delegate. If no delegation mechanism is available, follow this runtime's documented degradation path, or stop and explain the blocker instead of silently continuing inline.
+Route exploration to a read-only exploration worker, a large task's implementation to one writer, and high-risk verification to a verification worker, all through the runtime's subagent/delegation mechanism. The delegation trigger stays mandatory; a missing named worker changes the runtime used, not the requirement to delegate. If no delegation mechanism is available, follow this runtime's documented degradation path, or stop and explain the blocker instead of silently continuing inline.
+
+Understanding that needs more evidence or more than approximately 5 sequential lookups requires one read-only explorer; with its handoff, re-evaluate task size. Return at most approximately 2k tokens with path:line evidence and one parent spot check. Do not reread the entire mapped evidence.
+
+Keep parent bash output bounded to counts, --stat, tail, or summaries. On a large task, delegate long suites and builds; return concise observed results, including failures. The approximately 150k parent-context backstop is advisory guidance, not mechanically observed or enforced; pause and delegate the next bounded unit without claiming runtime telemetry or enforcement.
 
 Default balanced pattern for bounded implementation:
 

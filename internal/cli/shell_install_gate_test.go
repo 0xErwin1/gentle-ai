@@ -4,7 +4,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/v3/internal/shellinstaller"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/shellinstaller"
 )
 
 func TestShellCandidateGateAlwaysRefusesFourDrafts(t *testing.T) {

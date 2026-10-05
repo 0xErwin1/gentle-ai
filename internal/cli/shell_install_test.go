@@ -11,7 +11,7 @@ import (
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/shellinstaller"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/shellinstaller"
 )
 
 func TestShellInstallFlags(t *testing.T) {
