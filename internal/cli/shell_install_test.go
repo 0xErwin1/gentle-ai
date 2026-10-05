@@ -4,6 +4,9 @@ import (
 	"bytes"
 	"context"
 	"io"
+	"os"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -33,6 +36,40 @@ func TestShellInstallHelpHasNoEffects(t *testing.T) {
 	}
 	if !strings.Contains(output.String(), "--inspect") || !strings.Contains(output.String(), "existing delegated") {
 		t.Fatalf("missing consent or prerequisites: %q", output.String())
+	}
+}
+
+func TestShellInstallRefusalHelpIsRunnable(t *testing.T) {
+	_, _, positionalErr := parseShellInstall([]string{"extra"}, io.Discard)
+	_, gateErr := GateShellInstallCandidate(shellinstaller.Profile{Channel: shellinstaller.ChannelStable})
+	for _, err := range []error{positionalErr, gateErr} {
+		if err == nil || !strings.Contains(err.Error(), "gentle-ai shell install --help") {
+			t.Fatalf("refusal lacks the help continuation: %v", err)
+		}
+	}
+	if !strings.Contains(gateErr.Error(), "draft gate cannot execute") {
+		t.Fatal("draft guidance implies installation authority")
+	}
+	var output bytes.Buffer
+	if err := RunShell([]string{"install", "--help"}, &output); err != nil || !strings.Contains(output.String(), "--inspect") || !strings.Contains(output.String(), "--confirm") {
+		t.Fatalf("named help is not runnable or lacks physical consent flags: %v %q", err, output.String())
+	}
+	if _, err := GateShellInstallCandidate(shellinstaller.Profile{Channel: shellinstaller.ChannelStable}); err == nil {
+		t.Fatal("reading help authorized the draft gate")
+	}
+}
+
+func TestShellInstallConfirmationRefusalHasNoEffects(t *testing.T) {
+	if runtime.GOOS != "linux" || runtime.GOARCH != "amd64" {
+		t.Skip("physical user selection is Linux amd64 only")
+	}
+	target := filepath.Join(t.TempDir(), "shell")
+	err := RunShell([]string{"install", "--target", target, "--confirm", "not-confirmed"}, io.Discard)
+	if err == nil || !strings.Contains(err.Error(), "gentle-ai shell install --help") || !strings.Contains(err.Error(), "--inspect") || !strings.Contains(err.Error(), "--confirm") {
+		t.Fatalf("unconfirmed selection lacks the safe continuation: %v", err)
+	}
+	if _, err := os.Lstat(target); !os.IsNotExist(err) {
+		t.Fatalf("unconfirmed selection created or published a target: %v", err)
 	}
 }
 

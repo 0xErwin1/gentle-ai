@@ -41,7 +41,7 @@ func parseShellInstall(args []string, stdout io.Writer) (shellinstaller.UserInst
 		return req, false, err
 	}
 	if flags.NArg() != 0 {
-		return req, false, errors.New("unexpected shell install positional arguments")
+		return req, false, errors.New("unexpected shell install positional arguments; run gentle-ai shell install --help for supported flags")
 	}
 	return req, *inspect, nil
 }
@@ -92,7 +92,7 @@ func RunShell(args []string, stdout io.Writer) (resultErr error) {
 		return err
 	}
 	if req.Confirmation != token {
-		return errors.New("inspect the physical selection first, then pass its --confirm SHA256")
+		return errors.New("inspect the physical selection first with --inspect, then pass its --confirm SHA256; run gentle-ai shell install --help for selection flags or gentle-ai shell install for interactive review")
 	}
 	return shellinstaller.RunUserEntry(ctx, self, append([]string{"install"}, shellEntryValues(req)...), os.Stdin, stdout, os.Stderr)
 }
