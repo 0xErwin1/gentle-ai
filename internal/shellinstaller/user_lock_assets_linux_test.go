@@ -24,9 +24,9 @@ func TestUserFrozenLockAcquisition(t *testing.T) {
 		t.Skip("Node unavailable for process-boundary proof")
 	}
 	home := t.TempDir()
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, node, "--test", "../../e2e/frozen-user-lock-acquisition.test.mjs", "../../e2e/shared-recovery.test.mjs")
+	cmd := exec.CommandContext(ctx, node, "--test", "../../e2e/frozen-user-lock-acquisition.test.mjs", "../../e2e/shared-recovery.test.mjs", "../../e2e/frozen-global-materialization.test.mjs")
 	cmd.Env = []string{"PATH=" + os.Getenv("PATH"), "HOME=" + home, "TMPDIR=" + home, "XDG_CONFIG_HOME=" + home, "XDG_DATA_HOME=" + home,
 		"XDG_STATE_HOME=" + home, "XDG_CACHE_HOME=" + home, "PI_CODING_AGENT_DIR=" + home}
 	if output, err := cmd.CombinedOutput(); err != nil {

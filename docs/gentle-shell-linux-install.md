@@ -13,8 +13,16 @@ Both complete modern/prior acquisition locks are now embedded and authenticated.
 The selected lock supplies the seed manifest and package identities; validation
 precedes shallow stock `npm ci`. Runtime lock generation and registry SRI
 completion are removed. The locks were acquired with a three-day release-age
-minimum. Controlled npm-boundary tests do not qualify global deployment or the
-updater; the existing offline global-install step remains a separate blocker.
+minimum. Global deployment copies the verified shallow tree, not an unlocked
+`npm install --global`. Stock `npm rebuild --global --offline --ignore-scripts`
+creates bin links without resolving packages or running hooks. The acquisition
+hidden lock stays as evidence; its stale optional projection is not published.
+Copies preserve directory modes and existing authenticated native files. Previous
+modules remain under the selected prefix's `lib` for confirmed whole-prefix
+recovery. Real Node 24/npm 11 backend install/readback and prior preparation passed
+in private temporary roots, including preservation of the pinned native binary.
+Neither those checks nor controlled offline fixtures qualify the user manager,
+full installer journey or updater.
 Gentle Shell does not fork Pi, replace its updater, or modify PATH or shell files.
 
 ## Select the installation

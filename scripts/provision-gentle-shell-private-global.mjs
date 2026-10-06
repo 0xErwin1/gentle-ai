@@ -118,6 +118,18 @@ function inventory(directory) {
   visit(directory);
   return digest(JSON.stringify(records));
 }
+// Stock fs.cp creates directories with default modes, not the source modes.
+// Readback includes modes, so preserve them for acquisition and recovery copies.
+function copyTree(from, to) {
+  fs.cpSync(from, to, { recursive: true, force: false, errorOnExist: true, dereference: false, verbatimSymlinks: true });
+  function modes(original, copied) {
+    const info = fs.lstatSync(original);
+    if (!info.isDirectory()) return;
+    for (const name of fs.readdirSync(original)) modes(path.join(original, name), path.join(copied, name));
+    fs.chmodSync(copied, info.mode & 0o777);
+  }
+  modes(from, to);
+}
 function snapshot(upgrade = false) {
   const store = upgrade ? upgradeState : state;
   if (upgrade) {
@@ -133,7 +145,7 @@ function snapshot(upgrade = false) {
     for (const [from, name] of [[prefix, 'prefix.preimage'], [agent, 'agent.preimage']]) {
       const to = path.join(store, name);
       absent(to);
-      fs.cpSync(from, to, { recursive: true, force: false, errorOnExist: true, dereference: false, verbatimSymlinks: true });
+      copyTree(from, to);
       if (inventory(to) !== inventory(from)) reject('snapshot readback differs');
       syncTree(to);
     }
@@ -170,7 +182,7 @@ function restore() {
     fs.mkdirSync(quarantine, { mode: 0o700 });
     // Same-filesystem renames preserve uncertain new evidence, not destructive rm.
     for (const entry of fs.readdirSync(target)) fs.renameSync(path.join(target, entry), path.join(quarantine, entry));
-    fs.cpSync(saved, target, { recursive: true, force: false, errorOnExist: true, dereference: false, verbatimSymlinks: true });
+    copyTree(saved, target);
     if (inventory(target) !== expected) reject('restored tree differs');
   }
   console.log('Shared preimages restored; uncertain new evidence retained');
@@ -371,11 +383,48 @@ if (action === 'restore') {
     const manifest = '{"version":"4.0.0","asset":"gentle-ai_4.0.0_linux_amd64.tar.gz","assetSha256":"5f4417cf29c969c86da4799942fd673368840901be1bb09c779a12d7ed6096ea","binarySha256":"50ba217b5138c1a9c7d5bf2f79931b1bb89b89c4cf650dcd7ee037657c88158d"}\n';
     if (binary.length !== 17109176 || digest(binary) !== '50ba217b5138c1a9c7d5bf2f79931b1bb89b89c4cf650dcd7ee037657c88158d' || !read(path.join(version, 'integrity.json')).equals(Buffer.from(manifest))) reject('native independent readback');
   }
+  function materializeGlobal() {
+    const parent = path.dirname(modules);
+    if (!fs.existsSync(parent)) fs.mkdirSync(parent, { mode: 0o700 });
+    physical(parent, true);
+    // Siblings keep promotions on the prefix filesystem, even for shared installs.
+    const staged = path.join(parent, `.gentle-shell-staged-${crypto.randomUUID()}`);
+    const previous = path.join(parent, `.gentle-shell-previous-${crypto.randomUUID()}`);
+    absent(staged);
+    absent(previous);
+    const acquired = path.join(source, 'node_modules');
+    const acquiredSHA = inventory(acquired);
+    copyTree(acquired, staged);
+    if (inventory(acquired) !== acquiredSHA || inventory(staged) !== acquiredSHA) reject('materialized source differs');
+    // CI's hidden lock includes optional placements normalized out of this tree.
+    // Keep the original as acquisition evidence; do not publish its stale projection.
+    const hidden = path.join(staged, '.package-lock.json');
+    if (fs.existsSync(hidden)) fs.unlinkSync(hidden);
+    const native = path.join(modules, 'gentle-pi/.gentle-ai');
+    if (fs.existsSync(native)) {
+      const copied = path.join(staged, 'gentle-pi/.gentle-ai');
+      absent(copied);
+      const nativeSHA = inventory(native);
+      copyTree(native, copied);
+      if (inventory(native) !== nativeSHA || inventory(copied) !== nativeSHA) reject('native copy differs');
+    }
+    syncTree(staged);
+    sync(parent);
+    // Never delete the old tree or uncertain new evidence on a failed promotion.
+    // Existing confirmed whole-prefix recovery owns restoration, not this helper.
+    if (fs.existsSync(modules)) {
+      fs.renameSync(modules, previous);
+      sync(parent);
+    }
+    fs.renameSync(staged, modules);
+    sync(parent);
+    stockNpm(['rebuild', '--global', '--prefix', prefix, '--offline', '--ignore-scripts', '--bin-links=true', '--engine-strict', '--no-audit', '--no-fund']);
+  }
   if (action === 'install') {
     nativeState();
     if (mode === 'shared' && !preparing) packages(modules);
     observed.length = 0;
-    stockNpm(['install', '--global', '--prefix', prefix, '--offline', '--ignore-scripts', '--engine-strict', '--no-audit', '--no-fund', ...(preparing ? [`@earendil-works/pi-coding-agent@${pins['@earendil-works/pi-coding-agent'][0]}`] : Object.entries(pins).map(([name, [version]]) => `${name}@${version}`))]);
+    materializeGlobal();
   }
   packages(modules);
   const semver = createRequire(npm)('semver'); // Authenticated stock Node/npm closure.
