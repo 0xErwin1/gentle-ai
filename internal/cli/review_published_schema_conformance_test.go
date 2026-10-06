@@ -166,7 +166,9 @@ func TestPublishedLastEventClosureSchemaAcceptsRejectedTargetedValidatorCapture(
 	if err != nil {
 		t.Fatal(err)
 	}
-	overrideProviderRoleHostAdapter(t, providerTestAdapter{raw: failedPayload})
+	// The pi host relay submits its own raw result through --input (#4611):
+	// Go never spawns anything for this capture.
+	failedResultFile := writeReviewCLIRawInput(t, failedPayload)
 
 	var output bytes.Buffer
 	if err := RunReviewCaptureValidation([]string{
@@ -176,7 +178,7 @@ func TestPublishedLastEventClosureSchemaAcceptsRejectedTargetedValidatorCapture(
 		"--expected-revision", record.State.CapturePhaseRevision,
 		"--request-hash", request.RequestHash,
 		"--agent", "pi",
-		"--execute=true",
+		"--input", failedResultFile,
 	}, &output); err != nil {
 		t.Fatalf("capture rejected targeted validator: %v\\n%s", err, output.String())
 	}
