@@ -262,6 +262,7 @@ func RunInstall(args []string, detection system.DetectionResult) (InstallResult,
 	}
 	result.PiCodeGraph = runtime.state.piCodeGraph
 	result.ManualActions = append(result.ManualActions, runtime.state.nativeReviewActions...)
+	result.ManualActions = append(result.ManualActions, runtime.state.retiredSDDActions...)
 	result.Verify = runPostApplyVerification(postApplyVerificationInput{
 		HomeDir:      homeDir,
 		WorkspaceDir: runtime.workspaceDir,
@@ -711,6 +712,7 @@ type runtimeState struct {
 	rollbackSnapshotDir      string
 	piCodeGraph              *communitytool.PiCodeGraphResult
 	nativeReviewActions      []string
+	retiredSDDActions        []string
 	compatibilityTransaction compatibilityRefreshTransaction
 
 	// engramVersionResolved, engramVersion, and engramVersionErr cache the
@@ -877,6 +879,9 @@ func (r *installRuntime) stagePlan() pipeline.StagePlan {
 			apply = append(apply, nativeReviewAgentStep{id: "agent:native-review:" + string(agent), agent: agent, homeDir: r.homeDir, workspaceDir: r.workspaceDir, scope: r.scope, selection: r.selection, state: r.state})
 		}
 	}
+	// After the native installer: it rewrites a Gentle-owned v3 Kimi
+	// gentleman.yaml, so the SDD subagents it declared can be retired now.
+	apply = append(apply, retiredSDDAgentSteps("agent:retire-sdd:", r.homeDir, r.scope, r.resolved.Agents, nil, r.state)...)
 
 	// Routing guidance is scheduled per agent and outside the component loop:
 	// an agent that cannot choose between direct and delegated work is unusable,
@@ -962,6 +967,61 @@ func (s nativeReviewAgentStep) Run() error {
 		}
 	}
 	return nil
+}
+
+// retiredSDDAgentsStep removes the native SDD sub-agents earlier releases
+// rendered and reports the ones whose ownership cannot be proven (#5157,
+// #5253). The pipeline snapshot captures every inventory path first.
+type retiredSDDAgentsStep struct {
+	id, homeDir  string
+	agent        model.AgentID
+	changedFiles *[]string
+	state        *runtimeState
+}
+
+func (s retiredSDDAgentsStep) ID() string { return s.id }
+
+func (s retiredSDDAgentsStep) Run() error {
+	adapter := resolveAdapters([]model.AgentID{s.agent})[0]
+	res, err := legacyassets.RetireSDDAgents(s.agent, adapter.SubAgentsDir(s.homeDir))
+	if s.changedFiles != nil {
+		*s.changedFiles = append(*s.changedFiles, res.Removed...)
+	}
+	if err != nil {
+		return fmt.Errorf("retire SDD agents for %q: %w", s.agent, err)
+	}
+	if s.state != nil {
+		s.state.retiredSDDActions = append(s.state.retiredSDDActions, res.ManualActions()...)
+	}
+	return nil
+}
+
+// retiredSDDAgentSteps schedules retirement for every selected runtime that
+// received native SDD agents. Releases installed them in the home directory,
+// so a workspace-scoped run never touches them (#1074).
+func retiredSDDAgentSteps(prefix, homeDir string, scope InstallScope, agentIDs []model.AgentID, changedFiles *[]string, state *runtimeState) []pipeline.Step {
+	if scope == ScopeWorkspace {
+		return nil
+	}
+	var steps []pipeline.Step
+	for _, agent := range agentIDs {
+		if len(legacyassets.RetiredSDDAgentFiles(agent)) > 0 {
+			steps = append(steps, retiredSDDAgentsStep{id: prefix + string(agent), homeDir: homeDir, agent: agent, changedFiles: changedFiles, state: state})
+		}
+	}
+	return steps
+}
+
+// retiredSDDAgentBackupPaths is the snapshot half of retiredSDDAgentSteps.
+func retiredSDDAgentBackupPaths(homeDir string, scope InstallScope, adapters []agents.Adapter) []string {
+	if scope == ScopeWorkspace {
+		return nil
+	}
+	var paths []string
+	for _, adapter := range adapters {
+		paths = append(paths, legacyassets.RetiredSDDAgentPaths(adapter.Agent(), adapter.SubAgentsDir(homeDir))...)
+	}
+	return paths
 }
 
 func nativeReviewPreservedAction(path string) string {
@@ -3089,6 +3149,7 @@ func executeTUIInstallWithBackground(homeDir string, selection model.Selection, 
 		result.ManualActions = append(result.ManualActions, runtime.state.piCodeGraph.ManualActions...)
 	}
 	result.ManualActions = append(result.ManualActions, runtime.state.nativeReviewActions...)
+	result.ManualActions = append(result.ManualActions, runtime.state.retiredSDDActions...)
 	return result, orchestrator
 }
 
@@ -3418,6 +3479,9 @@ func backupTargets(homeDir, workspaceDir string, scope InstallScope, selection m
 	for _, adapter := range adapters {
 		if adapter.Agent() == model.AgentCodex {
 			paths[filepath.Join(adapter.GlobalConfigDir(homeDir), "hooks.json")] = struct{}{}
+		}
+		for _, path := range retiredSDDAgentBackupPaths(homeDir, scope, []agents.Adapter{adapter}) {
+			paths[path] = struct{}{}
 		}
 		// Native review and Judgment Day agents are installed independently of SDD.
 		// Retired review agents are listed too: the installer may remove them.
