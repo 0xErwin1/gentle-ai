@@ -2,10 +2,14 @@ package app
 
 import (
 	"bytes"
+	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/gentleman-programming/gentle-ai/v4/internal/opencode"
 )
 
 func TestConfigReadOnlyCommandsBypassSystemAndLeaveDestinationUntouched(t *testing.T) {
@@ -21,6 +25,20 @@ func TestConfigReadOnlyCommandsBypassSystemAndLeaveDestinationUntouched(t *testi
 	configPath := filepath.Join(t.TempDir(), "config.json")
 	if err := os.WriteFile(configPath, []byte(`{"version":"v1","selection":{"agents":["opencode"]}}`), 0o644); err != nil {
 		t.Fatal(err)
+	}
+
+	// Rendering the default OpenCode components stages the logo plugin, which
+	// probes the OpenCode runtime. Use upstream's process seam for isolated
+	// tests instead of a real host install: only --version is answered, with
+	// the same V1 version string upstream's own fixtures use; any other
+	// invocation is refused.
+	oldVersionRunner := opencode.VersionRunnerOverride
+	t.Cleanup(func() { opencode.VersionRunnerOverride = oldVersionRunner })
+	opencode.VersionRunnerOverride = func(_ context.Context, command opencode.Command) (opencode.CommandOutput, error) {
+		if len(command.Args) != 1 || command.Args[0] != "--version" {
+			return opencode.CommandOutput{}, fmt.Errorf("unexpected opencode invocation: %v", command.Args)
+		}
+		return opencode.CommandOutput{Stdout: []byte("1.18.30")}, nil
 	}
 
 	oldEnsure, oldDetect := ensureCurrentOSSupported, detectSystem
