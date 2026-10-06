@@ -208,11 +208,51 @@ func TestNextTransitionDerivedRangeAcknowledgementStaysTerminal(t *testing.T) {
 	if err != nil || !consumed {
 		t.Fatalf("derived range consumption = %v, %v", consumed, err)
 	}
+	// #4739: a later commit that only adds passive content to the acknowledged
+	// candidate changes the identity but has nothing new to review. STATUS
+	// stops without authority and the Stop hook stays silent.
 	writeReviewStartCandidate(t, repo, "docs/ordinary-guide.md", "new committed range\n", 0o644)
 	runReviewCLIGit(t, repo, "add", "docs/ordinary-guide.md")
-	runReviewCLIGit(t, repo, "commit", "-qm", "new range")
-	changed := derivedRangeTerminalStatus(t, repo)
-	if changed.TargetIdentity == offered.TargetIdentity || changed.NextTransition == nil || changed.NextTransition.Execute == nil || changed.NextTransition.Execute.Operation != "review.start" {
-		t.Fatalf("new committed range suppressed: %#v", changed)
+	runReviewCLIGit(t, repo, "commit", "-qm", "passive follow-up")
+	passive := derivedRangeTerminalStatus(t, repo)
+	if passive.TargetIdentity == offered.TargetIdentity || passive.NextTransition == nil || passive.NextTransition.Execute != nil ||
+		passive.NextTransition.ReasonCode != "acknowledged_predecessor_passive_delta" || passive.Authority != nil {
+		t.Fatalf("passive delta after acknowledgement re-offered review: %#v", passive)
 	}
+	payload = reviewStopHookTestPayload(t, "derived-range-passive-session", repo, false, nil)
+	output.Reset()
+	if err := runReviewStopHook([]string{"--agent", "claude-code"}, strings.NewReader(payload), &output, &diagnostics); err != nil || output.Len() != 0 {
+		t.Fatalf("passive delta Stop = %s, %v", output.String(), err)
+	}
+	if consumed, err := reviewtransaction.CompactTargetConsumed(context.Background(), repo, passive.TargetIdentity); err != nil || consumed {
+		t.Fatalf("suppressed passive delta recorded as consumed = %v, %v", consumed, err)
+	}
+	base := strings.TrimSpace(runReviewCLIGit(t, repo, "rev-parse", "refs/remotes/origin/main"))
+	if assessed := derivedRangeAssess(t, repo, base); assessed.ReviewDue || assessed.ReviewDueReason != "already_reviewed" || assessed.Candidate.Consumed {
+		t.Fatalf("assess disagrees with STATUS for a passive delta: due=%v reason=%q consumed=%v", assessed.ReviewDue, assessed.ReviewDueReason, assessed.Candidate.Consumed)
+	}
+	// Anything non-passive after the acknowledgement is offered for review.
+	writeReviewStartCandidate(t, repo, "cmd/app/main.go", "package main\n\nfunc main() {}\n", 0o644)
+	runReviewCLIGit(t, repo, "add", "cmd/app/main.go")
+	runReviewCLIGit(t, repo, "commit", "-qm", "code follow-up")
+	changed := derivedRangeTerminalStatus(t, repo)
+	if changed.TargetIdentity == passive.TargetIdentity || changed.NextTransition == nil || changed.NextTransition.Execute == nil || changed.NextTransition.Execute.Operation != "review.start" {
+		t.Fatalf("non-passive committed range suppressed: %#v", changed)
+	}
+	if assessed := derivedRangeAssess(t, repo, base); assessed.ReviewDueReason == "already_reviewed" {
+		t.Fatalf("assess reported a non-passive delta as already reviewed: %#v", assessed)
+	}
+}
+
+func derivedRangeAssess(t *testing.T, repo, base string) ReviewAssessmentResult {
+	t.Helper()
+	var output bytes.Buffer
+	if err := RunReview([]string{"assess", "--cwd", repo, "--base-ref", base, "--committed-only", "--json"}, &output); err != nil {
+		t.Fatalf("review assess: %v\n%s", err, output.String())
+	}
+	var result ReviewAssessmentResult
+	if err := json.Unmarshal(output.Bytes(), &result); err != nil {
+		t.Fatalf("decode review assess: %v\n%s", err, output.String())
+	}
+	return result
 }

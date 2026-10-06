@@ -14,7 +14,7 @@ Issue: gentle-ai#4739 (related #4939, #4815). Delivery: one PR that closes #4739
 
 ## Tasks
 
-- T1 — S2-S4: core helper `AcknowledgedPassivePredecessor` in `internal/reviewtransaction` with unit tests; inline; commit pending.
+- T1 — S2-S4: core helper `AcknowledgedPassivePredecessor` in `internal/reviewtransaction` with unit tests; inline; done, commit `4189a2f3`.
 - T2 — S2, S3, S5, S6: wire STATUS (facade fresh branch), next transition, contract validator, assess, narration, docs; update `TestNextTransitionDerivedRangeAcknowledgementStaysTerminal`; inline; commit pending.
 
 ## Log
@@ -23,3 +23,4 @@ Issue: gentle-ai#4739 (related #4939, #4815). Delivery: one PR that closes #4739
 - L2 (user, after #4739 was found as the existing report): "Quiero que lo arregles y al mergear lo cerramos"
 - L3 (user choice): "Delta pasivo → no ofrecer (recomendado)" over delta-scoped review.
 - L4 (evidence, explore): acknowledge burns the authority directory and leaves only a tombstone keyed by exact target identity (`compact_burn.go:208-232`, `compact_terminal_consumption.go:19-83`); identity is content-addressed (`IdentityForComponents`), so an ancestor's base-diff identity is recomputable. Selectorless STATUS (`review_facade.go:1059-1127`) and the Stop hook (`review_stop_hook.go:262-281`) share one path. `TestNextTransitionDerivedRangeAcknowledgementStaysTerminal` currently asserts a docs-only commit re-offers START and must change.
+- L5 (evidence): `go test ./...` exit 0 on the branch (one earlier full run hit `TestFetchLatestEngramVersionWithAssetsPaginates`, which passed 3/3 in isolation and on the rerun: unrelated flake). The shipped `review-ledger-contract.md` must carry a routable row for every stop code (`TestReviewStopInvariantTerminalClassificationAgreesWithShippedContract`, `TestEveryReviewStopReasonCodeHasAShippedContinuation`), so the new row names the deliberate-review command; `testdata/orchestrator-module-baseline.json` regenerated with `-update` for that intended contract drift. The Pi ledger variant is unchanged (it does not list `target_already_acknowledged` either).
