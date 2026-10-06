@@ -13,16 +13,7 @@ const uid = process.getuid();
 const reject = message => { throw Error(`global provision refused: ${message}`); };
 const digest = bytes => crypto.createHash('sha256').update(bytes).digest('hex');
 const packageName = /^(?:@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*$/;
-const modernPins = {
-  'gentle-pi': ['4.0.0', 'sha512-ZG/diWBSKPfjU4MjiHVUXxHWQvDSRS2dvpPCma4ZINuV+8UGdZAPHca6vcK27FLAAG7crlJpwdWOcwVNW4rh/Q=='],
-  '@earendil-works/pi-coding-agent': ['1.0.0', 'sha512-/FtbxoSQU/mEv1QnichJjRjqteqaIaMWxmhB4G367+MwZfX7/DI5B9YAg5lqbN7nztFskBEtUSZ+FlmMBECtMw=='],
-  '@earendil-works/pi-tui': ['1.0.0', 'sha512-JsT7kXnpZA2YOtQu6RyriyxEO0eJIzPyfiH09bH+OLN5+s18HYkwaUD/tBkjhnSfMu6/50CQPRYJagzSP6HdPw=='],
-  '@heyhuynhgiabuu/pi-pretty': ['0.6.27', 'sha512-4Jj+n6ZBFdn979fWAA3nMcJ45Q5qtcLeq1Pe6+Oo2LDIpDhqv7heoTKkBpq9G74/pNYc0EaXR28pssQ5Wbc5bg=='],
-  'typebox': ['1.3.27', 'sha512-zu+jc1pcy4UiNThxikUr36f0Rybk9PEeCg/NE6adeWr/SKsdNO4EzZHYRDlv2YCVAfj3Odq3dESSo/jNyoBXzA=='],
-};
-const priorCoding = ['0.99.2', 'sha512-6R1BZ2N77CrVcGf3eC2KovTz1Q4RYiAeydvVWQT546N2fi1nBc81aURlbOZCgruWoW9VY/UrLzDynF4YTolpoA=='];
-const priorTui = 'sha512-IOcNnd390NCIwBEKeOiBK/bvaR7Z+vEsvB5TtKsFdsY/vAZE6qRHbQqt6jpTefTiKPfQlwG8eS1BU42DeG2v4w==';
-let pins = modernPins;
+const rootNames = ['gentle-pi', '@earendil-works/pi-coding-agent', '@earendil-works/pi-tui', '@heyhuynhgiabuu/pi-pretty', 'typebox'];
 function physical(absolute, directory = false) {
   if (!path.isAbsolute(absolute) || path.resolve(absolute) !== absolute || fs.realpathSync(absolute) !== absolute) reject('noncanonical path');
   const stat = fs.lstatSync(absolute);
@@ -192,11 +183,38 @@ if (action === 'restore') {
     if (check.error || check.signal || check.status !== 0) reject('fixture prior requires verified existing installation');
   }
   const prior = preparing || (fs.existsSync(priorGraph) && JSON.parse(read(path.join(modules, '@earendil-works/pi-coding-agent/package.json'))).version === '0.99.2');
-  if (prior) {
-    pins = { ...modernPins, '@earendil-works/pi-coding-agent': priorCoding };
-    source = path.join(root, 'runtime/prior');
-  }
+  if (prior) source = path.join(root, 'runtime/prior');
   const graphPath = prior ? priorGraph : path.join(state, 'global-graph.json');
+  const lockBytes = read(path.join(root, 'user-locks', prior ? 'prior' : 'modern', 'package-lock.json'));
+  const lock = JSON.parse(lockBytes);
+  const seed = lock.packages?.[''];
+  if (lock.lockfileVersion !== 3 || !lock.packages || Array.isArray(lock.packages) || !seed?.dependencies ||
+      lock.name !== seed.name || lock.version !== seed.version || typeof seed.name !== 'string' || !packageName.test(seed.name) ||
+      JSON.stringify(Object.keys(seed.dependencies).sort()) !== JSON.stringify([...rootNames].sort())) reject('frozen source lock');
+  const identities = new Map();
+  const versionPattern = /^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/;
+  if (typeof seed.version !== 'string' || !versionPattern.test(seed.version)) reject('frozen seed version');
+  for (const [relative, entry] of Object.entries(lock.packages)) {
+    if (!relative) continue;
+    if (!/^node_modules\/(?:@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*(?:\/node_modules\/(?:@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*)*$/.test(relative)) reject('frozen lock path');
+    const name = relative.split('node_modules/').at(-1);
+    const version = typeof entry?.version === 'string' && versionPattern.exec(entry.version);
+    if (!entry || entry.link || (entry.name !== undefined && entry.name !== name) || !packageName.test(name) ||
+        !version || version[4]?.split('.').some(part => /^0[0-9]+$/.test(part))) reject('frozen package identity');
+    const canonical = `https://registry.npmjs.org/${name}/-/${name.split('/').at(-1)}-${entry.version}.tgz`;
+    if (entry.resolved !== canonical || typeof entry.integrity !== 'string' || !/^sha512-[A-Za-z0-9+/]{86}==$/.test(entry.integrity) ||
+        Buffer.from(entry.integrity.slice(7), 'base64').toString('base64') !== entry.integrity.slice(7)) reject('frozen source integrity');
+    const key = `${name}@${entry.version}`;
+    if (identities.has(key) && identities.get(key) !== entry.integrity) reject('ambiguous frozen identity');
+    identities.set(key, entry.integrity);
+  }
+  const pins = Object.fromEntries(rootNames.map(name => {
+    const entry = lock.packages[`node_modules/${name}`];
+    if (!entry || seed.dependencies[name] !== entry.version) reject('frozen root declaration');
+    return [name, [entry.version, entry.integrity]];
+  }));
+  if (pins['@earendil-works/pi-coding-agent'][0] !== (prior ? '0.99.2' : '1.0.0')) reject('frozen coding profile');
+  if (prior && lock.packages['node_modules/@earendil-works/pi-coding-agent/node_modules/@earendil-works/pi-tui']?.version !== '0.99.2') reject('prior nested TUI placement');
   if (action === 'install') {
     physical(agent, true);
     snapshot(preparing);
@@ -204,26 +222,14 @@ if (action === 'restore') {
       absent(directory);
       fs.mkdirSync(directory, { mode: 0o700 });
     }
-    const dependencies = Object.fromEntries(Object.entries(pins).map(([name, [version]]) => [name, version]));
-    writeExclusive(path.join(source, 'package.json'), `${JSON.stringify({ name: 'gentle-shell-owned-seed', version: '1.0.0', private: true, dependencies })}\n`);
-    stockNpm(['install', '--package-lock-only', '--ignore-scripts', '--engine-strict', '--no-audit', '--no-fund', '--min-release-age=0', '--registry=https://registry.npmjs.org/']);
-    const { completeFile } = await import(pathToFileURL(path.join(root, 'complete-generated-lock-sri.mjs')).href);
-    await completeFile(path.join(source, 'package-lock.json'));
+    writeExclusive(path.join(source, 'package.json'), `${JSON.stringify({ name: seed.name, version: seed.version, private: true, dependencies: seed.dependencies })}\n`);
+    writeExclusive(path.join(source, 'package-lock.json'), lockBytes);
   }
   const lockPath = path.join(source, 'package-lock.json');
-  const lockBytes = read(lockPath);
-  const lock = JSON.parse(lockBytes);
-  if (lock.lockfileVersion !== 3 || !lock.packages || Object.keys(lock.packages[''].dependencies).length !== 5) reject('source lock');
-  for (const [name, [version, integrity]] of Object.entries(pins)) {
-    const entry = lock.packages[`node_modules/${name}`];
-    if (entry?.version !== version || entry.integrity !== integrity || lock.packages[''].dependencies[name] !== version) reject('independent root pin');
-  }
-  if (prior) {
-    const nested = lock.packages['node_modules/@earendil-works/pi-coding-agent/node_modules/@earendil-works/pi-tui'];
-    if (nested?.version !== '0.99.2' || nested.integrity !== priorTui) reject('prior nested TUI placement/pin');
-  }
+  if (!read(lockPath).equals(lockBytes)) reject('selected frozen lock differs');
   if (action === 'install') {
-    stockNpm(['ci', '--ignore-scripts', '--engine-strict', '--no-audit', '--no-fund', '--min-release-age=0', '--registry=https://registry.npmjs.org/']);
+    stockNpm(['ci', '--install-strategy=shallow', '--ignore-scripts', '--engine-strict', '--no-audit', '--no-fund', '--min-release-age=3', '--registry=https://registry.npmjs.org/']);
+    if (!read(lockPath).equals(lockBytes)) reject('npm ci changed the frozen lock');
   }
   const retainedRoot = path.join(source, '.gentle-shell-optional');
   const retainedManifest = path.join(source, '.gentle-shell-optional.json');
@@ -280,7 +286,6 @@ if (action === 'restore') {
     const name = entry.name ?? relative.split('node_modules/').at(-1);
     const canonical = `https://registry.npmjs.org/${name}/-/${name.split('/').at(-1)}-${entry.version}.tgz`;
     if (!packageName.test(name) || entry.resolved !== canonical || !/^sha512-[A-Za-z0-9+/]{86}==$/.test(entry.integrity)) reject('source integrity');
-    if (name === '@earendil-works/pi-tui' && entry.version === '0.99.2' && entry.integrity !== priorTui) reject('independent nested prior TUI pin');
     let metadata = path.join(source, relative, 'package.json');
     if (!fs.existsSync(metadata)) {
       if (entry.optional !== true) reject('required acquired metadata absent');
@@ -370,7 +375,7 @@ if (action === 'restore') {
     nativeState();
     if (mode === 'shared' && !preparing) packages(modules);
     observed.length = 0;
-    stockNpm(['install', '--global', '--prefix', prefix, '--offline', '--ignore-scripts', '--engine-strict', '--no-audit', '--no-fund', ...(preparing ? [`@earendil-works/pi-coding-agent@${priorCoding[0]}`] : Object.entries(pins).map(([name, [version]]) => `${name}@${version}`))]);
+    stockNpm(['install', '--global', '--prefix', prefix, '--offline', '--ignore-scripts', '--engine-strict', '--no-audit', '--no-fund', ...(preparing ? [`@earendil-works/pi-coding-agent@${pins['@earendil-works/pi-coding-agent'][0]}`] : Object.entries(pins).map(([name, [version]]) => `${name}@${version}`))]);
   }
   packages(modules);
   const semver = createRequire(npm)('semver'); // Authenticated stock Node/npm closure.

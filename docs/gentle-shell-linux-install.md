@@ -9,6 +9,12 @@ The approved target is ordinary Pi 1.0.0 with Gentle/native 4.0.0 on top.
 The source now composes independently pinned modern roots through stock npm,
 using the unchanged Node-only bootstrap rather than legacy composite authority.
 Installation and warm UI opening were observed; the full journey still failed.
+Both complete modern/prior acquisition locks are now embedded and authenticated.
+The selected lock supplies the seed manifest and package identities; validation
+precedes shallow stock `npm ci`. Runtime lock generation and registry SRI
+completion are removed. The locks were acquired with a three-day release-age
+minimum. Controlled npm-boundary tests do not qualify global deployment or the
+updater; the existing offline global-install step remains a separate blocker.
 Gentle Shell does not fork Pi, replace its updater, or modify PATH or shell files.
 
 ## Select the installation

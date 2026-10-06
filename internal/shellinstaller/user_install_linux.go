@@ -558,14 +558,10 @@ func RunUserInstall(ctx context.Context, req UserInstallRequest) (result UserIns
 	if _, err = privateNativeFile(ctx, node, 0700, privateNativeNodeSize, privateNativeNodeSHA); err != nil {
 		return result, fmt.Errorf("bootstrap Node readback: %w", err)
 	}
-	helper, err := assets.ReadUserHelper()
-	if err != nil {
+	if err = userProvisionAssets(ctx, root, true); err != nil {
 		return result, err
 	}
 	helperPath := filepath.Join(root, "provision.mjs")
-	if err = os.WriteFile(helperPath, helper, 0400); err != nil {
-		return result, err
-	}
 	prefix, agent := filepath.Join(root, "prefix"), filepath.Join(root, "agent")
 	finalPrefix, finalAgent := filepath.Join(req.Destination, "prefix"), filepath.Join(req.Destination, "agent")
 	if req.Mode == "shared" {
@@ -930,20 +926,52 @@ func userSourceFile(ctx context.Context, path string, size int64, pin string) (s
 	return stamp, nil
 }
 
-func userVerifyGlobal(ctx context.Context, root, prefix, agent, finalPrefix, finalRoot, mode string) error {
-	data, err := assets.ReadUserHelper()
+func userProvisionAssets(ctx context.Context, root string, stage bool) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if _, err := privateDirectory(root); err != nil {
+		return err
+	}
+	for _, name := range []string{"user-locks", "user-locks/modern", "user-locks/prior"} {
+		directory := filepath.Join(root, name)
+		if stage {
+			if err := os.Mkdir(directory, 0700); err != nil {
+				return err
+			}
+		}
+		if _, err := privateDirectory(directory); err != nil {
+			return err
+		}
+	}
+	files, err := assets.ReadUserAssets()
 	if err != nil {
 		return err
 	}
-	helper := filepath.Join(root, "provision.mjs")
-	if _, err := privateNativeFile(ctx, helper, 0400, int64(len(data)), fmt.Sprintf("%x", sha256.Sum256(data))); err != nil {
+	for name, data := range files {
+		filename := filepath.Join(root, name)
+		if stage {
+			if err := userToolWrite(filename, data, 0400); err != nil {
+				return err
+			}
+		}
+		if _, err := privateNativeFile(ctx, filename, 0400, int64(len(data)), fmt.Sprintf("%x", sha256.Sum256(data))); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func userVerifyGlobal(ctx context.Context, root, prefix, agent, finalPrefix, finalRoot, mode string) error {
+	if err := userProvisionAssets(ctx, root, false); err != nil {
 		return err
 	}
+	helper := filepath.Join(root, "provision.mjs")
 	ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, filepath.Join(root, "runtime/node/bin/node"), helper, root, prefix, agent, finalPrefix, finalRoot, mode, "verify")
 	cmd.Dir, cmd.Env = filepath.Join(root, "project"), userEnvironment(root, prefix, agent)
-	_, err = privateRun(ctx, cmd, cancel)
+	_, err := privateRun(ctx, cmd, cancel)
 	return err
 }
 
