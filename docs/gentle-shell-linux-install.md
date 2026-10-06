@@ -31,8 +31,14 @@ gentle-ai shell install
 ```
 
 Select a target, mode and, for shared mode, the existing prefix and agent.
-Enter reviews the physical selection; `y` explicitly confirms it.
-Escape cancels; cancellation during installation waits for stop and reap.
+Tab cycles only the fields available in that mode; arrows change mode.
+Spaces are literal when editing paths. Enter reviews the physical selection;
+`y` explicitly confirms it and closes the TUI before the installer takes the
+terminal. Escape cancels before installation; Ctrl-C during installation
+requests cancellation and waits for stop and reap.
+
+`gentle-ai shell help` and `gentle-ai shell --help` print usage without starting
+a supervisor. Unknown commands refuse before entering the execution boundary.
 
 For noninteractive use, inspect before approving exactly that selection:
 
@@ -65,8 +71,14 @@ swap, one CPU and 64 tasks; capabilities must be zero and NoNewPrivs set.
 An already-qualified process enters directly. Otherwise the source candidate
 uses only an existing delegated systemd user manager, version 254 or later.
 There is no sudo, system-manager fallback, new delegation or container fallback.
-Missing prerequisites refuse before package JavaScript runs. Successful user-
-manager entry, terminal behavior and cancellation remain separately unqualified.
+Missing prerequisites refuse before package JavaScript runs. Refusals include
+the underlying cause. The supervisor executable and its ancestors must be owned
+by the current user or root and must not be group- or other-writable (except
+root-owned sticky `/tmp`); an unsafe ancestor is named in the error. A group-writable `~/go/bin` or Linuxbrew prefix
+is not accepted. Build or place the supervisor in a qualifying location rather
+than relaxing permissions on an unrelated shared prefix.
+Successful user-manager entry, terminal behavior and cancellation remain
+separately unqualified.
 
 The sealed Node environment adds the system CA store to Node's bundled roots.
 It does not inherit caller certificate selectors, proxies or loader injections,

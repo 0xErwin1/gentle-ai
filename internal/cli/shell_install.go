@@ -15,11 +15,14 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v4/internal/shellinstaller"
 )
 
-const shellInstallHelp = `gentle-ai shell install --target /owned/private-parent/shell --mode separate
+const shellInstallHelp = `gentle-ai shell --help      print this help without starting a supervisor
+gentle-ai shell install --target /owned/private-parent/shell --mode separate
   --mode shared --prefix /owned/selected-prefix --agent /owned/selected-agent
   --inspect                 print physical-selection confirmation without effects
   --confirm SHA256          approve that exact inspected selection
 No flags: dedicated installer TUI. Commands live in TARGET/bin, outside npm's bin.
+gentle-ai shell launch ROOT [PI_ARGS...]
+  Launch the selected stock Pi; normal use is through TARGET/bin/pi or gentle-shell.
 gentle-ai shell recover ROOT inspect
   Replace inspect with its printed confirmation to restore shared preimages.
 Requires Linux amd64 and qualified cgroup limits or an existing delegated
@@ -52,12 +55,19 @@ func RunShell(args []string, stdout io.Writer) (resultErr error) {
 	defer func() {
 		var failure *shellinstaller.PrivateRuntimeError
 		if errors.As(resultErr, &failure) && (failure.Workspace != "" || failure.Destination != "") {
-			resultErr = fmt.Errorf("%w\nBounded failure cause: %v\nPreserve evidence: workspace=%q destination/unit=%q\nFor shared installation recovery, inspect ROOT=workspace/installed or published destination with gentle-ai shell recover ROOT inspect", resultErr, failure.Cause, failure.Workspace, failure.Destination)
+			resultErr = fmt.Errorf("%w\nPreserve evidence: workspace=%q destination/unit=%q\nFor shared installation recovery, inspect ROOT=workspace/installed or published destination with gentle-ai shell recover ROOT inspect", resultErr, failure.Workspace, failure.Destination)
 		}
 	}()
-	if len(args) == 0 {
+	if len(args) == 0 || args[0] == "help" || args[0] == "--help" {
 		_, err := io.WriteString(stdout, shellInstallHelp)
 		return err
+	}
+	switch args[0] {
+	case "install", "launch", "recover", "internal-check", "internal-install", "internal-launch", "internal-recover":
+		// The delegated supervisor re-enters here; internal selectors still
+		// repeat kernel qualification and never grant execution authority.
+	default:
+		return fmt.Errorf("unknown shell command %q; run gentle-ai shell --help", args[0])
 	}
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
 	defer cancel()
@@ -69,12 +79,17 @@ func RunShell(args []string, stdout io.Writer) (resultErr error) {
 		return shellinstaller.RunUserEntry(ctx, self, args, os.Stdin, stdout, os.Stderr)
 	}
 	if len(args) == 1 {
-		model := shellInstallModel{ctx: ctx, cancel: cancel, self: self, stdout: stdout, req: shellinstaller.UserInstallRequest{Mode: "separate"}}
+		model := shellInstallModel{cancel: cancel, req: shellinstaller.UserInstallRequest{Mode: "separate"}}
 		final, err := tea.NewProgram(model, tea.WithInput(os.Stdin), tea.WithOutput(stdout)).Run()
 		if err != nil {
 			return err
 		}
-		return final.(shellInstallModel).err
+		selection := final.(shellInstallModel)
+		if !selection.confirmed {
+			return selection.err
+		}
+		// Run only after Bubble Tea has restored the terminal and released stdin.
+		return shellinstaller.RunUserEntry(ctx, self, append([]string{"install"}, shellEntryValues(selection.req)...), os.Stdin, stdout, os.Stderr)
 	}
 	req, inspect, err := parseShellInstall(args[1:], stdout)
 	if errors.Is(err, flag.ErrHelp) {
@@ -101,62 +116,49 @@ func shellEntryValues(req shellinstaller.UserInstallRequest) []string {
 	return []string{req.Destination, req.Mode, req.SharedPrefix, req.SharedAgent, req.Confirmation}
 }
 
-type shellInstallDone struct{ err error }
-
 type shellInstallModel struct {
-	ctx    context.Context
-	cancel context.CancelFunc
-	self   string
-	stdout io.Writer
-	req    shellinstaller.UserInstallRequest
-	field  int
-	review bool
-	busy   bool
-	err    error
+	cancel    context.CancelFunc
+	req       shellinstaller.UserInstallRequest
+	field     int
+	review    bool
+	confirmed bool
+	err       error
 }
 
 func (m shellInstallModel) Init() tea.Cmd { return nil }
 
 func (m shellInstallModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	if done, ok := msg.(shellInstallDone); ok {
-		m.busy, m.err = false, done.err
-		return m, tea.Quit
-	}
 	key, ok := msg.(tea.KeyMsg)
 	if !ok {
 		return m, nil
 	}
 	if key.String() == "ctrl+c" || key.String() == "esc" {
 		m.cancel()
-		if m.busy {
-			return m, nil // Await actual stop/reap; never abandon the install goroutine.
-		}
+		m.confirmed = false
 		return m, tea.Quit
-	}
-	if m.busy {
-		return m, nil
 	}
 	if m.review {
 		if key.String() != "y" {
 			m.review = false
 			return m, nil
 		}
-		m.busy = true
-		return m, func() tea.Msg {
-			err := shellinstaller.RunUserEntry(m.ctx, m.self, append([]string{"install"}, shellEntryValues(m.req)...), os.Stdin, m.stdout, os.Stderr)
-			return shellInstallDone{err}
-		}
+		m.confirmed = true
+		return m, tea.Quit
 	}
 	switch key.String() {
 	case "tab":
-		m.field = (m.field + 1) % 4
+		fields := 2
+		if m.req.Mode == "shared" {
+			fields = 4
+		}
+		m.field = (m.field + 1) % fields
 	case "enter":
 		token, err := shellinstaller.InspectUserInstall(m.req)
 		m.err = err
 		if err == nil {
 			m.req.Confirmation, m.review = token, true
 		}
-	case "left", "right", " ":
+	case "left", "right":
 		if m.field == 1 {
 			if m.req.Mode == "separate" {
 				m.req.Mode = "shared"
@@ -179,9 +181,6 @@ func (m shellInstallModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m shellInstallModel) View() string {
-	if m.busy {
-		return "Installing selected Gentle Shell. Ctrl-C cancels; waiting for stop/reap.\n"
-	}
 	rows := []string{"Gentle Shell Linux user installer", "Target: " + m.req.Destination, "Mode: " + m.req.Mode, "Shared prefix: " + m.req.SharedPrefix, "Shared agent: " + m.req.SharedAgent,
 		"Commands: " + m.req.Destination + "/bin/gentle-shell and " + m.req.Destination + "/bin/pi", "Tab selects field; arrows change mode; Enter reviews; Escape cancels."}
 	rows[m.field+1] = "> " + rows[m.field+1]

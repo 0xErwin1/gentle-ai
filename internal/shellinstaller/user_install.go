@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"strings"
 )
 
 // Shared mode selects an existing owned global Pi installation and agent
@@ -37,6 +38,7 @@ func userConfirmation(req UserInstallRequest, identity string) string {
 }
 
 func userBinding(root, name string) string {
+	root = strings.ReplaceAll(root, "'", "'\\''")
 	binding := "#!/bin/sh\nexec '" + root + "/supervisor' shell launch '" + root + "' \"$@\"\n"
 	if name == "gentle-shell" {
 		binding = "#!/bin/sh\nif test \"${1-}\" = install; then shift; exec '" + root + "/supervisor' shell install \"$@\"; fi\n" + binding[len("#!/bin/sh\n"):]

@@ -7,5 +7,11 @@ type PrivateRuntimeError struct {
 	Cause                        error
 }
 
-func (e *PrivateRuntimeError) Error() string { return "private installation: " + e.Kind }
+func (e *PrivateRuntimeError) Error() string {
+	message := "private installation: " + e.Kind
+	if e.Cause != nil {
+		message += ": " + e.Cause.Error()
+	}
+	return message
+}
 func (e *PrivateRuntimeError) Unwrap() error { return e.Cause }

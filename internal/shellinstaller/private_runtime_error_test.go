@@ -19,8 +19,16 @@ func TestPrivateRuntimeErrorClassification(t *testing.T) {
 			failure := &PrivateRuntimeError{
 				Kind: "source", Workspace: "/owned/workspace", Destination: "/owned/shell", Cause: tc.cause,
 			}
-			if got := failure.Error(); got != "private installation: source" {
-				t.Fatalf("error = %q", got)
+			want := "private installation: source"
+			if tc.cause != nil {
+				want += ": " + tc.cause.Error()
+			}
+			if got := failure.Error(); got != want {
+				t.Fatalf("error = %q, want %q", got, want)
+			}
+			failure.Workspace, failure.Destination = "", ""
+			if failure.Error() != want {
+				t.Fatal("clean refusal hid its cause without recovery paths")
 			}
 			if got := errors.Unwrap(failure); got != tc.cause {
 				t.Fatalf("cause = %v, want %v", got, tc.cause)
