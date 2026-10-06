@@ -271,6 +271,8 @@ If no `--component` flag is provided for a partial uninstall, `gentle-ai` remove
 
 An uninstall that removes every component of an agent (`--all`, or no `--component` flag) also retires what releases before v4.0.0 installed for the retired SDD workflow, with the same ownership proof as install and sync (see [Components](components.md)): `sdd-*` skills, commands, native agents, Codex profiles, the Kimi module, OpenCode and Kilocode agent entries and prompts, the Claude Code preflight hook, and the `<!-- gentle-ai:sdd-orchestrator -->` block of the agent's prompt files, including its active prompt, since uninstall delivers no routing guidance that would migrate it. Files whose bytes no release wrote are kept and reported: move or delete them yourself. A directory that is a symlink is never entered, Pi files are never touched, and everything uninstall changes is in its backup snapshot.
 
+A complete Claude Code uninstall also retires the optional orchestrator modules pilot and keeps module files Gentle AI does not own; see [Claude Code orchestrator modules](rollback.md#claude-code-orchestrator-modules-pilot).
+
 ### update / upgrade
 
 Check for and install new versions of `gentle-ai` itself. The pre-upgrade backup snapshot covers only the agents recorded in `state.InstalledAgents` (`~/.gentle-ai/state.json`) — not every agent config directory that exists on your machine.
@@ -378,6 +380,7 @@ gentle-ai -v
 | `--channel`                   | Release channel: `stable` (default), `beta`, or `nightly` (alias for `beta`). Also settable via `GENTLE_AI_CHANNEL`. |
 | `--opencode-background-subagents` | OpenCode background subagents: `auto`, `on`, or `off`. Also settable via `GENTLE_AI_OPENCODE_BACKGROUND_SUBAGENTS`. See [below](#background-subagent-flags). |
 | `--pi-background-subagents`   | Pi background-subagent policy projected for `gentle-pi`: `auto`, `on`, or `off`. Also settable via `GENTLE_AI_PI_BACKGROUND_SUBAGENTS`. |
+| `--claude-orchestrator-modules` | Global Claude Code only: install the orchestrator as an always-loaded core plus on-demand modules in `~/.claude/gentle-ai/orchestrator/`. Off by default; rejected with `--scope workspace` or without `claude-code` in the selection. Sync, uninstall and restore limits: [Claude Code orchestrator modules](rollback.md#claude-code-orchestrator-modules-pilot). |
 | `--dry-run`                   | Preview the install plan without applying changes                                                                 |
 
 ## CLI Flags (sync)
