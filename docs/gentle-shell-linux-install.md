@@ -57,6 +57,10 @@ and changed preimages refuse. This inventory is not a recovery backup.
 
 Normal launches have no installer menu. `TARGET/bin/gentle-shell install`
 reopens the dedicated installer; other arguments go to the selected stock Pi.
+Shell launches preserve a known child exit status, including `2` and `130`,
+after termination readback. A nonzero Pi exit alone is not installation
+uncertainty; failed readback, incomplete wait or cleanup still refuses with
+`uncertain` and retains evidence.
 The source now preserves the caller's project directory in both direct and
 manager routes; installer staging is not the ordinary coding directory.
 The limited smoke asserts caller CWD and foreground restoration for its UI openings;

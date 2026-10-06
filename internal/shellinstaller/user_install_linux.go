@@ -347,14 +347,23 @@ func userService(ctx context.Context, self string, args []string, stdin io.Reade
 		return nil
 	}
 	runErr := cmd.Run()
-	if readbackErr := userUnitReadback(filepath.Join(receiptDir, "kernel.json")); readbackErr != nil {
+	readbackErr := userUnitReadback(filepath.Join(receiptDir, "kernel.json"))
+	terminated = readbackErr == nil
+	return userServiceResult(runErr, readbackErr)
+}
+
+func userServiceResult(runErr, readbackErr error) error {
+	if readbackErr != nil {
 		return privateError("uncertain", errors.Join(runErr, readbackErr))
 	}
-	terminated = true
-	if runErr != nil {
-		return privateError("uncertain", runErr)
+	if runErr == nil {
+		return nil
 	}
-	return nil
+	var child *exec.ExitError
+	if errors.As(runErr, &child) && child.ProcessState != nil && !errors.Is(runErr, exec.ErrWaitDelay) {
+		return runErr // Known child status after physical termination readback.
+	}
+	return privateError("uncertain", runErr)
 }
 
 type userUnitEvidence struct {
