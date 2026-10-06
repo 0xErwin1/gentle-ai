@@ -1,0 +1,11 @@
+package shellinstaller
+
+// PrivateRuntimeError is declared on all platforms so callers can classify
+// Linux private-runtime failures without excluding the unsupported-OS route.
+type PrivateRuntimeError struct {
+	Kind, Workspace, Destination string
+	Cause                        error
+}
+
+func (e *PrivateRuntimeError) Error() string { return "private installation: " + e.Kind }
+func (e *PrivateRuntimeError) Unwrap() error { return e.Cause }

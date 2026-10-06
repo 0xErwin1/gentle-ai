@@ -123,6 +123,9 @@ func TestUserInventoryAggregateBound(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			root := t.TempDir()
+			if err := os.Chmod(root, 0700); err != nil {
+				t.Fatal(err)
+			}
 			for i := 0; i < tc.count; i++ {
 				file, err := os.CreateTemp(root, "part-")
 				if err != nil {
@@ -289,7 +292,11 @@ func TestUserFinishPreservesCleanupUncertainty(t *testing.T) {
 }
 
 func TestUserSupervisorPreimages(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "supervisor")
+	root := t.TempDir()
+	if err := os.Chmod(root, 0700); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(root, "supervisor")
 	if err := os.WriteFile(path, []byte("trusted-build DATA preimage"), 0700); err != nil {
 		t.Fatal(err)
 	}

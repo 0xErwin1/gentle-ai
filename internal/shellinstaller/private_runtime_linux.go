@@ -30,14 +30,6 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-type PrivateRuntimeError struct {
-	Kind, Workspace, Destination string
-	Cause                        error
-}
-
-func (e *PrivateRuntimeError) Error() string { return "private installation: " + e.Kind }
-func (e *PrivateRuntimeError) Unwrap() error { return e.Cause }
-
 type PrivateInstallResult struct {
 	State, Destination, LockSHA256 string
 }
