@@ -2087,7 +2087,8 @@ func runSyncWithSelectionScope(homeDir string, selection model.Selection, scope 
 	result.Verify = withFailedSyncVerificationNote(result.Verify)
 	result.BackgroundPolicyEnabled = rt.runtimeReady && background.Effective == model.OpenCodeBackgroundOn
 	if background.activationPlan != nil {
-		result.Background.Activation = background.activationPlan.Report()
+		background.Activation = background.activationPlan.Report()
+		result.Background.Activation = background.Activation
 	}
 	result.Verify = withOpenCodeBackgroundPending(result.Verify, background, rt.runtimeReady, agentIDs)
 	if !result.Verify.Ready {
@@ -2494,7 +2495,7 @@ func RenderSyncReport(result SyncResult) string {
 		}
 		fmt.Fprintf(&b, "OpenCode background intent: %s (policy effective: %s)\n", result.Background.Intent, result.Background.Effective)
 		if result.Background.Effective == model.OpenCodeBackgroundOn {
-			fmt.Fprintf(&b, "OpenCode background runtime ready: %t\n", result.BackgroundPolicyEnabled)
+			fmt.Fprintln(&b, renderOpenCodeBackgroundRuntime(result.Background, result.BackgroundPolicyEnabled))
 			fmt.Fprintln(&b, renderOpenCodeBackgroundActivation(result.Background))
 		} else if result.Background.Effective == model.OpenCodeBackgroundOff && len(result.Background.Activation.LauncherPaths) > 0 {
 			fmt.Fprintln(&b, renderOpenCodeBackgroundActivation(result.Background))
