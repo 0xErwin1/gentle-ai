@@ -34,11 +34,32 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v4/internal/statecoord"
 )
 
+// isolateHome redirects HOME and XDG_CONFIG_HOME into a fresh temporary home
+// so runtime tests never touch the real user configuration, which may
+// legitimately contain symlinks (for example home-manager managed files) that
+// the readers refuse. GOMODCACHE and GOCACHE are captured before the override
+// and re-pinned afterwards so Go tool caches survive the isolation.
+func isolateHome(t *testing.T) string {
+	t.Helper()
+	home := t.TempDir()
+	preserved := map[string]string{}
+	for _, key := range []string{"GOMODCACHE", "GOCACHE"} {
+		if value, ok := os.LookupEnv(key); ok {
+			preserved[key] = value
+		}
+	}
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+	for key, value := range preserved {
+		t.Setenv(key, value)
+	}
+	return home
+}
+
 func TestUninstallOpenCodeFamilyManagedAgents(t *testing.T) {
 	for _, agent := range []model.AgentID{model.AgentOpenCode, model.AgentKilocode} {
 		t.Run(string(agent), func(t *testing.T) {
-			home := t.TempDir()
-			t.Setenv("HOME", home)
+			home := isolateHome(t)
 			svc, err := NewService(home, t.TempDir(), "dev")
 			if err != nil {
 				t.Fatal(err)
@@ -121,8 +142,7 @@ func TestCompleteUninstallLegacyOpenCodeDefaultOwnership(t *testing.T) {
 		{name: "user modified default is preserved", current: "user-agent", want: "user-agent"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			home := t.TempDir()
-			t.Setenv("HOME", home)
+			home := isolateHome(t)
 			settings := opencode.NewAdapter().SettingsPath(home)
 			if err := os.MkdirAll(filepath.Dir(settings), 0700); err != nil {
 				t.Fatal(err)
@@ -165,8 +185,7 @@ func TestCompleteUninstallLegacyOpenCodeDefaultOwnership(t *testing.T) {
 func TestRetiredSDDDefaultUninstallSkipsLegacyCleanup(t *testing.T) {
 	for _, kind := range []string{"complete", "partial"} {
 		t.Run(kind, func(t *testing.T) {
-			home := t.TempDir()
-			t.Setenv("HOME", home)
+			home := isolateHome(t)
 			legacy := filepath.Join(home, ".claude", "commands", "sdd-custom.md")
 			if err := os.MkdirAll(filepath.Dir(legacy), 0700); err != nil {
 				t.Fatal(err)
@@ -197,8 +216,7 @@ func TestRetiredSDDDefaultUninstallSkipsLegacyCleanup(t *testing.T) {
 func TestRetiredSDDExplicitUninstallFailsWithoutWrites(t *testing.T) {
 	for _, kind := range []string{"partial", "profile selection"} {
 		t.Run(kind, func(t *testing.T) {
-			home := t.TempDir()
-			t.Setenv("HOME", home)
+			home := isolateHome(t)
 			legacy := filepath.Join(home, ".claude", "commands", "sdd-custom.md")
 			if err := os.MkdirAll(filepath.Dir(legacy), 0700); err != nil {
 				t.Fatal(err)
@@ -266,8 +284,7 @@ func TestRetiredSDDExplicitUninstallFailsWithoutWrites(t *testing.T) {
 // (installed unconditionally by reviewassets.InstallNativeAgents,
 // independent of any removable component) are never touched.
 func TestCompleteUninstallPreservesNativeReviewAndJudgmentDayAgents(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
+	home := isolateHome(t)
 	adapter := claude.NewAdapter()
 	agentsDir := adapter.SubAgentsDir(home)
 	if err := os.MkdirAll(agentsDir, 0700); err != nil {
@@ -296,8 +313,7 @@ func TestCompleteUninstallPreservesNativeReviewAndJudgmentDayAgents(t *testing.T
 func TestUninstallOpenCodeTelemetryOwnershipAndScope(t *testing.T) {
 	for _, kind := range []string{"owned", "modified", "modified-after-plan", "unowned", "other-agent", "component-only"} {
 		t.Run(kind, func(t *testing.T) {
-			home := t.TempDir()
-			t.Setenv("HOME", home)
+			home := isolateHome(t)
 			t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, "xdg"))
 			config := opencode.NewAdapter().GlobalConfigDir(home)
 			paths := telemetryruntime.ManagedPaths(config)
