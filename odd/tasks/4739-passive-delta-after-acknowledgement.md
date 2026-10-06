@@ -15,7 +15,7 @@ Issue: gentle-ai#4739 (related #4939, #4815). Delivery: one PR that closes #4739
 ## Tasks
 
 - T1 — S2-S4: core helper `AcknowledgedPassivePredecessor` in `internal/reviewtransaction` with unit tests; inline; done, commit `4189a2f3`.
-- T2 — S2, S3, S5, S6: wire STATUS (facade fresh branch), next transition, contract validator, assess, narration, docs; update `TestNextTransitionDerivedRangeAcknowledgementStaysTerminal`; inline; commit pending.
+- T2 — S2, S3, S5, S6: wire STATUS (facade fresh branch), next transition, contract validator, assess, narration, docs; update `TestNextTransitionDerivedRangeAcknowledgementStaysTerminal`; inline; done, commit `2207879b`.
 
 ## Log
 
