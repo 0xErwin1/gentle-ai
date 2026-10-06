@@ -273,7 +273,7 @@ func RunArgs(args []string, stdout io.Writer) error {
 		m.SyncFn = tuiSync(homeDir)
 		m.SyncDetailedFn = tuiSyncDetailed(homeDir)
 		m.UninstallFn = tuiUninstall(homeDir)
-		m.UninstallWithProfilesFn = tuiUninstallWithProfiles(homeDir)
+		m.UninstallWithEngramScopeFn = tuiUninstallWithEngramScope(homeDir)
 		// The review store is clone-scoped, so the TUI acts on the repository
 		// the user launched it from. Both closures resolve the working
 		// directory at call time rather than at wiring time, so a survey and
@@ -799,13 +799,13 @@ func tuiUninstall(homeDir string) tui.UninstallFunc {
 	}
 }
 
-func tuiUninstallWithProfiles(homeDir string) tui.UninstallWithProfilesFunc {
-	return func(agentIDs []model.AgentID, componentIDs []model.ComponentID, profileNames []string, engramScope model.EngramUninstallScope) (componentuninstall.Result, error) {
+func tuiUninstallWithEngramScope(homeDir string) tui.UninstallWithEngramScopeFunc {
+	return func(agentIDs []model.AgentID, componentIDs []model.ComponentID, engramScope model.EngramUninstallScope) (componentuninstall.Result, error) {
 		workspaceDir, err := os.Getwd()
 		if err != nil {
 			return componentuninstall.Result{}, fmt.Errorf("resolve workspace directory: %w", err)
 		}
-		return cli.RunUninstallWithSelectionAndProfiles(homeDir, workspaceDir, agentIDs, componentIDs, profileNames, engramScope)
+		return cli.RunUninstallWithSelectionAndEngramScope(homeDir, workspaceDir, agentIDs, componentIDs, engramScope)
 	}
 }
 
