@@ -26,9 +26,23 @@ import (
 // overrides resolve exactly as they do for a genuine user home.
 func setRealHome(t *testing.T, homeDir string) {
 	t.Helper()
+	// Preserve Go tool caches resolved before the override so subprocess
+	// invocations keep working inside the isolated home.
+	preserved := map[string]string{}
+	for _, key := range []string{"GOMODCACHE", "GOCACHE"} {
+		if value, ok := os.LookupEnv(key); ok {
+			preserved[key] = value
+		}
+	}
 	t.Setenv("HOME", homeDir)
+	// XDG_CONFIG_HOME must follow the isolated home: readers refuse symlinked
+	// user configuration, and the real ~/.config may legitimately contain some.
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(homeDir, ".config"))
 	if runtime.GOOS == "windows" {
 		t.Setenv("USERPROFILE", homeDir)
+	}
+	for key, value := range preserved {
+		t.Setenv(key, value)
 	}
 }
 
