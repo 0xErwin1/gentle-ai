@@ -50,7 +50,6 @@ type SyncFlags struct {
 	Agents             []string
 	Skills             []string
 	SDDMode            string
-	SDDProfileStrategy string
 	StrictTDD          bool
 	IncludePermissions bool
 	IncludeTheme       bool
@@ -62,13 +61,11 @@ type SyncFlags struct {
 
 	PiBackgroundSubagents    string
 	PiBackgroundSubagentsSet bool
-	// Profiles remains available to internal callers with persisted selections.
-	Profiles       []model.Profile
-	skillsSet      bool
-	sddModeSet     bool
-	strictTDDSet   bool
-	permissionsSet bool
-	themeSet       bool
+	skillsSet                bool
+	sddModeSet               bool
+	strictTDDSet             bool
+	permissionsSet           bool
+	themeSet                 bool
 }
 
 // SyncResult holds the outcome of a sync execution.
@@ -300,12 +297,10 @@ func BuildSyncSelection(flags SyncFlags, agentIDs []model.AgentID) model.Selecti
 	}
 
 	return model.Selection{
-		Agents:             agentIDs,
-		Components:         components,
-		SDDMode:            sddMode,
-		SDDProfileStrategy: model.SDDProfileStrategyID(flags.SDDProfileStrategy),
-		Skills:             skillIDs,
-		Profiles:           flags.Profiles,
+		Agents:     agentIDs,
+		Components: components,
+		SDDMode:    sddMode,
+		Skills:     skillIDs,
 		// Preset is set to full-gentleman so selectedSkillIDs() returns the
 		// correct default skill set when no explicit skills are provided.
 		Preset: model.PresetFullGentleman,

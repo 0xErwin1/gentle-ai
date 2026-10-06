@@ -889,26 +889,14 @@ func applyOverrides(selection *model.Selection, overrides *model.SyncOverrides) 
 	if overrides.SDDMode != "" {
 		selection.SDDMode = overrides.SDDMode
 	}
-	if overrides.SDDProfileStrategy != "" {
-		selection.SDDProfileStrategy = overrides.SDDProfileStrategy
-	}
 	if overrides.StrictTDD != nil {
 		selection.StrictTDD = *overrides.StrictTDD
 	}
-	if len(overrides.Profiles) > 0 {
-		selection.Profiles = overrides.Profiles
-		// Profiles are an OpenCode multi-mode feature — if profiles are being
-		// created/synced, SDDModeMulti is required so that WriteSharedPromptFiles
-		// runs and the {file:...} prompt references resolve correctly.
-		if selection.SDDMode == "" {
-			selection.SDDMode = model.SDDModeMulti
-		}
-	}
 	// A persisted component selection loaded earlier via loadPersistedAssignments
-	// may omit the SDD component (e.g. an install that predates profiles). When
-	// the caller explicitly asked for profile or model assignment work through
-	// this override, that request must not be silently dropped — see issue #3430.
-	if model.CarriesSDDWork(overrides.Profiles, overrides.ModelAssignments) {
+	// may omit the SDD component. When the caller explicitly asked for model
+	// assignment work through this override, that request must not be silently
+	// dropped — see issue #3430.
+	if model.CarriesSDDWork(overrides.ModelAssignments) {
 		selection.EnsureComponent(model.ComponentSDD)
 	}
 }
