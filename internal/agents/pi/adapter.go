@@ -818,7 +818,11 @@ func readPiJSONFile(path string) (raw []byte, object map[string]any, existed boo
 		}
 		return nil, nil, false, fmt.Errorf("read pi json file %q: %w", path, err)
 	}
-	if err := json.Unmarshal(raw, &object); err != nil {
+	// DecodeStrictJSONObject preserves exact number tokens (json.Number), so
+	// values like 1e999 survive a migration round-trip byte-for-byte instead
+	// of failing to unmarshal into float64.
+	object, err = filemerge.DecodeStrictJSONObject(raw)
+	if err != nil {
 		return nil, nil, true, fmt.Errorf("unmarshal pi json file %q: %w", path, err)
 	}
 	if object == nil {
