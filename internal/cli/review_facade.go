@@ -1030,6 +1030,9 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 		var native reviewtransaction.TargetStatusResult
 		var liveSnapshot reviewtransaction.Snapshot
 		derivedBaseRef := ""
+		// passiveDeltaIdentity names the fresh target whose START was withheld
+		// because it only adds passive content to an acknowledged candidate.
+		passiveDeltaIdentity := ""
 		// Issue #3932: a continuation START issued carries the opaque
 		// repository context, so it is a resume of an existing lineage, never
 		// a pre-named fresh START. A process cwd that does not hold that
@@ -1095,6 +1098,8 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 				}
 			} else {
 				native = reviewFreshAtomicTargetStatus(target, liveSnapshot)
+				// A lineage already holding this exact START is live authority.
+				startOccupied := false
 				if requestedLineage == "" {
 					// Only the lineage derived for this exact frozen START can block
 					// it. Avoid selectorless authority scans (and HEAD ancestry reads)
@@ -1107,6 +1112,7 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 					if occupancyErr != nil {
 						return fmt.Errorf("inspect negotiated START lineage occupancy: %w", occupancyErr)
 					}
+					startOccupied = occupied
 					if occupied {
 						assessed, _, assessErr := reviewtransaction.AssessTargetStatusWithSnapshot(ctx, root, reviewtransaction.TargetStatusRequest{Target: target, LineageID: startLineage, PrePR: prePR})
 						if assessErr != nil {
@@ -1124,6 +1130,16 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 				}
 				if consumed {
 					native.Action, native.Replayability = reviewtransaction.TargetStatusActionStop, reviewtransaction.ReplayabilityNotReplayable
+				} else if requestedLineage == "" && !startOccupied && native.Action == reviewtransaction.TargetStatusActionStart {
+					// #4739: a committed range that only adds passive content to
+					// an approved, acknowledged candidate has nothing new to
+					// review. This only withholds a fresh offer: it grants no
+					// authority, never hides a lineage already holding this
+					// START, and any lookup failure keeps the offer.
+					if passive, passiveErr := reviewtransaction.AcknowledgedPassivePredecessor(ctx, root, liveSnapshot); passiveErr == nil && passive {
+						native.Action, native.Replayability = reviewtransaction.TargetStatusActionStop, reviewtransaction.ReplayabilityNotReplayable
+						passiveDeltaIdentity = liveSnapshot.Identity
+					}
 				}
 			}
 		} else {
@@ -1153,6 +1169,8 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 		result := newReviewTargetStatusResultForContract(native, *contract)
 		result.intendedUntracked = intendedScope
 		result.committedRangeBaseRef = derivedBaseRef
+		result.passiveDeltaAfterAcknowledgement = passiveDeltaIdentity != "" && native.TargetIdentity == passiveDeltaIdentity &&
+			native.Action == reviewtransaction.TargetStatusActionStop
 		// Issue #4040: publish the digest once, here, before every path that
 		// could suppress it — the compact-reviewing replacement immediately
 		// below (which deliberately zeros Digest for the #1972 fail-closed
