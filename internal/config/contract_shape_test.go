@@ -124,17 +124,19 @@ func fullyPopulatedDocument() Document {
 	return Document{
 		Version: CurrentVersion,
 		Selection: Selection{
-			Agents:          []model.AgentID{model.AgentOpenCode},
-			Components:      []model.ComponentID{model.ComponentEngram},
-			Skills:          []model.SkillID{model.SkillSDDApply},
-			Persona:         model.PersonaGentleman,
-			Preset:          model.PresetFullGentleman,
-			SDDMode:         model.SDDModeSingle,
-			StrictTDD:       true,
-			Scope:           model.InstallScopeWorkspace,
-			Channel:         model.InstallChannelBeta,
-			RDDMode:         model.RDDModeOn,
-			CommunityTools:  []model.CommunityToolID{model.CommunityToolCodeGraph},
+			Agents:         []model.AgentID{model.AgentOpenCode},
+			Components:     []model.ComponentID{model.ComponentEngram},
+			Skills:         []model.SkillID{model.SkillSDDApply},
+			Persona:        model.PersonaGentleman,
+			Preset:         model.PresetFullGentleman,
+			SDDMode:        model.SDDModeSingle,
+			StrictTDD:      true,
+			Scope:          model.InstallScopeWorkspace,
+			Channel:        model.InstallChannelBeta,
+			RDDMode:        model.RDDModeOn,
+			CommunityTools: []model.CommunityToolID{model.CommunityToolCodeGraph},
+			// Retired upstream, but the shape guards must still cover the
+			// document key while it exists so refusals stay well-formed.
 			OpenCodePlugins: []model.OpenCodeCommunityPluginID{model.OpenCodePluginGentleLogo},
 
 			Providers: map[model.AgentID]ProviderSelection{
