@@ -246,4 +246,3 @@ internal/update/upgrade/download.go	downloadBinary
 internal/update/upgrade/executor.go	enumerateFilesInDir
 internal/update/upgrade/homebrew.go	homebrewPackageInstalledWith
 internal/update/upgrade/homebrew.go	pathWithinPrefix
-internal/update/upgrade/strategy.go	openCodePluginRegisteredPendingHint
