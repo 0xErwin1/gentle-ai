@@ -68,6 +68,7 @@ func AcknowledgedPassivePredecessor(ctx context.Context, repo string, live Snaps
 		if err != nil {
 			return false, err
 		}
+		// guard:population acknowledged-passive-delta too-loose: only a committed HEAD base-diff whose nearest acknowledged first-parent ancestor (same base tree, exact recomputed identity) is followed by a low-risk passive delta; code, tests, configuration, operational markdown, and any lookup failure keep the review offer
 		return assessment.Level == RiskLow, nil
 	}
 	return false, nil
