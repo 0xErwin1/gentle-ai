@@ -177,7 +177,7 @@ func PartialUninstall(homeDir, workspaceDir, appVersion string, agentIDs []strin
 	return svc.PartialUninstall(agentsTyped, componentsTyped)
 }
 
-func PartialUninstallWithProfileSelection(homeDir, workspaceDir, appVersion string, agentIDs []string, componentIDs []string, profileNames []string, engramScope model.EngramUninstallScope) (Result, error) {
+func PartialUninstallWithEngramScopeSelection(homeDir, workspaceDir, appVersion string, agentIDs []string, componentIDs []string, engramScope model.EngramUninstallScope) (Result, error) {
 	svc, err := NewService(homeDir, workspaceDir, appVersion)
 	if err != nil {
 		return Result{}, err
@@ -193,7 +193,7 @@ func PartialUninstallWithProfileSelection(homeDir, workspaceDir, appVersion stri
 		componentsTyped = append(componentsTyped, model.ComponentID(componentID))
 	}
 
-	return svc.PartialUninstallWithProfiles(agentsTyped, componentsTyped, profileNames, engramScope)
+	return svc.PartialUninstallWithEngramScope(agentsTyped, componentsTyped, engramScope)
 }
 
 func CompleteUninstall(homeDir, workspaceDir, appVersion string) (Result, error) {
@@ -210,10 +210,7 @@ func (s *Service) PartialUninstall(agentIDs []model.AgentID, componentIDs []mode
 	return s.partialUninstall(agentIDs, componentIDs)
 }
 
-func (s *Service) PartialUninstallWithProfiles(agentIDs []model.AgentID, componentIDs []model.ComponentID, profileNames []string, engramScope model.EngramUninstallScope) (Result, error) {
-	// Profiles only applied to the retired SDD component; component validation
-	// rejects that request before planning and preserves existing profiles.
-	_ = profileNames
+func (s *Service) PartialUninstallWithEngramScope(agentIDs []model.AgentID, componentIDs []model.ComponentID, engramScope model.EngramUninstallScope) (Result, error) {
 	s.SetEngramUninstallScope(engramScope)
 	defer func() {
 		s.engramUninstallScope = model.EngramUninstallScopeGlobal
@@ -223,7 +220,7 @@ func (s *Service) PartialUninstallWithProfiles(agentIDs []model.AgentID, compone
 }
 
 // partialUninstall is the shared body of PartialUninstall and
-// PartialUninstallWithProfiles. It resolves the requested components,
+// PartialUninstallWithEngramScope. It resolves the requested components,
 // downgrades any that are still shared with an agent this run is not
 // removing (see reconcileSharedComponents), and executes the resulting plan.
 func (s *Service) partialUninstall(agentIDs []model.AgentID, componentIDs []model.ComponentID) (Result, error) {

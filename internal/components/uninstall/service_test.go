@@ -230,7 +230,7 @@ func TestRetiredSDDExplicitUninstallFailsWithoutWrites(t *testing.T) {
 			if kind == "partial" {
 				_, err = svc.PartialUninstall([]model.AgentID{model.AgentClaudeCode}, []model.ComponentID{model.ComponentSDD})
 			} else {
-				_, err = svc.PartialUninstallWithProfiles([]model.AgentID{model.AgentClaudeCode}, []model.ComponentID{model.ComponentSDD}, []string{"custom"}, model.EngramUninstallScopeGlobal)
+				_, err = svc.PartialUninstallWithEngramScope([]model.AgentID{model.AgentClaudeCode}, []model.ComponentID{model.ComponentSDD}, model.EngramUninstallScopeGlobal)
 			}
 			if err == nil || !strings.Contains(err.Error(), "retired") {
 				t.Fatalf("expected retired component rejection, got %v", err)
