@@ -37,10 +37,14 @@ function exclusive(file, value) {
   if (!read(file).equals(Buffer.from(value))) reject('exclusive readback');
 }
 function npmCommand(args) {
-  const child = spawnSync(node, [npm, ...args], { cwd: source, env: process.env, shell: false, timeout: 180000, maxBuffer: 8388608, encoding: 'utf8' });
+  const child = spawnSync(node, [npm, ...args], { cwd: source, env: process.env, shell: false, timeout: 180000, maxBuffer: 8388608 });
   if (child.error || child.status !== 0 || child.signal) {
-    const bytes = Buffer.from((child.stdout ?? '') + (child.stderr ?? ''));
-    reject(`npm ${args[0]} failed; status=${child.status}; bytes=${bytes.length}; sha256=${digest(bytes)}`);
+    const bytes = Buffer.concat([child.stdout ?? Buffer.alloc(0), child.stderr ?? Buffer.alloc(0)]);
+    const text = bytes.toString('utf8');
+    const detail = bytes.length <= 8192 && Buffer.from(text, 'utf8').equals(bytes) && !text.includes('\0')
+      ? JSON.stringify(text).replace(/[\u007f-\u009f]/g, char => `\\u${char.charCodeAt(0).toString(16).padStart(4, '0')}`)
+      : 'whole npm diagnostic withheld (size/encoding guard)';
+    reject(`npm ${args[0]} failed; status=${child.status}; error=${child.error?.code ?? 'none'}; bytes=${bytes.length}; sha256=${digest(bytes)}; diagnostic=${detail}`);
   }
 }
 const lockPath = path.join(source, 'package-lock.json');

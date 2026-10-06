@@ -28,6 +28,77 @@ func TestWindowsShellInstallFlagsAndNoEffectHelp(t *testing.T) {
 	}
 }
 
+func TestWindowsShellInstallDestinationPreservesTypedAndPastedSpaces(t *testing.T) {
+	for _, pasted := range []bool{false, true} {
+		name := "typed"
+		if pasted {
+			name = "pasted"
+		}
+		t.Run(name, func(t *testing.T) {
+			want := "R:\\Gentle Lab Work\\Owned Shell"
+			m := shellInstallModel{req: shellinstaller.UserInstallRequest{Mode: "separate"}}
+			keys := []tea.KeyMsg{{Type: tea.KeyRunes, Runes: []rune(want), Paste: true}}
+			if !pasted {
+				keys = nil
+				for _, char := range want {
+					key := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{char}}
+					if char == ' ' {
+						key = tea.KeyMsg{Type: tea.KeySpace}
+					}
+					keys = append(keys, key)
+				}
+			}
+			for _, key := range keys {
+				next, cmd := m.Update(key)
+				m = next.(shellInstallModel)
+				if cmd != nil || m.review || m.busy {
+					t.Fatal("editing started installation or review effects")
+				}
+			}
+			if m.req.Destination != want {
+				t.Fatalf("destination spaces changed: got %q, want %q", m.req.Destination, want)
+			}
+			next, _ := m.Update(tea.KeyMsg{Type: tea.KeyTab})
+			next, cmd := next.(shellInstallModel).Update(tea.KeyMsg{Type: tea.KeySpace})
+			got := next.(shellInstallModel)
+			if cmd != nil || got.field != 1 || got.review || got.busy || got.req.Mode != "separate" || got.req.Destination != want {
+				t.Fatal("space on the mode field changed the selection or enabled Shared")
+			}
+		})
+	}
+}
+
+func TestWindowsShellInstallControlInputPreservesSelectionAndReview(t *testing.T) {
+	for _, state := range []string{"editing", "review", "busy"} {
+		t.Run(state, func(t *testing.T) {
+			m := shellInstallModel{req: shellinstaller.UserInstallRequest{Destination: "R:\\Gentle Lab Work\\Owned Shell", Mode: "separate", Confirmation: "unchanged"}, review: state == "review", busy: state == "busy"}
+			before := m
+			for _, control := range []rune{0, '\r', '\n', '\t', '\x7f', '\u0085'} {
+				next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{control}})
+				m = next.(shellInstallModel)
+				if cmd != nil || m.req != before.req || m.field != before.field || m.review != before.review || m.busy != before.busy || m.err != before.err {
+					t.Fatal("console control event changed the physical selection or review state")
+				}
+			}
+		})
+	}
+	for _, state := range []string{"editing", "review", "busy"} {
+		for _, key := range []tea.KeyMsg{
+			{Type: tea.KeyRunes, Runes: []rune("\\Owned\x00 Shell")},
+			{Type: tea.KeyRunes, Runes: []rune("\\Owned\x00 Shell"), Paste: true},
+			{Type: tea.KeyRunes, Runes: []rune{0}, Paste: true},
+		} {
+			m := shellInstallModel{req: shellinstaller.UserInstallRequest{Destination: "R:\\Gentle Lab Work", Mode: "separate", Confirmation: "unchanged"}, review: state == "review", busy: state == "busy"}
+			before := m
+			next, cmd := m.Update(key)
+			got := next.(shellInstallModel)
+			if cmd != nil || got.req != before.req || got.field != before.field || got.review != before.review || got.busy != before.busy || (got.err != nil) != !before.busy {
+				t.Fatal("control text changed selection/review, was admitted, or started effects")
+			}
+		}
+	}
+}
+
 func TestWindowsShellInstallReusesEditReviewAndSettledCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

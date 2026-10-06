@@ -14,6 +14,7 @@ import (
 	"runtime"
 	"strings"
 	"time"
+	"unicode/utf8"
 	"unsafe"
 
 	assets "github.com/gentleman-programming/gentle-ai/v4/scripts"
@@ -139,6 +140,29 @@ func userWindowsManifestRead(root string) (userWindowsManifest, error) {
 	return manifest, nil
 }
 
+// Keep whole small failures, never a plausible-looking prefix of a large one.
+// The sanitized worker environment contains no caller credentials or config.
+type userWindowsProvisionDiagnostic struct {
+	data     []byte
+	withheld bool
+}
+
+func (d *userWindowsProvisionDiagnostic) Write(p []byte) (int, error) {
+	if d.withheld || len(p) > (16<<10)-len(d.data) {
+		d.data, d.withheld = nil, true
+	} else {
+		d.data = append(d.data, p...)
+	}
+	return len(p), nil // Always drain the pipe, including wholly withheld output.
+}
+
+func (d *userWindowsProvisionDiagnostic) String() string {
+	if d.withheld || !utf8.Valid(d.data) || strings.ContainsRune(string(d.data), 0) {
+		return "whole diagnostic withheld (size, UTF-8, or NUL guard)"
+	}
+	return fmt.Sprintf("%q", d.data) // Escape terminal controls rather than emitting them.
+}
+
 func userWindowsProvision(ctx context.Context, root, action string, stdout, stderr io.Writer) error {
 	helper, err := assets.ReadWindowsUserHelper()
 	if err != nil {
@@ -154,8 +178,12 @@ func userWindowsProvision(ctx context.Context, root, action string, stdout, stde
 	}
 	command := exec.CommandContext(ctx, filepath.Join(root, "runtime/node/node.exe"), filepath.Join(root, "provision.mjs"), root, action)
 	command.Dir, command.Env = filepath.Join(root, "project"), env
-	command.Stdout, command.Stderr, command.WaitDelay = stdout, stderr, 2*time.Second
-	return command.Run() // Already inside the read-back bounded Job Object.
+	diagnostic := &userWindowsProvisionDiagnostic{}
+	command.Stdout, command.Stderr, command.WaitDelay = stdout, io.MultiWriter(stderr, diagnostic), 2*time.Second
+	if err := command.Run(); err != nil { // Already inside the read-back bounded Job Object.
+		return fmt.Errorf("Windows provision %s failed: %w; stderr=%s", action, err, diagnostic)
+	}
+	return nil
 }
 
 func userWindowsInventory(root string) error {
@@ -247,11 +275,17 @@ func RunUserInstall(ctx context.Context, req UserInstallRequest) (result UserIns
 	if err := userWindowsWrite(filepath.Join(stage, "selection.json"), selection); err != nil {
 		return result, err
 	}
+	started := time.Now()
+	phase := func(step, artifact string) {
+		fmt.Fprintf(os.Stderr, "Windows install phase: %s %s %dms\n", step, artifact, time.Since(started).Milliseconds())
+	}
 	for i, artifact := range userWindowsArtifacts {
+		phase("acquire", artifact.Archive)
 		data, err := userWindowsAcquire(ctx, artifact, filepath.Join(stage, "runtime/archives", artifact.Archive))
 		if err != nil {
 			return result, err
 		}
+		phase("unpack", artifact.Archive)
 		if i < 2 {
 			directory := "node"
 			if i == 1 {
@@ -271,6 +305,7 @@ func RunUserInstall(ctx context.Context, req UserInstallRequest) (result UserIns
 			}
 		}
 	}
+	phase("runtimes-ready", "all")
 	for _, name := range []string{"user.npmrc", "global.npmrc"} {
 		if err := userWindowsWrite(filepath.Join(stage, "config", name), nil); err != nil {
 			return result, err
@@ -301,9 +336,11 @@ func RunUserInstall(ctx context.Context, req UserInstallRequest) (result UserIns
 	if err := userWindowsWrite(filepath.Join(stage, "supervisor.exe"), image); err != nil {
 		return result, err
 	}
+	phase("provision", "stock")
 	if err := userWindowsProvision(ctx, stage, "install", io.Discard, io.Discard); err != nil {
 		return result, err
 	}
+	phase("provision-ready", "stock")
 	for _, product := range []string{"pi", "gentle-shell"} {
 		if err := userWindowsWrite(filepath.Join(stage, "bin", product+".cmd"), userWindowsBinding(req.Destination, product)); err != nil {
 			return result, err

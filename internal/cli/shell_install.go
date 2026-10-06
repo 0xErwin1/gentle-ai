@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
+	"unicode"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/shellinstaller"
@@ -129,6 +130,14 @@ func (m shellInstallModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if m.busy {
 		return m, nil
 	}
+	if key.Type == tea.KeyRunes && strings.IndexFunc(string(key.Runes), unicode.IsControl) >= 0 {
+		// Windows console modifier records can carry a NUL character instead of text.
+		// Never turn those records into path bytes or let them dismiss physical review.
+		if key.Paste || len(key.Runes) > 1 {
+			m.err = errors.New("destination text contains control characters; input refused")
+		}
+		return m, nil
+	}
 	if m.review {
 		if key.String() != "y" {
 			m.review = false
@@ -149,8 +158,12 @@ func (m shellInstallModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if err == nil {
 			m.req.Confirmation, m.review = token, true
 		}
-	case "left", "right", " ":
+	case "left", "right":
 		// Windows MVP keeps the existing UI in Separate; Shared is not offered.
+	case " ":
+		if m.field == 0 {
+			m.req.Destination += " "
+		}
 	default:
 		fields := []*string{&m.req.Destination, nil, &m.req.SharedPrefix, &m.req.SharedAgent}
 		if field := fields[m.field]; field != nil {

@@ -128,6 +128,13 @@ func userWindowsConsoleSave() func() error {
 	}
 }
 
+func userWindowsEntryContext(ctx context.Context, action string) (context.Context, context.CancelFunc) {
+	if action == "launch" {
+		return context.WithCancel(ctx)
+	}
+	return context.WithTimeout(ctx, 900*time.Second)
+}
+
 func RunUserEntry(ctx context.Context, self string, args []string, stdin io.Reader, stdout, stderr io.Writer) (err error) {
 	if ctx == nil || ctx.Err() != nil || len(args) == 0 {
 		return errors.New("missing or canceled Windows shell entry")
@@ -136,7 +143,7 @@ func RunUserEntry(ctx context.Context, self string, args []string, stdin io.Read
 		return err
 	}
 	if !strings.HasPrefix(args[0], "internal-") {
-		ctx, cancel := context.WithTimeout(ctx, 900*time.Second)
+		ctx, cancel := userWindowsEntryContext(ctx, args[0])
 		defer cancel()
 		env, envErr := userWindowsEnvironment("")
 		if envErr != nil {
@@ -185,8 +192,11 @@ func RunUserEntry(ctx context.Context, self string, args []string, stdin io.Read
 			return errors.New("missing owned Windows product/root")
 		}
 		root := args[1]
-		if err := userWindowsVerify(ctx, root, io.Discard, io.Discard); err != nil {
-			return err
+		verification, cancel := context.WithTimeout(ctx, 900*time.Second)
+		cause := userWindowsVerify(verification, root, io.Discard, io.Discard)
+		cancel()
+		if cause != nil {
+			return cause
 		}
 		env, err := userWindowsEnvironment(root)
 		if err != nil {

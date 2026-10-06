@@ -75,7 +75,7 @@ func userWindowsSecurity(path string, selected bool) error {
 }
 
 func userWindowsIdentity(path string, selected bool) (string, error) {
-	if !filepath.IsAbs(path) || filepath.Clean(path) != path || len(filepath.VolumeName(path)) != 2 || strings.ContainsAny(path, "\x00\r\n\"%&|<>^!") {
+	if !filepath.IsAbs(path) || filepath.Clean(path) != path || len(filepath.VolumeName(path)) != 2 || strings.ContainsAny(path, "\x00\r\n\"%&|<>^") {
 		return "", errors.New("select a canonical local drive path without shell metacharacters")
 	}
 	for current := path; ; current = filepath.Dir(current) {
@@ -86,6 +86,12 @@ func userWindowsIdentity(path string, selected bool) (string, error) {
 		attributes, err := windows.GetFileAttributes(name)
 		if err != nil || attributes&windows.FILE_ATTRIBUTE_REPARSE_POINT != 0 {
 			return "", errors.Join(err, errors.New("Windows aliases/reparse points are not an owned selection"))
+		}
+		// Official Go archives contain bang-escaped module fixture filenames.
+		// Permit only a regular leaf file; directories and binding selections
+		// still reject bang characters (including every ancestor directory).
+		if strings.Contains(current, "!") && (current != path || attributes&windows.FILE_ATTRIBUTE_DIRECTORY != 0) {
+			return "", errors.New("select a canonical local drive path without shell metacharacters")
 		}
 		if err := userWindowsSecurity(current, selected && current == path); err != nil {
 			return "", err
