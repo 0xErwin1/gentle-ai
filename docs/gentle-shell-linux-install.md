@@ -105,22 +105,47 @@ Package lifecycles remain disabled.
 
 Foreign destinations and native locks, stages, backups or tombstones refuse.
 Do not delete uncertain shared workspaces or published evidence to retry.
+Shared failures become uncertain only once global provisioning may begin;
+earlier clean refusals remove private staging and preserve their original cause.
 Shared source snapshots retain the entire affected prefix and agent preimages.
 Upgrade fixtures retain distinct full preimages in `state/upgrade`, including in
 separate mode; they do not overwrite the initial shared-install snapshots.
 Snapshot file trees and selection writes are synchronized before fixture effects.
-Recovery selects the upgrade snapshot when present and binds fresh confirmation
-to the current selected trees. Roots and target parent require one filesystem:
+Recovery selects the upgrade snapshot when present. Fresh confirmation binds
+the stored selection, saved preimage bytes and physical root identities, not the
+possibly damaged live contents. Restore independently verifies both stored
+preimage hashes before changing either target and rechecks confirmed selection
+and root identities before mutation. Roots and target parent require one filesystem:
 
 ```sh
 gentle-ai shell recover /preserved-workspace/installed inspect
 gentle-ai shell recover /preserved-workspace/installed PRINTED_CONFIRMATION
 ```
 
-For published uncertainty use the actual published target as ROOT. Inspection
-binds recovery to current selected trees; restoration preserves new evidence in
-fresh quarantine directories. This is not hostile-same-UID custody or full DR.
-Recovery, retry and cleanup-failure reporting still require actual fault tests.
+For published uncertainty use the actual published target as ROOT. Dangling
+links or oversized files in a live tree do not prevent restoration from intact
+preimages; restoration preserves new evidence in fresh quarantine directories.
+Changed selection, replaced roots or corrupt saved preimages refuse. This is
+not hostile-same-UID custody or full DR. Offline fixtures cover these controls;
+real user-manager recovery and cleanup-failure qualification remain deferred.
+
+### Separate-mode graph drift
+
+Without an intact stored recovery snapshot, `recover` cannot undo arbitrary
+`pi update` changes. Do not delete or reinstall into the same damaged target.
+Keep it, including `OLD_TARGET/agent`, for configuration/history and evidence.
+Inspect and confirm a different, empty target using separate mode:
+
+```sh
+gentle-ai shell install --target /owned/private-parent/new-shell --mode separate --inspect
+gentle-ai shell install --target /owned/private-parent/new-shell --mode separate --confirm PRINTED_SHA256
+```
+
+Use the new target\'s bindings. Agent data is not automatically migrated;
+review old user-authored configuration/history before any manual transfer.
+Do not copy managed `npmCommand`, package registrations or runtime files from
+the damaged installation. A saved upgrade preimage, when present and valid,
+can instead use the recovery commands above; no missing backup is synthesized.
 The full Guest path now attempts these controls only with an existing real
 manager and bus. Any failed/missing assertion refuses qualification; merely
 writing the path, or a successful direct-only run, is not functional readiness.

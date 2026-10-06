@@ -102,6 +102,15 @@ func TestShellInstallTUIEditAndCancel(t *testing.T) {
 	}
 }
 
+func TestShellInstallSeparateRepairHelpHasNoEffects(t *testing.T) {
+	// The documented repair continuation remains usable without a user manager.
+	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
+	var output bytes.Buffer
+	if err := RunShell([]string{"install", "--help"}, &output); err != nil || !strings.Contains(output.String(), "--mode separate") {
+		t.Fatalf("repair help is not runnable: %v %q", err, output.String())
+	}
+}
+
 func TestShellInstallTopLevelCommandsHaveNoEffects(t *testing.T) {
 	// An absent bus prevents a regression from reaching the real user manager.
 	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())

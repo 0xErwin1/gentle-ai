@@ -6,7 +6,7 @@ import { spawnSync } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { pathToFileURL } from 'node:url';
 
-const [root, prefix, agent, finalPrefix, finalRoot, mode, requestedAction = 'install'] = process.argv.slice(2);
+const [root, prefix, agent, finalPrefix, finalRoot, mode, requestedAction = 'install', recoveryAuthority] = process.argv.slice(2);
 const preparing = requestedAction === 'prepare-prior';
 const action = preparing ? 'install' : requestedAction;
 const uid = process.getuid();
@@ -62,7 +62,7 @@ function writeExclusive(absolute, bytes, permissions = 0o600) {
 for (const value of [root, prefix, agent, finalPrefix, finalRoot]) {
   if (typeof value !== 'string' || !/^\/[A-Za-z0-9_./-]+$/.test(value) || path.resolve(value) !== value) reject('unsafe selection');
 }
-if (process.argv.length !== 9 || !['separate', 'shared'].includes(mode) || !['install', 'verify', 'restore', 'prepare-prior'].includes(requestedAction) || uid === 0) reject('arguments or UID');
+if (process.argv.length !== (requestedAction === 'restore' ? 10 : 9) || !['separate', 'shared'].includes(mode) || !['install', 'verify', 'restore', 'prepare-prior'].includes(requestedAction) || uid === 0) reject('arguments or UID');
 physical(root, true);
 const state = path.join(root, 'state');
 physical(state, true);
@@ -151,13 +151,29 @@ function snapshot(upgrade = false) {
   writeExclusive(path.join(store, 'selection.json'), `${JSON.stringify(before)}\n`);
 }
 function restore() {
+  const authority = JSON.parse(recoveryAuthority);
   const selection = JSON.parse(read(selectionPath));
-  if (selection.mode !== 'shared' || selection.prefix !== prefix || selection.agent !== agent || selection.finalRoot !== finalRoot || selection.finalPrefix !== finalPrefix || finalPrefix !== prefix) reject('recovery selection differs');
-  for (const [target, name, expected] of [[prefix, 'prefix.preimage', selection.prefixSHA], [agent, 'agent.preimage', selection.agentSHA]]) {
+  if (mode !== 'shared' || selection.mode !== 'shared' || selection.prefix !== prefix || selection.agent !== agent || selection.finalRoot !== finalRoot || selection.finalPrefix !== finalPrefix || finalPrefix !== prefix) reject('recovery selection differs');
+  const targets = [[prefix, 'prefix.preimage', selection.prefixSHA], [agent, 'agent.preimage', selection.agentSHA]];
+  function validate() {
+    if (!authority || !/^[a-f0-9]{64}$/.test(authority.selectionSHA) || digest(read(selectionPath)) !== authority.selectionSHA) reject('confirmed recovery selection changed');
+    for (const [target, key] of [[root, 'rootID'], [prefix, 'prefixID'], [agent, 'agentID']]) {
+      physical(target, true);
+      const stat = fs.lstatSync(target, { bigint: true });
+      if (`${stat.dev}:${stat.ino}` !== authority[key]) reject('confirmed recovery root changed');
+    }
+    // Check both saved trees before touching either live target.
+    for (const [, name, expected] of targets) {
+      if (!/^[a-f0-9]{64}$/.test(expected) || inventory(path.join(recoveryState, name)) !== expected) reject('recovery preimage differs');
+    }
+  }
+  validate();
+  for (const [target, name, expected] of targets) {
     const saved = path.join(recoveryState, name);
-    if (inventory(saved) !== expected) reject('recovery preimage differs');
-    physical(target, true);
-    if (inventory(target) === expected) continue;
+    let unchanged = false;
+    try { unchanged = inventory(target) === expected; } catch { /* Damaged live contents are untrusted evidence, not restore authority. */ }
+    if (unchanged) continue;
+    validate();
     const quarantine = path.join(recoveryState, `${name}.quarantine-${crypto.randomUUID()}`);
     absent(quarantine);
     fs.mkdirSync(quarantine, { mode: 0o700 });

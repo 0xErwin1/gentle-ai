@@ -490,6 +490,15 @@ func userFinish(ctx context.Context, result UserInstallResult, cause error, work
 	return UserInstallResult{}, failure
 }
 
+func userInstallFinish(ctx context.Context, result UserInstallResult, cause error, workspace string, identity os.FileInfo, req UserInstallRequest, sharedProvisioningStarted bool) (UserInstallResult, error) {
+	if sharedProvisioningStarted && cause != nil {
+		failure := privateError("uncertain", cause)
+		failure.Workspace, failure.Destination = workspace, req.Destination
+		return UserInstallResult{}, failure
+	}
+	return userFinish(ctx, result, cause, workspace, identity, req.Destination)
+}
+
 func RunUserInstall(ctx context.Context, req UserInstallRequest) (result UserInstallResult, err error) {
 	if ctx == nil || ctx.Err() != nil {
 		return result, privateError("canceled", context.Canceled)
@@ -507,7 +516,7 @@ func RunUserInstall(ctx context.Context, req UserInstallRequest) (result UserIns
 			return result, err
 		}
 		if err = userVerifyGlobal(ctx, req.Destination, manifest.Prefix, manifest.Agent, manifest.Prefix, req.Destination, req.Mode); err != nil {
-			return result, err
+			return result, userGraphRepairError(req.Destination, req.Mode, err)
 		}
 		if err = userNativeReadback(ctx, filepath.Join(manifest.Prefix, "lib/node_modules/gentle-pi/.gentle-ai")); err != nil {
 			return result, err
@@ -521,14 +530,9 @@ func RunUserInstall(ctx context.Context, req UserInstallRequest) (result UserIns
 		return result, err
 	}
 	identity, err := privateDirectory(workspace)
+	sharedProvisioningStarted := false
 	defer func() {
-		if req.Mode == "shared" && err != nil {
-			failure := privateError("uncertain", err)
-			failure.Workspace, failure.Destination = workspace, req.Destination
-			result, err = UserInstallResult{}, failure // Keep shared preimages and supplier evidence.
-			return
-		}
-		result, err = userFinish(ctx, result, err, workspace, identity, req.Destination)
+		result, err = userInstallFinish(ctx, result, err, workspace, identity, req, sharedProvisioningStarted)
 	}()
 	if err != nil {
 		return result, err
@@ -571,6 +575,7 @@ func RunUserInstall(ctx context.Context, req UserInstallRequest) (result UserIns
 	if inspectErr != nil || freshConfirmation != req.Confirmation {
 		return result, privateError("preimage", errors.Join(inspectErr, errors.New("selected files changed before global provisioning")))
 	}
+	sharedProvisioningStarted = req.Mode == "shared"
 	cmd := exec.CommandContext(ctx, node, helperPath, root, prefix, agent, finalPrefix, req.Destination, req.Mode, "install")
 	cmd.Dir, cmd.Env = filepath.Join(root, "project"), userEnvironment(root, prefix, agent)
 	if output, err := privateRun(ctx, cmd, cancel); err != nil {
@@ -643,6 +648,15 @@ func RunUserInstall(ctx context.Context, req UserInstallRequest) (result UserIns
 	return UserInstallResult{req.Destination, finalPrefix, finalAgent, "ComponentInstalled"}, nil
 }
 
+func userRecoveryID(path string) (string, error) {
+	info, err := privateDirectory(path)
+	if err != nil {
+		return "", err
+	}
+	stat := info.Sys().(*syscall.Stat_t)
+	return fmt.Sprintf("%d:%d", stat.Dev, stat.Ino), nil
+}
+
 func userRecover(ctx context.Context, args []string, stdout io.Writer) error {
 	if len(args) != 2 || !privateHierarchyPath(args[0]) {
 		return errors.New("recovery: supply ROOT and inspect or printed confirmation")
@@ -659,18 +673,36 @@ func userRecover(ctx context.Context, args []string, stdout io.Writer) error {
 	} else if !os.IsNotExist(statErr) {
 		return statErr
 	}
+	selectionInfo, err := privatePhysical(selectionPath)
+	if err != nil || selectionInfo.Size() > 4096 || selectionInfo.Mode().Perm()&0022 != 0 || selectionInfo.Sys().(*syscall.Stat_t).Uid != uint32(os.Getuid()) {
+		return errors.New("recovery selection is absent or malformed; preserve evidence")
+	}
 	data, err := os.ReadFile(selectionPath)
-	var selection struct{ Mode, Prefix, Agent, FinalPrefix, FinalRoot string }
+	var selection struct{ Mode, Prefix, Agent, FinalPrefix, FinalRoot, PrefixSHA, AgentSHA string }
 	if err != nil || len(data) > 4096 || json.Unmarshal(data, &selection) != nil || selection.Mode != "shared" || !privateHierarchyPath(selection.Prefix) || !privateHierarchyPath(selection.Agent) || !privateHierarchyPath(selection.FinalRoot) || !privateHierarchyPath(selection.FinalPrefix) || selection.FinalPrefix != selection.Prefix {
 		return errors.New("recovery selection is absent or malformed; preserve evidence")
 	}
-	for _, selected := range []string{selection.Prefix, selection.Agent} {
-		stamp, err := userTreeStamp(selected)
+	for _, digest := range []string{selection.PrefixSHA, selection.AgentSHA} {
+		if len(digest) != 64 || strings.Trim(digest, "0123456789abcdef") != "" {
+			return errors.New("recovery preimage hashes are absent or malformed; preserve evidence")
+		}
+	}
+	binding := map[string]string{"selectionSHA": fmt.Sprintf("%x", sha256.Sum256(data))}
+	for key, selected := range map[string]string{"rootID": root, "prefixID": selection.Prefix, "agentID": selection.Agent} {
+		id, err := userRecoveryID(selected)
+		if err != nil {
+			return err
+		}
+		binding[key] = id
+	}
+	for _, name := range []string{"prefix.preimage", "agent.preimage"} {
+		stamp, err := userTreeStamp(filepath.Join(filepath.Dir(selectionPath), name))
 		if err != nil {
 			return err
 		}
 		identity += ":" + stamp
 	}
+	identity += ":" + binding["prefixID"] + ":" + binding["agentID"]
 	token := fmt.Sprintf("%x", sha256.Sum256(append(data, []byte(identity)...)))
 	if args[1] == "inspect" {
 		_, err := fmt.Fprintf(stdout, "Recovery confirmation: %s\nSelected prefix: %q\nSelected agent: %q\n", token, selection.Prefix, selection.Agent)
@@ -693,12 +725,19 @@ func userRecover(ctx context.Context, args []string, stdout io.Writer) error {
 	}
 	ctx, cancel := context.WithTimeout(ctx, 120*time.Second)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, node, helper, root, selection.Prefix, selection.Agent, selection.FinalPrefix, selection.FinalRoot, "shared", "restore")
+	authority, err := json.Marshal(binding)
+	if err != nil {
+		return err
+	}
+	cmd := exec.CommandContext(ctx, node, helper, root, selection.Prefix, selection.Agent, selection.FinalPrefix, selection.FinalRoot, "shared", "restore", string(authority))
 	cmd.Dir, cmd.Env = filepath.Join(root, "project"), userEnvironment(root, selection.Prefix, selection.Agent)
 	_, err = privateRun(ctx, cmd, cancel)
-	if err == nil {
-		_, err = fmt.Fprintf(stdout, "Restored selected shared preimages; preserve recovery evidence at %q\n", root)
+	if err != nil {
+		failure := privateError("uncertain", err)
+		failure.Workspace, failure.Destination = root, selection.Prefix
+		return failure // The restore command may already have moved shared data.
 	}
+	_, err = fmt.Fprintf(stdout, "Restored selected shared preimages; preserve recovery evidence at %q\n", root)
 	return err
 }
 
@@ -1063,10 +1102,10 @@ func userLaunch(ctx context.Context, root string, args []string, stdin io.Reader
 	}
 	cli := filepath.Join(manifest.Prefix, "lib/node_modules/@earendil-works/pi-coding-agent/dist/bundle/cli.js")
 	if _, err := userSourceFile(ctx, cli, -1, ""); err != nil {
-		return err
+		return userGraphRepairError(root, manifest.Mode, err)
 	}
 	if err := userVerifyGlobal(ctx, root, manifest.Prefix, manifest.Agent, manifest.Prefix, root, manifest.Mode); err != nil {
-		return err
+		return userGraphRepairError(root, manifest.Mode, err)
 	}
 	if err := userNativeReadback(ctx, filepath.Join(manifest.Prefix, "lib/node_modules/gentle-pi/.gentle-ai")); err != nil {
 		return err

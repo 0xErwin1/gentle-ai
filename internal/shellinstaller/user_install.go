@@ -46,6 +46,13 @@ func userBinding(root, name string) string {
 	return binding
 }
 
+func userGraphRepairError(root, mode string, err error) error {
+	if mode == "separate" && err != nil {
+		return fmt.Errorf("%w\nSeparate repair: preserve target %q and its agent data; install into a different empty target with separate mode. Run gentle-ai shell install --help for inspection and confirmation flags; do not delete or reuse the damaged target", err, root)
+	}
+	return err
+}
+
 func UserInstallFromEntry(args []string) (UserInstallRequest, error) {
 	if len(args) != 5 {
 		return UserInstallRequest{}, fmt.Errorf("invalid internal install arguments")
