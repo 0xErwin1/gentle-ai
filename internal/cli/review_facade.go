@@ -1098,6 +1098,8 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 				}
 			} else {
 				native = reviewFreshAtomicTargetStatus(target, liveSnapshot)
+				// A lineage already holding this exact START is live authority.
+				startOccupied := false
 				if requestedLineage == "" {
 					// Only the lineage derived for this exact frozen START can block
 					// it. Avoid selectorless authority scans (and HEAD ancestry reads)
@@ -1110,6 +1112,7 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 					if occupancyErr != nil {
 						return fmt.Errorf("inspect negotiated START lineage occupancy: %w", occupancyErr)
 					}
+					startOccupied = occupied
 					if occupied {
 						assessed, _, assessErr := reviewtransaction.AssessTargetStatusWithSnapshot(ctx, root, reviewtransaction.TargetStatusRequest{Target: target, LineageID: startLineage, PrePR: prePR})
 						if assessErr != nil {
@@ -1127,11 +1130,12 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 				}
 				if consumed {
 					native.Action, native.Replayability = reviewtransaction.TargetStatusActionStop, reviewtransaction.ReplayabilityNotReplayable
-				} else if native.Action == reviewtransaction.TargetStatusActionStart {
+				} else if requestedLineage == "" && !startOccupied && native.Action == reviewtransaction.TargetStatusActionStart {
 					// #4739: a committed range that only adds passive content to
 					// an approved, acknowledged candidate has nothing new to
-					// review. This only withholds the offer; it grants no
-					// authority, and any lookup failure keeps the offer.
+					// review. This only withholds a fresh offer: it grants no
+					// authority, never hides a lineage already holding this
+					// START, and any lookup failure keeps the offer.
 					if passive, passiveErr := reviewtransaction.AcknowledgedPassivePredecessor(ctx, root, liveSnapshot); passiveErr == nil && passive {
 						native.Action, native.Replayability = reviewtransaction.TargetStatusActionStop, reviewtransaction.ReplayabilityNotReplayable
 						passiveDeltaIdentity = liveSnapshot.Identity
