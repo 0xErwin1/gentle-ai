@@ -137,6 +137,13 @@ const finalRoot = JSON.parse(read(path.join(root, 'selection.json'))).Destinatio
 if (!path.isAbsolute(finalRoot)) reject('publication selection');
 const settings = { packages: [path.join(finalRoot, 'prefix/node_modules/gentle-pi')], npmCommand: [path.join(finalRoot, 'runtime/node/node.exe'), path.join(finalRoot, 'runtime/node/node_modules/npm/bin/npm-cli.js'), '--prefix', path.join(finalRoot, 'prefix')] };
 if (action === 'install') exclusive(settingsPath, `${JSON.stringify(settings, null, 2)}\n`);
-else if (JSON.stringify(JSON.parse(read(settingsPath))) !== JSON.stringify(settings)) reject('owned package/settings bindings changed');
+const observedSettings = JSON.parse(read(settingsPath));
+const settingsKeys = ['packages', 'npmCommand', 'lastChangelogVersion'];
+if (observedSettings === null || typeof observedSettings !== 'object' || Array.isArray(observedSettings) ||
+    Object.keys(observedSettings).some(key => !settingsKeys.includes(key)) ||
+    (Object.hasOwn(observedSettings, 'lastChangelogVersion') && typeof observedSettings.lastChangelogVersion !== 'string') ||
+    JSON.stringify({ packages: observedSettings.packages, npmCommand: observedSettings.npmCommand }) !== JSON.stringify(settings)) {
+  reject('owned package/settings bindings changed');
+}
 if (!read(lockPath).equals(lockBytes)) reject('source lock changed');
 console.log(`Windows stock composition verified; packages=${count}; registration and full Ready remain unqualified`);

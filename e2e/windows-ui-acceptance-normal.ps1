@@ -1,4 +1,4 @@
-# Focused install/open lab control. Parent compiles the pinned helper after Guest resource checks.
+# Settings fixtures and repeated installed entries, bounded modified-Windows lab only.
 $ErrorActionPreference = 'Stop'
 $work = 'R:\Gentle Lab Work'
 $utf8 = [Text.UTF8Encoding]::new($false)
@@ -39,13 +39,17 @@ foreach ($path in @('R:\', $work)) {
     }
 }
 # Gate above precedes all product operations. No SDK, network helper, or replacement installer here.
+if ((Get-FileHash -LiteralPath 'C:\lab-input\windows-owned-settings.test.mjs' -Algorithm SHA256).Hash.ToLowerInvariant() -cne '6cac763321104d06186bc8a502e3ae65b4cb68209d1cbc70fbc3b9bde0ceb12d') {
+    throw 'Owned settings fixture digest differs; no product execution'
+}
 $target = Join-Path $work 'Owned Shell'; $project = Join-Path $work 'Project With Spaces'
 $profile = Join-Path $work 'Simulated Guest Profile'
 $receiptPath = Join-Path $work 'ui-acceptance.json'; $diagnosticPath = Join-Path $work 'ui-diagnostic.log'
 $rawPath = Join-Path $work 'ui-terminal.private.bin'
+$fixtureReport = Join-Path $work 'settings-fixtures.private.json'
 $candidate = Join-Path $work 'candidate.private.exe'
-$artifactPaths = @($candidate,$target,$project,$profile,$receiptPath,$diagnosticPath,$rawPath,"$work\fixture-before.private.txt","$work\fixture-after.private.txt")
-foreach ($phase in @('before','inspect','installed','gentle','pi')) { $artifactPaths += "$work\$phase.cwd"; $artifactPaths += "$work\$phase.env" }
+$artifactPaths = @($candidate,$target,$project,$profile,$receiptPath,$diagnosticPath,$rawPath,$fixtureReport,"$work\fixture-before.private.txt","$work\fixture-after.private.txt")
+foreach ($phase in @('before','inspect','installed','settings','gentle1','pi1','gentle2','pi2')) { $artifactPaths += "$work\$phase.cwd"; $artifactPaths += "$work\$phase.env" }
 foreach ($path in $artifactPaths) {
     if (Test-Path -LiteralPath $path) { throw 'Fresh acceptance path exists; preserve it, refuse replacement' }
 }
@@ -55,7 +59,8 @@ $result = [ordered]@{Schema='gentle-win11-ui/v1'; SourceBaseCommit=$control.Sour
     Foreground='unknown'; FixturePreservation='unknown'; PersonalConfigurationPreservation='unknown'; OwnedCmdExit='unknown';
     ResourceChecks='unknown'; Cleanup='unknown'; CaptureComplete='unknown'; FunctionalReady=$false; Result='INCOMPLETE';
     GentleCtrlDReturn='unknown'; PiCtrlDReturn='unknown'; GentleExitMethod='unknown'; PiExitMethod='unknown'}
-$provisionRenderedFailure = $null; $phaseTimings = $null
+$provisionRenderedFailure = $null; $phaseTimings = $null; $fixtureSummary = $null
+$result.EntryRuns = @()
 $terminal = $null; $failure = $null; $failurePhase = $null; $phaseContext = 'candidate-digest'; $before = $null
 $oldHome = $env:HOME; $oldProfile = $env:USERPROFILE; $parentCwd = (Get-Location).Path
 function Inventory([string[]]$roots) {
@@ -152,27 +157,36 @@ try {
     if ($view -match ('(?m)^G35_' + $marker + '_installed_RC=([0-9]+) *$')) { $result.InstallerExitCode = [uint32]$Matches[1] }
     $result.InstallerExit = $view -match ('(?m)^G35_' + $marker + '_installed_RC=0 *$')
     if (-not $result.InstallerExit) { throw ('Actual installer exit was not zero; observed code: ' + $result.InstallerExitCode) }
-    # User scope: installation and opening Gentle Shell, not Pi or Ctrl-D acceptance.
-    foreach ($app in @('gentle-shell')) {
-        $phase = if ($app -eq 'pi') {'pi'} else {'gentle'}
+    $phaseContext = 'settings-fixtures'
+    $fixtureCommand = '"{0}\runtime\node\node.exe" "C:\lab-input\windows-owned-settings.test.mjs" "{0}\provision.mjs" "{1}"' -f $target,$fixtureReport
+    $fixtureView = $terminal.Wait((Boundary 'settings' $fixtureCommand),15000)
+    $fixtureSummary = Read-Bounded $fixtureReport 4096
+    $fixtures = $fixtureSummary | ConvertFrom-Json
+    $result.SettingsFixturePassed = $fixtures.schema -ceq 'windows-owned-settings-fixtures/v1' -and $fixtures.total -eq 19 -and $fixtures.passed -eq 19 -and $fixtures.failed -eq 0 -and $fixtureView -match ('(?m)^G35_' + $marker + '_settings_RC=0 *$')
+    if (-not $result.SettingsFixturePassed) { throw 'Owned-settings fixture assertion failed; complete typed report retained' }
+    foreach ($entry in @(@('gentle-shell','gentle1','Gentle'),@('pi','pi1','Pi'),@('gentle-shell','gentle2','Gentle'),@('pi','pi2','Pi'))) {
+        $app = $entry[0]; $phase = $entry[1]; $property = $entry[2]
+        $observation = [ordered]@{phase=$phase;opened=$false;exit0=$false}
+        $result.EntryRuns += $observation
         $phaseContext = "$phase-opening"
         $clock.Restart(); $fresh = $terminal.Mark(); $returnPattern = Boundary $phase "call `"$target\bin\$app.cmd`""
-        # Authenticated stock Pi 1.0.0 init() help literals, from the pinned supplier source.
-        # Never count the previous app's opening, or send exit before the editor exists.
+        # Fresh-screen and distinct return nonces prevent earlier launches proving later ones.
         $terminal.WaitFresh($fresh,'Pi can explain its own features|clear/exit',180000)
-        $result[($phase.Substring(0,1).ToUpper()+$phase.Substring(1)+'UI')] = $true
+        $observation.opened = $true; $result[($property+'UI')] = $true
         $result.InstallOpenPassed = $result.InstallerExit -ceq $true -and $result.GentleUI -ceq $true
-        $phaseContext = 'gentle-quit-command-return'
+        $phaseContext = "$phase-quit-command-return"
         $terminal.Send('/quit')
         $terminal.PressEnter()
         $view = $terminal.Wait($returnPattern,90000)
-        $result.GentleExitMethod = '/quit'
-        $result.GentleExit = $view -match ('(?m)^G35_' + $marker + '_gentle_RC=0 *$')
+        $observation.exit0 = $view -match ('(?m)^G35_' + $marker + '_' + $phase + '_RC=0 *$')
+        $result[($property+'ExitMethod')] = '/quit'; $result[($property+'Exit')] = $observation.exit0
+        if (-not $observation.exit0) { throw 'Installed entry did not return zero; no repeated-entry acceptance' }
     }
+    $result.RepeatedEntriesPassed = $result.EntryRuns.Count -eq 4 -and @($result.EntryRuns | Where-Object { -not $_.opened -or -not $_.exit0 }).Count -eq 0
     $phaseContext = 'caller-postimages'
     $result.CallerCWD = $true; $result.CallerEnvironment = $true; $result.CallerPATH = $true
     $baseline = Read-Bounded "$work\before.env" 65536
-    foreach ($phase in @('before','installed','gentle')) {
+    foreach ($phase in @('before','installed','settings','gentle1','pi1','gentle2','pi2')) {
         if ((Read-Bounded "$work\$phase.cwd" 4096).TrimEnd("`r","`n") -cne $project) { $result.CallerCWD = $false }
         $environment = Read-Bounded "$work\$phase.env" 65536
         if ($environment -cne $baseline) { $result.CallerEnvironment = $false }
@@ -184,7 +198,7 @@ try {
     if ($terminal) {
         # Semantic observation only: never export terminal text or private preimages.
         $result.Win32InputRequested = $terminal.Win32InputRequested
-        $result.PiReturnMarkerObserved = $terminal.Matches('G35_' + $marker + '_pi_RC=[0-9]+')
+        $result.PiReturnMarkerObserved = $terminal.Matches('G35_' + $marker + '_pi[12]_RC=[0-9]+')
         $result.SettingsBindingRefusal = $terminal.Matches('owned package/settings bindings changed')
         $result.PiMissingModelsVisible = $terminal.Matches('No models available')
         try { $result.OwnedSettingsKeyNames = @((Read-Bounded (Join-Path $target 'agent/settings.json') 4096 | ConvertFrom-Json).PSObject.Properties.Name) } catch { $result.OwnedSettingsKeyNames = 'unverified' }
@@ -251,6 +265,7 @@ try {
         $result.FailureMessage = if ($utf8.GetByteCount($failure) -le 1024) { $failure } else { 'Whole exception message withheld (>1024 UTF-8 bytes)' }
         $diagnostic += ' Failure phase: ' + $failurePhase + '. Exception: ' + $result.FailureMessage
     }
+    if ($fixtureSummary) { $diagnostic += "`nComplete typed owned-settings fixture report:`n" + $fixtureSummary }
     if ($phaseTimings) { $diagnostic += "`nFixed-name installer phase elapsed times:`n" + $phaseTimings }
     if ($provisionRenderedFailure) { $diagnostic += "`nComplete rendered installer error (not raw terminal/pipe):`n" + $provisionRenderedFailure }
     if ($utf8.GetByteCount($diagnostic) -le 12000) { [IO.File]::WriteAllText($diagnosticPath,$diagnostic,$utf8) }
