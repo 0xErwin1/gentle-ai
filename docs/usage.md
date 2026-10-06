@@ -199,7 +199,7 @@ See [Skill Registry](skill-registry.md) for the full index-first flow and diagra
 
 ### Community Tools
 
-The installer’s **Community Tools/Plugins** screen offers opt-in integrations that are never selected by a preset or detection.
+The installer’s **Community Tools** screen offers opt-in integrations that are never selected by a preset or detection.
 
 ### sync
 
@@ -361,7 +361,7 @@ gentle-ai -v
 | `review` | Receipt-Driven Development review lifecycle, including `review assess` and `review mode` | [Review Integration](review-integration.md) |
 | `codegraph init --cwd <project-root>` | Validate a project root, then initialize its CodeGraph index (used by generated agent guidance) | [Components](components.md) |
 | `skill-registry list [--json]` | List the resolved, deduplicated skill set | [Skill Registry](skill-registry.md) |
-| `uninstall opencode-plugin <id> [--yes]` | Remove one managed OpenCode community plugin | — |
+| `uninstall opencode-plugin <id> [--yes]` | Remove `gentle-logo` or a legacy external plugin registration (`sub-agent-statusline`, `sdd-engram-plugin`) left by older installations | — |
 
 ---
 

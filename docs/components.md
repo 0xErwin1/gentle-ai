@@ -46,7 +46,7 @@ gga install
 
 ## Optional Community Tools
 
-Community Tools are opt-in and are not included by presets or automatic detection. Select them from the installer’s **Community Tools/Plugins** screen.
+Community Tools are opt-in and are not included by presets or automatic detection. Select them from the installer’s **Community Tools** screen.
 
 | Tool | Behavior | Removal |
 |---|---|---|

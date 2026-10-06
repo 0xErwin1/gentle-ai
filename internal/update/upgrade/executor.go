@@ -472,7 +472,6 @@ func writeBackupDiagnostic(w io.Writer, format string, args ...any) {
 //   - Status UpdateAvailable → attempt upgrade; report Succeeded/Failed/Skipped(manual)
 //   - Status DevBuild → report as UpgradeSkipped with ManualHint (dev/source build)
 //   - Status VersionUnknown → report as UpgradeSkipped with ManualHint (manual attention required)
-//   - Status RegisteredNotMaterialized → attempt OpenCode npm dependency installation/update
 //   - Status UpToDate, NotInstalled, CheckFailed → omitted from report
 //   - dryRun=true → no exec; eligible tools reported as UpgradeSkipped
 //
@@ -491,7 +490,7 @@ func Execute(ctx context.Context, results []update.UpdateResult, profile system.
 func ExecuteWithOptions(ctx context.Context, results []update.UpdateResult, profile system.PlatformProfile, homeDir string, dryRun bool, options ExecuteOptions) UpgradeReport {
 	// progress writer for real-time status output (optional, defaults to no-op).
 	pw := firstWriter(options.Progress)
-	// Separate tools into executable (UpdateAvailable and OpenCode registered-pending),
+	// Separate tools into executable (UpdateAvailable),
 	// dev-build (DevBuild), and version-unknown tools. Non-actionable but user-visible
 	// states are included in the report as UpgradeSkipped so the upgrade flow never
 	// fails silently.
@@ -500,7 +499,7 @@ func ExecuteWithOptions(ctx context.Context, results []update.UpdateResult, prof
 	var versionUnknowns []update.UpdateResult
 	for _, r := range results {
 		switch r.Status {
-		case update.UpdateAvailable, update.RegisteredNotMaterialized:
+		case update.UpdateAvailable:
 			executable = append(executable, executableUpdate{result: r})
 		case update.DevBuild:
 			devBuilds = append(devBuilds, r)
@@ -688,10 +687,6 @@ func executeOne(ctx context.Context, r update.UpdateResult, profile system.Platf
 		base.Status = UpgradeSkipped
 		return base
 	}
-	if base.Method == update.InstallOpenCodePlugin {
-		base.NewVersion = ""
-	}
-
 	outcome, err := runStrategyWithOutcome(ctx, r, profile, preflightDestination...)
 	if err != nil {
 		// Distinguish manual fallback (informational skip) from real failures.
@@ -705,9 +700,6 @@ func executeOne(ctx context.Context, r update.UpdateResult, profile system.Platf
 		}
 	} else {
 		base.NewVersion = r.LatestVersion
-		if outcome.observedVersion != "" {
-			base.NewVersion = outcome.observedVersion
-		}
 		base.Status = UpgradeSucceeded
 		base.ExitRequested = outcome.exitRequested
 	}
@@ -716,21 +708,17 @@ func executeOne(ctx context.Context, r update.UpdateResult, profile system.Platf
 }
 
 // effectiveMethod resolves the actual upgrade strategy for a tool on a given platform.
-// Priority order: plugin → brew-owned package → gentle-ai self-upgrade policy →
+// Priority order: brew-owned package → gentle-ai self-upgrade policy →
 // go-install → declared method.
 //
-//  1. OpenCode plugins are always handled by their own method — never overridden.
-//  2. Homebrew is used only when Homebrew confirms it owns this specific tool.
-//  3. gentle-ai's own upgrade never falls through to the generic rules below; it
+//  1. Homebrew is used only when Homebrew confirms it owns this specific tool.
+//  2. gentle-ai's own upgrade never falls through to the generic rules below; it
 //     is resolved entirely by gentleAISelfUpgradeMethod, which is what keeps
 //     Linux and macOS on the signed release download.
-//  4. For every other tool: when Go is available on PATH and the tool declares a
+//  3. For every other tool: when Go is available on PATH and the tool declares a
 //     GoImportPath, go-install is preferred over a direct binary download.
-//  5. Otherwise the tool's declared InstallMethod is used as-is.
+//  4. Otherwise the tool's declared InstallMethod is used as-is.
 func effectiveMethod(tool update.ToolInfo, profile system.PlatformProfile) update.InstallMethod {
-	if tool.InstallMethod == update.InstallOpenCodePlugin {
-		return update.InstallOpenCodePlugin
-	}
 	if profile.PackageManager == "brew" && homebrewPackageInstalled(tool.Name) {
 		return update.InstallBrew
 	}
