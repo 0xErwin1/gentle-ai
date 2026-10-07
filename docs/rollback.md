@@ -57,6 +57,22 @@ Pinned backups are never automatically deleted, even when the retention limit is
 
 ## Restore behavior
 
+### Restore from the CLI
+
+```bash
+gentle-ai restore --list          # List available backups
+gentle-ai restore latest          # Restore after interactive confirmation
+gentle-ai restore <id> --yes      # Restore without prompting (-y also works)
+```
+
+Flags work before or after the backup target. `--list=true` and `--yes=true`
+match the bare flags; `--list=false` disables listing, and `--yes=false` requires
+confirmation. Repeated flags use the last value. With listing disabled, a target
+(`latest` or `<id>`) is required; otherwise the command returns a usage error.
+Invalid boolean values and unknown flags return an error without restoring.
+
+### Restored files
+
 - If `existed=true`: restores the file from the snapshot to its original path
 - If `existed=false`: removes the file (reverting files created during install)
 - Each restored regular file is written atomically (temporary file, then rename), so its contents are never left half-written
