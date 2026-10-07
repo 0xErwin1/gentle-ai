@@ -120,7 +120,10 @@ The document describes what Gentle AI should configure. It deliberately excludes
 | `config.document.unknown-field` | The document contains a field the schema does not define. |
 | `config.version.unsupported` | The schema version is not one this binary understands. |
 | `config.agent.unsupported` | A declared adapter does not exist. |
+| `config.provider.profiles.retired` | A declared `providers.<id>.profiles` block. The SDD profile runtime is retired upstream; remove the key. |
+| `config.provider.profile-strategy.retired` | A declared `providers.<id>.profileStrategy`. The profile runtime is retired upstream; remove the key. |
 | `config.flags.exclusive` | `--config` was combined with a semantic selection flag. |
+| `config.export.loss.codex-service-tier` | Persisted Codex service tier cannot be represented in the document; export reports `lossless: false`. Reconfigure the tier through Gentle AI's model picker. |
 | `config.export.loss.*` | Export could not represent a value; the message names what to do instead. |
 | `render.ownership.conflict` | An unmanaged resource occupies a path the document wants. |
 
