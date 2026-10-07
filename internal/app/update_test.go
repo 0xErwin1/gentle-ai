@@ -118,9 +118,7 @@ func TestPartialUpdateChecks(t *testing.T) {
 					updateCheckAll, updateCheckFiltered, upgradeExecuteWithOptions = origAll, origFiltered, origExecute
 				})
 				updateCheckAll = func(context.Context, string, system.PlatformProfile) []update.UpdateResult { return results }
-				updateCheckFiltered = func(context.Context, string, system.PlatformProfile, []string, bool) []update.UpdateResult {
-					return results
-				}
+				updateCheckFiltered = func(context.Context, string, system.PlatformProfile, []string, bool) []update.UpdateResult { return results }
 				calls := 0
 				upgradeExecuteWithOptions = func(_ context.Context, got []update.UpdateResult, _ system.PlatformProfile, gotHome string, dryRun bool, opts upgrade.ExecuteOptions) upgrade.UpgradeReport {
 					calls++
