@@ -290,6 +290,62 @@ func (a *Adapter) InstallCommand(profile system.PlatformProfile) ([][]string, er
 	return commands, nil
 }
 
+// PrepareInstall preserves the configured Engram source before Pi can replace
+// it. Compatible duplicates are normalized; conflicting declarations abort
+// without writes. The caller must snapshot settings before this preparation.
+func (a *Adapter) PrepareInstall(profile system.PlatformProfile, homeDir string) ([][]string, error) {
+	commands, err := a.InstallCommand(profile)
+	if err != nil {
+		return nil, err
+	}
+	settings, packages, source, err := a.readInstallSettings(homeDir)
+	if err != nil {
+		return nil, err
+	}
+	path := a.SettingsPath(homeDir)
+	if source == "" {
+		return commands, nil
+	}
+	if !reflect.DeepEqual(settings["packages"], packages) {
+		settings["packages"] = packages
+		if _, err := writePiJSONObject(path, settings); err != nil {
+			return nil, err
+		}
+	}
+	for _, command := range commands {
+		if command[2] == piGentleEngramPackageSource {
+			command[2] = source
+		}
+	}
+	return commands, nil
+}
+
+// ValidateInstall checks settings without writes, for public install admission.
+func (a *Adapter) ValidateInstall(homeDir string) error {
+	_, _, _, err := a.readInstallSettings(homeDir)
+	return err
+}
+
+func (a *Adapter) readInstallSettings(homeDir string) (map[string]any, []any, string, error) {
+	path := a.SettingsPath(homeDir)
+	settings, exists, err := readExistingPiJSONObject(path)
+	if err != nil || !exists {
+		return nil, nil, "", err
+	}
+	packages := repairPiEngramPackages(piPackagesAsSlice(settings["packages"]))
+	source := ""
+	for _, pkg := range packages {
+		if !isPiEngramPackage(pkg) {
+			continue
+		}
+		if source != "" {
+			return nil, nil, "", fmt.Errorf("conflicting Engram package declarations in %q; resolve them before installing Pi packages", path)
+		}
+		source = piPackageIdentity(pkg)
+	}
+	return settings, packages, source, nil
+}
+
 // GlobalConfigDir returns Pi's global config directory: always
 // homeDir/.pi, matching every other installed agent's config root.
 // PI_CODING_AGENT_DIR never moves this parent root — it only relocates

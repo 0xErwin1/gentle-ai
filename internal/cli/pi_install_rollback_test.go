@@ -102,12 +102,8 @@ func TestPiExternalDirectoryRollback(t *testing.T) {
 			}
 			failure := errors.New("intentional failure after normalization")
 			plan.Apply = append(plan.Apply, piRollbackFailingStep{run: func() error {
-				changed, _, err := piagent.NewAdapter().ProvisionEngramMCP(home)
-				if err != nil {
+				if _, err := piagent.NewAdapter().PrepareInstall(system.PlatformProfile{}, home); err != nil {
 					return err
-				}
-				if !changed {
-					t.Fatal("normalization did not run")
 				}
 				data, err := os.ReadFile(path)
 				if err != nil {
