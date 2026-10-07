@@ -447,7 +447,12 @@ func mergeExplicitAgentInstallState(homeDir string, newState state.InstallState,
 	if newState.CodexPhaseModelAssignments != nil {
 		merged.CodexPhaseModelAssignments = newState.CodexPhaseModelAssignments
 	}
-	if merged.SelectionConfigured {
+	if !merged.SelectionConfigured && newState.SelectionConfigured {
+		// A metadata-only or legacy state has no selection to preserve.
+		merged.SelectionConfigured = true
+		merged.Components, merged.Skills = newState.Components, newState.Skills
+		merged.Preset, merged.SDDMode = newState.Preset, newState.SDDMode
+	} else if merged.SelectionConfigured {
 		if len(flags.Components) > 0 {
 			merged.Components = newState.Components
 		}
