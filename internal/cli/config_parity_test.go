@@ -54,9 +54,7 @@ var selectionParity = map[string]parityDisposition{
 	"Persona":            represented("Persona"),
 	"Preset":             represented("Preset"),
 	"SDDMode":            represented("SDDMode"),
-	"SDDProfileStrategy": represented("Providers"),
 	"StrictTDD":          represented("StrictTDD"),
-	"Profiles":           represented("Providers"),
 	"BackgroundIntent":   represented("Providers"),
 	"PiBackgroundIntent": represented("Providers"),
 	"Scope":              represented("Scope"),
@@ -71,8 +69,15 @@ var selectionParity = map[string]parityDisposition{
 	"CodexOrchestratorAssignment": represented("CodexOrchestrator"),
 	"CodexCarrilModelAssignments": represented("CodexCarrilModelAssignments"),
 	"CodexPhaseModelAssignments":  represented("CodexPhaseModelAssignments"),
-	"OpenCodePlugins":             represented("OpenCodePlugins"),
 	"CommunityTools":              represented("CommunityTools"),
+
+	// The Codex service tier is a user-settable choice (the Codex model
+	// picker) recorded in state so sync preserves it, but the declarative
+	// contract cannot carry it yet.
+	"CodexServiceTier": gap("CodexServiceTier"),
+	// The managed tier is not a choice at all: restoreCodexServiceTier derives
+	// it from the tier persisted state records as written.
+	"CodexManagedServiceTier": exempt("readback of the tier state records as managed; derived from persisted state during restore, never a user choice"),
 
 	"CodexMultiAgent":                  exempt("deprecated; Codex always writes features.multi_agent and the field survives only for state back-compatibility"),
 	"ClearCodexOrchestratorAssignment": exempt("imperative clear action; declarative state expresses the same intent by omitting the assignment"),
@@ -100,7 +105,11 @@ var installStateParity = map[string]parityDisposition{
 	"CodexOrchestratorAssignment": represented("CodexOrchestrator"),
 	"CodexCarrilModelAssignments": represented("CodexCarrilModelAssignments"),
 	"CodexPhaseModelAssignments":  represented("CodexPhaseModelAssignments"),
-	"RDDMode":                     represented("RDDMode"),
+	// The tier state records as written is the durable record of the same
+	// user choice model.Selection.CodexServiceTier carries; the contract gap
+	// is the one declared above.
+	"CodexServiceTier": gap("CodexServiceTier"),
+	"RDDMode":          represented("RDDMode"),
 
 	"InstalledBinaryVersion":   exempt(observedState),
 	"ManagedAssetDigest":       exempt(observedState),
@@ -131,6 +140,11 @@ var installFlagsParity = map[string]parityDisposition{
 	"DryRun":                         exempt(operationalFlag),
 	"OpenCodeBackgroundSubagentsSet": exempt("flag-presence companion to OpenCodeBackgroundSubagents"),
 	"PiBackgroundSubagentsSet":       exempt("flag-presence companion to PiBackgroundSubagents"),
+	// The pilot the flag opts a global Claude install into is one-shot: the
+	// module ledger it installs is detected on disk, and sync continues it
+	// without the flag, so the durable state lives in the ledger, not in the
+	// invocation.
+	"ClaudeOrchestratorModules": exempt("one-shot pilot opt-in; the installed module ledger carries the resulting state and sync continues it without the flag"),
 }
 
 func TestImperativeSurfacesAreClassifiedForParity(t *testing.T) {
@@ -266,7 +280,19 @@ func TestEveryContractFieldIsClaimed(t *testing.T) {
 
 	for _, field := range structFields(t, "config.Selection", configdomain.Selection{}) {
 		if _, ok := claimed[field]; !ok {
+			if reason, exempted := contractFieldExemptions[field]; exempted {
+				t.Logf("config.Selection.%s is exempt from parity: %s", field, reason)
+				continue
+			}
 			t.Errorf("config.Selection.%s is claimed by no parity entry; record which imperative surface it represents, or add it as an exemption", field)
 		}
 	}
+}
+
+// contractFieldExemptions records contract fields with no imperative
+// counterpart left. A shipped OpenCode plugin is retired upstream, so nothing
+// can set it any more; the field survives only to refuse what a document
+// still declares, which is why no imperative surface claims it.
+var contractFieldExemptions = map[string]string{
+	"OpenCodePlugins": "retired upstream; the field survives only to refuse plugin requests with config.opencode-plugin.retired",
 }
