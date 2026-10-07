@@ -748,7 +748,7 @@ def main():
     server = tls_fixture()
     try:
         run([SUPERVISOR, 'shell', 'internal-check'])
-        tests = run([TESTS, '-test.run=^TestUser', '-test.timeout=90s'], timeout=100)
+        tests = run([TESTS, '-test.run=^TestUser', '-test.timeout=90s'], cwd=WORK / 'src/internal/shellinstaller', timeout=100)
         require('PASS' in tests, 'focused Go controls')
         personal = WORK / 'personal'
         (personal / 'sentinel').write_bytes(b'personal Pi must remain unchanged\n')

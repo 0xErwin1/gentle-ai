@@ -50,6 +50,22 @@ class LinuxCIContract(unittest.TestCase):
         self.assertIn('internal-check', probes)
         self.assertNotIn('check', probes)
 
+    def test_compiled_package_controls_use_their_source_working_directory(self):
+        fixture = ast.parse((ROOT / 'e2e/shell-linux-user-install-guest.py').read_text())
+        controls = []
+        for node in ast.walk(fixture):
+            if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Name) or node.func.id != 'run' or not node.args:
+                continue
+            args = node.args[0]
+            if isinstance(args, ast.List) and len(args.elts) > 1 and isinstance(args.elts[0], ast.Name) and args.elts[0].id == 'TESTS' and isinstance(args.elts[1], ast.Constant) and args.elts[1].value == '-test.run=^TestUser':
+                controls.append(node)
+        self.assertEqual(len(controls), 1)
+        cwd = next((keyword.value for keyword in controls[0].keywords if keyword.arg == 'cwd'), None)
+        self.assertIsInstance(cwd, ast.BinOp)
+        self.assertIsInstance(cwd.op, ast.Div)
+        self.assertEqual(cwd.left.id, 'WORK')
+        self.assertEqual(cwd.right.value, 'src/internal/shellinstaller')
+
     def test_shell_blocks_parse_without_execution(self):
         for step in self.workflow['jobs']['user-vm-laboratory']['steps']:
             if 'run' not in step:
