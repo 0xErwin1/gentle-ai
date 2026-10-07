@@ -22,9 +22,7 @@ func TestDetectRuntimeMajorDoesNotBypassSymlinkedLauncher(t *testing.T) {
 	if err := os.MkdirAll(BinDir(home), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Symlink(wrapper, filepath.Join(BinDir(home), name)); err != nil {
-		t.Fatal(err)
-	}
+	symlinkOrSkip(t, wrapper, filepath.Join(BinDir(home), name))
 	realDir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(realDir, name), []byte("fixture"), 0o755); err != nil {
 		t.Fatal(err)

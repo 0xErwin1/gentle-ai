@@ -36,9 +36,7 @@ func TestManagedLauncherSurvivesTargetUpgrade(t *testing.T) {
 		}
 	}
 	stable := filepath.Join(bin, name)
-	if err := os.Symlink(oldTarget, stable); err != nil {
-		t.Fatal(err)
-	}
+	symlinkOrSkip(t, oldTarget, stable)
 	target, err := ResolveTarget(home, runtime.GOOS, bin)
 	if err != nil {
 		t.Fatal(err)
@@ -55,9 +53,7 @@ func TestManagedLauncherSurvivesTargetUpgrade(t *testing.T) {
 	if err := os.Remove(stable); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Symlink(newTarget, stable); err != nil {
-		t.Fatal(err)
-	}
+	symlinkOrSkip(t, newTarget, stable)
 	if err := os.Remove(oldTarget); err != nil {
 		t.Fatal(err)
 	}
@@ -179,9 +175,7 @@ func TestResolveTargetRejectsAliasToManagedLauncher(t *testing.T) {
 	if err := os.WriteFile(managed, []byte("fixture"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Symlink(managed, filepath.Join(aliasDir, name)); err != nil {
-		t.Fatal(err)
-	}
+	symlinkOrSkip(t, managed, filepath.Join(aliasDir, name))
 	if target, err := ResolveTarget(home, runtime.GOOS, aliasDir); err == nil {
 		t.Fatalf("managed alias accepted: %q", target)
 	}
