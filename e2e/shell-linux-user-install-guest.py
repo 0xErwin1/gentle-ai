@@ -747,7 +747,7 @@ def main():
         (WORK / name).mkdir(mode=0o700, parents=True, exist_ok=False)
     server = tls_fixture()
     try:
-        run([SUPERVISOR, 'shell', 'check'])
+        run([SUPERVISOR, 'shell', 'internal-check'])
         tests = run([TESTS, '-test.run=^TestUser', '-test.timeout=90s'], timeout=100)
         require('PASS' in tests, 'focused Go controls')
         personal = WORK / 'personal'

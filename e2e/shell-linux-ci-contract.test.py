@@ -1,4 +1,5 @@
 """Guest-only syntax and source-binding controls; not hosted CI execution."""
+import ast
 import pathlib
 import subprocess
 import sys
@@ -33,6 +34,21 @@ class LinuxCIContract(unittest.TestCase):
         self.assertNotIn('/fixture/harness.py smoke', self.text)
         self.assertNotIn('322de52', self.text)
         self.assertNotIn('3.7.0', self.text)
+
+    def test_full_fixture_uses_guarded_internal_kernel_probe(self):
+        fixture = ast.parse((ROOT / 'e2e/shell-linux-user-install-guest.py').read_text())
+        probes = []
+        for node in ast.walk(fixture):
+            if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Name) or node.func.id != 'run' or not node.args:
+                continue
+            args = node.args[0]
+            if not isinstance(args, ast.List) or len(args.elts) != 3:
+                continue
+            binary, command, selector = args.elts
+            if isinstance(binary, ast.Name) and binary.id == 'SUPERVISOR' and isinstance(command, ast.Constant) and command.value == 'shell' and isinstance(selector, ast.Constant):
+                probes.append(selector.value)
+        self.assertIn('internal-check', probes)
+        self.assertNotIn('check', probes)
 
     def test_shell_blocks_parse_without_execution(self):
         for step in self.workflow['jobs']['user-vm-laboratory']['steps']:
