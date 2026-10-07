@@ -8,6 +8,7 @@ import ipaddress
 import json
 import os
 import pathlib
+import re
 import select
 import shutil
 import signal
@@ -23,6 +24,7 @@ import urllib.parse
 import urllib.request
 import fcntl
 import termios
+import yaml
 
 START = time.monotonic()
 CEILING = 850
@@ -49,6 +51,37 @@ PUBLIC_TLS = ssl.create_default_context()
 def require(condition, message):
     if not condition:
         raise RuntimeError(message)
+
+
+def pnpm_root_receipt(text, name, version, sri):
+    """Parse stock lock-v9 roles with the OS YAML SDK; refuse duplicate keys/aliases."""
+    class ReceiptLoader(yaml.SafeLoader):
+        def compose_node(self, parent, index):
+            if self.check_event(yaml.AliasEvent):
+                raise ValueError('receipt aliases are not stock root evidence')
+            return super().compose_node(parent, index)
+
+        def construct_mapping(self, node, deep=False):
+            seen = set()
+            for key, _ in node.value:
+                value = self.construct_object(key, deep=deep)
+                if value in seen:
+                    raise ValueError('duplicate receipt key')
+                seen.add(value)
+            return super().construct_mapping(node, deep=deep)
+
+    try:
+        lock = yaml.load(text, Loader=ReceiptLoader)
+        imported = lock['importers']['.']['dependencies'][name]
+        package = lock['packages'][name + '@' + version]
+        selected = imported['version']
+        return (str(lock['lockfileVersion']) in ['9', '9.0']
+                and imported['specifier'] in [version, '^' + version, '~' + version]
+                and isinstance(selected, str)
+                and re.fullmatch(re.escape(version) + r'(?:\([^\s]*\))*', selected) is not None
+                and package['resolution']['integrity'] == sri)
+    except (yaml.YAMLError, ValueError, TypeError, KeyError):
+        return False
 
 
 def remaining():
@@ -615,7 +648,7 @@ def alan_pnpm_backend_probe():
             require(reported == context / 'node_modules' / name, 'pnpm reported root placement differs')
             text = lock_text(context.resolve(strict=True))
             location = reported.resolve(strict=True)
-            require(location.is_relative_to(home) and location.stat().st_uid == 1002 and item['version'] == expected and sri in text, 'pnpm root identity/integrity differs')
+            require(location.is_relative_to(home) and location.stat().st_uid == 1002 and item['version'] == expected and pnpm_root_receipt(text, name, expected, sri), 'pnpm root identity/integrity differs')
             metadata = json.loads((location / 'package.json').read_bytes())
             require(metadata['name'] == name and metadata['version'] == expected, 'pnpm root metadata differs')
             # Keep pnpm's global entrypoint for Pi's stock ownership check;
@@ -818,8 +851,16 @@ def main():
             REPORT['manager'] = 'actual manager/controller/PTY/stop-subtree readback observed'
         recovery = run([SUPERVISOR, 'shell', 'recover', str(shared), 'inspect'])
         recovery_token = next(line.split(': ', 1)[1] for line in recovery.splitlines() if line.startswith('Recovery confirmation: '))
+        # Recovery intentionally accepts damaged live contents. Stale authority
+        # must change a bound directory identity, not merely settings bytes.
+        retained_agent = WORK / 'shared-agent-before-replacement'
+        shared_agent.rename(retained_agent)
+        shared_agent.mkdir(mode=0o700)
         (shared_agent / 'settings.json').write_text('{"theme":"after-inspect"}\n')
+        os.chmod(shared_agent / 'settings.json', 0o600)
         run([SUPERVISOR, 'shell', 'recover', str(shared), recovery_token], good=False)
+        require(json.loads((shared_agent / 'settings.json').read_text()) == {'theme': 'after-inspect'}, 'stale recovery altered replacement')
+        require((retained_agent / 'settings.json').is_file(), 'replaced shared agent evidence lost')
         recovery = run([SUPERVISOR, 'shell', 'recover', str(shared), 'inspect'])
         recovery_token = next(line.split(': ', 1)[1] for line in recovery.splitlines() if line.startswith('Recovery confirmation: '))
         run([SUPERVISOR, 'shell', 'recover', str(shared), recovery_token], timeout=120)
