@@ -382,6 +382,23 @@ func TestCodeGraphGuidanceRequiresFreshIndexForCLIReads(t *testing.T) {
 	}
 }
 
+func TestCodeGraphGuidanceSyncPrecedesCLIReads(t *testing.T) {
+	guidance := CodeGraphGuidanceMarkdown()
+	read := strings.Index(guidance, "Use `codegraph_explore` after initialization, or the read-only upstream CLI commands when MCP tools are absent")
+	if read < 0 {
+		t.Fatal("missing intelligence read instruction")
+	}
+	for _, prerequisite := range []string{
+		"Before CLI intelligence reads, run `codegraph sync -q <project-root>`",
+		"If sync fails, do not treat the existing index as current; explain the failure and fall back to normal filesystem tools",
+	} {
+		position := strings.Index(guidance, prerequisite)
+		if position < 0 || position >= read {
+			t.Errorf("prerequisite %q must precede the intelligence read instruction", prerequisite)
+		}
+	}
+}
+
 func TestCodeGraphGuidancePreservesExplicitInitializationWorkspace(t *testing.T) {
 	guidance := CodeGraphGuidanceMarkdown()
 	for _, want := range []string{
