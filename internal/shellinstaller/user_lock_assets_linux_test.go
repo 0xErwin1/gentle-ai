@@ -26,7 +26,7 @@ func TestUserFrozenLockAcquisition(t *testing.T) {
 	home := t.TempDir()
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, node, "--test", "../../e2e/frozen-user-lock-acquisition.test.mjs", "../../e2e/shared-recovery.test.mjs", "../../e2e/frozen-global-materialization.test.mjs")
+	cmd := exec.CommandContext(ctx, node, "--test", "../../e2e/frozen-user-lock-acquisition.test.mjs", "../../e2e/shared-recovery.test.mjs", "../../e2e/frozen-global-materialization.test.mjs", "../../e2e/user-global-graph.test.mjs")
 	cmd.Env = []string{"PATH=" + os.Getenv("PATH"), "HOME=" + home, "TMPDIR=" + home, "XDG_CONFIG_HOME=" + home, "XDG_DATA_HOME=" + home,
 		"XDG_STATE_HOME=" + home, "XDG_CACHE_HOME=" + home, "PI_CODING_AGENT_DIR=" + home}
 	if output, err := cmd.CombinedOutput(); err != nil {
@@ -40,7 +40,7 @@ func TestUserProvisionAssetsStageAndReadback(t *testing.T) {
 	privateMust(t, userProvisionAssets(context.Background(), root, true))
 	files, err := assets.ReadUserAssets()
 	privateMust(t, err)
-	if len(files) != 3 {
+	if len(files) != 4 {
 		t.Fatalf("asset inventory: %v", files)
 	}
 	for name, expected := range files {
@@ -57,7 +57,7 @@ func TestUserProvisionAssetsStageAndReadback(t *testing.T) {
 }
 
 func TestUserProvisionAssetsRefusesChangedAssets(t *testing.T) {
-	for _, name := range []string{"provision.mjs", "user-locks/modern/package-lock.json", "user-locks/prior/package-lock.json"} {
+	for _, name := range []string{"provision.mjs", "user-global-graph.mjs", "user-locks/modern/package-lock.json", "user-locks/prior/package-lock.json"} {
 		t.Run(name, func(t *testing.T) {
 			root := t.TempDir()
 			privateMust(t, os.Chmod(root, 0700))

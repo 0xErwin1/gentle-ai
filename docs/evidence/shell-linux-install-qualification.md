@@ -10,6 +10,12 @@
 - Reported JavaScript controls (22) and predicate checks (3), earlier Go CLI checks and cross-compilation are partial evidence, **not the full installer/startup/update/recovery journey**. No tests or candidate runtimes were executed for this documentation rewrite.
 - Modern roots target Pi 1.0.0 and Gentle/native 4.0.0 with fixed Node 24.18.0/npm; pinning is not runtime proof. Stock Pi and its updater remain unchanged; only complete authenticated known prior/modern graphs are accepted.
 
+## Optional-graph comparison boundary
+
+- After complete physical/source-byte, range, bin, supplier, native and settings verification, comparison may omit a single exact retained, locked, nonapplicable, nonroot optional placement. Live packages and the original graph witness are not rewritten; malformed, duplicate, relocated, unknown and required rows still drift.
+- The separately authenticated `user-global-graph.mjs` asset is imported only at that final comparison, not during helper-only recovery. Settings publication remains synced before its graph witness.
+- The in-memory current-helper regression exercises the complete 315-node lock corpus (297 observed rows versus the original 272-row witness) for both profiles. This is comparison-boundary evidence, **not a current-candidate physical stock update or full Guest qualification**; those remain pending.
+
 ## Exact limits and debt
 
 - Execution: non-root Linux amd64; cgroup2, capabilities 0, NoNewPrivs 1, memory 3 GiB, swap 0, CPU 1, tasks 64. Existing real delegated systemd user manager >=254 when direct entry is not already qualified; no fallback or skipped-manager readiness claim.

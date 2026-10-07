@@ -504,7 +504,14 @@ if (action === 'restore') {
       if (!read(settingsPath).equals(priorSettings)) reject('fixture changed selected settings');
       writeExclusive(graphPath, `${JSON.stringify(observed)}\n`);
     }
-    else if (!read(graphPath).equals(Buffer.from(`${JSON.stringify(observed)}\n`))) reject('global graph changed; inspect update before relaunch');
+    else {
+      // Stock updates may restore foreign optionals retained during acquisition.
+      // Authenticate every physical package above before projecting comparison;
+      // never normalize the live prefix or rewrite the original graph evidence.
+      const { projectGlobalGraph } = await import(pathToFileURL(path.join(root, 'user-global-graph.mjs')).href);
+      const comparable = projectGlobalGraph(observed, lock, retained.paths);
+      if (!read(graphPath).equals(Buffer.from(`${JSON.stringify(comparable)}\n`))) reject('global graph changed; inspect update before relaunch');
+    }
   }
   if (!read(lockPath).equals(lockBytes)) reject('acquired lock changed');
   console.log(`Global readback verified; authenticated packages=${observed.length}; functional Ready=false`);
