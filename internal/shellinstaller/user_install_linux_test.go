@@ -182,7 +182,7 @@ func TestUserServiceLiteral(t *testing.T) {
 		"--property=CPUQuotaPeriodSec=100ms", "--property=TasksMax=64", "--property=NoNewPrivileges=yes",
 		"--property=UMask=0077", "--property=KillMode=control-group", "--property=TimeoutStopSec=2s",
 		"--property=UnsetEnvironment=LD_PRELOAD LD_LIBRARY_PATH LD_AUDIT NODE_OPTIONS NODE_PATH",
-		"/usr/bin/env\n-i\nHOME=/owned/home\n/owned/supervisor\nshell\ninternal-install",
+		"/usr/bin/env\n-i\nHOME=/owned/home\n/usr/bin/setpriv\n--inh-caps=-all\n--ambient-caps=-all\n--no-new-privs\n--\n/owned/supervisor\nshell\ninternal-install",
 	} {
 		if !strings.Contains(joined, literal) {
 			t.Errorf("missing service literal %q", literal)

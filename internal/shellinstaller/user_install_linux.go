@@ -323,6 +323,10 @@ func userService(ctx context.Context, self string, args []string, stdin io.Reade
 	if _, err := userSupervisorSHA(ctx, self); err != nil {
 		return err
 	}
+	// Drop inherited/ambient capabilities before starting Go, not on one of its threads.
+	if _, err := userSupervisorSHA(ctx, userCapabilityDrop); err != nil {
+		return fmt.Errorf("qualify capability-clearing helper %s: %w", userCapabilityDrop, err)
+	}
 	env, err := userBusEnvironment()
 	if err != nil {
 		return err

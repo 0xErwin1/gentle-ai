@@ -29,6 +29,7 @@ type userManifest struct {
 }
 
 const userSchema = "gentle-shell-user-install/v1"
+const userCapabilityDrop = "/usr/bin/setpriv"
 
 // Confirmation binds the human's approval to the inspected physical selection,
 // not a boolean flag or an unvalidated path alias.
@@ -74,5 +75,5 @@ func userServiceArgs(unit string, interactive bool, self, cwd string, args, env 
 	}
 	result = append(result, "/usr/bin/env", "-i")
 	result = append(result, env...)
-	return append(append(result, self, "shell"), args...)
+	return append(append(result, userCapabilityDrop, "--inh-caps=-all", "--ambient-caps=-all", "--no-new-privs", "--", self, "shell"), args...)
 }
