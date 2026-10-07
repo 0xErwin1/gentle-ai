@@ -71,6 +71,11 @@ confirmation. Repeated flags use the last value. With listing disabled, a target
 (`latest` or `<id>`) is required; otherwise the command returns a usage error.
 Invalid boolean values and unknown flags return an error without restoring.
 
+`--` ends flag parsing: all following arguments are backup targets, not flags.
+At most one target is accepted. For example, `restore -- latest` still requires
+confirmation, while `restore latest -- --yes=true` returns a usage error without
+restoring because it supplies two targets.
+
 ### Restored files
 
 - If `existed=true`: restores the file from the snapshot to its original path

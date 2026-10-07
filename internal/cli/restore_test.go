@@ -343,6 +343,51 @@ func TestRunRestore_BooleanFlagValues(t *testing.T) {
 	}
 }
 
+func TestRunRestore_EndOfFlagsAndExtraArguments(t *testing.T) {
+	label := "install — " + time.Date(2026, 3, 20, 10, 0, 0, 0, time.UTC).Local().Format("2006-01-02 15:04")
+	prompt := "Restore backup backup-000 (" + label + ")?\nThis will overwrite your current configuration. Type 'yes' to confirm: "
+	const usage = "usage: gentle-ai restore [--list | latest | <id>] [--yes]"
+	for _, test := range []struct {
+		name    string
+		args    []string
+		wantOut string
+		wantErr string
+	}{
+		{name: "explicit yes after terminator", args: []string{"latest", "--", "--yes=true"}, wantErr: usage},
+		{name: "bare yes after terminator", args: []string{"latest", "--", "--yes"}, wantErr: usage},
+		{name: "short yes after terminator", args: []string{"latest", "--", "-y"}, wantErr: usage},
+		{name: "extra target without terminator", args: []string{"latest", "backup-000", "--yes"}, wantErr: usage},
+		{name: "extra targets in list mode", args: []string{"--list", "latest", "backup-000"}, wantErr: usage},
+		{name: "target after terminator requires confirmation", args: []string{"--", "latest"}, wantOut: prompt, wantErr: "confirmation: no confirmation provided (use --yes to skip prompt)"},
+		{name: "terminator after target requires confirmation", args: []string{"latest", "--"}, wantOut: prompt, wantErr: "confirmation: no confirmation provided (use --yes to skip prompt)"},
+		{name: "list after terminator is a target", args: []string{"--", "--list"}, wantErr: "backup \"--list\" not found — use `gentle-ai restore --list` to see available backups"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			home := setupRestoreHome(t, 1)
+			restoreHomeDir(t, home)
+			calls := 0
+			restorer := func(backup.Manifest) error { calls++; return nil }
+			var before, after, out strings.Builder
+			if err := RunRestore([]string{"--list"}, &before); err != nil {
+				t.Fatal(err)
+			}
+			err := RunRestoreWithFnAndInput(test.args, restorer, &out, strings.NewReader(""))
+			if err == nil || err.Error() != test.wantErr {
+				t.Errorf("error = %v, want %q", err, test.wantErr)
+			}
+			if out.String() != test.wantOut || calls != 0 {
+				t.Errorf("stdout = %q, want %q; restore calls = %d, want 0", out.String(), test.wantOut, calls)
+			}
+			if err := RunRestore([]string{"--list"}, &after); err != nil {
+				t.Fatal(err)
+			}
+			if after.String() != before.String() {
+				t.Errorf("backup listing changed: before %q, after %q", before.String(), after.String())
+			}
+		})
+	}
+}
+
 func TestRunRestore_InvalidFlagsDoNotRestore(t *testing.T) {
 	home := setupRestoreHome(t, 1)
 	restoreHomeDir(t, home)

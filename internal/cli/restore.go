@@ -49,6 +49,7 @@ func newRestoreFlagSet(list, yes *bool) *flag.FlagSet {
 		// reported twice alongside the custom block.
 		fmt.Fprintf(fs.Output(), "Usage of %s:\n", fs.Name())
 		fmt.Fprintln(fs.Output(), "  gentle-ai restore [--list | latest | <id>] [--yes]")
+		fmt.Fprintln(fs.Output(), "  -- ends flag parsing; at most one backup target is accepted")
 		fs.PrintDefaults()
 	}
 	return fs
@@ -64,8 +65,17 @@ func runRestoreWithHomeDir(args []string, restorer RestoreFunc, stdout io.Writer
 	yes := false
 	fs := newRestoreFlagSet(&list, &yes)
 	var positional []string
+	flagsEnded := false
 
 	for _, a := range args {
+		if flagsEnded {
+			positional = append(positional, a)
+			continue
+		}
+		if a == "--" {
+			flagsEnded = true
+			continue
+		}
 		if !strings.HasPrefix(a, "-") {
 			positional = append(positional, a)
 			continue
@@ -82,6 +92,11 @@ func runRestoreWithHomeDir(args []string, restorer RestoreFunc, stdout io.Writer
 			}
 			return fmt.Errorf("parse restore flags: %w", err)
 		}
+	}
+
+	// Reject surplus targets before listing, prompting, or restoring anything.
+	if len(positional) > 1 {
+		return fmt.Errorf("usage: gentle-ai restore [--list | latest | <id>] [--yes]")
 	}
 
 	// Resolve the home directory only once the request is known to need it.
