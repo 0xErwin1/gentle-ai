@@ -42,6 +42,9 @@ import (
 // Package-level var so tests can inject a deterministic clock.
 var tuiNowFn = time.Now
 
+// updateCheckFn is the remote-check boundary, replaceable by deterministic tests.
+var updateCheckFn = update.CheckAll
+
 // tuiOpenBrowserFn opens a URL in the default system browser.
 // Package-level var so tests can inject a stub without spawning a process.
 // Returns a non-nil error when the browser cannot be opened; callers fall back
@@ -393,6 +396,7 @@ type BackupRestoreMsg struct {
 // UpdateCheckResultMsg is sent when the background update check completes.
 type UpdateCheckResultMsg struct {
 	Results []update.UpdateResult
+	State   update.CheckState
 }
 
 // AdvisoryMsg is sent when the background advisory manifest fetch completes.
@@ -718,7 +722,8 @@ type Model struct {
 	UpdateResults []update.UpdateResult
 
 	// UpdateCheckDone is true once the background update check has completed.
-	UpdateCheckDone bool
+	UpdateCheckDone  bool
+	UpdateCheckState update.CheckState
 
 	// AdvisoryMessage holds the informational text from the advisory manifest
 	// fetch, when a non-empty message was returned. Empty string means no
@@ -981,20 +986,24 @@ func installStateModelAssignments(assignments map[string]state.ModelAssignmentSt
 	return out
 }
 
-func (m Model) Init() tea.Cmd {
+func (m Model) updateCheckCommand(ttl time.Duration) tea.Cmd {
 	version := m.Version
 	profile := m.Detection.System.Profile
 	home := homeDir()
 
-	updateCmd := func() tea.Msg {
+	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
-		results := update.CheckAllWithCooldown(ctx, version, profile, home, update.UpdateCheckTTL,
+		report := update.CheckAllWithCooldownReport(ctx, version, profile, home, ttl,
 			tuiNowFn,
-			update.CheckAll,
+			updateCheckFn,
 		)
-		return UpdateCheckResultMsg{Results: results}
+		return UpdateCheckResultMsg{Results: report.Results, State: report.State}
 	}
+}
+
+func (m Model) Init() tea.Cmd {
+	updateCmd := m.updateCheckCommand(update.UpdateCheckTTL)
 
 	// Fetch the advisory manifest concurrently with the update check.
 	// advisoryFetchFn is a package-level var so tests can override it.
@@ -1184,6 +1193,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case UpdateCheckResultMsg:
 		m.UpdateResults = msg.Results
 		m.UpdateCheckDone = true
+		m.UpdateCheckState = msg.State
+		for _, result := range msg.Results {
+			if result.Status == update.CheckFailed {
+				m.UpdateCheckState = update.CheckUnsuccessful
+			}
+		}
+		// The user may have opened an upgrade screen while startup was pending.
+		if m.UpdateCheckState == update.CheckSkipped && (m.Screen == ScreenUpgrade || m.Screen == ScreenUpgradeSync) {
+			m.UpdateCheckDone = false
+			return m, tea.Batch(tickCmd(), m.updateCheckCommand(0))
+		}
 		// Show the pre-Welcome update prompt only when the user is still on the
 		// initial Welcome screen. The update check is async (~10 s) so if the user
 		// has already navigated into a flow we must not interrupt them mid-action.
@@ -1436,7 +1456,7 @@ func (m Model) View() string {
 			banner = "Updates available: " + update.UpdateSummaryLine(m.UpdateResults)
 		}
 		return screens.RenderWelcomeWithAdvisory(
-			m.Cursor, m.Version, banner, m.UpdateResults, m.UpdateCheckDone, m.hasAgentBuilderEngines(),
+			m.Cursor, m.Version, banner, m.UpdateResults, m.UpdateCheckDone && m.UpdateCheckState == update.CheckCompleted, m.hasAgentBuilderEngines(),
 			m.Width, m.Height,
 			screens.WelcomeAdvisory{Message: m.AdvisoryMessage, URL: m.AdvisoryURL, Scroll: m.AdvisoryScroll},
 		)
@@ -1966,6 +1986,10 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 		case 1:
 			m = m.withResetOperationState()
 			m.setScreen(ScreenUpgrade)
+			if m.UpdateCheckDone && m.UpdateCheckState != update.CheckCompleted {
+				m.UpdateCheckDone = false
+				return m, tea.Batch(tickCmd(), m.updateCheckCommand(0))
+			}
 			// Start spinner for update check waiting state.
 			if !m.UpdateCheckDone {
 				return m, tickCmd()
@@ -1976,6 +2000,10 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 		case 3:
 			m = m.withResetOperationState()
 			m.setScreen(ScreenUpgradeSync)
+			if m.UpdateCheckDone && m.UpdateCheckState != update.CheckCompleted {
+				m.UpdateCheckDone = false
+				return m, tea.Batch(tickCmd(), m.updateCheckCommand(0))
+			}
 			// Start spinner for update check waiting state.
 			if !m.UpdateCheckDone {
 				return m, tickCmd()

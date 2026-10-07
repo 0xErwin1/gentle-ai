@@ -118,6 +118,8 @@ Just run it — the Bubbletea TUI guides you through agent selection, components
 gentle-ai
 ```
 
+Automatic update checks at TUI startup have a six-hour cooldown. A skipped or failed check does not label `Upgrade tools` as `(up to date)`; that label requires a completed successful check. Opening `Upgrade tools` or `Upgrade + Sync` after a skipped or failed check fetches fresh version information without waiting for the cooldown. Release advisories are fetched independently and do not determine update availability.
+
 The uninstall flow is also available from the TUI menu. It lets you:
 
 - select one or more configured agents

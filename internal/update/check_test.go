@@ -1777,6 +1777,15 @@ func TestCheckFiltered_DevBuildSkipNotEligible(t *testing.T) {
 // TestNoUpdatesPath verifies CheckFiltered returns correct statuses when nothing needs updating.
 func TestNoUpdatesPath(t *testing.T) {
 	mockNoHomebrew(t)
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("LOCALAPPDATA", filepath.Join(home, "local"))
+	originalStat := osStat
+	t.Cleanup(func() { osStat = originalStat })
+	// An absent PATH entry must not discover a real fallback installation,
+	// especially a .ps1 shim that bypasses execCommand through PowerShell.
+	osStat = func(string) (os.FileInfo, error) { return nil, os.ErrNotExist }
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
