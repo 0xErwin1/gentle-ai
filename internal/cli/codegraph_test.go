@@ -9,6 +9,50 @@ import (
 	"testing"
 )
 
+func TestRunCodeGraphHelpAndInvalidArgumentsDoNotInitialize(t *testing.T) {
+	originalRoot := codeGraphGitTopLevel
+	originalInit := codeGraphInit
+	t.Cleanup(func() {
+		codeGraphGitTopLevel = originalRoot
+		codeGraphInit = originalInit
+	})
+	codeGraphGitTopLevel = func(string) (string, error) {
+		t.Fatal("help or invalid arguments must not inspect a project")
+		return "", nil
+	}
+	codeGraphInit = func(string, ...string) error {
+		t.Fatal("help or invalid arguments must not initialize an index")
+		return nil
+	}
+	for _, args := range [][]string{nil, {"init"}, {"--help"}, {"-h"}, {"init", "--help"}, {"init", "-h"}} {
+		t.Run("help/"+strings.Join(args, " "), func(t *testing.T) {
+			var output bytes.Buffer
+			if err := RunCodeGraph(args, &output); err != nil {
+				t.Fatalf("RunCodeGraph(%v) error = %v", args, err)
+			}
+			if !strings.Contains(output.String(), "USAGE\n  gentle-ai codegraph init --cwd <project-root>\n") {
+				t.Fatalf("missing help in stdout: %q", output.String())
+			}
+		})
+	}
+	for _, args := range [][]string{
+		{"query"}, {"init", "--cwd"}, {"init", "--cwd", ""},
+		{"init", "--cwd", "/project", "extra"}, {"init", "--unknown"},
+		{"query", "--help"}, {"init", "--unknown", "--help"},
+	} {
+		t.Run("invalid/"+strings.Join(args, " "), func(t *testing.T) {
+			var output bytes.Buffer
+			err := RunCodeGraph(args, &output)
+			if err == nil || err.Error() != "usage: gentle-ai codegraph init --cwd <project-root>" {
+				t.Fatalf("error = %v, want exact usage error", err)
+			}
+			if output.Len() != 0 {
+				t.Fatalf("invalid arguments wrote stdout: %q", output.String())
+			}
+		})
+	}
+}
+
 func TestRunCodeGraphInitValidatesCanonicalProjectAndPropagatesInitFailure(t *testing.T) {
 	workspace := t.TempDir()
 	root := filepath.Join(workspace, "project")
