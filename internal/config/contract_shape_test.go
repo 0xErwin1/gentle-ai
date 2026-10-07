@@ -45,29 +45,19 @@ func TestPublicDocumentKeysAreContractNames(t *testing.T) {
 	}
 }
 
-// A profile written with contract names must survive the round trip through the
-// internal model, which uses different identifiers for the same intent.
-func TestProfileExportDoesNotRecreateRetiredFields(t *testing.T) {
-	state := FromSelection(model.Selection{})
-	block := state.Selection.Providers[model.AgentOpenCode]
-	if len(block.Profiles) != 0 || block.ProfileStrategy != "" {
-		t.Fatalf("export resurrected retired profiles: %+v", block)
+// Named SDD profiles are retired upstream, so an exported document never
+// carries a profiles block or a profile strategy: the round trip cannot
+// resurrect a runtime that no longer exists.
+func TestExportNeverResurrectsRetiredProfiles(t *testing.T) {
+	selection := model.Selection{Agents: []model.AgentID{model.AgentOpenCode}}
+
+	encoded, err := json.Marshal(FromSelection(selection))
+	if err != nil {
+		t.Fatalf("encode document: %v", err)
 	}
-}
 
-// The historical capitalised spelling is not a supported contract name, so a
-// document written against the leaked identifiers must be rejected rather than
-// silently accepted alongside the real one.
-func TestLeakedGoIdentifiersAreRejected(t *testing.T) {
-	document := `{"version":"v1","selection":{"providers":{"opencode":{"profiles":{"cheap":{"Orchestrator":{"ProviderID":"anthropic","ModelID":"claude-haiku"}}}}}}}`
-
-	_, diagnostics := Decode([]byte(document))
-
-	if len(diagnostics) == 0 {
-		t.Fatal("expected the leaked Go spelling to be rejected")
-	}
-	if diagnostics[0].Code != "config.document.unknown-field" {
-		t.Errorf("code = %q, want %q", diagnostics[0].Code, "config.document.unknown-field")
+	if strings.Contains(string(encoded), "profiles") || strings.Contains(string(encoded), "profileStrategy") {
+		t.Errorf("exported document resurrects a retired profile surface: %s", encoded)
 	}
 }
 

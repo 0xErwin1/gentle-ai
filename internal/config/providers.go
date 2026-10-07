@@ -38,13 +38,15 @@ type ProviderSelection struct {
 	// unresolved, because only an explicit choice is persisted.
 	BackgroundIntent string `json:"backgroundIntent,omitempty"`
 
-	// Profiles are named SDD orchestrator configurations, keyed by name
-	// instead of carrying it as a field, so the same name cannot be declared
-	// twice by accident. Accepted for opencode (the existing
-	// generated-profiles path) and pi (gentle-pi agent profiles).
+	// Profiles are named SDD orchestrator configurations, keyed by name. The
+	// profile runtime they drove is retired upstream, so the field survives
+	// only to refuse a document that still declares it instead of silently
+	// dropping it.
 	Profiles map[string]ProviderProfile `json:"profiles,omitempty"`
 
-	// ProfileStrategy is opencode-only: how sync handles named SDD profiles.
+	// ProfileStrategy is how sync handles named SDD profiles. The strategy
+	// runtime is retired upstream, so the field survives only to refuse a
+	// document that still declares it instead of silently dropping it.
 	ProfileStrategy string `json:"profileStrategy,omitempty"`
 }
 
@@ -102,7 +104,7 @@ func validateProviders(selection Selection, diagnostics *[]Diagnostic) {
 		validateProviderModels(provider, block, path, diagnostics)
 		validateProviderModelPreset(provider, block, path, diagnostics)
 		validateProviderBackgroundIntent(provider, block, path, diagnostics)
-		validateProviderProfiles(provider, block, path, diagnostics)
+		validateProviderProfiles(block, path, diagnostics)
 	}
 }
 
@@ -217,18 +219,17 @@ func validateProviderBackgroundIntent(provider model.AgentID, block ProviderSele
 	}
 }
 
-func validateProviderProfiles(provider model.AgentID, block ProviderSelection, path string, diagnostics *[]Diagnostic) {
-	if provider == model.AgentOpenCode && len(block.Profiles) > 0 {
-		*diagnostics = append(*diagnostics, diagnostic("config.provider.profiles.retired", path+".profiles", "SDD profiles are retired upstream; remove profiles from the document"))
+// validateProviderProfiles refuses any named-profile declaration. The SDD
+// profile runtime upstream retired no longer syncs named profiles or a
+// strategy for them, so an explicit request is refused instead of honored —
+// the same policy the retired OpenCode plugins already follow.
+func validateProviderProfiles(block ProviderSelection, path string, diagnostics *[]Diagnostic) {
+	if len(block.Profiles) > 0 {
+		names := sortedProfileNames(block.Profiles)
+		*diagnostics = append(*diagnostics, diagnostic("config.provider.profiles.retired", path+".profiles", fmt.Sprintf("retired SDD profiles %q; the profile runtime was removed upstream and sync no longer writes named profiles, so remove profiles from the document", names)))
 	}
-	if provider == model.AgentOpenCode && block.ProfileStrategy != "" {
-		*diagnostics = append(*diagnostics, diagnostic("config.provider.profile-strategy.retired", path+".profileStrategy", "SDD profile strategy is retired upstream; remove profileStrategy from the document"))
-	}
-	if len(block.Profiles) > 0 && provider != model.AgentOpenCode {
-		*diagnostics = append(*diagnostics, diagnostic("config.provider.profiles.unsupported-provider", path+".profiles", fmt.Sprintf("provider %q does not support named profiles", provider)))
-	}
-	if block.ProfileStrategy != "" && provider != model.AgentOpenCode {
-		*diagnostics = append(*diagnostics, diagnostic("config.provider.profile-strategy.unsupported-provider", path+".profileStrategy", fmt.Sprintf("provider %q does not support a profile strategy; only opencode does", provider)))
+	if block.ProfileStrategy != "" {
+		*diagnostics = append(*diagnostics, diagnostic("config.provider.profile-strategy.retired", path+".profileStrategy", fmt.Sprintf("retired SDD profile strategy %q; the profile runtime was removed upstream and sync no longer reads a profile strategy, so remove profileStrategy from the document", block.ProfileStrategy)))
 	}
 }
 

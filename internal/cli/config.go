@@ -421,7 +421,21 @@ func exportConfig(stdout io.Writer, configPath, home string) error {
 	}
 	desired, err := desiredstate.ReadDesired(home)
 	if err == nil {
-		return writeConfigResult(stdout, configdomain.Export(desired))
+		result := configdomain.Export(desired)
+		installState, stateErr := state.Read(home)
+		switch {
+		case stateErr == nil:
+			losses := codexServiceTierExportLoss(installState.CodexServiceTier)
+			if len(losses) > 0 {
+				result.Diagnostics = append(result.Diagnostics, losses...)
+				result.Lossless = false
+			}
+		case errors.Is(stateErr, os.ErrNotExist):
+			// No persisted install state, so no tier choice to report.
+		default:
+			return fmt.Errorf("read install state: %w", stateErr)
+		}
+		return writeConfigResult(stdout, result)
 	}
 	legacy, legacyErr := state.Read(home)
 	if legacyErr != nil {
@@ -475,6 +489,8 @@ func legacyExportDiagnostics(legacy state.InstallState) []configdomain.Diagnosti
 		})
 	}
 
+	diagnostics = append(diagnostics, codexServiceTierExportLoss(legacy.CodexServiceTier)...)
+
 	diagnostics = append(diagnostics, configdomain.Diagnostic{
 		Code: "config.export.loss.legacy-operational", Path: "$", Severity: configdomain.Error,
 		Message: "legacy install state omits runtime and provenance fields from desired configuration",
@@ -492,6 +508,22 @@ func legacyExportDiagnostics(legacy state.InstallState) []configdomain.Diagnosti
 		})
 	}
 	return diagnostics
+}
+
+// codexServiceTierExportLoss reports the tier install state recorded as
+// written to Codex's config.toml, which the declarative document cannot carry:
+// the tier is a runtime-request choice, not part of the selection. An absent
+// or invalid tier is the standard default and is never reported.
+func codexServiceTierExportLoss(tier string) []configdomain.Diagnostic {
+	if !model.ValidCodexServiceTier(tier) {
+		return nil
+	}
+	return []configdomain.Diagnostic{{
+		Code:     "config.export.loss.codex-service-tier",
+		Path:     "$.codexServiceTier",
+		Severity: configdomain.Error,
+		Message:  fmt.Sprintf("persisted Codex service tier %q cannot be represented in the exported document; reconfigure it through gentle-ai's model picker", tier),
+	}}
 }
 
 func legacyAgentIDs(values []string) []model.AgentID {
