@@ -31,6 +31,17 @@
 - `git` available.
 - If Node.js is missing, `gentle-ai install` prints this install hint: NodeSource LTS setup + `dnf install -y nodejs` (npm comes bundled).
 
+### Homebrew component installs
+
+When you select Engram or GGA, Gentle AI taps the repository and, if
+`brew help trust` succeeds, runs `brew trust --formula` for only the selected
+component before installing it. This applies to macOS and Homebrew on Linux;
+it does not trust the entire tap. Older Homebrew versions without `trust`
+keep the tap-and-install flow. The capability probe checks PATH first, then
+Homebrew's standard prefixes (`/opt/homebrew`, `/usr/local`, and
+`/home/linuxbrew/.linuxbrew`) so Engram installs still authorize the formula
+when Homebrew is outside PATH.
+
 ### All platforms
 
 - Git.
