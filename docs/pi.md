@@ -23,7 +23,6 @@ Gentle AI runs these setup steps:
 ```bash
 pi install npm:gentle-pi
 pi install npm:gentle-engram
-npm exec --yes --package gentle-engram@latest -- pi-engram init
 pi install npm:pi-web-access
 pi install npm:pi-btw
 ```
@@ -32,8 +31,9 @@ pi install npm:pi-btw
 | --- | --- |
 | `gentle-pi` (Gentle Shell) | Pi harness, ODD guidance, persona, models, skills, first-party clarification tool and delegation |
 | `gentle-engram` | Pi session memory and Engram tools |
-| `pi-engram init` | Initializes Pi Engram; current `gentle-engram` releases expose Engram as native Pi tools, not an MCP server |
 | `pi-web-access`, `pi-btw` | Web access and companion workflow support |
+
+Pi's package manager is the sole owner of Engram registration; Gentle AI does not run `pi-engram init`, which would add a second, version-pinned declaration. Install and sync repair unambiguous existing Engram duplicates: an identical declaration is kept once, and a bare string is removed when one distinct pinned or object declaration exists. The retained declaration's version and object options are preserved. Different pins or conflicting object declarations are left unchanged for manual resolution. Other packages are not deduplicated.
 
 Gentle AI no longer installs `npm:pi-subagents-j0k3r` or `npm:@juicesharp/rpiv-ask-user-question`: `gentle-pi` supplies their first-party replacements. Pi tool names are exclusive, so the latter package alongside `gentle-pi` can prevent Pi from loading. Existing entries are pruned from managed settings on the next install or sync. The retired `@juicesharp/rpiv-todo` entry is likewise removed; Gentle Todo ships with `gentle-pi`.
 

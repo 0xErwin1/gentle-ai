@@ -701,7 +701,6 @@ func TestAdapterInstallCommandSequenceUsesNpmWhenPnpmIsUnavailable(t *testing.T)
 	want := [][]string{
 		{"pi", "install", "npm:gentle-pi"},
 		{"pi", "install", "npm:gentle-engram"},
-		{"npm", "exec", "--yes", "--package", "gentle-engram@latest", "--", "pi-engram", "init"},
 		{"pi", "install", "npm:pi-web-access"},
 		{"pi", "install", "npm:pi-btw"},
 	}
@@ -710,7 +709,7 @@ func TestAdapterInstallCommandSequenceUsesNpmWhenPnpmIsUnavailable(t *testing.T)
 	}
 }
 
-func TestAdapterInstallCommandSequenceUsesNpmForEngramInitWhenPnpmIsAvailable(t *testing.T) {
+func TestAdapterInstallCommandSequenceUsesPiWhenPnpmIsAvailable(t *testing.T) {
 	a := &Adapter{
 		lookPath: func(file string) (string, error) {
 			if file == "pnpm" {
@@ -725,9 +724,14 @@ func TestAdapterInstallCommandSequenceUsesNpmForEngramInitWhenPnpmIsAvailable(t 
 		t.Fatalf("InstallCommand() error = %v", err)
 	}
 
-	want := []string{"npm", "exec", "--yes", "--package", "gentle-engram@latest", "--", "pi-engram", "init"}
-	if !reflect.DeepEqual(commands[2], want) {
-		t.Fatalf("InstallCommand()[2] = %#v, want %#v", commands[2], want)
+	want := [][]string{
+		{"pi", "install", "npm:gentle-pi"},
+		{"pi", "install", "npm:gentle-engram"},
+		{"pi", "install", "npm:pi-web-access"},
+		{"pi", "install", "npm:pi-btw"},
+	}
+	if !reflect.DeepEqual(commands, want) {
+		t.Fatalf("InstallCommand() = %#v, want %#v", commands, want)
 	}
 }
 

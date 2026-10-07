@@ -283,18 +283,11 @@ func (a *Adapter) CapabilityManifest() capabilitymanifest.AgentCapabilityManifes
 }
 
 func (a *Adapter) InstallCommand(profile system.PlatformProfile) ([][]string, error) {
-	commands := make([][]string, 0, len(managedPackageSources)+1)
+	commands := make([][]string, 0, len(managedPackageSources))
 	for _, source := range ManagedPackageSources() {
 		commands = append(commands, []string{"pi", "install", source})
-		if source == piGentleEngramPackageSource {
-			commands = append(commands, a.engramInitCommand())
-		}
 	}
 	return commands, nil
-}
-
-func (a *Adapter) engramInitCommand() []string {
-	return []string{"npm", "exec", "--yes", "--package", "gentle-engram@latest", "--", "pi-engram", "init"}
 }
 
 // GlobalConfigDir returns Pi's global config directory: always
@@ -479,9 +472,9 @@ func (a *Adapter) ProvisionEngramMCP(homeDir string) (bool, []string, error) {
 	return len(paths) > 0, paths, nil
 }
 
-// prunePiSettingsFile drops retired packages from an existing settings.json.
-// A missing file, a file without packages, or one with nothing to drop is
-// left untouched.
+// prunePiSettingsFile drops retired packages and repairs unambiguous Engram
+// duplicates in an existing settings.json. A missing file, a file without
+// packages, or one with nothing to change is left untouched.
 func prunePiSettingsFile(path string) (filemerge.WriteResult, error) {
 	settings, exists, err := readExistingPiJSONObject(path)
 	if err != nil || !exists {
@@ -492,7 +485,7 @@ func prunePiSettingsFile(path string) (filemerge.WriteResult, error) {
 		return filemerge.WriteResult{}, nil
 	}
 
-	retained := retainPiPackages(existing)
+	retained := repairPiEngramPackages(retainPiPackages(existing))
 	if current, isSlice := existing.([]any); isSlice && reflect.DeepEqual(current, retained) {
 		return filemerge.WriteResult{}, nil
 	}
@@ -621,6 +614,53 @@ func retainPiPackages(existing any) []any {
 		filtered = append(filtered, pkg)
 	}
 	return filtered
+}
+
+// repairPiEngramPackages keeps one Engram declaration when the choice is
+// unambiguous. A bare string is redundant next to a pin or an object with
+// options. Different pins or objects are left intact: choosing between them
+// would discard user constraints. Other packages are never deduplicated.
+func repairPiEngramPackages(packages []any) []any {
+	preferred := -1
+	first := -1
+	count := 0
+	for i, pkg := range packages {
+		if !isPiEngramPackage(pkg) {
+			continue
+		}
+		count++
+		if first < 0 {
+			first = i
+		}
+		if source, isString := pkg.(string); isString && source == piGentleEngramPackageSource {
+			continue
+		}
+		if preferred >= 0 && !reflect.DeepEqual(packages[preferred], pkg) {
+			return packages
+		}
+		if preferred < 0 {
+			preferred = i
+		}
+	}
+	if count < 2 {
+		return packages
+	}
+	if preferred < 0 {
+		preferred = first
+	}
+	retained := make([]any, 0, len(packages)-count+1)
+	for i, pkg := range packages {
+		if !isPiEngramPackage(pkg) || i == preferred {
+			retained = append(retained, pkg)
+		}
+	}
+	return retained
+}
+
+func isPiEngramPackage(pkg any) bool {
+	source := piPackageIdentity(pkg)
+	return source == piGentleEngramPackageSource ||
+		(strings.HasPrefix(source, piGentleEngramPackageSource+"@") && len(source) > len(piGentleEngramPackageSource)+1)
 }
 
 func piPackagesAsSlice(existing any) []any {
