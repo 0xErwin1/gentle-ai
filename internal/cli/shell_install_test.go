@@ -11,6 +11,30 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v4/internal/shellinstaller"
 )
 
+func TestWindowsShellInstallChannels(t *testing.T) {
+	for _, channel := range []string{"stable", "main"} {
+		req, _, err := parseShellInstall([]string{"--channel", channel}, io.Discard)
+		if err != nil || req.Channel != channel || shellEntryValues(req)[6] != channel {
+			t.Fatalf("channel did not reach worker: %+v, %v", req, err)
+		}
+	}
+	for _, value := range []string{"nightly", ""} {
+		req, _, err := parseShellInstall([]string{"--channel", value}, io.Discard)
+		if err == nil || req != (shellinstaller.UserInstallRequest{}) {
+			t.Fatal("invalid channel returned actionable request")
+		}
+	}
+	req, _, err := parseShellInstall(nil, io.Discard)
+	if err != nil || req.Channel != "stable" {
+		t.Fatal("default channel is not stable")
+	}
+	m := shellInstallModel{field: 2, req: req}
+	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRight})
+	if cmd != nil || next.(shellInstallModel).req.Channel != "main" || !strings.Contains(next.(shellInstallModel).View(), "Main resolves once after confirmation") {
+		t.Fatal("TUI channel selection caused effects or hid snapshot resolution timing")
+	}
+}
+
 func TestWindowsShellInstallFlagsAndNoEffectHelp(t *testing.T) {
 	for _, args := range [][]string{{"--unknown"}, {"extra"}, {"--target"}, {"--confirm"}} {
 		if _, _, err := parseShellInstall(args, io.Discard); err == nil {

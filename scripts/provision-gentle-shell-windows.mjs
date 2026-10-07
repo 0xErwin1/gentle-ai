@@ -7,7 +7,7 @@ import { pathToFileURL } from 'node:url';
 
 const [root, action] = process.argv.slice(2);
 const reject = message => { throw Error(`Windows provision refused: ${message}`); };
-if (process.platform !== 'win32' || process.arch !== 'x64' || process.argv.length !== 4 || !['install', 'verify'].includes(action) || !path.isAbsolute(root)) reject('platform/arguments');
+if (process.platform !== 'win32' || process.arch !== 'x64' || process.argv.length !== 4 || !['install', 'overlay', 'verify'].includes(action) || !path.isAbsolute(root)) reject('platform/arguments');
 const digest = bytes => crypto.createHash('sha256').update(bytes).digest('hex');
 const node = path.join(root, 'runtime/node/node.exe');
 const npm = path.join(root, 'runtime/node/node_modules/npm/bin/npm-cli.js');
@@ -15,6 +15,20 @@ const prefix = path.join(root, 'prefix');
 const modules = path.join(prefix, 'node_modules');
 const source = path.join(root, 'source');
 const agent = path.join(root, 'agent');
+const selection = JSON.parse(read(path.join(root, 'selection.json')));
+const selectionKeys = ['Channel', 'Confirmation', 'Destination', 'Mode', 'SharedAgent', 'SharedPrefix'];
+if (selection === null || typeof selection !== 'object' || Array.isArray(selection) ||
+    Object.keys(selection).sort().join(',') !== selectionKeys.join(',') || selectionKeys.some(key => typeof selection[key] !== 'string') ||
+    selection.Mode !== 'separate' || selection.SharedPrefix !== '' || selection.SharedAgent !== '' || !['stable', 'main'].includes(selection.Channel) ||
+    !path.isAbsolute(selection.Destination) || (action === 'verify' && selection.Destination !== root)) reject('publication channel/selection');
+const finalRoot = selection.Destination; // Install/overlay stages differ from the final root.
+const mainOverlay = selection.Channel === 'main' && action !== 'install';
+if (selection.Channel === 'main') {
+  const snapshot = JSON.parse(read(path.join(root, 'main.json'))), commit = snapshot?.Prefix?.slice('gentle-shell-'.length);
+  if (Object.keys(snapshot).sort().join(',') !== 'Archive,Bound,Prefix,SHA,Size,URL' || !/^[0-9a-f]{40}$/.test(commit) ||
+      snapshot.Prefix !== `gentle-shell-${commit}` || snapshot.URL !== `https://codeload.github.com/Gentleman-Programming/gentle-shell/zip/${commit}` ||
+      !/^[0-9a-f]{64}$/.test(snapshot.SHA) || snapshot.Archive !== 'main.zip' || snapshot.Bound !== 33554432 || snapshot.Size !== 0) reject('Main descriptor authority');
+}
 const pins = {
   'gentle-pi': ['4.0.0', 'sha512-ZG/diWBSKPfjU4MjiHVUXxHWQvDSRS2dvpPCma4ZINuV+8UGdZAPHca6vcK27FLAAG7crlJpwdWOcwVNW4rh/Q=='],
   '@earendil-works/pi-coding-agent': ['1.0.0', 'sha512-/FtbxoSQU/mEv1QnichJjRjqteqaIaMWxmhB4G367+MwZfX7/DI5B9YAg5lqbN7nztFskBEtUSZ+FlmMBECtMw=='],
@@ -114,14 +128,29 @@ function packages(directory) {
     if (++count > 4096) reject('global graph bound');
     const metadata = read(path.join(absolute, 'package.json')), record = JSON.parse(metadata);
     const acquired = authority.get(`${record.name}@${record.version}`);
-    if (!acquired || !metadata.equals(acquired.bytes)) reject('global unauthenticated metadata');
-    compare(absolute, acquired.directory, record.name === 'gentle-pi');
+    if (mainOverlay && absolute === path.join(modules, 'gentle-pi')) {
+      // Go has compared every Main source member/set against the retained ZIP.
+      // Its authority is the frozen publisher snapshot, not this npm SRI record.
+      const peers = { '@earendil-works/pi-coding-agent': '>=0.99.1', '@earendil-works/pi-ai': '*', '@earendil-works/pi-tui': '*', typebox: '*' };
+      if (!acquired || record.name !== 'gentle-pi' || record.version !== '4.0.0' || record.engines?.node !== '>=22.19.0' ||
+          JSON.stringify(record.dependencies) !== JSON.stringify(JSON.parse(acquired.bytes).dependencies) ||
+          Object.keys(record.peerDependencies ?? {}).length !== 4 || Object.entries(peers).some(([name, range]) => record.peerDependencies?.[name] !== range)) reject('unsupported Main dependency/native composition');
+    } else {
+      if (!acquired || !metadata.equals(acquired.bytes)) reject('global unauthenticated metadata');
+      compare(absolute, acquired.directory, record.name === 'gentle-pi');
+    }
     if (fs.existsSync(path.join(absolute, 'node_modules'))) packages(path.join(absolute, 'node_modules'));
   }
 }
 packages(modules);
 const gentle = path.join(modules, 'gentle-pi');
-for (const [name, expected] of [
+const piMetadata = JSON.parse(read(path.join(modules, '@earendil-works/pi-coding-agent/package.json')));
+const gentleMetadata = JSON.parse(read(path.join(gentle, 'package.json')));
+if (piMetadata.bin?.pi !== 'dist/bundle/cli.js' || gentleMetadata.bin?.['gentle-shell'] !== 'bin/gentle-shell.mjs') reject('stock role bin metadata');
+read(path.join(modules, '@earendil-works/pi-coding-agent/dist/bundle/cli.js'));
+read(path.join(gentle, 'bin/gentle-shell.mjs'));
+// Stock supplier pins authorize installation; Main source is bound by the frozen ZIP.
+if (action === 'install' || !mainOverlay) for (const [name, expected] of [
   ['scripts/gentle-ai-installer.mjs', 'bc2da0585026fa538f0c6ae0cf50463767c175b71d0dfdb582a88cbe894c84ca'],
   ['runtime/gentle-ai-binary.mjs', 'cbdf5deac8b7a85ab1253dbd049953aeb192a7d1f7987f9206916ab449c10a92'],
 ]) if (digest(read(path.join(gentle, name))) !== expected) reject('stock native supplier source pin');
@@ -132,16 +161,26 @@ if (action === 'install') {
 const native = path.join(gentle, '.gentle-ai/v4.0.0');
 const manifest = JSON.parse(read(path.join(native, 'integrity.json')));
 if (manifest.version !== '4.0.0' || manifest.method !== 'go-sumdb-source-build' || manifest.moduleChecksum !== 'h1:pZ/XZ2Pk3U9lgXigOTY62zlxxFOHnc9CjQhLgaV/Hfc=' || manifest.binarySha256 !== digest(read(path.join(native, 'gentle-ai.exe')))) reject('stock native source manifest');
+const configPath = path.join(root, 'config/gentle-shell.json');
+const homeKey = path.join(finalRoot, 'agent');
+if (action === 'install') exclusive(configPath, `${JSON.stringify({ home: 'isolated', provisioned: { [homeKey]: { gentleAi: '4.0.0', gentlePi: gentleMetadata.version, at: new Date().toISOString() } } })}\n`);
+const config = JSON.parse(read(configPath));
+const provisioned = config?.provisioned, entry = provisioned?.[homeKey];
+if (config?.home !== 'isolated' || Object.keys(config).sort().join(',') !== 'home,provisioned' ||
+    provisioned === null || typeof provisioned !== 'object' || Array.isArray(provisioned) || Object.keys(provisioned).length !== 1 ||
+    entry === null || typeof entry !== 'object' || Array.isArray(entry) || Object.keys(entry).sort().join(',') !== 'at,gentleAi,gentlePi' ||
+    entry.gentleAi !== '4.0.0' || entry.gentlePi !== gentleMetadata.version || typeof entry.at !== 'string' ||
+    !Number.isFinite(Date.parse(entry.at))) reject('owned Shell provisioning binding changed');
 const settingsPath = path.join(agent, 'settings.json');
-const finalRoot = JSON.parse(read(path.join(root, 'selection.json'))).Destination;
-if (!path.isAbsolute(finalRoot)) reject('publication selection');
 const settings = { packages: [path.join(finalRoot, 'prefix/node_modules/gentle-pi')], npmCommand: [path.join(finalRoot, 'runtime/node/node.exe'), path.join(finalRoot, 'runtime/node/node_modules/npm/bin/npm-cli.js'), '--prefix', path.join(finalRoot, 'prefix')] };
 if (action === 'install') exclusive(settingsPath, `${JSON.stringify(settings, null, 2)}\n`);
 const observedSettings = JSON.parse(read(settingsPath));
-const settingsKeys = ['packages', 'npmCommand', 'lastChangelogVersion'];
+// The authenticated launcher excludes exactly this builtin; no resource paths.
+const settingsKeys = ['packages', 'npmCommand', 'lastChangelogVersion', 'extensions'];
 if (observedSettings === null || typeof observedSettings !== 'object' || Array.isArray(observedSettings) ||
     Object.keys(observedSettings).some(key => !settingsKeys.includes(key)) ||
     (Object.hasOwn(observedSettings, 'lastChangelogVersion') && typeof observedSettings.lastChangelogVersion !== 'string') ||
+    (Object.hasOwn(observedSettings, 'extensions') && JSON.stringify(observedSettings.extensions) !== '["-builtin:codemode"]') ||
     JSON.stringify({ packages: observedSettings.packages, npmCommand: observedSettings.npmCommand }) !== JSON.stringify(settings)) {
   reject('owned package/settings bindings changed');
 }

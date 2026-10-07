@@ -6,6 +6,8 @@ import (
 	"archive/zip"
 	"bytes"
 	"context"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -19,6 +21,155 @@ import (
 type userWindowsArtifact struct {
 	URL, SHA, Archive, Prefix string
 	Bound, Size               int64
+}
+
+// Descriptor construction alone does not authenticate or resolve Main source.
+func userWindowsMainArtifact(commit, archiveSHA string) (userWindowsArtifact, error) {
+	if !userWindowsLowerHex(commit, 40) || !userWindowsLowerHex(archiveSHA, 64) {
+		return userWindowsArtifact{}, errors.New("invalid frozen Gentle Shell Main commit/archive digest")
+	}
+	return userWindowsArtifact{URL: "https://codeload.github.com/Gentleman-Programming/gentle-shell/zip/" + commit, SHA: archiveSHA, Archive: "main.zip", Prefix: "gentle-shell-" + commit, Bound: 32 << 20}, nil
+}
+
+func userWindowsLowerHex(value string, length int) bool {
+	_, err := hex.DecodeString(value)
+	return len(value) == length && err == nil && value == strings.ToLower(value)
+}
+
+// One fixed-publisher ref lookup; no redirects, proxy, credentials or retries.
+func userWindowsMainSnapshot(ctx context.Context) (userWindowsArtifact, []byte, error) {
+	if ctx == nil || ctx.Err() != nil {
+		return userWindowsArtifact{}, nil, errors.New("Main acquisition canceled before requests")
+	}
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.Proxy, transport.DisableCompression = nil, true
+	defer transport.CloseIdleConnections()
+	client := &http.Client{Transport: transport, Timeout: 90 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error {
+		return errors.New("Main publisher redirect refused")
+	}}
+	get := func(url string, bound int64) ([]byte, error) {
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+		if err != nil {
+			return nil, err
+		}
+		req.Header.Set("Accept-Encoding", "identity")
+		req.Header.Set("User-Agent", "gentle-shell-windows-installer")
+		response, err := client.Do(req)
+		if err != nil {
+			return nil, err
+		}
+		defer response.Body.Close()
+		if response.StatusCode != http.StatusOK || response.ContentLength > bound || (response.Header.Get("Content-Encoding") != "" && response.Header.Get("Content-Encoding") != "identity") {
+			return nil, errors.New("Main publisher status/encoding/bound refused")
+		}
+		data, err := io.ReadAll(io.LimitReader(response.Body, bound+1))
+		if err != nil || int64(len(data)) > bound {
+			return nil, errors.Join(err, errors.New("Main publisher response bound"))
+		}
+		return data, nil
+	}
+	metadata, err := get("https://api.github.com/repos/Gentleman-Programming/gentle-shell/commits/main", 256<<10)
+	var record struct{ SHA string `json:"sha"` }
+	if err != nil {
+		return userWindowsArtifact{}, nil, err
+	}
+	if err := json.Unmarshal(metadata, &record); err != nil || !userWindowsLowerHex(record.SHA, 40) {
+		return userWindowsArtifact{}, nil, errors.Join(err, errors.New("canonical Main ref identity refused"))
+	}
+	data, err := get("https://codeload.github.com/Gentleman-Programming/gentle-shell/zip/"+record.SHA, 32<<20)
+	if err != nil {
+		return userWindowsArtifact{}, nil, err
+	}
+	artifact, err := userWindowsMainArtifact(record.SHA, userWindowsSHA(data))
+	return artifact, data, err
+}
+
+func userWindowsMainFiles(ctx context.Context, data []byte, artifact userWindowsArtifact) (map[string]*zip.File, error) {
+	if _, err := userWindowsZIP(ctx, data, artifact, "", artifact.Prefix+"/package.json"); err != nil {
+		return nil, err
+	}
+	reader, err := zip.NewReader(bytes.NewReader(data), int64(len(data)))
+	if err != nil {
+		return nil, err
+	}
+	files := map[string]*zip.File{}
+	for _, file := range reader.File {
+		name := strings.TrimSuffix(file.Name, "/")
+		if name == artifact.Prefix {
+			continue
+		}
+		relative := strings.TrimPrefix(name, artifact.Prefix+"/")
+		first := strings.ToLower(strings.Split(relative, "/")[0])
+		if first == "node_modules" || first == ".gentle-ai" {
+			return nil, errors.New("Main archive may not replace native/dependency custody")
+		}
+		files[relative] = file
+		for parent := filepath.ToSlash(filepath.Dir(relative)); parent != "."; parent = filepath.ToSlash(filepath.Dir(parent)) {
+			if _, exists := files[parent]; !exists {
+				files[parent] = nil // Implicit archive directory.
+			}
+		}
+	}
+	return files, nil
+}
+
+func userWindowsCompareMain(ctx context.Context, data []byte, artifact userWindowsArtifact, destination string) error {
+	files, err := userWindowsMainFiles(ctx, data, artifact)
+	if err != nil {
+		return err
+	}
+	err = filepath.WalkDir(destination, func(path string, entry os.DirEntry, cause error) error {
+		if cause != nil || ctx.Err() != nil {
+			return errors.Join(cause, ctx.Err())
+		}
+		relative, err := filepath.Rel(destination, path)
+		if err != nil || relative == "." {
+			return err
+		}
+		relative = filepath.ToSlash(relative)
+		if _, err := userWindowsIdentity(path, true); err != nil {
+			return err
+		}
+		if (relative == "node_modules" || relative == ".gentle-ai") && entry.IsDir() {
+			return filepath.SkipDir // Verified separately against npm and SumDB custody.
+		}
+		file, exists := files[relative]
+		if !exists || entry.IsDir() != (file == nil || file.FileInfo().IsDir()) {
+			return errors.New("Main source exact set/type differs")
+		}
+		delete(files, relative)
+		if entry.IsDir() {
+			return nil
+		}
+		stream, err := file.Open()
+		if err != nil {
+			return err
+		}
+		original, readErr := io.ReadAll(io.LimitReader(stream, int64(file.UncompressedSize64)+1))
+		closeErr := stream.Close()
+		actual, actualErr := userWindowsRead(path, int64(file.UncompressedSize64))
+		if cause := errors.Join(readErr, closeErr, actualErr); cause != nil || !bytes.Equal(original, actual) {
+			return errors.Join(cause, errors.New("Main source bytes differ from retained archive"))
+		}
+		return nil
+	})
+	if err != nil || len(files) != 0 {
+		return errors.Join(err, errors.New("Main source missing/extra members"))
+	}
+	return nil
+}
+
+func userWindowsMainRead(root string, manifest userWindowsManifest) (userWindowsArtifact, error) {
+	artifact, err := userWindowsMainArtifact(manifest.MainCommit, manifest.MainArchiveSHA)
+	if err != nil {
+		return userWindowsArtifact{}, err
+	}
+	data, err := userWindowsRead(filepath.Join(root, "main.json"), 4096)
+	canonical, _ := json.Marshal(artifact)
+	if err != nil || string(data) != string(canonical) {
+		return userWindowsArtifact{}, errors.Join(err, errors.New("retained Main descriptor differs"))
+	}
+	return artifact, nil
 }
 
 var userWindowsArtifacts = []userWindowsArtifact{
@@ -83,7 +234,7 @@ func userWindowsZIP(ctx context.Context, data []byte, artifact userWindowsArtifa
 	for _, file := range reader.File {
 		name := strings.TrimSuffix(file.Name, "/")
 		key := strings.ToLower(name)
-		if ctx.Err() != nil || name == "" || (name == artifact.Prefix && !file.FileInfo().IsDir()) || seen[key] || strings.ContainsAny(name, "\\:\x00\r\n") || (name != artifact.Prefix && !strings.HasPrefix(name, artifact.Prefix+"/")) || (!file.Mode().IsRegular() && !file.FileInfo().IsDir()) {
+		if ctx.Err() != nil || name == "" || (name == artifact.Prefix && !file.FileInfo().IsDir()) || seen[key] || file.Mode()&os.ModeSymlink != 0 || strings.ContainsAny(name, "\\:\x00\r\n") || (name != artifact.Prefix && !strings.HasPrefix(name, artifact.Prefix+"/")) || (!file.Mode().IsRegular() && !file.FileInfo().IsDir()) {
 			return nil, errors.New("Windows archive path/type/duplicate refused")
 		}
 		seen[key] = true

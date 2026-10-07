@@ -103,6 +103,19 @@ func userWindowsVerify(ctx context.Context, root string, stdout, stderr io.Write
 			return err
 		}
 	}
+	if manifest.MainCommit != "" {
+		artifact, err := userWindowsMainRead(root, manifest)
+		if err != nil {
+			return err
+		}
+		data, err := userWindowsRead(filepath.Join(root, "runtime/archives/main.zip"), artifact.Bound)
+		if err != nil {
+			return err
+		}
+		if err := userWindowsCompareMain(ctx, data, artifact, filepath.Join(root, "prefix/node_modules/gentle-pi")); err != nil {
+			return err
+		}
+	}
 	return userWindowsProvision(ctx, root, "verify", stdout, stderr)
 }
 
@@ -133,6 +146,13 @@ func userWindowsEntryContext(ctx context.Context, action string) (context.Contex
 		return context.WithCancel(ctx)
 	}
 	return context.WithTimeout(ctx, 900*time.Second)
+}
+
+func userWindowsLaunchCLI(root, product string) string {
+	if product == "gentle-shell" {
+		return filepath.Join(root, "prefix/node_modules/gentle-pi/bin/gentle-shell.mjs")
+	}
+	return filepath.Join(root, "prefix/node_modules/@earendil-works/pi-coding-agent/dist/bundle/cli.js")
 }
 
 func RunUserEntry(ctx context.Context, self string, args []string, stdin io.Reader, stdout, stderr io.Writer) (err error) {
@@ -185,7 +205,7 @@ func RunUserEntry(ctx context.Context, self string, args []string, stdin io.Read
 		if err != nil {
 			return err
 		}
-		_, err = fmt.Fprintf(stdout, "Installed %s; owned commands %s and %s (personal PATH unchanged)\n", result.Destination, filepath.Join(result.Destination, "bin/gentle-shell.cmd"), filepath.Join(result.Destination, "bin/pi.cmd"))
+		_, err = fmt.Fprintf(stdout, "Installed %s (%s); owned commands %s and %s (personal PATH unchanged)\nCurrent CMD only: set \"PATH=%s;%%PATH%%\"\n", result.Destination, req.Channel, filepath.Join(result.Destination, "bin/gentle-shell.cmd"), filepath.Join(result.Destination, "bin/pi.cmd"), filepath.Join(result.Destination, "bin"))
 		return err
 	case "launch":
 		if len(args) < 3 || (args[2] != "pi" && args[2] != "gentle-shell") {
@@ -202,8 +222,12 @@ func RunUserEntry(ctx context.Context, self string, args []string, stdin io.Read
 		if err != nil {
 			return err
 		}
-		cli := filepath.Join(root, "prefix/node_modules/@earendil-works/pi-coding-agent/dist/cli.js")
-		command := exec.CommandContext(ctx, filepath.Join(root, "runtime/node/node.exe"), append([]string{cli}, args[3:]...)...)
+		cli := userWindowsLaunchCLI(root, args[2])
+		forward := []string{cli}
+		if args[2] == "gentle-shell" {
+			forward = append(forward, "--isolated", "--") // Caller flags cannot redirect the Shell home/package.
+		}
+		command := exec.CommandContext(ctx, filepath.Join(root, "runtime/node/node.exe"), append(forward, args[3:]...)...)
 		command.Env, command.Stdin, command.Stdout, command.Stderr, command.WaitDelay = env, stdin, stdout, stderr, 2*time.Second
 		return command.Run() // Inherits the caller CWD and the bounded owned Job Object.
 	default:

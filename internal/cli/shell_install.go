@@ -18,6 +18,7 @@ import (
 )
 
 const shellInstallHelp = `gentle-ai shell install --target C:\owned\shell --mode separate
+  --channel stable|main     default stable; Main freezes the canonical source snapshot
   --inspect                 print physical-selection confirmation without effects
   --confirm SHA256          approve that exact inspected selection
 No flags: existing installer TUI. Owned commands live in TARGET\bin; personal PATH stays unchanged.
@@ -31,17 +32,23 @@ func parseShellInstall(args []string, stdout io.Writer) (shellinstaller.UserInst
 	flags.SetOutput(stdout)
 	flags.StringVar(&req.Destination, "target", "", "owned installation target")
 	flags.StringVar(&req.Mode, "mode", "separate", "separate or shared")
+	flags.StringVar(&req.Channel, "channel", "stable", "stable or main")
 	flags.StringVar(&req.SharedPrefix, "prefix", "", "selected existing global Pi prefix")
 	flags.StringVar(&req.SharedAgent, "agent", "", "selected existing Pi configuration")
 	flags.StringVar(&req.Confirmation, "confirm", "", "physical selection SHA256")
 	inspect := flags.Bool("inspect", false, "inspect without installation")
 	flags.Usage = func() { _, _ = io.WriteString(stdout, shellInstallHelp) }
 	if err := flags.Parse(args); err != nil {
-		return req, false, err
+		return shellinstaller.UserInstallRequest{}, false, err
 	}
 	if flags.NArg() != 0 {
-		return req, false, errors.New("unexpected shell install positional arguments; run gentle-ai shell install --help for supported flags")
+		return shellinstaller.UserInstallRequest{}, false, errors.New("unexpected shell install positional arguments; run gentle-ai shell install --help for supported flags")
 	}
+	channel, err := shellinstaller.UserInstallChannel(req.Channel)
+	if err != nil || req.Channel == "" {
+		return shellinstaller.UserInstallRequest{}, false, errors.New("invalid channel; use stable or main")
+	}
+	req.Channel = channel
 	return req, *inspect, nil
 }
 
@@ -62,7 +69,7 @@ func RunShell(args []string, stdout io.Writer) error {
 		return shellinstaller.RunUserEntry(ctx, self, args, os.Stdin, stdout, os.Stderr)
 	}
 	if len(args) == 1 {
-		model := shellInstallModel{ctx: ctx, cancel: cancel, self: self, stdout: stdout, req: shellinstaller.UserInstallRequest{Mode: "separate"}}
+		model := shellInstallModel{ctx: ctx, cancel: cancel, self: self, stdout: stdout, req: shellinstaller.UserInstallRequest{Mode: "separate", Channel: "stable"}}
 		final, err := tea.NewProgram(model, tea.WithInput(os.Stdin), tea.WithOutput(stdout)).Run()
 		if err != nil {
 			return err
@@ -81,7 +88,7 @@ func RunShell(args []string, stdout io.Writer) error {
 		return err
 	}
 	if inspect {
-		_, err = fmt.Fprintf(stdout, "Confirmation: %s\nCommands: %s, %s\n", token, filepath.Join(req.Destination, "bin/gentle-shell.cmd"), filepath.Join(req.Destination, "bin/pi.cmd"))
+		_, err = fmt.Fprintf(stdout, "Channel: %s\nConfirmation: %s\nCommands: %s, %s\n", req.Channel, token, filepath.Join(req.Destination, "bin/gentle-shell.cmd"), filepath.Join(req.Destination, "bin/pi.cmd"))
 		return err
 	}
 	// guard:population windows-separate-confirmation fail-closed: legitimate explicit installations carry the current token from the owned physical selection; missing or mismatched confirmations remain excluded without starting a worker
@@ -92,7 +99,8 @@ func RunShell(args []string, stdout io.Writer) error {
 }
 
 func shellEntryValues(req shellinstaller.UserInstallRequest) []string {
-	return []string{req.Destination, req.Mode, req.SharedPrefix, req.SharedAgent, req.Confirmation}
+	channel, _ := shellinstaller.UserInstallChannel(req.Channel) // Worker rejects invalid values.
+	return []string{req.Destination, req.Mode, req.SharedPrefix, req.SharedAgent, req.Confirmation, "--channel", channel}
 }
 
 type shellInstallDone struct{ err error }
@@ -151,7 +159,7 @@ func (m shellInstallModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 	switch key.String() {
 	case "tab":
-		m.field = (m.field + 1) % 2
+		m.field = (m.field + 1) % 3
 	case "enter":
 		token, err := shellinstaller.InspectUserInstall(m.req)
 		m.err = err
@@ -159,13 +167,20 @@ func (m shellInstallModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.req.Confirmation, m.review = token, true
 		}
 	case "left", "right":
-		// Windows MVP keeps the existing UI in Separate; Shared is not offered.
+		// Separate remains fixed; only the channel field toggles.
+		if m.field == 2 {
+			if m.req.Channel == "main" {
+				m.req.Channel = "stable"
+			} else {
+				m.req.Channel = "main"
+			}
+		}
 	case " ":
 		if m.field == 0 {
 			m.req.Destination += " "
 		}
 	default:
-		fields := []*string{&m.req.Destination, nil, &m.req.SharedPrefix, &m.req.SharedAgent}
+		fields := []*string{&m.req.Destination, nil, nil}
 		if field := fields[m.field]; field != nil {
 			if key.Type == tea.KeyBackspace && len(*field) > 0 {
 				value := []rune(*field)
@@ -183,6 +198,7 @@ func (m shellInstallModel) View() string {
 		return "Installing selected Gentle Shell. Ctrl-C cancels; waiting for stop/reap.\n"
 	}
 	rows := []string{"Gentle Shell Windows 11 x64 user installer", "Target: " + m.req.Destination, "Mode: Separate (private Node/Go/Pi; personal installation preserved)",
+		"Channel: " + m.req.Channel + " (Left/Right selects; Main resolves once after confirmation)",
 		"Commands: " + filepath.Join(m.req.Destination, "bin/gentle-shell.cmd") + " and " + filepath.Join(m.req.Destination, "bin/pi.cmd"),
 		"Tab selects field; Enter reviews; Escape cancels. Personal PATH and configuration are not changed."}
 	rows[m.field+1] = "> " + rows[m.field+1]

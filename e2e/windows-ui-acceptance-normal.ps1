@@ -39,9 +39,11 @@ foreach ($path in @('R:\', $work)) {
     }
 }
 # Gate above precedes all product operations. No SDK, network helper, or replacement installer here.
-if ((Get-FileHash -LiteralPath 'C:\lab-input\windows-owned-settings.test.mjs' -Algorithm SHA256).Hash.ToLowerInvariant() -cne '6cac763321104d06186bc8a502e3ae65b4cb68209d1cbc70fbc3b9bde0ceb12d') {
+if ((Get-FileHash -LiteralPath 'C:\lab-input\windows-owned-settings.test.mjs' -Algorithm SHA256).Hash.ToLowerInvariant() -cne '48f99c0f4d25586a3e655658516602eb93a12a6946a601e255fd198290741d70') {
     throw 'Owned settings fixture digest differs; no product execution'
 }
+$channel = (Read-Bounded 'C:\lab-input\selected-channel.data-only.txt' 32).Trim()
+if ($channel -cnotmatch '^(stable|main)$') { throw 'Owned selected channel invalid; no candidate execution' }
 $target = Join-Path $work 'Owned Shell'; $project = Join-Path $work 'Project With Spaces'
 $profile = Join-Path $work 'Simulated Guest Profile'
 $receiptPath = Join-Path $work 'ui-acceptance.json'; $diagnosticPath = Join-Path $work 'ui-diagnostic.log'
@@ -59,8 +61,8 @@ $result = [ordered]@{Schema='gentle-win11-ui/v1'; SourceBaseCommit=$control.Sour
     Foreground='unknown'; FixturePreservation='unknown'; PersonalConfigurationPreservation='unknown'; OwnedCmdExit='unknown';
     ResourceChecks='unknown'; Cleanup='unknown'; CaptureComplete='unknown'; FunctionalReady=$false; Result='INCOMPLETE';
     GentleCtrlDReturn='unknown'; PiCtrlDReturn='unknown'; GentleExitMethod='unknown'; PiExitMethod='unknown'}
-$provisionRenderedFailure = $null; $phaseTimings = $null; $fixtureSummary = $null
-$result.EntryRuns = @()
+$provisionRenderedFailure = $null; $phaseTimings = $null; $fixtureSummary = $null; $mainIdentitySummary = $null
+$result.EntryRuns = @(); $result.SelectedChannel = $channel
 $terminal = $null; $failure = $null; $failurePhase = $null; $phaseContext = 'candidate-digest'; $before = $null
 $oldHome = $env:HOME; $oldProfile = $env:USERPROFILE; $parentCwd = (Get-Location).Path
 function Inventory([string[]]$roots) {
@@ -135,7 +137,7 @@ try {
     $null = $terminal.Wait((Boundary 'before'),10000)
     $phaseContext = 'read-only-selection-inspection'
     $result.CandidateExecuted = 'unknown'
-    $inspectPattern = Boundary 'inspect' "`"$candidate`" shell install --target `"$target`" --inspect"
+    $inspectPattern = Boundary 'inspect' "`"$candidate`" shell install --target `"$target`" --channel $channel --inspect"
     $inspectView = $terminal.Wait($inspectPattern,15000)
     $result.CandidateExecuted = $true
     if ($inspectView -match ('(?m)^G35_' + $marker + '_inspect_RC=([0-9]+) *$')) { $result.DirectInspectionExitCode = [uint32]$Matches[1] }
@@ -147,6 +149,13 @@ try {
     $phaseContext = 'installer-edit-review'
     $terminal.Send($target)
     $null = $terminal.Wait([regex]::Escape('Target: ' + $target),10000)
+    if ($channel -ceq 'main') {
+        # ConPTY's requested Win32 mode: two Tab presses, then Right on the channel field.
+        $esc = [char]27; $channelFresh = $terminal.Mark()
+        $tab = "$esc[9;15;9;1;0;1_$esc[9;15;9;0;0;1_"
+        $terminal.Send($tab + $tab + "$esc[39;77;0;1;0;1_$esc[39;77;0;0;0;1_")
+        $terminal.WaitFresh($channelFresh,'Channel: main',10000)
+    } else { $null = $terminal.Wait('Channel: stable',10000) }
     $terminal.PressEnter()
     $null = $terminal.Wait('Confirm this physical selection and both command bindings\? y installs;',15000)
     $null = $terminal.Wait([regex]::Escape($target),1000)
@@ -157,21 +166,58 @@ try {
     if ($view -match ('(?m)^G35_' + $marker + '_installed_RC=([0-9]+) *$')) { $result.InstallerExitCode = [uint32]$Matches[1] }
     $result.InstallerExit = $view -match ('(?m)^G35_' + $marker + '_installed_RC=0 *$')
     if (-not $result.InstallerExit) { throw ('Actual installer exit was not zero; observed code: ' + $result.InstallerExitCode) }
+    if ($channel -ceq 'main') {
+        $phaseContext = 'installed-main-identity'
+        $installed = Read-Bounded (Join-Path $target 'manifest.json') 4096 | ConvertFrom-Json
+        if ($installed.MainCommit -cnotmatch '^[a-f0-9]{40}$' -or $installed.MainArchiveSHA -cnotmatch '^[a-f0-9]{64}$' -or
+            $installed.LockSHA -cnotmatch '^[a-f0-9]{64}$' -or
+            (Get-FileHash (Join-Path $target 'runtime/archives/main.zip') -Algorithm SHA256).Hash.ToLowerInvariant() -cne $installed.MainArchiveSHA -or
+            (Get-FileHash (Join-Path $target 'source/package-lock.json') -Algorithm SHA256).Hash.ToLowerInvariant() -cne $installed.LockSHA) { throw 'Installed Main snapshot/lock identity mismatch' }
+        $mainIdentitySummary = [ordered]@{commit=$installed.MainCommit;archiveSHA256=$installed.MainArchiveSHA;lockSHA256=$installed.LockSHA} | ConvertTo-Json -Compress
+    }
     $phaseContext = 'settings-fixtures'
     $fixtureCommand = '"{0}\runtime\node\node.exe" "C:\lab-input\windows-owned-settings.test.mjs" "{0}\provision.mjs" "{1}"' -f $target,$fixtureReport
     $fixtureView = $terminal.Wait((Boundary 'settings' $fixtureCommand),15000)
     $fixtureSummary = Read-Bounded $fixtureReport 4096
     $fixtures = $fixtureSummary | ConvertFrom-Json
-    $result.SettingsFixturePassed = $fixtures.schema -ceq 'windows-owned-settings-fixtures/v1' -and $fixtures.total -eq 19 -and $fixtures.passed -eq 19 -and $fixtures.failed -eq 0 -and $fixtureView -match ('(?m)^G35_' + $marker + '_settings_RC=0 *$')
+    $badOutcomes = @($fixtures.outcomes | Where-Object { $_.expected -cnotin @('accept','reject') -or $_.observed -cne $_.expected -or $_.infrastructure -eq $true -or $_.assertionCode })
+    $result.SettingsFixturePassed = $fixtures.schema -ceq 'windows-owned-settings-fixtures/v2' -and $fixtures.total -eq 37 -and $fixtures.passed -eq 37 -and $fixtures.failed -eq 0 -and @($fixtures.outcomes).Count -eq 37 -and @($fixtures.outcomes.name | Sort-Object -Unique).Count -eq 37 -and $badOutcomes.Count -eq 0 -and $fixtureView -match ('(?m)^G35_' + $marker + '_settings_RC=0 *$')
     if (-not $result.SettingsFixturePassed) { throw 'Owned-settings fixture assertion failed; complete typed report retained' }
     foreach ($entry in @(@('gentle-shell','gentle1','Gentle'),@('pi','pi1','Pi'),@('gentle-shell','gentle2','Gentle'),@('pi','pi2','Pi'))) {
         $app = $entry[0]; $phase = $entry[1]; $property = $entry[2]
         $observation = [ordered]@{phase=$phase;opened=$false;exit0=$false}
         $result.EntryRuns += $observation
         $phaseContext = "$phase-opening"
-        $clock.Restart(); $fresh = $terminal.Mark(); $returnPattern = Boundary $phase "call `"$target\bin\$app.cmd`""
+        $clock.Restart(); $fresh = $terminal.Mark()
+        # Bare names resolve in a nested current CMD only; parent PATH remains unchanged.
+        $command = 'cmd /D /Q /V:ON /C "set "PATH={0}\bin;!PATH!" & call {1}"' -f $target,$app
+        $returnPattern = Boundary $phase $command
         # Fresh-screen and distinct return nonces prevent earlier launches proving later ones.
         $terminal.WaitFresh($fresh,'Pi can explain its own features|clear/exit',180000)
+        # One trusted OS snapshot: actual owned Node argv must identify this role.
+        $processes = @(Get-CimInstance Win32_Process)
+        if ($processes.Count -gt 512) { throw 'Whole process observation exceeds bound' }
+        $owned = [Collections.Generic.HashSet[uint32]]::new(); $null = $owned.Add($terminal.Pid)
+        for ($depth=0; $depth -lt 8; $depth++) {
+            foreach ($p in $processes) { if ($owned.Contains([uint32]$p.ParentProcessId)) { $null = $owned.Add([uint32]$p.ProcessId) } }
+        }
+        $nodePath = Join-Path $target 'runtime\node\node.exe'
+        $piPath = Join-Path $target 'prefix\node_modules\@earendil-works\pi-coding-agent\dist\bundle\cli.js'
+        $shellPath = Join-Path $target 'prefix\node_modules\gentle-pi\bin\gentle-shell.mjs'
+        # Fixed paths contain spaces and must be quoted as complete argv members.
+        $nodePattern = '^(?i)"' + [regex]::Escape($nodePath) + '"\s+"'
+        $piNodes = @($processes | Where-Object { $owned.Contains([uint32]$_.ProcessId) -and $_.ExecutablePath -ieq $nodePath -and $_.CommandLine -match ($nodePattern + [regex]::Escape($piPath) + '"(?:\s|$)') })
+        $shellNodes = @($processes | Where-Object { $owned.Contains([uint32]$_.ProcessId) -and $_.ExecutablePath -ieq $nodePath -and $_.CommandLine -match ($nodePattern + [regex]::Escape($shellPath) + '"(?:\s|$)') })
+        if ($piNodes.Count -ne 1 -or ($app -ceq 'pi' -and $shellNodes.Count -ne 0) -or ($app -ceq 'gentle-shell' -and $shellNodes.Count -ne 1)) { throw 'Live owned role process/argv not observed' }
+        if ($app -ceq 'gentle-shell') {
+            $parent = [uint32]$piNodes[0].ParentProcessId; $linked = $false
+            for ($depth=0; $depth -lt 8; $depth++) {
+                if ($parent -eq [uint32]$shellNodes[0].ProcessId) { $linked = $true; break }
+                $ancestor = @($processes | Where-Object { [uint32]$_.ProcessId -eq $parent })
+                if ($ancestor.Count -ne 1) { break }; $parent = [uint32]$ancestor[0].ParentProcessId
+            }
+            if (-not $linked) { throw 'Pi child does not descend from the owned Shell launcher' }
+        }
         $observation.opened = $true; $result[($property+'UI')] = $true
         $result.InstallOpenPassed = $result.InstallerExit -ceq $true -and $result.GentleUI -ceq $true
         $phaseContext = "$phase-quit-command-return"
@@ -266,6 +312,7 @@ try {
         $diagnostic += ' Failure phase: ' + $failurePhase + '. Exception: ' + $result.FailureMessage
     }
     if ($fixtureSummary) { $diagnostic += "`nComplete typed owned-settings fixture report:`n" + $fixtureSummary }
+    if ($mainIdentitySummary) { $diagnostic += "`nInstalled Main source and lock identity:`n" + $mainIdentitySummary }
     if ($phaseTimings) { $diagnostic += "`nFixed-name installer phase elapsed times:`n" + $phaseTimings }
     if ($provisionRenderedFailure) { $diagnostic += "`nComplete rendered installer error (not raw terminal/pipe):`n" + $provisionRenderedFailure }
     if ($utf8.GetByteCount($diagnostic) -le 12000) { [IO.File]::WriteAllText($diagnosticPath,$diagnostic,$utf8) }

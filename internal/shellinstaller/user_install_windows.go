@@ -26,6 +26,8 @@ const userWindowsSchema = "gentle-shell-windows-separate/v1"
 type userWindowsManifest struct {
 	Schema, Destination, SID, Identity, SupervisorSHA string
 	PrefixIdentity, AgentIdentity                     string
+	SelectionSHA                                      string
+	MainCommit, MainArchiveSHA, LockSHA                string
 }
 
 func UserKernelCheck() error {
@@ -62,6 +64,11 @@ func userWindowsWorkerCheck() error {
 }
 
 func InspectUserInstall(req UserInstallRequest) (string, error) {
+	channel, err := UserInstallChannel(req.Channel)
+	if err != nil {
+		return "", err
+	}
+	req.Channel = channel
 	if err := UserKernelCheck(); err != nil {
 		return "", err
 	}
@@ -112,6 +119,7 @@ func userWindowsEnvironment(root string) ([]string, error) {
 		"TEMP="+filepath.Join(root, "tmp"), "TMP="+filepath.Join(root, "tmp"),
 		"GENTLE_PI_CONFIG_HOME="+filepath.Join(root, "config"), "PI_CODING_AGENT_DIR="+agent,
 		"GENTLE_PI_AGENT_HOME="+agent, "GENTLE_PI_NO_SKILL_REGISTRY=1",
+		"GENTLE_SHELL_HOME="+agent, "GENTLE_SHELL_CONFIG="+filepath.Join(root, "config/gentle-shell.json"),
 		"PATH="+strings.Join([]string{filepath.Join(root, "runtime/node"), filepath.Join(root, "runtime/go/bin"), filepath.Join(system, "System32")}, string(os.PathListSeparator)),
 		"NPM_CONFIG_PREFIX="+prefix, "NPM_CONFIG_IGNORE_SCRIPTS=true", "NPM_CONFIG_AUDIT=false", "NPM_CONFIG_FUND=false",
 		"NPM_CONFIG_USERCONFIG="+filepath.Join(root, "config/user.npmrc"), "NPM_CONFIG_GLOBALCONFIG="+filepath.Join(root, "config/global.npmrc"),
@@ -122,6 +130,19 @@ func userWindowsBinding(root, product string) []byte {
 	return []byte("@echo off\r\n\"" + filepath.Join(root, "supervisor.exe") + "\" shell launch \"" + root + "\" " + product + " %*\r\n")
 }
 
+// Canonical complete JSON rejects missing, duplicate, aliased and unknown fields.
+func userWindowsSelection(data []byte, root string) (UserInstallRequest, error) {
+	var req UserInstallRequest
+	if err := json.Unmarshal(data, &req); err != nil {
+		return UserInstallRequest{}, err
+	}
+	canonical, _ := json.Marshal(req)
+	if string(data) != string(canonical) || req.Destination != root || req.Mode != "separate" || req.SharedPrefix != "" || req.SharedAgent != "" || (req.Channel != "stable" && req.Channel != "main") {
+		return UserInstallRequest{}, errors.New("Windows retained selection fields/root differ")
+	}
+	return req, nil
+}
+
 func userWindowsManifestRead(root string) (userWindowsManifest, error) {
 	var manifest userWindowsManifest
 	data, err := userWindowsRead(filepath.Join(root, "manifest.json"), 4096)
@@ -130,6 +151,25 @@ func userWindowsManifestRead(root string) (userWindowsManifest, error) {
 	}
 	if err := json.Unmarshal(data, &manifest); err != nil {
 		return manifest, err
+	}
+	selection, selectionErr := userWindowsRead(filepath.Join(root, "selection.json"), 4096)
+	if selectionErr != nil || userWindowsSHA(selection) != manifest.SelectionSHA {
+		return manifest, errors.Join(selectionErr, errors.New("Windows selection binding differs"))
+	}
+	selected, err := userWindowsSelection(selection, root)
+	if err != nil {
+		return manifest, err
+	}
+	if selected.Channel == "main" {
+		if _, err := userWindowsMainRead(root, manifest); err != nil {
+			return manifest, err
+		}
+	} else if manifest.MainCommit != "" || manifest.MainArchiveSHA != "" {
+		return manifest, errors.New("stable selection contains Main authority")
+	}
+	lock, err := userWindowsRead(filepath.Join(root, "source/package-lock.json"), 32<<20)
+	if err != nil || userWindowsSHA(lock) != manifest.LockSHA {
+		return manifest, errors.Join(err, errors.New("retained generated lock differs"))
 	}
 	canonical, _ := json.Marshal(manifest)
 	identity, identityErr := userWindowsIdentity(root, true)
@@ -225,6 +265,11 @@ func RunUserInstall(ctx context.Context, req UserInstallRequest) (result UserIns
 	if ctx == nil || ctx.Err() != nil {
 		return result, errors.New("Windows installation canceled")
 	}
+	channel, err := UserInstallChannel(req.Channel)
+	if err != nil {
+		return result, err
+	}
+	req.Channel = channel
 	if err := userWindowsWorkerCheck(); err != nil {
 		return result, err
 	}
@@ -236,7 +281,24 @@ func RunUserInstall(ctx context.Context, req UserInstallRequest) (result UserIns
 		if err := userWindowsVerify(ctx, req.Destination, io.Discard, io.Discard); err != nil {
 			return result, err
 		}
+		selection, err := userWindowsRead(filepath.Join(req.Destination, "selection.json"), 4096)
+		selected, selectionErr := userWindowsSelection(selection, req.Destination)
+		if err != nil || selectionErr != nil || selected.Channel != channel {
+			return result, errors.Join(err, selectionErr, errors.New("existing installation channel differs; no replacement"))
+		}
 		return UserInstallResult{req.Destination, filepath.Join(req.Destination, "prefix"), filepath.Join(req.Destination, "agent"), "already-installed"}, nil
+	}
+	var mainArtifact userWindowsArtifact
+	var mainData []byte
+	if channel == "main" {
+		mainArtifact, mainData, err = userWindowsMainSnapshot(ctx) // Confirmed choice, before first filesystem effect.
+		if err != nil {
+			return result, err
+		}
+		if _, err := userWindowsMainFiles(ctx, mainData, mainArtifact); err != nil {
+			return result, err
+		}
+		fmt.Fprintf(os.Stderr, "Frozen canonical Gentle Shell Main: %s archive SHA256 %s (TLS publisher, not signed binary)\n", mainArtifact.Prefix, mainArtifact.SHA)
 	}
 	parent := filepath.Dir(req.Destination)
 	stage, err := os.MkdirTemp(parent, ".gentle-shell-windows-stage-")
@@ -305,6 +367,15 @@ func RunUserInstall(ctx context.Context, req UserInstallRequest) (result UserIns
 			}
 		}
 	}
+	if channel == "main" {
+		metadata, _ := json.Marshal(mainArtifact)
+		if err := userWindowsWrite(filepath.Join(stage, "main.json"), metadata); err != nil {
+			return result, err
+		}
+		if err := userWindowsWrite(filepath.Join(stage, "runtime/archives/main.zip"), mainData); err != nil {
+			return result, err
+		}
+	}
 	phase("runtimes-ready", "all")
 	for _, name := range []string{"user.npmrc", "global.npmrc"} {
 		if err := userWindowsWrite(filepath.Join(stage, "config", name), nil); err != nil {
@@ -341,6 +412,35 @@ func RunUserInstall(ctx context.Context, req UserInstallRequest) (result UserIns
 		return result, err
 	}
 	phase("provision-ready", "stock")
+	if channel == "main" {
+		if err := userWindowsInventory(stage); err != nil {
+			return result, err
+		}
+		gentle, stock := filepath.Join(stage, "prefix/node_modules/gentle-pi"), filepath.Join(stage, "stock-gentle-pi")
+		if err := os.Rename(gentle, stock); err != nil {
+			return result, err
+		}
+		if _, err := userWindowsZIP(ctx, mainData, mainArtifact, gentle, ""); err != nil {
+			return result, err
+		}
+		for _, name := range []string{".gentle-ai", "node_modules"} {
+			original := filepath.Join(stock, name)
+			if _, err := os.Lstat(original); errors.Is(err, os.ErrNotExist) && name == "node_modules" {
+				continue
+			} else if err != nil {
+				return result, err
+			}
+			if err := os.Rename(original, filepath.Join(gentle, name)); err != nil {
+				return result, err
+			}
+		}
+		if err := userWindowsCompareMain(ctx, mainData, mainArtifact, gentle); err != nil {
+			return result, err
+		}
+		if err := userWindowsProvision(ctx, stage, "overlay", io.Discard, io.Discard); err != nil {
+			return result, err
+		}
+	}
 	for _, product := range []string{"pi", "gentle-shell"} {
 		if err := userWindowsWrite(filepath.Join(stage, "bin", product+".cmd"), userWindowsBinding(req.Destination, product)); err != nil {
 			return result, err
@@ -365,7 +465,14 @@ func RunUserInstall(ctx context.Context, req UserInstallRequest) (result UserIns
 	if err != nil {
 		return result, err
 	}
-	manifest := userWindowsManifest{userWindowsSchema, req.Destination, sid, stageIdentity, userWindowsSHA(image), prefixID, agentID}
+	lock, err := userWindowsRead(filepath.Join(stage, "source/package-lock.json"), 32<<20)
+	if err != nil {
+		return result, err
+	}
+	manifest := userWindowsManifest{Schema: userWindowsSchema, Destination: req.Destination, SID: sid, Identity: stageIdentity, SupervisorSHA: userWindowsSHA(image), PrefixIdentity: prefixID, AgentIdentity: agentID, SelectionSHA: userWindowsSHA(selection), LockSHA: userWindowsSHA(lock)}
+	if channel == "main" {
+		manifest.MainCommit, manifest.MainArchiveSHA = strings.TrimPrefix(mainArtifact.Prefix, "gentle-shell-"), mainArtifact.SHA
+	}
 	encoded, _ := json.Marshal(manifest)
 	if err := userWindowsWrite(filepath.Join(stage, "manifest.json"), append(encoded, '\n')); err != nil {
 		return result, err
