@@ -6,6 +6,7 @@ import (
 	"context"
 	"os"
 	"os/exec"
+	"strings"
 	"syscall"
 	"testing"
 	"time"
@@ -32,5 +33,8 @@ func TestIsolateProtectsOpenCodeWithMalformedInheritedEnv(t *testing.T) {
 	t.Logf("raw-environment OpenCode regression:\n%s", out)
 	if err != nil {
 		t.Fatalf("raw-environment subprocess failed: %v (context: %v)", err, ctx.Err())
+	}
+	if !strings.Contains(string(out), "--- PASS: TestIsolateProtectsExternalOpenCodeConfig (") {
+		t.Fatal("raw-environment subprocess did not confirm the OpenCode regression passed")
 	}
 }
