@@ -12,8 +12,8 @@ S5. Base-repository branches: "Autorizar esas tres ramas en el repositorio base"
 ## Tasks
 - T1 | S1-S5 | parent: record chain, preserve tested snapshot, create tracker branch | done | commit: 6791e1557f1b37ed1e4861bd0016f45f89bea11d
 - T2 | S1-S2 | parent + independent verifier: execution-health slice with covering tests/docs, <=400 lines | done | commit: 5e8e6c3cf831c0dc0b3a43adb9b9f6419969092b
-- T3 | S1-S2 | parent + independent verifier: descendant-cleanup slice, <=400 lines, final functional snapshot equality | in_progress | commit: pending
-- T4 | S1-S5 | parent: publish draft tracker and dependent PRs, verify identities/bases/type labels/budgets | pending | commit: delivery-record commit pending
+- T3 | S1-S2 | parent + independent verifier: descendant-cleanup slice, <=400 lines, final functional snapshot equality | done | commit: cdefb9b4d3f0129cb94b6dc649fac81684276509
+- T4 | S1-S5 | parent: publish draft tracker and dependent PRs, verify identities/bases/type labels/budgets | in_progress | commit: publication record pending
 
 ## Log
 L1. Original delivery request: "hagamos eso".
@@ -25,3 +25,5 @@ L6. Tracker commit `6791e1557f1b37ed1e4861bd0016f45f89bea11d` records the plan. 
 L7. T2 focused Windows doctor/refusal tests and `go run ./internal/gofmtcheck` passed. Independent source verification found the deferred process-tree guarantee still present in the first-slice docs; removed that sentence from T2 and will restore the original final docs in T3. Help text only promises bounded probes and already matches T2. Verifier had no shell tools; Linux full-suite and Git facts remain parent-observed evidence.
 L8. T2 complete clean Linux suite passed (`go test -p 4 ./... -count=1 -timeout=10m`, job 10 exit 0). Independent doc/help readback resolved the finding. Native `review-d8d176ce8fb340fa` approved and acknowledged the 352-line slice; commit `5e8e6c3cf831c0dc0b3a43adb9b9f6419969092b`. Two native warnings were informational, with no correction route.
 L9. T3 restored all 12 original functional paths and SHA256-verified equality with the approved final snapshot, including the deferred docs guarantee. This reuses the original full clean Linux suite for identical functional bytes; new chain-tracking metadata is additional, non-runtime documentation.
+L10. T3 Windows and clean Linux focused doctor/refusal checks passed, as did formatting. Independent source verification found no blocker. Native `review-f0350108e95db5ad` approved and acknowledged the 211-line slice; commit `cdefb9b4d3f0129cb94b6dc649fac81684276509`. The docs warning about detached POSIX descendants remains informational; no correction was offered.
+L11. Publication plan: draft/no-merge tracker to `main` with the closing reference, probe child to tracker, cleanup child to probe; both children link the approved issue without closing it. All three use `type:bug`. Required GitHub checks are the three issue/type checks, Unit Tests, and E2E Tests on ubuntu/arch/fedora; local E2E and full Windows suite are not claimed passed. Push only the three authorized branches, without force or merge.
