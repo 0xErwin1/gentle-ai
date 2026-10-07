@@ -1,6 +1,8 @@
 #!/usr/bin/python3
 """Credentialless Guest ONLY. Direct evidence is not complete manager/update proof."""
 import base64
+import ctypes
+import errno
 import hashlib
 import http.client
 import http.server
@@ -365,6 +367,41 @@ def publication_fault(target, shared):
             os.chmod(node, 0o700)
 
 
+def project_watch(project):
+    """Read-only kernel notifications; names/masks, never file contents."""
+    libc = ctypes.CDLL(None, use_errno=True)
+    libc.inotify_init1.argtypes, libc.inotify_init1.restype = [ctypes.c_int], ctypes.c_int
+    libc.inotify_add_watch.argtypes, libc.inotify_add_watch.restype = [ctypes.c_int, ctypes.c_char_p, ctypes.c_uint32], ctypes.c_int
+    fd = libc.inotify_init1(os.O_NONBLOCK | os.O_CLOEXEC)
+    require(fd >= 0, 'kernel project observer unavailable')
+    if libc.inotify_add_watch(fd, os.fsencode(project / '.git'), 0x000003CA) < 0:
+        error = ctypes.get_errno()
+        os.close(fd)
+        if error == errno.ENOENT:
+            return None  # Installer cases precede Git initialization; create nothing.
+        raise RuntimeError('kernel Git observer unavailable')
+    return fd
+
+
+def project_events(fd):
+    """One bounded partial queue read, not a complete mutation receipt."""
+    if fd is None:
+        return {'partial': True, 'available': False}
+    try:
+        data = os.read(fd, 4096)
+    except BlockingIOError:
+        data = b''
+    events, offset = set(), 0
+    while offset + 16 <= len(data):
+        _, mask, _, size = struct.unpack_from('iIII', data, offset)
+        require(offset + 16 + size <= len(data), 'kernel observer record truncated')
+        name = data[offset + 16:offset + 16 + size].split(b'\0', 1)[0]
+        label = name.decode('ascii') if re.fullmatch(rb'[A-Za-z0-9._-]{1,64}', name) else 'sha256:' + hashlib.sha256(name).hexdigest()
+        events.add((mask, label))
+        offset += 16 + size
+    return {'partial': True, 'queueBytes': len(data), 'observedUnique': len(events), 'firstEight': sorted(events)[:8]}
+
+
 def pty_status(binding, project, command=None, extra=None, installer=None, cancel_installer=False, opening_only=False):
     project_before_entries = []
     project_before, requests_before = physical_inventory(project, project_before_entries), len(REQUESTS)
@@ -383,7 +420,16 @@ def pty_status(binding, project, command=None, extra=None, installer=None, cance
     require(all("'" not in value and '\n' not in value for value in selected), 'unsafe PTY command selection')
     invocation = ' '.join("'" + value + "'" for value in selected)
     script = invocation + "; result=$?; printf '\\nGUEST-STATUS:%d\\n' \"$result\"; read -r finish; exit \"$result\""
-    child = subprocess.Popen(['/bin/bash', '--noprofile', '--norc', '-m', '-c', script], cwd=project, env=env, stdin=slave, stdout=slave, stderr=slave, preexec_fn=terminal)
+    observer = None
+    try:
+        observer = project_watch(project)
+        child = subprocess.Popen(['/bin/bash', '--noprofile', '--norc', '-m', '-c', script], cwd=project, env=env, stdin=slave, stdout=slave, stderr=slave, preexec_fn=terminal)
+    except BaseException:
+        if observer is not None:
+            os.close(observer)
+        os.close(master)
+        os.close(slave)
+        raise
     os.close(slave)
     raw = bytearray()
     deadline = time.monotonic() + min(45, remaining())
@@ -456,7 +502,7 @@ def pty_status(binding, project, command=None, extra=None, installer=None, cance
             data = json.dumps(delta, sort_keys=True, separators=(',', ':')).encode()
             entries = [{'path': key[0], 'kind': key[1], 'change': 'created' if key not in before else 'removed' if key not in after else 'modified'} for key in changed]
             names = json.dumps(entries, sort_keys=True, separators=(',', ':')).encode()
-            REPORT['projectMutation'] = {'changedRecords': len(delta), 'bytes': len(data), 'sha256': hashlib.sha256(data).hexdigest(),
+            REPORT['projectMutation'] = {'notifications': project_events(observer), 'changedRecords': len(delta), 'bytes': len(data), 'sha256': hashlib.sha256(data).hexdigest(),
                                          'metadataFields': ['mode', 'uid', 'gid', 'dev', 'inode', 'size', 'mtime_ns', 'ctime_ns'],
                                          'wholeDelta': delta if len(data) <= 1024 else 'withheld',
                                          'entriesBytes': len(names), 'entriesSHA256': hashlib.sha256(names).hexdigest(),
@@ -537,6 +583,8 @@ def pty_status(binding, project, command=None, extra=None, installer=None, cance
         if child.poll() is None:
             os.killpg(child.pid, signal.SIGKILL)
             child.wait(timeout=3)
+        if observer is not None:
+            os.close(observer)
         os.close(master)
 
 

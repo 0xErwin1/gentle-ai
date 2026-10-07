@@ -1,6 +1,13 @@
 """Guest-only syntax and source-binding controls; not hosted CI execution."""
 import ast
+import ctypes
+import errno
+import hashlib
+import os
 import pathlib
+import re
+import struct
+import tempfile
 import subprocess
 import sys
 import unittest
@@ -97,6 +104,44 @@ class LinuxCIContract(unittest.TestCase):
         self.assertIn("min(45, remaining())", text)
         self.assertIn("len(raw) <= 65536", text)
         self.assertIn("require(project_after == project_before", text)
+
+    def test_kernel_notifications_are_read_only_bounded_partial_evidence(self):
+        fixture = ast.parse((ROOT / 'e2e/shell-linux-user-install-guest.py').read_text())
+        names = {'require', 'project_watch', 'project_events'}
+        selected = [node for node in fixture.body if isinstance(node, ast.FunctionDef) and node.name in names]
+        self.assertEqual(len(selected), len(names))
+        namespace = {'ctypes': ctypes, 'errno': errno, 'os': os, 'struct': struct, 're': re, 'hashlib': hashlib}
+        exec(compile(ast.Module(body=selected, type_ignores=[]), '<actual-kernel-observer>', 'exec'), namespace)
+        with tempfile.TemporaryDirectory() as temporary:
+            project = pathlib.Path(temporary)
+            git = project / '.git'
+            # Installer PTYs run before the fixture initializes its Git repo.
+            self.assertIsNone(namespace['project_watch'](project))
+            unavailable = namespace['project_events'](None)
+            self.assertTrue(unavailable['partial'])
+            self.assertFalse(unavailable['available'])
+            self.assertEqual(list(project.iterdir()), [])
+            git.mkdir(mode=0o700)
+            before = git.stat()
+            fd = namespace['project_watch'](project)
+            try:
+                self.assertFalse(os.get_inheritable(fd))
+                self.assertFalse(os.get_blocking(fd))
+                empty = namespace['project_events'](fd)
+                self.assertEqual(empty['queueBytes'], 0)
+                fresh = git.stat()
+                self.assertEqual((before.st_mtime_ns, before.st_ctime_ns), (fresh.st_mtime_ns, fresh.st_ctime_ns))
+                transient = git / 'actual-transient.lock'
+                transient.write_bytes(b'fixture')
+                transient.unlink()
+                observed = namespace['project_events'](fd)
+                self.assertTrue(observed['partial'])
+                self.assertLessEqual(observed['queueBytes'], 4096)
+                self.assertLessEqual(len(observed['firstEight']), 8)
+                self.assertIn([0x100, transient.name], [list(row) for row in observed['firstEight']])
+                self.assertIn([0x200, transient.name], [list(row) for row in observed['firstEight']])
+            finally:
+                os.close(fd)
 
     def test_shell_blocks_parse_without_execution(self):
         for step in self.workflow['jobs']['user-vm-laboratory']['steps']:
