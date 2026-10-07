@@ -350,13 +350,51 @@ func TestCodeGraphGuidanceContainsLazyInitAndUsageRules(t *testing.T) {
 		"Do not fall back just because `.codegraph/` is missing",
 		"missing index is the trigger to lazy-initialize",
 		"read-only upstream CLI commands when MCP tools are absent",
-		"rely on watcher auto-sync by default",
-		"Run `codegraph sync` only when the watcher is disabled or CodeGraph reports stale files",
 		"Only fall back to normal filesystem tools after CodeGraph initialization or use fails",
 		"Broad Read/Glob/Grep exploration before this CodeGraph check is explicitly discouraged",
 	} {
 		if !strings.Contains(guidance, want) {
 			t.Fatalf("CodeGraphGuidanceMarkdown() missing %q:\n%s", want, guidance)
+		}
+	}
+}
+
+func TestCodeGraphGuidanceRequiresFreshIndexForCLIReads(t *testing.T) {
+	guidance := CodeGraphGuidanceMarkdown()
+	for _, want := range []string{
+		"MCP auto-sync requires a running daemon with an active file watcher",
+		"CLI intelligence commands read the existing index as-is and do not auto-sync",
+		"Before CLI intelligence reads, run `codegraph sync -q <project-root>`",
+		"If sync fails, do not treat the existing index as current",
+		"The presence of `.codegraph/` alone does not guarantee freshness",
+	} {
+		if !strings.Contains(guidance, want) {
+			t.Errorf("CodeGraphGuidanceMarkdown() missing %q", want)
+		}
+	}
+	for _, stale := range []string{
+		"rely on watcher auto-sync by default",
+		"Run `codegraph sync` only when",
+	} {
+		if strings.Contains(guidance, stale) {
+			t.Errorf("CodeGraphGuidanceMarkdown() retains misleading freshness rule %q", stale)
+		}
+	}
+}
+
+func TestCodeGraphGuidanceSyncPrecedesCLIReads(t *testing.T) {
+	guidance := CodeGraphGuidanceMarkdown()
+	read := strings.Index(guidance, "Use `codegraph_explore` after initialization, or the read-only upstream CLI commands when MCP tools are absent")
+	if read < 0 {
+		t.Fatal("missing intelligence read instruction")
+	}
+	for _, prerequisite := range []string{
+		"Before CLI intelligence reads, run `codegraph sync -q <project-root>`",
+		"If sync fails, do not treat the existing index as current; explain the failure and fall back to normal filesystem tools",
+	} {
+		position := strings.Index(guidance, prerequisite)
+		if position < 0 || position >= read {
+			t.Errorf("prerequisite %q must precede the intelligence read instruction", prerequisite)
 		}
 	}
 }
