@@ -57,9 +57,6 @@ var telemetryTestSpawnRecorder *telemetry.RecordingSpawner
 // TestRunInstallRefusesMissingKimiRegardlessOfUVPresence for that opposite,
 // deliberately-kept case.
 func TestMain(m *testing.M) {
-	if os.Getenv("GENTLE_AI_TEST_BREW_FIXTURE") == "1" {
-		os.Exit(runPortableBrewFixture())
-	}
 	// Neutralize ambient agent runtime-dir overrides (PI_CODING_AGENT_DIR,
 	// OPENCODE_CONFIG_DIR) before anything else, including before the
 	// stand-in re-exec branch below: this package's catalog.AllAgents() loops
