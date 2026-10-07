@@ -494,6 +494,7 @@ if (action === 'restore') {
     const stage = path.join(agent, `.gentle-shell-settings-${process.pid}`);
     writeExclusive(stage, `${JSON.stringify(settings, null, 2)}\n`);
     fs.renameSync(stage, settingsPath);
+    sync(agent); // Complete settings publication before persisting its graph witness.
     writeExclusive(path.join(state, 'global-graph.json'), `${JSON.stringify(observed)}\n`);
   } else {
     const declaration = settings.packages?.some(entry => (typeof entry === 'string' ? entry : entry?.source) === packageRoot);
