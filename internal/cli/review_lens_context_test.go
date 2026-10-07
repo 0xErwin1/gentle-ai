@@ -651,6 +651,7 @@ func TestReviewLensContextAfterCollectionClosesNamesTheFindingsSurface(t *testin
 		ProofRefs:     []string{"the changed line deterministically causes the reproduced failure"},
 		EvidenceClass: reviewtransaction.EvidenceDeterministic, CausalDisposition: reviewtransaction.CausalIntroduced,
 	}}, &bytes.Buffer{})
+	corroborateRefuterClaimsForTest(t, repo, started.LineageID)
 
 	store, err := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, started.LineageID)
 	if err != nil {
@@ -900,6 +901,62 @@ func TestReviewLensContextStandsAloneAsTheReviewerInstruction(t *testing.T) {
 				t.Fatal("block terminator moved")
 			}
 		})
+	}
+}
+
+// TestReviewLensContextInstructionAppliesSeverityRules pins S12: a lens with no
+// installed agent body learns the same severity discipline from the block.
+func TestReviewLensContextInstructionAppliesSeverityRules(t *testing.T) {
+	reviewEnabledHome(t)
+	_, args, _, _ := newCandidateInspectionReview(t, "candidate\n", true)
+	block := lensContextBlock(t, args, args[slices.Index(args, "--lens")+1])
+	instruction, found := lensContextSection(block, "GENTLE_AI_REVIEW_INSTRUCTION")
+	if !found {
+		t.Fatalf("block carries no reviewer instruction:\n%s", block)
+	}
+	for _, required := range []string{
+		"must be caused by this change", "does not already happen at the baseline", "reachable with realistic input",
+		"was not asked to change", "out-of-domain values", "at most WARNING",
+		"ignoring an explicit option or argument while reporting success",
+		"unrequested changes to existing command output or messages",
+		"must also name its observable harm", "a concrete violation of the requested behavior",
+		"a regression on input or state that was valid at the baseline", "is not harm by itself and is at most WARNING",
+		"at most WARNING unless the finding also shows a concrete violation of the requested behavior or a regression on input or state that was valid at the baseline.",
+		"is a regression even when nothing prohibited it",
+		"is not a regression merely because its results differ from the baseline",
+	} {
+		if !strings.Contains(instruction, required) {
+			t.Fatalf("instruction omits severity rule %q:\n%s", required, instruction)
+		}
+	}
+}
+
+// TestReviewProviderRefuterRolePromptRequiresObservableHarm pins S19 on the
+// rendered refuter role prompt of every runtime: the shared harm rules and the
+// refuter decision rule reach the model, not only the source constant.
+func TestReviewProviderRefuterRolePromptRequiresObservableHarm(t *testing.T) {
+	refuter, err := reviewProviderRoleContractFor(reviewProviderRoleRefuter)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, runtime := range []model.AgentID{model.AgentCodex, model.AgentClaudeCode, model.AgentPi, model.AgentOpenCode} {
+		prompt, err := reviewProviderRolePrompt(refuter, runtimeBudgetRolePromptRequest(""), string(runtime))
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, required := range []string{
+			"must also name its observable harm", "is not harm by itself and is at most WARNING",
+			"at most WARNING unless the finding also shows a concrete violation of the requested behavior or a regression on input or state that was valid at the baseline.",
+			"is a regression even when nothing prohibited it",
+			"ignoring an explicit option or argument while reporting success",
+			"it demonstrates no observable harm",
+			"Inconclusive is not a severity downgrade: it still opens a correction",
+			"only when the supplied evidence cannot decide",
+		} {
+			if !strings.Contains(string(prompt), required) {
+				t.Fatalf("%s refuter role prompt omits %q:\n%s", runtime, required, prompt)
+			}
+		}
 	}
 }
 
