@@ -190,7 +190,7 @@ func TestDecodeRefusesRemovedPiFields(t *testing.T) {
 		{
 			name:      "profiles",
 			document:  `{"version":"v1","selection":{"providers":{"pi":{"profiles":{"deep":{"orchestrator":{"provider":"anthropic","model":"claude-sonnet"}}}}}}}`,
-			wantCodes: []string{"config.provider.profiles.unsupported-provider"},
+			wantCodes: []string{"config.provider.profiles.retired"},
 		},
 		{
 			name:      "activeProfile",
