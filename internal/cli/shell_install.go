@@ -103,7 +103,11 @@ func RunShell(args []string, stdout io.Writer) (resultErr error) {
 		return err
 	}
 	if inspect {
-		_, err = fmt.Fprintf(stdout, "Confirmation: %s\nCommands: %s/bin/gentle-shell, %s/bin/pi\n", token, req.Destination, req.Destination)
+		preview, previewErr := shellinstaller.PreviewUserInstall(req, token)
+		if previewErr != nil {
+			return previewErr
+		}
+		_, err = fmt.Fprintf(stdout, "Confirmation: %s\nCommands: %s/bin/gentle-shell, %s/bin/pi\n%s", token, req.Destination, req.Destination, preview)
 		return err
 	}
 	if req.Confirmation != token {
@@ -122,6 +126,7 @@ type shellInstallModel struct {
 	field     int
 	review    bool
 	confirmed bool
+	preview   string
 	err       error
 }
 
@@ -154,6 +159,10 @@ func (m shellInstallModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.field = (m.field + 1) % fields
 	case "enter":
 		token, err := shellinstaller.InspectUserInstall(m.req)
+		m.preview = ""
+		if err == nil {
+			m.preview, err = shellinstaller.PreviewUserInstall(m.req, token)
+		}
 		m.err = err
 		if err == nil {
 			m.req.Confirmation, m.review = token, true
@@ -185,6 +194,9 @@ func (m shellInstallModel) View() string {
 		"Commands: " + m.req.Destination + "/bin/gentle-shell and " + m.req.Destination + "/bin/pi", "Tab selects field; arrows change mode; Enter reviews; Escape cancels."}
 	rows[m.field+1] = "> " + rows[m.field+1]
 	if m.review {
+		if m.preview != "" {
+			rows = append(rows, m.preview)
+		}
 		rows = append(rows, "Confirm this physical selection and both command bindings? y installs; any other key edits.", m.req.Confirmation)
 	}
 	if m.err != nil {
