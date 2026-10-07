@@ -369,7 +369,9 @@ def pty_status(binding, project, command=None, extra=None, installer=None, cance
     project_before_entries = []
     project_before, requests_before = physical_inventory(project, project_before_entries), len(REQUESTS)
     master, slave = os.openpty()
-    fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack('HHHH', 18, 72, 0, 0))
+    # Stock /gentle:status reports routing for every installed agent. Give its
+    # actual notification room; a short viewport can omit the required header.
+    fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack('HHHH', 80, 72, 0, 0))
 
     def terminal():
         os.setsid()

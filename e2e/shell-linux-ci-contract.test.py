@@ -86,6 +86,18 @@ class LinuxCIContract(unittest.TestCase):
         self.assertEqual(fields['tailBytes'].func.id, 'min')
         self.assertEqual(fields['tailBytes'].args[1].value, 1024)
 
+    def test_status_notification_fits_the_pty_without_lowering_success_checks(self):
+        text = (ROOT / 'e2e/shell-linux-user-install-guest.py').read_text()
+        fixture = ast.parse(text)
+        function = next(node for node in fixture.body if isinstance(node, ast.FunctionDef) and node.name == 'pty_status')
+        geometry = next(node for node in ast.walk(function) if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == 'pack' and isinstance(node.args[0], ast.Constant) and node.args[0].value == 'HHHH')
+        self.assertEqual([value.value for value in geometry.args[1:]], [80, 72, 0, 0])
+        self.assertIn("b'el Gentleman package is active.'", text)
+        self.assertIn("require(expected in raw,", text)
+        self.assertIn("min(45, remaining())", text)
+        self.assertIn("len(raw) <= 65536", text)
+        self.assertIn("require(project_after == project_before", text)
+
     def test_shell_blocks_parse_without_execution(self):
         for step in self.workflow['jobs']['user-vm-laboratory']['steps']:
             if 'run' not in step:
