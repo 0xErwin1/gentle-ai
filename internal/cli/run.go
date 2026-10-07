@@ -24,6 +24,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/cursor"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/kimi"
 	opencodeagent "github.com/gentleman-programming/gentle-ai/v4/internal/agents/opencode"
+	piagent "github.com/gentleman-programming/gentle-ai/v4/internal/agents/pi"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/assets"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/backup"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/components/agentguidance"
@@ -178,6 +179,9 @@ func RunInstall(args []string, detection system.DetectionResult) (InstallResult,
 	homeDir, err := osUserHomeDir()
 	if err != nil {
 		return InstallResult{}, fmt.Errorf("resolve user home directory: %w", err)
+	}
+	if err := validatePiPackageInstall(homeDir, resolved.Agents); err != nil {
+		return InstallResult{}, err
 	}
 	persistedState, stateErr := state.Read(homeDir)
 	if errors.Is(stateErr, os.ErrNotExist) {
@@ -841,7 +845,11 @@ func (r *installRuntime) stagePlan() pipeline.StagePlan {
 			touchedKeys: openCodeSettingsWriterKeys(r.resolved.OrderedComponents, true, false),
 		}}, prepare...)
 	}
-	apply = append(apply, rollbackRestoreStep{id: "apply:rollback-restore", state: r.state, homeDir: r.homeDir, workspaceDir: r.workspaceDir, telemetryConfigDir: telemetryDir})
+	piAgentDir := ""
+	if containsAgent(r.resolved.Agents, model.AgentPi) {
+		piAgentDir = piagent.AgentConfigPath(r.homeDir)
+	}
+	apply = append(apply, rollbackRestoreStep{id: "apply:rollback-restore", state: r.state, homeDir: r.homeDir, workspaceDir: r.workspaceDir, telemetryConfigDir: telemetryDir, piAgentDir: piAgentDir})
 	if telemetryDir != "" {
 		apply = append(apply, openCodeTelemetryStep{id: "opencode:telemetry-runtime", configDir: telemetryDir, state: r.state})
 	}
@@ -2644,6 +2652,7 @@ type rollbackRestoreStep struct {
 	homeDir            string
 	workspaceDir       string
 	telemetryConfigDir string // Selected adapter authority, potentially outside HOME via XDG.
+	piAgentDir         string // Selected Pi adapter authority, never derived from the manifest.
 }
 
 type openCodeBackgroundActivationStep struct {
@@ -2680,6 +2689,10 @@ func (s rollbackRestoreStep) Rollback() error {
 	manifest := s.state.manifest
 	var telemetryErr error
 	roots := rollbackRoots(s.homeDir, s.workspaceDir)
+	// guard:population pi-rollback-agent-root too-loose: Only the selected adapter directory extends restore roots; sibling and symlink escapes remain refused.
+	if s.piAgentDir != "" {
+		roots = append(roots, s.piAgentDir)
+	}
 	if s.telemetryConfigDir != "" {
 		roots = append(roots, s.telemetryConfigDir)
 		// The retained journals, never the generic backup, own this pair's rollback.
@@ -2810,6 +2823,17 @@ func (s agentInstallStep) ID() string {
 	return s.id
 }
 
+func validatePiPackageInstall(homeDir string, agentIDs []model.AgentID) error {
+	if !containsAgent(agentIDs, model.AgentPi) {
+		return nil
+	}
+	// guard:population pi-install-settings-preflight fail-closed: Selected Pi conflicts or malformed settings are refused before CLI/TUI runtime construction or pipeline execution.
+	if err := piagent.NewAdapter().ValidateInstall(homeDir); err != nil {
+		return fmt.Errorf("preflight for agent %q: %w", model.AgentPi, err)
+	}
+	return nil
+}
+
 // Run executes Pi's package installation commands only. Other selected
 // agents remain config targets regardless of whether their runtime is present.
 //
@@ -2822,10 +2846,7 @@ func (s agentInstallStep) Run() error {
 		return nil
 	}
 
-	adapter, err := agents.NewAdapter(s.agent)
-	if err != nil {
-		return fmt.Errorf("create adapter for %q: %w", s.agent, err)
-	}
+	adapter := piagent.NewAdapter()
 
 	if _, _, _, _, err := adapter.Detect(context.Background(), s.homeDir); err != nil {
 		return fmt.Errorf("detect agent %q: %w", s.agent, err)
@@ -2835,7 +2856,7 @@ func (s agentInstallStep) Run() error {
 		return fmt.Errorf("preflight for agent %q: %w", s.agent, err)
 	}
 
-	commands, err := adapter.InstallCommand(s.profile)
+	commands, err := adapter.PrepareInstall(s.profile, s.homeDir)
 	if err != nil {
 		return fmt.Errorf("resolve install command for %q: %w", s.agent, err)
 	}
@@ -3401,6 +3422,9 @@ func ExecuteTUIInstallRecordingCodexServiceTier(homeDir string, selection model.
 }
 
 func executeTUIInstall(homeDir string, selection model.Selection, resolved planner.ResolvedPlan, profile system.PlatformProfile, background model.OpenCodeBackgroundIntent, piBackground model.PiBackgroundIntent, onProgress pipeline.ProgressFunc, consent ...*OpenCodeSDKConsent) (pipeline.ExecutionResult, *pipeline.Orchestrator, *string) {
+	if err := validatePiPackageInstall(homeDir, resolved.Agents); err != nil {
+		return pipeline.ExecutionResult{Err: err}, nil, nil
+	}
 	runtime, err := newInstallRuntime(homeDir, ScopeGlobal, ChannelStable, selection, resolved, profile)
 	if err != nil {
 		return pipeline.ExecutionResult{Err: err}, nil, nil
@@ -3704,6 +3728,13 @@ func selectedSkillIDs(selection model.Selection) []model.SkillID {
 func installBackupTargets(homeDir, workspaceDir string, scope InstallScope, selection model.Selection, resolved planner.ResolvedPlan, claudeModules bool) ([]string, error) {
 	paths := map[string]struct{}{}
 	adapters := resolveAdapters(resolved.Agents)
+	// Pi package commands always target global settings, even for a workspace
+	// selection or a plan without the Engram component.
+	for _, adapter := range adapters {
+		if adapter.Agent() == model.AgentPi {
+			paths[adapter.SettingsPath(homeDir)] = struct{}{}
+		}
+	}
 	if configDir := openCodeTelemetryConfigDir(homeDir, workspaceDir, scope, resolved.Agents); configDir != "" {
 		for _, path := range telemetryruntime.ManagedPaths(configDir) {
 			paths[path] = struct{}{}

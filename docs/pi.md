@@ -23,7 +23,6 @@ Gentle AI runs these setup steps:
 ```bash
 pi install npm:gentle-pi
 pi install npm:gentle-engram
-npm exec --yes --package gentle-engram@latest -- pi-engram init
 pi install npm:pi-web-access
 pi install npm:pi-btw
 ```
@@ -32,12 +31,15 @@ pi install npm:pi-btw
 | --- | --- |
 | `gentle-pi` (Gentle Shell) | Pi harness, ODD guidance, persona, models, skills, first-party clarification tool and delegation |
 | `gentle-engram` | Pi session memory and Engram tools |
-| `pi-engram init` | Initializes Pi Engram; current `gentle-engram` releases expose Engram as native Pi tools, not an MCP server |
 | `pi-web-access`, `pi-btw` | Web access and companion workflow support |
+
+Pi's package manager is the sole owner of Engram registration; Gentle AI does not run `pi-engram init`, which would add a second, version-pinned declaration. Install and sync repair unambiguous existing Engram duplicates: an identical declaration is kept once, and a bare string is removed when one distinct pinned or object declaration exists. Before package installation, Gentle AI normalizes compatible Engram duplicates and installs the retained source, so Pi does not overwrite an existing pin with the bare source. The retained declaration's version and object options are preserved. Conflicting declarations or malformed settings abort CLI and TUI installation at read-only admission, before runtime construction, commands, or configuration changes. Resolve the reported error before installing. Sync leaves conflicting declarations unchanged for manual resolution. Other packages are not deduplicated.
 
 Gentle AI no longer installs `npm:pi-subagents-j0k3r` or `npm:@juicesharp/rpiv-ask-user-question`: `gentle-pi` supplies their first-party replacements. Pi tool names are exclusive, so the latter package alongside `gentle-pi` can prevent Pi from loading. Existing entries are pruned from managed settings on the next install or sync. The retired `@juicesharp/rpiv-todo` entry is likewise removed; Gentle Todo ships with `gentle-pi`.
 
 Engram on Pi uses the native tools `gentle-engram` registers, not MCP, so Gentle AI never adds an `engram` server to `.pi/agent/mcp.json` and post-sync verification does not require that file; an `engram` entry you added yourself is left alone. Pi's built-in MCP support (Pi >= 0.99.0) runs other MCP servers, such as CodeGraph, from `mcp.json`. Gentle AI no longer installs `pi-mcp-adapter`: an installed extension that registers `/mcp` replaces Pi's built-in MCP support, so install and sync remove a previously installed `npm:pi-mcp-adapter` entry from `.pi/agent/settings.json` and its dependency from `.pi/agent/npm/package.json`, preserving unrelated Pi settings and dependencies. Install and sync also migrate servers from a legacy `.pi/agent/mcp-adapter.json` (the file `pi-mcp-adapter` 3.x read) into `mcp.json`, creating it only when there is a server to copy and never overwriting entries already in `mcp.json`. `mcp-adapter.json` is left in place, and a malformed `mcp-adapter.json`, or a malformed `mcp.json` that servers must be copied into, stops the run instead of being overwritten. Uninstall still lists `pi remove npm:pi-mcp-adapter` for older installs. Set `PI_CODING_AGENT_DIR` before install or sync to redirect those agent-owned files, `mcp.json`, and `APPEND_SYSTEM.md` into an isolated Pi home instead of `~/.pi/agent`. The Pi package owns its commands and project-file layout; use its current package documentation for runtime-specific recovery, model overrides, and startup behavior. Starting Pi with `pi -ns` skips startup hooks and automatic refreshes.
+
+When Pi is selected for installation, Gentle AI snapshots its global settings regardless of the selected components or install scope. Rollback permits restoring snapshotted files inside its resolved agent directory (`PI_CODING_AGENT_DIR`, when set), even outside the home or workspace. This does not authorize restoring sibling paths or files outside the existing restore guards. An unselected Pi directory adds neither a settings snapshot target nor rollback authority.
 
 ## Optional CodeGraph
 
