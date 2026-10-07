@@ -77,7 +77,11 @@ func TestIsolateProtectsExternalOpenCodeConfig(t *testing.T) {
 				want = filepath.Join(explicit, "opencode", "AGENTS.md")
 			}
 			for _, entry := range os.Environ() {
-				key := entry[:strings.IndexByte(entry, '=')]
+				i := strings.IndexByte(entry, '=')
+				if i < 0 {
+					continue
+				}
+				key := entry[:i]
 				if _, replaced := env[key]; !replaced && key != "XDG_CONFIG_HOME" {
 					cmd.Env = append(cmd.Env, entry)
 				}
