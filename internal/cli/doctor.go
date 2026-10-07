@@ -69,6 +69,7 @@ const (
 
 // Overridable for testing.
 var (
+	doctorToolProbeFn   = probeDoctorTool
 	lookPathFn          = exec.LookPath
 	availableBytesFn    = storage.AvailableBytes
 	osUserHomeDirDoctor = os.UserHomeDir
@@ -108,8 +109,8 @@ func RunDoctor(ctx context.Context, w io.Writer) error {
 	checks := make([]doctor.Check, 0, len(requiredTools)+3)
 	for _, tool := range requiredTools {
 		tool := tool
-		checks = append(checks, doctor.Check{ID: doctor.ToolCheckID(tool), Run: func(context.Context) doctor.Result {
-			return checkOneTool(tool, pathDirs)
+		checks = append(checks, doctor.Check{ID: doctor.ToolCheckID(tool), Run: func(ctx context.Context) doctor.Result {
+			return checkOneToolContext(ctx, tool, pathDirs)
 		}})
 	}
 	checks = append(checks,
@@ -197,16 +198,7 @@ func requiredDoctorTools(installedAgents []string) []string {
 	return required
 }
 
-func checkToolBinaries(pathDirs []string, installedAgents []string) []CheckResult {
-	required := requiredDoctorTools(installedAgents)
-	results := make([]CheckResult, 0, len(required))
-	for _, tool := range required {
-		results = append(results, checkOneTool(tool, pathDirs))
-	}
-	return results
-}
-
-func checkOneTool(tool string, pathDirs []string) CheckResult {
+func checkOneToolContext(ctx context.Context, tool string, pathDirs []string) CheckResult {
 	resolved, shim, err := resolveDoctorTool(tool)
 	if err != nil {
 		// resolved is "" here: there is no PATH-resolved copy to name or to
@@ -263,6 +255,14 @@ func checkOneTool(tool string, pathDirs []string) CheckResult {
 	}
 	if tool == "gentle-ai" {
 		detail += doctorInvokedGentleAIClause(resolved)
+	}
+	if err := doctorToolProbeFn(ctx, tool, resolved); err != nil {
+		return CheckResult{
+			Name:   doctor.ToolCheckID(tool),
+			Status: CheckStatusWarn,
+			Detail: detail + "; version probe failed: " + err.Error(),
+			Remedy: doctor.NewRemedy(doctor.RemedyInstallTool, "Repair or reinstall "+tool+" at "+resolved+", then run 'gentle-ai doctor' again"),
+		}
 	}
 	return CheckResult{
 		Name:   doctor.ToolCheckID(tool),
