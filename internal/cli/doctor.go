@@ -198,19 +198,6 @@ func requiredDoctorTools(installedAgents []string) []string {
 	return required
 }
 
-func checkToolBinaries(pathDirs []string, installedAgents []string) []CheckResult {
-	required := requiredDoctorTools(installedAgents)
-	results := make([]CheckResult, 0, len(required))
-	for _, tool := range required {
-		results = append(results, checkOneTool(tool, pathDirs))
-	}
-	return results
-}
-
-func checkOneTool(tool string, pathDirs []string) CheckResult {
-	return checkOneToolContext(context.Background(), tool, pathDirs)
-}
-
 func checkOneToolContext(ctx context.Context, tool string, pathDirs []string) CheckResult {
 	resolved, shim, err := resolveDoctorTool(tool)
 	if err != nil {
