@@ -66,6 +66,26 @@ class LinuxCIContract(unittest.TestCase):
         self.assertEqual(cwd.left.id, 'WORK')
         self.assertEqual(cwd.right.value, 'src/internal/shellinstaller')
 
+    def test_pty_failure_tail_is_bounded_encoded_partial_evidence(self):
+        fixture = ast.parse((ROOT / 'e2e/shell-linux-user-install-guest.py').read_text())
+        function = next(node for node in fixture.body if isinstance(node, ast.FunctionDef) and node.name == 'pty_status')
+        evidence = next(node for node in ast.walk(function) if isinstance(node, ast.Dict) and any(isinstance(key, ast.Constant) and key.value == 'tailBase64' for key in node.keys))
+        fields = {key.value: value for key, value in zip(evidence.keys, evidence.values) if isinstance(key, ast.Constant)}
+        self.assertIn('not complete process stream', fields['observation'].value)
+        encoded = fields['tailBase64']
+        self.assertEqual(encoded.func.attr, 'decode')
+        self.assertEqual(encoded.args[0].value, 'ascii')
+        encode = encoded.func.value
+        self.assertEqual(encode.func.value.id, 'base64')
+        self.assertEqual(encode.func.attr, 'b64encode')
+        partial = encode.args[0]
+        self.assertEqual(partial.value.id, 'snapshot')
+        self.assertIsInstance(partial.slice.lower.op, ast.USub)
+        self.assertEqual(partial.slice.lower.operand.value, 1024)
+        self.assertIsNone(partial.slice.upper)
+        self.assertEqual(fields['tailBytes'].func.id, 'min')
+        self.assertEqual(fields['tailBytes'].args[1].value, 1024)
+
     def test_shell_blocks_parse_without_execution(self):
         for step in self.workflow['jobs']['user-vm-laboratory']['steps']:
             if 'run' not in step:

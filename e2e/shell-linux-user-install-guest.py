@@ -508,6 +508,10 @@ def pty_status(binding, project, command=None, extra=None, installer=None, cance
             REPORT['ptyFailure'] = {
                 'kernel': REPORT['ptyKernel'],
                 'binding': binding.name, 'observation': 'buffer at failed check, not complete process stream',
+                # A bounded encoded tail distinguishes editor/command failures;
+                # it is neither a complete stream nor a startup/registration proof.
+                'tailBytes': min(len(snapshot), 1024),
+                'tailBase64': base64.b64encode(snapshot[-1024:]).decode('ascii'),
                 'bytes': len(snapshot), 'sha256': hashlib.sha256(snapshot).hexdigest(),
                 'nulBytes': snapshot.count(0), 'strictUTF8': valid_utf8,
                 'typingSent': typed, 'commandSent': sent, 'registrationObserved': b'el Gentleman package is active.' in snapshot,
