@@ -549,9 +549,12 @@ func runUpgrade(ctx context.Context, args upgradeArgs, detection system.Detectio
 	sp := upgrade.NewSpinner(stdout, "Checking for updates")
 	checkResults := updateCheckFiltered(ctx, Version, profile, toolFilter)
 	checkErr := updateCheckError(checkResults)
-	sp.Finish(checkErr == nil)
-	if checkErr != nil {
+	sp.Finish(!update.HasCheckFailures(checkResults))
+	if update.HasCheckFailures(checkResults) {
+		// Preserve partial-check diagnostics even when healthy tools can upgrade.
 		_, _ = fmt.Fprint(stdout, update.RenderCLI(checkResults))
+	}
+	if checkErr != nil {
 		return checkErr
 	}
 
@@ -594,7 +597,10 @@ func runUpgrade(ctx context.Context, args upgradeArgs, detection system.Detectio
 
 func updateCheckError(results []update.UpdateResult) error {
 	failed := update.CheckFailures(results)
-	if len(failed) == 0 {
+	// A failed tool must not invalidate the usable results of other tools.
+	// Non-failed statuses retain their existing semantics, including unknown
+	// versions, absent tools, and development builds; none implies up-to-date.
+	if len(failed) == 0 || len(failed) < len(results) {
 		return nil
 	}
 
