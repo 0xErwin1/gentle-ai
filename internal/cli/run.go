@@ -23,6 +23,7 @@ import (
 	codexagent "github.com/gentleman-programming/gentle-ai/v4/internal/agents/codex"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/kimi"
 	opencodeagent "github.com/gentleman-programming/gentle-ai/v4/internal/agents/opencode"
+	piagent "github.com/gentleman-programming/gentle-ai/v4/internal/agents/pi"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/assets"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/backup"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/components/agentguidance"
@@ -835,7 +836,11 @@ func (r *installRuntime) stagePlan() pipeline.StagePlan {
 			touchedKeys: openCodeSettingsWriterKeys(r.resolved.OrderedComponents, true, false),
 		}}, prepare...)
 	}
-	apply = append(apply, rollbackRestoreStep{id: "apply:rollback-restore", state: r.state, homeDir: r.homeDir, workspaceDir: r.workspaceDir, telemetryConfigDir: telemetryDir})
+	piAgentDir := ""
+	if containsAgent(r.resolved.Agents, model.AgentPi) {
+		piAgentDir = piagent.AgentConfigPath(r.homeDir)
+	}
+	apply = append(apply, rollbackRestoreStep{id: "apply:rollback-restore", state: r.state, homeDir: r.homeDir, workspaceDir: r.workspaceDir, telemetryConfigDir: telemetryDir, piAgentDir: piAgentDir})
 	if telemetryDir != "" {
 		apply = append(apply, openCodeTelemetryStep{id: "opencode:telemetry-runtime", configDir: telemetryDir, state: r.state})
 	}
@@ -2632,6 +2637,7 @@ type rollbackRestoreStep struct {
 	homeDir            string
 	workspaceDir       string
 	telemetryConfigDir string // Selected adapter authority, potentially outside HOME via XDG.
+	piAgentDir         string // Selected Pi adapter authority, never derived from the manifest.
 }
 
 type openCodeBackgroundActivationStep struct {
@@ -2668,6 +2674,10 @@ func (s rollbackRestoreStep) Rollback() error {
 	manifest := s.state.manifest
 	var telemetryErr error
 	roots := rollbackRoots(s.homeDir, s.workspaceDir)
+	// guard:population pi-rollback-agent-root too-loose: Only the selected adapter directory extends restore roots; sibling and symlink escapes remain refused.
+	if s.piAgentDir != "" {
+		roots = append(roots, s.piAgentDir)
+	}
 	if s.telemetryConfigDir != "" {
 		roots = append(roots, s.telemetryConfigDir)
 		// The retained journals, never the generic backup, own this pair's rollback.
@@ -3692,6 +3702,13 @@ func selectedSkillIDs(selection model.Selection) []model.SkillID {
 func installBackupTargets(homeDir, workspaceDir string, scope InstallScope, selection model.Selection, resolved planner.ResolvedPlan, claudeModules bool) ([]string, error) {
 	paths := map[string]struct{}{}
 	adapters := resolveAdapters(resolved.Agents)
+	// Pi package commands always target global settings, even for a workspace
+	// selection or a plan without the Engram component.
+	for _, adapter := range adapters {
+		if adapter.Agent() == model.AgentPi {
+			paths[adapter.SettingsPath(homeDir)] = struct{}{}
+		}
+	}
 	if configDir := openCodeTelemetryConfigDir(homeDir, workspaceDir, scope, resolved.Agents); configDir != "" {
 		for _, path := range telemetryruntime.ManagedPaths(configDir) {
 			paths[path] = struct{}{}
