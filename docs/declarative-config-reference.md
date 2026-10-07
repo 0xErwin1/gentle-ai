@@ -56,21 +56,13 @@ The last two both write configuration and install something. `config render` pro
 |-------|------|---------------|
 | `sddMode` | `single` \| `multi` | The default mode. |
 | `strictTDD` | boolean | Not enforced. |
-| `sddProfileStrategy` | `generated-multi` \| `external-single-active` | Gentle AI detects it. OpenCode only. |
-| `profiles` | array of [profile](#profiles) | No named profiles. OpenCode only. |
 | `rddMode` | `on` \| `off` | The machine's own review setting stands. Declaring it is opting into managing a user-owned choice. |
 | `backgroundIntent` | `auto` \| `on` \| `off` | Unresolved: the flag, the environment and the prior managed choice keep their turn. |
 | `piBackgroundIntent` | `auto` \| `on` \| `off` | The same, for Pi. |
 
-### Profiles
+### Retired SDD profiles
 
-A named model configuration that generates its own orchestrator and phase agents beside the default set.
-
-| Field | Type |
-|-------|------|
-| `name` | string, required |
-| `orchestrator` | [model assignment](#model-assignment) |
-| `phaseAssignments` | object: phase → model assignment |
+The upstream SDD profile runtime is retired. Non-empty `providers.<id>.profiles` and `providers.<id>.profileStrategy` requests are decoded only to report `config.provider.profiles.retired` and `config.provider.profile-strategy.retired`; remove those keys. Empty profile declarations do not restore the retired runtime. The former flat `profiles` and `sddProfileStrategy` keys remain superseded, not active workflow fields.
 
 ## Models
 
@@ -142,9 +134,12 @@ Every diagnostic carries a `code`, the JSON `path` it applies to, a `severity` a
 | `config.skill.unsupported` | A skill id that does not exist, in `skills`. |
 | `config.community-tool.unsupported` | The same, for that list. |
 | `config.opencode-plugin.retired` | A non-empty `openCodePlugins` list. Shipped OpenCode plugins are retired upstream; remove the key and let OpenCode's built-in functionality apply. |
+| `config.provider.profiles.retired` | A non-empty `providers.<id>.profiles` block requests the retired SDD profile runtime; remove the key. |
+| `config.provider.profile-strategy.retired` | A non-empty `providers.<id>.profileStrategy` requests the retired SDD profile runtime; remove the key. |
 | `config.model-preset.unsupported-provider` | A provider that offers no named profiles. |
 | `config.model-preset.unsupported` | A profile name that provider does not offer. |
 | `config.flags.exclusive` | `--config` combined with a semantic selection flag. |
+| `config.export.loss.codex-service-tier` | Persisted Codex service tier cannot be represented in the exported document; export reports `lossless: false`. Reconfigure the tier through Gentle AI's model picker. |
 | `config.export.loss.*` | Export could not represent a value; the message names what to do instead. |
 | `render.ownership.conflict` | An unmanaged resource occupies a path the document wants. |
 
