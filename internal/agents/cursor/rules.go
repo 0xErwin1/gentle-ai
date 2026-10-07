@@ -2,6 +2,7 @@ package cursor
 
 import (
 	"fmt"
+	"io"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -28,9 +29,17 @@ func ValidateRule(content []byte) error {
 	if end < 0 {
 		return fmt.Errorf("Cursor rule has unclosed YAML frontmatter; run `gentle-ai sync` to repair it")
 	}
+	decoder := yaml.NewDecoder(strings.NewReader(strings.Join(lines[1:end], "\n")))
 	var metadata map[string]any
-	if err := yaml.Unmarshal([]byte(strings.Join(lines[1:end], "\n")), &metadata); err != nil {
+	if err := decoder.Decode(&metadata); err != nil {
 		return fmt.Errorf("Cursor rule has invalid YAML frontmatter: %w", err)
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); err != io.EOF {
+		if err != nil {
+			return fmt.Errorf("Cursor rule has invalid YAML frontmatter: %w", err)
+		}
+		return fmt.Errorf("Cursor rule frontmatter must contain exactly one YAML document")
 	}
 	if enabled, ok := metadata["alwaysApply"].(bool); !ok || !enabled {
 		return fmt.Errorf("Cursor rule requires boolean alwaysApply: true; run `gentle-ai sync` to repair it")

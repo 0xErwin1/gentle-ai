@@ -18,6 +18,9 @@ func TestCursorRulePostApplyVerification(t *testing.T) {
 		ready         bool
 	}{
 		{"valid", "---\ndescription: Rules\nalwaysApply: true\n---\n\n## Rules\n", true},
+		{"terminated document with comment", "---\nalwaysApply: true\n...\n# trailing comment\n---\n## Rules\n", true},
+		{"malformed trailing content", "---\nalwaysApply: true\n...\ninvalid: [\n---\n## Rules\n", false},
+		{"additional yaml document", "---\nalwaysApply: true\n...\n--- # second document\nalwaysApply: false\n---\n## Rules\n", false},
 		{"missing frontmatter", "## Rules\n", false},
 		{"missing activation", "---\ndescription: Rules\n---\n## Rules\n", false},
 		{"disabled", "---\nalwaysApply: false\n---\n## Rules\n", false},
