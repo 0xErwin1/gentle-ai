@@ -81,6 +81,8 @@ func buildOrchestratorModules(agent model.AgentID, source ReviewContractSource, 
 
 // validateOrchestratorModuleDir accepts only a home-relative or absolute
 // reference: a relative one would resolve against whatever project is open.
+// Absolute filesystem bindings use native path semantics, including Windows
+// drive-absolute paths. Installation scope and ownership are checked separately.
 func validateOrchestratorModuleDir(dir string) error {
 	switch {
 	case strings.TrimSpace(dir) == "":
