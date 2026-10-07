@@ -733,7 +733,9 @@ func buildAppCandidateBinary(t *testing.T) string {
 	// 30s; the cap only guards against a hung toolchain, not build speed.
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
-	command := exec.CommandContext(ctx, "go", "build", "-o", binary, "../../cmd/gentle-ai")
+	// This fixture tests runtime state, not VCS metadata. Avoid consulting
+	// ambient repository ancestry when building from a linked worktree.
+	command := exec.CommandContext(ctx, "go", "build", "-buildvcs=false", "-o", binary, "../../cmd/gentle-ai")
 	if output, err := command.CombinedOutput(); err != nil {
 		t.Fatalf("build candidate binary: %v\n%s", err, output)
 	}
