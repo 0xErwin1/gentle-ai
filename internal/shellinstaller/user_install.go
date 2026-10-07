@@ -63,7 +63,7 @@ func UserInstallFromEntry(args []string) (UserInstallRequest, error) {
 }
 
 func userServiceArgs(unit string, interactive bool, self, cwd string, args, env []string) []string {
-	result := []string{"--user", "--quiet", "--wait", "--collect", "--service-type=exec", "--expand-environment=no", "--unit=" + unit, "--working-directory=" + cwd,
+	result := []string{"--user", "--quiet", "--wait", "--collect", "--service-type=exec", "--expand-environment=no", "--description=Gentle Shell owned runtime", "--unit=" + unit, "--working-directory=" + cwd,
 		"--property=MemoryMax=3221225472", "--property=MemorySwapMax=0", "--property=CPUQuota=100%", "--property=CPUQuotaPeriodSec=100ms",
 		"--property=TasksMax=64", "--property=NoNewPrivileges=yes", "--property=UMask=0077", "--property=KillMode=control-group", "--property=TimeoutStopSec=2s",
 		"--property=UnsetEnvironment=LD_PRELOAD LD_LIBRARY_PATH LD_AUDIT NODE_OPTIONS NODE_PATH"}

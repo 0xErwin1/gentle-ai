@@ -65,9 +65,15 @@ func UserKernelCheck() error {
 	return privateKernel() // Real mount, membership, cgroup2 statfs and exact leaf limits.
 }
 
+func userSelectionPath(path string) bool {
+	return privateHierarchyPath(path) && strings.IndexFunc(path, func(r rune) bool {
+		return !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || strings.ContainsRune("/_.-", r))
+	}) == -1
+}
+
 func ValidateUserInstall(req UserInstallRequest) error {
-	if !privateHierarchyPath(req.Destination) || (req.Mode != "separate" && req.Mode != "shared") {
-		return privateError("refused", errors.New("choose a canonical target and separate or shared mode"))
+	if !userSelectionPath(req.Destination) || (req.Mode != "separate" && req.Mode != "shared") {
+		return privateError("refused", errors.New("choose separate or shared mode and a canonical absolute target using only ASCII letters, digits, /, _, . or -"))
 	}
 	parent, err := privateDirectory(filepath.Dir(req.Destination))
 	if err != nil {
@@ -89,8 +95,8 @@ func ValidateUserInstall(req UserInstallRequest) error {
 		return errors.New("shared prefix and agent must be disjoint")
 	}
 	for _, path := range []string{req.SharedPrefix, req.SharedAgent} {
-		if !privateHierarchyPath(path) || path == req.Destination || strings.HasPrefix(path, req.Destination+"/") {
-			return privateError("refused", errors.New("shared selection must be independently owned"))
+		if !userSelectionPath(path) || path == req.Destination || strings.HasPrefix(path, req.Destination+"/") || strings.HasPrefix(req.Destination, path+"/") {
+			return privateError("refused", errors.New("shared paths must use the supported target character set and remain disjoint from the target in both directions"))
 		}
 		selected, err := privateDirectory(path)
 		if err != nil {
@@ -272,6 +278,40 @@ func userInteractive(stdin io.Reader) (bool, error) {
 	return err == nil, err
 }
 
+func userManagerProbe(ctx context.Context) *exec.Cmd {
+	return exec.CommandContext(ctx, "/usr/bin/systemctl", "--user", "show", "--property=Version", "--value")
+}
+
+func userManagerVersion(version []byte) error {
+	refused := errors.New("existing systemd user manager version >=254 required")
+	value := strings.TrimSuffix(string(version), "\n")
+	if value == "" || len(version) > 4096 {
+		return refused
+	}
+	end := strings.IndexFunc(value, func(r rune) bool { return r < '0' || r > '9' })
+	if end < 0 {
+		end = len(value)
+	}
+	if end == 0 {
+		return refused
+	}
+	if end < len(value) {
+		if !strings.ContainsRune(".~+-", rune(value[end])) || end+1 == len(value) {
+			return refused
+		}
+		if strings.IndexFunc(value[end+1:], func(r rune) bool {
+			return !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || strings.ContainsRune("._~+-", r))
+		}) != -1 {
+			return refused
+		}
+	}
+	number, err := strconv.Atoi(value[:end])
+	if err != nil || number < 254 {
+		return refused
+	}
+	return nil
+}
+
 func userService(ctx context.Context, self string, args []string, stdin io.Reader, stdout, stderr io.Writer) (resultErr error) {
 	if ctx == nil || ctx.Err() != nil || os.Getuid() == 0 {
 		return privateError("unavailable", errors.New("existing delegated non-root user manager required"))
@@ -289,16 +329,14 @@ func userService(ctx context.Context, self string, args []string, stdin io.Reade
 	}
 	probeCtx, probeCancel := context.WithTimeout(ctx, 2*time.Second)
 	defer probeCancel()
-	probe := exec.CommandContext(probeCtx, "/usr/bin/systemd-run", "--version")
+	probe := userManagerProbe(probeCtx)
 	probe.Env = env
 	version, err := probe.Output()
-	fields := strings.Fields(string(version))
-	if err != nil || len(version) > 4096 || len(fields) < 2 || fields[0] != "systemd" {
-		return errors.New("systemd >=254 with --expand-environment=no required")
+	if err != nil {
+		return fmt.Errorf("read existing systemd user manager version: %w", err)
 	}
-	number, err := strconv.Atoi(fields[1])
-	if err != nil || number < 254 {
-		return errors.New("systemd >=254 with --expand-environment=no required")
+	if err := userManagerVersion(version); err != nil {
+		return err
 	}
 	nonce := make([]byte, 8)
 	if _, err := rand.Read(nonce); err != nil {
@@ -617,12 +655,12 @@ func RunUserInstall(ctx context.Context, req UserInstallRequest) (result UserIns
 	if err != nil {
 		return result, err
 	}
-	if err = os.WriteFile(filepath.Join(root, "installation.json"), data, 0600); err != nil {
+	if err = userToolWrite(filepath.Join(root, "installation.json"), data, 0600); err != nil {
 		return result, err
 	}
 	for _, name := range []string{"gentle-shell", "pi"} {
 		binding := userBinding(req.Destination, name)
-		if err = os.WriteFile(filepath.Join(root, "bin", name), []byte(binding), 0700); err != nil {
+		if err = userToolWrite(filepath.Join(root, "bin", name), []byte(binding), 0700); err != nil {
 			return result, err
 		}
 	}
@@ -637,6 +675,9 @@ func RunUserInstall(ctx context.Context, req UserInstallRequest) (result UserIns
 	}
 	if err = unix.Renameat2(unix.AT_FDCWD, root, unix.AT_FDCWD, req.Destination, unix.RENAME_NOREPLACE); err != nil {
 		return result, err
+	}
+	if err = userDirectorySync(filepath.Dir(req.Destination)); err != nil {
+		return result, privateError("uncertain", err)
 	}
 	if _, err = userReadManifest(ctx, req.Destination); err != nil {
 		return result, privateError("uncertain", err)
@@ -810,17 +851,44 @@ func userToolMember(ctx context.Context, data []byte, pin, member string) ([]byt
 	}
 }
 
+type userSyncedFile interface {
+	Write([]byte) (int, error)
+	Sync() error
+	Close() error
+}
+
 func userToolWrite(path string, data []byte, mode os.FileMode) error {
-	file, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, mode)
+	return userWriteWithSync(path, data, mode, func(path string, flags int, mode os.FileMode) (userSyncedFile, error) {
+		return os.OpenFile(path, flags, mode)
+	})
+}
+
+func userWriteWithSync(path string, data []byte, mode os.FileMode, open func(string, int, os.FileMode) (userSyncedFile, error)) error {
+	file, err := open(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, mode)
 	if err != nil {
 		return err
 	}
 	n, writeErr := file.Write(data)
+	if n != len(data) {
+		writeErr = errors.Join(writeErr, io.ErrShortWrite)
+	}
 	err = errors.Join(writeErr, file.Sync(), file.Close())
-	if n != len(data) || err != nil {
+	if err != nil {
 		return privateError("source", err)
 	}
-	return nil
+	directory, err := open(filepath.Dir(path), os.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW, 0)
+	if err != nil {
+		return err
+	}
+	return errors.Join(directory.Sync(), directory.Close())
+}
+
+func userDirectorySync(path string) error {
+	directory, err := os.OpenFile(path, os.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW, 0)
+	if err != nil {
+		return err
+	}
+	return errors.Join(directory.Sync(), directory.Close())
 }
 
 // Stock Pi prefers agent/bin before probing PATH or downloading helpers.
@@ -1038,7 +1106,7 @@ func userCopySupervisor(ctx context.Context, source, dest string) (string, error
 	if err != nil || fmt.Sprintf("%x", sha256.Sum256(data)) != before {
 		return "", privateError("preimage", err)
 	}
-	return before, os.WriteFile(dest, data, 0700)
+	return before, userToolWrite(dest, data, 0700)
 }
 
 func userReadManifest(ctx context.Context, root string) (userManifest, error) {
