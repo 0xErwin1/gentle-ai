@@ -56,8 +56,12 @@ func TestSelectionSurvivesTheContractRoundTrip(t *testing.T) {
 
 // These are not desired state: one is a deprecated flag the adapter now decides
 // on its own, the other an imperative clear action a document expresses by
-// omitting the assignment.
+// omitting the assignment. The Codex service tier is a user choice the contract
+// cannot yet carry — selectionParity records it as a parity gap — and the
+// managed readback is derived from state, never a user choice.
 var unrepresentedBySelection = map[string]bool{
 	"CodexMultiAgent":                  true,
 	"ClearCodexOrchestratorAssignment": true,
+	"CodexServiceTier":                 true,
+	"CodexManagedServiceTier":          true,
 }
