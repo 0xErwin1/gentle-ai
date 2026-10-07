@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os/exec"
 	"path/filepath"
@@ -27,7 +28,7 @@ func probeDoctorTool(parent context.Context, tool, path string) error {
 		cmd := exec.CommandContext(ctx, name, args...)
 		// A child that inherits output handles must not keep Wait blocked forever.
 		cmd.WaitDelay = 100 * time.Millisecond
-		return nil, cmd.Run()
+		return nil, runDoctorProbeCommand(ctx, cmd)
 	}
 	var err error
 	if runtime.GOOS == "windows" && strings.EqualFold(filepath.Ext(path), ".ps1") {
@@ -39,7 +40,7 @@ func probeDoctorTool(parent context.Context, tool, path string) error {
 			return buildErr
 		}
 		cmd.WaitDelay = 100 * time.Millisecond
-		err = cmd.Run()
+		err = runDoctorProbeCommand(ctx, cmd)
 	}
 	if parent.Err() != nil {
 		return parent.Err()
@@ -48,4 +49,18 @@ func probeDoctorTool(parent context.Context, tool, path string) error {
 		return fmt.Errorf("did not complete within %s: %w", doctorToolProbeTimeout, ctx.Err())
 	}
 	return err
+}
+
+// Keep descendants in the probe's process group/job and release the whole tree
+// before returning, including when a launcher exits before its child does.
+func runDoctorProbeCommand(ctx context.Context, cmd *exec.Cmd) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	terminate, err := startDoctorProbeProcessTree(cmd)
+	if err != nil {
+		return err
+	}
+	err = cmd.Wait()
+	return errors.Join(err, terminate())
 }

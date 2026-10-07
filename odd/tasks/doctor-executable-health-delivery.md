@@ -11,8 +11,8 @@ S5. Base-repository branches: "Autorizar esas tres ramas en el repositorio base"
 
 ## Tasks
 - T1 | S1-S5 | parent: record chain, preserve tested snapshot, create tracker branch | done | commit: 6791e1557f1b37ed1e4861bd0016f45f89bea11d
-- T2 | S1-S2 | parent + independent verifier: execution-health slice with covering tests/docs, <=400 lines | in_progress | commit: pending
-- T3 | S1-S2 | parent + independent verifier: descendant-cleanup slice, <=400 lines, final functional snapshot equality | pending | commit: pending
+- T2 | S1-S2 | parent + independent verifier: execution-health slice with covering tests/docs, <=400 lines | done | commit: 5e8e6c3cf831c0dc0b3a43adb9b9f6419969092b
+- T3 | S1-S2 | parent + independent verifier: descendant-cleanup slice, <=400 lines, final functional snapshot equality | in_progress | commit: pending
 - T4 | S1-S5 | parent: publish draft tracker and dependent PRs, verify identities/bases/type labels/budgets | pending | commit: delivery-record commit pending
 
 ## Log
@@ -23,3 +23,5 @@ L4. Starting functional candidate: 12 paths, 537 changed lines; native review `r
 L5. Verified GitHub actor `dnlrsls`, base-repository permission `MAINTAIN`, approved issue #5127, existing `type:bug` catalog label, and Git author Daniel Rosales with public GitHub noreply identity. Validated base `310ff35f4989a724876185a6538962ed157143a6` is an ancestor of current `origin/main`. Branches in S5 did not exist locally or remotely at admission.
 L6. Tracker commit `6791e1557f1b37ed1e4861bd0016f45f89bea11d` records the plan. All 12 functional paths were copied and byte-verified under ignored diagnostics before reducing any slice. Python's Windows Store alias was unavailable; Node performed preservation. No installation or cleanup of Git's unreachable objects was attempted.
 L7. T2 focused Windows doctor/refusal tests and `go run ./internal/gofmtcheck` passed. Independent source verification found the deferred process-tree guarantee still present in the first-slice docs; removed that sentence from T2 and will restore the original final docs in T3. Help text only promises bounded probes and already matches T2. Verifier had no shell tools; Linux full-suite and Git facts remain parent-observed evidence.
+L8. T2 complete clean Linux suite passed (`go test -p 4 ./... -count=1 -timeout=10m`, job 10 exit 0). Independent doc/help readback resolved the finding. Native `review-d8d176ce8fb340fa` approved and acknowledged the 352-line slice; commit `5e8e6c3cf831c0dc0b3a43adb9b9f6419969092b`. Two native warnings were informational, with no correction route.
+L9. T3 restored all 12 original functional paths and SHA256-verified equality with the approved final snapshot, including the deferred docs guarantee. This reuses the original full clean Linux suite for identical functional bytes; new chain-tracking metadata is additional, non-runtime documentation.
