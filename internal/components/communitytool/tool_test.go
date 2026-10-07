@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -768,8 +769,85 @@ func TestInstallLeavesPiPendingWhenAdapterHealthIsNotMachineVerifiable(t *testin
 		t.Fatalf("Pi manual action = %q, want pending state", result.PiCodeGraph.ManualActions[0])
 	}
 	pi := findAgentStatus(t, *result.StatusAfter, model.AgentPi)
-	if pi.Configured || pi.Status != AgentStatusMissing {
+	if pi.Configured || pi.Status != "pending" {
 		t.Fatalf("Pi status = %#v, want unconfigured pending state", pi)
+	}
+	if detected, configured, missing := result.StatusAfter.DetectedConfiguredMissingCounts(); detected != 1 || configured != 0 || missing != 0 {
+		t.Fatalf("counts = (%d, %d, %d), want (1, 0, 0) for pending Pi", detected, configured, missing)
+	}
+	if !result.StatusAfter.CodeGraphReconcileSatisfied() {
+		t.Fatal("validated pending Pi must satisfy reconciliation")
+	}
+
+	calls := 0
+	rerun, err := InstallWithHome(model.CommunityToolCodeGraph, "", home, RunnerFunc(func(string, ...string) error {
+		calls++
+		return nil
+	}), DetectorFunc(func(string) (string, error) { return "/bin/codegraph", nil }))
+	if err != nil {
+		t.Fatalf("second InstallWithHome() error = %v", err)
+	}
+	if calls != 0 || len(rerun.CommandsRun) != 0 {
+		t.Fatalf("rerun calls = %d, commands = %v, want no install commands", calls, rerun.CommandsRun)
+	}
+	if !slices.Contains(rerun.ManualActions, "CodeGraph is already available and configured for all detected supported agents. No changes were needed.") {
+		t.Fatalf("rerun actions = %v, want already-reconciled note", rerun.ManualActions)
+	}
+	if rerun.PiCodeGraph == nil || !slices.Contains(rerun.ManualActions, piCodeGraphPendingAction) {
+		t.Fatalf("rerun = %#v, want pending health guidance preserved", rerun)
+	}
+	if rerun.StatusAfter == nil || findAgentStatus(t, *rerun.StatusAfter, model.AgentPi).Status != "pending" {
+		t.Fatalf("rerun status = %#v, want Pi still pending", rerun.StatusAfter)
+	}
+}
+
+func TestDetectStatusDistinguishesPiPendingFromFailures(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		probeErr    error
+		missingTool bool
+		brokenChild bool
+		want        AgentStatusKind
+	}{
+		{name: "verified capability pending", probeErr: ErrPiCodeGraphAdapterHealthUnavailable, want: "pending"},
+		{name: "genuine probe failure", probeErr: errors.New("probe failed"), want: AgentStatusMissing},
+		{name: "pending without capability", probeErr: ErrPiCodeGraphAdapterHealthUnavailable, missingTool: true, want: AgentStatusMissing},
+		{name: "pending with broken child", probeErr: ErrPiCodeGraphAdapterHealthUnavailable, brokenChild: true, want: AgentStatusMissing},
+		{name: "verified healthy", want: AgentStatusConfigured},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			home := t.TempDir()
+			mustWrite(t, filepath.Join(home, ".pi", "agent", "settings.json"), `{}`)
+			child := filepath.Join(home, ".pi", "agent", "subagents", "worker.md")
+			mustWrite(t, child, "---\ntools: bash\n---\nwork\n")
+			if _, err := ReconcilePiCodeGraph(PiCodeGraphOptions{HomeDir: home, Selected: true}); err != nil {
+				t.Fatal(err)
+			}
+			if tc.brokenChild {
+				mustWrite(t, child, "---\ntools: bash\n---\nmissing managed guidance\n")
+			}
+			previous := piCodeGraphEffectiveMCPProbe
+			piCodeGraphEffectiveMCPProbe = func(path string) (PiCodeGraphMCPProbeResult, error) {
+				result, _ := piProbeForTest(path)
+				if tc.missingTool {
+					result.Tools = nil
+				}
+				return result, tc.probeErr
+			}
+			t.Cleanup(func() { piCodeGraphEffectiveMCPProbe = previous })
+			status := DetectStatus(model.CommunityToolCodeGraph, home, DetectorFunc(func(string) (string, error) { return "/bin/codegraph", nil }))
+			pi := findAgentStatus(t, status, model.AgentPi)
+			if !pi.Detected || pi.Status != tc.want || pi.Configured != (tc.want == AgentStatusConfigured) {
+				t.Fatalf("Pi status = %#v, want %s", pi, tc.want)
+			}
+			if status.CodeGraphReconcileSatisfied() != (tc.want != AgentStatusMissing) {
+				t.Fatalf("reconciled = %v for %s", status.CodeGraphReconcileSatisfied(), tc.want)
+			}
+			configured, _ := PiCodeGraphConfigured(home, "")
+			if configured != (tc.want == AgentStatusConfigured) {
+				t.Fatalf("PiCodeGraphConfigured() = %v, want %v", configured, tc.want == AgentStatusConfigured)
+			}
+		})
 	}
 }
 

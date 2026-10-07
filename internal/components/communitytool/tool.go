@@ -29,6 +29,7 @@ const (
 	AgentStatusUnavailable AgentStatusKind = "unavailable"
 	AgentStatusConfigured  AgentStatusKind = "configured"
 	AgentStatusMissing     AgentStatusKind = "missing"
+	AgentStatusPending     AgentStatusKind = "pending"
 )
 
 type Definition struct {
@@ -371,6 +372,11 @@ func (s Status) CodeGraphReconcileSatisfied() bool {
 		return false
 	}
 	for _, agent := range s.Agents {
+		// Validated Pi capability is reconciled even when activation health
+		// remains unverifiable. Genuine Pi failures still block this shortcut.
+		if agent.Agent == model.AgentPi && agent.Status == AgentStatusPending {
+			continue
+		}
 		if agent.Detected && !agent.Configured {
 			return false
 		}
@@ -386,7 +392,7 @@ func (s Status) DetectedConfiguredMissingCounts() (detected, configured, missing
 		detected++
 		if agent.Configured {
 			configured++
-		} else {
+		} else if agent.Status != AgentStatusPending {
 			missing++
 		}
 	}
@@ -424,16 +430,16 @@ func detectCodeGraphAgents(homeDir string) []AgentStatus {
 		if detected {
 			configured, markerPath, reason := hasCodeGraphWiring(homeDir, adapter)
 			if id == model.AgentPi {
-				configured, reason, state.Children = inspectPiCodeGraph(homeDir, "")
-			}
-			state.Configured = configured
-			state.Path = markerPath
-			state.Reason = reason
-			if configured {
+				state.Status, reason, state.Children = inspectPiCodeGraph(homeDir, "")
+				configured = state.Status == AgentStatusConfigured
+			} else if configured {
 				state.Status = AgentStatusConfigured
 			} else {
 				state.Status = AgentStatusMissing
 			}
+			state.Configured = configured
+			state.Path = markerPath
+			state.Reason = reason
 		}
 		result = append(result, state)
 	}
