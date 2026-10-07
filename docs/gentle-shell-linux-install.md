@@ -18,6 +18,8 @@
 
 Run `gentle-ai shell install`. Arrows select mode; Tab cycles mode-appropriate fields (Shared adds prefix/agent). Enter reviews; `y` confirms and closes the TUI before terminal handoff. Escape aborts before installation; Ctrl-C during installation requests cancellation and waits for stop/reap.
 
+The confirmation review wraps to terminal width. Use PgUp/PgDn to scroll and Home/End to reach the first/last page, including the full Shared settings preview and recovery warnings; scrolling or resizing does not confirm or change your selection.
+
 For command-line installation, inspect, then use the **exact fresh printed confirmation** for that unchanged selection:
 
 ```sh

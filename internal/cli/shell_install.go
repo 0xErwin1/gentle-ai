@@ -127,12 +127,20 @@ type shellInstallModel struct {
 	review    bool
 	confirmed bool
 	preview   string
+	width     int
+	height    int
+	scroll    int
 	err       error
 }
 
 func (m shellInstallModel) Init() tea.Cmd { return nil }
 
 func (m shellInstallModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if size, ok := msg.(tea.WindowSizeMsg); ok {
+		m.width, m.height = max(0, size.Width), max(0, size.Height)
+		m.scroll = min(m.scroll, m.lastReviewOffset())
+		return m, nil
+	}
 	key, ok := msg.(tea.KeyMsg)
 	if !ok {
 		return m, nil
@@ -143,8 +151,11 @@ func (m shellInstallModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.Quit
 	}
 	if m.review {
+		if m.scrollReview(key.String()) {
+			return m, nil
+		}
 		if key.String() != "y" {
-			m.review = false
+			m.review, m.scroll = false, 0
 			return m, nil
 		}
 		m.confirmed = true
@@ -165,7 +176,7 @@ func (m shellInstallModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.err = err
 		if err == nil {
-			m.req.Confirmation, m.review = token, true
+			m.req.Confirmation, m.review, m.scroll = token, true, 0
 		}
 	case "left", "right":
 		if m.field == 1 {
@@ -189,7 +200,7 @@ func (m shellInstallModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m shellInstallModel) View() string {
+func (m shellInstallModel) content() string {
 	rows := []string{"Gentle Shell Linux user installer", "Target: " + m.req.Destination, "Mode: " + m.req.Mode, "Shared prefix: " + m.req.SharedPrefix, "Shared agent: " + m.req.SharedAgent,
 		"Commands: " + m.req.Destination + "/bin/gentle-shell and " + m.req.Destination + "/bin/pi", "Tab selects field; arrows change mode; Enter reviews; Escape cancels."}
 	rows[m.field+1] = "> " + rows[m.field+1]
@@ -197,10 +208,10 @@ func (m shellInstallModel) View() string {
 		if m.preview != "" {
 			rows = append(rows, m.preview)
 		}
-		rows = append(rows, "Confirm this physical selection and both command bindings? y installs; any other key edits.", m.req.Confirmation)
+		rows = append(rows, "Confirm this physical selection and both command bindings? y installs; non-scroll keys edit.", m.req.Confirmation)
 	}
 	if m.err != nil {
 		rows = append(rows, m.err.Error())
 	}
-	return strings.Join(rows, "\n") + "\n"
+	return strings.Join(rows, "\n")
 }
