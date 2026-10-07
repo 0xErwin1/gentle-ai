@@ -1153,7 +1153,9 @@ func userReadManifest(ctx context.Context, root string) (userManifest, error) {
 
 func userLaunchCommand(ctx context.Context, root string, manifest userManifest, cli string, args []string) *exec.Cmd {
 	cmd := exec.CommandContext(ctx, filepath.Join(root, "runtime/node/bin/node"), append([]string{cli}, args...)...)
-	cmd.Env = userEnvironment(root, manifest.Prefix, manifest.Agent)
+	// Read-only stock Git probes must not refresh the caller's index. Explicit
+	// Git writes still take their mandatory locks.
+	cmd.Env = append(userEnvironment(root, manifest.Prefix, manifest.Agent), "GIT_OPTIONAL_LOCKS=0")
 	return cmd // Empty Dir inherits the caller's project, not the installer stage.
 }
 
