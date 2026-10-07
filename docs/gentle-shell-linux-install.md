@@ -54,6 +54,10 @@ gentle-ai shell recover TARGET PRINTED_CONFIRMATION
 
 Recovery requires intact saved preimages and fresh printed consent. It restores the **whole prefix and agent**, so it can overwrite later edits, not just the two settings keys. Changed selection/root identities or corrupt preimages refuse. Quarantines, evidence and command bindings remain: this is **not uninstall or TARGET deletion**.
 
+**Recover before deleting TARGET.** Shared `npmCommand` invokes Node/npm inside TARGET; deleting it can break the selected Pi's package operations even while its prefix remains. Keep TARGET and its saved preimages until recovery completes.
+
+If TARGET was already removed, this recovery command cannot reconstruct its lost preimages. Restore the selected prefix and agent only from an independently verified backup outside TARGET; do not guess prior settings or redirect `npmCommand` to an arbitrary runtime. Without that backup, preserve the damaged Shared selection and use a different, empty Separate target as described below. That gives a new installation, not restoration of the old Shared prefix or settings.
+
 ## Repair Separate graph drift
 
 Without an intact recovery snapshot, do not reinstall into the damaged target. Keep the previous target, agent configuration/history and evidence; inspect and confirm a **different, empty TARGET** using the Separate commands above, then use its bindings.
