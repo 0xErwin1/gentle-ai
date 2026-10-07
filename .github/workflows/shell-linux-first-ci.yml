@@ -1,375 +1,36 @@
-name: Gentle Shell first Linux evidence
+name: Gentle Shell Linux qualification
 
 on:
-  push:
-    branches: [feat/shell-linux-runtime-35]
+  pull_request:
+    branches: [main]
+    paths:
+      - 'internal/shellinstaller/**'
+      - 'internal/cli/shell_install*'
+      - 'internal/app/shell_install*'
+      - 'scripts/*gentle-shell*'
+      - 'scripts/*private*'
+      - 'scripts/user*'
+      - 'e2e/*shell-linux*'
+      - 'e2e/*shared*'
+      - 'e2e/*frozen*'
+      - '.github/workflows/shell-linux-first-ci.yml'
+  workflow_dispatch:
 
 permissions: {}
 
 jobs:
-  focused-linux:
-    name: Baseline native 322de52 (not final User candidate)
-    env:
-      NATIVE_SOURCE_SHA: '322de52a3739ebe4fb0c2b04546d3af642be51ea'
-    if: github.repository == 'decode2/gentle-ai' && github.ref == 'refs/heads/feat/shell-linux-runtime-35'
-    runs-on: ubuntu-24.04
-    timeout-minutes: 35
-    steps:
-      # No checkout action or credentialed checkout: the exact public commit is data.
-      - name: Fetch exact public fork commit without a token
-        shell: bash
-        env:
-          EXPECTED_SHA: ${{ env.NATIVE_SOURCE_SHA }}
-          EXPECTED_REPO: ${{ github.repository }}
-          EXPECTED_REF: ${{ github.ref }}
-          GIT_TERMINAL_PROMPT: '0'
-          GIT_CONFIG_NOSYSTEM: '1'
-          GIT_CONFIG_GLOBAL: /dev/null
-          GIT_ASKPASS: /bin/false
-        run: |
-          set -euo pipefail
-          test "$EXPECTED_REPO" = 'decode2/gentle-ai'
-          test "$EXPECTED_REF" = 'refs/heads/feat/shell-linux-runtime-35'
-          [[ "$EXPECTED_SHA" =~ ^[0-9a-f]{40}$ ]]
-          test ! -e .git
-          git init -q
-          git remote add origin https://github.com/decode2/gentle-ai.git
-          git -c credential.helper= -c core.askPass= -c http.followRedirects=false \
-            fetch --no-tags --depth=1 origin "$EXPECTED_SHA"
-          test "$(git rev-parse FETCH_HEAD)" = "$EXPECTED_SHA"
-          git checkout --detach --force FETCH_HEAD
-          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
-          test ! -e internal/shellinstaller/user_install.go
-          test ! -e scripts/provision-gentle-shell-private-global.mjs
-          printf 'Verified public fork commit: %s\n' "$EXPECTED_SHA"
-
-      # Stock OS boundary first: no candidate Go/Node/Pi enters this image.
-      - name: Build pinned stock Linux guest
-        shell: bash
-        run: |
-          set -euo pipefail
-          command -v docker
-          command -v timeout
-          test -r /proc/self/ns/net && test -r /proc/self/ns/mnt
-          timeout --kill-after=5 180 docker build -f e2e/Dockerfile.shell-linux-guest -t gentle-shell-guest:ci e2e
-
-      - name: Prove stock guest isolation and rejection controls
-        shell: bash
-        run: |
-          set -euo pipefail
-          host_net="$(stat -Lc %i /proc/self/ns/net)"
-          host_mnt="$(stat -Lc %i /proc/self/ns/mnt)"
-          guest() {
-            local network="$1"
-            shift
-            timeout --kill-after=5 30 docker run --rm --pull=never \
-              --network "$network" --cap-drop=ALL \
-              --security-opt=no-new-privileges --read-only --user 65532:65532 \
-              --tmpfs /tmp:rw,nosuid,nodev,mode=1777 \
-              --cpus=1 --memory=128m --memory-swap=128m --pids-limit=32 \
-              -e HOME=/tmp -e HOST_NETNS="$host_net" -e HOST_MNTNS="$host_mnt" \
-              "$@" gentle-shell-guest:ci
-          }
-          # Success is required before testing controls; Docker failure is not proof.
-          guest none
-          expect_rejection() {
-            local expected="$1" status=0 output
-            shift
-            # Capture privately: raw guest output could contain environment values.
-            output="$(guest "$@" 2>&1)" || status=$?
-            if test "$status" != 1 || test "$output" != "$expected"; then
-              printf 'STOP: negative control did not return the expected guest rejection (status=%s).\n' "$status" >&2
-              exit 1
-            fi
-          }
-          expect_rejection 'STOP: non-loopback interface present' bridge
-          expect_rejection 'STOP: unexpected environment name (credentials forbidden)' none -e GITHUB_TOKEN=synthetic-canary
-          printf 'Stock guest positive and negative controls passed; installation remains unproven.\n'
-
-      # Fetch archive bytes as DATA only. Never unpack or execute npm lifecycle scripts.
-      - name: Measure human-approved Stable archive bytes without execution
-        shell: bash
-        env:
-          ARCHIVE_URL: https://registry.npmjs.org/gentle-pi/-/gentle-pi-3.7.0.tgz
-          EXPECTED_SRI: sha512-SXBp9jIRnVIcOsLCW/Zw4XDTXxhViXNxrCZS7LyioB6kdRl99Ohojeaj+yIH5+K/ucwLlTlHYBz8zwue9aspNQ==
-        run: |
-          set -euo pipefail
-          umask 077
-          archive="$(mktemp "$RUNNER_TEMP/gentle-shell-stable-3.7.0.XXXXXXXX.tgz")"
-          trap 'rm -f -- "$archive"' EXIT
-          status="$(curl --proto '=https' --max-redirs 0 --fail --silent --show-error \
-            --tlsv1.2 --connect-timeout 10 --max-time 90 --max-filesize 67108864 \
-            --write-out '%{http_code}' --output "$archive" "$ARCHIVE_URL")"
-          test "$status" = 200
-          bytes="$(wc -c < "$archive" | tr -d '[:space:]')"
-          test "$bytes" -gt 0 && test "$bytes" -le 67108864
-          actual_sri="sha512-$(openssl dgst -sha512 -binary "$archive" | base64 -w0)"
-          test "$actual_sri" = "$EXPECTED_SRI"
-          sha256="$(sha256sum "$archive" | cut -d ' ' -f1)"
-          printf 'Stable data only: gentle-pi@3.7.0 bytes=%s sha256=%s sri=%s\n' \
-            "$bytes" "$sha256" "$actual_sri"
-
-          # Reuse these exact fetched bytes; no second fetch, npm or install route.
-          # Minimal context contains only named harness files and the data archive.
-          context="$(mktemp -d "$RUNNER_TEMP/shell-source-data.XXXXXXXX")"
-          cp e2e/Dockerfile.shell-linux-source-data e2e/shell-linux-guest-proof.sh \
-            e2e/shell-linux-source-data-guest.sh e2e/shell-linux-source-data-controls.sh "$context/"
-          cp "$archive" "$context/approved.tgz"
-          timeout --kill-after=5 180 docker build \
-            -f "$context/Dockerfile.shell-linux-source-data" -t gentle-shell-source-data:ci "$context"
-          host_net="$(stat -Lc %i /proc/self/ns/net)"
-          host_mnt="$(stat -Lc %i /proc/self/ns/mnt)"
-          # Stock proof runs again in this exact guest before synthetic or real data.
-          timeout --kill-after=5 150 docker run --rm --pull=never \
-            --network none --read-only --user 65532:65532 --cap-drop=ALL \
-            --security-opt=no-new-privileges \
-            --tmpfs /tmp:rw,nosuid,nodev,mode=1777,size=96m \
-            --cpus=1 --memory=128m --memory-swap=128m --pids-limit=32 \
-            -e HOME=/tmp -e HOST_NETNS="$host_net" -e HOST_MNTNS="$host_mnt" \
-            gentle-shell-source-data:ci
-
-      # Component install evidence: no operator runtime or broad checkout context.
-      - name: Acquire pinned runtime data and execute private install in isolated guest
-        timeout-minutes: 16
-        shell: bash
-        run: |
-          set -euo pipefail
-          umask 077
-          context="$(mktemp -d "$RUNNER_TEMP/shell-private-runtime.XXXXXXXX")"
-          status="$(curl --proto '=https' --max-redirs 0 --fail --silent --show-error \
-            --tlsv1.2 --connect-timeout 10 --max-time 120 --max-filesize 57224421 \
-            --write-out '%{http_code}' --output "$context/node.tgz" \
-            https://nodejs.org/dist/v24.18.0/node-v24.18.0-linux-x64.tar.gz)"
-          test "$status" = 200
-          test "$(wc -c < "$context/node.tgz")" = 57224421
-          echo "783130984963db7ba9cbd01089eaf2c2efb055c7c1693c943174b967b3050cb8  $context/node.tgz" | sha256sum -c -
-          cp e2e/Dockerfile.shell-linux-private-runtime e2e/shell-linux-guest-proof.sh \
-            e2e/shell-linux-private-runtime-guest.sh scripts/install-gentle-shell-private.sh \
-            scripts/complete-generated-lock-sri.mjs e2e/complete-generated-lock-sri.test.mjs \
-            scripts/normalize-private-optional-platform-closure.mjs \
-            e2e/normalize-private-optional-platform-closure.test.mjs \
-            scripts/bootstrap-gentle-shell-private-node.sh \
-            e2e/shell-linux-node-bootstrap-controls.sh \
-            scripts/acquire-gentle-shell-private-bundle.sh \
-            e2e/shell-linux-bundle-acquisition-controls.sh "$context/"
-          printf 'Owned Node bootstrap commands source=%s archive-bytes=57224421\n' "$NATIVE_SOURCE_SHA"
-          sha256sum "$context/bootstrap-gentle-shell-private-node.sh" \
-            "$context/shell-linux-node-bootstrap-controls.sh" \
-            "$context/acquire-gentle-shell-private-bundle.sh" \
-            "$context/shell-linux-bundle-acquisition-controls.sh" \
-            "$context/Dockerfile.shell-linux-private-runtime" \
-            .github/workflows/shell-linux-first-ci.yml
-          printf '%s\n' \
-            'ulimit -t 240 && ulimit -u 64 && timeout --kill-after=5 450 env -i PATH=/usr/bin:/bin HOME=/acquire /bin/sh /owned/acquire-gentle-shell-private-bundle.sh --destination /acquire/published --node-archive /node.tgz' \
-            '/bin/bash -c "ulimit -t 240 && ulimit -u 64 && exec /bin/sh /usr/local/bin/shell-linux-bundle-acquisition-controls.sh"' \
-            'timeout --kill-after=5 90 env -i PATH=/usr/bin:/bin HOME="$stage/home" /bin/sh "$bootstrap" --destination "$bundle/node" --node-archive "$archive"' \
-            'ulimit -f 1024 && exec env -i PATH=/usr/bin:/bin HOME=/tmp/bundle-fixture /bin/sh /usr/local/bin/acquire-gentle-shell-private-bundle.sh --destination /tmp/bundle-parent/rejected --node-archive /node.tgz' \
-            '(cd "$bundle/project" && private_npm install --package-lock-only)' \
-            '(cd "$bundle/project" && private_npm ci)' \
-            'find . -type f \( -name package.json -o -name package-lock.json -o -name binding.gyp \) -exec cp --parents -t "$stage/metadata" {} +' \
-            '/bin/bash -o pipefail -c '\''cd "$1" && find node cache project -type f -print0 | LC_ALL=C sort -z | xargs -0 sha256sum'\'' bash "$bundle"' \
-            'timeout --kill-after=5 240 env -i HOME="$stage/home" TMPDIR="$stage/tmp" XDG_CONFIG_HOME="$stage/config" XDG_STATE_HOME="$stage/state" PATH="$bundle/node/bin:/usr/bin:/bin" NPM_CONFIG_USERCONFIG="$stage/config/user.npmrc" NPM_CONFIG_GLOBALCONFIG="$stage/config/global.npmrc" "$node" --max-old-space-size=2048 "$npm" "$@" --ignore-scripts --engine-strict --no-audit --no-fund --registry=https://registry.npmjs.org --cache="$bundle/cache"' \
-            'timeout --kill-after=5 150 env -i HOME="$stage/home" TMPDIR="$stage/tmp" XDG_CONFIG_HOME="$stage/config" XDG_STATE_HOME="$stage/state" PATH="$bundle/node/bin:/usr/bin:/bin" NPM_CONFIG_USERCONFIG="$stage/config/user.npmrc" NPM_CONFIG_GLOBALCONFIG="$stage/config/global.npmrc" "$node" --max-old-space-size=256 "$sri" "$bundle/project/package-lock.json"' \
-            '/bin/bash -c "ulimit -t 240 && ulimit -u 64 && exec /bin/sh /usr/local/bin/shell-linux-node-bootstrap-controls.sh"' \
-            '/bin/bash -c "ulimit -t 240 && ulimit -u 64 && exec /bin/sh /usr/local/bin/shell-linux-private-runtime-guest.sh"' \
-            'ulimit -f 1024 && exec env -i PATH=/usr/bin:/bin HOME=/tmp/bootstrap-fixture /bin/sh /usr/local/bin/bootstrap-gentle-shell-private-node.sh --destination /tmp/bootstrap-parent/rejected --node-archive /node.tgz' \
-            'timeout --kill-after=2 15 env -i HOME="$stage/home" TMPDIR="$stage/tmp" XDG_CONFIG_HOME="$stage/config" XDG_STATE_HOME="$stage/state" PATH="$stage/node/bin:/usr/bin:/bin" NPM_CONFIG_USERCONFIG="$stage/config/user.npmrc" NPM_CONFIG_GLOBALCONFIG="$stage/config/global.npmrc" "$node" --max-old-space-size=256 --version' \
-            'timeout --kill-after=2 15 env -i HOME="$stage/home" TMPDIR="$stage/tmp" XDG_CONFIG_HOME="$stage/config" XDG_STATE_HOME="$stage/state" PATH="$stage/node/bin:/usr/bin:/bin" NPM_CONFIG_USERCONFIG="$stage/config/user.npmrc" NPM_CONFIG_GLOBALCONFIG="$stage/config/global.npmrc" "$node" --max-old-space-size=256 "$npm" --version'
-          printf 'Owned data-only commands source=%s\n' "$NATIVE_SOURCE_SHA"
-          sha256sum "$context/complete-generated-lock-sri.mjs" "$context/complete-generated-lock-sri.test.mjs" \
-            "$context/normalize-private-optional-platform-closure.mjs" \
-            "$context/normalize-private-optional-platform-closure.test.mjs"
-          printf '%s\n' \
-            '/acquire/published/bundle/node/bin/node --max-old-space-size=256 /owned/complete-generated-lock-sri.test.mjs' \
-            '/acquire/published/bundle/node/bin/node --max-old-space-size=256 /owned/normalize-private-optional-platform-closure.test.mjs' \
-            'normalizer="$(dirname "$0")/normalize-private-optional-platform-closure.mjs"' \
-            'env -i "$node" --input-type=module - "$stage/project" "$normalizer"'
-          # Capture complete output in memory; reject excess before public printing.
-          bounded() {
-            local output status=0 bytes
-            output="$("$@" 2>&1)" || status=$?
-            bytes="$(printf '%s' "$output" | wc -c)"
-            test "$bytes" -le 12000 || { printf 'STOP: component output bound exceeded.\n'; return 1; }
-            printf '%s\n' "$output"
-            return "$status"
-          }
-          printf 'Private install candidate source=%s Node-data-sha256=783130984963db7ba9cbd01089eaf2c2efb055c7c1693c943174b967b3050cb8\n' "$NATIVE_SOURCE_SHA"
-          bounded timeout --kill-after=5 480 env DOCKER_BUILDKIT=0 docker build --quiet --network=default \
-            --memory=3g --memory-swap=3g --cpu-period=100000 --cpu-quota=100000 \
-            --build-arg SOURCE_SHA="$NATIVE_SOURCE_SHA" \
-            -f "$context/Dockerfile.shell-linux-private-runtime" \
-            -t gentle-shell-private-runtime:ci "$context"
-          host_net="$(stat -Lc %i /proc/self/ns/net)"
-          host_mnt="$(stat -Lc %i /proc/self/ns/mnt)"
-          bounded timeout --kill-after=5 300 docker run --rm --pull=never \
-            --network none --read-only --user 65532:65532 --cap-drop=ALL \
-            --security-opt=no-new-privileges \
-            --tmpfs /tmp:rw,nosuid,nodev,exec,mode=1777,size=2g \
-            --cpus=1 --memory=3g --memory-swap=3g --pids-limit=64 \
-            -e HOME=/tmp -e HOST_NETNS="$host_net" -e HOST_MNTNS="$host_mnt" \
-            gentle-shell-private-runtime:ci
-
-      - name: Select pinned Go toolchain
-        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
-        with:
-          go-version-file: go.mod
-          cache: false
-          token: ''
-
-      # Prefetch module before tests; no OS network isolation is claimed.
-      - name: Prepare the one focused external module
-        shell: bash
-        env:
-          GOTOOLCHAIN: local
-          GOMODCACHE: ${{ runner.temp }}/shell-ci/modcache
-        run: |
-          set -euo pipefail
-          test "$(go version)" = 'go version go1.25.10 linux/amd64'
-          mkdir -p "$GOMODCACHE"
-          go mod download golang.org/x/sys@v0.47.0
-
-      - name: Build private Linux tests offline and execute only in bounded guests
-        shell: bash
-        env:
-          GOMODCACHE: ${{ runner.temp }}/shell-ci/modcache
-        run: |
-          set -euo pipefail
-          test "$(go version)" = 'go version go1.25.10 linux/amd64'
-          scratch="$RUNNER_TEMP/shell-broker-context"
-          mkdir -p "$scratch" "$RUNNER_TEMP/shell-ci/home" \
-            "$RUNNER_TEMP/shell-ci/tmp" "$RUNNER_TEMP/shell-ci/gocache"
-          format_diff="$RUNNER_TEMP/shell-ci/broker-gofmt.diff"
-          timeout 10 env -i PATH="$PATH" HOME="$RUNNER_TEMP/shell-ci/home" \
-            TMPDIR="$RUNNER_TEMP/shell-ci/tmp" gofmt -d \
-            internal/shellinstaller/linux_broker_peer_linux.go \
-            internal/shellinstaller/linux_broker_peer_linux_test.go \
-            internal/shellinstaller/linux_broker_consent_linux.go \
-            internal/shellinstaller/linux_broker_consent_linux_test.go \
-            scripts/private_helpers.go \
-            internal/shellinstaller/private_runtime_linux.go \
-            internal/shellinstaller/private_runtime_linux_test.go \
-            internal/shellinstaller/private_native_linux.go \
-            internal/shellinstaller/private_native_linux_test.go \
-            | head -c 65536 | tee "$format_diff"
-          test ! -s "$format_diff"
-          test "$(git rev-parse HEAD)" = "$NATIVE_SOURCE_SHA"
-          env -i PATH="$PATH" HOME="$RUNNER_TEMP/shell-ci/home" \
-            TMPDIR="$RUNNER_TEMP/shell-ci/tmp" GOCACHE="$RUNNER_TEMP/shell-ci/gocache" \
-            GOMODCACHE="$GOMODCACHE" GOTOOLCHAIN=local GOPROXY=off GOSUMDB=off CGO_ENABLED=0 \
-            go test -mod=readonly -c -o "$scratch/shellinstaller.test" ./internal/shellinstaller
-          cp e2e/Dockerfile.shell-linux-broker e2e/shell-linux-broker-guest.sh \
-            e2e/shell-linux-guest-proof.sh "$scratch/"
-          timeout --kill-after=5 180 docker build -f "$scratch/Dockerfile.shell-linux-broker" \
-            -t gentle-shell-broker:ci "$scratch"
-          host_net="$(stat -Lc %i /proc/self/ns/net)"
-          host_mnt="$(stat -Lc %i /proc/self/ns/mnt)"
-          timeout --kill-after=5 40 docker run --rm --pull=never \
-            --network none --read-only --user 0:0 --cap-drop=ALL \
-            --cap-add=SETUID --cap-add=SETGID --security-opt=no-new-privileges \
-            --tmpfs /tmp:rw,nosuid,nodev,mode=1777 \
-            --cpus=1 --memory=128m --memory-swap=128m --pids-limit=32 \
-            -e HOME=/tmp -e HOST_NETNS="$host_net" -e HOST_MNTNS="$host_mnt" \
-            gentle-shell-broker:ci
-
-          go_context="$(mktemp -d "$RUNNER_TEMP/shell-go-backend.XXXXXXXX")"
-          cp "$scratch/shellinstaller.test" e2e/Dockerfile.shell-linux-go-backend "$go_context/"
-          sha256sum "$scratch/shellinstaller.test" scripts/private_helpers.go \
-            internal/shellinstaller/private_runtime_linux.go internal/shellinstaller/private_runtime_linux_test.go \
-            internal/shellinstaller/private_native_linux.go internal/shellinstaller/private_native_linux_test.go \
-            scripts/acquire-gentle-shell-private-bundle.sh scripts/bootstrap-gentle-shell-private-node.sh \
-            scripts/complete-generated-lock-sri.mjs scripts/install-gentle-shell-private.sh \
-            scripts/normalize-private-optional-platform-closure.mjs e2e/Dockerfile.shell-linux-go-backend .github/workflows/shell-linux-first-ci.yml
-          printf 'Go backend source=%s; Node DATA sha256=783130984963db7ba9cbd01089eaf2c2efb055c7c1693c943174b967b3050cb8\n' "$NATIVE_SOURCE_SHA"
-          printf '%s\n' 'env -i PATH="$PATH" HOME="$RUNNER_TEMP/shell-ci/home" TMPDIR="$RUNNER_TEMP/shell-ci/tmp" GOCACHE="$RUNNER_TEMP/shell-ci/gocache" GOMODCACHE="$GOMODCACHE" GOTOOLCHAIN=local GOPROXY=off GOSUMDB=off CGO_ENABLED=0 go test -mod=readonly -c -o "$scratch/shellinstaller.test" ./internal/shellinstaller'
-          printf '%s\n' 'env -i PATH=/usr/bin:/bin HOME=/tmp TMPDIR=/tmp GENTLE_PRIVATE_GUEST=approved /go-backend.test -test.run=^TestPrivate -test.v -test.timeout=900s'
-          # Native supplier is Guest-only, after independent Node/module pin checks.
-          # No postinstall, updater, Pi launch or global setup command is admitted.
-          printf '%s\n' \
-            'Native Node ELF: bytes=123655872 sha256=41a74efb34cbde5c7632cdac0cf8bd1a14d0b8d73dc1e82755014d9a9ce70f5c' \
-            'Native supplier: installGentleAi({packageRoot}); stock stable source 0d57ec9926847b7363362e5a07d999b464b9cf93a6cffd62b0acc093259df7fb' \
-            'Native resolver: package pin only; stock source cbdf5deac8b7a85ab1253dbd049953aeb192a7d1f7987f9206916ab449c10a92' \
-            'Native version ONLY: <private-package-root>/.gentle-ai/v3.7.0/gentle-ai version; expected gentle-ai 3.7.0 plus newline; Ready=false'
-          bounded() {
-            local output status=0 bytes
-            output="$("$@" 2>&1 | base64 -w0)" || status=$?
-            bytes="$(printf '%s' "$output" | base64 --decode | wc -c)"
-            test "$bytes" -lt 4096 || { printf 'STOP: Go Guest output withheld: bound exceeded.\n'; return 1; }
-            printf '%s' "$output" | base64 --decode
-            return "$status"
-          }
-          bounded timeout --kill-after=5 180 docker build --quiet \
-            -f "$go_context/Dockerfile.shell-linux-go-backend" -t gentle-shell-go-backend:ci "$go_context"
-          bounded timeout --kill-after=5 900 docker run --rm --pull=never \
-            --network default --read-only --user 65532:65532 \
-            --cap-drop=ALL --security-opt=no-new-privileges \
-            --tmpfs /tmp:rw,nosuid,nodev,exec,mode=1777,size=2g \
-            --cpus=1 --memory=3g --memory-swap=3g --pids-limit=64 \
-            gentle-shell-go-backend:ci
-
-          # Add live non-root membership qualification, not a second fault-suite
-          # replacement. The first private-namespace run still executes ALL tests.
-          # Repeat mapping controls and full warm, cold and native public pipelines.
-          bounded printf '%s\n' \
-            "Host-like Go Guest candidate source=$NATIVE_SOURCE_SHA; require live non-root membership; kernel limits unchanged" \
-            'timeout --kill-after=5 900 docker run --rm --pull=never --cgroupns=host --network default --read-only --user 65532:65532 --cap-drop=ALL --security-opt=no-new-privileges --tmpfs /tmp:rw,nosuid,nodev,exec,mode=1777,size=2g --cpus=1 --memory=3g --memory-swap=3g --pids-limit=64 gentle-shell-go-backend:ci -private-cgroup-non-root=true -test.run=^TestPrivate(CgroupMapping|Install|ColdInstall|NativeInstall)$' \
-            'Fixed ENTRYPOINT env-i retains exactly PATH HOME TMPDIR GENTLE_PRIVATE_GUEST; appended test.run selects mapping and full warm/cold/native install; live-cgroup-member must be non-root'
-          bounded timeout --kill-after=5 900 docker run --rm --pull=never \
-            --cgroupns=host --network default --read-only --user 65532:65532 \
-            --cap-drop=ALL --security-opt=no-new-privileges \
-            --tmpfs /tmp:rw,nosuid,nodev,exec,mode=1777,size=2g \
-            --cpus=1 --memory=3g --memory-swap=3g --pids-limit=64 \
-            gentle-shell-go-backend:ci -private-cgroup-non-root=true \
-            '-test.run=^TestPrivate(CgroupMapping|Install|ColdInstall|NativeInstall)$'
-
-      - name: Run focused tests with a scrubbed process environment
-        shell: bash
-        env:
-          GOMODCACHE: ${{ runner.temp }}/shell-ci/modcache
-        run: |
-          set -euo pipefail
-          test "$(git rev-parse HEAD)" = "$NATIVE_SOURCE_SHA"
-          mkdir -p "$RUNNER_TEMP/shell-ci/home" \
-            "$RUNNER_TEMP/shell-ci/tmp" "$RUNNER_TEMP/shell-ci/gocache"
-          printf 'Testing exact commit: %s\n' "$NATIVE_SOURCE_SHA"
-          env -i PATH="$PATH" \
-            HOME="$RUNNER_TEMP/shell-ci/home" TMPDIR="$RUNNER_TEMP/shell-ci/tmp" \
-            GOCACHE="$RUNNER_TEMP/shell-ci/gocache" GOMODCACHE="$GOMODCACHE" \
-            GOTOOLCHAIN=local GOPROXY=off GOSUMDB=off \
-            go test -mod=readonly -count=1 -p 2 -parallel 2 -timeout=2m \
-              ./internal/shellinstaller ./internal/pathidentity
-
-      - name: Check formatting of Shell Linux source and synthetic tests
-        shell: bash
-        run: |
-          set -euo pipefail
-          diff="$RUNNER_TEMP/shell-ci/gofmt.diff"
-          env -i PATH="$PATH" HOME="$RUNNER_TEMP/shell-ci/home" \
-            TMPDIR="$RUNNER_TEMP/shell-ci/tmp" \
-            gofmt -d internal/shellinstaller/linux_instance_inventory_linux.go \
-              internal/shellinstaller/linux_instance_inventory_linux_test.go \
-              internal/shellinstaller/linux_transaction_test.go \
-              internal/shellinstaller/gentle_shell_source_test.go \
-              internal/shellinstaller/gentle_shell_tls.go \
-              internal/shellinstaller/gentle_shell_tls_test.go \
-              internal/shellinstaller/linux_journal_root_linux.go \
-              internal/shellinstaller/linux_journal_root_linux_test.go \
-              internal/shellinstaller/linux_journal_prepare_linux.go \
-              internal/shellinstaller/linux_journal_prepare_linux_test.go | tee "$diff"
-          if test -s "$diff"; then
-            printf 'STOP: synthetic tests are not gofmt-clean; full diff above.\n' >&2
-            exit 1
-          fi
-
   user-vm-laboratory:
-    name: MVP Separate smoke
-    if: github.repository == 'decode2/gentle-ai' && github.ref == 'refs/heads/feat/shell-linux-runtime-35'
+    name: Linux installation and recovery qualification
+    if: github.repository == 'Gentleman-Programming/gentle-ai' || github.repository == 'decode2/gentle-ai'
     runs-on: ubuntu-24.04
-    timeout-minutes: 35
+    # Includes bounded build, UID65532 controls, and the unchanged full journey.
+    timeout-minutes: 60
     steps:
       - name: Bind public source without repository credentials
         shell: bash
         env:
-          SOURCE_SHA: ${{ github.sha }}
+          SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          SOURCE_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
           GIT_TERMINAL_PROMPT: '0'
           GIT_CONFIG_NOSYSTEM: '1'
           GIT_CONFIG_GLOBAL: /dev/null
@@ -377,13 +38,14 @@ jobs:
         run: |
           set -euo pipefail
           [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$SOURCE_REPOSITORY" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]
           test ! -e .git
           git init -q
-          git -c credential.helper= -c http.followRedirects=false fetch --no-tags --depth=1 https://github.com/decode2/gentle-ai.git "$SOURCE_SHA"
+          git -c credential.helper= -c http.followRedirects=false fetch --no-tags --depth=1 "https://github.com/$SOURCE_REPOSITORY.git" "$SOURCE_SHA"
           test "$(git rev-parse FETCH_HEAD)" = "$SOURCE_SHA"
           git checkout --detach FETCH_HEAD
           test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
-          printf 'MVP candidate source: %s\n' "$SOURCE_SHA"
+          printf 'Linux candidate source: %s\n' "$SOURCE_SHA"
 
       # Privileged preparation belongs only to this fresh hosted VM, not the installer.
       - name: Prepare real delegated manager and read-only laboratory
@@ -393,6 +55,9 @@ jobs:
           trap 'failed=$?; printf "LAB-PREP-STOP line=%s exit=%s db=%s key=%s lookup=%s\n" "$LINENO" "$failed" "${kind:-none}" "${key:-none}" "${status:-none}" >&2' ERR
           test "$(uname -m)" = x86_64
           test "$(cat /proc/1/comm)" = systemd
+          # OS SDK dependency for strict receipt parsing inside the bounded Guest.
+          sudo -n apt-get update -qq
+          sudo -n apt-get install -y -qq python3-yaml
           test ! -e /work
           test ! -e /fixture
           if systemctl is-active --quiet user@1002.service; then exit 1; fi
@@ -440,7 +105,7 @@ jobs:
           sudo -n -u gentle-lab /usr/bin/test -S /run/user/1002/systemd/private
           sudo -n -u gentle-lab /usr/bin/test -S /run/user/1002/bus
 
-      - name: Compile only after physical worker isolation then check limited MVP
+      - name: Compile only after physical worker isolation then qualify installation and recovery
         shell: bash
         run: |
           set -euo pipefail
@@ -455,9 +120,9 @@ jobs:
               /usr/bin/env -i PATH=/fixture/go/bin:/usr/local/bin:/usr/bin:/bin HOME=/work TMPDIR=/tmp \
               XDG_RUNTIME_DIR=/run/user/1002 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1002/bus \
               GOTOOLCHAIN=local GOMAXPROCS=1 CGO_ENABLED=0 GOCACHE=/work/gocache GOMODCACHE=/work/gomod \
-              GENTLE_GUEST_SOURCE_SHA='${{ github.sha }}' "$2" "${@:3}"
+              GENTLE_GUEST_SOURCE_SHA='${{ github.event.pull_request.head.sha || github.sha }}' "$2" "${@:3}"
           }
-          sudo -n -u gentle-lab /usr/bin/env -i /usr/bin/python3 -c 'import pathlib; p=pathlib.Path("/work/build.sh"); p.write_text("set -eu\n/usr/bin/python3 -B /fixture/harness.py probe\ngo build -mod=readonly -p 1 -o /work/supervisor ./cmd/gentle-ai\ngo test -mod=readonly -p 1 -c -o /work/user-install.test ./internal/shellinstaller\ngofmt -d internal/shellinstaller/user_install*.go internal/cli/shell_install.go internal/cli/shell_install_test.go internal/app/app.go internal/app/shell_install_test.go scripts/user_helpers.go > /work/gofmt.data\n")'
+          sudo -n -u gentle-lab /usr/bin/env -i /usr/bin/python3 -c 'import pathlib; p=pathlib.Path("/work/build.sh"); p.write_text("set -eu\n/usr/bin/python3 -B /fixture/harness.py probe\n/usr/bin/python3 -B e2e/shell-linux-ci-contract.test.py\n/usr/bin/python3 -B e2e/user-receipt-contract.test.py\ngo build -mod=readonly -p 1 -o /work/supervisor ./cmd/gentle-ai\ngo test -mod=readonly -p 1 -c -o /work/user-install.test ./internal/shellinstaller\ngofmt -d internal/shellinstaller/*.go internal/cli/shell_install*.go internal/app/app.go internal/app/shell_install_test.go scripts/*helpers.go > /work/gofmt.data\n")'
           build_status=0
           worker gentle-lab-build /bin/bash /work/build.sh >"$RUNNER_TEMP/user-build.raw" 2>&1 || build_status=$?
           /usr/bin/python3 - "$RUNNER_TEMP/user-build.raw" "$build_status" <<'PY'
@@ -487,8 +152,32 @@ jobs:
           else:
               print('FORMAT-DATA-WITHHELD:'+str(len(raw))+':'+hashlib.sha256(raw).hexdigest())
           PY
+          # The retained primitive tests require their original UID65532 Guest.
+          # Compile above in the bounded worker; never execute them on the runner.
+          primitive_context="$RUNNER_TEMP/shell-primitives"
+          mkdir -m 700 "$primitive_context"
+          cp e2e/Dockerfile.shell-linux-primitives "$primitive_context/Dockerfile"
+          sudo -n install -o "$(id -u)" -g "$(id -g)" -m 0555 /fixture/user-install.test "$primitive_context/user-install.test"
+          timeout --kill-after=5 180 docker build --network=default --tag gentle-shell-primitives:ci "$primitive_context" >"$RUNNER_TEMP/primitive-build.raw" 2>&1
+          primitive_status=0
+          timeout --kill-after=5 600 docker run --rm --pull=never --cgroupns=host --network=none --read-only \
+            --user 65532:65532 --cap-drop=ALL --security-opt=no-new-privileges \
+            --tmpfs /tmp:rw,nosuid,nodev,exec,mode=1777,size=2g \
+            --cpus=1 --memory=3g --memory-swap=3g --pids-limit=64 gentle-shell-primitives:ci \
+            -private-cgroup-non-root=true '-test.run=^TestPrivate(Kernel|CgroupMapping|Runner|Cold|DirectoryAndCleanup|Destination|LiveCgroupMarker|Native)' \
+            >"$RUNNER_TEMP/primitives.raw" 2>&1 || primitive_status=$?
+          /usr/bin/python3 - "$RUNNER_TEMP/primitives.raw" "$primitive_status" <<'PY'
+          import pathlib,sys,base64,hashlib
+          raw=pathlib.Path(sys.argv[1]).read_bytes()
+          if len(raw)<4096 and b'\0' not in raw:
+              raw.decode('utf-8','strict')
+              print('PRIMITIVE-RAW-BASE64:'+base64.b64encode(raw).decode('ascii'))
+          else:
+              print('PRIMITIVE-RAW-WITHHELD:'+str(len(raw))+':'+hashlib.sha256(raw).hexdigest())
+          raise SystemExit(int(sys.argv[2]))
+          PY
           status=0
-          worker gentle-lab-smoke /usr/bin/python3 -B /fixture/harness.py smoke >"$RUNNER_TEMP/user-guest.raw" 2>&1 || status=$?
+          worker gentle-lab-full /usr/bin/python3 -B /fixture/harness.py full >"$RUNNER_TEMP/user-guest.raw" 2>&1 || status=$?
           /usr/bin/python3 - "$RUNNER_TEMP/user-guest.raw" "$status" <<'PY'
           import pathlib,sys,base64
           raw=pathlib.Path(sys.argv[1]).read_bytes()

@@ -8,7 +8,6 @@ import (
 	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -26,33 +25,11 @@ import (
 	"unicode"
 	"unicode/utf8"
 
-	assets "github.com/gentleman-programming/gentle-ai/v4/scripts"
 	"golang.org/x/sys/unix"
 )
 
-type PrivateInstallResult struct {
-	State, Destination, LockSHA256 string
-}
-
 func privateError(kind string, cause error) *PrivateRuntimeError {
 	return &PrivateRuntimeError{Kind: kind, Cause: cause}
-}
-
-func privateMount(data, target, required string) bool {
-	for _, line := range strings.Split(data, "\n") {
-		fields := strings.Fields(line)
-		if len(fields) < 7 || fields[4] != target {
-			continue
-		}
-		options := "," + fields[5] + ","
-		for _, option := range strings.Split(required, ",") {
-			if !strings.Contains(options, ","+option+",") {
-				return false
-			}
-		}
-		return target != "/tmp" || !strings.Contains(options, ",noexec,")
-	}
-	return false
 }
 
 func privateHierarchyPath(path string) bool {
@@ -191,26 +168,6 @@ func privateDestination(dest string) error {
 	return nil
 }
 
-func privateStage(parent string) (string, os.FileInfo, error) {
-	workspace, err := os.MkdirTemp(parent, ".gentle-go-")
-	if err != nil {
-		return "", nil, err
-	}
-	identity, err := privateDirectory(workspace)
-	for _, name := range assets.PrivateHelperNames() {
-		if err != nil {
-			break
-		}
-		var data []byte
-		data, err = assets.ReadPrivateHelper(name)
-		if err == nil {
-			path := filepath.Join(workspace, name)
-			err = errors.Join(os.WriteFile(path, data, 0444), os.Chmod(path, 0444))
-		}
-	}
-	return workspace, identity, err
-}
-
 func privatePhysical(path string) (os.FileInfo, error) {
 	info, err := os.Lstat(path)
 	canonical, canonicalErr := filepath.EvalSymlinks(path)
@@ -225,56 +182,12 @@ func privateStamp(info os.FileInfo) string {
 	return fmt.Sprintf("%d:%d:%d:%d:%v:%d:%v:%v", st.Dev, st.Ino, st.Uid, st.Gid, info.Mode(), info.Size(), st.Mtim, st.Ctim)
 }
 
-func privateSources(workspace string) (string, error) {
-	var snapshot strings.Builder
-	for _, name := range assets.PrivateHelperNames() {
-		path := filepath.Join(workspace, name)
-		info, err := privatePhysical(path)
-		if err != nil || info.Mode() != 0444 || info.Sys().(*syscall.Stat_t).Uid != uint32(os.Getuid()) {
-			return "", privateError("source", err)
-		}
-		want, err := assets.ReadPrivateHelper(name)
-		got, readErr := os.ReadFile(path)
-		if err != nil || readErr != nil || !bytes.Equal(got, want) {
-			return "", privateError("source", errors.Join(err, readErr))
-		}
-		snapshot.WriteString(name + privateStamp(info))
-	}
-	return snapshot.String(), nil
-}
-
 func privateCleanup(workspace string, identity os.FileInfo) error {
 	current, err := privateDirectory(workspace)
 	if err != nil || identity == nil || !os.SameFile(identity, current) {
 		return privateError("uncertain", err)
 	}
 	return os.RemoveAll(workspace)
-}
-
-func privateLock(path string) (string, error) {
-	info, err := privatePhysical(path)
-	if err != nil || info.Size() > 8388608 {
-		return "", privateError("readback", err)
-	}
-	data, err := os.ReadFile(path)
-	return fmt.Sprintf("%x", sha256.Sum256(data)), err
-}
-
-func privateReadback(dest, lock string) error {
-	if _, err := privateDirectory(dest); err != nil {
-		return err
-	}
-	for _, name := range []string{"node/bin/node", "node/lib/node_modules/npm/bin/npm-cli.js", "project/package.json", "closure.json", "project/node_modules/gentle-pi/package.json", "project/node_modules/@earendil-works/pi-coding-agent/package.json", "project/node_modules/@earendil-works/pi-tui/package.json", "project/node_modules/@heyhuynhgiabuu/pi-pretty/package.json", "project/node_modules/typebox/package.json"} {
-		info, err := privatePhysical(filepath.Join(dest, name))
-		if err != nil || (name == "node/bin/node" && info.Mode().Perm()&0111 == 0) {
-			return privateError("readback", err)
-		}
-	}
-	actual, err := privateLock(filepath.Join(dest, "project/package-lock.json"))
-	if err != nil || actual != lock || len(lock) != 64 {
-		return privateError("readback", err)
-	}
-	return nil
 }
 
 func privateFailure(dest string, cause error) *PrivateRuntimeError {
@@ -342,114 +255,6 @@ func privateRun(ctx context.Context, cmd *exec.Cmd, cancel context.CancelFunc) (
 		return string(output.data), nil
 	}
 	return string(output.data), privateError(kind, err)
-}
-
-func privatePhase(ctx context.Context, workspace, helper string, budget time.Duration, args ...string) error {
-	ctx, cancel := context.WithTimeout(ctx, budget)
-	defer cancel()
-	cmd := exec.CommandContext(ctx, "/bin/sh", append([]string{filepath.Join(workspace, helper)}, args...)...)
-	cmd.Dir = workspace
-	cmd.Env = []string{"PATH=/usr/bin:/bin", "HOME=" + workspace, "TMPDIR=" + workspace}
-	_, err := privateRun(ctx, cmd, cancel)
-	return err
-}
-
-// RunPrivateInstall requires separate caller effect approval and a private single
-// writer. Kernel limits are freshly checked; this never launches Pi or claims Ready.
-func RunPrivateInstall(ctx context.Context, destination, nodeArchive string) (result PrivateInstallResult, err error) {
-	if ctx == nil || ctx.Err() != nil {
-		return result, privateError("canceled", context.Canceled)
-	}
-	ctx, cancel := context.WithTimeout(ctx, 750*time.Second)
-	defer cancel()
-	if err = privateKernel(); err != nil {
-		return result, err
-	}
-	if err = privateDestination(destination); err != nil {
-		return result, err
-	}
-	archive, err := privatePhysical(nodeArchive)
-	if err != nil || !filepath.IsAbs(nodeArchive) {
-		return result, privateError("refused", err)
-	}
-	parent := filepath.Dir(destination)
-	parentBefore, err := privateDirectory(parent)
-	if err != nil {
-		return result, err
-	}
-	if err = ctx.Err(); err != nil {
-		return result, privateError("canceled", err)
-	}
-	workspace, identity, err := privateStage(parent)
-	if workspace == "" {
-		return result, privateError("filesystem", err)
-	}
-	defer func() {
-		if cleanupErr := privateCleanup(workspace, identity); cleanupErr != nil {
-			err = privateError("uncertain", errors.Join(err, cleanupErr))
-		}
-		if ctx.Err() != nil {
-			err = errors.Join(err, privateError("canceled", ctx.Err()))
-		}
-		if err != nil {
-			failure := privateFailure(destination, err)
-			failure.Workspace, failure.Destination = workspace, destination
-			result, err = PrivateInstallResult{}, failure
-		}
-	}()
-	if err != nil {
-		return result, err
-	}
-	sources, err := privateSources(workspace)
-	if err != nil {
-		return result, err
-	}
-	acquired := filepath.Join(workspace, "acquired")
-	if err = privatePhase(ctx, workspace, "acquire-gentle-shell-private-bundle.sh", 450*time.Second, "--destination", acquired, "--node-archive", nodeArchive); err != nil {
-		return result, err
-	}
-	bundle := filepath.Join(acquired, "bundle")
-	lock, err := privateLock(filepath.Join(bundle, "project/package-lock.json")) // PRE-install witness.
-	if err != nil {
-		return result, err
-	}
-	receiptPath := filepath.Join(acquired, "bundle-receipt")
-	info, err := privatePhysical(receiptPath)
-	if err != nil || info.Size() != 65 {
-		return result, privateError("readback", err)
-	}
-	receipt, err := os.ReadFile(receiptPath)
-	digest := strings.TrimSpace(string(receipt))
-	decoded, decodeErr := hex.DecodeString(digest)
-	if err != nil || decodeErr != nil || len(decoded) != 32 {
-		return result, privateError("readback", errors.Join(err, decodeErr))
-	}
-	installed := filepath.Join(workspace, "installed")
-	if err = privatePhase(ctx, workspace, "install-gentle-shell-private.sh", 300*time.Second, "--destination", installed, "--bundle", bundle, "--bundle-sha256", digest); err != nil {
-		return result, err
-	}
-	if err = privateReadback(installed, lock); err != nil {
-		return result, err
-	}
-	freshSources, sourceErr := privateSources(workspace)
-	freshArchive, archiveErr := privatePhysical(nodeArchive)
-	freshParent, parentErr := privateDirectory(parent)
-	if sourceErr != nil || archiveErr != nil || parentErr != nil || freshSources != sources || privateStamp(freshArchive) != privateStamp(archive) || !os.SameFile(parentBefore, freshParent) {
-		return result, privateError("preimage", errors.Join(sourceErr, archiveErr, parentErr))
-	}
-	if err = privateDestination(destination); err != nil {
-		return result, err
-	}
-	if err = ctx.Err(); err != nil {
-		return result, privateError("canceled", err)
-	}
-	if err = unix.Renameat2(unix.AT_FDCWD, installed, unix.AT_FDCWD, destination, unix.RENAME_NOREPLACE); err != nil {
-		return result, privateError("publication", err)
-	}
-	if err = privateReadback(destination, lock); err != nil {
-		return result, err
-	}
-	return PrivateInstallResult{State: "ComponentInstalled", Destination: destination, LockSHA256: lock}, nil
 }
 
 const privateColdURL = "https://nodejs.org/dist/v24.18.0/node-v24.18.0-linux-x64.tar.gz"
@@ -545,94 +350,4 @@ func privateColdFetch(ctx context.Context, client *http.Client, archive string, 
 		return privateError("acquisition", errors.Join(openErr, closeErr))
 	}
 	return privateColdReceive(ctx, response, file, size, digest)
-}
-
-func privateColdWorkspace(parent string, parentIdentity os.FileInfo, workspace string, identity os.FileInfo, dest string) error {
-	freshParent, parentErr := privateDirectory(parent)
-	freshStage, stageErr := privateDirectory(workspace)
-	destErr := privateDestination(dest)
-	if parentErr != nil || stageErr != nil || destErr != nil || parentIdentity == nil || identity == nil || !os.SameFile(parentIdentity, freshParent) || !os.SameFile(identity, freshStage) || filepath.Dir(workspace) != parent || filepath.Dir(dest) != parent || dest == workspace {
-		return privateError("preimage", errors.Join(parentErr, stageErr, destErr))
-	}
-	return nil
-}
-
-func privateColdFinish(ctx context.Context, result PrivateInstallResult, err error, workspace string, identity os.FileInfo, dest string) (PrivateInstallResult, error) {
-	if cleanupErr := privateCleanup(workspace, identity); cleanupErr != nil {
-		err = privateError("uncertain", errors.Join(err, cleanupErr))
-	}
-	if ctx.Err() != nil {
-		err = errors.Join(err, privateError("canceled", ctx.Err()))
-	}
-	if err != nil {
-		failure := privateFailure(dest, err)
-		failure.Workspace, failure.Destination = workspace, dest
-		return PrivateInstallResult{}, failure
-	}
-	return result, nil
-}
-
-// RunPrivateInstallCold requires separate external caller effect approval and a
-// private single writer, just like RunPrivateInstall. It acquires only fixed Node
-// DATA before the entire existing installation; it never launches Pi or claims
-// Ready, provisions Host isolation, or accepts caller-selected trust authorities.
-func RunPrivateInstallCold(ctx context.Context, destination string) (result PrivateInstallResult, err error) {
-	if ctx == nil {
-		return result, privateError("canceled", context.Canceled)
-	}
-	if err = ctx.Err(); err != nil {
-		return result, privateError("canceled", err)
-	}
-	ctx, cancel := context.WithTimeout(ctx, 870*time.Second)
-	defer cancel()
-	if err = privateKernel(); err != nil {
-		return result, err
-	}
-	if err = privateDestination(destination); err != nil {
-		return result, err
-	}
-	parent := filepath.Dir(destination)
-	parentIdentity, err := privateDirectory(parent)
-	if err != nil {
-		return result, err
-	}
-	if err = ctx.Err(); err != nil {
-		return result, privateError("canceled", err)
-	}
-	workspace, err := os.MkdirTemp(parent, ".gentle-go-cold-")
-	if err != nil {
-		return result, privateError("filesystem", err)
-	}
-	identity, err := privateDirectory(workspace)
-	defer func() {
-		result, err = privateColdFinish(ctx, result, err, workspace, identity, destination)
-	}()
-	if err != nil {
-		return result, err
-	}
-	client, err := privateColdClient()
-	if err != nil {
-		return result, err
-	}
-	defer client.CloseIdleConnections()
-	archive := filepath.Join(workspace, "node.tgz")
-	if err = privateColdFetch(ctx, client, archive, privateColdSize, privateColdSHA); err != nil {
-		return result, err
-	}
-	client.CloseIdleConnections() // No live HTTP body/file or idle connection reaches Node.
-	info, err := privatePhysical(archive)
-	if err != nil || info.Mode() != 0600 || info.Size() != privateColdSize || info.Sys().(*syscall.Stat_t).Uid != uint32(os.Getuid()) {
-		return result, privateError("preimage", err)
-	}
-	if err = privateColdWorkspace(parent, parentIdentity, workspace, identity, destination); err != nil {
-		return result, err
-	}
-	if err = ctx.Err(); err != nil {
-		return result, privateError("canceled", err)
-	}
-	result, err = RunPrivateInstall(ctx, destination, archive)
-	if err == nil {
-		err = privateReadback(destination, result.LockSHA256)
-	}
-	return result, err
 }

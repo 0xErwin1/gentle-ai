@@ -12,7 +12,6 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
-	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -35,7 +34,6 @@ import (
 	"testing"
 	"time"
 
-	assets "github.com/gentleman-programming/gentle-ai/v4/scripts"
 	"golang.org/x/sys/unix"
 )
 
@@ -46,6 +44,23 @@ func privateMust(t *testing.T, err error) {
 	if err != nil {
 		t.Fatal(err)
 	}
+}
+
+func privateMount(data, target, required string) bool {
+	for _, line := range strings.Split(data, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) < 7 || fields[4] != target {
+			continue
+		}
+		options := "," + fields[5] + ","
+		for _, option := range strings.Split(required, ",") {
+			if !strings.Contains(options, ","+option+",") {
+				return false
+			}
+		}
+		return target != "/tmp" || !strings.Contains(options, ",noexec,")
+	}
+	return false
 }
 
 func privateGuest(t *testing.T) {
@@ -215,106 +230,6 @@ func privateFixture(t *testing.T, root string) map[string]string {
 	return result
 }
 
-func privateNoStage(t *testing.T, parent string) {
-	t.Helper()
-	entries, err := os.ReadDir(parent)
-	privateMust(t, err)
-	for _, entry := range entries {
-		if strings.HasPrefix(entry.Name(), ".gentle-go-") || strings.HasPrefix(entry.Name(), ".gentle-shell-stage.") {
-			t.Fatal("owned workspace leaked", entry.Name())
-		}
-	}
-}
-
-func TestPrivateAssetsAndStates(t *testing.T) {
-	privateGuest(t)
-	parent := t.TempDir()
-	privateMust(t, os.Chmod(parent, 0700))
-	workspace, identity, err := privateStage(parent)
-	privateMust(t, err)
-	if identity.Mode() != os.ModeDir|0700 || identity.Sys().(*syscall.Stat_t).Uid != uint32(os.Getuid()) {
-		t.Fatal("workspace ownership")
-	}
-	pins := map[string]string{
-		"acquire-gentle-shell-private-bundle.sh":          "584459543e037544b5d5dab181fab55efa412cc52bc96bccf7f3bac180f92cad",
-		"bootstrap-gentle-shell-private-node.sh":          "ac220abf4621a56bddc900209925df1716d8859c621c2994299ce3fc1f84e964",
-		"complete-generated-lock-sri.mjs":                 "f4930552535513241f35dfeb67d5660b1efca19492bc4092e557a23cd5e612b6",
-		"install-gentle-shell-private.sh":                 "54e18072fe243290546d7706245060deb59cfcb78cac3ca3f0a6b2ee295b78fc",
-		"normalize-private-optional-platform-closure.mjs": "013529f77c887af5eab97cdd0568210b7a6f61a04121a67018d6fa5101a995f3",
-	}
-	entries, err := os.ReadDir(workspace)
-	privateMust(t, err)
-	if len(entries) != 5 || len(assets.PrivateHelperNames()) != 5 {
-		t.Fatal("helper inventory differs")
-	}
-	for _, entry := range entries {
-		path := filepath.Join(workspace, entry.Name())
-		data, err := os.ReadFile(path)
-		privateMust(t, err)
-		info, err := os.Lstat(path)
-		privateMust(t, err)
-		if !info.Mode().IsRegular() || info.Mode() != 0444 || fmt.Sprintf("%x", sha256.Sum256(data)) != pins[entry.Name()] {
-			t.Fatal("fixed asset mismatch", entry.Name())
-		}
-	}
-	for _, path := range []string{parent, filepath.Join(workspace, "install-gentle-shell-private.sh")} {
-		info, err := os.Lstat(path)
-		privateMust(t, err)
-		privateMust(t, os.Chmod(path, info.Mode()|os.ModeSticky))
-		_, directoryErr := privateDirectory(parent)
-		_, sourceErr := privateSources(workspace)
-		if (path == parent && directoryErr == nil) || (path != parent && sourceErr == nil) {
-			t.Fatal("special mode bit accepted", path)
-		}
-		privateMust(t, os.Chmod(path, info.Mode()))
-	}
-	before, err := privateSources(workspace)
-	privateMust(t, err)
-	path := filepath.Join(workspace, "install-gentle-shell-private.sh")
-	privateMust(t, os.Chmod(path, 0664))
-	if _, err := privateSources(workspace); err == nil {
-		t.Fatal("source mode mutation accepted")
-	}
-	privateMust(t, os.WriteFile(path, []byte("not executable fixture"), 0600))
-	privateMust(t, os.Chmod(path, 0444))
-	if _, err := privateSources(workspace); err == nil {
-		t.Fatal("source content mutation accepted")
-	}
-	original, err := assets.ReadPrivateHelper("install-gentle-shell-private.sh")
-	privateMust(t, err)
-	privateMust(t, os.Rename(path, path+".preimage"))
-	privateMust(t, os.WriteFile(path, original, 0600))
-	privateMust(t, os.Chmod(path, 0444))
-	after, err := privateSources(workspace)
-	privateMust(t, err)
-	if before == after {
-		t.Fatal("source metadata preimage mutation missed")
-	}
-	// Physical classifier cases simulate ambiguity, not actual transport failure.
-	dest := filepath.Join(parent, "appeared")
-	privateMust(t, os.Mkdir(dest, 0700))
-	if privateReadback(dest, "") == nil || privateFailure(dest, context.Canceled).Kind != "uncertain" {
-		t.Fatal("empty or cancelled publication treated as success")
-	}
-	blocked := filepath.Join(workspace, "blocked")
-	privateMust(t, os.Mkdir(blocked, 0700))
-	privateMust(t, os.WriteFile(filepath.Join(blocked, "child"), nil, 0600))
-	privateMust(t, os.Chmod(blocked, 0000))
-	cleanupErr := privateCleanup(workspace, identity)
-	privateMust(t, os.Chmod(blocked, 0700))
-	if cleanupErr == nil {
-		t.Fatal("cleanup fault hidden")
-	}
-	old := workspace + ".old"
-	privateMust(t, os.Rename(workspace, old))
-	privateMust(t, os.Mkdir(workspace, 0700))
-	if privateCleanup(workspace, identity) == nil {
-		t.Fatal("replacement deleted")
-	}
-	_, err = os.Lstat(workspace)
-	privateMust(t, err)
-}
-
 func TestPrivateRunner(t *testing.T) {
 	privateGuest(t)
 	cases := []struct{ name, path, body, kind string }{
@@ -368,117 +283,6 @@ func TestPrivateRunner(t *testing.T) {
 			}
 		})
 	}
-}
-
-func TestPrivateInstall(t *testing.T) {
-	privateGuest(t)
-	membership, err := os.ReadFile("/proc/self/cgroup")
-	privateMust(t, err)
-	mounts, err := os.ReadFile("/proc/self/mountinfo")
-	privateMust(t, err)
-	mapped, err := privateCgroupPath(string(membership), string(mounts))
-	privateMust(t, err)
-	marker := fmt.Sprintf("live-cgroup-member=%s mapped=%s\n", strings.TrimSuffix(string(membership), "\n"), mapped)
-	if len(marker) > 1024 {
-		t.Fatal("live membership diagnostic withheld: bound exceeded")
-	}
-	fmt.Print(marker)
-	parent := t.TempDir()
-	privateMust(t, os.Chmod(parent, 0700))
-	pi := filepath.Join(parent, "pi")
-	privateMust(t, os.Mkdir(pi, 0700))
-	privateMust(t, os.WriteFile(filepath.Join(pi, "settings.json"), []byte("private Pi fixture"), 0600))
-	privateMust(t, os.Symlink("settings.json", filepath.Join(pi, "link")))
-	before := privateFixture(t, pi)
-	assertPreserved := func() {
-		t.Helper()
-		privateNoStage(t, parent)
-		if !reflect.DeepEqual(before, privateFixture(t, pi)) {
-			t.Fatal("Pi preimage changed")
-		}
-	}
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-	cancelledBefore := privateFixture(t, parent)
-	_, err = RunPrivateInstall(ctx, filepath.Join(parent, "cancelled"), "/node.tgz")
-	var failure *PrivateRuntimeError
-	if !errors.As(err, &failure) || failure.Kind != "canceled" || !reflect.DeepEqual(cancelledBefore, privateFixture(t, parent)) {
-		t.Fatal("pre-cancelled invocation", err)
-	}
-	assertPreserved()
-	for _, kind := range []string{"file", "directory", "symlink"} {
-		dest := filepath.Join(parent, kind)
-		switch kind {
-		case "file":
-			privateMust(t, os.WriteFile(dest, []byte("Pi sentinel"), 0600))
-		case "directory":
-			privateMust(t, os.Mkdir(dest, 0700))
-		case "symlink":
-			privateMust(t, os.Symlink(pi, dest))
-		}
-		preimage := privateFixture(t, parent)
-		_, err := RunPrivateInstall(context.Background(), dest, "/node.tgz")
-		if !errors.As(err, &failure) || failure.Kind != "refused" || !reflect.DeepEqual(preimage, privateFixture(t, parent)) {
-			t.Fatal("real API collision changed preimage", kind, err)
-		}
-		assertPreserved()
-	}
-	for _, kind := range []string{"full-size wrong hash", "truncated", "symlink archive"} {
-		archive := filepath.Join(parent, strings.ReplaceAll(kind, " ", "-")+".tgz")
-		if kind == "symlink archive" {
-			privateMust(t, os.Symlink("/node.tgz", archive))
-		} else {
-			file, err := os.OpenFile(archive, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
-			privateMust(t, err)
-			if kind == "full-size wrong hash" {
-				privateMust(t, file.Truncate(57224421))
-			}
-			privateMust(t, file.Close())
-		}
-		preimage := privateFixture(t, parent)
-		_, err := RunPrivateInstall(context.Background(), filepath.Join(parent, "rejected"), archive)
-		if !errors.As(err, &failure) || !reflect.DeepEqual(preimage, privateFixture(t, parent)) {
-			t.Fatal("invalid archive accepted", kind, err)
-		}
-		if _, err := os.Lstat(filepath.Join(parent, "rejected")); !os.IsNotExist(err) {
-			t.Fatal("invalid archive published")
-		}
-		assertPreserved()
-	}
-	ctx, cancel = context.WithTimeout(context.Background(), 750*time.Second)
-	defer cancel()
-	dest := filepath.Join(parent, "installed")
-	result, err := RunPrivateInstall(ctx, dest, "/node.tgz")
-	if err != nil || result.State != "ComponentInstalled" {
-		t.Fatal("cold production pipeline", err)
-	}
-	lock, err := os.ReadFile(filepath.Join(dest, "project/package-lock.json"))
-	privateMust(t, err)
-	if fmt.Sprintf("%x", sha256.Sum256(lock)) != result.LockSHA256 {
-		t.Fatal("provider lock preimage changed")
-	}
-	var manifest struct{ Dependencies map[string]string }
-	data, err := os.ReadFile(filepath.Join(dest, "project/package.json"))
-	privateMust(t, err)
-	privateMust(t, json.Unmarshal(data, &manifest))
-	pins := map[string]string{"gentle-pi": "3.7.0", "@earendil-works/pi-coding-agent": "0.85.1", "@earendil-works/pi-tui": "0.85.1", "@heyhuynhgiabuu/pi-pretty": "0.6.27", "typebox": "1.3.7"}
-	if !reflect.DeepEqual(manifest.Dependencies, pins) {
-		t.Fatal("five independent version pins differ")
-	}
-	var closure []string
-	data, err = os.ReadFile(filepath.Join(dest, "closure.json"))
-	privateMust(t, err)
-	privateMust(t, json.Unmarshal(data, &closure))
-	if len(closure) != 283 {
-		t.Fatal("closure cardinality differs; identity is checked by the fixed installer")
-	}
-	installed := privateFixture(t, dest)
-	_, err = RunPrivateInstall(context.Background(), dest, "/node.tgz")
-	if !errors.As(err, &failure) || failure.Kind != "refused" || !reflect.DeepEqual(installed, privateFixture(t, dest)) {
-		t.Fatal("retry changed published installation", err)
-	}
-	assertPreserved()
-	fmt.Printf("Go private pipeline: ComponentInstalled closure=283 lock-sha256=%s launch=not-run Ready=false\n", result.LockSHA256)
 }
 
 // These seams exercise DATA and resource accounting, not production TLS authority.
@@ -865,6 +669,89 @@ func TestPrivateColdRequest(t *testing.T) {
 	}
 }
 
+func privateNoStage(t *testing.T, parent string) {
+	t.Helper()
+	entries, err := os.ReadDir(parent)
+	privateMust(t, err)
+	for _, entry := range entries {
+		if strings.HasPrefix(entry.Name(), ".gentle-go-") || strings.HasPrefix(entry.Name(), ".gentle-shell-stage.") {
+			t.Fatal("owned workspace leaked", entry.Name())
+		}
+	}
+}
+
+func TestPrivateDirectoryAndCleanup(t *testing.T) {
+	privateGuest(t)
+	parent := t.TempDir()
+	privateMust(t, os.Chmod(parent, 0700))
+	// Owned inert DATA replaces staging the retired installer assets.
+	workspace, err := os.MkdirTemp(parent, ".gentle-go-")
+	privateMust(t, err)
+	identity, err := privateDirectory(workspace)
+	privateMust(t, err)
+	if identity.Mode() != os.ModeDir|0700 || identity.Sys().(*syscall.Stat_t).Uid != uint32(os.Getuid()) {
+		t.Fatal("workspace ownership")
+	}
+	privateMust(t, os.WriteFile(filepath.Join(workspace, "data"), []byte("not executable fixture"), 0444))
+	info, err := os.Lstat(parent)
+	privateMust(t, err)
+	privateMust(t, os.Chmod(parent, info.Mode()|os.ModeSticky))
+	_, directoryErr := privateDirectory(parent)
+	if directoryErr == nil {
+		t.Fatal("special mode bit accepted", parent)
+	}
+	privateMust(t, os.Chmod(parent, info.Mode()))
+	blocked := filepath.Join(workspace, "blocked")
+	privateMust(t, os.Mkdir(blocked, 0700))
+	privateMust(t, os.WriteFile(filepath.Join(blocked, "child"), nil, 0600))
+	privateMust(t, os.Chmod(blocked, 0000))
+	cleanupErr := privateCleanup(workspace, identity)
+	privateMust(t, os.Chmod(blocked, 0700))
+	if cleanupErr == nil {
+		t.Fatal("cleanup fault hidden")
+	}
+	old := workspace + ".old"
+	privateMust(t, os.Rename(workspace, old))
+	privateMust(t, os.Mkdir(workspace, 0700))
+	if privateCleanup(workspace, identity) == nil {
+		t.Fatal("replacement deleted")
+	}
+	_, err = os.Lstat(workspace)
+	privateMust(t, err)
+}
+
+func TestPrivateDestination(t *testing.T) {
+	privateGuest(t)
+	parent := t.TempDir()
+	privateMust(t, os.Chmod(parent, 0700))
+	pi := filepath.Join(parent, "pi")
+	privateMust(t, os.Mkdir(pi, 0700))
+	privateMust(t, os.WriteFile(filepath.Join(pi, "settings.json"), []byte("private Pi fixture"), 0600))
+	privateMust(t, os.Symlink("settings.json", filepath.Join(pi, "link")))
+	before := privateFixture(t, pi)
+	for _, kind := range []string{"file", "directory", "symlink"} {
+		dest := filepath.Join(parent, kind)
+		switch kind {
+		case "file":
+			privateMust(t, os.WriteFile(dest, []byte("Pi sentinel"), 0600))
+		case "directory":
+			privateMust(t, os.Mkdir(dest, 0700))
+		case "symlink":
+			privateMust(t, os.Symlink(pi, dest))
+		}
+		preimage := privateFixture(t, parent)
+		err := privateDestination(dest)
+		var failure *PrivateRuntimeError
+		if !errors.As(err, &failure) || failure.Kind != "refused" || !reflect.DeepEqual(preimage, privateFixture(t, parent)) {
+			t.Fatal("real API collision changed preimage", kind, err)
+		}
+		privateNoStage(t, parent)
+		if !reflect.DeepEqual(before, privateFixture(t, pi)) {
+			t.Fatal("Pi preimage changed")
+		}
+	}
+}
+
 func TestPrivateColdInvalidArchive(t *testing.T) {
 	privateGuest(t)
 	parent := t.TempDir()
@@ -900,11 +787,9 @@ func TestPrivateColdInvalidArchive(t *testing.T) {
 		if !errors.As(err, &failure) || failure.Kind != "acquisition" || body.closes != 1 || calls != 1 || readErr != nil || len(entries) != 1 || entries[0].Name() != "node.tgz" || !reflect.DeepEqual(before, privateFixture(t, pi)) {
 			t.Fatalf("invalid full-size DATA control %d reached bootstrap or changed Pi", index)
 		}
+		// Direct owned cleanup; the retired cold finalizer/result is not recreated.
+		privateMust(t, privateCleanup(workspace, identity))
 		dest := filepath.Join(parent, "rejected")
-		result, finishErr := privateColdFinish(context.Background(), PrivateInstallResult{}, err, workspace, identity, dest)
-		if result != (PrivateInstallResult{}) || !errors.As(finishErr, &failure) || failure.Kind != "acquisition" || failure.Workspace != workspace || failure.Destination != dest {
-			t.Fatal("invalid DATA lost empty result or cleanup error classification")
-		}
 		if _, statErr := os.Lstat(dest); !os.IsNotExist(statErr) {
 			t.Fatal("invalid DATA published a destination")
 		}
@@ -956,15 +841,33 @@ func TestPrivateColdOwnership(t *testing.T) {
 			privateMust(t, os.Mkdir(dest, 0700))
 		}
 		before := privateFixture(t, base)
-		err = privateColdWorkspace(parent, parentIdentity, workspace, identity, dest)
-		var failure *PrivateRuntimeError
-		if (err == nil) != (kind == "valid") || (err != nil && (!errors.As(err, &failure) || failure.Kind != "preimage")) || !reflect.DeepEqual(before, privateFixture(t, base)) {
+		// Assert physical reinspection and held identities directly, not through
+		// the retired composite workspace validator's preimage classification.
+		freshParent, parentErr := privateDirectory(parent)
+		freshStage, stageErr := privateDirectory(workspace)
+		destErr := privateDestination(dest)
+		parentMatches := parentErr == nil && os.SameFile(parentIdentity, freshParent)
+		stageMatches := stageErr == nil && identity != nil && os.SameFile(identity, freshStage)
+		wantParent := kind != "parent mode" && kind != "parent replacement" && kind != "parent symlink"
+		wantStage := kind != "stage mode" && kind != "stage replacement" && kind != "stage symlink" && kind != "parent replacement" && kind != "parent symlink" && kind != "nil identity"
+		wantDest := kind != "parent mode" && kind != "parent symlink" && kind != "destination appeared"
+		if parentMatches != wantParent || stageMatches != wantStage || (destErr == nil) != wantDest || !reflect.DeepEqual(before, privateFixture(t, base)) {
 			t.Fatalf("ownership control %d changed preimage/classification", index)
+		}
+		for _, err := range []error{parentErr, stageErr} {
+			var failure *PrivateRuntimeError
+			if err != nil && (!errors.As(err, &failure) || failure.Kind != "filesystem") {
+				t.Fatal("physical directory refusal classification", err)
+			}
+		}
+		var failure *PrivateRuntimeError
+		if destErr != nil && (!errors.As(destErr, &failure) || failure.Kind != "refused") {
+			t.Fatal("destination refusal classification", destErr)
 		}
 	}
 	// Actual filesystem cleanup denial and replacement preservation. The
-	// published sentinel is a classifier fixture, not a simulated full pipeline.
-	for index, kind := range []string{"permission", "replacement", "nil identity", "cancel after publication", "readback after publication"} {
+	// published sentinel is DATA, not a simulated full pipeline.
+	for index, kind := range []string{"permission", "replacement", "nil identity", "clean published"} {
 		parent := t.TempDir()
 		workspace, err := os.MkdirTemp(parent, ".gentle-go-cold-")
 		privateMust(t, err)
@@ -988,26 +891,19 @@ func TestPrivateColdOwnership(t *testing.T) {
 		if kind == "nil identity" {
 			identity = nil
 		}
-		ctx, cancel := context.WithCancel(context.Background())
-		if kind == "cancel after publication" {
-			cancel()
-		}
 		var stageBefore map[string]string
 		if kind == "replacement" || kind == "nil identity" {
 			stageBefore = privateFixture(t, workspace)
 		}
-		var cause error
-		if kind == "readback after publication" {
-			cause = privateError("readback", errors.New("readback DATA fault"))
-		}
-		result, failureErr := privateColdFinish(ctx, PrivateInstallResult{State: "ComponentInstalled", Destination: dest}, cause, workspace, identity, dest)
-		cancel()
+		cleanupErr := privateCleanup(workspace, identity)
 		if kind == "permission" {
 			privateMust(t, os.Chmod(blocked, 0700))
 		}
 		var failure *PrivateRuntimeError
-		if result != (PrivateInstallResult{}) || !errors.As(failureErr, &failure) || failure.Kind != "uncertain" || failure.Workspace != workspace || failure.Destination != dest || !reflect.DeepEqual(published, privateFixture(t, dest)) {
-			t.Fatalf("late failure control %d lost publication/ambiguity", index)
+		permissionFailure := kind == "permission" && os.IsPermission(cleanupErr)
+		identityFailure := (kind == "replacement" || kind == "nil identity") && errors.As(cleanupErr, &failure) && failure.Kind == "uncertain"
+		if (cleanupErr == nil) != (kind == "clean published") || (cleanupErr != nil && !permissionFailure && !identityFailure) || !reflect.DeepEqual(published, privateFixture(t, dest)) {
+			t.Fatalf("cleanup control %d lost publication/ambiguity", index)
 		}
 		if (kind == "replacement" || kind == "nil identity") && !reflect.DeepEqual(stageBefore, privateFixture(t, workspace)) {
 			t.Fatal("refused cleanup changed foreign or unowned preimage")
@@ -1018,99 +914,23 @@ func TestPrivateColdOwnership(t *testing.T) {
 				t.Fatal("foreign replacement deleted")
 			}
 		}
+		if kind == "clean published" {
+			privateNoStage(t, parent)
+		}
 	}
 }
 
-func TestPrivateColdInstall(t *testing.T) {
+func TestPrivateLiveCgroupMarker(t *testing.T) {
 	privateGuest(t)
-	parent := t.TempDir()
-	privateMust(t, os.Chmod(parent, 0700))
-	pi := filepath.Join(parent, "pi")
-	privateMust(t, os.Mkdir(pi, 0700))
-	privateMust(t, os.WriteFile(filepath.Join(pi, "settings.json"), []byte("cold Pi preimage"), 0600))
-	privateMust(t, os.Symlink("settings.json", filepath.Join(pi, "link")))
-	piBefore := privateFixture(t, pi)
-	for index, kind := range []string{"nil", "cancel", "file", "directory", "symlink"} {
-		dest := filepath.Join(parent, strconv.Itoa(index))
-		ctx := context.Background()
-		wantKind := "refused"
-		switch kind {
-		case "nil":
-			ctx = nil
-			wantKind = "canceled"
-		case "cancel":
-			var cancel context.CancelFunc
-			ctx, cancel = context.WithCancel(ctx)
-			cancel()
-			wantKind = "canceled"
-		case "file":
-			privateMust(t, os.WriteFile(dest, []byte("sentinel"), 0600))
-		case "directory":
-			privateMust(t, os.Mkdir(dest, 0700))
-		case "symlink":
-			privateMust(t, os.Symlink(pi, dest))
-		}
-		before := privateFixture(t, parent)
-		result, err := RunPrivateInstallCold(ctx, dest)
-		var failure *PrivateRuntimeError
-		if result != (PrivateInstallResult{}) || !errors.As(err, &failure) || failure.Kind != wantKind || !reflect.DeepEqual(before, privateFixture(t, parent)) {
-			t.Fatalf("early public cold control %d", index)
-		}
-	}
-	// Public fixed API: real HTTPS fetch, not /node.tgz or an injected client.
-	// Independent old tests retain the separate warm archive acquisition path.
-	ctx, cancel := context.WithTimeout(context.Background(), 870*time.Second)
-	defer cancel()
-	dest := filepath.Join(parent, "installed")
-	result, err := RunPrivateInstallCold(ctx, dest)
-	if err != nil || result.State != "ComponentInstalled" || result.Destination != dest {
-		t.Fatal("public fixed cold pipeline", err)
-	}
-	privateMust(t, privateReadback(dest, result.LockSHA256))
-	lock, err := os.ReadFile(filepath.Join(dest, "project/package-lock.json"))
+	membership, err := os.ReadFile("/proc/self/cgroup")
 	privateMust(t, err)
-	if fmt.Sprintf("%x", sha256.Sum256(lock)) != result.LockSHA256 {
-		t.Fatal("cold PRE/post lock differs")
-	}
-	var manifest struct{ Dependencies map[string]string }
-	data, err := os.ReadFile(filepath.Join(dest, "project/package.json"))
+	mounts, err := os.ReadFile("/proc/self/mountinfo")
 	privateMust(t, err)
-	privateMust(t, json.Unmarshal(data, &manifest))
-	pins := map[string]string{"gentle-pi": "3.7.0", "@earendil-works/pi-coding-agent": "0.85.1", "@earendil-works/pi-tui": "0.85.1", "@heyhuynhgiabuu/pi-pretty": "0.6.27", "typebox": "1.3.7"}
-	if !reflect.DeepEqual(manifest.Dependencies, pins) {
-		t.Fatal("cold five independent pins")
-	}
-	var closure []string
-	data, err = os.ReadFile(filepath.Join(dest, "closure.json"))
+	mapped, err := privateCgroupPath(string(membership), string(mounts))
 	privateMust(t, err)
-	privateMust(t, json.Unmarshal(data, &closure))
-	if len(closure) != 283 {
-		t.Fatal("cold closure cardinality")
+	marker := fmt.Sprintf("live-cgroup-member=%s mapped=%s\n", strings.TrimSuffix(string(membership), "\n"), mapped)
+	if len(marker) > 1024 {
+		t.Fatal("live membership diagnostic withheld: bound exceeded")
 	}
-	published := privateFixture(t, dest)
-	retry, err := RunPrivateInstallCold(context.Background(), dest)
-	var failure *PrivateRuntimeError
-	if retry != (PrivateInstallResult{}) || !errors.As(err, &failure) || failure.Kind != "refused" || !reflect.DeepEqual(published, privateFixture(t, dest)) || !reflect.DeepEqual(piBefore, privateFixture(t, pi)) {
-		t.Fatal("cold retry or Pi preimage changed")
-	}
-	privateNoStage(t, parent)
-	// Real publication from the public API, then an actual owned-filesystem
-	// cleanup fault through its shared finalizer. This is not a claim that a
-	// transport failure was injected into the preceding public invocation.
-	workspace, err := os.MkdirTemp(parent, ".gentle-go-cold-")
-	privateMust(t, err)
-	identity, err := privateDirectory(workspace)
-	privateMust(t, err)
-	blocked := filepath.Join(workspace, "blocked")
-	privateMust(t, os.Mkdir(blocked, 0700))
-	privateMust(t, os.WriteFile(filepath.Join(blocked, "child"), []byte("owned cleanup witness"), 0600))
-	privateMust(t, os.Chmod(blocked, 0000))
-	uncertain, cleanupErr := privateColdFinish(ctx, result, nil, workspace, identity, dest)
-	privateMust(t, os.Chmod(blocked, 0700))
-	if uncertain != (PrivateInstallResult{}) || !errors.As(cleanupErr, &failure) || failure.Kind != "uncertain" || failure.Workspace != workspace || failure.Destination != dest || !reflect.DeepEqual(published, privateFixture(t, dest)) || !reflect.DeepEqual(piBefore, privateFixture(t, pi)) {
-		t.Fatal("actual published installation lost on owned cleanup failure")
-	}
-	privateMust(t, privateCleanup(workspace, identity))
-	privateNoStage(t, parent)
-	fmt.Printf("Go fixed HTTPS cold pipeline: ComponentInstalled closure=283 lock-sha256=%s launch=not-run Ready=false\n", result.LockSHA256)
+	fmt.Print(marker)
 }

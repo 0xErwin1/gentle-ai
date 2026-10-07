@@ -1,7 +1,0 @@
-# Archive COPY is data only; no package installation or lifecycle execution.
-FROM --platform=linux/amd64 debian:bookworm-slim@sha256:f3034a6ec3c1205360777c4aae76234998866ad18806ae62b63a3f84ccad782b
-# Private host umask must not make COPY data unreadable by guest UID 65532.
-# Interpreters need read access only; no lifecycle/executable permission is added.
-COPY --chmod=0444 shell-linux-guest-proof.sh shell-linux-source-data-guest.sh shell-linux-source-data-controls.sh /usr/local/bin/
-COPY --chmod=0444 approved.tgz /data/approved.tgz
-ENTRYPOINT ["/bin/sh", "/usr/local/bin/shell-linux-source-data-controls.sh"]

@@ -41,21 +41,12 @@ func TestShellInstallHelpHasNoEffects(t *testing.T) {
 
 func TestShellInstallRefusalHelpIsRunnable(t *testing.T) {
 	_, _, positionalErr := parseShellInstall([]string{"extra"}, io.Discard)
-	_, gateErr := GateShellInstallCandidate(shellinstaller.Profile{Channel: shellinstaller.ChannelStable})
-	for _, err := range []error{positionalErr, gateErr} {
-		if err == nil || !strings.Contains(err.Error(), "gentle-ai shell install --help") {
-			t.Fatalf("refusal lacks the help continuation: %v", err)
-		}
-	}
-	if !strings.Contains(gateErr.Error(), "draft gate cannot execute") {
-		t.Fatal("draft guidance implies installation authority")
+	if positionalErr == nil || !strings.Contains(positionalErr.Error(), "gentle-ai shell install --help") {
+		t.Fatalf("refusal lacks the help continuation: %v", positionalErr)
 	}
 	var output bytes.Buffer
 	if err := RunShell([]string{"install", "--help"}, &output); err != nil || !strings.Contains(output.String(), "--inspect") || !strings.Contains(output.String(), "--confirm") {
 		t.Fatalf("named help is not runnable or lacks physical consent flags: %v %q", err, output.String())
-	}
-	if _, err := GateShellInstallCandidate(shellinstaller.Profile{Channel: shellinstaller.ChannelStable}); err == nil {
-		t.Fatal("reading help authorized the draft gate")
 	}
 }
 
