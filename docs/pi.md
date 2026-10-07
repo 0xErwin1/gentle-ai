@@ -43,6 +43,13 @@ Engram on Pi uses the native tools `gentle-engram` registers, not MCP, so Gentle
 
 CodeGraph is an optional Gentle AI integration. When selected, Gentle AI merges its MCP entry without overwriting a conflicting user entry. Compatible Pi children receive tools or lazy-init guidance through managed overlays, not edits to package-owned child files. Guidance resolves a safe project root and initializes a missing index once; a stale index requires upstream recovery, not a claim that old graph results reflect current source. `gentle-ai sync` reconciles managed configuration, which is distinct from index freshness. Sync never recreates a child file that was deleted; it drops that file from its ownership record. Gentle AI also stops managing the retired SDD agents (`sdd-*.md`) in the Pi agent home: when one still holds exactly Gentle AI's recorded overlay, sync restores the bytes it had before the overlay so the Pi package can retire it, and leaves any edited copy untouched. Uninstall removes only manifest-owned entries and reports drifted child files instead of deleting them.
 
+Index freshness depends on the intelligence surface:
+
+- **MCP:** auto-sync requires a running daemon with an active file watcher. If the watcher is disabled or stale files do not refresh, run `codegraph sync -q <project-root>`.
+- **CLI:** intelligence commands read the existing index without auto-sync. Run `codegraph sync -q <project-root>` before intelligence reads, including after edits. If sync fails, use filesystem tools and explain the failure instead of treating stale graph results as current.
+
+The presence of `.codegraph/` alone does not guarantee freshness.
+
 ## Review and checks
 
 Strict TDD follows the resolved configuration and exact test runner: observe RED, GREEN and REFACTOR when enabled; otherwise run applicable functional checks. RDD is separate and controlled by the user's `gentle-ai review mode status`, `gentle-ai review mode enable`, and `gentle-ai review mode disable` choices. Candidate consent and native authority do not authorize commits or releases. The review execution contract is provided to Pi through the provider bundle and mirrored by Gentle Shell, not by writing a Gentle AI system prompt block. See [Review](review-integration.md).
