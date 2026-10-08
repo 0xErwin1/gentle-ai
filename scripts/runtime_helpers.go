@@ -1,3 +1,5 @@
+//go:build !windows
+
 // Package scripts exposes the fixed Linux Shell runtime installation assets.
 package scripts
 

@@ -85,7 +85,8 @@ func clearPendingSyncAfterDeferredSync(homeDir string, fallback state.InstallSta
 
 func RunArgs(args []string, stdout io.Writer) error {
 	// Shell installation and ordinary owned launches bypass generic setup,
-	// detection, self-update and gates; the dedicated supervisor checks Linux.
+	// detection, self-update and gates; each platform backend (Linux supervisor,
+	// Windows worker) validates its own physical limits.
 	if len(args) > 0 && args[0] == "shell" {
 		return cli.RunShell(args[1:], stdout)
 	}
