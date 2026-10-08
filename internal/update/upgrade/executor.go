@@ -530,7 +530,7 @@ func ExecuteWithOptions(ctx context.Context, results []update.UpdateResult, prof
 
 	var preflightSkips []ToolUpgradeResult
 	if !dryRun {
-		executable, preflightSkips = preflightWindowsGentleAIUpgrades(executable, profile)
+		executable, preflightSkips = preflightGentleAIUpgrades(executable, profile)
 	}
 
 	// Create backup snapshot BEFORE any execution (only when there are executables).
@@ -646,14 +646,22 @@ func ExecuteWithOptions(ctx context.Context, results []update.UpdateResult, prof
 	}
 }
 
-// preflightWindowsGentleAIUpgrades removes unsafe Windows self-upgrades before
-// the backup phase. A manual fallback must not create or prune a backup because
-// no upgrade will be attempted.
-func preflightWindowsGentleAIUpgrades(executable []executableUpdate, profile system.PlatformProfile) ([]executableUpdate, []ToolUpgradeResult) {
+// preflightGentleAIUpgrades removes unsupported source-build and unsafe Windows
+// self-upgrades before backups. A manual fallback must not create or prune a
+// backup because no upgrade will be attempted.
+func preflightGentleAIUpgrades(executable []executableUpdate, profile system.PlatformProfile) ([]executableUpdate, []ToolUpgradeResult) {
 	remaining := make([]executableUpdate, 0, len(executable))
 	skipped := make([]ToolUpgradeResult, 0)
 	for _, candidate := range executable {
 		r := candidate.result
+		if needsSourceBuildManualUpgrade(r, profile) {
+			skipped = append(skipped, ToolUpgradeResult{
+				ToolName: r.Tool.Name, OldVersion: r.InstalledVersion,
+				NewVersion: r.LatestVersion, Method: effectiveMethod(r.Tool, profile),
+				Status: UpgradeSkipped, ManualHint: gentleAISourceBuildUpgradeHint(r),
+			})
+			continue
+		}
 		if profile.OS != "windows" || r.Tool.Name != "gentle-ai" || effectiveMethod(r.Tool, profile) != update.InstallGoInstall {
 			remaining = append(remaining, candidate)
 			continue
@@ -727,8 +735,9 @@ func executeOne(ctx context.Context, r update.UpdateResult, profile system.Platf
 //
 //  1. Homebrew is used only when Homebrew confirms it owns this specific tool.
 //  2. gentle-ai's own upgrade never falls through to the generic rules below; it
-//     is resolved entirely by gentleAISelfUpgradeMethod, which is what keeps
-//     Linux and macOS on the signed release download.
+//     is resolved entirely by gentleAISelfUpgradeMethod: configured release
+//     anchors keep Linux/macOS on signed downloads; exact UNSET source builds
+//     may use Go's pinned module installation.
 //  3. For every other tool: when Go is available on PATH and the tool declares a
 //     GoImportPath, go-install is preferred over a direct binary download.
 //  4. Otherwise the tool's declared InstallMethod is used as-is.
@@ -748,18 +757,13 @@ func effectiveMethod(tool update.ToolInfo, profile system.PlatformProfile) updat
 // gentleAISelfUpgradeMethod resolves how gentle-ai upgrades itself, once
 // Homebrew ownership has already been ruled out.
 //
-// Trust anchors differ by platform, and that is the whole point of this
-// function:
+// Trust anchors differ by build and platform:
 //
-//   - Linux and macOS publish signed release binaries. Those are downloaded over
-//     an authenticated connection and verified with minisign, so they always
-//     return InstallBinary. This function is the ONLY place gentle-ai's method is
-//     decided, which is what makes that guarantee structural rather than
-//     incidental: gentle-ai never reaches the generic
-//     `GoAvailable && GoImportPath != ""` rule, so declaring a GoImportPath for
-//     the Windows path below cannot silently move Linux or macOS off minisign.
-//     Regression guards: TestGentleAIOnLinuxNeverRoutesToGoInstall and
-//     TestGentleAIOnMacOSNeverRoutesToGoInstall.
+//   - Linux/macOS release builds keep InstallBinary and minisign verification.
+//     Only source builds carrying the exact UNSET sentinel may use a pinned
+//     Go install when Go and an import path are available. Empty, malformed,
+//     or placeholder keys still take the binary path and fail authentication;
+//     signature failures never trigger a Go fallback.
 //
 //   - Windows publishes no official binary and no Scoop manifest while publicly
 //     trusted Authenticode signing is pending, so there is no signed asset to
@@ -782,7 +786,7 @@ func effectiveMethod(tool update.ToolInfo, profile system.PlatformProfile) updat
 // legacy InstallScript declaration on Windows, where scriptUpgrade has no bash
 // and would point the user at a releases page that publishes no Windows assets.
 func gentleAISelfUpgradeMethod(tool update.ToolInfo, profile system.PlatformProfile) update.InstallMethod {
-	if profile.OS == "windows" && profile.GoAvailable && tool.GoImportPath != "" {
+	if (profile.OS == "windows" || isUnanchoredSourceBuild(profile)) && profile.GoAvailable && tool.GoImportPath != "" {
 		return update.InstallGoInstall
 	}
 	return update.InstallBinary

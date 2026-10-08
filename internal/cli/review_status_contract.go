@@ -115,6 +115,10 @@ type ReviewTargetStatusResult struct {
 	// object the derived snapshot froze), letting the caller see and override
 	// the offered scope.
 	committedRangeBaseRef string
+	// startOptions are the START options this STATUS preflighted. Both the
+	// emitted fresh START and its exact validator render them through
+	// reviewStartArguments, so neither can drift from the other.
+	startOptions reviewStartPreflightOptions
 	// passiveDeltaAfterAcknowledgement marks an authority-free STOP for a
 	// committed range that only adds passive content to an acknowledged
 	// candidate (#4739). It selects the STOP reason, never authority.

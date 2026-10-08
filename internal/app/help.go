@@ -66,7 +66,7 @@ COMPATIBILITY COMMANDS
                Anonymous, opt-out usage telemetry; preview shows the exact payload without sending it;
                trigger runs the opportunistic check for hosts that never call install/update/sync
   restore      Restore a config backup
-  doctor       Run ecosystem health diagnostics
+  doctor       Run ecosystem health diagnostics (bounded tool version probes)
   version      Print version
 
 FLAGS

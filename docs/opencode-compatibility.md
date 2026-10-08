@@ -40,9 +40,11 @@ resolved executable and reuses that answer, failures included, at every review
 gate (assess, STATUS, START, consent, relay, capture), so eligibility cannot
 change between steps of one invocation. The supported-runtime list in a refusal
 never probes: it names what the binary supports, and an OpenCode refusal states
-the host condition that failed. A probe that times out (3 seconds) is reported
-as a timeout, not as an unsupported runtime; re-run once `opencode --version`
-answers promptly.
+the host condition that failed. Runtime-major detection allows up to 15 seconds
+for `opencode --version`, accommodating slow external CLI startup while keeping
+the probe bounded. A timeout reports the elapsed budget and that managed runtime
+assets were not selected; it is not reported as an unsupported runtime. Re-run
+once `opencode --version` answers within that budget.
 
 Proven scope, on a real OpenCode 2.0.19 host with SDK 2.0.4 and external network
 denied: the managed V2 review plugin and the real Go relay admit the lens,
