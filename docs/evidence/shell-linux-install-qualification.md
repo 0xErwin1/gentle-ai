@@ -16,6 +16,13 @@
 - The separately authenticated `user-global-graph.mjs` asset is imported only at that final comparison, not during helper-only recovery. Settings publication remains synced before its graph witness.
 - The in-memory current-helper regression exercises the complete 315-node lock corpus (297 observed rows versus the original 272-row witness) for both profiles. This is comparison-boundary evidence, **not a current-candidate physical stock update or full Guest qualification**; those remain pending.
 
+## Caller-project preservation policy
+
+- Each Guest launch compares the whole physical project inventory before and after the PTY: paths, file bytes, link targets and mode/uid/gid/dev/inode/size/mtime/ctime of every object.
+- One narrow exception: the root `.git` **directory** may differ only in `mtime_ns`/`ctime_ns`. The native review integration creates and deletes a private `.gentle-ai-review-index-*` index (and Git's `.lock` for it) beside Git's control files, which moves those directory times. Nested `.git` names, other directories and files get no exception.
+- Any `.gentle-ai-review-index-*` or associated `.lock` left in the project refuses, even when unchanged across the launch. Separate Git directories and disabling RDD are not accepted workarounds.
+- [Preservation controls](../../e2e/shell-linux-preservation.test.py) cover this with synthetic inventories and local temporary fixtures. They are not native Guest proof: whether the pinned runtime leaves only these times and no residue still needs a fresh exact-candidate `full` run.
+
 ## Exact limits and debt
 
 - Execution: non-root Linux amd64; cgroup2, capabilities 0, NoNewPrivs 1, memory 3 GiB, swap 0, CPU 1, tasks 64. Existing real delegated systemd user manager >=254 when direct entry is not already qualified; no fallback or skipped-manager readiness claim.

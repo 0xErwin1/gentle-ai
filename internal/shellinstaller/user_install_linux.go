@@ -79,7 +79,9 @@ func ValidateUserInstall(req UserInstallRequest) error {
 	if err != nil {
 		return err
 	}
+	fresh := true
 	if err := privateDestination(req.Destination); err != nil {
+		fresh = false
 		manifest, readErr := userReadManifest(context.Background(), req.Destination)
 		if readErr != nil || manifest.Mode != req.Mode || (req.Mode == "shared" && (manifest.Prefix != req.SharedPrefix || manifest.Agent != req.SharedAgent)) {
 			return err
@@ -104,6 +106,11 @@ func ValidateUserInstall(req UserInstallRequest) error {
 		}
 		if selected.Sys().(*syscall.Stat_t).Dev != parent.Sys().(*syscall.Stat_t).Dev {
 			return errors.New("shared recovery requires one physical filesystem")
+		}
+	}
+	if fresh {
+		if err := userToolBinAvailable(req.SharedAgent); err != nil {
+			return err
 		}
 	}
 	_, err = privatePhysical(filepath.Join(req.SharedPrefix, "lib/node_modules/@earendil-works/pi-coding-agent/dist/bundle/cli.js"))
@@ -609,6 +616,11 @@ func RunUserInstall(ctx context.Context, req UserInstallRequest) (result UserIns
 	if req.Mode == "shared" {
 		prefix, agent, finalPrefix, finalAgent = req.SharedPrefix, req.SharedAgent, req.SharedPrefix, req.SharedAgent
 	}
+	// Acquire and verify pinned fd/rg inside the private stage before any
+	// selected Shared object changes; binding into AGENT/bin comes later.
+	if err = userToolsAcquire(ctx, root); err != nil {
+		return result, fmt.Errorf("pinned tool acquisition: %w", err)
+	}
 	freshConfirmation, inspectErr := InspectUserInstall(req)
 	if inspectErr != nil || freshConfirmation != req.Confirmation {
 		return result, privateError("preimage", errors.Join(inspectErr, errors.New("selected files changed before global provisioning")))
@@ -636,6 +648,8 @@ func RunUserInstall(ctx context.Context, req UserInstallRequest) (result UserIns
 	if err = userVerifyGlobal(ctx, root, prefix, agent, finalPrefix, req.Destination, req.Mode); err != nil {
 		return result, fmt.Errorf("post-native global readback: %w", err)
 	}
+	// A bind refusal here follows Shared provisioning: it stays uncertain and
+	// keeps the staged recovery root instead of claiming an atomic rollback.
 	if err = userTools(ctx, root, agent, true); err != nil {
 		return result, privateError("source", err)
 	}
@@ -895,77 +909,121 @@ func userDirectorySync(path string) error {
 	return errors.Join(directory.Sync(), directory.Close())
 }
 
+type userToolSource struct {
+	name, repo, tag, stem, pin string
+	size                       int64
+}
+
+var userToolSources = []userToolSource{
+	{"fd", "sharkdp/fd", "v10.5.0", "fd-v10.5.0-x86_64-unknown-linux-musl", "761c72dc8e120d85b22292063be8a796e2eeb20eb3e4f38b8fa2343ccf3514a7", 1573549},
+	{"rg", "BurntSushi/ripgrep", "15.2.0", "ripgrep-15.2.0-x86_64-unknown-linux-musl", "33e15bcf1624b25cdd2a55813a47a2f95dbe126268203e76aa6a585d1e7b149c", 2265718},
+}
+
+// Selected personal tools are never replaced. AGENT/bin must be absent or an
+// owned physical 0700/0755 directory without fd or rg; links are not followed.
+func userToolBinAvailable(agent string) error {
+	bin := filepath.Join(agent, "bin")
+	if _, err := os.Lstat(bin); errors.Is(err, os.ErrNotExist) {
+		return nil
+	} else if err != nil {
+		return privateError("refused", fmt.Errorf("inspect agent bin %q: %w", bin, err))
+	}
+	if err := privateNativeDirectory(bin); err != nil {
+		return privateError("refused", fmt.Errorf("agent bin %q must be absent or an owned physical 0700/0755 directory: %w", bin, err))
+	}
+	for _, source := range userToolSources {
+		if _, err := os.Lstat(filepath.Join(bin, source.name)); !errors.Is(err, os.ErrNotExist) {
+			return privateError("refused", errors.Join(fmt.Errorf("agent bin %q already contains %s; move it before Shared installation", bin, source.name), err))
+		}
+	}
+	return nil
+}
+
+// Pinned archives land only in the private stage. Nothing here touches the
+// selected agent, so acquisition failure precedes every Shared mutation.
+func userToolsAcquire(ctx context.Context, root string) error {
+	archives := filepath.Join(root, "runtime/tools")
+	if err := os.Mkdir(archives, 0700); err != nil && !errors.Is(err, os.ErrExist) {
+		return err
+	}
+	if err := privateNativeDirectory(archives); err != nil {
+		return err
+	}
+	client, err := privateColdClient()
+	if err != nil {
+		return err
+	}
+	transport := client.Transport.(*http.Transport)
+	transport.TLSClientConfig = transport.TLSClientConfig.Clone()
+	transport.TLSClientConfig.ServerName = "" // Verify each actual HTTPS host.
+	client.CheckRedirect = func(req *http.Request, via []*http.Request) error {
+		if len(via) > 4 || req.URL.Scheme != "https" || req.URL.User != nil || req.URL.Fragment != "" || req.URL.Host != "release-assets.githubusercontent.com" {
+			return privateError("acquisition", nil)
+		}
+		return nil
+	}
+	defer client.CloseIdleConnections()
+	for _, source := range userToolSources {
+		url := "https://github.com/" + source.repo + "/releases/download/" + source.tag + "/" + source.stem + ".tar.gz"
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+		if err != nil {
+			return err
+		}
+		response, err := client.Do(req)
+		if err != nil {
+			return privateError("acquisition", err)
+		}
+		encoding := response.Header.Values("Content-Encoding")
+		if response.StatusCode != 200 || response.ContentLength != source.size || response.Uncompressed || response.TLS == nil || len(response.TLS.VerifiedChains) == 0 || len(encoding) > 1 || (len(encoding) == 1 && encoding[0] != "" && encoding[0] != "identity") {
+			return privateError("acquisition", errors.Join(response.Body.Close(), errors.New("helper response refused")))
+		}
+		data, readErr := io.ReadAll(io.LimitReader(response.Body, source.size+1))
+		err = errors.Join(readErr, response.Body.Close(), ctx.Err())
+		if err != nil || int64(len(data)) != source.size || fmt.Sprintf("%x", sha256.Sum256(data)) != source.pin {
+			return privateError("acquisition", err)
+		}
+		if err := userToolWrite(filepath.Join(archives, source.name+".tgz"), data, 0600); err != nil {
+			return err
+		}
+		if _, err := userToolBinary(ctx, archives, source); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func userToolBinary(ctx context.Context, archives string, source userToolSource) ([]byte, error) {
+	archive := filepath.Join(archives, source.name+".tgz")
+	if _, err := privateNativeFile(ctx, archive, 0600, source.size, source.pin); err != nil {
+		return nil, err
+	}
+	data, err := os.ReadFile(archive)
+	if err != nil {
+		return nil, err
+	}
+	return userToolMember(ctx, data, source.pin, source.stem+"/"+source.name)
+}
+
 // Stock Pi prefers agent/bin before probing PATH or downloading helpers.
 // Retained archive authority also verifies every ordinary launch and idempotence.
 func userTools(ctx context.Context, root, agent string, install bool) error {
 	archives, bin := filepath.Join(root, "runtime/tools"), filepath.Join(agent, "bin")
-	for _, dir := range []string{archives, bin} {
-		if install {
-			if err := os.Mkdir(dir, 0700); err != nil && !errors.Is(err, os.ErrExist) {
-				return err
-			}
+	if install {
+		// Guarded reinspection at bind time; exclusive writes below still refuse races.
+		if err := userToolBinAvailable(agent); err != nil {
+			return err
 		}
+		if err := os.Mkdir(bin, 0700); err != nil && !errors.Is(err, os.ErrExist) {
+			return err
+		}
+	}
+	for _, dir := range []string{archives, bin} {
 		if err := privateNativeDirectory(dir); err != nil {
 			return err
 		}
 	}
-	var client *http.Client
-	if install {
-		var err error
-		client, err = privateColdClient()
-		if err != nil {
-			return err
-		}
-		transport := client.Transport.(*http.Transport)
-		transport.TLSClientConfig = transport.TLSClientConfig.Clone()
-		transport.TLSClientConfig.ServerName = "" // Verify each actual HTTPS host.
-		client.CheckRedirect = func(req *http.Request, via []*http.Request) error {
-			if len(via) > 4 || req.URL.Scheme != "https" || req.URL.User != nil || req.URL.Fragment != "" || req.URL.Host != "release-assets.githubusercontent.com" {
-				return privateError("acquisition", nil)
-			}
-			return nil
-		}
-		defer client.CloseIdleConnections()
-	}
-	for _, source := range []struct {
-		name, repo, tag, stem, pin string
-		size                       int64
-	}{
-		{"fd", "sharkdp/fd", "v10.5.0", "fd-v10.5.0-x86_64-unknown-linux-musl", "761c72dc8e120d85b22292063be8a796e2eeb20eb3e4f38b8fa2343ccf3514a7", 1573549},
-		{"rg", "BurntSushi/ripgrep", "15.2.0", "ripgrep-15.2.0-x86_64-unknown-linux-musl", "33e15bcf1624b25cdd2a55813a47a2f95dbe126268203e76aa6a585d1e7b149c", 2265718},
-	} {
-		archive := filepath.Join(archives, source.name+".tgz")
-		if install {
-			url := "https://github.com/" + source.repo + "/releases/download/" + source.tag + "/" + source.stem + ".tar.gz"
-			req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-			if err != nil {
-				return err
-			}
-			response, err := client.Do(req)
-			if err != nil {
-				return privateError("acquisition", err)
-			}
-			encoding := response.Header.Values("Content-Encoding")
-			if response.StatusCode != 200 || response.ContentLength != source.size || response.Uncompressed || response.TLS == nil || len(response.TLS.VerifiedChains) == 0 || len(encoding) > 1 || (len(encoding) == 1 && encoding[0] != "" && encoding[0] != "identity") {
-				return privateError("acquisition", errors.Join(response.Body.Close(), errors.New("helper response refused")))
-			}
-			data, readErr := io.ReadAll(io.LimitReader(response.Body, source.size+1))
-			err = errors.Join(readErr, response.Body.Close(), ctx.Err())
-			if err != nil || int64(len(data)) != source.size || fmt.Sprintf("%x", sha256.Sum256(data)) != source.pin {
-				return privateError("acquisition", err)
-			}
-			if err := userToolWrite(archive, data, 0600); err != nil {
-				return err
-			}
-		}
-		if _, err := privateNativeFile(ctx, archive, 0600, source.size, source.pin); err != nil {
-			return err
-		}
-		data, err := os.ReadFile(archive)
-		if err != nil {
-			return err
-		}
-		tool, err := userToolMember(ctx, data, source.pin, source.stem+"/"+source.name)
+	for _, source := range userToolSources {
+		tool, err := userToolBinary(ctx, archives, source)
 		if err != nil {
 			return err
 		}

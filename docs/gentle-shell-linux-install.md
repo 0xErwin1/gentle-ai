@@ -15,7 +15,7 @@
 | Mode | Selection and effects |
 | --- | --- |
 | Separate | New private prefix, runtime, HOME, agent and state; existing personal Pi is untouched. |
-| Shared | Explicit existing owned global Pi prefix and agent; both new bindings use those same objects. Review settings changes below. |
+| Shared | Explicit existing owned global Pi prefix and agent; both new bindings use those same objects. Review settings and agent tool changes below. |
 
 Run `gentle-ai shell install`. Arrows select mode; Tab cycles mode-appropriate fields (Shared adds prefix/agent). Enter reviews; `y` confirms and closes the TUI before terminal handoff. Escape aborts before installation; Ctrl-C during installation requests cancellation and waits for stop/reap.
 
@@ -43,14 +43,18 @@ Inspect prints the selected agent's `settings.json` path and **only** its `packa
 
 `TARGET` and `PREFIX` above stand for your selected absolute paths, not literal settings values. The command uses pinned Node/npm. Other settings keys and existing package entries are preserved; foreign npm overrides or Gentle declarations refuse. Preview is disclosure, not authority or a backup; confirm only the exact fresh inspected selection.
 
+Shared also writes **two new files** into the selected agent: `AGENT/bin/fd` (fd 10.5.0) and `AGENT/bin/rg` (ripgrep 15.2.0), which stock Pi prefers over PATH. Personal tools are never replaced: an existing `fd` or `rg` (including links), or an `AGENT/bin` that is not an owned physical `0700`/`0755` directory, refuses at inspect and confirmation before any change. Both pinned archives are downloaded and verified in the private stage before the prefix or settings change.
+
 ## Undo Shared changes
 
-Use the **actual installed TARGET**, not a prefix, agent or staging directory:
+Use the **actual installed TARGET**, never a prefix or agent:
 
 ```sh
 gentle-ai shell recover TARGET inspect
 gentle-ai shell recover TARGET PRINTED_CONFIRMATION
 ```
+
+If a Shared installation fails as uncertain **before TARGET exists**, the failure prints `workspace=WORKSPACE`. Use `WORKSPACE/installed` as ROOT in the same two commands; it holds any saved preimages, and recovery refuses if none were saved. Keep that workspace until recovery completes.
 
 Recovery requires intact saved preimages and fresh printed consent. It restores the **whole prefix and agent**, so it can overwrite later edits, not just the two settings keys. Changed selection/root identities or corrupt preimages refuse. Quarantines, evidence and command bindings remain: this is **not uninstall or TARGET deletion**.
 

@@ -18,7 +18,7 @@ func PreviewUserInstall(req UserInstallRequest, inspected string) (string, error
 	if err != nil {
 		return "", err
 	}
-	undo := fmt.Sprintf("Undo: gentle-ai shell recover %s inspect\nRecovery requires fresh confirmation; restoring prefix/agent preimages can overwrite later changes. It leaves evidence and command bindings; it is not uninstall or target deletion.\n", req.Destination)
+	undo := fmt.Sprintf("Undo: gentle-ai shell recover %s inspect\nIf installation fails before %s exists, use ROOT=WORKSPACE/installed from the printed failure instead; never a prefix or agent.\nRecovery requires fresh confirmation; restoring prefix/agent preimages can overwrite later changes. It leaves evidence and command bindings; it is not uninstall or target deletion.\n", req.Destination, req.Destination)
 	if existing {
 		return "Existing destination: no new provisioning preview; installed graph readback remains required.\n" + undo, nil
 	}
@@ -55,6 +55,8 @@ func PreviewUserInstall(req UserInstallRequest, inspected string) (string, error
 	after, _ := json.Marshal(append(packages, rootJSON))
 	command, _ := json.Marshal([]string{filepath.Join(req.Destination, "runtime/node/bin/node"),
 		filepath.Join(req.Destination, "runtime/node/lib/node_modules/npm/bin/npm-cli.js"), "--prefix", req.SharedPrefix})
-	return fmt.Sprintf("Shared settings: %s\npackages before: %s\npackages after: %s\nnpmCommand before: (absent)\nnpmCommand after: %s\n%s",
-		filepath.Join(req.SharedAgent, "settings.json"), before, after, command, undo), nil
+	tools := fmt.Sprintf("Agent tools: new files %s and %s (pinned fd 10.5.0, ripgrep 15.2.0); existing fd/rg or an agent bin that is not an owned 0700/0755 directory refuse before changes.\n",
+		filepath.Join(req.SharedAgent, "bin/fd"), filepath.Join(req.SharedAgent, "bin/rg"))
+	return fmt.Sprintf("Shared settings: %s\npackages before: %s\npackages after: %s\nnpmCommand before: (absent)\nnpmCommand after: %s\n%s%s",
+		filepath.Join(req.SharedAgent, "settings.json"), before, after, command, tools, undo), nil
 }

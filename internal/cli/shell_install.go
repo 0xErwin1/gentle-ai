@@ -21,6 +21,7 @@ gentle-ai shell install --target /owned/private-parent/shell --mode separate
   --inspect                 print physical-selection confirmation without effects
   --confirm SHA256          approve that exact inspected selection
 No flags: dedicated installer TUI. Commands live in TARGET/bin, outside npm's bin.
+Shared creates AGENT/bin/fd and AGENT/bin/rg; existing tools refuse before changes.
 gentle-ai shell launch ROOT [PI_ARGS...]
   Launch the selected stock Pi; normal use is through TARGET/bin/pi or gentle-shell.
 gentle-ai shell recover ROOT inspect

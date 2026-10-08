@@ -48,6 +48,10 @@ PUBLIC_IPS = {}
 ALLOW = {'registry.npmjs.org', 'nodejs.org', 'github.com', 'release-assets.githubusercontent.com', 'pi.dev'}
 NODE_SHA = '783130984963db7ba9cbd01089eaf2c2efb055c7c1693c943174b967b3050cb8'
 PUBLIC_TLS = ssl.create_default_context()
+FIXTURE_UID = 1002
+# Native review integration creates and deletes this private index (and Git's
+# .lock for it) beside Git control files; any leftover is residue, never state.
+REVIEW_INDEX_PREFIX = '.gentle-ai-review-index-'
 
 
 def require(condition, message):
@@ -153,7 +157,7 @@ def physical_inventory(root, details=None):
         for name in sorted(directories + files):
             p = pathlib.Path(parent) / name
             info = p.lstat()
-            require(info.st_uid == 1002, 'foreign fixture object')
+            require(info.st_uid == FIXTURE_UID, 'foreign fixture object')
             relative = str(p.relative_to(root))
             result.append((relative, 'metadata', info.st_mode, info.st_uid, info.st_gid, info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns))
             if stat.S_ISLNK(info.st_mode):
@@ -165,6 +169,34 @@ def physical_inventory(root, details=None):
     if details is not None:
         details.extend(result)
     return hashlib.sha256(json.dumps(sorted(result)).encode()).hexdigest()
+
+
+def project_preservation_violations(before_entries, after_entries):
+    """Compare physical_inventory rows; empty means the caller project is preserved.
+
+    The only tolerated difference is mtime_ns/ctime_ns of the root .git
+    directory, written by the native review index cycle. Paths, bytes, links
+    and every other metadata field stay compared, everywhere. Review-index or
+    lock residue refuses even when it is unchanged across the launch.
+    """
+    before = {(row[0], row[1]): row[2:] for row in before_entries}
+    after = {(row[0], row[1]): row[2:] for row in after_entries}
+    violations = []
+    for key in sorted(set(before) | set(after)):
+        if pathlib.PurePosixPath(key[0]).name.startswith(REVIEW_INDEX_PREFIX):
+            violations.append((key[0], key[1], 'review-index residue'))
+            continue
+        old, new = before.get(key), after.get(key)
+        if old == new:
+            continue
+        if old is None or new is None:
+            violations.append((key[0], key[1], 'created' if old is None else 'removed'))
+            continue
+        # Row tail: mode, uid, gid, dev, inode, size, mtime_ns, ctime_ns.
+        git_times = key == ('.git', 'metadata') and stat.S_ISDIR(old[0]) and old[:6] == new[:6]
+        if not git_times:
+            violations.append((key[0], key[1], 'modified'))
+    return violations
 
 
 def upstream_ip(host):
@@ -234,6 +266,9 @@ class Mirror(http.server.BaseHTTPRequestHandler):
                 if FAULT in {'node-sri', 'node-cleanup'}:
                     raw = raw[:-1] + bytes([raw[-1] ^ 1])
                 status, headers = 200, {}
+            elif FAULT == 'tool-refuse' and host == 'github.com' and self.path.startswith('/sharkdp/fd/releases/download/'):
+                FAULT_SEEN.set()
+                status, headers, raw = 404, {}, b''
             elif host == 'pi.dev' and self.path == '/api/latest-version':
                 status, headers, raw = 200, {'content-type': 'application/json'}, b'{"version":"1.0.0"}'
             else:
@@ -340,6 +375,23 @@ def acquisition_fault(target, cleanup=False):
                 child.wait(timeout=3)
         if stage is not None and stage.exists():
             os.chmod(stage, 0o700)  # Only this disposable, physically identified Guest-owned stage.
+
+
+def tool_acquisition_fault(target, shared):
+    global FAULT
+    before = [physical_inventory(path) for path in shared]
+    stages = set(target.parent.glob('.gentle-user-*'))  # Earlier fault evidence stays retained.
+    args, token = inspect(target, shared)
+    FAULT_SEEN.clear()
+    FAULT = 'tool-refuse'
+    try:
+        text = run(args + ['--confirm', token], timeout=remaining(), good=False)
+    finally:
+        FAULT = ''
+    require(FAULT_SEEN.is_set(), 'actual pinned tool acquisition not observed')
+    require('uncertain' not in text and not target.exists() and set(target.parent.glob('.gentle-user-*')) == stages, 'pre-provisioning tool refusal left uncertain evidence')
+    require([physical_inventory(path) for path in shared] == before, 'tool acquisition failure changed selected Shared prefix or agent')
+    REPORT['toolAcquisitionOrder'] = 'actual pinned fd refusal before Shared provisioning; selected prefix and agent unchanged'
 
 
 def publication_fault(target, shared):
@@ -494,7 +546,8 @@ def pty_status(binding, project, command=None, extra=None, installer=None, cance
         child.wait(timeout=5)
         project_after_entries = []
         project_after = physical_inventory(project, project_after_entries)
-        if project_after != project_before:
+        violations = project_preservation_violations(project_before_entries, project_after_entries)
+        if violations:
             before = {(row[0], row[1]): row[2:] for row in project_before_entries}
             after = {(row[0], row[1]): row[2:] for row in project_after_entries}
             changed = [key for key in sorted(set(before) | set(after)) if before.get(key) != after.get(key)]
@@ -506,8 +559,11 @@ def pty_status(binding, project, command=None, extra=None, installer=None, cance
                                          'metadataFields': ['mode', 'uid', 'gid', 'dev', 'inode', 'size', 'mtime_ns', 'ctime_ns'],
                                          'wholeDelta': delta if len(data) <= 1024 else 'withheld',
                                          'entriesBytes': len(names), 'entriesSHA256': hashlib.sha256(names).hexdigest(),
-                                         'wholeEntries': entries if len(names) <= 1024 else 'withheld'}
-        require(project_after == project_before, 'fixture blank caller project changed during launch')
+                                         'wholeEntries': entries if len(names) <= 1024 else 'withheld',
+                                         'violationCount': len(violations), 'violationReasons': sorted({row[2] for row in violations})}
+        elif project_after != project_before:
+            REPORT['projectGitTimesOnly'] = REPORT.get('projectGitTimesOnly', 0) + 1
+        require(not violations, 'fixture blank caller project changed during launch')
         if command is None:
             requests = REQUESTS[requests_before:]
             observed = sorted(set(requests))
@@ -888,6 +944,7 @@ def main():
         args, token = inspect(shared, (shared_prefix, shared_agent))
         (shared_agent / 'settings.json').write_text('{"theme":"dark"}\n')
         run(args + ['--confirm', token], good=False)
+        tool_acquisition_fault(WORK / 'parents/tool-fault', (shared_prefix, shared_agent))
         shared_manifest = install(shared, (shared_prefix, shared_agent))
         require(shared_manifest['Prefix'] == str(shared_prefix) and shared_manifest['Agent'] == str(shared_agent), 'shared physical binding selection')
         pty_status(shared / 'bin/gentle-shell', WORK / 'project')

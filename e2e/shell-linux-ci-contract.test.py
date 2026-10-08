@@ -103,7 +103,13 @@ class LinuxCIContract(unittest.TestCase):
         self.assertIn("require(expected in raw,", text)
         self.assertIn("min(45, remaining())", text)
         self.assertIn("len(raw) <= 65536", text)
-        self.assertIn("require(project_after == project_before", text)
+        self.assertIn("require(not violations, 'fixture blank caller project changed during launch')", text)
+
+    def test_project_preservation_policy_controls_pass(self):
+        # The build step only names this file; run the narrow .git times policy here.
+        result = subprocess.run([sys.executable, '-B', str(ROOT / 'e2e/shell-linux-preservation.test.py')],
+                                text=True, capture_output=True, timeout=60)
+        self.assertEqual(result.returncode, 0, result.stderr[-1000:])
 
     def test_kernel_notifications_are_read_only_bounded_partial_evidence(self):
         fixture = ast.parse((ROOT / 'e2e/shell-linux-user-install-guest.py').read_text())
