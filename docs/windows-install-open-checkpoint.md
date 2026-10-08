@@ -36,6 +36,11 @@ This is scoped lab evidence for the unfinished Windows Separate installer, not g
 - Main retained commit `aa2c03896be9866ab0af89bbc621d4c2a8fcf9c2`, ZIP SHA-256 `432aaa147885071aa84dd4a2b4630f646350d835de88dfe0f8aa0c21addd8aeb` and generated lock SHA-256 `da06d9e1da42c7edf19d74989b799315e97aa5a3b56d50b05403240bc5cc50c7`; launch verification did not follow the moving ref.
 - These are successful scoped fresh-Separate checks, not native review closure or full/default-Windows qualification.
 
+## Review corrections after the matrix (not yet Guest-executed)
+- Launch verification still walks every entry recursively with unchanged per-entry guards and bounds; only names strictly below the fixed runtime state roots (`home`, `state`, `tmp`, `runtime\cache`, `agent\sessions`) may contain `!`, `%`, `&` or `^`. Large-cache performance/bounds remain unqualified. Settings additionally accept the pinned Pi 1.0.0 UI scalars (model, provider, thinking level, path-free theme). Install cancellation is cooperative with owned-job quiescence and strict owned-stage removal.
+- `windows-owned-settings.test.mjs` replaced `unproven-theme` with `theme-path-injection` (still 37 fixtures; Guest digest updated). `windows-mutable-settings.test.mjs` is a portable VM region check, not runtime evidence.
+- The new native Windows unit tests only cross-compiled; no Guest run, RED or installed-runtime proof exists for these corrections yet. The matrix above predates them.
+
 ## Limits and follow-up
 - The disposable guests' system-root ACLs were modified. Untouched/default Windows and independent stock-UI authenticity are not qualified.
 - Full receipts remain `QualifiedCandidateGuest=false` and `FunctionalReady=false`; these are scoped lab checks, not native review closure or release approval.

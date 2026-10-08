@@ -33,6 +33,40 @@ already contains this unreleased installer.
 | Processes | Suspended child bound before resume; Job Object CPU/memory/process readback, inherited console, bounded cleanup |
 | Preservation | Isolated HOME/agent/config, caller CWD inherited; console modes saved/restored; personal PATH unchanged |
 
+## Launch custody: artefacts versus runtime state
+
+Every launch re-walks the **installed artefacts** with the complete per-file
+owner, DACL, reparse, NTFS, hard-link and selection-name checks and the bounds
+below, and compares supervisor, runtimes, helpers and source bytes with their
+retained authorities. There is no size/mtime shortcut.
+
+**Runtime state** written after publication by the owned tools is not an
+artefact: `home` (GOPATH/GOMODCACHE, set explicitly), `state` (GOCACHE),
+`tmp`, `runtime\cache` (npm) and `agent\sessions` (Pi names sessions after the
+caller CWD). Launch walks them recursively with the same per-entry owner,
+DACL, reparse, hard-link, regular-file and resource checks as artefacts; the
+file-count, per-file (32 MiB) and aggregate (2 GiB) bounds include them. The
+only difference is naming: names strictly **below** these fixed roots are data
+and may contain `!`, `%`, `&` or `^` (Go's escaped module paths, CWD-named
+sessions). The roots, their ancestors, artefacts and bindings keep the strict
+names. Large real caches beyond those bounds are not yet qualified and fail
+closed.
+
+`agent\settings.json` keeps exact `packages`/`npmCommand` and the codemode
+exclusion. Following the pinned Pi 1.0.0 `SettingsManager`, it also accepts
+the UI-written typed scalars `lastChangelogVersion`, `defaultProvider`,
+`defaultModel`, `defaultThinkingLevel` and a path-free `theme` name. Every
+other key (resources, skills, prompts, themes, shell paths, editors, session
+redirection, proxies, trust and telemetry) is still refused, including other
+`/settings` toggles; those remain an unqualified usability limit.
+
+Cancellation of `shell install` signals a session-local event first. The
+worker cancels its own context, terminates the remaining members of its own
+Job Object (only after reading back its exact supervisor limits), and removes
+its stage only when the stage identity and complete alias-free inventory
+still match. After 120 seconds the supervisor kills the job; any uncertain or
+remaining stage is preserved and reported, never removed by pattern.
+
 Job committed-memory limits do not claim to disable Windows' pagefile.
 Ownership controls assume cooperative same-account actors; they are not
 hostile same-SID custody, loaded-byte attestation or escaped-descendant immunity.
@@ -47,6 +81,8 @@ The old Linux controls and frozen Linux work are unchanged.
 - [ ] Credentialless, resource-bounded **actual Windows 11 x64** laboratory is independently established.
 - [ ] A user installs through the existing TUI, not a fake installer or helper.
 - [ ] Both owned bindings open authentic UIs and settle their exits.
+- [ ] A launch after real Go module/build cache use, a model/theme change and a `!` CWD session opens again.
+- [ ] A canceled installation (timeout and Ctrl-C) leaves no owned stage and no foreign deletion.
 - [ ] Caller CWD/console/foreground and personal configuration/project preimages are preserved.
 - [ ] Required target checks and exact-head Windows smoke pass before ready-for-review.
 

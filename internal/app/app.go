@@ -84,8 +84,9 @@ func clearPendingSyncAfterDeferredSync(homeDir string, fallback state.InstallSta
 }
 
 func RunArgs(args []string, stdout io.Writer) error {
-	// The dedicated Separate TUI and owned launches do not enter generic setup
-	// or self-update. Their platform backend validates its own physical limits.
+	// Shell installation and ordinary owned launches bypass generic setup,
+	// detection, self-update and gates; each platform backend (Linux supervisor,
+	// Windows worker) validates its own physical limits.
 	if len(args) > 0 && args[0] == "shell" {
 		return cli.RunShell(args[1:], stdout)
 	}

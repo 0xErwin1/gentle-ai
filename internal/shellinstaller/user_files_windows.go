@@ -75,7 +75,19 @@ func userWindowsSecurity(path string, selected bool) error {
 }
 
 func userWindowsIdentity(path string, selected bool) (string, error) {
-	if !filepath.IsAbs(path) || filepath.Clean(path) != path || len(filepath.VolumeName(path)) != 2 || strings.ContainsAny(path, "\x00\r\n\"%&|<>^") {
+	return userWindowsIdentityBelow(path, selected, "")
+}
+
+// Names strictly below data are owned file data (Go's bang-escaped module
+// cache, Pi sessions named after the caller CWD), never a command-binding
+// selection: they may contain ! % & ^. Data itself, its ancestors and every
+// owner/DACL/reparse/volume/hard-link check stay unchanged.
+func userWindowsIdentityBelow(path string, selected bool, data string) (string, error) {
+	strict, relaxed := path, ""
+	if data != "" && strings.HasPrefix(path, data+string(filepath.Separator)) {
+		strict, relaxed = data, path[len(data):]
+	}
+	if !filepath.IsAbs(path) || filepath.Clean(path) != path || len(filepath.VolumeName(path)) != 2 || strings.ContainsAny(strict, "\x00\r\n\"%&|<>^") || strings.ContainsAny(relaxed, "\x00\r\n\"|<>") {
 		return "", errors.New("select a canonical local drive path without shell metacharacters")
 	}
 	for current := path; ; current = filepath.Dir(current) {
@@ -89,8 +101,10 @@ func userWindowsIdentity(path string, selected bool) (string, error) {
 		}
 		// Official Go archives contain bang-escaped module fixture filenames.
 		// Permit only a regular leaf file; directories and binding selections
-		// still reject bang characters (including every ancestor directory).
-		if strings.Contains(current, "!") && (current != path || attributes&windows.FILE_ATTRIBUTE_DIRECTORY != 0) {
+		// still reject bang characters (including every ancestor directory)
+		// unless they lie strictly below an explicit owned data root.
+		below := data != "" && strings.HasPrefix(current, data+string(filepath.Separator))
+		if strings.Contains(current, "!") && !below && (current != path || attributes&windows.FILE_ATTRIBUTE_DIRECTORY != 0) {
 			return "", errors.New("select a canonical local drive path without shell metacharacters")
 		}
 		if err := userWindowsSecurity(current, selected && current == path); err != nil {

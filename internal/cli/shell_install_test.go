@@ -4,147 +4,127 @@ import (
 	"bytes"
 	"context"
 	"io"
+	"os"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
-	tea "github.com/charmbracelet/bubbletea"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/shellinstaller"
 )
 
-func TestWindowsShellInstallChannels(t *testing.T) {
-	for _, channel := range []string{"stable", "main"} {
-		req, _, err := parseShellInstall([]string{"--channel", channel}, io.Discard)
-		if err != nil || req.Channel != channel || shellEntryValues(req)[6] != channel {
-			t.Fatalf("channel did not reach worker: %+v, %v", req, err)
-		}
-	}
-	for _, value := range []string{"nightly", ""} {
-		req, _, err := parseShellInstall([]string{"--channel", value}, io.Discard)
-		if err == nil || req != (shellinstaller.UserInstallRequest{}) {
-			t.Fatal("invalid channel returned actionable request")
-		}
-	}
-	req, _, err := parseShellInstall(nil, io.Discard)
-	if err != nil || req.Channel != "stable" {
-		t.Fatal("default channel is not stable")
-	}
-	m := shellInstallModel{field: 2, req: req}
-	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRight})
-	if cmd != nil || next.(shellInstallModel).req.Channel != "main" || !strings.Contains(next.(shellInstallModel).View(), "Main resolves once after confirmation") {
-		t.Fatal("TUI channel selection caused effects or hid snapshot resolution timing")
-	}
-}
+// Platform-neutral routing and flag contracts. Review-model tests live in
+// shell_install_view_test.go (Linux model) and shell_install_windows_test.go.
 
-func TestWindowsShellInstallFlagsAndNoEffectHelp(t *testing.T) {
+func TestShellInstallFlags(t *testing.T) {
 	for _, args := range [][]string{{"--unknown"}, {"extra"}, {"--target"}, {"--confirm"}} {
 		if _, _, err := parseShellInstall(args, io.Discard); err == nil {
-			t.Fatalf("invalid flags admitted: %q", args)
+			t.Fatalf("accepted invalid flags %q", args)
 		}
 	}
-	var output bytes.Buffer
-	if err := RunShell([]string{"install", "--help"}, &output); err != nil {
+	req, inspect, err := parseShellInstall([]string{"--target", "/owned/shell", "--mode", "shared", "--prefix", "/owned/pi", "--agent", "/owned/agent", "--inspect"}, io.Discard)
+	if err != nil || !inspect || req.Mode != "shared" || req.Confirmation != "" {
+		t.Fatalf("selection = %+v inspect=%v error=%v", req, inspect, err)
+	}
+	if _, err := shellinstaller.UserInstallFromEntry(shellEntryValues(req)); err != nil {
 		t.Fatal(err)
 	}
-	for _, expected := range []string{"--inspect", "--confirm", "Windows 11 x64", "Separate only", "personal PATH"} {
-		if !strings.Contains(output.String(), expected) {
-			t.Fatalf("missing safe help: %s", expected)
+}
+
+func TestShellInstallChannelMatchesPlatform(t *testing.T) {
+	for _, channel := range []string{"main", "stable"} {
+		req, _, err := parseShellInstall([]string{"--target", "/owned/shell", "--channel", channel}, io.Discard)
+		if runtime.GOOS == "windows" {
+			entry := shellEntryValues(req)
+			if err != nil || entry[len(entry)-1] != channel {
+				t.Fatalf("Windows channel did not reach the worker: %q, %v", entry, err)
+			}
+			continue
 		}
+		if err == nil || !strings.Contains(err.Error(), "Windows-only") || req != (shellinstaller.UserInstallRequest{}) {
+			t.Fatalf("explicit --channel %s was ignored instead of refused: %+v, %v", channel, req, err)
+		}
+	}
+	req, _, err := parseShellInstall([]string{"--target", "/owned/shell"}, io.Discard)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if entry, err := shellinstaller.UserInstallFromEntry(shellEntryValues(req)); err != nil || entry.Destination != "/owned/shell" {
+		t.Fatalf("default selection does not round-trip through the platform entry: %+v, %v", entry, err)
 	}
 }
 
-func TestWindowsShellInstallDestinationPreservesTypedAndPastedSpaces(t *testing.T) {
-	for _, pasted := range []bool{false, true} {
-		name := "typed"
-		if pasted {
-			name = "pasted"
-		}
-		t.Run(name, func(t *testing.T) {
-			want := "R:\\Gentle Lab Work\\Owned Shell"
-			m := shellInstallModel{req: shellinstaller.UserInstallRequest{Mode: "separate"}}
-			keys := []tea.KeyMsg{{Type: tea.KeyRunes, Runes: []rune(want), Paste: true}}
-			if !pasted {
-				keys = nil
-				for _, char := range want {
-					key := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{char}}
-					if char == ' ' {
-						key = tea.KeyMsg{Type: tea.KeySpace}
-					}
-					keys = append(keys, key)
+func TestShellInstallRefusalHelpIsRunnable(t *testing.T) {
+	_, _, positionalErr := parseShellInstall([]string{"extra"}, io.Discard)
+	if positionalErr == nil || !strings.Contains(positionalErr.Error(), "gentle-ai shell install --help") {
+		t.Fatalf("refusal lacks the help continuation: %v", positionalErr)
+	}
+	var output bytes.Buffer
+	if err := RunShell([]string{"install", "--help"}, &output); err != nil || !strings.Contains(output.String(), "--inspect") || !strings.Contains(output.String(), "--confirm") {
+		t.Fatalf("named help is not runnable or lacks physical consent flags: %v %q", err, output.String())
+	}
+}
+
+func TestShellInstallConfirmationRefusalHasNoEffects(t *testing.T) {
+	if runtime.GOOS != "linux" || runtime.GOARCH != "amd64" {
+		t.Skip("physical user selection is Linux amd64 only")
+	}
+	parent := t.TempDir()
+	if err := os.Chmod(parent, 0700); err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(parent, "shell")
+	if _, err := shellinstaller.InspectUserInstall(shellinstaller.UserInstallRequest{Destination: target, Mode: "separate"}); err != nil {
+		t.Fatalf("invalid physical selection fixture: %v", err)
+	}
+	err := RunShell([]string{"install", "--target", target, "--confirm", "not-confirmed"}, io.Discard)
+	if err == nil || !strings.Contains(err.Error(), "gentle-ai shell install --help") || !strings.Contains(err.Error(), "--inspect") || !strings.Contains(err.Error(), "--confirm") {
+		t.Fatalf("unconfirmed selection lacks the safe continuation: %v", err)
+	}
+	if _, err := os.Lstat(target); !os.IsNotExist(err) {
+		t.Fatalf("unconfirmed selection created or published a target: %v", err)
+	}
+}
+
+func TestShellInstallSeparateRepairHelpHasNoEffects(t *testing.T) {
+	// The documented repair continuation remains usable without a user manager.
+	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
+	var output bytes.Buffer
+	if err := RunShell([]string{"install", "--help"}, &output); err != nil || !strings.Contains(output.String(), "--mode separate") {
+		t.Fatalf("repair help is not runnable: %v %q", err, output.String())
+	}
+}
+
+func TestShellInstallTopLevelCommandsHaveNoEffects(t *testing.T) {
+	// An absent bus prevents a regression from reaching the real user manager.
+	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
+	for _, verb := range []string{"help", "--help", "typo", "check", "internal-typo", "internal-internal-install"} {
+		t.Run(verb, func(t *testing.T) {
+			var output bytes.Buffer
+			err := RunShell([]string{verb}, &output)
+			if verb == "help" || verb == "--help" {
+				if err != nil || output.String() != shellInstallHelp {
+					t.Fatalf("help reached runtime instead of printing usage: %v %q", err, output.String())
 				}
-			}
-			for _, key := range keys {
-				next, cmd := m.Update(key)
-				m = next.(shellInstallModel)
-				if cmd != nil || m.review || m.busy {
-					t.Fatal("editing started installation or review effects")
-				}
-			}
-			if m.req.Destination != want {
-				t.Fatalf("destination spaces changed: got %q, want %q", m.req.Destination, want)
-			}
-			next, _ := m.Update(tea.KeyMsg{Type: tea.KeyTab})
-			next, cmd := next.(shellInstallModel).Update(tea.KeyMsg{Type: tea.KeySpace})
-			got := next.(shellInstallModel)
-			if cmd != nil || got.field != 1 || got.review || got.busy || got.req.Mode != "separate" || got.req.Destination != want {
-				t.Fatal("space on the mode field changed the selection or enabled Shared")
+			} else if err == nil || !strings.Contains(err.Error(), "unknown shell command") || !strings.Contains(err.Error(), "gentle-ai shell --help") {
+				t.Fatalf("unknown verb reached runtime instead of naming help: %v", err)
 			}
 		})
 	}
 }
 
-func TestWindowsShellInstallControlInputPreservesSelectionAndReview(t *testing.T) {
-	for _, state := range []string{"editing", "review", "busy"} {
-		t.Run(state, func(t *testing.T) {
-			m := shellInstallModel{req: shellinstaller.UserInstallRequest{Destination: "R:\\Gentle Lab Work\\Owned Shell", Mode: "separate", Confirmation: "unchanged"}, review: state == "review", busy: state == "busy"}
-			before := m
-			for _, control := range []rune{0, '\r', '\n', '\t', '\x7f', '\u0085'} {
-				next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{control}})
-				m = next.(shellInstallModel)
-				if cmd != nil || m.req != before.req || m.field != before.field || m.review != before.review || m.busy != before.busy || m.err != before.err {
-					t.Fatal("console control event changed the physical selection or review state")
-				}
+func TestShellInstallInternalCommandsRetainKernelChecks(t *testing.T) {
+	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
+	t.Setenv("GENTLE_SHELL_UNIT", "")
+	t.Setenv("GENTLE_SHELL_UNIT_RECEIPT", "")
+	for _, verb := range []string{"internal-check", "internal-install", "internal-launch", "internal-recover"} {
+		t.Run(verb, func(t *testing.T) {
+			// No operands: cannot install, launch or recover, even on a qualified host.
+			want := shellinstaller.RunUserEntry(context.Background(), "", []string{verb}, nil, io.Discard, io.Discard)
+			got := RunShell([]string{verb}, io.Discard)
+			if (got == nil) != (want == nil) || (got != nil && got.Error() != want.Error()) {
+				t.Fatalf("internal route bypassed or blocked kernel checks: got %v, want %v", got, want)
 			}
 		})
-	}
-	for _, state := range []string{"editing", "review", "busy"} {
-		for _, key := range []tea.KeyMsg{
-			{Type: tea.KeyRunes, Runes: []rune("\\Owned\x00 Shell")},
-			{Type: tea.KeyRunes, Runes: []rune("\\Owned\x00 Shell"), Paste: true},
-			{Type: tea.KeyRunes, Runes: []rune{0}, Paste: true},
-		} {
-			m := shellInstallModel{req: shellinstaller.UserInstallRequest{Destination: "R:\\Gentle Lab Work", Mode: "separate", Confirmation: "unchanged"}, review: state == "review", busy: state == "busy"}
-			before := m
-			next, cmd := m.Update(key)
-			got := next.(shellInstallModel)
-			if cmd != nil || got.req != before.req || got.field != before.field || got.review != before.review || got.busy != before.busy || (got.err != nil) != !before.busy {
-				t.Fatal("control text changed selection/review, was admitted, or started effects")
-			}
-		}
-	}
-}
-
-func TestWindowsShellInstallReusesEditReviewAndSettledCancellation(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	m := shellInstallModel{ctx: ctx, cancel: cancel, stdout: io.Discard, req: shellinstaller.UserInstallRequest{Mode: "separate"}}
-	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("C:\\owned\\shell")})
-	m = next.(shellInstallModel)
-	if cmd != nil || m.review || m.busy {
-		t.Fatal("typing performed installation effects")
-	}
-	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab})
-	next, _ = next.(shellInstallModel).Update(tea.KeyMsg{Type: tea.KeyRight})
-	m = next.(shellInstallModel)
-	if m.req.Mode != "separate" || !strings.Contains(m.View(), "gentle-shell.cmd") || !strings.Contains(m.View(), "pi.cmd") {
-		t.Fatal("Windows offered unsupported Shared or hid owned commands")
-	}
-	m.busy = true
-	next, cmd = m.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
-	if cmd != nil || ctx.Err() == nil || !next.(shellInstallModel).busy {
-		t.Fatal("cancel abandoned the installer worker")
-	}
-	next, cmd = next.(shellInstallModel).Update(shellInstallDone{context.Canceled})
-	if cmd == nil || next.(shellInstallModel).busy || next.(shellInstallModel).err != context.Canceled {
-		t.Fatal("cancellation did not await actual completion")
 	}
 }

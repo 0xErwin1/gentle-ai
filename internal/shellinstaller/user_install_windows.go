@@ -27,7 +27,7 @@ type userWindowsManifest struct {
 	Schema, Destination, SID, Identity, SupervisorSHA string
 	PrefixIdentity, AgentIdentity                     string
 	SelectionSHA                                      string
-	MainCommit, MainArchiveSHA, LockSHA                string
+	MainCommit, MainArchiveSHA, LockSHA               string
 }
 
 func UserKernelCheck() error {
@@ -49,6 +49,11 @@ func userWindowsWorkerCheck() error {
 	if err := UserKernelCheck(); err != nil {
 		return err
 	}
+	return userWindowsJobOwned()
+}
+
+// The current process runs in the exact job the owned supervisor created.
+func userWindowsJobOwned() error {
 	var limits windows.JOBOBJECT_EXTENDED_LIMIT_INFORMATION
 	if err := windows.QueryInformationJobObject(0, windows.JobObjectExtendedLimitInformation, uintptr(unsafe.Pointer(&limits)), uint32(unsafe.Sizeof(limits)), nil); err != nil {
 		return err
@@ -120,6 +125,9 @@ func userWindowsEnvironment(root string) ([]string, error) {
 		"GENTLE_PI_CONFIG_HOME="+filepath.Join(root, "config"), "PI_CODING_AGENT_DIR="+agent,
 		"GENTLE_PI_AGENT_HOME="+agent, "GENTLE_PI_NO_SKILL_REGISTRY=1",
 		"GENTLE_SHELL_HOME="+agent, "GENTLE_SHELL_CONFIG="+filepath.Join(root, "config/gentle-shell.json"),
+		// Go's own defaults below the private HOME/LOCALAPPDATA, made explicit
+		// because launch verification classifies them as mutable runtime state.
+		"GOPATH="+filepath.Join(root, "home/go"), "GOMODCACHE="+filepath.Join(root, "home/go/pkg/mod"), "GOCACHE="+filepath.Join(root, "state/go-build"),
 		"PATH="+strings.Join([]string{filepath.Join(root, "runtime/node"), filepath.Join(root, "runtime/go/bin"), filepath.Join(system, "System32")}, string(os.PathListSeparator)),
 		"NPM_CONFIG_PREFIX="+prefix, "NPM_CONFIG_IGNORE_SCRIPTS=true", "NPM_CONFIG_AUDIT=false", "NPM_CONFIG_FUND=false",
 		"NPM_CONFIG_USERCONFIG="+filepath.Join(root, "config/user.npmrc"), "NPM_CONFIG_GLOBALCONFIG="+filepath.Join(root, "config/global.npmrc"),
@@ -226,7 +234,42 @@ func userWindowsProvision(ctx context.Context, root, action string, stdout, stde
 	return nil
 }
 
-func userWindowsInventory(root string) error {
+// Runtime state written after publication by the owned Go, npm, Node and Pi
+// processes: GOPATH/GOMODCACHE, GOCACHE, TEMP, the npm cache and Pi sessions
+// named after the caller CWD. It is not an installed artefact.
+var userWindowsMutableState = []string{"home", "state", "tmp", "runtime/cache", "agent/sessions"}
+
+type userWindowsInventoryMode int
+
+const (
+	// Complete stage before publication: every name must stay selection-safe.
+	userWindowsInventoryInstalled userWindowsInventoryMode = iota
+	// Complete walk with every per-entry owner/DACL/reparse/hard-link/type and
+	// resource check. Only names strictly below a fixed mutable state root may
+	// be data names; the roots themselves and all artefacts stay strict.
+	userWindowsInventoryLaunch
+	// Complete owned stage before removal; data names permitted below the stage.
+	userWindowsInventoryCleanup
+)
+
+func userWindowsInventory(root string, mode userWindowsInventoryMode) error {
+	mutable := map[string]bool{}
+	if mode == userWindowsInventoryLaunch {
+		for _, relative := range userWindowsMutableState {
+			mutable[filepath.Join(root, filepath.FromSlash(relative))] = true
+		}
+	}
+	dataRoot := func(path string) string {
+		if mode == userWindowsInventoryCleanup {
+			return root
+		}
+		for current := filepath.Dir(path); len(current) > len(root); current = filepath.Dir(current) {
+			if mutable[current] {
+				return current
+			}
+		}
+		return ""
+	}
 	var count int
 	var total int64
 	return filepath.WalkDir(root, func(path string, entry os.DirEntry, cause error) error {
@@ -237,8 +280,11 @@ func userWindowsInventory(root string) error {
 		if count > 250000 {
 			return errors.New("Windows inventory file-count bound")
 		}
-		if _, err := userWindowsIdentity(path, true); err != nil {
+		if _, err := userWindowsIdentityBelow(path, true, dataRoot(path)); err != nil {
 			return err
+		}
+		if mutable[path] && !entry.IsDir() {
+			return errors.New("Windows mutable state root is not a private directory")
 		}
 		info, err := entry.Info()
 		if err != nil {
@@ -259,6 +305,19 @@ func userWindowsInventory(root string) error {
 		}
 		return nil
 	})
+}
+
+// Remove only the stage this worker created, with the same volume/file identity
+// and a complete owned, alias-free inventory; anything uncertain is preserved.
+func userWindowsStageRemove(stage, identity string) error {
+	observed, err := userWindowsIdentity(stage, true)
+	if err != nil || observed != identity {
+		return errors.Join(err, fmt.Errorf("uncertain Windows stage identity; preserved %q", stage))
+	}
+	if err := userWindowsInventory(stage, userWindowsInventoryCleanup); err != nil {
+		return errors.Join(err, fmt.Errorf("uncertain Windows stage inventory; preserved %q", stage))
+	}
+	return os.RemoveAll(stage)
 }
 
 func RunUserInstall(ctx context.Context, req UserInstallRequest) (result UserInstallResult, err error) {
@@ -314,16 +373,12 @@ func RunUserInstall(ctx context.Context, req UserInstallRequest) (result UserIns
 		if published {
 			return
 		}
-		observed, cause := userWindowsIdentity(stage, true)
-		if cause != nil || observed != stageIdentity {
-			err = errors.Join(err, cause, fmt.Errorf("uncertain Windows stage identity; preserved %q", stage))
+		// A canceled provision kills only Node; its npm/Go descendants may still write.
+		if cause := userWindowsJobQuiesce(30 * time.Second); cause != nil {
+			err = errors.Join(err, cause, fmt.Errorf("owned Windows processes may still write; preserved %q", stage))
 			return
 		}
-		if cause := userWindowsInventory(stage); cause != nil {
-			err = errors.Join(err, cause, fmt.Errorf("uncertain Windows stage inventory; preserved %q", stage))
-			return
-		}
-		err = errors.Join(err, os.RemoveAll(stage))
+		err = errors.Join(err, userWindowsStageRemove(stage, stageIdentity))
 	}()
 	if err := userWindowsPrivate(stage); err != nil {
 		return result, err
@@ -413,7 +468,7 @@ func RunUserInstall(ctx context.Context, req UserInstallRequest) (result UserIns
 	}
 	phase("provision-ready", "stock")
 	if channel == "main" {
-		if err := userWindowsInventory(stage); err != nil {
+		if err := userWindowsInventory(stage, userWindowsInventoryInstalled); err != nil {
 			return result, err
 		}
 		gentle, stock := filepath.Join(stage, "prefix/node_modules/gentle-pi"), filepath.Join(stage, "stock-gentle-pi")
@@ -446,7 +501,7 @@ func RunUserInstall(ctx context.Context, req UserInstallRequest) (result UserIns
 			return result, err
 		}
 	}
-	if err := userWindowsInventory(stage); err != nil {
+	if err := userWindowsInventory(stage, userWindowsInventoryInstalled); err != nil {
 		return result, err
 	}
 	observed, err := InspectUserInstall(req)

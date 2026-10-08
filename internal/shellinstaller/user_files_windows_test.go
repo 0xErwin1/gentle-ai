@@ -65,6 +65,44 @@ func TestUserWindowsOfficialGoFixtureBangIsDataNotShellSelection(t *testing.T) {
 	}
 }
 
+func TestUserWindowsBangDataOnlyBelowOwnedRoot(t *testing.T) {
+	root := t.TempDir()
+	if err := userWindowsPrivate(root); err != nil {
+		t.Fatal(err)
+	}
+	module := filepath.Join(root, "gomodcache", "github.com", "!burnt!sushi")
+	if err := os.MkdirAll(module, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := userWindowsIdentityBelow(module, true, root); err != nil {
+		t.Fatalf("owned bang data directory refused: %v", err)
+	}
+	if _, err := userWindowsIdentity(module, true); err == nil {
+		t.Fatal("bang directory admitted as a selection")
+	}
+	if _, err := userWindowsIdentityBelow(module, true, module); err == nil {
+		t.Fatal("bang data root admitted")
+	}
+	session := filepath.Join(root, "sessions", "--C--R&D-100%^x--")
+	if err := os.MkdirAll(session, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := userWindowsIdentityBelow(session, true, root); err != nil {
+		t.Fatalf("owned session data name refused: %v", err)
+	}
+	if _, err := userWindowsIdentity(session, true); err == nil {
+		t.Fatal("metacharacter directory admitted as a selection")
+	}
+	for _, bad := range []string{filepath.Join(root, "x\ny"), filepath.Join(root, "x\"y"), filepath.Join(root, "x|y")} {
+		if _, err := userWindowsIdentityBelow(bad, true, root); err == nil {
+			t.Fatalf("invalid data name admitted: %q", bad)
+		}
+	}
+	if _, err := userWindowsIdentityBelow(filepath.Join(root+"&", "x"), true, root+"&"); err == nil {
+		t.Fatal("metacharacter data root admitted")
+	}
+}
+
 func TestUserWindowsSelectionRejectsAliasesAndShellPaths(t *testing.T) {
 	root := t.TempDir()
 	if err := userWindowsPrivate(root); err != nil {

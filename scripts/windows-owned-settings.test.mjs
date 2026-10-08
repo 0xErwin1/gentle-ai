@@ -27,7 +27,7 @@ const cases = [
   { name: 'owned-codemode-exclusion', value: { ...copy(), extensions: ['-builtin:codemode'] }, want: 'accept' },
   { name: 'foreign-builtin-exclusion', value: { ...copy(), extensions: ['-builtin:foreign'] }, want: 'reject' },
   { name: 'mixed-extension-injection', value: { ...copy(), extensions: ['-builtin:codemode', 'R:\\Foreign'] }, want: 'reject' },
-  { name: 'unproven-theme', value: { ...copy(), theme: 'foreign' }, want: 'reject' },
+  { name: 'theme-path-injection', value: { ...copy(), theme: 'R:\\Foreign\\theme' }, want: 'reject' },
   { name: 'changed-packages', value: { ...copy(), packages: ['R:\\Foreign Package'] }, want: 'reject' },
   { name: 'changed-npm-command', value: { ...copy(), npmCommand: ['R:\\Foreign Executable'] }, want: 'reject' },
   { name: 'missing-packages', value: { npmCommand: expected.npmCommand }, want: 'reject' },

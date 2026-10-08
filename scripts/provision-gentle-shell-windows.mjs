@@ -175,11 +175,22 @@ const settingsPath = path.join(agent, 'settings.json');
 const settings = { packages: [path.join(finalRoot, 'prefix/node_modules/gentle-pi')], npmCommand: [path.join(finalRoot, 'runtime/node/node.exe'), path.join(finalRoot, 'runtime/node/node_modules/npm/bin/npm-cli.js'), '--prefix', path.join(finalRoot, 'prefix')] };
 if (action === 'install') exclusive(settingsPath, `${JSON.stringify(settings, null, 2)}\n`);
 const observedSettings = JSON.parse(read(settingsPath));
+// Pinned Pi 1.0.0 SettingsManager writes these typed scalars from changelog, model,
+// thinking-level and theme selection. A theme is a name lookup, never a path.
+// Packages, commands, resources, trust, redirection and telemetry stay refused.
+const uiScalar = value => typeof value === 'string' && value.length > 0 && value.length <= 256 && !/[\u0000-\u001f\u007f]/.test(value);
+const mutableSettings = {
+  lastChangelogVersion: value => typeof value === 'string',
+  defaultProvider: uiScalar,
+  defaultModel: uiScalar,
+  defaultThinkingLevel: value => ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'].includes(value),
+  theme: value => uiScalar(value) && /^[A-Za-z0-9][A-Za-z0-9 ._-]*$/.test(value) && !value.includes('..'),
+};
 // The authenticated launcher excludes exactly this builtin; no resource paths.
-const settingsKeys = ['packages', 'npmCommand', 'lastChangelogVersion', 'extensions'];
+const settingsKeys = ['packages', 'npmCommand', 'extensions', ...Object.keys(mutableSettings)];
 if (observedSettings === null || typeof observedSettings !== 'object' || Array.isArray(observedSettings) ||
     Object.keys(observedSettings).some(key => !settingsKeys.includes(key)) ||
-    (Object.hasOwn(observedSettings, 'lastChangelogVersion') && typeof observedSettings.lastChangelogVersion !== 'string') ||
+    Object.entries(mutableSettings).some(([key, valid]) => Object.hasOwn(observedSettings, key) && !valid(observedSettings[key])) ||
     (Object.hasOwn(observedSettings, 'extensions') && JSON.stringify(observedSettings.extensions) !== '["-builtin:codemode"]') ||
     JSON.stringify({ packages: observedSettings.packages, npmCommand: observedSettings.npmCommand }) !== JSON.stringify(settings)) {
   reject('owned package/settings bindings changed');

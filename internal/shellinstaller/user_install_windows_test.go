@@ -64,6 +64,94 @@ func TestUserWindowsMainArchiveAuthority(t *testing.T) {
 	}
 }
 
+// A canceled native build leaves the stock installer's sealed Go module cache
+// (bang-escaped names, read-only files) inside the worker's own stage.
+func userWindowsCanceledStage(t *testing.T) (string, string) {
+	t.Helper()
+	parent := filepath.Join(t.TempDir(), "parent")
+	if err := os.Mkdir(parent, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := userWindowsPrivate(parent); err != nil {
+		t.Fatal(err)
+	}
+	stage, err := os.MkdirTemp(parent, ".gentle-shell-windows-stage-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	identity, err := userWindowsIdentity(stage, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	module := filepath.Join(stage, filepath.FromSlash("prefix/node_modules/gentle-pi/.gentle-ai/.v4.0.0.staging-1/.build/gomodcache/github.com/!burnt!sushi/toml@v1.4.0/decode.go"))
+	if err := os.MkdirAll(filepath.Dir(module), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(module, []byte("fixture-only, never executed"), 0400); err != nil {
+		t.Fatal(err)
+	}
+	return stage, identity
+}
+
+func TestUserWindowsStageRemovalAfterCancellation(t *testing.T) {
+	stage, identity := userWindowsCanceledStage(t)
+	if err := userWindowsStageRemove(stage, identity); err != nil {
+		t.Fatalf("owned canceled stage preserved: %v", err)
+	}
+	if _, err := os.Lstat(stage); !os.IsNotExist(err) {
+		t.Fatalf("owned stage remains: %v", err)
+	}
+}
+
+func TestUserWindowsStageRemovalRefusesUncertainCustody(t *testing.T) {
+	for _, tt := range []struct {
+		name   string
+		mutate func(t *testing.T, stage string) (string, string)
+	}{
+		{"replaced identity", func(t *testing.T, stage string) (string, string) {
+			return "", "00000000:0000000000000000"
+		}},
+		{"foreign junction", func(t *testing.T, stage string) (string, string) {
+			foreign := t.TempDir()
+			marker := filepath.Join(foreign, "foreign.txt")
+			if err := os.WriteFile(marker, []byte("foreign"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			userWindowsJunction(t, filepath.Join(stage, "home"), foreign)
+			return marker, ""
+		}},
+		{"hard-linked foreign file", func(t *testing.T, stage string) (string, string) {
+			marker := filepath.Join(t.TempDir(), "foreign.txt")
+			if err := os.WriteFile(marker, []byte("foreign"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Link(marker, filepath.Join(stage, "linked.txt")); err != nil {
+				t.Skipf("hard link fixture unavailable: %v", err)
+			}
+			return marker, ""
+		}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			stage, identity := userWindowsCanceledStage(t)
+			marker, replaced := tt.mutate(t, stage)
+			if replaced != "" {
+				identity = replaced
+			}
+			if err := userWindowsStageRemove(stage, identity); err == nil {
+				t.Fatal("uncertain stage custody removed")
+			}
+			if _, err := os.Lstat(stage); err != nil {
+				t.Fatalf("uncertain stage was not preserved: %v", err)
+			}
+			if marker != "" {
+				if got, err := os.ReadFile(marker); err != nil || string(got) != "foreign" {
+					t.Fatalf("foreign data changed: %q %v", got, err)
+				}
+			}
+		})
+	}
+}
+
 func TestUserWindowsMainExactSourceSet(t *testing.T) {
 	ctx := context.Background()
 	commit := strings.Repeat("a", 40)

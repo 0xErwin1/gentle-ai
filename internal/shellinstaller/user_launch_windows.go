@@ -77,7 +77,7 @@ func userWindowsVerify(ctx context.Context, root string, stdout, stderr io.Write
 	if err != nil || agent != manifest.AgentIdentity {
 		return errors.Join(err, errors.New("owned Windows agent identity differs"))
 	}
-	if err := userWindowsInventory(root); err != nil {
+	if err := userWindowsInventory(root, userWindowsInventoryLaunch); err != nil {
 		return err
 	}
 	for _, product := range []string{"pi", "gentle-shell"} {
@@ -184,15 +184,28 @@ func RunUserEntry(ctx context.Context, self string, args []string, stdin io.Read
 		forward := append([]string{"shell", "internal-" + args[0]}, args[1:]...)
 		command := exec.CommandContext(ctx, self, forward...)
 		command.Env, command.Stdin, command.Stdout, command.Stderr = env, stdin, stdout, stderr
+		grace := 2 * time.Second
+		if args[0] == "install" {
+			grace = 120 * time.Second // Quiesce owned descendants and remove the owned stage.
+		}
+		closeChannel, channelErr := userWindowsCooperative(command, grace)
+		if channelErr != nil {
+			return channelErr
+		}
 		release, startErr := userWindowsStart(command)
 		if startErr != nil {
-			return startErr
+			return errors.Join(startErr, closeChannel())
 		}
-		return errors.Join(command.Wait(), release(), ctx.Err())
+		return errors.Join(command.Wait(), release(), closeChannel(), ctx.Err())
 	}
 	if err := userWindowsWorkerCheck(); err != nil {
 		return err
 	}
+	ctx, stop, watchErr := userWindowsCancelWatch(ctx, os.Getenv(userWindowsCancelEnv))
+	if watchErr != nil {
+		return watchErr
+	}
+	defer stop()
 	switch strings.TrimPrefix(args[0], "internal-") {
 	case "check":
 		return nil
