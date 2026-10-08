@@ -1658,6 +1658,11 @@ func validateCompactRepositoryEvidence(ctx context.Context, repo string, current
 			return errors.New("initial compact snapshot is not repository-derived")
 		}
 		risk, lines, err := builder.ClassifySnapshotRisk(ctx, next.InitialSnapshot)
+		// A frozen agent escalation raised the classifier's tier to high and
+		// never lowers one, so high is the only tier it can carry.
+		if next.AgentEscalation != nil {
+			risk = RiskHigh
+		}
 		if err != nil || risk != next.RiskLevel || lines != next.OriginalChangedLines {
 			return errors.New("compact risk inputs do not match repository evidence")
 		}
@@ -1726,10 +1731,12 @@ func validateCompactSuccessor(previousRevision string, previous, next CompactSta
 	if previous.LineageID != next.LineageID || previous.Generation != next.Generation ||
 		!snapshotsEqual(previous.InitialSnapshot, next.InitialSnapshot) || !equalStrings(previous.GenesisPaths, next.GenesisPaths) ||
 		previous.PolicyHash != next.PolicyHash || !reflect.DeepEqual(previous.FrozenPolicyContent, next.FrozenPolicyContent) ||
+		previous.RequestContextHash != next.RequestContextHash || !reflect.DeepEqual(previous.FrozenRequestContext, next.FrozenRequestContext) ||
+		!equalCompactAgentEscalation(previous.AgentEscalation, next.AgentEscalation) ||
 		previous.RiskLevel != next.RiskLevel || !equalStrings(previous.SelectedLenses, next.SelectedLenses) || previous.OriginalChangedLines != next.OriginalChangedLines ||
 		previous.CorrectionBudget != next.CorrectionBudget || previous.CorrectionBudgetPolicy != next.CorrectionBudgetPolicy ||
 		previous.RuntimeAgent != next.RuntimeAgent {
-		return fmt.Errorf("%w: compact review scope, tier, policy, budget, and runtime are immutable", ErrInvalidSuccessor)
+		return fmt.Errorf("%w: compact review scope, tier, policy, request context, agent escalation, budget, and runtime are immutable", ErrInvalidSuccessor)
 	}
 	switch operation {
 	case "review/invalidate":

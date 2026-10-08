@@ -920,9 +920,6 @@ func loadPersistedAssignments(homeDir string, selection *model.Selection) {
 	if len(selection.ClaudePhaseAssignments) == 0 && len(s.ClaudePhaseAssignments) > 0 {
 		m := make(map[string]model.ClaudePhaseAssignment, len(s.ClaudePhaseAssignments))
 		for k, v := range s.ClaudePhaseAssignments {
-			if k == "orchestrator" {
-				continue
-			}
 			a := model.ClaudePhaseAssignment{Model: model.ClaudeModelAlias(v.Model), Effort: model.ClaudeEffort(v.Effort)}
 			if a.Valid() {
 				m[k] = a
@@ -933,11 +930,6 @@ func loadPersistedAssignments(homeDir string, selection *model.Selection) {
 	if len(selection.ClaudeModelAssignments) == 0 && len(selection.ClaudePhaseAssignments) == 0 && len(s.ClaudeModelAssignments) > 0 {
 		m := make(map[string]model.ClaudeModelAlias, len(s.ClaudeModelAssignments))
 		for k, v := range s.ClaudeModelAssignments {
-			// Claude Code controls the main session/orchestrator model itself.
-			// Keep persisted assignments scoped to Agent tool calls only.
-			if k == "orchestrator" {
-				continue
-			}
 			m[k] = model.ClaudeModelAlias(v)
 		}
 		selection.ClaudeModelAssignments = m
@@ -1083,11 +1075,6 @@ func claudeAliasesToStrings(m map[string]model.ClaudeModelAlias) map[string]stri
 	}
 	out := make(map[string]string, len(m))
 	for k, v := range m {
-		// Claude Code owns the main session/orchestrator model; do not persist it
-		// as a Gentle AI model assignment.
-		if k == "orchestrator" {
-			continue
-		}
 		out[k] = string(v)
 	}
 	return out
@@ -1103,13 +1090,15 @@ func claudeLegacyAssignmentsForState(
 	return claudeAliasesToStrings(legacy)
 }
 
+// Keep orchestrator metadata so the picker can recognize persisted presets.
+// Persisting a choice does not configure Claude Code's main session model.
 func claudePhaseAssignmentsToState(m map[string]model.ClaudePhaseAssignment) map[string]state.ClaudePhaseAssignmentState {
 	if len(m) == 0 {
 		return nil
 	}
 	out := make(map[string]state.ClaudePhaseAssignmentState, len(m))
 	for k, v := range m {
-		if k == "orchestrator" || !v.Valid() {
+		if !v.Valid() {
 			continue
 		}
 		out[k] = state.ClaudePhaseAssignmentState{Model: string(v.Model), Effort: string(v.Effort)}

@@ -222,6 +222,8 @@ gentle-ai          # pick your agents, components and persona
 gentle-ai doctor   # verify — read-only, changes nothing
 ```
 
+If `doctor` cannot read `state.json`, inspect the reported file and parent directory's access; for permission errors, check permissions and ownership. Keep the existing state file. For invalid JSON, restore a valid backup or repair the content while preserving your installation settings. Then re-run `gentle-ai doctor`; it never changes the file or its permissions.
+
 Then use your agent normally. Your configs are snapshotted before every write, and **Gentle-AI never installs an AI agent for you** — it configures what you already have.
 
 > **Beta channel and per-distro prerequisites: [Quickstart →](docs/quickstart.md) · Signature verification: [Release signing →](docs/release-signing.md#user-verification)**
