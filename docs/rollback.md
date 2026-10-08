@@ -93,6 +93,11 @@ When an install or sync step fails, `gentle-ai` restores the snapshot it took be
 
 There is no locking or concurrency protection. Avoid editing agent configuration while install or sync runs.
 
+In the installation TUI, completed rollback steps appear as `↶ <step> (rolled back)`,
+not as pending steps. They count toward completed progress, so a finished pipeline
+with a completed rollback reaches 100%. The original installation error remains
+visible; press **Enter** to continue to the result screen.
+
 ## Claude Code orchestrator modules (pilot)
 
 The user-global Claude Code install can split the orchestrator into an always-loaded core in `~/.claude/CLAUDE.md` and on-demand modules in `~/.claude/gentle-ai/orchestrator/`, tracked by the ownership ledger `.gentle-ai-orchestrator-module-ownership.json` in that directory. The default is still the single monolithic orchestrator. Opt in with `gentle-ai install --agent claude-code --scope global --claude-orchestrator-modules`; the flag is install-only and is rejected with `--scope workspace` or a selection without Claude Code before anything is written.
