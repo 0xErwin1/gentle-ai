@@ -48,7 +48,7 @@ func TestRunSyncPiPreservesUserSubagentRouting(t *testing.T) {
 		mustWriteFile(t, fixture.path, []byte(fixture.body))
 	}
 
-	result, err := RunSync([]string{"--agent", "pi"})
+	result, err := RunSync([]string{"--agent", "pi", "--scope", "global"})
 	if err != nil {
 		t.Fatalf("RunSync() error = %v", err)
 	}
