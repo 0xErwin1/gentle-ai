@@ -429,6 +429,9 @@ func prependGoPattern(existing, pattern string) string {
 // works on all platforms including Windows. Other Windows binary upgrades return
 // ManualFallbackError so the executor surfaces them as UpgradeSkipped.
 func binaryUpgrade(ctx context.Context, r update.UpdateResult, profile system.PlatformProfile) error {
+	if needsSourceBuildManualUpgrade(r, profile) {
+		return &ManualFallbackError{Hint: gentleAISourceBuildUpgradeHint(r)}
+	}
 	if profile.OS == "windows" && r.Tool.Name == "gentle-ai" {
 		return &ManualFallbackError{Hint: gentleAIWindowsSourceInstallHint(r)}
 	}
@@ -454,6 +457,25 @@ func binaryUpgrade(ctx context.Context, r update.UpdateResult, profile system.Pl
 
 	// For Linux/macOS binary installs: delegate to the download package.
 	return downloadAndReplace(ctx, r, profile)
+}
+
+// isUnanchoredSourceBuild recognizes the intentional source-build sentinel,
+// never a failed key parse or signature verification.
+func isUnanchoredSourceBuild(profile system.PlatformProfile) bool {
+	return (profile.OS == "linux" || profile.OS == "darwin") && releaseMinisignPublicKeys == unsetReleaseMinisignPublicKeys
+}
+
+func needsSourceBuildManualUpgrade(r update.UpdateResult, profile system.PlatformProfile) bool {
+	return r.Tool.Name == "gentle-ai" && isUnanchoredSourceBuild(profile) &&
+		!isBetaGentleAIUpgrade(r) && effectiveMethod(r.Tool, profile) == update.InstallBinary &&
+		(!profile.GoAvailable || r.Tool.GoImportPath == "")
+}
+
+func gentleAISourceBuildUpgradeHint(r update.UpdateResult) string {
+	return "This source build has no embedded release trust anchor. " +
+		"Automatic source upgrade requires Go on PATH and a declared Go import path. " +
+		"No files were changed. Install/update from source with Go 1.25.10+:\n  " +
+		gentleAISourceCommandForResult(r)
 }
 
 func gentleAIWindowsSourceInstallHint(r update.UpdateResult) string {

@@ -118,6 +118,8 @@ Just run it — the Bubbletea TUI guides you through agent selection, components
 gentle-ai
 ```
 
+Automatic update checks at TUI startup have a six-hour cooldown. A skipped or failed check does not label `Upgrade tools` as `(up to date)`; that label requires a completed successful check. Opening `Upgrade tools` or `Upgrade + Sync` after a skipped or failed check fetches fresh version information without waiting for the cooldown. If you enter either screen while the startup check is still pending, a skipped or failed result triggers one fresh check; a failure of that forced check does not start another automatic retry. Release advisories are fetched independently and do not determine update availability.
+
 The uninstall flow is also available from the TUI menu. It lets you:
 
 - select one or more configured agents
@@ -345,7 +347,7 @@ Checks performed:
 | Check | What it verifies |
 |-------|-----------------|
 | Tool binaries | Required tools present on `PATH` and successfully run a non-interactive version probe within five seconds (`--version`, or `version` for Engram); probe failures warn instead of reporting a healthy tool. Probe process trees are terminated before the check returns, including on timeout or cancellation. Shadow detection (wrong binary resolves first). The managed OpenCode launcher and the executable it delegates to count as one installation when the launcher comes first on `PATH`; when the target comes first, doctor warns that it bypasses the launcher |
-| `state.json` validity | Parses `~/.gentle-ai/state.json` and reports any schema/corruption issues |
+| `state.json` validity | Parses `~/.gentle-ai/state.json`, reports schema/corruption issues, and checks installed agents' managed config directories using the same adapters as install/sync. Missing directories suggest sync; unrecognized agent IDs warn and require state inspection. Detection-only agents such as Conductor do not require their own config directory. |
 | Installed asset version | Compares the recorded installation version with the running binary; on a mismatch, recommends `sync` using that binary's absolute path and flags a different copy resolved through `PATH` |
 | OpenCode activation (`opencode:managed_profile`) | With OpenCode background subagents on (POSIX): a new login shell resolves `opencode` to the managed launcher, not to a copy that a later startup file puts first on `PATH`; warns when this cannot be verified |
 | Engram MCP reachability | Confirms the Engram MCP server responds |

@@ -1777,6 +1777,15 @@ func TestCheckFiltered_DevBuildSkipNotEligible(t *testing.T) {
 // TestNoUpdatesPath verifies CheckFiltered returns correct statuses when nothing needs updating.
 func TestNoUpdatesPath(t *testing.T) {
 	mockNoHomebrew(t)
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("LOCALAPPDATA", filepath.Join(home, "local"))
+	originalStat := osStat
+	t.Cleanup(func() { osStat = originalStat })
+	// An absent PATH entry must not discover a real fallback installation,
+	// especially a .ps1 shim that bypasses execCommand through PowerShell.
+	osStat = func(string) (os.FileInfo, error) { return nil, os.ErrNotExist }
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
@@ -1799,15 +1808,27 @@ func TestNoUpdatesPath(t *testing.T) {
 	origLookPath := lookPath
 	origExecCommand := execCommand
 	origTools := Tools
+	origOsStat := osStat
+	origRunPowerShell := runPowerShell
 	t.Cleanup(func() {
 		httpClient = origClient
 		lookPath = origLookPath
 		execCommand = origExecCommand
 		Tools = origTools
+		osStat = origOsStat
+		runPowerShell = origRunPowerShell
 	})
 
 	httpClient = server.Client()
 	httpClient.Transport = &testTransport{server: server}
+
+	// Absence includes fallback locations, not just PATH. Never let a local
+	// GGA PowerShell shim escape the command fixture and run on the host.
+	osStat = func(string) (os.FileInfo, error) { return nil, os.ErrNotExist }
+	runPowerShell = func(context.Context, ...string) ([]byte, error) {
+		t.Error("absent-tool detection must not execute PowerShell")
+		return nil, fmt.Errorf("unexpected PowerShell execution")
+	}
 
 	// engram is at v0.3.2 (same as remote), gga is not installed
 	lookPath = func(name string) (string, error) {

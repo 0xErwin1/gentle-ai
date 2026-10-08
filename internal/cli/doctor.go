@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/gentleman-programming/gentle-ai/v4/internal/agents"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/components/engram"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/doctor"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
@@ -69,6 +70,7 @@ const (
 
 // Overridable for testing.
 var (
+	doctorReadStateFn   = state.Read
 	doctorToolProbeFn   = probeDoctorTool
 	lookPathFn          = exec.LookPath
 	availableBytesFn    = storage.AvailableBytes
@@ -506,9 +508,9 @@ func checkStateJSON(homeDir string) CheckResult {
 	const id = doctor.CheckStateJSON
 	statePath := state.Path(homeDir)
 
-	s, err := state.Read(homeDir)
+	s, err := doctorReadStateFn(homeDir)
 	if err != nil {
-		if os.IsNotExist(err) {
+		if errors.Is(err, os.ErrNotExist) {
 			return CheckResult{
 				Name:   id,
 				Status: CheckStatusWarn,
@@ -516,11 +518,24 @@ func checkStateJSON(homeDir string) CheckResult {
 				Remedy: doctor.NewRemedy(doctor.RemedyInstall, "Run 'gentle-ai install' to create initial state"),
 			}
 		}
+		var pathErr *os.PathError
+		if errors.Is(err, os.ErrPermission) || errors.As(err, &pathErr) {
+			guidance := "Inspect the file and parent directory for access or filesystem problems at " + statePath
+			if errors.Is(err, os.ErrPermission) {
+				guidance = "Inspect permissions and ownership of " + statePath + " and its parent directory"
+			}
+			return CheckResult{
+				Name:   id,
+				Status: CheckStatusFail,
+				Detail: "failed to read " + statePath + ": " + err.Error(),
+				Remedy: doctor.NewRemedy(doctor.RemedyInspectStateAccess, guidance+", then re-run 'gentle-ai doctor'; keep the existing state file"),
+			}
+		}
 		return CheckResult{
 			Name:   id,
 			Status: CheckStatusFail,
 			Detail: "failed to parse " + statePath + ": " + err.Error(),
-			Remedy: doctor.NewRemedy(doctor.RemedyRepairState, "Delete or repair "+statePath+", then re-run 'gentle-ai install'"),
+			Remedy: doctor.NewRemedy(doctor.RemedyRepairState, "Restore a valid backup or repair "+statePath+" while preserving your installation settings, then re-run 'gentle-ai doctor'"),
 		}
 	}
 
@@ -535,8 +550,14 @@ func checkStateJSON(homeDir string) CheckResult {
 
 	var missing []string
 	var dangling []string
+	var unknown []string
 	for _, agentID := range s.InstalledAgents {
-		if dir := agentConfigDir(homeDir, agentID); dir != "" {
+		dir, err := agentConfigDir(homeDir, agentID)
+		if err != nil {
+			unknown = append(unknown, agentID)
+			continue
+		}
+		if dir != "" {
 			info, lstatErr := os.Lstat(dir)
 			if os.IsNotExist(lstatErr) {
 				// A missing final path is only genuinely missing when its
@@ -580,7 +601,20 @@ func checkStateJSON(homeDir string) CheckResult {
 		if len(missing) > 0 {
 			detail += "; genuinely absent config dirs: " + strings.Join(missing, ", ")
 		}
+		if len(unknown) > 0 {
+			detail += "; unrecognized agent IDs: " + strings.Join(unknown, ", ")
+		}
 		return CheckResult{Name: id, Status: CheckStatusWarn, Detail: detail}
+	}
+
+	if len(unknown) > 0 {
+		detail := fmt.Sprintf("state lists unrecognized agent IDs: %s; inspect or repair the state file, then re-run 'gentle-ai doctor'", strings.Join(unknown, ", "))
+		result := CheckResult{Name: id, Status: CheckStatusWarn, Detail: detail}
+		if len(missing) > 0 {
+			result.Detail += "; config dirs are missing: " + strings.Join(missing, ", ")
+			result.Remedy = doctor.NewRemedy(doctor.RemedySync, "Run 'gentle-ai sync' to restore missing config files")
+		}
+		return result
 	}
 
 	if len(missing) > 0 {
@@ -637,27 +671,17 @@ func danglingAncestor(homeDir, path string) (string, error) {
 	return "", nil
 }
 
-// agentConfigDir returns the expected config directory for a known agent ID.
-func agentConfigDir(homeDir, agentID string) string {
-	cfgBase := filepath.Join(homeDir, ".config")
-	switch agentID {
-	case "claude-code":
-		return filepath.Join(homeDir, ".claude")
-	case "opencode":
-		return filepath.Join(cfgBase, "opencode")
-	case "cursor":
-		return filepath.Join(homeDir, ".cursor")
-	case "windsurf":
-		return filepath.Join(homeDir, ".codeium", "windsurf")
-	case "vscode":
-		return filepath.Join(cfgBase, "Code")
-	case "codex":
-		return filepath.Join(homeDir, ".codex")
-	case "kiro":
-		return filepath.Join(homeDir, ".kiro")
-	default:
-		return ""
+// agentConfigDir uses the same adapter paths as installation and sync. An
+// empty path means a known detection-only agent, not an unrecognized ID.
+func agentConfigDir(homeDir, agentID string) (string, error) {
+	adapter, err := agents.NewAdapter(model.AgentID(agentID))
+	if err != nil {
+		return "", err
 	}
+	if !adapter.SupportsSkills() && !adapter.SupportsSystemPrompt() && !adapter.SupportsMCP() {
+		return "", nil
+	}
+	return adapter.GlobalConfigDir(homeDir), nil
 }
 
 // checkEngramReachable probes the configured Engram transport. An explicit

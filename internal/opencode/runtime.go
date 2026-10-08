@@ -85,9 +85,10 @@ func (b *limitedBuffer) Bytes() []byte { return b.buffer.Bytes() }
 // may be perfectly supported, so callers must not report it as unsupported.
 var ErrRuntimeVersionTimeout = errors.New("`opencode --version` timed out")
 
-// runtimeVersionTimeout bounds the probe; a variable only so tests can
-// exercise the real deadline path without waiting for it.
-var runtimeVersionTimeout = 3 * time.Second
+// runtimeVersionTimeout allows for slow external CLI startup while keeping
+// the probe bounded; a variable only so tests can exercise the real deadline
+// path without waiting for it.
+var runtimeVersionTimeout = 15 * time.Second
 
 func DetectRuntimeMajor(ctx context.Context) (RuntimeMajor, error) {
 	ctx, cancel := context.WithTimeout(ctx, runtimeVersionTimeout)

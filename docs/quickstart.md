@@ -81,6 +81,14 @@ go install github.com/gentleman-programming/gentle-ai/v4/cmd/gentle-ai@latest
 gentle-ai version
 ```
 
+To update a source installation on Linux/macOS, run `gentle-ai upgrade` with Go
+on `PATH`. Source builds without an embedded release key use `go install` pinned
+to the target release, retaining the normal Go checksum database settings.
+Official signed binaries keep minisign-verified downloads; Homebrew-owned
+installations keep Homebrew. If Go is unavailable, the upgrader prints a manual
+source-install command without changing files. After a manual binary update,
+run `gentle-ai sync` to refresh the managed assets.
+
 ### Install unreleased development changes
 
 Only use `main` when testing changes that are not part of a release yet:
@@ -164,6 +172,8 @@ When checks pass, the installer prints a ready message that names the agent comm
 ``You're ready. Run `claude` or `opencode` and start building.``
 
 If something looks wrong after install, run `gentle-ai doctor` for a read-only health check. It verifies tool binaries, `state.json` validity, Engram™ MCP reachability, and disk space — each check reports pass/warn/fail with a remedy hint.
+
+For `state.json` read errors, inspect the file and parent directory; check permissions and ownership when access is denied, and keep the existing state. For invalid JSON, restore a valid backup or repair the content while preserving your installation settings. Re-run `gentle-ai doctor` afterward; it never changes the file or its permissions.
 
 For a Pi-only install, the plan shows the Pi package stack instead of Gentle AI components. It installs `gentle-pi`, `gentle-engram`, `pi-web-access`, and `pi-btw` through Pi's package manager, without a separate `pi-engram init` registration. Engram exposes native Pi tools; Pi's built-in MCP support (Pi >= 0.99.0) runs other servers, such as CodeGraph, from `mcp.json`. Install and sync also repair unambiguous Engram package duplicates while preserving the retained version and object options; conflicting declarations require manual resolution. Gentle AI removes a previously installed `pi-mcp-adapter`, because an extension that registers `/mcp` replaces Pi's built-in MCP support.
 

@@ -100,14 +100,9 @@ func TestGentleAIOnWindowsWithGoAvailableUpgradesThroughGoInstall(t *testing.T) 
 	}
 }
 
-// TestGentleAIOnLinuxNeverRoutesToGoInstall is a regression guard for the
-// authenticated-download requirement. Linux upgrades must keep downloading the
-// signed release asset and verifying it with minisign; declaring a GoImportPath
-// for the Windows path must never move Linux off that trust anchor.
-//
-// Do not delete this test. It is the only thing standing between a one-line
-// routing edit and silently dropping minisign verification on Linux.
+// Release builds must keep their minisign trust anchor even with Go on PATH.
 func TestGentleAIOnLinuxNeverRoutesToGoInstall(t *testing.T) {
+	useTestReleaseKey(t)
 	origHomebrewPackageInstalled := homebrewPackageInstalled
 	t.Cleanup(func() { homebrewPackageInstalled = origHomebrewPackageInstalled })
 	homebrewPackageInstalled = func(string) bool { return false }
@@ -123,6 +118,7 @@ func TestGentleAIOnLinuxNeverRoutesToGoInstall(t *testing.T) {
 // TestGentleAIOnMacOSNeverRoutesToGoInstall is the macOS half of the same
 // regression guard. See TestGentleAIOnLinuxNeverRoutesToGoInstall.
 func TestGentleAIOnMacOSNeverRoutesToGoInstall(t *testing.T) {
+	useTestReleaseKey(t)
 	origHomebrewPackageInstalled := homebrewPackageInstalled
 	t.Cleanup(func() { homebrewPackageInstalled = origHomebrewPackageInstalled })
 	homebrewPackageInstalled = func(string) bool { return false }
