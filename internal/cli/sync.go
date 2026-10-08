@@ -2082,6 +2082,15 @@ func runSyncWithSelectionScope(homeDir string, selection model.Selection, scope 
 	result.ManualActions = append(result.ManualActions, rt.state.nativeReviewActions...)
 	result.ManualActions = append(result.ManualActions, rt.state.retiredSDDActions...)
 	result.ManualActions = append(result.ManualActions, rt.skippedActions...)
+	if scope == ScopeGlobal && containsAgent(agentIDs, model.AgentPi) {
+		warning, inspectErr := inspectPiMCP(homeDir)
+		if inspectErr != nil {
+			warning = fmt.Sprintf("Pi MCP configuration could not be inspected: %v; inspect or repair it manually, then run `gentle-ai doctor`", inspectErr)
+		}
+		if warning != "" {
+			result.ManualActions = append(result.ManualActions, "WARNING: "+warning)
+		}
+	}
 
 	// Capture how many managed assets were actually changed.
 	// Deduplicate paths — multiple components may touch the same file
