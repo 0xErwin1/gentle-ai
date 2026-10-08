@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -106,6 +107,63 @@ func TestCooldownReleaseNavigationWhileStartupPending(t *testing.T) {
 	m = next.(Model)
 	if m.Screen != ScreenUpgrade || m.UpdateCheckDone || cmd == nil {
 		t.Fatal("late skipped result left upgrade without a refresh")
+	}
+}
+
+func TestCooldownReleaseLateFailedStartupRefreshesOnce(t *testing.T) {
+	for _, cursor := range []int{1, 3} {
+		for _, succeeds := range []bool{false, true} {
+			name := map[int]string{1: "upgrade", 3: "upgrade-and-sync"}[cursor]
+			if succeeds {
+				name += "/refresh-succeeds"
+			} else {
+				name += "/refresh-fails"
+			}
+			t.Run(name, func(t *testing.T) {
+				home := t.TempDir()
+				t.Setenv("HOME", home)
+				t.Setenv("USERPROFILE", home)
+				oldCheck := updateCheckFn
+				t.Cleanup(func() { updateCheckFn = oldCheck })
+				calls := 0
+				updateCheckFn = func(context.Context, string, system.PlatformProfile) []update.UpdateResult {
+					calls++
+					if calls == 2 && succeeds {
+						return []update.UpdateResult{makeUpdateResult(update.UpdateAvailable, "https://example.com/release")}
+					}
+					return []update.UpdateResult{{Status: update.CheckFailed}}
+				}
+				m := NewModel(system.DetectionResult{}, "1.0.0")
+				startup := m.Init()().(tea.BatchMsg)[0]
+				m.Cursor = cursor
+				next, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+				m = next.(Model)
+				wantScreen := map[int]Screen{1: ScreenUpgrade, 3: ScreenUpgradeSync}[cursor]
+				next, cmd := m.Update(startup())
+				m = next.(Model)
+				if calls != 1 || m.Screen != wantScreen || m.UpdateCheckDone || cmd == nil || !strings.Contains(m.View(), "Checking for updates") {
+					t.Fatal("late startup failure did not start one fresh check")
+				}
+				forced := cmd().(tea.BatchMsg)[1]
+				next, cmd = m.Update(forced())
+				m = next.(Model)
+				if calls != 2 || !m.UpdateCheckDone || m.Screen != wantScreen || cmd != nil {
+					t.Fatalf("forced result started another retry: calls=%d done=%v screen=%v cmd=%v", calls, m.UpdateCheckDone, m.Screen, cmd != nil)
+				}
+				if succeeds {
+					if !update.HasUpdates(m.UpdateResults) || m.UpdateCheckState != update.CheckCompleted {
+						t.Fatal("successful refresh did not expose updates")
+					}
+				} else {
+					if m.UpdateCheckState != update.CheckUnsuccessful {
+						t.Fatal("failed forced check lost its failure state")
+					}
+					if _, err := state.Read(home); !os.IsNotExist(err) {
+						t.Fatalf("failed checks changed persisted state: %v", err)
+					}
+				}
+			})
+		}
 	}
 }
 

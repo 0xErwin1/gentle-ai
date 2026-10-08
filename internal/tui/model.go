@@ -397,6 +397,8 @@ type BackupRestoreMsg struct {
 type UpdateCheckResultMsg struct {
 	Results []update.UpdateResult
 	State   update.CheckState
+	// Forced marks a zero-TTL refresh result so its failure cannot auto-retry.
+	Forced bool
 }
 
 // AdvisoryMsg is sent when the background advisory manifest fetch completes.
@@ -998,7 +1000,7 @@ func (m Model) updateCheckCommand(ttl time.Duration) tea.Cmd {
 			tuiNowFn,
 			updateCheckFn,
 		)
-		return UpdateCheckResultMsg{Results: report.Results, State: report.State}
+		return UpdateCheckResultMsg{Results: report.Results, State: report.State, Forced: ttl == 0}
 	}
 }
 
@@ -1199,8 +1201,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.UpdateCheckState = update.CheckUnsuccessful
 			}
 		}
-		// The user may have opened an upgrade screen while startup was pending.
-		if m.UpdateCheckState == update.CheckSkipped && (m.Screen == ScreenUpgrade || m.Screen == ScreenUpgradeSync) {
+		// An upgrade screen opened during startup gets one fresh check after
+		// omission or failure. Never automatically retry that forced check.
+		if !msg.Forced && (m.UpdateCheckState == update.CheckSkipped || m.UpdateCheckState == update.CheckUnsuccessful) &&
+			(m.Screen == ScreenUpgrade || m.Screen == ScreenUpgradeSync) {
 			m.UpdateCheckDone = false
 			return m, tea.Batch(tickCmd(), m.updateCheckCommand(0))
 		}
