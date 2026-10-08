@@ -279,7 +279,7 @@ func RunArgs(args []string, stdout io.Writer) error {
 		m.SyncFn = tuiSync(homeDir)
 		m.SyncDetailedFn = tuiSyncDetailed(homeDir)
 		m.UninstallFn = tuiUninstall(homeDir)
-		m.UninstallWithProfilesFn = tuiUninstallWithProfiles(homeDir)
+		m.UninstallWithEngramScopeFn = tuiUninstallWithEngramScope(homeDir)
 		// The review store is clone-scoped, so the TUI acts on the repository
 		// the user launched it from. Both closures resolve the working
 		// directory at call time rather than at wiring time, so a survey and
@@ -555,9 +555,12 @@ func runUpgrade(ctx context.Context, args upgradeArgs, detection system.Detectio
 	sp := upgrade.NewSpinner(stdout, "Checking for updates")
 	checkResults := updateCheckFiltered(ctx, Version, profile, toolFilter)
 	checkErr := updateCheckError(checkResults)
-	sp.Finish(checkErr == nil)
-	if checkErr != nil {
+	sp.Finish(!update.HasCheckFailures(checkResults))
+	if update.HasCheckFailures(checkResults) {
+		// Preserve partial-check diagnostics even when healthy tools can upgrade.
 		_, _ = fmt.Fprint(stdout, update.RenderCLI(checkResults))
+	}
+	if checkErr != nil {
 		return checkErr
 	}
 
@@ -600,7 +603,10 @@ func runUpgrade(ctx context.Context, args upgradeArgs, detection system.Detectio
 
 func updateCheckError(results []update.UpdateResult) error {
 	failed := update.CheckFailures(results)
-	if len(failed) == 0 {
+	// A failed tool must not invalidate the usable results of other tools.
+	// Non-failed statuses retain their existing semantics, including unknown
+	// versions, absent tools, and development builds; none implies up-to-date.
+	if len(failed) == 0 || len(failed) < len(results) {
 		return nil
 	}
 
@@ -646,7 +652,7 @@ func tuiExecuteWithSDK(
 	profile := cli.ResolveInstallProfile(detection)
 	resolved.PlatformDecision = planner.PlatformDecisionFromProfile(profile)
 
-	execResult, orchestrator := cli.ExecuteTUIInstallWithBackgroundAndOrchestrator(homeDir, selection, resolved, profile, background, piBackground, onProgress, consent)
+	execResult, orchestrator, codexServiceTier := cli.ExecuteTUIInstallRecordingCodexServiceTier(homeDir, selection, resolved, profile, background, piBackground, onProgress, consent)
 	// The TUI settles asynchronously: keep its deduplicated rollback snapshot
 	// until state persistence succeeds or the failure has been compensated.
 	if orchestrator != nil {
@@ -675,6 +681,9 @@ func tuiExecuteWithSDK(
 			installState.KiroModelAssignments = kiroAliasesToStrings(selection.KiroModelAssignments)
 			installState.CodexModelAssignments = codexEffortsToStrings(selection.CodexModelAssignments)
 			installState.CodexOrchestratorAssignment = codexOrchestratorToState(selection.CodexOrchestratorAssignment)
+			if codexServiceTier != nil { // only what engram actually left in config.toml
+				installState.CodexServiceTier = *codexServiceTier
+			}
 			installState.CodexCarrilModelAssignments = selection.CodexCarrilModelAssignments
 			installState.CodexPhaseModelAssignments = selection.CodexPhaseModelAssignments
 			installState.ModelAssignments = modelAssignmentsToState(selection.ModelAssignments)
@@ -802,13 +811,13 @@ func tuiUninstall(homeDir string) tui.UninstallFunc {
 	}
 }
 
-func tuiUninstallWithProfiles(homeDir string) tui.UninstallWithProfilesFunc {
-	return func(agentIDs []model.AgentID, componentIDs []model.ComponentID, profileNames []string, engramScope model.EngramUninstallScope) (componentuninstall.Result, error) {
+func tuiUninstallWithEngramScope(homeDir string) tui.UninstallWithEngramScopeFunc {
+	return func(agentIDs []model.AgentID, componentIDs []model.ComponentID, engramScope model.EngramUninstallScope) (componentuninstall.Result, error) {
 		workspaceDir, err := os.Getwd()
 		if err != nil {
 			return componentuninstall.Result{}, fmt.Errorf("resolve workspace directory: %w", err)
 		}
-		return cli.RunUninstallWithSelectionAndProfiles(homeDir, workspaceDir, agentIDs, componentIDs, profileNames, engramScope)
+		return cli.RunUninstallWithSelectionAndEngramScope(homeDir, workspaceDir, agentIDs, componentIDs, engramScope)
 	}
 }
 
@@ -877,6 +886,9 @@ func applyOverrides(selection *model.Selection, overrides *model.SyncOverrides) 
 		selection.CodexOrchestratorAssignment = overrides.CodexOrchestratorAssignment
 		selection.ClearCodexOrchestratorAssignment = false
 	}
+	if overrides.CodexServiceTier != nil {
+		selection.CodexServiceTier = *overrides.CodexServiceTier
+	}
 	if overrides.CodexModelAssignments != nil {
 		selection.CodexModelAssignments = overrides.CodexModelAssignments
 	}
@@ -889,26 +901,14 @@ func applyOverrides(selection *model.Selection, overrides *model.SyncOverrides) 
 	if overrides.SDDMode != "" {
 		selection.SDDMode = overrides.SDDMode
 	}
-	if overrides.SDDProfileStrategy != "" {
-		selection.SDDProfileStrategy = overrides.SDDProfileStrategy
-	}
 	if overrides.StrictTDD != nil {
 		selection.StrictTDD = *overrides.StrictTDD
 	}
-	if len(overrides.Profiles) > 0 {
-		selection.Profiles = overrides.Profiles
-		// Profiles are an OpenCode multi-mode feature — if profiles are being
-		// created/synced, SDDModeMulti is required so that WriteSharedPromptFiles
-		// runs and the {file:...} prompt references resolve correctly.
-		if selection.SDDMode == "" {
-			selection.SDDMode = model.SDDModeMulti
-		}
-	}
 	// A persisted component selection loaded earlier via loadPersistedAssignments
-	// may omit the SDD component (e.g. an install that predates profiles). When
-	// the caller explicitly asked for profile or model assignment work through
-	// this override, that request must not be silently dropped — see issue #3430.
-	if model.CarriesSDDWork(overrides.Profiles, overrides.ModelAssignments) {
+	// may omit the SDD component. When the caller explicitly asked for model
+	// assignment work through this override, that request must not be silently
+	// dropped — see issue #3430.
+	if model.CarriesSDDWork(overrides.ModelAssignments) {
 		selection.EnsureComponent(model.ComponentSDD)
 	}
 }
@@ -926,9 +926,6 @@ func loadPersistedAssignments(homeDir string, selection *model.Selection) {
 	if len(selection.ClaudePhaseAssignments) == 0 && len(s.ClaudePhaseAssignments) > 0 {
 		m := make(map[string]model.ClaudePhaseAssignment, len(s.ClaudePhaseAssignments))
 		for k, v := range s.ClaudePhaseAssignments {
-			if k == "orchestrator" {
-				continue
-			}
 			a := model.ClaudePhaseAssignment{Model: model.ClaudeModelAlias(v.Model), Effort: model.ClaudeEffort(v.Effort)}
 			if a.Valid() {
 				m[k] = a
@@ -939,11 +936,6 @@ func loadPersistedAssignments(homeDir string, selection *model.Selection) {
 	if len(selection.ClaudeModelAssignments) == 0 && len(selection.ClaudePhaseAssignments) == 0 && len(s.ClaudeModelAssignments) > 0 {
 		m := make(map[string]model.ClaudeModelAlias, len(s.ClaudeModelAssignments))
 		for k, v := range s.ClaudeModelAssignments {
-			// Claude Code controls the main session/orchestrator model itself.
-			// Keep persisted assignments scoped to Agent tool calls only.
-			if k == "orchestrator" {
-				continue
-			}
 			m[k] = model.ClaudeModelAlias(v)
 		}
 		selection.ClaudeModelAssignments = m
@@ -974,6 +966,9 @@ func loadPersistedAssignments(homeDir string, selection *model.Selection) {
 	}
 	if !selection.ClearCodexOrchestratorAssignment && selection.CodexOrchestratorAssignment == nil && s.CodexOrchestratorAssignment != nil {
 		selection.CodexOrchestratorAssignment = codexOrchestratorFromState(s.CodexOrchestratorAssignment)
+	}
+	if model.ValidCodexServiceTier(s.CodexServiceTier) {
+		selection.CodexServiceTier, selection.CodexManagedServiceTier = s.CodexServiceTier, s.CodexServiceTier
 	}
 	if len(selection.ModelAssignments) == 0 && len(s.ModelAssignments) > 0 {
 		m := make(map[string]model.ModelAssignment, len(s.ModelAssignments))
@@ -1086,11 +1081,6 @@ func claudeAliasesToStrings(m map[string]model.ClaudeModelAlias) map[string]stri
 	}
 	out := make(map[string]string, len(m))
 	for k, v := range m {
-		// Claude Code owns the main session/orchestrator model; do not persist it
-		// as a Gentle AI model assignment.
-		if k == "orchestrator" {
-			continue
-		}
 		out[k] = string(v)
 	}
 	return out
@@ -1106,13 +1096,15 @@ func claudeLegacyAssignmentsForState(
 	return claudeAliasesToStrings(legacy)
 }
 
+// Keep orchestrator metadata so the picker can recognize persisted presets.
+// Persisting a choice does not configure Claude Code's main session model.
 func claudePhaseAssignmentsToState(m map[string]model.ClaudePhaseAssignment) map[string]state.ClaudePhaseAssignmentState {
 	if len(m) == 0 {
 		return nil
 	}
 	out := make(map[string]state.ClaudePhaseAssignmentState, len(m))
 	for k, v := range m {
-		if k == "orchestrator" || !v.Valid() {
+		if !v.Valid() {
 			continue
 		}
 		out[k] = state.ClaudePhaseAssignmentState{Model: string(v.Model), Effort: string(v.Effort)}

@@ -23,6 +23,7 @@ gentle-ai shell install --target /owned/private-parent/shell --mode separate
 No flags: dedicated installer TUI. Commands live in TARGET/bin, outside npm's bin.
 Installation also writes pinned fd and rg helpers to AGENT/bin, which stock Pi
 prefers over PATH: the private agent (Separate) or the selected --agent (Shared).
+Shared creates AGENT/bin/fd and AGENT/bin/rg; existing tools refuse before changes.
 gentle-ai shell launch ROOT [PI_ARGS...]
   Launch the selected stock Pi; normal use is through TARGET/bin/pi or gentle-shell.
 gentle-ai shell recover ROOT inspect
