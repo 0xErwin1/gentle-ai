@@ -172,6 +172,12 @@ recorded successor fails closed with a read-only `review inspect-authority`
 diagnostic. Run that diagnostic with the requested repository as process cwd;
 do not invent a new successor to bypass the conflict.
 
+When strict compact-state decoding and historical compatibility both fail,
+`CompactStore.Load` reports the lineage and both failure causes, retaining the
+strict error as its wrapped cause. The record remains rejected and unchanged;
+`review inspect-authority` keeps its existing problem codes, not these details.
+This diagnostic does not grant compatibility, recovery, or mutation authority.
+
 Explicit compatibility remains available through the complete successor,
 `--recovery-actor`, `--recovery-reason`, and `--recovery-authorization` binding.
 STATUS renders the existing seven-argument RECOVER form only for an exact binding.
