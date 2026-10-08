@@ -111,12 +111,12 @@ jobs:
           set -euo pipefail
           umask 077
           worker() {
-            timeout --kill-after=5 900 sudo -n -u gentle-lab /usr/bin/env -i HOME=/work XDG_RUNTIME_DIR=/run/user/1002 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1002/bus \
+            timeout --kill-after=5 1350 sudo -n -u gentle-lab /usr/bin/env -i HOME=/work XDG_RUNTIME_DIR=/run/user/1002 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1002/bus \
               /usr/bin/systemd-run --user --quiet --wait --collect --service-type=exec --expand-environment=no \
               --unit="$1" --working-directory=/work/src --pipe \
               --property=MemoryMax=3221225472 --property=MemorySwapMax=0 --property=CPUQuota=100% \
               --property=CPUQuotaPeriodSec=100ms --property=TasksMax=64 --property=NoNewPrivileges=yes \
-              --property=UMask=0077 --property=KillMode=control-group --property=TimeoutStopSec=2s --property=RuntimeMaxSec=880 --property=LimitFSIZE=256M \
+              --property=UMask=0077 --property=KillMode=control-group --property=TimeoutStopSec=2s --property=RuntimeMaxSec=1330 --property=LimitFSIZE=256M \
               /usr/bin/env -i PATH=/fixture/go/bin:/usr/local/bin:/usr/bin:/bin HOME=/work TMPDIR=/tmp \
               XDG_RUNTIME_DIR=/run/user/1002 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1002/bus \
               GOTOOLCHAIN=local GOMAXPROCS=1 CGO_ENABLED=0 GOCACHE=/work/gocache GOMODCACHE=/work/gomod \

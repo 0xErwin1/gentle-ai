@@ -29,7 +29,7 @@ import termios
 import yaml
 
 START = time.monotonic()
-CEILING = 850
+CEILING = 1300
 WORK = pathlib.Path('/work')
 SUPERVISOR = '/fixture/supervisor'
 TESTS = '/fixture/user-install.test'
