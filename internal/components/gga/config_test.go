@@ -4,9 +4,11 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 
+	"github.com/gentleman-programming/gentle-ai/v4/internal/assets"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
 )
 
@@ -108,46 +110,41 @@ func TestBuildConfig(t *testing.T) {
 }
 
 func TestBuildConfigGGAMatcher(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration test requires Bash and Git")
+	}
 	bash, err := exec.LookPath("bash")
 	if err != nil {
-		t.Skip("bash is required to exercise the GGA matcher")
+		t.Skip("bash is required to exercise the GGA file filter")
+	}
+	git, err := exec.LookPath("git")
+	if err != nil {
+		t.Skip("git is required to exercise the GGA file filter")
 	}
 
-	// Reproduce the include/exclude matcher from GGA v2.10.1 bin/gga:1081-1115.
-	// Do not use a general-purpose glob matcher: GGA quotes the suffix after
-	// removing only the leading wildcard.
-	const script = `
-matches() {
-  local pattern="$1" file="$2"
-  if [[ "$pattern" == \** ]]; then
-    local suffix="${pattern#\*}"
-    [[ "$file" == *"$suffix" ]]
-  else
-    [[ "$file" == $pattern ]] || [[ "$(basename "$file")" == $pattern ]]
-  fi
-}
-IFS=',' read -ra includes <<< "$FILE_PATTERNS"
-IFS=',' read -ra excludes <<< "$EXCLUDE_PATTERNS"
-for file in "$@"; do
-  included=false
-  excluded=false
-  for pattern in "${includes[@]}"; do
-    if matches "$pattern" "$file"; then
-      included=true
-      break
-    fi
-  done
-  for pattern in "${excludes[@]}"; do
-    if matches "$pattern" "$file"; then
-      excluded=true
-      break
-    fi
-  done
-  if [[ "$included" == true && "$excluded" == false ]]; then
-    printf '%s\n' "$file"
-  fi
-done
-`
+	repo := t.TempDir()
+	env := append(os.Environ(), "GIT_CONFIG_GLOBAL="+os.DevNull, "GIT_CONFIG_NOSYSTEM=1", "GGA_SKIP_FILE_CHECK=")
+	runGit := func(t *testing.T, args ...string) string {
+		t.Helper()
+		cmd := exec.Command(git, append([]string{
+			"-c", "core.hooksPath=/dev/null",
+			"-c", "core.autocrlf=false",
+			"-c", "commit.gpgsign=false",
+			"-c", "user.name=GGA Test",
+			"-c", "user.email=gga-test@example.invalid",
+			"-c", "init.defaultBranch=main",
+		}, args...)...)
+		cmd.Dir = repo
+		cmd.Env = env
+		output, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("git %v failed: %v\n%s", args, err, output)
+		}
+		return string(output)
+	}
+	runGit(t, "init", "-q")
+	runGit(t, "commit", "-q", "--allow-empty", "-m", "baseline")
+
 	files := []string{}
 	for _, suffix := range []string{
 		".test.ts", ".test.tsx", ".spec.ts", ".spec.tsx",
@@ -158,21 +155,84 @@ done
 	files = append(files, "types.d.ts", "src/types.d.ts", "dist/app.js", "build/app.js", "node_modules/pkg/index.js")
 	production := []string{"src/auth.ts", "src/view.tsx", "src/app.js", "src/view.jsx", "src/main.py", "src/main.go"}
 	files = append(files, production...)
+	files = append(files, "notes.txt", "deleted.ts")
+	for _, file := range files {
+		path := filepath.Join(repo, filepath.FromSlash(file))
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte("fixture\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	runGit(t, "add", "-f", ".")
+	runGit(t, "commit", "-q", "-m", "fixtures")
+	// Use a small second change for normalization cases: repeated process
+	// launches in the shell filter are comparatively expensive on Windows.
+	for _, file := range []string{"src/auth.ts", "src/auth.test.ts", "notes.txt", "deleted.ts"} {
+		if err := os.WriteFile(filepath.Join(repo, filepath.FromSlash(file)), []byte("updated fixture\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	runGit(t, "add", ".")
+	runGit(t, "commit", "-q", "-m", "normalization fixtures")
+	if err := os.Remove(filepath.Join(repo, "deleted.ts")); err != nil {
+		t.Fatal(err)
+	}
+	before := runGit(t, "status", "--porcelain")
 
-	args := append([]string{"-s", "--"}, files...)
-	cmd := exec.Command(bash, args...)
-	cmd.Stdin = strings.NewReader(string(BuildConfig("claude")) + script)
-	var stdout, stderr strings.Builder
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-	if err := cmd.Run(); err != nil {
-		t.Fatalf("GGA matcher failed: %v\nstdout: %s\nstderr: %s", err, stdout.String(), stderr.String())
+	filter, err := assets.Read("gga/pr_mode.sh")
+	if err != nil {
+		t.Fatal(err)
 	}
-	if stderr.Len() != 0 {
-		t.Errorf("GGA matcher stderr = %q, want empty", stderr.String())
+	// Exercise the shipped filter, including Git discovery and the existence
+	// check, rather than maintaining a second implementation of its matcher.
+	const script = `
+case "$1" in
+  whitespace)
+    FILE_PATTERNS=" ${FILE_PATTERNS//,/, } "
+    EXCLUDE_PATTERNS=" ${EXCLUDE_PATTERNS//,/, } "
+    ;;
+  wildcard)
+    FILE_PATTERNS="*"
+    ;;
+esac
+get_pr_files "$2" "$FILE_PATTERNS" "$EXCLUDE_PATTERNS"
+`
+	tests := []struct {
+		name     string
+		scenario string
+		gitRange string
+		want     []string
+	}{
+		{name: "generated exclusions", scenario: "defaults", gitRange: "HEAD~2...HEAD~1", want: production},
+		{name: "whitespace is trimmed", scenario: "whitespace", gitRange: "HEAD~1...HEAD", want: []string{"src/auth.ts"}},
+		{name: "wildcard includes other extensions", scenario: "wildcard", gitRange: "HEAD~1...HEAD", want: []string{"notes.txt", "src/auth.ts"}},
 	}
-	if want := strings.Join(production, "\n") + "\n"; stdout.String() != want {
-		t.Errorf("files sent to reviewer = %q, want %q", stdout.String(), want)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cmd := exec.Command(bash, "-s", "--", tt.scenario, tt.gitRange)
+			cmd.Dir = repo
+			cmd.Env = env
+			cmd.Stdin = strings.NewReader(string(BuildConfig("claude")) + "\n" + filter + "\n" + script)
+			var stdout, stderr strings.Builder
+			cmd.Stdout = &stdout
+			cmd.Stderr = &stderr
+			if err := cmd.Run(); err != nil {
+				t.Fatalf("GGA filter failed: %v\nstdout: %s\nstderr: %s", err, stdout.String(), stderr.String())
+			}
+			if stderr.Len() != 0 {
+				t.Errorf("GGA filter stderr = %q, want empty", stderr.String())
+			}
+			wantFiles := append([]string{}, tt.want...)
+			sort.Strings(wantFiles)
+			if want := strings.Join(wantFiles, "\n") + "\n"; stdout.String() != want {
+				t.Errorf("files sent to reviewer = %q, want %q", stdout.String(), want)
+			}
+			if after := runGit(t, "status", "--porcelain"); after != before {
+				t.Errorf("filter changed repository state: before %q, after %q", before, after)
+			}
+		})
 	}
 }
 
