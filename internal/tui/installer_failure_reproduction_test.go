@@ -74,9 +74,11 @@ func TestInstallerFailureRollbackReturnsControl(t *testing.T) {
 		}
 	}
 
-	m := NewModel(system.DetectionResult{}, "test")
-	m.Screen = ScreenInstalling
-	m.Progress = NewProgressState(labels)
+	const runID uint64 = 1
+	m := installingModel(labels, runID)
+	if !m.pipelineRunning || m.progressRun == nil || m.installRunID != runID {
+		t.Fatal("fixture must represent an active install with a nonzero run ID")
+	}
 	// Keep an executor configured to disable the manual development fallback.
 	m.ExecuteFn = func(model.Selection, planner.ResolvedPlan, system.DetectionResult,
 		model.OpenCodeBackgroundIntent, model.OpenCodeBackgroundIntent,
@@ -87,7 +89,7 @@ func TestInstallerFailureRollbackReturnsControl(t *testing.T) {
 	orchestrator := pipeline.NewOrchestrator(pipeline.DefaultRollbackPolicy(),
 		pipeline.WithFailurePolicy(pipeline.ContinueOnError),
 		pipeline.WithProgressFunc(func(event pipeline.ProgressEvent) {
-			next, _ := m.Update(StepProgressMsg{StepID: event.StepID, Status: event.Status, Err: event.Err})
+			next, _ := m.Update(StepProgressMsg{RunID: runID, StepID: event.StepID, Status: event.Status, Err: event.Err})
 			m = next.(Model)
 		}),
 	)
@@ -101,8 +103,23 @@ func TestInstallerFailureRollbackReturnsControl(t *testing.T) {
 	if !result.Rollback.Success || !reflect.DeepEqual(rolledBack, rollbackIDs) {
 		t.Fatalf("rollback = %+v, calls = %v, want successful rollback %v", result.Rollback, rolledBack, rollbackIDs)
 	}
-	next, _ := m.Update(PipelineDoneMsg{Result: result})
+	if !m.pipelineRunning || m.progressRun == nil {
+		t.Fatal("install became inactive before matching completion")
+	}
+	m.progressRun.complete(result)
+	doneValue := m.nextProgressCommand()()
+	doneMsg, ok := doneValue.(PipelineDoneMsg)
+	if !ok || doneMsg.RunID != runID {
+		t.Fatalf("progress command returned %#v, want PipelineDoneMsg for run %d", doneValue, runID)
+	}
+	next, completionCmd := m.Update(doneMsg)
 	m = next.(Model)
+	if m.pipelineRunning || m.progressRun != nil {
+		t.Fatal("matching failed completion did not clear active install state")
+	}
+	if completionCmd != nil {
+		t.Fatal("failed completion scheduled another command")
+	}
 	if !errors.Is(m.Execution.Err, failure) {
 		t.Fatal("TUI discarded the execution error")
 	}
@@ -125,8 +142,14 @@ func TestInstallerFailureRollbackReturnsControl(t *testing.T) {
 	if !strings.Contains(output, "Completed with errors:") || !strings.Contains(output, "Press Enter to continue.") || strings.Contains(output, "completed successfully") {
 		t.Errorf("terminal view missing error or continuation: %q", output)
 	}
-	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	next, enterCmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	m = next.(Model)
+	if enterCmd != nil || m.pipelineRunning || m.progressRun != nil || m.installRunID != runID {
+		t.Fatal("Enter restarted or scheduled execution after failed completion")
+	}
+	if !reflect.DeepEqual(order, labels) || !reflect.DeepEqual(rolledBack, rollbackIDs) {
+		t.Fatal("Enter changed execution or rollback calls")
+	}
 	if m.Screen != ScreenComplete {
 		t.Errorf("screen after Enter = %v, want ScreenComplete", m.Screen)
 	}
