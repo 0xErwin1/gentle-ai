@@ -247,6 +247,31 @@ func TestNegotiatedStartRefusesOverBudgetCandidateWithoutPersistingAuthority(t *
 	}
 }
 
+func TestNegotiatedStartRefusesOverBudgetDependencyLocks(t *testing.T) {
+	reviewEnabledHome(t)
+	repo := initReviewCLIRepo(t)
+	body := strings.Repeat("oversized dependency evidence\n", 80_000)
+	for _, path := range []string{"package-lock.json", "nested/package-lock.json"} {
+		writeReviewStartCandidate(t, repo, path, body, 0o644)
+	}
+	before := runReviewCLIGit(t, repo, "status", "--porcelain=v2", "--untracked-files=all")
+	var output bytes.Buffer
+	err := RunReview(boundNegotiatedStartArgs(t, []string{
+		"start", "--contract", ReviewIntegrationContractV2, "--cwd", repo, "--lineage", "lock-budget",
+	}), &output)
+	var failure *ReviewIntegrationFailureError
+	if !errors.As(err, &failure) || failure.Failure.Code != "lens_context_budget_exceeded" ||
+		failure.Failure.MutationOutcome != ReviewMutationNotStarted {
+		t.Fatalf("oversized dependency locks must refuse before authority creation: %v", err)
+	}
+	if strings.Contains(output.String(), "GENTLE_AI_REVIEW_") {
+		t.Fatal("budget refusal emitted partial reviewer evidence")
+	}
+	if after := runReviewCLIGit(t, repo, "status", "--porcelain=v2", "--untracked-files=all"); before != after {
+		t.Fatal("budget refusal changed the candidate")
+	}
+}
+
 // TestReviewLensContextRefusesEmptyPatchForContentChangingPath proves the one
 // guard that cannot be provoked from a real repository: if a native read
 // silently returns nothing for a path that changed content, the reviewer must
@@ -443,6 +468,49 @@ func runGeneratedSummaryLensContext(t *testing.T, repo, lineage string) string {
 	return lensContextBlock(t, argv, started.SelectedLenses[0])
 }
 
+// Dependency locks retain semantic evidence even when classified as generated.
+func TestReviewLensContextDependencyLocksKeepFrozenPatches(t *testing.T) {
+	reviewEnabledHome(t)
+	repo := initReviewCLIRepo(t)
+	paths := []string{"package-lock.json", "nested/npm-shrinkwrap.json", "pnpm-lock.yaml", "yarn.lock", "go.sum", "Cargo.lock"}
+	for _, path := range paths {
+		writeReviewStartCandidate(t, repo, path, "base dependency marker\n", 0o644)
+	}
+	runReviewCLIGit(t, repo, "commit", "-qm", "base dependency locks")
+	for _, path := range paths {
+		writeReviewStartCandidate(t, repo, path, "candidate dependency marker\n", 0o644)
+	}
+	started := runNegotiatedReviewStart(t, repo, "dependency-lock-evidence")
+	// Live bytes must never replace the frozen candidate's evidence.
+	for _, path := range paths {
+		writeReviewStartCandidate(t, repo, path, "live dependency marker\n", 0o644)
+	}
+	argv := []string{"--cwd", repo, "--repository-context", started.RepositoryContext.Handle,
+		"--lineage", started.LineageID, "--target", started.RepositoryContext.TargetIdentity,
+		"--expected-revision", started.RepositoryContext.Revision}
+	block := lensContextBlock(t, argv, started.SelectedLenses[0])
+	for _, path := range paths {
+		header := fmt.Sprintf("GENTLE_AI_REVIEW_PATCH %d %s", lensContextManifestIndex(t, block, path), path)
+		_, after, found := strings.Cut(block, header+"\n")
+		if !found {
+			t.Fatalf("dependency lock %q lost its full frozen patch", path)
+		}
+		patch, _, ended := strings.Cut(after, "\nGENTLE_AI_REVIEW_PATCH_END\n")
+		if !ended || !strings.Contains(patch, "-base dependency marker") || !strings.Contains(patch, "+candidate dependency marker") || strings.Contains(patch, "live dependency marker") {
+			t.Fatalf("dependency lock %q does not carry complete frozen evidence: %s", path, patch)
+		}
+		if _, summarized := lensContextGeneratedSection(block, path); summarized {
+			t.Fatalf("dependency lock %q still has an omitted-content summary", path)
+		}
+	}
+	for _, raw := range lensContextPreflight(t, block)["changed_path_manifest"].([]any) {
+		entry := raw.(map[string]any)
+		if entry["generated"] != true {
+			t.Fatalf("lockfile lost generated classification: %v", entry)
+		}
+	}
+}
+
 // lensContextPreflight decodes the capture-context line of a reviewer block.
 func lensContextPreflight(t *testing.T, block string) map[string]any {
 	t.Helper()
@@ -539,12 +607,8 @@ func assertGeneratedSummary(t *testing.T, block string, want generatedSummaryExp
 	}
 }
 
-// TestReviewLensContextSummarizesGeneratedPathsAndOmitsTheirPatches is the
-// #4680 T1 behavior: recognized generated paths (existing testdata goldens and
-// the explicit dependency-lockfile basenames) reach the reviewer as a truthful
-// metadata summary -- path, status, numstat, object identifiers, and an
-// explicit omitted-content disclosure -- instead of their full patch, while
-// ordinary authored paths keep their complete evidence in full.
+// Nonsemantic generated outputs retain metadata-only evidence; dependency
+// locks and ordinary authored paths retain complete frozen patches.
 func TestReviewLensContextSummarizesGeneratedPathsAndOmitsTheirPatches(t *testing.T) {
 	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
@@ -557,8 +621,6 @@ func TestReviewLensContextSummarizesGeneratedPathsAndOmitsTheirPatches(t *testin
 		additions int
 		deletions int
 	}{
-		{path: "go.sum", status: "M", additions: 1, deletions: 0},
-		{path: "web/package-lock.json", status: "A", additions: 200, deletions: 0},
 		{path: "internal/render/testdata/golden/rendered.golden", status: "A", additions: 1, deletions: 0},
 	} {
 		t.Run(test.path, func(t *testing.T) {
@@ -567,6 +629,16 @@ func TestReviewLensContextSummarizesGeneratedPathsAndOmitsTheirPatches(t *testin
 				requireNewObjectID: true,
 			})
 		})
+	}
+
+	for _, lock := range []struct{ path, added string }{
+		{"go.sum", "+new dependency line"},
+		{"web/package-lock.json", "+package-lock line"},
+	} {
+		if !strings.Contains(block, fmt.Sprintf("GENTLE_AI_REVIEW_PATCH %d %s\n", lensContextManifestIndex(t, block, lock.path), lock.path)) ||
+			!strings.Contains(block, lock.added) {
+			t.Fatalf("dependency lock %q lost its complete patch", lock.path)
+		}
 	}
 
 	// The ordinary authored path keeps its complete patch.
@@ -601,8 +673,8 @@ func TestReviewLensContextSummarizesGeneratedPathsAndOmitsTheirPatches(t *testin
 }
 
 // TestReviewLensContextGeneratedSummaryKeepsDeletionEvidenceAndNearMissPatches
-// preserves the safety property: a deleted lockfile is still important evidence
-// and keeps its summary with status and object identifiers, while files whose
+// preserves the safety property: a deleted lockfile keeps its full patch,
+// while files whose
 // basename merely resembles a recognized one (go.mod, yarn.lock.example) stay
 // authored evidence with their complete patches.
 func TestReviewLensContextGeneratedSummaryKeepsDeletionEvidenceAndNearMissPatches(t *testing.T) {
@@ -616,9 +688,10 @@ func TestReviewLensContextGeneratedSummaryKeepsDeletionEvidenceAndNearMissPatche
 	writeReviewStartCandidate(t, repo, "docs/yarn.lock.example", "# authored example, not a lockfile\n", 0o644)
 	block := runGeneratedSummaryLensContext(t, repo, "generated-summary-deletion")
 
-	assertGeneratedSummary(t, block, generatedSummaryExpectation{
-		path: "yarn.lock", status: "D", deletions: 80,
-	})
+	if !strings.Contains(block, fmt.Sprintf("GENTLE_AI_REVIEW_PATCH %d yarn.lock\n", lensContextManifestIndex(t, block, "yarn.lock"))) ||
+		!strings.Contains(block, "deleted file mode") || strings.Count(block, "-yarn dependency line\n") != 80 {
+		t.Fatal("deleted dependency lock lost its complete deletion patch")
+	}
 	for _, path := range []string{"tools/go.mod", "docs/yarn.lock.example"} {
 		if _, summarized := lensContextGeneratedSection(block, path); summarized {
 			t.Fatalf("near-miss %q was summarized as generated", path)

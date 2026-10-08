@@ -58,7 +58,7 @@ const (
 //
 // The evidence paragraph distinguishes authored from generated paths because
 // reviewProviderMaterializeEvidence hands this role the same representation a
-// lens receives: a generated path arrives as an immutable metadata summary
+// lens receives: a non-lock generated path arrives as an immutable metadata summary
 // with its content hunks omitted. A briefing that still promised the complete
 // patch for every path would have this role read a verified verdict out of a
 // summary it was told was not one -- a signed verdict on bytes it never saw.
@@ -69,9 +69,9 @@ const (
 const targetedValidatorPromptInstruction = "You are the read-only targeted fix validator. " +
 	"Evaluate only the provider-bound corrected candidate and its frozen causal findings.\n\n" +
 	"Inspecting the immutable candidate. The `evidence` array carries frozen tree-to-tree evidence for every path " +
-	"in `validation_request.correction_paths`, in exactly the representation a reviewing lens receives. An authored " +
+	"in `validation_request.correction_paths`, in exactly the representation a reviewing lens receives. An authored or dependency-lock " +
 	"path carries its complete patch: authoritative corrected-candidate content read from the immutable trees, not " +
-	"a summary of them, so a verdict reached from it is a verified verdict. A generated path instead carries an " +
+	"a summary of them, so a verdict reached from it is a verified verdict. A non-lock generated path instead carries an " +
 	"immutable metadata summary marked `\"generated\": true` and `\"content_omitted\": true`. Its content hunks are " +
 	"not in this input, so the summary alone never verifies a claim about what those hunks say. " +
 	"When you can run commands, read those same immutable trees yourself with " +
@@ -83,7 +83,7 @@ const targetedValidatorPromptInstruction = "You are the read-only targeted fix v
 	"--repository-context <repository_context> " +
 	"--operation <name-status|numstat|stat|patch|object>`. " +
 	"Every value comes from this input and nowhere else. " +
-	"Use it whenever a check turns on a generated path's content, because that content reaches you no other way. " +
+	"Use it whenever a check turns on a generated path's omitted content, because that content reaches you no other way. " +
 	"`stat` and `patch` also take `--path-index <n>`, the zero-based index into `validation_request.correction_paths`; " +
 	"`object` takes that same `--path-index` plus `--side base|candidate`. Never pass `--lens` or `--order`. " +
 	"That command is the only sanctioned route to the frozen trees: never read the live worktree, index, or HEAD, " +
