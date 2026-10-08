@@ -69,6 +69,7 @@ const (
 
 // Overridable for testing.
 var (
+	doctorReadStateFn   = state.Read
 	doctorToolProbeFn   = probeDoctorTool
 	lookPathFn          = exec.LookPath
 	availableBytesFn    = storage.AvailableBytes
@@ -506,9 +507,9 @@ func checkStateJSON(homeDir string) CheckResult {
 	const id = doctor.CheckStateJSON
 	statePath := state.Path(homeDir)
 
-	s, err := state.Read(homeDir)
+	s, err := doctorReadStateFn(homeDir)
 	if err != nil {
-		if os.IsNotExist(err) {
+		if errors.Is(err, os.ErrNotExist) {
 			return CheckResult{
 				Name:   id,
 				Status: CheckStatusWarn,
@@ -516,11 +517,24 @@ func checkStateJSON(homeDir string) CheckResult {
 				Remedy: doctor.NewRemedy(doctor.RemedyInstall, "Run 'gentle-ai install' to create initial state"),
 			}
 		}
+		var pathErr *os.PathError
+		if errors.Is(err, os.ErrPermission) || errors.As(err, &pathErr) {
+			guidance := "Inspect the file and parent directory for access or filesystem problems at " + statePath
+			if errors.Is(err, os.ErrPermission) {
+				guidance = "Inspect permissions and ownership of " + statePath + " and its parent directory"
+			}
+			return CheckResult{
+				Name:   id,
+				Status: CheckStatusFail,
+				Detail: "failed to read " + statePath + ": " + err.Error(),
+				Remedy: doctor.NewRemedy(doctor.RemedyInspectStateAccess, guidance+", then re-run 'gentle-ai doctor'; keep the existing state file"),
+			}
+		}
 		return CheckResult{
 			Name:   id,
 			Status: CheckStatusFail,
 			Detail: "failed to parse " + statePath + ": " + err.Error(),
-			Remedy: doctor.NewRemedy(doctor.RemedyRepairState, "Delete or repair "+statePath+", then re-run 'gentle-ai install'"),
+			Remedy: doctor.NewRemedy(doctor.RemedyRepairState, "Restore a valid backup or repair "+statePath+" while preserving your installation settings, then re-run 'gentle-ai doctor'"),
 		}
 	}
 
