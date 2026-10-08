@@ -53,6 +53,14 @@ func TestCursorJudgmentDayCLISmoke(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	if runtime.GOOS == "linux" {
+		// Linux startup requires package-manager discovery even for asset-only
+		// commands. Keep PATH isolated and reject any actual package operation.
+		apt := []byte("#!/bin/sh\necho 'unexpected package-manager execution' >&2\nexit 1\n")
+		if err := os.WriteFile(filepath.Join(emptyPath, "apt"), apt, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
 	// Do not inherit host config selectors, credentials, runtime identities, or
 	// executable discovery. Disable telemetry and self-update explicitly.
 	env := []string{
