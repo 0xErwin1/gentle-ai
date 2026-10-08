@@ -1808,15 +1808,27 @@ func TestNoUpdatesPath(t *testing.T) {
 	origLookPath := lookPath
 	origExecCommand := execCommand
 	origTools := Tools
+	origOsStat := osStat
+	origRunPowerShell := runPowerShell
 	t.Cleanup(func() {
 		httpClient = origClient
 		lookPath = origLookPath
 		execCommand = origExecCommand
 		Tools = origTools
+		osStat = origOsStat
+		runPowerShell = origRunPowerShell
 	})
 
 	httpClient = server.Client()
 	httpClient.Transport = &testTransport{server: server}
+
+	// Absence includes fallback locations, not just PATH. Never let a local
+	// GGA PowerShell shim escape the command fixture and run on the host.
+	osStat = func(string) (os.FileInfo, error) { return nil, os.ErrNotExist }
+	runPowerShell = func(context.Context, ...string) ([]byte, error) {
+		t.Error("absent-tool detection must not execute PowerShell")
+		return nil, fmt.Errorf("unexpected PowerShell execution")
+	}
 
 	// engram is at v0.3.2 (same as remote), gga is not installed
 	lookPath = func(name string) (string, error) {
