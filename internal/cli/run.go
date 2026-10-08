@@ -167,14 +167,6 @@ type PreparedInstall struct {
 	resolved planner.ResolvedPlan
 }
 
-func RunInstall(args []string, detection system.DetectionResult) (InstallResult, error) {
-	prepared, err := PrepareInstall(args, detection)
-	if err != nil {
-		return InstallResult{}, err
-	}
-	return RunPreparedInstall(prepared, detection)
-}
-
 // PrepareInstall resolves and validates without reading or writing install state.
 func PrepareInstall(args []string, detection system.DetectionResult) (PreparedInstall, error) {
 	flags, err := ParseInstallFlags(args)
