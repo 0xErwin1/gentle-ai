@@ -1544,7 +1544,7 @@ test_integrity_full_preset_all_skills_nonempty() {
     log_test "Integrity: full preset — every SKILL.md is non-empty"
     cleanup_test_env
 
-    if $BINARY install --agent opencode --component skills --preset full-gentleman --persona gentleman 2>&1; then
+    if $BINARY install --agent opencode --component skills --preset full-gentleman 2>&1; then
         local skill_dir="$HOME/.config/opencode/skills"
         assert_file_count "$skill_dir" "SKILL.md" 8 "Full preset installs 8 foundation skills"
         local all_ok=true
