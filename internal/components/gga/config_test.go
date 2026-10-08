@@ -2,6 +2,7 @@ package gga
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -82,8 +83,8 @@ func TestBuildConfig(t *testing.T) {
 
 	requiredFields := []string{
 		`PROVIDER="claude"`,
-		`FILE_PATTERNS=`,
-		`EXCLUDE_PATTERNS=`,
+		`FILE_PATTERNS="*.ts,*.tsx,*.js,*.jsx,*.py,*.go"`,
+		`EXCLUDE_PATTERNS="*.test.ts,*.test.tsx,*.spec.ts,*.spec.tsx,*.test.js,*.test.jsx,*.spec.js,*.spec.jsx,*.d.ts,dist/*,build/*,node_modules/*"`,
 		`RULES_FILE="AGENTS.md"`,
 		`STRICT_MODE="true"`,
 		`TIMEOUT="300"`,
@@ -103,6 +104,75 @@ func TestBuildConfig(t *testing.T) {
 	// Verify header comment.
 	if !strings.HasPrefix(config, "# Gentleman Guardian Angel") {
 		t.Error("BuildConfig() should start with a header comment")
+	}
+}
+
+func TestBuildConfigGGAMatcher(t *testing.T) {
+	bash, err := exec.LookPath("bash")
+	if err != nil {
+		t.Skip("bash is required to exercise the GGA matcher")
+	}
+
+	// Reproduce the include/exclude matcher from GGA v2.10.1 bin/gga:1081-1115.
+	// Do not use a general-purpose glob matcher: GGA quotes the suffix after
+	// removing only the leading wildcard.
+	const script = `
+matches() {
+  local pattern="$1" file="$2"
+  if [[ "$pattern" == \** ]]; then
+    local suffix="${pattern#\*}"
+    [[ "$file" == *"$suffix" ]]
+  else
+    [[ "$file" == $pattern ]] || [[ "$(basename "$file")" == $pattern ]]
+  fi
+}
+IFS=',' read -ra includes <<< "$FILE_PATTERNS"
+IFS=',' read -ra excludes <<< "$EXCLUDE_PATTERNS"
+for file in "$@"; do
+  included=false
+  excluded=false
+  for pattern in "${includes[@]}"; do
+    if matches "$pattern" "$file"; then
+      included=true
+      break
+    fi
+  done
+  for pattern in "${excludes[@]}"; do
+    if matches "$pattern" "$file"; then
+      excluded=true
+      break
+    fi
+  done
+  if [[ "$included" == true && "$excluded" == false ]]; then
+    printf '%s\n' "$file"
+  fi
+done
+`
+	files := []string{}
+	for _, suffix := range []string{
+		".test.ts", ".test.tsx", ".spec.ts", ".spec.tsx",
+		".test.js", ".test.jsx", ".spec.js", ".spec.jsx",
+	} {
+		files = append(files, "auth"+suffix, "src/auth"+suffix)
+	}
+	files = append(files, "types.d.ts", "src/types.d.ts", "dist/app.js", "build/app.js", "node_modules/pkg/index.js")
+	production := []string{"src/auth.ts", "src/view.tsx", "src/app.js", "src/view.jsx", "src/main.py", "src/main.go"}
+	files = append(files, production...)
+
+	args := append([]string{"-s", "--"}, files...)
+	cmd := exec.Command(bash, args...)
+	cmd.Stdin = strings.NewReader(string(BuildConfig("claude")) + script)
+	var stdout, stderr strings.Builder
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("GGA matcher failed: %v\nstdout: %s\nstderr: %s", err, stdout.String(), stderr.String())
+	}
+	if stderr.Len() != 0 {
+		t.Errorf("GGA matcher stderr = %q, want empty", stderr.String())
+	}
+	if want := strings.Join(production, "\n") + "\n"; stdout.String() != want {
+		t.Errorf("files sent to reviewer = %q, want %q", stdout.String(), want)
 	}
 }
 
@@ -139,6 +209,10 @@ func TestInjectWritesConfigAndAgents(t *testing.T) {
 	}
 	if !strings.Contains(string(configContent), `PROVIDER="claude"`) {
 		t.Error("config file missing PROVIDER=claude")
+	}
+
+	if want := string(BuildConfig("claude")); string(configContent) != want {
+		t.Errorf("injected config = %q, want generated config %q", configContent, want)
 	}
 
 	// AGENTS.md template created.
