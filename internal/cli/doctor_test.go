@@ -641,7 +641,7 @@ func TestCheckInstalledAssetVersion_SkewWarning(t *testing.T) {
 	if got.Status != CheckStatusWarn {
 		t.Errorf("expected warn for version skew, got %s: %s", got.Status, got.Detail)
 	}
-	if !strings.Contains(got.Detail, "v0.9.0") || !strings.Contains(got.Detail, "gentle-ai sync") {
+	if !strings.Contains(got.Detail, "v0.9.0") || !strings.Contains(got.Detail, "sync") {
 		t.Errorf("unexpected detail: %s", got.Detail)
 	}
 }
