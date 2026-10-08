@@ -270,6 +270,19 @@ class OwnedCommandTimeout(unittest.TestCase):
         self.assertTrue(guest['COMMAND_FAILURE']['wholeBudget'])
 
 
+class DeadlineNesting(unittest.TestCase):
+    def test_guest_budget_fits_inside_service_and_wrapper_limits(self):
+        import re
+        workflow = (ROOT / '.github/workflows/shell-linux-first-ci.yml').read_text()
+        ceiling = int(re.search(r'^CEILING = (\d+)$', GUEST.read_text(), re.M).group(1))
+        service = int(re.search(r'RuntimeMaxSec=(\d+)', workflow).group(1))
+        wrapper = int(re.search(r'timeout --kill-after=5 (\d+) ', workflow).group(1))
+        self.assertLess(ceiling, service)
+        self.assertLess(service, wrapper)
+        # The full qualification reached its final fault step with only 66s left at 850s.
+        self.assertGreaterEqual(ceiling, 1300)
+
+
 class LaunchWiring(unittest.TestCase):
     def test_launch_requires_the_policy_with_the_original_failure(self):
         module = ast.parse(GUEST.read_text())
