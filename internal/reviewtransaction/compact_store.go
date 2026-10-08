@@ -1942,8 +1942,9 @@ func parseCompactRecord(payload []byte, lineageID string) (CompactRecord, error)
 		}
 		historical, historicalErr := parseHistoricalCompactRecord(payload)
 		if historicalErr != nil {
-			// Preserve the original strict decode wording for callers.
-			return CompactRecord{}, strictErr
+			// Keep the strict cause's classification while exposing why
+			// compatibility also failed, without admitting the record.
+			return CompactRecord{}, fmt.Errorf("compact review state %q: strict decode: %w; historical compatibility: %v", lineageID, strictErr, historicalErr)
 		}
 		record = historical
 	} else {
