@@ -555,8 +555,8 @@ func TestVerifyPiCodeGraphRejectsNonCanonicalMCP(t *testing.T) {
 	home := t.TempDir()
 	mcpPath := filepath.Join(home, "mcp.json")
 	writePiFile(t, mcpPath, `{"mcpServers":{"not-codegraph":{"command":"other codegraph"}}}`)
-	if err := verifyPiCodeGraph(mcpPath, nil); err == nil {
-		t.Fatal("verifyPiCodeGraph() accepted substring-only MCP evidence")
+	if err := verifyPiCodeGraphWithProbe(mcpPath, nil, piCodeGraphEffectiveMCPProbe); err == nil {
+		t.Fatal("verifyPiCodeGraphWithProbe() accepted substring-only MCP evidence")
 	}
 }
 

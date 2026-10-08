@@ -445,10 +445,6 @@ func stripPiCodeGraphBlocks(body string) (string, error) {
 	return body, nil
 }
 
-func verifyPiCodeGraph(mcpPath string, children []PiCodeGraphChild) error {
-	return verifyPiCodeGraphWithProbe(mcpPath, children, piCodeGraphEffectiveMCPProbe)
-}
-
 func verifyPiCodeGraphWithProbe(mcpPath string, children []PiCodeGraphChild, probe PiCodeGraphEffectiveMCPProbe) error {
 	_, err := verifyPiCodeGraphCapabilityWithProbe(mcpPath, children, probe)
 	return err
