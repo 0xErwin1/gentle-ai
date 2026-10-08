@@ -121,22 +121,31 @@ def run(args, cwd=None, extra=None, timeout=180, good=True, stdout_only=False):
     env = {'PATH': '/usr/local/bin:/usr/bin:/bin:/work/personal/prefix/bin', 'HOME': str(WORK / 'home'), 'TMPDIR': str(WORK / 'tmp'),
            'PYTHONDONTWRITEBYTECODE': '1', 'TERM': 'xterm-256color'}
     env.update(extra or {})
+    names = {pathlib.Path(arg).name for arg in args[:2]}
+    stock = next((name for name in ['pnpm', 'pnpm.mjs', 'npm-cli.js', 'pi', 'cli.js', 'provision.mjs', 'git'] if name in names), 'stock')
+    identity = {
+        'kind': 'tests' if args[0] == TESTS else 'supervisor' if args[0] == SUPERVISOR else stock,
+        'operation': next((op for op in ['check', 'install', 'recover', 'internal-install', 'internal-run', 'internal-verify', 'ci', 'add', 'list', 'update', 'bin', '--version', 'prepare-prior'] if op in args), 'stock'),
+        'inspect': '--inspect' in args, 'force': '--force' in args, 'lockOnly': '--package-lock-only' in args,
+    }
+    limit = min(timeout, remaining())
     child = subprocess.Popen(args, cwd=cwd or WORK, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True)
     try:
-        out, error = child.communicate(timeout=min(timeout, remaining()))
+        out, error = child.communicate(timeout=limit)
     except subprocess.TimeoutExpired:
         os.killpg(child.pid, signal.SIGKILL)
-        child.communicate(timeout=3)
-        raise RuntimeError('owned command deadline; raw output withheld')
+        out, error = child.communicate(timeout=3)
+        raw = out + error
+        # Identify the killed command and when it died; only a bounded tail of
+        # its own output is disclosed, never its environment or arguments.
+        COMMAND_FAILURE = {**identity, 'timeout': True, 'limitSeconds': round(limit), 'elapsedSeconds': round(time.monotonic() - START),
+                           'wholeBudget': limit < timeout, 'rawBytes': len(raw), 'rawSHA256': hashlib.sha256(raw).hexdigest()}
+        if b'\0' not in raw:
+            COMMAND_FAILURE.update(stdoutTailBase64=base64.b64encode(out[-600:]).decode('ascii'),
+                                   stderrTailBase64=base64.b64encode(error[-600:]).decode('ascii'))
+        raise RuntimeError('owned command deadline; bounded output tail only')
     raw = out + error
-    names = {pathlib.Path(arg).name for arg in args[:2]}
-    stock = next((name for name in ['pnpm', 'pnpm.mjs', 'npm-cli.js', 'pi', 'cli.js'] if name in names), 'stock')
-    evidence = {
-        'kind': 'tests' if args[0] == TESTS else 'supervisor' if args[0] == SUPERVISOR else stock,
-        'operation': next((op for op in ['check', 'install', 'recover', 'internal-install', 'internal-run', 'internal-verify', 'ci', 'add', 'list', 'update', 'bin', '--version'] if op in args), 'stock'),
-        'inspect': '--inspect' in args, 'force': '--force' in args, 'lockOnly': '--package-lock-only' in args,
-        'exit': child.returncode, 'expectedSuccess': good, 'rawBytes': len(raw), 'rawSHA256': hashlib.sha256(raw).hexdigest(),
-    }
+    evidence = {**identity, 'exit': child.returncode, 'expectedSuccess': good, 'rawBytes': len(raw), 'rawSHA256': hashlib.sha256(raw).hexdigest()}
     if len(raw) >= 4096 or b'\0' in raw:
         COMMAND_FAILURE = {**evidence, 'nulBytes': raw.count(b'\0'),
                            'stdoutBytes': len(out), 'stdoutSHA256': hashlib.sha256(out).hexdigest(),
@@ -1002,7 +1011,8 @@ try:
         require(len(output) < 4096, 'entire raw Guest report withheld above bound')
         sys.stdout.buffer.write(output)
 except Exception as error:
-    message = {'functionalReady': False, 'errorType': type(error).__name__, 'reason': str(error)[:240], 'rawStockOutput': 'withheld'}
+    message = {'functionalReady': False, 'errorType': type(error).__name__, 'reason': str(error)[:240], 'rawStockOutput': 'withheld',
+               'elapsedSeconds': round(time.monotonic() - START), 'reached': sorted(key for key in REPORT if not key.startswith('pty'))}
     if 'pnpmLayout' in REPORT:
         message['pnpmLayout'] = REPORT['pnpmLayout']
     if 'ptyFailure' in REPORT:
@@ -1023,6 +1033,9 @@ except Exception as error:
         if len((json.dumps(candidate, sort_keys=True) + '\n').encode()) < 4096:
             message = candidate
     output = (json.dumps(message, sort_keys=True) + '\n').encode()
+    if len(output) >= 4096 and 'stdoutTailBase64' in message.get('commandFailure', {}):
+        message['commandFailure'] = {k: v for k, v in message['commandFailure'].items() if not k.endswith('TailBase64')}
+        output = (json.dumps(message, sort_keys=True) + '\n').encode()
     if len(output) >= 4096:
         message = {'functionalReady': False, 'reason': 'entire command failure output withheld at original Guest bound', 'rawStockOutput': 'withheld', 'bytes': len(output), 'sha256': hashlib.sha256(output).hexdigest()}
         output = (json.dumps(message, sort_keys=True) + '\n').encode()
