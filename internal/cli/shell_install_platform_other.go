@@ -40,7 +40,7 @@ func shellInstallPlatformFlags(flags *flag.FlagSet, _ *shellinstaller.UserInstal
 		explicit := false
 		flags.Visit(func(f *flag.Flag) { explicit = explicit || f.Name == "channel" })
 		if explicit {
-			return fmt.Errorf("--channel %q refused: channel selection is Windows-only; omit --channel on this platform", *channel)
+			return fmt.Errorf("--channel %q refused: channel selection is Windows-only; rerun `gentle-ai shell install` without --channel", *channel)
 		}
 		return nil
 	}

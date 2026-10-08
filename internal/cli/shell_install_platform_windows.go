@@ -27,7 +27,7 @@ func shellInstallPlatformFlags(flags *flag.FlagSet, req *shellinstaller.UserInst
 	return func() error {
 		channel, err := shellinstaller.UserInstallChannel(req.Channel)
 		if err != nil || req.Channel == "" {
-			return errors.New("invalid channel; use stable or main")
+			return errors.New("invalid channel; rerun `gentle-ai shell install --channel stable` or `gentle-ai shell install --channel main`")
 		}
 		req.Channel = channel
 		return nil

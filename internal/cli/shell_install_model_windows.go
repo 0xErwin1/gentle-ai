@@ -53,6 +53,7 @@ func (m shellInstallModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Windows console modifier records can carry a NUL character instead of text.
 		// Never turn those records into path bytes or let them dismiss physical review.
 		if key.Paste || len(key.Runes) > 1 {
+			// refusal:by-design operator-knowledge: only the operator can retype the destination without control characters; the TUI stays open for that input and no runnable command can supply it for them
 			m.err = errors.New("destination text contains control characters; input refused")
 		}
 		return m, nil

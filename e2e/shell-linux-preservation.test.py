@@ -238,6 +238,38 @@ class PhysicalPreservationPolicy(unittest.TestCase):
             foreign['physical_inventory'](self.project, [])
 
 
+def guest_runner(ceiling):
+    """Execute only run() and its budget helpers, with a portable working directory."""
+    import base64
+    import signal
+    import subprocess
+    module = ast.parse(GUEST.read_text())
+    selected = [node for node in module.body if isinstance(node, ast.FunctionDef) and node.name in {'require', 'remaining', 'run'}]
+    namespace = {'base64': base64, 'hashlib': hashlib, 'os': os, 'pathlib': pathlib, 'signal': signal, 'subprocess': subprocess, 'time': time,
+                 'START': time.monotonic(), 'CEILING': ceiling, 'WORK': pathlib.Path(tempfile.gettempdir()),
+                 'TESTS': '/fixture/user-install.test', 'SUPERVISOR': '/fixture/supervisor', 'COMMAND_FAILURE': None}
+    exec(compile(ast.Module(body=selected, type_ignores=[]), str(GUEST), 'exec'), namespace)
+    return namespace
+
+
+class OwnedCommandTimeout(unittest.TestCase):
+    def test_timeout_identifies_the_killed_command_with_bounded_tail(self):
+        guest = guest_runner(ceiling=850)
+        with self.assertRaisesRegex(RuntimeError, 'owned command deadline'):
+            guest['run'](['/bin/sh', '-c', 'printf partial; sleep 5', 'prepare-prior'], timeout=1)
+        failure = guest['COMMAND_FAILURE']
+        self.assertEqual((failure['timeout'], failure['limitSeconds'], failure['wholeBudget']), (True, 1, False))
+        self.assertEqual(failure['operation'], 'prepare-prior')
+        self.assertEqual(failure['stdoutTailBase64'], 'cGFydGlhbA==')
+        self.assertNotIn('args', failure)
+
+    def test_timeout_reports_whole_budget_exhaustion(self):
+        guest = guest_runner(ceiling=1)
+        with self.assertRaisesRegex(RuntimeError, 'owned command deadline'):
+            guest['run'](['/bin/sh', '-c', 'sleep 5'], timeout=180)
+        self.assertTrue(guest['COMMAND_FAILURE']['wholeBudget'])
+
+
 class LaunchWiring(unittest.TestCase):
     def test_launch_requires_the_policy_with_the_original_failure(self):
         module = ast.parse(GUEST.read_text())
