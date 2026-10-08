@@ -11,6 +11,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v4/internal/agents"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/components/reviewassets"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
+	"gopkg.in/yaml.v3"
 )
 
 // Captured by actual sdd.Inject in the disposable af4ce122 worktree, TestParityCapture.
@@ -65,6 +66,65 @@ func TestAllUnknownNativeAgentsLeaveLedgerAbsent(t *testing.T) {
 		if _, err := os.Lstat(ledger); !os.IsNotExist(err) {
 			t.Fatalf("all-skipped ledger exists: %v", err)
 		}
+	}
+}
+
+// This pins the installed YAML configuration, not Claude's runtime enforcement.
+func TestInstalledClaudeReviewAgentsHaveExplicitEmptyTools(t *testing.T) {
+	adapter, err := agents.NewAdapter(model.AgentClaudeCode)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name     string
+		guidance string
+	}{
+		{name: "without CodeGraph"},
+		{name: "with CodeGraph", guidance: "Use CodeGraph before broad filesystem search."},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			home := t.TempDir()
+			result, err := reviewassets.InstallNativeAgents(home, adapter, reviewassets.InstallOptions{
+				CodeGraphGuidanceMarkdown: tc.guidance,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !result.Changed || len(result.Skipped) != 0 {
+				t.Fatalf("unexpected fresh install result: %+v", result)
+			}
+			for _, name := range []string{
+				"review-risk.md", "review-readability.md", "review-reliability.md",
+				"review-resilience.md", "review-refuter.md",
+			} {
+				t.Run(name, func(t *testing.T) {
+					data, err := os.ReadFile(filepath.Join(adapter.SubAgentsDir(home), name))
+					if err != nil {
+						t.Fatal(err)
+					}
+					body, found := strings.CutPrefix(string(data), "---\n")
+					if !found {
+						t.Fatal("installed agent has no YAML frontmatter")
+					}
+					frontmatter, _, found := strings.Cut(body, "\n---\n")
+					if !found {
+						t.Fatal("installed agent has unterminated YAML frontmatter")
+					}
+					var fields map[string]any
+					if err := yaml.Unmarshal([]byte(frontmatter), &fields); err != nil {
+						t.Fatalf("parse installed frontmatter: %v", err)
+					}
+					value, present := fields["tools"]
+					if !present {
+						t.Fatal("tools must be explicit; omitting it inherits available tools")
+					}
+					tools, ok := value.([]any)
+					if !ok || len(tools) != 0 {
+						t.Fatalf("tools = %#v, want an explicit empty YAML sequence", value)
+					}
+				})
+			}
+		})
 	}
 }
 
