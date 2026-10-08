@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/gentleman-programming/gentle-ai/v4/internal/agents"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/components/engram"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/doctor"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
@@ -535,8 +536,14 @@ func checkStateJSON(homeDir string) CheckResult {
 
 	var missing []string
 	var dangling []string
+	var unknown []string
 	for _, agentID := range s.InstalledAgents {
-		if dir := agentConfigDir(homeDir, agentID); dir != "" {
+		dir, err := agentConfigDir(homeDir, agentID)
+		if err != nil {
+			unknown = append(unknown, agentID)
+			continue
+		}
+		if dir != "" {
 			info, lstatErr := os.Lstat(dir)
 			if os.IsNotExist(lstatErr) {
 				// A missing final path is only genuinely missing when its
@@ -579,6 +586,17 @@ func checkStateJSON(homeDir string) CheckResult {
 		detail := fmt.Sprintf("state lists %d agent(s) whose managed config paths are dangling symlinks: %s; inspect or repair these paths manually, then re-run 'gentle-ai doctor'", len(dangling), strings.Join(dangling, ", "))
 		if len(missing) > 0 {
 			detail += "; genuinely absent config dirs: " + strings.Join(missing, ", ")
+		}
+		if len(unknown) > 0 {
+			detail += "; unrecognized agent IDs: " + strings.Join(unknown, ", ")
+		}
+		return CheckResult{Name: id, Status: CheckStatusWarn, Detail: detail}
+	}
+
+	if len(unknown) > 0 {
+		detail := fmt.Sprintf("state lists unrecognized agent IDs: %s; inspect or repair the state file, then re-run 'gentle-ai doctor'", strings.Join(unknown, ", "))
+		if len(missing) > 0 {
+			detail += "; config dirs are missing: " + strings.Join(missing, ", ")
 		}
 		return CheckResult{Name: id, Status: CheckStatusWarn, Detail: detail}
 	}
@@ -637,27 +655,17 @@ func danglingAncestor(homeDir, path string) (string, error) {
 	return "", nil
 }
 
-// agentConfigDir returns the expected config directory for a known agent ID.
-func agentConfigDir(homeDir, agentID string) string {
-	cfgBase := filepath.Join(homeDir, ".config")
-	switch agentID {
-	case "claude-code":
-		return filepath.Join(homeDir, ".claude")
-	case "opencode":
-		return filepath.Join(cfgBase, "opencode")
-	case "cursor":
-		return filepath.Join(homeDir, ".cursor")
-	case "windsurf":
-		return filepath.Join(homeDir, ".codeium", "windsurf")
-	case "vscode":
-		return filepath.Join(cfgBase, "Code")
-	case "codex":
-		return filepath.Join(homeDir, ".codex")
-	case "kiro":
-		return filepath.Join(homeDir, ".kiro")
-	default:
-		return ""
+// agentConfigDir uses the same adapter paths as installation and sync. An
+// empty path means a known detection-only agent, not an unrecognized ID.
+func agentConfigDir(homeDir, agentID string) (string, error) {
+	adapter, err := agents.NewAdapter(model.AgentID(agentID))
+	if err != nil {
+		return "", err
 	}
+	if !adapter.SupportsSkills() && !adapter.SupportsSystemPrompt() && !adapter.SupportsMCP() {
+		return "", nil
+	}
+	return adapter.GlobalConfigDir(homeDir), nil
 }
 
 // checkEngramReachable probes the configured Engram transport. An explicit

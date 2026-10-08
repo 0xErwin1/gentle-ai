@@ -345,7 +345,7 @@ Checks performed:
 | Check | What it verifies |
 |-------|-----------------|
 | Tool binaries | Required tools present on `PATH` and successfully run a non-interactive version probe within five seconds (`--version`, or `version` for Engram); probe failures warn instead of reporting a healthy tool. Probe process trees are terminated before the check returns, including on timeout or cancellation. Shadow detection (wrong binary resolves first). The managed OpenCode launcher and the executable it delegates to count as one installation when the launcher comes first on `PATH`; when the target comes first, doctor warns that it bypasses the launcher |
-| `state.json` validity | Parses `~/.gentle-ai/state.json` and reports any schema/corruption issues |
+| `state.json` validity | Parses `~/.gentle-ai/state.json`, reports schema/corruption issues, and checks installed agents' managed config directories using the same adapters as install/sync. Missing directories suggest sync; unrecognized agent IDs warn and require state inspection. Detection-only agents such as Conductor do not require their own config directory. |
 | OpenCode activation (`opencode:managed_profile`) | With OpenCode background subagents on (POSIX): a new login shell resolves `opencode` to the managed launcher, not to a copy that a later startup file puts first on `PATH`; warns when this cannot be verified |
 | Engram MCP reachability | Confirms the Engram MCP server responds |
 | Disk space | Warns when available space is critically low |
