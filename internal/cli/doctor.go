@@ -595,10 +595,12 @@ func checkStateJSON(homeDir string) CheckResult {
 
 	if len(unknown) > 0 {
 		detail := fmt.Sprintf("state lists unrecognized agent IDs: %s; inspect or repair the state file, then re-run 'gentle-ai doctor'", strings.Join(unknown, ", "))
+		result := CheckResult{Name: id, Status: CheckStatusWarn, Detail: detail}
 		if len(missing) > 0 {
-			detail += "; config dirs are missing: " + strings.Join(missing, ", ")
+			result.Detail += "; config dirs are missing: " + strings.Join(missing, ", ")
+			result.Remedy = doctor.NewRemedy(doctor.RemedySync, "Run 'gentle-ai sync' to restore missing config files")
 		}
-		return CheckResult{Name: id, Status: CheckStatusWarn, Detail: detail}
+		return result
 	}
 
 	if len(missing) > 0 {

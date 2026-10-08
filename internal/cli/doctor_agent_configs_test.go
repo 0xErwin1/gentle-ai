@@ -89,7 +89,11 @@ func TestRunDoctor_AgentConfigSpecialCases(t *testing.T) {
 			if !strings.Contains(output, tt.want+"\n") {
 				t.Fatalf("missing exact state result %q:\n%s", tt.want, output)
 			}
-			if strings.Contains(output, "gentle-ai sync") {
+			if tt.name == "unknown and missing" {
+				if !strings.Contains(output, "       Remedy: Run 'gentle-ai sync' to restore missing config files\n") {
+					t.Fatalf("missing sync remedy for absent managed config:\n%s", output)
+				}
+			} else if strings.Contains(output, "gentle-ai sync") {
 				t.Fatalf("unexpected sync remedy:\n%s", output)
 			}
 		})
