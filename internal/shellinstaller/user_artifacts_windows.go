@@ -69,7 +69,9 @@ func userWindowsMainSnapshot(ctx context.Context) (userWindowsArtifact, []byte, 
 		return data, nil
 	}
 	metadata, err := get("https://api.github.com/repos/Gentleman-Programming/gentle-shell/commits/main", 256<<10)
-	var record struct{ SHA string `json:"sha"` }
+	var record struct {
+		SHA string `json:"sha"`
+	}
 	if err != nil {
 		return userWindowsArtifact{}, nil, err
 	}
