@@ -1989,10 +1989,15 @@ func RunSyncWithSelectionScope(homeDir string, selection model.Selection, scope 
 		return SyncResult{}, err
 	}
 	// Normalize the selection against the declarative contract desired state
-	// before persona validation or any write.
+	// before persona validation or any write. This entry receives a fully-built
+	// selection, not a document requesting preset defaults: an empty component
+	// list must not opt the caller into additional component writers.
 	normalized, err := normalizeConfigSelection(selection)
 	if err != nil {
 		return SyncResult{}, err
+	}
+	if len(selection.Components) == 0 {
+		normalized.Components = selection.Components
 	}
 	selection = normalized
 
