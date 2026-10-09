@@ -360,8 +360,8 @@ func reviewProviderNewTargetedValidatorRequest(ctx context.Context, repo string,
 
 // reviewProviderMaterializeEvidence materializes the frozen tree-to-tree
 // evidence per changed path for one provider role request, in exactly the
-// representation a lens receives: authored paths carry their complete patch
-// and generated paths carry their immutable metadata summary. The aggregate
+// representation a lens receives: authored paths and dependency locks carry
+// their complete patch; other generated paths carry immutable metadata. The aggregate
 // budget is the effective runtime-context budget for the runtime START froze
 // this authority to, not the raw Git ceiling: the refuter and validator hold
 // the same evidence as a lens, so the same approved runtime cap bounds what
@@ -394,7 +394,7 @@ func reviewProviderMaterializeEvidence(ctx context.Context, repo, runtime string
 	}
 	evidence := make([]reviewProviderEvidence, 0, len(frozen.ChangedPathManifest))
 	for index, entry := range frozen.ChangedPathManifest {
-		if entry.Generated {
+		if reviewLensContextOmitsContent(entry) {
 			summary, err := reviewLensContextGeneratedSummaryFor(index, entry, frozen, numstats)
 			if err != nil {
 				return nil, reviewLensContextInspectionFailure(ctx, err)

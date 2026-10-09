@@ -68,7 +68,7 @@ func TestTargetedValidatorContractDoesNotPromiseOmittedGeneratedContent(t *testi
 	for _, required := range []string{
 		`"content_omitted": true`,
 		"Its content hunks are not in this input, so the summary alone never verifies a claim about what those hunks say.",
-		"Use it whenever a check turns on a generated path's content, because that content reaches you no other way.",
+		"Use it whenever a check turns on a generated path's omitted content, because that content reaches you no other way.",
 		"When a check turns on a generated path's omitted content and you cannot run that command, that check carries no verdict: mark it unavailable rather than reading one out of the summary.",
 	} {
 		if !strings.Contains(contract.PromptInstruction, required) {

@@ -89,6 +89,9 @@ type SyncResult struct {
 	// components touch the same file. It is nil when no files changed.
 	ChangedFiles  []string
 	ManualActions []string
+	// DryRunStops lists refusals a dry-run found that the real sync would stop
+	// on before writing anything.
+	DryRunStops []string
 
 	Background              OpenCodeBackgroundResolution
 	BackgroundPolicyEnabled bool
@@ -103,7 +106,9 @@ type SyncResult struct {
 
 // SyncSkippedAgent is one selected agent that a partial sync left untouched.
 type SyncSkippedAgent struct {
-	Agent  model.AgentID
+	Agent model.AgentID
+	// Part names the skipped part of the agent; empty means the whole agent.
+	Part   string
 	Reason string
 }
 
@@ -124,6 +129,9 @@ func (e *PartialSyncError) Error() string {
 // Action is the operator-facing line for a skipped agent, reused by the CLI
 // error and the TUI manual actions.
 func (s SyncSkippedAgent) Action() string {
+	if s.Part != "" {
+		return fmt.Sprintf("%s %s were skipped: %s; then re-run `gentle-ai sync`", s.Agent, s.Part, s.Reason)
+	}
 	return fmt.Sprintf("%s was skipped: %s; then re-run `gentle-ai sync`", s.Agent, s.Reason)
 }
 
@@ -157,9 +165,9 @@ func skipUndetectableOpenCode(selection *model.Selection) ([]SyncSkippedAgent, e
 // finishPartialSync attaches skipped agents to a sync result and turns an
 // otherwise successful partial sync into a *PartialSyncError.
 func finishPartialSync(result SyncResult, err error, skipped []SyncSkippedAgent) (SyncResult, error) {
-	result.SkippedAgents = skipped
-	if err == nil && len(skipped) > 0 {
-		err = &PartialSyncError{Skipped: skipped}
+	result.SkippedAgents = append(append([]SyncSkippedAgent(nil), skipped...), result.SkippedAgents...)
+	if err == nil && len(result.SkippedAgents) > 0 {
+		err = &PartialSyncError{Skipped: result.SkippedAgents}
 	}
 	return result, err
 }
@@ -453,6 +461,7 @@ type syncRuntime struct {
 	managedPaths         []string
 	changedFiles         []string // accumulates candidate paths reported by component injectors
 	skippedActions       []string // workspace-scope skips of global-only operations, surfaced as manual actions
+	skippedParts         []SyncSkippedAgent
 	backgroundPolicy     bool
 	backgroundActivation *opencodeactivation.ActivationPlan
 	runtimeReady         bool
@@ -658,6 +667,7 @@ func (r *syncRuntime) stagePlan() pipeline.StagePlan {
 			homeDir:      r.homeDir,
 			agents:       r.agentIDs,
 			changedFiles: &r.changedFiles,
+			skipped:      &r.skippedParts,
 		})
 	}
 
@@ -1261,6 +1271,9 @@ type openCodePluginSyncStep struct {
 	homeDir      string
 	agents       []model.AgentID
 	changedFiles *[]string
+	// skipped collects agents whose plugin convergence was refused because a
+	// plugin path is user-owned; the rest of the sync still runs (#5393).
+	skipped *[]SyncSkippedAgent
 }
 
 func (s openCodePluginSyncStep) ID() string { return s.id }
@@ -1271,6 +1284,11 @@ func (s openCodePluginSyncStep) Run() error {
 			continue
 		}
 		res, err := opencoderuntimeplugins.Install(s.homeDir, adapter)
+		var userOwned *opencoderuntimeplugins.UserOwnedPathError
+		if errors.As(err, &userOwned) && s.skipped != nil {
+			*s.skipped = append(*s.skipped, SyncSkippedAgent{Agent: adapter.Agent(), Part: "managed plugins", Reason: err.Error()})
+			continue
+		}
 		if err != nil {
 			return fmt.Errorf("sync managed OpenCode plugins: %w", err)
 		}
@@ -2082,6 +2100,7 @@ func runSyncWithSelectionScope(homeDir string, selection model.Selection, scope 
 	result.ManualActions = append(result.ManualActions, rt.state.nativeReviewActions...)
 	result.ManualActions = append(result.ManualActions, rt.state.retiredSDDActions...)
 	result.ManualActions = append(result.ManualActions, rt.skippedActions...)
+	result.SkippedAgents = append(result.SkippedAgents, rt.skippedParts...)
 	if scope == ScopeGlobal && containsAgent(agentIDs, model.AgentPi) {
 		warning, inspectErr := inspectPiMCP(homeDir)
 		if inspectErr != nil {
@@ -2373,6 +2392,13 @@ func RunSync(args []string) (SyncResult, error) {
 			if prepare, ok := step.(prepareBackupStep); ok && prepare.targetErr != nil {
 				return result, fmt.Errorf("resolve backup targets: %w", prepare.targetErr)
 			}
+			// Without consent the plugin SDK preflight only reads, so the
+			// dry-run reports the refusal the real sync would stop on.
+			if preflight, ok := step.(openCodePluginDependencyPreflightStep); ok && preflight.consent == nil {
+				if err := preflight.Run(); err != nil {
+					result.DryRunStops = append(result.DryRunStops, err.Error())
+				}
+			}
 		}
 		return result, nil
 	}
@@ -2574,6 +2600,9 @@ func RenderSyncReport(result SyncResult) string {
 		}
 		fmt.Fprintf(&b, "Prepare steps: %d\n", len(result.Plan.Prepare))
 		fmt.Fprintf(&b, "Apply steps: %d\n", len(result.Plan.Apply))
+		for _, stop := range result.DryRunStops {
+			fmt.Fprintf(&b, "Would stop: %s\n", stop)
+		}
 		backgroundReport()
 		return strings.TrimRight(b.String(), "\n")
 	}
@@ -2616,11 +2645,15 @@ func renderSyncSkippedAgents(b *strings.Builder, skipped []SyncSkippedAgent) {
 	if len(skipped) == 0 {
 		return
 	}
-	names := make([]model.AgentID, 0, len(skipped))
+	names := make([]string, 0, len(skipped))
 	for _, agent := range skipped {
-		names = append(names, agent.Agent)
+		if agent.Part != "" {
+			names = append(names, fmt.Sprintf("%s (%s)", agent.Agent, agent.Part))
+			continue
+		}
+		names = append(names, string(agent.Agent))
 	}
-	fmt.Fprintf(b, "Agents skipped: %s\n", joinAgentIDs(names))
+	fmt.Fprintf(b, "Agents skipped: %s\n", strings.Join(names, ", "))
 	for _, agent := range skipped {
 		fmt.Fprintf(b, "- %s\n", agent.Action())
 	}
