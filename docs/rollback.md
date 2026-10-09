@@ -78,7 +78,7 @@ restoring because it supplies two targets.
 
 ### Codex configuration outside the user home
 
-For CLI restore of a backup written to an external `CODEX_HOME`, keep `CODEX_HOME` pointing to that same existing directory. CLI restore authorizes that validated directory, not its parent; unrelated destinations and symlink escapes remain refused. TUI restore and automatic rollback still use their existing scopes.
+For CLI restore of a backup written to an external `CODEX_HOME`, keep `CODEX_HOME` pointing to that same existing directory. CLI restore authorizes that validated directory and its current `CODEX_HOME` symlink spelling, not their parents; unrelated destinations and symlink escapes remain refused. TUI restore and automatic rollback still use their existing scopes.
 
 ### Restored files
 

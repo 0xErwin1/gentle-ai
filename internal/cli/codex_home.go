@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"os"
 	"path/filepath"
 	"strings"
 
@@ -19,13 +20,25 @@ func RestoreManagedBackup(manifest backup.Manifest) error {
 	}
 	roots := []string{homeDir}
 	codexRoot := system.CodexConfigDir(homeDir)
-	for _, entry := range manifest.Entries {
-		if pathInsideCodexRoot(entry.OriginalPath, codexRoot) {
-			if err := system.ValidateCodexHome(homeDir); err != nil {
-				return err
+	codexRoots := []string{codexRoot}
+	// Keep the environment spelling only when it resolves to the selected root.
+	// An isolated home must never adopt the real user\'s CODEX_HOME override.
+	if userHome, err := os.UserHomeDir(); err == nil && filepath.Clean(homeDir) == filepath.Clean(userHome) && os.Getenv("CODEX_HOME") != "" {
+		if spelling, err := filepath.Abs(os.Getenv("CODEX_HOME")); err == nil {
+			if canonical, err := filepath.EvalSymlinks(spelling); err == nil && canonical == codexRoot && spelling != codexRoot {
+				codexRoots = append(codexRoots, spelling)
 			}
-			roots = append(roots, codexRoot)
-			break
+		}
+	}
+	for _, entry := range manifest.Entries {
+		for _, root := range codexRoots {
+			if pathInsideCodexRoot(entry.OriginalPath, root) {
+				if err := system.ValidateCodexHome(homeDir); err != nil {
+					return err
+				}
+				roots = append(roots, codexRoots...)
+				return (backup.RestoreService{Roots: roots}).Restore(manifest)
+			}
 		}
 	}
 	return (backup.RestoreService{Roots: roots}).Restore(manifest)
