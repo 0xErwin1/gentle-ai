@@ -60,6 +60,8 @@ Index freshness depends on the intelligence surface:
 
 The presence of `.codegraph/` alone does not guarantee freshness.
 
+When the direct CodeGraph MCP capability is verified but Pi adapter activation health cannot be machine-verified, Community Tools reports Pi as `pending`, not `missing` or `configured`. Pending agents are counted separately from missing wiring. This validated pending state preserves the verified MCP capability in the reconciliation result and satisfies installation reconciliation. Rerunning setup can take the already-reconciled path while preserving the pending health guidance; its summary says configuration is reconciled and Pi activation health remains pending, not that every agent is configured. Missing configuration, failed capability probes, and invalid child guidance still report `missing` and do not satisfy reconciliation.
+
 ## Review and checks
 
 Strict TDD follows the resolved configuration and exact test runner: observe RED, GREEN and REFACTOR when enabled; otherwise run applicable functional checks. RDD is separate and controlled by the user's `gentle-ai review mode status`, `gentle-ai review mode enable`, and `gentle-ai review mode disable` choices. Candidate consent and native authority do not authorize commits or releases. The review execution contract is provided to Pi through the provider bundle and mirrored by Gentle Shell, not by writing a Gentle AI system prompt block. See [Review](review-integration.md).

@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -827,8 +828,110 @@ func TestInstallLeavesPiPendingWhenAdapterHealthIsNotMachineVerifiable(t *testin
 		t.Fatalf("Pi manual action = %q, want pending state", result.PiCodeGraph.ManualActions[0])
 	}
 	pi := findAgentStatus(t, *result.StatusAfter, model.AgentPi)
-	if pi.Configured || pi.Status != AgentStatusMissing {
+	if pi.Configured || pi.Status != "pending" {
 		t.Fatalf("Pi status = %#v, want unconfigured pending state", pi)
+	}
+	if detected, configured, missing := result.StatusAfter.DetectedConfiguredMissingCounts(); detected != 1 || configured != 0 || missing != 0 {
+		t.Fatalf("counts = (%d, %d, %d), want (1, 0, 0) for pending Pi", detected, configured, missing)
+	}
+	if !result.StatusAfter.CodeGraphReconcileSatisfied() {
+		t.Fatal("validated pending Pi must satisfy reconciliation")
+	}
+
+	calls := 0
+	rerun, err := InstallWithHome(model.CommunityToolCodeGraph, "", home, RunnerFunc(func(string, ...string) error {
+		calls++
+		return nil
+	}), DetectorFunc(func(string) (string, error) { return "/bin/codegraph", nil }))
+	if err != nil {
+		t.Fatalf("second InstallWithHome() error = %v", err)
+	}
+	if calls != 0 || len(rerun.CommandsRun) != 0 {
+		t.Fatalf("rerun calls = %d, commands = %v, want no install commands", calls, rerun.CommandsRun)
+	}
+	wantPending := "CodeGraph configuration is reconciled for all detected supported agents. Pi activation health remains pending."
+	if !slices.Contains(rerun.ManualActions, wantPending) {
+		t.Fatalf("rerun actions = %v, want %q", rerun.ManualActions, wantPending)
+	}
+	for _, action := range rerun.ManualActions {
+		if strings.Contains(action, "configured for all") || strings.Contains(action, "already available and MCP-configured") {
+			t.Fatalf("pending rerun falsely reports configured health: %q", action)
+		}
+	}
+	if rerun.PiCodeGraph == nil || !slices.Contains(rerun.ManualActions, piCodeGraphPendingAction) {
+		t.Fatalf("rerun = %#v, want pending health guidance preserved", rerun)
+	}
+	if rerun.StatusAfter == nil || findAgentStatus(t, *rerun.StatusAfter, model.AgentPi).Status != "pending" {
+		t.Fatalf("rerun status = %#v, want Pi still pending", rerun.StatusAfter)
+	}
+	mustWrite(t, filepath.Join(home, ".claude.json"), `{"mcpServers":{"codegraph":{"command":"codegraph"}}}`)
+	mustWrite(t, filepath.Join(home, ".claude", "CLAUDE.md"), "user guidance\n")
+	updated, err := InstallWithHome(model.CommunityToolCodeGraph, "", home, RunnerFunc(func(string, ...string) error {
+		calls++
+		return nil
+	}), DetectorFunc(func(string) (string, error) { return "/bin/codegraph", nil }))
+	if err != nil || calls != 0 || len(updated.CommandsRun) != 0 {
+		t.Fatalf("guidance refresh = %#v, err=%v, calls=%d, want no installer", updated, err, calls)
+	}
+	if !slices.Contains(updated.ManualActions, wantPending) || !slices.Contains(updated.ManualActions, piCodeGraphPendingAction) {
+		t.Fatalf("guidance refresh actions = %v, want reconciled pending guidance", updated.ManualActions)
+	}
+	if pi := findAgentStatus(t, *updated.StatusAfter, model.AgentPi); pi.Configured || pi.Status != AgentStatusPending {
+		t.Fatalf("refreshed Pi = %#v, want unconfigured pending", pi)
+	}
+	guidance, err := os.ReadFile(filepath.Join(home, ".claude", "CLAUDE.md"))
+	if err != nil || !strings.Contains(string(guidance), "gentle-ai:codegraph-guidance") {
+		t.Fatalf("Claude guidance = %q, err=%v, want newly reconciled guidance", guidance, err)
+	}
+}
+
+func TestDetectStatusDistinguishesPiPendingFromFailures(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		probeErr    error
+		missingTool bool
+		brokenChild bool
+		want        AgentStatusKind
+	}{
+		{name: "verified capability pending", probeErr: ErrPiCodeGraphAdapterHealthUnavailable, want: "pending"},
+		{name: "genuine probe failure", probeErr: errors.New("probe failed"), want: AgentStatusMissing},
+		{name: "pending without capability", probeErr: ErrPiCodeGraphAdapterHealthUnavailable, missingTool: true, want: AgentStatusMissing},
+		{name: "pending with broken child", probeErr: ErrPiCodeGraphAdapterHealthUnavailable, brokenChild: true, want: AgentStatusMissing},
+		{name: "verified healthy", want: AgentStatusConfigured},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			home := t.TempDir()
+			mustWrite(t, filepath.Join(home, ".pi", "agent", "settings.json"), `{}`)
+			child := filepath.Join(home, ".pi", "agent", "subagents", "worker.md")
+			mustWrite(t, child, "---\ntools: bash\n---\nwork\n")
+			if _, err := ReconcilePiCodeGraph(PiCodeGraphOptions{HomeDir: home, Selected: true}); err != nil {
+				t.Fatal(err)
+			}
+			if tc.brokenChild {
+				mustWrite(t, child, "---\ntools: bash\n---\nmissing managed guidance\n")
+			}
+			previous := piCodeGraphEffectiveMCPProbe
+			piCodeGraphEffectiveMCPProbe = func(path string) (PiCodeGraphMCPProbeResult, error) {
+				result, _ := piProbeForTest(path)
+				if tc.missingTool {
+					result.Tools = nil
+				}
+				return result, tc.probeErr
+			}
+			t.Cleanup(func() { piCodeGraphEffectiveMCPProbe = previous })
+			status := DetectStatus(model.CommunityToolCodeGraph, home, DetectorFunc(func(string) (string, error) { return "/bin/codegraph", nil }))
+			pi := findAgentStatus(t, status, model.AgentPi)
+			if !pi.Detected || pi.Status != tc.want || pi.Configured != (tc.want == AgentStatusConfigured) {
+				t.Fatalf("Pi status = %#v, want %s", pi, tc.want)
+			}
+			if status.CodeGraphReconcileSatisfied() != (tc.want != AgentStatusMissing) {
+				t.Fatalf("reconciled = %v for %s", status.CodeGraphReconcileSatisfied(), tc.want)
+			}
+			configured, _ := PiCodeGraphConfigured(home, "")
+			if configured != (tc.want == AgentStatusConfigured) {
+				t.Fatalf("PiCodeGraphConfigured() = %v, want %v", configured, tc.want == AgentStatusConfigured)
+			}
+		})
 	}
 }
 
@@ -1264,6 +1367,25 @@ func TestInstallSkipsWhenCodeGraphAlreadyReconciled(t *testing.T) {
 	}
 	if result.StatusAfter == nil || !result.StatusAfter.CodeGraphReconcileSatisfied() {
 		t.Fatalf("StatusAfter = %#v, want reconciled", result.StatusAfter)
+	}
+}
+
+func TestInstallAlreadyReconciledHealthyMessage(t *testing.T) {
+	home := t.TempDir()
+	mustWrite(t, filepath.Join(home, ".claude.json"), `{"mcpServers":{"codegraph":{"command":"codegraph"}}}`)
+	mustWrite(t, filepath.Join(home, ".claude", "CLAUDE.md"), "user guidance\n")
+	runner := RunnerFunc(func(string, ...string) error {
+		t.Fatal("already reconciled healthy agent must not invoke installer")
+		return nil
+	})
+	detector := DetectorFunc(func(string) (string, error) { return "/bin/codegraph", nil })
+	first, err := InstallWithHome(model.CommunityToolCodeGraph, "", home, runner, detector)
+	if err != nil || !slices.Contains(first.ManualActions, "CodeGraph is already available and MCP-configured. Agent guidance was updated so enabled agents lazily initialize project indexes when needed.") {
+		t.Fatalf("healthy guidance refresh = %#v, err=%v", first, err)
+	}
+	second, err := InstallWithHome(model.CommunityToolCodeGraph, "", home, runner, detector)
+	if err != nil || len(second.CommandsRun) != 0 || !slices.Contains(second.ManualActions, "CodeGraph is already available and configured for all detected supported agents. No changes were needed.") {
+		t.Fatalf("healthy no-op = %#v, err=%v", second, err)
 	}
 }
 

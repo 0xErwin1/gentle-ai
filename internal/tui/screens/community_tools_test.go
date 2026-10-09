@@ -58,6 +58,37 @@ func TestRenderCommunityToolResultShowsPartialContextOnError(t *testing.T) {
 	}
 }
 
+func TestCommunityToolScreensShowPendingSeparately(t *testing.T) {
+	status := communitytool.Status{
+		Tool: model.CommunityToolCodeGraph,
+		CLI:  communitytool.AvailabilityAvailable,
+		Agents: []communitytool.AgentStatus{
+			{Agent: model.AgentPi, Name: "Pi", Detected: true, Status: "pending"},
+			{Agent: model.AgentClaudeCode, Name: "Claude Code", Detected: true, Configured: true, Status: communitytool.AgentStatusConfigured},
+			{Agent: model.AgentOpenCode, Name: "OpenCode", Detected: true, Status: communitytool.AgentStatusMissing},
+		},
+	}
+	for name, out := range map[string]string{
+		"selection": RenderCommunityTools(nil, 0, []communitytool.Status{status}, false, nil),
+		"result":    RenderCommunityToolResult([]communitytool.Result{{Tool: status.Tool, StatusAfter: &status}}, nil),
+	} {
+		t.Run(name, func(t *testing.T) {
+			for _, want := range []string{"1 configured • 1 missing • 1 pending", "Pi: pending", "Claude Code: configured", "OpenCode: missing"} {
+				if !strings.Contains(out, want) {
+					t.Fatalf("missing %q; output:\n%s", want, out)
+				}
+			}
+			if strings.Contains(out, "Pi: missing") || strings.Contains(out, "Pi: configured") {
+				t.Fatalf("pending Pi mislabeled:\n%s", out)
+			}
+		})
+	}
+	out := RenderCommunityToolInstalling([]model.CommunityToolID{status.Tool}, "*", []communitytool.Status{status})
+	if !strings.Contains(out, "1 configured, 1 missing detected agent wiring, 1 pending") {
+		t.Fatalf("installing counts omit pending:\n%s", out)
+	}
+}
+
 type assertErr string
 
 func (e assertErr) Error() string { return string(e) }
