@@ -4,9 +4,12 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
+	"syscall"
 	"testing"
 )
 
@@ -70,21 +73,52 @@ func TestRunDoctorPiMCPDiagnosticIsReadOnly(t *testing.T) {
 	for _, tt := range []struct {
 		name, settings, npm, mcp string
 		warn                     bool
+		inactive                 bool
+		dangling                 string
 	}{
-		{"disabled with servers", `{"extensions":["-builtin:mcp"]}`, `{}`, `{"mcpServers":{"context7":{"command":"npx"}}}`, true},
-		{"explicitly enabled", `{"extensions":["+builtin:mcp"]}`, `{}`, `{"mcpServers":{"context7":{}}}`, false},
-		{"no servers", `{"extensions":["-builtin:mcp"]}`, `{}`, `{"mcpServers":{}}`, false},
-		{"adapter in settings", `{"extensions":["-builtin:mcp"],"packages":[{"source":"npm:pi-mcp-adapter@5.0.0"}]}`, `{}`, `{"mcpServers":{"context7":{}}}`, false},
-		{"adapter in npm", `{"extensions":["-builtin:mcp"]}`, `{"dependencies":{"pi-mcp-adapter":"5.0.0"}}`, `{"mcpServers":{"context7":{}}}`, false},
+		{"disabled with servers", `{"extensions":["-builtin:mcp"]}`, `{}`, `{"mcpServers":{"context7":{"command":"npx"}}}`, true, false, ""},
+		{"explicitly enabled", `{"extensions":["+builtin:mcp"]}`, `{}`, `{"mcpServers":{"context7":{}}}`, false, false, ""},
+		{"no servers", `{"extensions":["-builtin:mcp"]}`, `{}`, `{"mcpServers":{}}`, false, false, ""},
+		{"adapter in settings", `{"extensions":["-builtin:mcp"],"packages":[{"source":"npm:pi-mcp-adapter@5.0.0"}]}`, `{}`, `{"mcpServers":{"context7":{}}}`, false, false, ""},
+		{"adapter in npm", `{"extensions":["-builtin:mcp"]}`, `{"dependencies":{"pi-mcp-adapter":"5.0.0"}}`, `{"mcpServers":{"context7":{}}}`, false, false, ""},
+		{"filtered adapter", `{"extensions":["-builtin:mcp"],"packages":[{"source":"npm:pi-mcp-adapter@5.0.0","extensions":[]}]}`, `{}`, `{"mcpServers":{"context7":{}}}`, true, true, ""},
+		{"filtered adapter with npm", `{"extensions":["-builtin:mcp"],"packages":[{"source":"npm:pi-mcp-adapter@5.0.0","extensions":[]}]}`, `{"dependencies":{"pi-mcp-adapter":"5.0.0"}}`, `{"mcpServers":{"context7":{}}}`, true, true, ""},
+		{"autoload false does not disable extensions", `{"extensions":["-builtin:mcp"],"packages":[{"source":"npm:pi-mcp-adapter@5.0.0","autoload":false}]}`, `{}`, `{"mcpServers":{"context7":{}}}`, false, false, ""},
+		{"absent settings", "", `{}`, `{"mcpServers":{"context7":{}}}`, false, false, ""},
+		{"absent mcp", `{"extensions":["-builtin:mcp"]}`, `{}`, "", false, false, ""},
+		{"dangling settings", `{}`, `{}`, `{"mcpServers":{"context7":{}}}`, true, false, "settings.json"},
+		{"dangling mcp", `{"extensions":["-builtin:mcp"]}`, `{}`, `{}`, true, false, "mcp.json"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			home := setupPiSyncHost(t)
 			dir := filepath.Join(home, ".pi", "agent")
 			files := map[string]string{"settings.json": tt.settings, "npm/package.json": tt.npm, "mcp.json": tt.mcp}
 			for name, body := range files {
-				mustWriteFile(t, filepath.Join(dir, name), []byte(body))
+				if body != "" {
+					mustWriteFile(t, filepath.Join(dir, name), []byte(body))
+				}
 			}
-			mustWriteFile(t, filepath.Join(home, ".gentle-ai", "state.json"), []byte(`{"installed_agents":["pi"]}`))
+			missing := filepath.Join(dir, "missing-target.json")
+			var readErr error
+			if tt.dangling != "" {
+				path := filepath.Join(dir, tt.dangling)
+				if err := os.Remove(path); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Symlink(missing, path); err != nil {
+					if runtime.GOOS == "windows" && errors.Is(err, syscall.Errno(1314)) {
+						t.Skip("symlink creation requires Windows privilege")
+					}
+					t.Fatal(err)
+				}
+				_, readErr = os.ReadFile(path)
+				if !os.IsNotExist(readErr) {
+					t.Fatalf("expected dangling symlink read failure: %v", readErr)
+				}
+			}
+			statePath := filepath.Join(home, ".gentle-ai", "state.json")
+			state := `{"installed_agents":["pi"]}`
+			mustWriteFile(t, statePath, []byte(state))
 			oldHome := osUserHomeDirDoctor
 			osUserHomeDirDoctor = func() (string, error) { return home, nil }
 			t.Cleanup(func() { osUserHomeDirDoctor = oldHome })
@@ -113,15 +147,40 @@ func TestRunDoctorPiMCPDiagnosticIsReadOnly(t *testing.T) {
 			}
 			if tt.warn {
 				want := "  [!!]  pi:mcp                         Pi built-in MCP is disabled in " + filepath.Join(dir, "settings.json") + "; pi-mcp-adapter is absent, so servers in " + filepath.Join(dir, "mcp.json") + " will not load. If you want these servers enabled, remove -builtin:mcp from extensions in " + filepath.Join(dir, "settings.json") + ", then restart Pi and run `gentle-ai doctor`. If MCP is intentionally disabled, keep the setting."
+				if tt.inactive {
+					want = strings.Replace(want, "pi-mcp-adapter is absent", "pi-mcp-adapter is inactive", 1)
+				}
+				if tt.dangling != "" {
+					want = "  [!!]  pi:mcp                         Pi MCP configuration could not be inspected: inspect " + filepath.Join(dir, tt.dangling) + ": " + readErr.Error() + "; inspect or repair it manually, then run `gentle-ai doctor`"
+				}
 				if line != want {
 					t.Fatalf("wrong warning:\n got %s\nwant %s", line, want)
 				}
 			}
 			for name, want := range files {
-				got, err := os.ReadFile(filepath.Join(dir, name))
+				path := filepath.Join(dir, name)
+				if name == tt.dangling {
+					if target, err := os.Readlink(path); err != nil || target != missing {
+						t.Fatalf("doctor changed dangling symlink: %q, %v", target, err)
+					}
+					if _, err := os.Lstat(missing); !os.IsNotExist(err) {
+						t.Fatalf("doctor created symlink target: %v", err)
+					}
+					continue
+				}
+				got, err := os.ReadFile(path)
+				if want == "" && os.IsNotExist(err) {
+					if _, err := os.Lstat(path); !os.IsNotExist(err) {
+						t.Fatalf("doctor created absent path: %v", err)
+					}
+					continue
+				}
 				if err != nil || string(got) != want {
 					t.Fatalf("doctor changed %s: %s, %v", name, got, err)
 				}
+			}
+			if got, err := os.ReadFile(statePath); err != nil || string(got) != state {
+				t.Fatalf("doctor changed stored state: %s, %v", got, err)
 			}
 		})
 	}

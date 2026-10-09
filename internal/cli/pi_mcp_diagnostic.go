@@ -27,7 +27,8 @@ func inspectPiMCP(homeDir string) (string, error) {
 			disabled = true
 		}
 	}
-	if !disabled || hasPiMCPAdapter(settings["packages"]) {
+	adapterPresent, adapterActive := hasPiMCPAdapter(settings["packages"])
+	if !disabled || adapterActive {
 		return "", nil
 	}
 	mcpPath := filepath.Join(dir, "mcp.json")
@@ -44,39 +45,52 @@ func inspectPiMCP(homeDir string) (string, error) {
 		return "", err
 	}
 	dependencies, _ := manifest["dependencies"].(map[string]any)
-	if _, present := dependencies["pi-mcp-adapter"]; present {
+	if _, present := dependencies["pi-mcp-adapter"]; present && !adapterPresent {
 		return "", nil
 	}
-	return fmt.Sprintf("Pi built-in MCP is disabled in %s; pi-mcp-adapter is absent, so servers in %s will not load. If you want these servers enabled, remove -builtin:mcp from extensions in %s, then restart Pi and run `gentle-ai doctor`. If MCP is intentionally disabled, keep the setting.", settingsPath, mcpPath, settingsPath), nil
+	adapterStatus := "absent"
+	if adapterPresent {
+		adapterStatus = "inactive"
+	}
+	return fmt.Sprintf("Pi built-in MCP is disabled in %s; pi-mcp-adapter is %s, so servers in %s will not load. If you want these servers enabled, remove -builtin:mcp from extensions in %s, then restart Pi and run `gentle-ai doctor`. If MCP is intentionally disabled, keep the setting.", settingsPath, adapterStatus, mcpPath, settingsPath), nil
 }
 
-func hasPiMCPAdapter(packages any) bool {
+// Presence and activity are separate: npm dependencies cannot override an
+// explicitly empty extension filter. autoload: false alone is not a disable.
+func hasPiMCPAdapter(packages any) (present, active bool) {
 	switch value := packages.(type) {
 	case string:
-		return value == "npm:pi-mcp-adapter" || strings.HasPrefix(value, "npm:pi-mcp-adapter@")
+		present = value == "npm:pi-mcp-adapter" || strings.HasPrefix(value, "npm:pi-mcp-adapter@")
+		return present, present
 	case []any:
 		for _, entry := range value {
-			if hasPiMCPAdapter(entry) {
-				return true
-			}
+			found, enabled := hasPiMCPAdapter(entry)
+			present, active = present || found, active || enabled
 		}
 	case map[string]any:
 		if source, ok := value["source"].(string); ok {
-			return hasPiMCPAdapter(source)
+			present, active = hasPiMCPAdapter(source)
+			if extensions, ok := value["extensions"].([]any); ok && len(extensions) == 0 {
+				active = false
+			}
+			return present, active
 		}
 		for source := range value {
-			if hasPiMCPAdapter(source) {
-				return true
-			}
+			found, enabled := hasPiMCPAdapter(source)
+			present, active = present || found, active || enabled
 		}
 	}
-	return false
+	return present, active
 }
 
 func readPiDiagnosticJSON(path string) (map[string]any, error) {
 	data, err := os.ReadFile(path)
 	if os.IsNotExist(err) {
-		return nil, nil
+		if _, statErr := os.Lstat(path); os.IsNotExist(statErr) {
+			return nil, nil
+		} else if statErr != nil {
+			err = statErr
+		}
 	}
 	if err != nil {
 		return nil, fmt.Errorf("inspect %s: %w", path, err)
