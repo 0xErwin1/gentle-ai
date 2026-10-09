@@ -265,11 +265,13 @@ func ReconcilePiCodeGraph(options PiCodeGraphOptions) (result PiCodeGraphResult,
 			probe = probePiCodeGraphMCP
 		}
 	}
-	if err = verifyPiCodeGraphWithProbe(effectiveMCPPath, result.Children, probe); err != nil {
+	var verification PiCodeGraphMCPVerification
+	if verification, err = verifyPiCodeGraphCapabilityWithProbe(effectiveMCPPath, result.Children, probe); err != nil {
 		result, err = PreservePiCodeGraphPending(result, err)
 		if err != nil {
 			return result, err
 		}
+		result.MCP = verification
 	} else {
 		result.MCP, err = verifyPiMCPWithProbe(effectiveMCPPath, probe)
 		if err != nil {
@@ -443,11 +445,6 @@ func stripPiCodeGraphBlocks(body string) (string, error) {
 		}
 	}
 	return body, nil
-}
-
-func verifyPiCodeGraphWithProbe(mcpPath string, children []PiCodeGraphChild, probe PiCodeGraphEffectiveMCPProbe) error {
-	_, err := verifyPiCodeGraphCapabilityWithProbe(mcpPath, children, probe)
-	return err
 }
 
 func verifyPiCodeGraphCapabilityWithProbe(mcpPath string, children []PiCodeGraphChild, probe PiCodeGraphEffectiveMCPProbe) (PiCodeGraphMCPVerification, error) {

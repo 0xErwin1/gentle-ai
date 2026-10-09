@@ -172,7 +172,16 @@ func InstallWithHome(id model.CommunityToolID, workspaceDir string, homeDir stri
 		if err := validateCodeGraphInstallStatus(after); err != nil {
 			return rollback(err)
 		}
-		if openCodeResult.Changed || guidanceResult.Changed {
+		piPending := false
+		for _, agent := range after.Agents {
+			if agent.Agent == model.AgentPi && agent.Status == AgentStatusPending {
+				piPending = true
+				break
+			}
+		}
+		if piPending {
+			result.ManualActions = append(result.ManualActions, "CodeGraph configuration is reconciled for all detected supported agents. Pi activation health remains pending.")
+		} else if openCodeResult.Changed || guidanceResult.Changed {
 			result.ManualActions = append(result.ManualActions, "CodeGraph is already available and MCP-configured. Agent guidance was updated so enabled agents lazily initialize project indexes when needed.")
 		} else {
 			result.ManualActions = append(result.ManualActions, "CodeGraph is already available and configured for all detected supported agents. No changes were needed.")

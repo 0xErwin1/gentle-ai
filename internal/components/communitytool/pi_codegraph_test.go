@@ -44,6 +44,9 @@ func TestPiCodeGraphReconcileInjectsOnlyCompatibleToolsAndGuidanceForEveryChild(
 	if err != nil {
 		t.Fatalf("ReconcilePiCodeGraph() error = %v", err)
 	}
+	if !result.MCP.Adapter || !result.MCP.ReadOnlyExplore || !slices.Equal(result.MCP.Tools, []string{"codegraph_explore"}) {
+		t.Fatalf("MCP = %#v, want verified healthy capability", result.MCP)
+	}
 	if len(result.Children) != 2 || result.Children[0].Classification != PiChildCompatible || result.Children[1].Classification != PiChildGuidanceOnly {
 		t.Fatalf("children = %#v", result.Children)
 	}
@@ -555,8 +558,8 @@ func TestVerifyPiCodeGraphRejectsNonCanonicalMCP(t *testing.T) {
 	home := t.TempDir()
 	mcpPath := filepath.Join(home, "mcp.json")
 	writePiFile(t, mcpPath, `{"mcpServers":{"not-codegraph":{"command":"other codegraph"}}}`)
-	if err := verifyPiCodeGraphWithProbe(mcpPath, nil, piCodeGraphEffectiveMCPProbe); err == nil {
-		t.Fatal("verifyPiCodeGraphWithProbe() accepted substring-only MCP evidence")
+	if _, err := verifyPiCodeGraphCapabilityWithProbe(mcpPath, nil, piCodeGraphEffectiveMCPProbe); err == nil {
+		t.Fatal("verifyPiCodeGraphCapabilityWithProbe() accepted substring-only MCP evidence")
 	}
 }
 
@@ -725,6 +728,9 @@ func TestPiCodeGraphPendingProbePreservesConfiguredFiles(t *testing.T) {
 	result, err := ReconcilePiCodeGraph(PiCodeGraphOptions{HomeDir: home, Selected: true})
 	if err != nil {
 		t.Fatalf("ReconcilePiCodeGraph() error = %v, want pending success", err)
+	}
+	if !result.MCP.Adapter || !result.MCP.ReadOnlyExplore || !slices.Equal(result.MCP.Tools, []string{"codegraph_explore"}) {
+		t.Fatalf("MCP = %#v, want verified capability despite pending health", result.MCP)
 	}
 	if len(result.ManualActions) != 1 {
 		t.Fatalf("ManualActions = %#v, want one pending action", result.ManualActions)

@@ -849,14 +849,39 @@ func TestInstallLeavesPiPendingWhenAdapterHealthIsNotMachineVerifiable(t *testin
 	if calls != 0 || len(rerun.CommandsRun) != 0 {
 		t.Fatalf("rerun calls = %d, commands = %v, want no install commands", calls, rerun.CommandsRun)
 	}
-	if !slices.Contains(rerun.ManualActions, "CodeGraph is already available and configured for all detected supported agents. No changes were needed.") {
-		t.Fatalf("rerun actions = %v, want already-reconciled note", rerun.ManualActions)
+	wantPending := "CodeGraph configuration is reconciled for all detected supported agents. Pi activation health remains pending."
+	if !slices.Contains(rerun.ManualActions, wantPending) {
+		t.Fatalf("rerun actions = %v, want %q", rerun.ManualActions, wantPending)
+	}
+	for _, action := range rerun.ManualActions {
+		if strings.Contains(action, "configured for all") || strings.Contains(action, "already available and MCP-configured") {
+			t.Fatalf("pending rerun falsely reports configured health: %q", action)
+		}
 	}
 	if rerun.PiCodeGraph == nil || !slices.Contains(rerun.ManualActions, piCodeGraphPendingAction) {
 		t.Fatalf("rerun = %#v, want pending health guidance preserved", rerun)
 	}
 	if rerun.StatusAfter == nil || findAgentStatus(t, *rerun.StatusAfter, model.AgentPi).Status != "pending" {
 		t.Fatalf("rerun status = %#v, want Pi still pending", rerun.StatusAfter)
+	}
+	mustWrite(t, filepath.Join(home, ".claude.json"), `{"mcpServers":{"codegraph":{"command":"codegraph"}}}`)
+	mustWrite(t, filepath.Join(home, ".claude", "CLAUDE.md"), "user guidance\n")
+	updated, err := InstallWithHome(model.CommunityToolCodeGraph, "", home, RunnerFunc(func(string, ...string) error {
+		calls++
+		return nil
+	}), DetectorFunc(func(string) (string, error) { return "/bin/codegraph", nil }))
+	if err != nil || calls != 0 || len(updated.CommandsRun) != 0 {
+		t.Fatalf("guidance refresh = %#v, err=%v, calls=%d, want no installer", updated, err, calls)
+	}
+	if !slices.Contains(updated.ManualActions, wantPending) || !slices.Contains(updated.ManualActions, piCodeGraphPendingAction) {
+		t.Fatalf("guidance refresh actions = %v, want reconciled pending guidance", updated.ManualActions)
+	}
+	if pi := findAgentStatus(t, *updated.StatusAfter, model.AgentPi); pi.Configured || pi.Status != AgentStatusPending {
+		t.Fatalf("refreshed Pi = %#v, want unconfigured pending", pi)
+	}
+	guidance, err := os.ReadFile(filepath.Join(home, ".claude", "CLAUDE.md"))
+	if err != nil || !strings.Contains(string(guidance), "gentle-ai:codegraph-guidance") {
+		t.Fatalf("Claude guidance = %q, err=%v, want newly reconciled guidance", guidance, err)
 	}
 }
 
@@ -1342,6 +1367,25 @@ func TestInstallSkipsWhenCodeGraphAlreadyReconciled(t *testing.T) {
 	}
 	if result.StatusAfter == nil || !result.StatusAfter.CodeGraphReconcileSatisfied() {
 		t.Fatalf("StatusAfter = %#v, want reconciled", result.StatusAfter)
+	}
+}
+
+func TestInstallAlreadyReconciledHealthyMessage(t *testing.T) {
+	home := t.TempDir()
+	mustWrite(t, filepath.Join(home, ".claude.json"), `{"mcpServers":{"codegraph":{"command":"codegraph"}}}`)
+	mustWrite(t, filepath.Join(home, ".claude", "CLAUDE.md"), "user guidance\n")
+	runner := RunnerFunc(func(string, ...string) error {
+		t.Fatal("already reconciled healthy agent must not invoke installer")
+		return nil
+	})
+	detector := DetectorFunc(func(string) (string, error) { return "/bin/codegraph", nil })
+	first, err := InstallWithHome(model.CommunityToolCodeGraph, "", home, runner, detector)
+	if err != nil || !slices.Contains(first.ManualActions, "CodeGraph is already available and MCP-configured. Agent guidance was updated so enabled agents lazily initialize project indexes when needed.") {
+		t.Fatalf("healthy guidance refresh = %#v, err=%v", first, err)
+	}
+	second, err := InstallWithHome(model.CommunityToolCodeGraph, "", home, runner, detector)
+	if err != nil || len(second.CommandsRun) != 0 || !slices.Contains(second.ManualActions, "CodeGraph is already available and configured for all detected supported agents. No changes were needed.") {
+		t.Fatalf("healthy no-op = %#v, err=%v", second, err)
 	}
 }
 
