@@ -5,7 +5,10 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
+	"reflect"
+
+	"github.com/BurntSushi/toml"
+	"gopkg.in/yaml.v3"
 
 	"github.com/gentleman-programming/gentle-ai/v4/internal/agents"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/claude"
@@ -76,6 +79,13 @@ func injectTOMLFile(homeDir string, adapter agents.Adapter) (InjectionResult, er
 		return InjectionResult{}, fmt.Errorf("read TOML config %q: %w", configPath, err)
 	}
 
+	var config map[string]any
+	if _, err := toml.Decode(string(existingBytes), &config); err != nil {
+		return InjectionResult{}, fmt.Errorf("parse TOML config %q: %w", configPath, err)
+	}
+	if hasContext7Entry(config, "mcp_servers") {
+		return InjectionResult{Files: []string{configPath}}, nil
+	}
 	existing := string(existingBytes)
 	updated := filemerge.UpsertCodexRemoteMCPServerBlock(existing, "context7", "https://mcp.context7.com/mcp")
 
@@ -105,6 +115,13 @@ func injectYAMLFile(homeDir string, adapter agents.Adapter) (InjectionResult, er
 		return InjectionResult{}, fmt.Errorf("read YAML config %q: %w", configPath, err)
 	}
 
+	var config map[string]any
+	if err := yaml.Unmarshal(existingBytes, &config); err != nil {
+		return InjectionResult{}, fmt.Errorf("parse YAML config %q: %w", configPath, err)
+	}
+	if hasContext7Entry(config, "mcp_servers") {
+		return InjectionResult{Files: []string{configPath}}, nil
+	}
 	existing := string(existingBytes)
 	updated := filemerge.UpsertHermesContext7Block(existing)
 
@@ -119,6 +136,11 @@ func injectYAMLFile(homeDir string, adapter agents.Adapter) (InjectionResult, er
 // injectSeparateFile writes a standalone JSON file per MCP server.
 func injectSeparateFile(homeDir string, adapter agents.Adapter) (InjectionResult, error) {
 	path := adapter.MCPConfigPath(homeDir, "context7")
+	if _, err := os.Stat(path); err == nil {
+		return InjectionResult{Files: []string{path}}, nil
+	} else if !os.IsNotExist(err) {
+		return InjectionResult{}, err
+	}
 	writeResult, err := filemerge.WriteFileAtomic(path, DefaultContext7ServerJSON(), 0o644)
 	if err != nil {
 		return InjectionResult{}, err
@@ -167,37 +189,7 @@ func injectOpenCodeMergeIntoSettings(settingsPath string, agent model.AgentID) (
 		return InjectionResult{}, err
 	}
 
-	overlay := OpenCodeContext7OverlayJSON()
-	if settings, parseErr := filemerge.UnmarshalJSONObject(baseJSON); parseErr == nil {
-		mcp, _ := settings["mcp"].(map[string]any)
-		context7, _ := mcp["context7"].(map[string]any)
-		if headers, ok := context7["headers"].(map[string]any); ok {
-			validHeaders := make(map[string]string, len(headers))
-			for name, value := range headers {
-				if header, valid := value.(string); valid {
-					validHeaders[name] = header
-				}
-			}
-			replacement := map[string]any{
-				"type":    "remote",
-				"url":     "https://mcp.context7.com/mcp",
-				"enabled": true,
-			}
-			if len(validHeaders) > 0 {
-				replacement["headers"] = validHeaders
-			}
-			overlay, err = json.Marshal(map[string]any{
-				"mcp": map[string]any{
-					"context7": map[string]any{"__replace__": replacement},
-				},
-			})
-			if err != nil {
-				return InjectionResult{}, fmt.Errorf("marshal opencode context7 overlay: %w", err)
-			}
-		}
-	}
-
-	merged, err := mergeSettingsJSON(settingsPath, baseJSON, overlay)
+	merged, err := mergeContext7JSON(settingsPath, baseJSON, OpenCodeContext7OverlayJSON())
 	if err != nil {
 		return InjectionResult{}, err
 	}
@@ -225,7 +217,7 @@ func injectOpenClawMergeIntoSettings(settingsPath string) (InjectionResult, erro
 		return InjectionResult{}, err
 	}
 
-	merged, err := filemerge.MergeJSONObjects(normalized, OpenClawContext7OverlayJSON())
+	merged, err := mergeContext7JSON(settingsPath, normalized, OpenClawContext7OverlayJSON())
 	if err != nil {
 		return InjectionResult{}, err
 	}
@@ -286,7 +278,7 @@ func migrateOpenClawLegacyMCPServers(baseJSON []byte) ([]byte, error) {
 // silently ignores the top-level mcpServers key earlier versions wrote
 // (issue #1868).
 func injectClaudeUserConfig(homeDir string, adapter agents.Adapter) (InjectionResult, error) {
-	writeResult, configPath, err := claude.MergeUserConfig(homeDir, DefaultContext7OverlayJSON())
+	writeResult, configPath, err := claude.MergeUserMCPServer(homeDir, "context7", DefaultContext7OverlayJSON())
 	if err != nil {
 		return InjectionResult{}, err
 	}
@@ -339,7 +331,11 @@ func isManagedSettingsContext7Entry(entry any) bool {
 	if !ok {
 		return false
 	}
-	return server["command"] == "npx" && strings.Contains(fmt.Sprint(server["args"]), "context7-mcp")
+	var managed map[string]any
+	if err := json.Unmarshal(DefaultContext7ServerJSON(), &managed); err != nil {
+		return false
+	}
+	return reflect.DeepEqual(server, managed)
 }
 
 func removeInertSettingsMCPServers(settingsPath string) (bool, error) {
@@ -410,12 +406,40 @@ func mergeJSONFile(path string, overlay []byte) (filemerge.WriteResult, error) {
 		return filemerge.WriteResult{}, err
 	}
 
-	merged, err := filemerge.MergeJSONObjectsForPath(path, baseJSON, overlay)
+	merged, err := mergeContext7JSON(path, baseJSON, overlay)
 	if err != nil {
 		return filemerge.WriteResult{}, err
 	}
 
 	return filemerge.WriteFileAtomic(path, merged, filemerge.ExistingFileMode(path, 0o644))
+}
+
+// Context7 has no reliable ownership metadata. An existing entry, including
+// an older or user-selected package pin, is therefore left intact.
+func hasContext7Entry(root map[string]any, keys ...string) bool {
+	for _, key := range keys {
+		root, _ = root[key].(map[string]any)
+	}
+	_, exists := root["context7"]
+	return exists
+}
+
+func mergeContext7JSON(path string, base, overlay []byte) ([]byte, error) {
+	// Keep the existing JSONC refusal checks even when no write is needed.
+	merged, err := mergeSettingsJSON(path, base, overlay)
+	if err != nil {
+		return nil, err
+	}
+	root, err := filemerge.UnmarshalJSONObject(base)
+	defaults, _ := filemerge.UnmarshalJSONObject(overlay)
+	if err == nil {
+		for _, keys := range [][]string{{"mcpServers"}, {"servers"}, {"mcp"}, {"mcp", "servers"}} {
+			if hasContext7Entry(defaults, keys...) && hasContext7Entry(root, keys...) {
+				return base, nil
+			}
+		}
+	}
+	return merged, nil
 }
 
 var osReadFile = func(path string) ([]byte, error) {

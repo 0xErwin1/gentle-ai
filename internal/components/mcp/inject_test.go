@@ -345,7 +345,7 @@ func TestInjectOpenClawMergesContext7UnderMCPDotServersAndMigratesLegacyMCPServe
 	if !strings.Contains(text, `"sessionIdleTtlMs": 120000`) {
 		t.Fatalf("openclaw.json should preserve existing mcp fields; got:\n%s", text)
 	}
-	if !strings.Contains(text, `"context7"`) || !strings.Contains(text, `@upstash/context7-mcp@`) {
+	if !strings.Contains(text, `"context7"`) || !strings.Contains(text, `@upstash/context7-mcp`) {
 		t.Fatalf("openclaw.json missing context7 under mcp.servers; got:\n%s", text)
 	}
 }
@@ -397,19 +397,18 @@ func TestInjectOpenCodeAndKilocodePreserveContext7Headers(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Inject() first error = %v", err)
 			}
-			if !first.Changed {
-				t.Fatal("Inject() first changed = false")
+			if first.Changed {
+				t.Fatal("Inject() changed a configured Context7 entry")
 			}
 
-			assertOpenCodeRemoteContext7Schema(t, configPath)
 			context7 := readOpenCodeContext7Entry(t, configPath)
 			headers, ok := context7["headers"].(map[string]any)
 			if !ok || headers["CONTEXT7_API_KEY"] != "{env:CONTEXT7_API_KEY}" {
 				t.Fatalf("mcp.context7.headers = %#v; want existing API key header", context7["headers"])
 			}
 			for _, key := range []string{"number", "nested", "list"} {
-				if _, exists := headers[key]; exists {
-					t.Fatalf("mcp.context7.headers[%q] = %#v; want invalid value discarded", key, headers[key])
+				if _, exists := headers[key]; !exists {
+					t.Fatalf("mcp.context7.headers[%q] was discarded", key)
 				}
 			}
 
@@ -442,8 +441,6 @@ func TestInjectOpenCodeAndKilocodeRecoverMalformedSettingsAndDiscardInvalidHeade
 		{name: "KiloCode malformed settings", adapter: kilocodeAdapter(), existing: `{malformed`},
 		{name: "OpenCode malformed headers", adapter: opencodeAdapter(), existing: `{"mcp":{"context7":{"headers":`},
 		{name: "KiloCode malformed headers", adapter: kilocodeAdapter(), existing: `{"mcp":{"context7":{"headers":`},
-		{name: "OpenCode non-object headers", adapter: opencodeAdapter(), existing: `{"mcp":{"context7":{"headers":["secret"]}}}`},
-		{name: "KiloCode non-object headers", adapter: kilocodeAdapter(), existing: `{"mcp":{"context7":{"headers":"secret"}}}`},
 	}
 
 	for _, tt := range tests {
@@ -506,7 +503,7 @@ func TestInjectOpenCodeRejectsMalformedJSONCSettingsWithoutReplacingBytes(t *tes
 	}
 }
 
-func TestInjectOpenCodePreservesOtherMCPEntriesWhenReplacingContext7(t *testing.T) {
+func TestInjectOpenCodePreservesOtherMCPEntriesAlongsideContext7(t *testing.T) {
 	home := t.TempDir()
 	adapter := opencodeAdapter()
 	configPath := adapter.SettingsPath(home)
@@ -539,7 +536,7 @@ func TestInjectOpenCodePreservesOtherMCPEntriesWhenReplacingContext7(t *testing.
 		t.Fatalf("Inject() error = %v", err)
 	}
 
-	assertOpenCodeRemoteContext7Schema(t, configPath)
+	assertContext7FileUnchanged(t, configPath, legacy)
 
 	content, err := os.ReadFile(configPath)
 	if err != nil {
@@ -667,7 +664,7 @@ func TestInjectClaudeSettingsInertBlockCleanup(t *testing.T) {
 		settings       string
 		wantKeyRemoved bool
 	}{
-		{"managed-only block is removed", `{"theme":"dark","mcpServers":{"context7":{"command":"npx","args":["--","context7-mcp"]}}}`, true},
+		{"managed-only block is removed", `{"theme":"dark","mcpServers":{"context7":` + string(DefaultContext7ServerJSON()) + `}}`, true},
 		{"foreign block is left alone", `{"theme":"dark","mcpServers":{"context7":{"command":"npx","args":["--","context7-mcp"]},"stranded":{"command":"stranded-server"}}}`, false},
 		{"user-authored context7 is left alone", `{"theme":"dark","mcpServers":{"context7":{"command":"my-own-proxy"}}}`, false},
 		{"empty block is left alone", `{"theme":"dark","mcpServers":{}}`, false},
@@ -1040,7 +1037,7 @@ func TestInjectClaudeWorkspaceCleansInertSettingsBlock(t *testing.T) {
 		name, settings string
 		wantKey        bool
 	}{
-		{"managed-only", `{"theme":"dark","mcpServers":{"context7":{"command":"npx","args":["--","context7-mcp"]}}}`, false},
+		{"managed-only", `{"theme":"dark","mcpServers":{"context7":` + string(DefaultContext7ServerJSON()) + `}}`, false},
 		{"foreign", `{"theme":"dark","mcpServers":{"context7":{"command":"npx","args":["--","context7-mcp"]},"stranded":{"command":"stranded-server"}}}`, true},
 		{"empty", `{"theme":"dark","mcpServers":{}}`, true},
 	} {
@@ -1231,7 +1228,7 @@ args = ["mcp", "--tools=agent"]
 	}
 }
 
-func TestInjectCodexContext7ReplacesLegacyLocalBlock(t *testing.T) {
+func TestInjectCodexContext7PreservesLegacyLocalBlock(t *testing.T) {
 	home := t.TempDir()
 	configTOML := filepath.Join(home, ".codex", "config.toml")
 	if err := os.MkdirAll(filepath.Dir(configTOML), 0o755); err != nil {
@@ -1253,8 +1250,8 @@ args = ["mcp", "--tools=agent"]
 	if err != nil {
 		t.Fatalf("Inject(codex) error = %v", err)
 	}
-	if !result.Changed {
-		t.Fatal("Inject(codex) changed = false; expected legacy local block migration")
+	if result.Changed {
+		t.Fatal("Inject(codex) changed an existing local block")
 	}
 
 	content, err := os.ReadFile(configTOML)
@@ -1266,12 +1263,7 @@ args = ["mcp", "--tools=agent"]
 	if count := strings.Count(text, "[mcp_servers.context7]"); count != 1 {
 		t.Fatalf("expected 1 [mcp_servers.context7], got %d; result:\n%s", count, text)
 	}
-	if !strings.Contains(text, `url = "https://mcp.context7.com/mcp"`) {
-		t.Fatalf("config.toml missing remote Context7 URL after migration; got:\n%s", text)
-	}
-	if strings.Contains(text, `command = "npx"`) || strings.Contains(text, "context7-mcp") {
-		t.Fatalf("legacy local Context7 config survived migration; got:\n%s", text)
-	}
+	assertContext7FileUnchanged(t, configTOML, existing)
 	if !strings.Contains(text, "[mcp_servers.engram]") {
 		t.Fatalf("engram block was not preserved; got:\n%s", text)
 	}
@@ -1314,7 +1306,7 @@ args = ["-y", "context7-mcp"]
 	if err != nil {
 		t.Fatalf("ReadFile(config.toml) error = %v", err)
 	}
-	want := instructions + "\n\n[mcp_servers.context7]\nurl = \"https://mcp.context7.com/mcp\"\n"
+	want := existing
 	if got := string(content); got != want {
 		t.Fatalf("config.toml mismatch:\nwant:\n%s\ngot:\n%s", want, got)
 	}
@@ -1360,7 +1352,7 @@ func TestInjectVSCodeWritesContext7ToMCPConfigFile(t *testing.T) {
 	}
 }
 
-func TestInjectAntigravityReplacesLegacyContext7LocalConfig(t *testing.T) {
+func TestInjectAntigravityPreservesLegacyContext7LocalConfig(t *testing.T) {
 	home := t.TempDir()
 	adapter := antigravityAdapter()
 	configPath := adapter.MCPConfigPath(home, "context7")
@@ -1385,11 +1377,11 @@ func TestInjectAntigravityReplacesLegacyContext7LocalConfig(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Inject() first error = %v", err)
 	}
-	if !first.Changed {
-		t.Fatalf("Inject() first changed = false; expected migration to rewrite legacy context7")
+	if first.Changed {
+		t.Fatal("Inject() changed a configured Context7 entry")
 	}
 
-	assertAntigravityContext7Schema(t, configPath)
+	assertContext7FileUnchanged(t, configPath, legacy)
 
 	second, err := Inject(home, home, adapter)
 	if err != nil {
@@ -1399,7 +1391,7 @@ func TestInjectAntigravityReplacesLegacyContext7LocalConfig(t *testing.T) {
 		t.Fatalf("Inject() second changed = true; expected idempotent context7 rewrite")
 	}
 
-	assertAntigravityContext7Schema(t, configPath)
+	assertContext7FileUnchanged(t, configPath, legacy)
 }
 
 func TestInjectKimiWritesContext7ToMCPConfigFile(t *testing.T) {
@@ -1442,7 +1434,7 @@ func TestInjectKimiWritesContext7ToMCPConfigFile(t *testing.T) {
 	}
 }
 
-func TestInjectKimiReplacesLegacyContext7LocalConfig(t *testing.T) {
+func TestInjectKimiPreservesLegacyContext7LocalConfig(t *testing.T) {
 	home := t.TempDir()
 	adapter := kimiAdapter()
 	configPath := adapter.MCPConfigPath(home, "context7")
@@ -1467,11 +1459,11 @@ func TestInjectKimiReplacesLegacyContext7LocalConfig(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Inject(kimi) first error = %v", err)
 	}
-	if !first.Changed {
-		t.Fatalf("Inject(kimi) first changed = false; expected migration to rewrite legacy context7")
+	if first.Changed {
+		t.Fatal("Inject(kimi) changed a configured Context7 entry")
 	}
 
-	assertKimiContext7Schema(t, configPath)
+	assertContext7FileUnchanged(t, configPath, legacy)
 
 	second, err := Inject(home, home, adapter)
 	if err != nil {
@@ -1481,7 +1473,7 @@ func TestInjectKimiReplacesLegacyContext7LocalConfig(t *testing.T) {
 		t.Fatalf("Inject(kimi) second changed = true; expected idempotent context7 rewrite")
 	}
 
-	assertKimiContext7Schema(t, configPath)
+	assertContext7FileUnchanged(t, configPath, legacy)
 }
 
 // TestInjectHermesContext7IntoYAML verifies that Inject(hermes) writes context7
