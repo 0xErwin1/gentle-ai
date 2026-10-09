@@ -31,6 +31,8 @@ func RestoreManagedBackup(manifest backup.Manifest) error {
 	return (backup.RestoreService{Roots: roots}).Restore(manifest)
 }
 
+// pathInsideCodexRoot checks lexical strict containment for absolute paths.
+// RestoreService performs the subsequent filesystem and symlink validation.
 func pathInsideCodexRoot(path, root string) bool {
 	if !filepath.IsAbs(path) || !filepath.IsAbs(root) {
 		return false

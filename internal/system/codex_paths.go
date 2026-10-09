@@ -23,6 +23,8 @@ func ValidateCodexHome(homeDir string) error {
 	return err
 }
 
+// resolveCodexHome validates and canonicalizes an applicable override without writes.
+// Isolated homes and an unset or empty override use the local .codex fallback.
 func resolveCodexHome(homeDir string) (string, error) {
 	fallback := filepath.Join(homeDir, ".codex")
 	override := os.Getenv("CODEX_HOME")

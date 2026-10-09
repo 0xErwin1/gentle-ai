@@ -9,6 +9,8 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v4/internal/system"
 )
 
+// TestCodexHomeResolver checks override resolution, rejection without mutation,
+// and isolated-home behavior through the public resolver APIs.
 func TestCodexHomeResolver(t *testing.T) {
 	for _, scenario := range []string{"unset", "empty", "absolute", "relative", "missing", "file", "isolated"} {
 		t.Run(scenario, func(t *testing.T) {

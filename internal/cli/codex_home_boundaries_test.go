@@ -10,6 +10,8 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v4/internal/backup"
 )
 
+// codexCLIHome isolates home-related state and restores the CLI home resolver.
+// The initial override is intentionally missing until a test supplies a root.
 func codexCLIHome(t *testing.T) string {
 	t.Helper()
 	home := t.TempDir()
@@ -26,6 +28,7 @@ func codexCLIHome(t *testing.T) string {
 	return home
 }
 
+// externalCodexHome selects an existing canonical root outside the isolated home.
 func externalCodexHome(t *testing.T) (string, string) {
 	t.Helper()
 	home := codexCLIHome(t)
@@ -38,6 +41,7 @@ func externalCodexHome(t *testing.T) (string, string) {
 	return home, canonical
 }
 
+// TestCodexHomeStandaloneRestoreExternalRoot checks public restore output and bytes.
 func TestCodexHomeStandaloneRestoreExternalRoot(t *testing.T) {
 	home, root := externalCodexHome(t)
 	path := filepath.Join(root, "config.toml")
@@ -64,6 +68,7 @@ func TestCodexHomeStandaloneRestoreExternalRoot(t *testing.T) {
 	}
 }
 
+// TestCodexHomeRestoreStillRejectsUnrelatedRoot checks refusal without file mutation.
 func TestCodexHomeRestoreStillRejectsUnrelatedRoot(t *testing.T) {
 	home, _ := externalCodexHome(t)
 	path := filepath.Join(t.TempDir(), "outside.txt")
@@ -91,6 +96,7 @@ func TestCodexHomeRestoreStillRejectsUnrelatedRoot(t *testing.T) {
 	}
 }
 
+// TestCodexHomeRestorePreservesOrdinaryHomeScope checks the existing home restore scope.
 func TestCodexHomeRestorePreservesOrdinaryHomeScope(t *testing.T) {
 	home, _ := externalCodexHome(t)
 	path := filepath.Join(home, "ordinary.txt")
