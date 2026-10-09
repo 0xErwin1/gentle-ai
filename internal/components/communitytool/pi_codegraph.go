@@ -271,13 +271,8 @@ func ReconcilePiCodeGraph(options PiCodeGraphOptions) (result PiCodeGraphResult,
 		if err != nil {
 			return result, err
 		}
-		result.MCP = verification
-	} else {
-		result.MCP, err = verifyPiMCPWithProbe(effectiveMCPPath, probe)
-		if err != nil {
-			return result, err
-		}
 	}
+	result.MCP = verification
 	encoded, marshalErr := json.MarshalIndent(manifest, "", "  ")
 	if marshalErr != nil {
 		return result, marshalErr
