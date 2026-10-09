@@ -139,7 +139,7 @@ func TestCursorJudgmentDayCLISmoke(t *testing.T) {
 		return got
 	}
 
-	installOutput := run("install", "--agent", "cursor", "--component", "skills", "--skill", "judgment-day", "--persona", "neutral")
+	installOutput := run("install", "--agent", "cursor", "--component", "skills", "--skill", "judgment-day")
 	if !strings.Contains(installOutput, "Verification checks:") || !strings.Contains(installOutput, "0 failed") {
 		t.Fatalf("install did not report successful verification: %s", installOutput)
 	}
