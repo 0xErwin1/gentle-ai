@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/gentleman-programming/gentle-ai/v4/internal/agents"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/components/engram"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/doctor"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
@@ -124,6 +125,12 @@ func RunDoctor(ctx context.Context, w io.Writer) error {
 		checks = append(checks, doctor.Check{ID: doctor.CheckOpenCodeProfile, Run: func(context.Context) doctor.Result {
 			return checkOpenCodeProfile(homeDir, pathDirs)
 		}})
+	}
+	for _, agent := range installedAgents {
+		if agent == string(model.AgentPi) {
+			checks = append(checks, doctor.Check{ID: "pi:mcp", Run: func(context.Context) doctor.Result { return checkPiMCP(homeDir) }})
+			break
+		}
 	}
 	report := (doctor.Runner{Checks: checks}).Run(ctx)
 
@@ -549,8 +556,14 @@ func checkStateJSON(homeDir string) CheckResult {
 
 	var missing []string
 	var dangling []string
+	var unknown []string
 	for _, agentID := range s.InstalledAgents {
-		if dir := agentConfigDir(homeDir, agentID); dir != "" {
+		dir, err := agentConfigDir(homeDir, agentID)
+		if err != nil {
+			unknown = append(unknown, agentID)
+			continue
+		}
+		if dir != "" {
 			info, lstatErr := os.Lstat(dir)
 			if os.IsNotExist(lstatErr) {
 				// A missing final path is only genuinely missing when its
@@ -594,7 +607,20 @@ func checkStateJSON(homeDir string) CheckResult {
 		if len(missing) > 0 {
 			detail += "; genuinely absent config dirs: " + strings.Join(missing, ", ")
 		}
+		if len(unknown) > 0 {
+			detail += "; unrecognized agent IDs: " + strings.Join(unknown, ", ")
+		}
 		return CheckResult{Name: id, Status: CheckStatusWarn, Detail: detail}
+	}
+
+	if len(unknown) > 0 {
+		detail := fmt.Sprintf("state lists unrecognized agent IDs: %s; inspect or repair the state file, then re-run 'gentle-ai doctor'", strings.Join(unknown, ", "))
+		result := CheckResult{Name: id, Status: CheckStatusWarn, Detail: detail}
+		if len(missing) > 0 {
+			result.Detail += "; config dirs are missing: " + strings.Join(missing, ", ")
+			result.Remedy = doctor.NewRemedy(doctor.RemedySync, "Run 'gentle-ai sync' to restore missing config files")
+		}
+		return result
 	}
 
 	if len(missing) > 0 {
@@ -651,27 +677,17 @@ func danglingAncestor(homeDir, path string) (string, error) {
 	return "", nil
 }
 
-// agentConfigDir returns the expected config directory for a known agent ID.
-func agentConfigDir(homeDir, agentID string) string {
-	cfgBase := filepath.Join(homeDir, ".config")
-	switch agentID {
-	case "claude-code":
-		return filepath.Join(homeDir, ".claude")
-	case "opencode":
-		return filepath.Join(cfgBase, "opencode")
-	case "cursor":
-		return filepath.Join(homeDir, ".cursor")
-	case "windsurf":
-		return filepath.Join(homeDir, ".codeium", "windsurf")
-	case "vscode":
-		return filepath.Join(cfgBase, "Code")
-	case "codex":
-		return filepath.Join(homeDir, ".codex")
-	case "kiro":
-		return filepath.Join(homeDir, ".kiro")
-	default:
-		return ""
+// agentConfigDir uses the same adapter paths as installation and sync. An
+// empty path means a known detection-only agent, not an unrecognized ID.
+func agentConfigDir(homeDir, agentID string) (string, error) {
+	adapter, err := agents.NewAdapter(model.AgentID(agentID))
+	if err != nil {
+		return "", err
 	}
+	if !adapter.SupportsSkills() && !adapter.SupportsSystemPrompt() && !adapter.SupportsMCP() {
+		return "", nil
+	}
+	return adapter.GlobalConfigDir(homeDir), nil
 }
 
 // checkEngramReachable probes the configured Engram transport. An explicit
@@ -885,6 +901,21 @@ func statusIcon(s CheckStatus) string {
 	}
 }
 
+// doctorAssetSyncRemediation keeps the remedy anchored to the build that
+// diagnosed the skew. A bare PATH fallback could sync a different build's
+// assets and leave this warning unchanged (#4782).
+func doctorAssetSyncRemediation() string {
+	invoked, err := osExecutableDoctor()
+	if err != nil || !managedAssetsArgvZeroIdentity(invoked) {
+		return "cannot determine the absolute invoked executable path; run sync using the absolute path of this running build to update installed assets"
+	}
+	remedy := fmt.Sprintf("run `%s sync` to update installed assets", managedAssetsExecutableToken(invoked))
+	if resolved, _, err := resolveDoctorTool("gentle-ai"); err == nil && !doctorSameExecutable(invoked, resolved) {
+		remedy += fmt.Sprintf("; gentle-ai on PATH resolves to %s, which differs from the running executable; use the invoked path above", resolved)
+	}
+	return remedy
+}
+
 func checkInstalledAssetVersion(homeDir string) CheckResult {
 	s, err := state.Read(homeDir)
 	if err != nil {
@@ -902,7 +933,7 @@ func checkInstalledAssetVersion(homeDir string) CheckResult {
 	if s.InstalledBinaryVersion != AppVersion {
 		return CheckResult{
 			Status: CheckStatusWarn,
-			Detail: fmt.Sprintf("installed assets were configured by gentle-ai %s, but running binary is %s — run 'gentle-ai sync' to update installed assets", s.InstalledBinaryVersion, AppVersion),
+			Detail: fmt.Sprintf("installed assets were configured by gentle-ai %s, but running binary is %s — %s", s.InstalledBinaryVersion, AppVersion, doctorAssetSyncRemediation()),
 		}
 	}
 	return CheckResult{

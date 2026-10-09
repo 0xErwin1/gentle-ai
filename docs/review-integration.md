@@ -125,7 +125,7 @@ Without the flags, START and the persisted authority are unchanged. Authority th
 The agent names the 4R lenses pertinent to what it touched and how, instead of taking the tier default (one `review-reliability` lens for `medium`, all four for `high`). `--lenses` takes a comma-separated list of `risk`, `resilience`, `readability`, and `reliability` (or their `review-` names). `--lenses-reason` is a non-empty one-line reason of at most 500 bytes. Both flags or neither, each at most once, never together with `--focus`.
 
 - START runs exactly the named lenses, in canonical 4R order, on a `medium` or `high` candidate. A `high` candidate may run fewer than four. A candidate that selects no lenses (structural readback) refuses a selection.
-- START freezes the reason with the authority (`lens_selection_reason` in the state and in its START binding) and binds it into the capture phase revision. Replaying START on the same lineage with a different selection is an `atomic_start_conflict`.
+- START freezes the reason with the authority (`lens_selection_reason` in the state and in its START binding) and binds it into the capture phase revision. Replaying START on an active lineage keeps its frozen selection: a resume that names a different selection or reason replays the existing authority and returns the frozen `selected_lenses`. Any other immutable difference is still an `atomic_start_conflict`.
 - Recovery successors inherit the selection and its reason. A relayed consent answer repeats both flags.
 
 Without the flags, START keeps the tier default and the persisted authority is unchanged. Authority that carries a selection is not readable by older binaries; see the request-context compatibility note above.
@@ -172,6 +172,12 @@ recorded successor fails closed with a read-only `review inspect-authority`
 diagnostic. Run that diagnostic with the requested repository as process cwd;
 do not invent a new successor to bypass the conflict.
 
+When strict compact-state decoding and historical compatibility both fail,
+`CompactStore.Load` reports the lineage and both failure causes, retaining the
+strict error as its wrapped cause. The record remains rejected and unchanged;
+`review inspect-authority` keeps its existing problem codes, not these details.
+This diagnostic does not grant compatibility, recovery, or mutation authority.
+
 Explicit compatibility remains available through the complete successor,
 `--recovery-actor`, `--recovery-reason`, and `--recovery-authorization` binding.
 STATUS renders the existing seven-argument RECOVER form only for an exact binding.
@@ -203,6 +209,8 @@ The in-process Claude Code reviewer uses the saved model and effort for each rol
 Each provider-issued capture input is one slot. Its reviewer prompt starts with `GENTLE_AI_REVIEW_BINDING ` followed by one-line binding JSON. A result echoes the exact `subject_hash`, reports completed inspection of the full manifest, and supplies structured findings/evidence. On malformed, incomplete, or unavailable inspection, query bound STATUS again; relaunch only when it reoffers the exact same slot.
 
 Reviewers inspect only provider-bound immutable trees. They never inspect the live worktree, index, `HEAD`, or another revision, and candidate bytes must not move through `/tmp`, a repository scratch file, or `GENTLE_AI_FROZEN_CANDIDATE_CONTEXT`. The one exception is the Codex refuter probe below: Go itself writes the frozen candidate tree into a fresh scratch copy it creates and removes.
+
+Dependency locks (`package-lock.json`, `npm-shrinkwrap.json`, `pnpm-lock.yaml`, `yarn.lock`, `go.sum`, and `Cargo.lock`, including nested paths) retain their generated classification in the changed-path manifest and carry complete frozen patches as semantic evidence. Existing changed-line accounting is unchanged: text lockfile additions and deletions are still counted. Lenses, refuters, and targeted validators use the same evidence policy; other generated outputs retain metadata-only summaries. The existing 4 MiB native ceiling and any smaller runtime-context budget still apply: oversized evidence is refused, never truncated, and tool-free reviewers receive no additional tools.
 
 ### Non-lens provider roles: refuter and targeted validator
 

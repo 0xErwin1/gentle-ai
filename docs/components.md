@@ -46,6 +46,12 @@ retired and is not accepted by install.
 **Compatibility change:** commands that previously succeeded while silently
 ignoring an explicit modifier now fail with a diagnostic and a nonzero exit code.
 
+## Context7 sync behavior
+
+Install and sync add the agent-specific Context7 default when its server entry is absent. Existing entries are migrated only if the complete parsed entry exactly matches a known default written by a released gentle-ai version, such as the legacy unpinned or pinned `2.2.5` npx launcher. Key order and whitespace do not matter; extra or changed fields do. Custom commands, arguments, environment, URLs, headers, and different version pins (including `4.2.0` or `@latest`) are preserved untouched. Remove a customized entry explicitly to install the current default again.
+
+Claude Code cleans up an inert legacy `settings.json` entry only when it exactly matches a released managed default; customized entries are left alone.
+
 ## Primary remote-authorization guidance
 
 Always-installed agent guidance includes a canonical remote-operation boundary, independent of the optional persona and permissions components. Local-development access does not authorize remote execution, transfer, or discovery/reuse of ambient SSH agents, ControlMaster sockets, credentials, or sessions. Ask for explicit destination, operation, and credential/session authorization; authorized work remains allowed within stricter user/runtime restrictions.

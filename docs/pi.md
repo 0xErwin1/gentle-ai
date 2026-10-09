@@ -41,6 +41,14 @@ Engram on Pi uses the native tools `gentle-engram` registers, not MCP, so Gentle
 
 When Pi is selected for installation, Gentle AI snapshots its global settings regardless of the selected components or install scope. Rollback permits restoring snapshotted files inside its resolved agent directory (`PI_CODING_AGENT_DIR`, when set), even outside the home or workspace. This does not authorize restoring sibling paths or files outside the existing restore guards. An unselected Pi directory adds neither a settings snapshot target nor rollback authority.
 
+## MCP disabled after migration
+
+`sync` preserves `extensions: ["-builtin:mcp"]`: the adapter's onboarding marker does not distinguish a setting it created from an intentional user choice. When `pi-mcp-adapter` is absent and `mcp.json` contains servers, `sync` warns and `gentle-ai doctor` reports `pi:mcp` as a warning instead of silently treating those servers as available. These diagnostics use `PI_CODING_AGENT_DIR` when configured.
+
+If you want those servers enabled, remove `-builtin:mcp` from `extensions` in the `settings.json` path shown by the warning, preserving other entries. Restart Pi, then run `gentle-ai doctor`. If MCP is intentionally disabled, leave the setting in place; neither command re-enables it automatically. Engram's native Pi tools are independent of this MCP setting.
+
+An adapter package with `extensions: []` is inactive for this diagnostic, even if `npm/package.json` still lists its dependency; the warning identifies it as inactive rather than absent. Configuration that cannot be read, including a dangling symlink, produces an inspection warning. Genuinely absent configuration files remain optional.
+
 ## Optional CodeGraph
 
 CodeGraph is an optional Gentle AI integration. When selected, Gentle AI merges its MCP entry without overwriting a conflicting user entry. Compatible Pi children receive tools or lazy-init guidance through managed overlays, not edits to package-owned child files. Guidance resolves a safe project root and initializes a missing index once; a stale index requires upstream recovery, not a claim that old graph results reflect current source. `gentle-ai sync` reconciles managed configuration, which is distinct from index freshness. Sync never recreates a child file that was deleted; it drops that file from its ownership record. Gentle AI also stops managing the retired SDD agents (`sdd-*.md`) in the Pi agent home: when one still holds exactly Gentle AI's recorded overlay, sync restores the bytes it had before the overlay so the Pi package can retire it, and leaves any edited copy untouched. Uninstall removes only manifest-owned entries and reports drifted child files instead of deleting them.
@@ -51,6 +59,8 @@ Index freshness depends on the intelligence surface:
 - **CLI:** intelligence commands read the existing index without auto-sync. Run `codegraph sync -q <project-root>` before intelligence reads, including after edits. If sync fails, use filesystem tools and explain the failure instead of treating stale graph results as current.
 
 The presence of `.codegraph/` alone does not guarantee freshness.
+
+When the direct CodeGraph MCP capability is verified but Pi adapter activation health cannot be machine-verified, Community Tools reports Pi as `pending`, not `missing` or `configured`. Pending agents are counted separately from missing wiring. This validated pending state preserves the verified MCP capability in the reconciliation result and satisfies installation reconciliation. Rerunning setup can take the already-reconciled path while preserving the pending health guidance; its summary says configuration is reconciled and Pi activation health remains pending, not that every agent is configured. Missing configuration, failed capability probes, and invalid child guidance still report `missing` and do not satisfy reconciliation.
 
 ## Review and checks
 

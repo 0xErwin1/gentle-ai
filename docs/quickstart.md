@@ -81,6 +81,14 @@ go install github.com/gentleman-programming/gentle-ai/v4/cmd/gentle-ai@latest
 gentle-ai version
 ```
 
+To update a source installation on Linux/macOS, run `gentle-ai upgrade` with Go
+on `PATH`. Source builds without an embedded release key use `go install` pinned
+to the target release, retaining the normal Go checksum database settings.
+Official signed binaries keep minisign-verified downloads; Homebrew-owned
+installations keep Homebrew. If Go is unavailable, the upgrader prints a manual
+source-install command without changing files. After a manual binary update,
+run `gentle-ai sync` to refresh the managed assets.
+
 ### Install unreleased development changes
 
 Only use `main` when testing changes that are not part of a release yet:

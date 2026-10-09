@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"sort"
 	"strings"
 	"testing"
@@ -103,8 +104,13 @@ func TestOwnershipReuseFreshLedgerBytes(t *testing.T) {
 	if string(got) != want {
 		t.Fatalf("ledger bytes changed:\n%s\nwant:\n%s", got, want)
 	}
-	if info, err := os.Lstat(ledger); err != nil || info.Mode().Perm() != 0o644 {
-		t.Fatalf("ledger mode: %v %v", info, err)
+	wantMode := os.FileMode(0o644)
+	if runtime.GOOS == "windows" {
+		// Windows exposes writable files as 0666 rather than POSIX permission bits.
+		wantMode = 0o666
+	}
+	if info, err := os.Lstat(ledger); err != nil || info.Mode().Perm() != wantMode {
+		t.Fatalf("ledger mode: %v %v, want %04o", info, err, wantMode)
 	}
 }
 
@@ -139,7 +145,9 @@ func TestOwnershipReuseRejectsLedgerWithoutMutation(t *testing.T) {
 				t.Fatal(err)
 			}
 		}, wantFor: func(ledger string) string {
-			return fmt.Sprintf("capture ownership ledger: read before-image %q: read %s: is a directory", ledger, ledger)
+			// Pin the wrapper while preserving the host OS's directory-read error.
+			_, readErr := os.ReadFile(ledger)
+			return fmt.Sprintf("capture ownership ledger: read before-image %q: %v", ledger, readErr)
 		}},
 		{name: "symlink", setup: func(t *testing.T, ledger string) {
 			target := filepath.Join(filepath.Dir(ledger), "ledger-target")
