@@ -126,6 +126,12 @@ func RunDoctor(ctx context.Context, w io.Writer) error {
 			return checkOpenCodeProfile(homeDir, pathDirs)
 		}})
 	}
+	for _, agent := range installedAgents {
+		if agent == string(model.AgentPi) {
+			checks = append(checks, doctor.Check{ID: "pi:mcp", Run: func(context.Context) doctor.Result { return checkPiMCP(homeDir) }})
+			break
+		}
+	}
 	report := (doctor.Runner{Checks: checks}).Run(ctx)
 
 	renderDoctorReport(w, report)
