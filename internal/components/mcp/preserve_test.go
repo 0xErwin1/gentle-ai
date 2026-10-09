@@ -50,7 +50,7 @@ func TestInjectContext7PreservesConfiguredServers(t *testing.T) {
 		if !adapter.SupportsMCP() {
 			continue
 		}
-		for _, customization := range []string{"launcher", "remote", "version pin"} {
+		for _, customization := range []string{"launcher", "remote", "version pin", "near-miss pin", "managed legacy"} {
 			t.Run(string(id)+"/"+customization, func(t *testing.T) {
 				home := t.TempDir()
 				t.Setenv("HOME", home)
@@ -74,6 +74,12 @@ func TestInjectContext7PreservesConfiguredServers(t *testing.T) {
 				if !bytes.Contains(installed, []byte(want)) {
 					t.Fatalf("managed default missing %q: %s", want, installed)
 				}
+				pin := "latest"
+				if customization == "near-miss pin" {
+					pin = "4.2.0"
+				}
+				pinned := customization == "version pin" || customization == "near-miss pin"
+				managed := customization == "managed legacy"
 				var custom []byte
 				switch adapter.MCPStrategy() {
 				case model.StrategyTOMLFile:
@@ -81,16 +87,22 @@ func TestInjectContext7PreservesConfiguredServers(t *testing.T) {
 					if customization == "remote" {
 						custom = []byte("[mcp_servers.\"context7\"] # custom endpoint\nurl = 'https://example.com/mcp'\n")
 					}
-					if customization == "version pin" {
-						custom = []byte("[mcp_servers.context7]\ncommand = 'npx'\nargs = ['-y', '--package=@upstash/context7-mcp@latest', '--', 'context7-mcp']\n")
+					if pinned {
+						custom = []byte("[mcp_servers.context7]\ncommand = 'npx'\nargs = ['-y', '--package=@upstash/context7-mcp@" + pin + "', '--', 'context7-mcp']\n")
+					}
+					if managed {
+						custom = []byte("[mcp_servers.context7]\nargs = ['-y', '@upstash/context7-mcp']\ncommand = 'npx'\n")
 					}
 				case model.StrategyMergeIntoYAML:
 					custom = []byte("# user config\nmcp_servers:\n  context7:\n    command: /custom/launcher\n    args: ['--custom']\n    env: {TOKEN_SOURCE: keychain}\n")
 					if customization == "remote" {
 						custom = []byte("mcp_servers: {context7: {url: 'https://example.com/mcp'}}\n")
 					}
-					if customization == "version pin" {
-						custom = []byte("mcp_servers:\n  context7:\n    command: npx\n    args: ['-y', '--package=@upstash/context7-mcp@latest', '--', 'context7-mcp']\n")
+					if pinned {
+						custom = []byte("mcp_servers:\n  context7:\n    command: npx\n    args: ['-y', '--package=@upstash/context7-mcp@" + pin + "', '--', 'context7-mcp']\n")
+					}
+					if managed {
+						custom = []byte("mcp_servers:\n  context7:\n    args: ['-y', '@upstash/context7-mcp']\n    command: npx\n")
 					}
 				default:
 					var root map[string]any
@@ -109,10 +121,13 @@ func TestInjectContext7PreservesConfiguredServers(t *testing.T) {
 					}
 					entry := map[string]any{"command": "/custom/launcher", "args": []string{"--custom"}, "env": map[string]string{"TOKEN_SOURCE": "keychain"}}
 					if customization == "remote" {
-						entry = map[string]any{"url": "https://example.com/mcp", "headers": map[string]string{"X-Custom": "keep"}}
+						entry = map[string]any{"url": "https://example.com/mcp", "headers": map[string]any{"X-Custom": "keep", "number": json.Number("9007199254740993")}}
 					}
-					if customization == "version pin" {
-						entry = map[string]any{"command": "npx", "args": []string{"-y", "--package=@upstash/context7-mcp@latest", "--", "context7-mcp"}}
+					if pinned {
+						entry = map[string]any{"command": "npx", "args": []string{"-y", "--package=@upstash/context7-mcp@" + pin, "--", "context7-mcp"}}
+					}
+					if managed {
+						entry = map[string]any{"command": "npx", "args": []string{"-y", "@upstash/context7-mcp"}}
 					}
 					if servers == nil {
 						root = entry
@@ -124,9 +139,16 @@ func TestInjectContext7PreservesConfiguredServers(t *testing.T) {
 						t.Fatal(err)
 					}
 					custom = append(custom, '\n')
+					if id == model.AgentOpenClaw && customization == "remote" {
+						custom = append(custom, []byte(" \t\n")...)
+					}
 				}
 				if err := os.WriteFile(path, custom, 0o600); err != nil {
 					t.Fatal(err)
+				}
+				expected := custom
+				if managed {
+					expected = installed
 				}
 				for i := 0; i < 2; i++ {
 					result, err := Inject(home, home, adapter)
@@ -137,11 +159,11 @@ func TestInjectContext7PreservesConfiguredServers(t *testing.T) {
 					if err != nil {
 						t.Fatal(err)
 					}
-					if !bytes.Equal(got, custom) {
+					if !bytes.Equal(got, expected) {
 						t.Fatalf("configured Context7 overwritten:\n%s", got)
 					}
-					if result.Changed {
-						t.Fatal("preserved entry reported Changed=true")
+					if result.Changed != (managed && i == 0) {
+						t.Fatalf("Changed=%v; want migration only on first managed call", result.Changed)
 					}
 				}
 			})

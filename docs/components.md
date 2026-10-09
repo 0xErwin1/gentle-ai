@@ -25,9 +25,9 @@ ODD (Organic Driven Development) is shared routing guidance, not a separate comp
 
 ## Context7 sync behavior
 
-Install and sync add the agent-specific Context7 default only when its server entry is absent. An existing entry is preserved, including custom launchers, arguments, environment, URLs, headers, and package version pins. Sync does not upgrade or migrate an existing Context7 entry: there is no reliable ownership metadata to distinguish an older managed default from a user-selected configuration. Remove the entry explicitly if you want the current default installed again.
+Install and sync add the agent-specific Context7 default when its server entry is absent. Existing entries are migrated only if the complete parsed entry exactly matches a known default written by a released gentle-ai version, such as the legacy unpinned or pinned `2.2.5` npx launcher. Key order and whitespace do not matter; extra or changed fields do. Custom commands, arguments, environment, URLs, headers, and different version pins (including `4.2.0` or `@latest`) are preserved untouched. Remove a customized entry explicitly to install the current default again.
 
-Claude Code still cleans up an inert legacy `settings.json` entry only when it exactly matches the current managed default; customized entries are left alone.
+Claude Code cleans up an inert legacy `settings.json` entry only when it exactly matches a released managed default; customized entries are left alone.
 
 ## Primary remote-authorization guidance
 

@@ -3,9 +3,10 @@ package mcp
 import (
 	"encoding/json"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
-	"reflect"
+	"slices"
 
 	"github.com/BurntSushi/toml"
 	"gopkg.in/yaml.v3"
@@ -83,7 +84,7 @@ func injectTOMLFile(homeDir string, adapter agents.Adapter) (InjectionResult, er
 	if _, err := toml.Decode(string(existingBytes), &config); err != nil {
 		return InjectionResult{}, fmt.Errorf("parse TOML config %q: %w", configPath, err)
 	}
-	if hasContext7Entry(config, "mcp_servers") {
+	if entry, exists := context7Entry(config, "mcp_servers"); exists && !isManagedContext7Entry(entry) {
 		return InjectionResult{Files: []string{configPath}}, nil
 	}
 	existing := string(existingBytes)
@@ -119,7 +120,7 @@ func injectYAMLFile(homeDir string, adapter agents.Adapter) (InjectionResult, er
 	if err := yaml.Unmarshal(existingBytes, &config); err != nil {
 		return InjectionResult{}, fmt.Errorf("parse YAML config %q: %w", configPath, err)
 	}
-	if hasContext7Entry(config, "mcp_servers") {
+	if entry, exists := context7Entry(config, "mcp_servers"); exists && !isManagedContext7Entry(entry) {
 		return InjectionResult{Files: []string{configPath}}, nil
 	}
 	existing := string(existingBytes)
@@ -136,10 +137,12 @@ func injectYAMLFile(homeDir string, adapter agents.Adapter) (InjectionResult, er
 // injectSeparateFile writes a standalone JSON file per MCP server.
 func injectSeparateFile(homeDir string, adapter agents.Adapter) (InjectionResult, error) {
 	path := adapter.MCPConfigPath(homeDir, "context7")
-	if _, err := os.Stat(path); err == nil {
-		return InjectionResult{Files: []string{path}}, nil
-	} else if !os.IsNotExist(err) {
+	base, err := osReadFile(path)
+	if err != nil {
 		return InjectionResult{}, err
+	}
+	if entry, parseErr := filemerge.UnmarshalJSONObject(base); len(base) > 0 && (parseErr != nil || !isManagedContext7Entry(entry)) {
+		return InjectionResult{Files: []string{path}}, nil
 	}
 	writeResult, err := filemerge.WriteFileAtomic(path, DefaultContext7ServerJSON(), 0o644)
 	if err != nil {
@@ -212,6 +215,11 @@ func injectOpenClawMergeIntoSettings(settingsPath string) (InjectionResult, erro
 		return InjectionResult{}, err
 	}
 
+	root, _ := filemerge.UnmarshalJSONObject(baseJSON)
+	_, legacy := root["mcpServers"]
+	if entry, exists := context7Entry(root, "mcp", "servers"); exists && !legacy && !isManagedContext7Entry(entry) {
+		return InjectionResult{Files: []string{settingsPath}}, nil
+	}
 	normalized, err := migrateOpenClawLegacyMCPServers(baseJSON)
 	if err != nil {
 		return InjectionResult{}, err
@@ -236,8 +244,8 @@ func migrateOpenClawLegacyMCPServers(baseJSON []byte) ([]byte, error) {
 		return nil, err
 	}
 
-	root := map[string]any{}
-	if err := json.Unmarshal(normalized, &root); err != nil {
+	root, err := filemerge.UnmarshalJSONObject(normalized)
+	if err != nil {
 		return nil, fmt.Errorf("unmarshal openclaw settings json: %w", err)
 	}
 
@@ -278,7 +286,8 @@ func migrateOpenClawLegacyMCPServers(baseJSON []byte) ([]byte, error) {
 // silently ignores the top-level mcpServers key earlier versions wrote
 // (issue #1868).
 func injectClaudeUserConfig(homeDir string, adapter agents.Adapter) (InjectionResult, error) {
-	writeResult, configPath, err := claude.MergeUserMCPServer(homeDir, "context7", DefaultContext7OverlayJSON())
+	overlay := []byte(`{"mcpServers":{"context7":{"__replace__":` + string(DefaultContext7ServerJSON()) + `}}}`)
+	writeResult, configPath, err := claude.MergeUserMCPServer(homeDir, "context7", overlay, isManagedContext7Entry)
 	if err != nil {
 		return InjectionResult{}, err
 	}
@@ -321,23 +330,25 @@ func injectClaudeWorkspaceMCPJSON(workspaceDir string, adapter agents.Adapter) (
 	return InjectionResult{Changed: changed, Files: files}, nil
 }
 
-// from settings.json once the real registration lives in ~/.claude.json —
-// but only when the block holds nothing beyond the managed context7 entry.
-// An unparsable settings file is left untouched.
-// isManagedSettingsContext7Entry reports whether the inert settings.json entry
-// matches the managed shape, so cleanup never deletes a user-authored server.
-func isManagedSettingsContext7Entry(entry any) bool {
-	server, ok := entry.(map[string]any)
-	if !ok {
-		return false
-	}
-	var managed map[string]any
-	if err := json.Unmarshal(DefaultContext7ServerJSON(), &managed); err != nil {
-		return false
-	}
-	return reflect.DeepEqual(server, managed)
+// releasedContext7ManagedDefaults contains complete persisted entries in canonical
+// JSON key order, not overlay directives. Extra fields or different pins never match.
+var releasedContext7ManagedDefaults = []string{
+	`{"args":["-y","@upstash/context7-mcp"],"command":"npx"}`,                                     // v1.0.0: mcp/context7.go
+	`{"args":["-y","--package=@upstash/context7-mcp@2.2.5","--","context7-mcp"],"command":"npx"}`, // v1.30.0: mcp/context7.go + versions.Context7MCP; Codex v1.36.0, Hermes v3.7.0
+	`{"enabled":true,"type":"remote","url":"https://mcp.context7.com/mcp"}`,                       // v1.6.0: mcp/context7.go (OpenCode)
+	`{"type":"http","url":"https://mcp.context7.com/mcp"}`,                                        // v1.6.0: mcp/context7.go (VS Code)
+	`{"serverUrl":"https://mcp.context7.com/mcp"}`,                                                // v1.10.0: mcp/context7.go (Antigravity)
+	`{"transport":"http","url":"https://mcp.context7.com/mcp"}`,                                   // v1.30.0: mcp/context7.go (Kimi)
+	`{"url":"https://mcp.context7.com/mcp"}`,                                                      // v1.37.0: mcp/inject.go (Codex)
 }
 
+func isManagedContext7Entry(entry any) bool {
+	canonical, err := json.Marshal(entry)
+	return err == nil && slices.Contains(releasedContext7ManagedDefaults, string(canonical))
+}
+
+// removeInertSettingsMCPServers removes an inert, managed-only settings block.
+// Unparsable settings and customized entries are left untouched.
 func removeInertSettingsMCPServers(settingsPath string) (bool, error) {
 	if settingsPath == "" {
 		return false, nil
@@ -355,7 +366,7 @@ func removeInertSettingsMCPServers(settingsPath string) (bool, error) {
 		return false, nil
 	}
 	entry, ok := servers["context7"]
-	if !ok || !isManagedSettingsContext7Entry(entry) {
+	if !ok || !isManagedContext7Entry(entry) {
 		return false, nil
 	}
 	delete(root, "mcpServers")
@@ -414,14 +425,12 @@ func mergeJSONFile(path string, overlay []byte) (filemerge.WriteResult, error) {
 	return filemerge.WriteFileAtomic(path, merged, filemerge.ExistingFileMode(path, 0o644))
 }
 
-// Context7 has no reliable ownership metadata. An existing entry, including
-// an older or user-selected package pin, is therefore left intact.
-func hasContext7Entry(root map[string]any, keys ...string) bool {
+func context7Entry(root map[string]any, keys ...string) (any, bool) {
 	for _, key := range keys {
 		root, _ = root[key].(map[string]any)
 	}
-	_, exists := root["context7"]
-	return exists
+	entry, exists := root["context7"]
+	return entry, exists
 }
 
 func mergeContext7JSON(path string, base, overlay []byte) ([]byte, error) {
@@ -434,8 +443,24 @@ func mergeContext7JSON(path string, base, overlay []byte) ([]byte, error) {
 	defaults, _ := filemerge.UnmarshalJSONObject(overlay)
 	if err == nil {
 		for _, keys := range [][]string{{"mcpServers"}, {"servers"}, {"mcp"}, {"mcp", "servers"}} {
-			if hasContext7Entry(defaults, keys...) && hasContext7Entry(root, keys...) {
-				return base, nil
+			if target, installs := context7Entry(defaults, keys...); installs {
+				if entry, exists := context7Entry(root, keys...); exists {
+					if !isManagedContext7Entry(entry) {
+						return base, nil
+					}
+					// Replace the whole recognized default, never retaining legacy keys.
+					server := target.(map[string]any)
+					if _, replaces := server["__replace__"]; !replaces {
+						replacement := maps.Clone(server)
+						clear(server)
+						server["__replace__"] = replacement
+						overlay, err = json.Marshal(defaults)
+						if err != nil {
+							return nil, err
+						}
+						return mergeSettingsJSON(path, base, overlay)
+					}
+				}
 			}
 		}
 	}

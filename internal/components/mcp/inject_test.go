@@ -291,7 +291,8 @@ func TestInjectOpenClawMergesContext7UnderMCPDotServersAndMigratesLegacyMCPServe
 	existing := `{
   "mcpServers": {
     "legacyDocs": {
-      "command": "legacy-docs"
+      "command": "legacy-docs",
+      "headers": {"number": 9007199254740993}
     },
     "context7": {
       "command": "old-context7"
@@ -342,10 +343,13 @@ func TestInjectOpenClawMergesContext7UnderMCPDotServersAndMigratesLegacyMCPServe
 	if !strings.Contains(text, `"legacyDocs"`) {
 		t.Fatalf("openclaw.json should migrate legacy mcpServers entries into mcp.servers; got:\n%s", text)
 	}
+	if !strings.Contains(text, `"number": 9007199254740993`) {
+		t.Fatalf("legacy MCP header number lost precision: %s", text)
+	}
 	if !strings.Contains(text, `"sessionIdleTtlMs": 120000`) {
 		t.Fatalf("openclaw.json should preserve existing mcp fields; got:\n%s", text)
 	}
-	if !strings.Contains(text, `"context7"`) || !strings.Contains(text, `@upstash/context7-mcp`) {
+	if !strings.Contains(text, `"context7"`) || !strings.Contains(text, `@upstash/context7-mcp@`) {
 		t.Fatalf("openclaw.json missing context7 under mcp.servers; got:\n%s", text)
 	}
 }
@@ -441,6 +445,8 @@ func TestInjectOpenCodeAndKilocodeRecoverMalformedSettingsAndDiscardInvalidHeade
 		{name: "KiloCode malformed settings", adapter: kilocodeAdapter(), existing: `{malformed`},
 		{name: "OpenCode malformed headers", adapter: opencodeAdapter(), existing: `{"mcp":{"context7":{"headers":`},
 		{name: "KiloCode malformed headers", adapter: kilocodeAdapter(), existing: `{"mcp":{"context7":{"headers":`},
+		{name: "OpenCode non-object headers", adapter: opencodeAdapter(), existing: `{"mcp":{"context7":{"headers":["secret"]}}}`},
+		{name: "KiloCode non-object headers", adapter: kilocodeAdapter(), existing: `{"mcp":{"context7":{"headers":"secret"}}}`},
 	}
 
 	for _, tt := range tests {
@@ -457,6 +463,13 @@ func TestInjectOpenCodeAndKilocodeRecoverMalformedSettingsAndDiscardInvalidHeade
 			first, err := Inject(home, home, tt.adapter)
 			if err != nil {
 				t.Fatalf("Inject() first error = %v", err)
+			}
+			if strings.Contains(tt.name, "non-object") {
+				if first.Changed {
+					t.Fatal("custom headers entry changed")
+				}
+				assertContext7FileUnchanged(t, configPath, tt.existing)
+				return
 			}
 			if !first.Changed {
 				t.Fatal("Inject() first changed = false")
@@ -1228,7 +1241,7 @@ args = ["mcp", "--tools=agent"]
 	}
 }
 
-func TestInjectCodexContext7PreservesLegacyLocalBlock(t *testing.T) {
+func TestInjectCodexContext7ReplacesLegacyLocalBlock(t *testing.T) {
 	home := t.TempDir()
 	configTOML := filepath.Join(home, ".codex", "config.toml")
 	if err := os.MkdirAll(filepath.Dir(configTOML), 0o755); err != nil {
@@ -1250,8 +1263,8 @@ args = ["mcp", "--tools=agent"]
 	if err != nil {
 		t.Fatalf("Inject(codex) error = %v", err)
 	}
-	if result.Changed {
-		t.Fatal("Inject(codex) changed an existing local block")
+	if !result.Changed {
+		t.Fatal("Inject(codex) changed = false; expected legacy local block migration")
 	}
 
 	content, err := os.ReadFile(configTOML)
@@ -1263,7 +1276,12 @@ args = ["mcp", "--tools=agent"]
 	if count := strings.Count(text, "[mcp_servers.context7]"); count != 1 {
 		t.Fatalf("expected 1 [mcp_servers.context7], got %d; result:\n%s", count, text)
 	}
-	assertContext7FileUnchanged(t, configTOML, existing)
+	if !strings.Contains(text, `url = "https://mcp.context7.com/mcp"`) {
+		t.Fatalf("config.toml missing remote Context7 URL after migration; got:\n%s", text)
+	}
+	if strings.Contains(text, `command = "npx"`) || strings.Contains(text, "context7-mcp") {
+		t.Fatalf("legacy local Context7 config survived migration; got:\n%s", text)
+	}
 	if !strings.Contains(text, "[mcp_servers.engram]") {
 		t.Fatalf("engram block was not preserved; got:\n%s", text)
 	}
