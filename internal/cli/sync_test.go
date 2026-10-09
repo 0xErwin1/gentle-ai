@@ -3999,7 +3999,7 @@ func TestRunSyncWithSelection_NoAgentsIsNoOp(t *testing.T) {
 
 	sel := model.Selection{
 		Agents:     nil,
-		Components: []model.ComponentID{model.ComponentSDD, model.ComponentEngram},
+		Components: []model.ComponentID{model.ComponentSkills, model.ComponentEngram},
 	}
 
 	result, err := RunSyncWithSelection(home, sel)
