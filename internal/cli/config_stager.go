@@ -90,6 +90,10 @@ func (stager configurationStager) Stage(state configdomain.DesiredState, stageRo
 		return err
 	}
 
+	if err := stageOpenCodeBackgroundPolicy(stageRoot, selection, adapters); err != nil {
+		return err
+	}
+
 	if err := stagePiBackgroundPolicy(stageRoot, selection, adapters); err != nil {
 		return err
 	}
@@ -269,6 +273,34 @@ func (stager configurationStager) stageComponentForAdapter(
 
 		return err
 
+	}
+
+	return nil
+}
+
+// stageOpenCodeBackgroundPolicy applies the declared OpenCode background choice
+// to the staged orchestrator prompt, the step the installer runs right after
+// routing guidance. Before upstream retired the SDD component, that component
+// carried the policy; without this step an enabled intent rendered the same
+// prompt as declaring nothing.
+//
+// The installer also requires a runtime that supports background sub-agents.
+// A render cannot probe the machine without making one document produce
+// different bytes on two of them, so only an explicit on or off is applied and
+// `auto` leaves the prompt as routing guidance staged it.
+func stageOpenCodeBackgroundPolicy(stageRoot string, selection model.Selection, adapters []agents.Adapter) error {
+	intent := selection.BackgroundIntent
+	if intent != model.OpenCodeBackgroundOn && intent != model.OpenCodeBackgroundOff {
+		return nil
+	}
+
+	for _, adapter := range adapters {
+		if adapter.Agent() != model.AgentOpenCode {
+			continue
+		}
+		if _, err := agentguidance.ApplyOpenCodeBackgroundPolicy(adapter.SettingsPath(stageRoot), intent == model.OpenCodeBackgroundOn); err != nil {
+			return fmt.Errorf("stage OpenCode background policy: %w", err)
+		}
 	}
 
 	return nil
