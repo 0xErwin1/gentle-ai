@@ -16,7 +16,7 @@ func backgroundPolicyStaged(t *testing.T, intent string) bool {
 
 	const marker = "gentle-ai:opencode-background-subagents"
 
-	document := `{"version":"v1","selection":{"agents":["opencode"],"components":["sdd"],"sddMode":"multi","providers":{"opencode":{"backgroundIntent":"` + intent + `"}}}}`
+	document := `{"version":"v1","selection":{"agents":["opencode"],"providers":{"opencode":{"backgroundIntent":"` + intent + `"}}}}`
 	configPath := filepath.Join(t.TempDir(), "config.json")
 	if err := os.WriteFile(configPath, []byte(document), 0o644); err != nil {
 		t.Fatal(err)
