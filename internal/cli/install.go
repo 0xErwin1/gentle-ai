@@ -122,7 +122,7 @@ func ParseInstallFlags(args []string) (InstallFlags, error) {
 		case "pi-background-subagents":
 			opts.PiBackgroundSubagentsSet = true
 			semanticFlagUsed = true
-		case "agent", "agents", "component", "components", "skill", "skills", "persona", "preset", "sdd-mode":
+		case "agent", "agents", "component", "components", "skill", "skills", "persona", "preset":
 			semanticFlagUsed = true
 		}
 	})
