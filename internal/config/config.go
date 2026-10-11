@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"slices"
 	"sort"
 
 	"github.com/gentleman-programming/gentle-ai/v4/internal/catalog"
@@ -291,20 +292,42 @@ func FromSelection(selection model.Selection) DesiredState {
 }
 
 // NormalizeSelection routes existing workflow selections through the desired-state contract.
+//
+// The retired SDD component is legacy install state, not contract input:
+// upstream keeps reading it and install and sync treat it as a marker that
+// writes nothing. It is kept out of the contract, which refuses it, and handed
+// back unchanged so this bridge neither rejects a legacy home nor alters what
+// the installer does with it.
 func NormalizeSelection(selection model.Selection) (model.Selection, []Diagnostic) {
 	preserveUnsetPersona := selection.Persona == ""
 
+	legacySDD := slices.Contains(selection.Components, model.ComponentSDD)
+	contractSelection := selection
+	contractSelection.Components = slices.DeleteFunc(slices.Clone(selection.Components), func(component model.ComponentID) bool {
+		return component == model.ComponentSDD
+	})
+
 	state, diagnostics := Normalize(Document{
 		Version:   CurrentVersion,
-		Selection: FromSelection(selection).Selection,
+		Selection: FromSelection(contractSelection).Selection,
 	})
 	if len(diagnostics) != 0 {
 		return model.Selection{}, diagnostics
 	}
 
 	projected := Project(state)
+	components := projected.Components
+	if legacySDD {
+		// The marker alone selects nothing; the contract would read the list
+		// left without it as empty and fill it with preset defaults.
+		if len(contractSelection.Components) == 0 {
+			components = nil
+		}
+		components = append(components, model.ComponentSDD)
+	}
+
 	selection.Agents = projected.Agents
-	selection.Components = projected.Components
+	selection.Components = components
 	selection.Skills = projected.Skills
 	selection.Preset = projected.Preset
 	selection.SDDMode = projected.SDDMode
