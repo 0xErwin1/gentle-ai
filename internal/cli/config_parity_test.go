@@ -140,6 +140,7 @@ var installFlagsParity = map[string]parityDisposition{
 	"DryRun":                         exempt(operationalFlag),
 	"OpenCodeBackgroundSubagentsSet": exempt("flag-presence companion to OpenCodeBackgroundSubagents"),
 	"PiBackgroundSubagentsSet":       exempt("flag-presence companion to PiBackgroundSubagents"),
+	"PiExcludePackages":              exempt("install-time skip of managed Pi packages; never persisted, and the contract leaves Pi package installation to its consumer"),
 	// The pilot the flag opts a global Claude install into is one-shot: the
 	// module ledger it installs is detected on disk, and sync continues it
 	// without the flag, so the durable state lives in the ledger, not in the
