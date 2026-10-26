@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/components/filemerge"
 	"os"
@@ -188,7 +189,15 @@ func (stager configurationStager) stageComponent(component model.ComponentID, st
 	}
 
 	if component == model.ComponentOpenCodeGentleLogo {
-		if _, err := opencodeplugin.Install(stageRoot, model.OpenCodePluginGentleLogo); err != nil {
+		// OpenCode 2.x has no slot for the logo. The imperative pipeline reports
+		// that omission as a skipped step, so the stage leaves the logo out
+		// instead of rejecting the document.
+		_, err := opencodeplugin.Install(stageRoot, model.OpenCodePluginGentleLogo)
+		var unsupported opencodeplugin.UnsupportedLogoError
+		if errors.As(err, &unsupported) {
+			return nil
+		}
+		if err != nil {
 			return fmt.Errorf("stage OpenCode logo plugin: %w", err)
 		}
 
