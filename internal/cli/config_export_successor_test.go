@@ -271,6 +271,86 @@ func TestConfigExportLegacyReportsPersistedCodexServiceTierLoss(t *testing.T) {
 	}
 }
 
+// Antigravity's per-role model tiers are durable intent the document cannot
+// carry yet: an export must name the loss, in role order, instead of dropping
+// the choice silently.
+func TestConfigExportReportsAntigravityModelTierLoss(t *testing.T) {
+	home := t.TempDir()
+	writeDesiredState(t, home, []byte(`{"version":"v1","selection":{"agents":["antigravity"]}}`))
+	if err := state.Write(home, state.InstallState{
+		InstalledAgents:             []string{"antigravity"},
+		SelectionConfigured:         true,
+		AntigravityModelAssignments: map[string]string{"jd-judge-b": "sonnet", "jd-judge-a": "opus"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	output := new(bytes.Buffer)
+	if err := RunConfig([]string{"export", "--home", home}, output); err != nil {
+		t.Fatal(err)
+	}
+
+	var result struct {
+		Document    json.RawMessage `json:"document"`
+		Diagnostics []struct {
+			Code    string `json:"code"`
+			Path    string `json:"path"`
+			Message string `json:"message"`
+		} `json:"diagnostics"`
+		Lossless bool `json:"lossless"`
+	}
+	if err := json.Unmarshal(output.Bytes(), &result); err != nil {
+		t.Fatal(err)
+	}
+	got := make([]string, len(result.Diagnostics))
+	for index, diagnostic := range result.Diagnostics {
+		got[index] = diagnostic.Code + "|" + diagnostic.Path + "|" + diagnostic.Message
+	}
+	want := []string{
+		"config.export.loss.antigravity-model-assignments|$.antigravityModelAssignments|persisted Antigravity model tiers for jd-judge-a, jd-judge-b cannot be represented in the exported document; reconfigure them through gentle-ai's model picker",
+	}
+	if !equalStrings(got, want) {
+		t.Fatalf("diagnostics = %v, want %v", got, want)
+	}
+	if result.Lossless {
+		t.Fatal("export reported itself lossless while dropping the Antigravity model tiers")
+	}
+	if bytes.Contains(result.Document, []byte("antigravityModelAssignments")) {
+		t.Fatal("exported document carries the Antigravity model tiers")
+	}
+}
+
+// An installation that never chose Antigravity tiers reports nothing.
+func TestConfigExportWithoutAntigravityTiersStaysLossless(t *testing.T) {
+	home := t.TempDir()
+	writeDesiredState(t, home, []byte(`{"version":"v1","selection":{"agents":["antigravity"]}}`))
+	if err := state.Write(home, state.InstallState{InstalledAgents: []string{"antigravity"}, SelectionConfigured: true}); err != nil {
+		t.Fatal(err)
+	}
+
+	output := new(bytes.Buffer)
+	if err := RunConfig([]string{"export", "--home", home}, output); err != nil {
+		t.Fatal(err)
+	}
+	var result struct {
+		Diagnostics []struct {
+			Code string `json:"code"`
+		} `json:"diagnostics"`
+		Lossless bool `json:"lossless"`
+	}
+	if err := json.Unmarshal(output.Bytes(), &result); err != nil {
+		t.Fatal(err)
+	}
+	for _, diagnostic := range result.Diagnostics {
+		if diagnostic.Code == "config.export.loss.antigravity-model-assignments" {
+			t.Fatalf("diagnostics = %v, want no Antigravity loss", result.Diagnostics)
+		}
+	}
+	if !result.Lossless {
+		t.Fatalf("export of a tier-free installation reported losses: %v", result.Diagnostics)
+	}
+}
+
 func equalStrings(got, want []string) bool {
 	if len(got) != len(want) {
 		return false
