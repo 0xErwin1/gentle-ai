@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 
 	configdomain "github.com/gentleman-programming/gentle-ai/v4/internal/config"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
@@ -426,6 +427,7 @@ func exportConfig(stdout io.Writer, configPath, home string) error {
 		switch {
 		case stateErr == nil:
 			losses := codexServiceTierExportLoss(installState.CodexServiceTier)
+			losses = append(losses, antigravityModelAssignmentsExportLoss(installState.AntigravityModelAssignments)...)
 			if len(losses) > 0 {
 				result.Diagnostics = append(result.Diagnostics, losses...)
 				result.Lossless = false
@@ -490,6 +492,7 @@ func legacyExportDiagnostics(legacy state.InstallState) []configdomain.Diagnosti
 	}
 
 	diagnostics = append(diagnostics, codexServiceTierExportLoss(legacy.CodexServiceTier)...)
+	diagnostics = append(diagnostics, antigravityModelAssignmentsExportLoss(legacy.AntigravityModelAssignments)...)
 
 	diagnostics = append(diagnostics, configdomain.Diagnostic{
 		Code: "config.export.loss.legacy-operational", Path: "$", Severity: configdomain.Error,
@@ -523,6 +526,31 @@ func codexServiceTierExportLoss(tier string) []configdomain.Diagnostic {
 		Path:     "$.codexServiceTier",
 		Severity: configdomain.Error,
 		Message:  fmt.Sprintf("persisted Codex service tier %q cannot be represented in the exported document; reconfigure it through gentle-ai's model picker", tier),
+	}}
+}
+
+// antigravityModelAssignmentsExportLoss reports the per-role Antigravity model
+// tiers install state recorded, which the declarative document cannot carry
+// yet: the contract names a model vocabulary for OpenCode, Claude, Kiro and
+// Codex, and Antigravity's native agent roles are the surface still missing.
+// Reporting the loss keeps an export from dropping a user's tier choice
+// silently; an installation that never chose tiers reports nothing.
+func antigravityModelAssignmentsExportLoss(assignments map[string]string) []configdomain.Diagnostic {
+	if len(assignments) == 0 {
+		return nil
+	}
+
+	roles := make([]string, 0, len(assignments))
+	for role := range assignments {
+		roles = append(roles, role)
+	}
+	sort.Strings(roles)
+
+	return []configdomain.Diagnostic{{
+		Code:     "config.export.loss.antigravity-model-assignments",
+		Path:     "$.antigravityModelAssignments",
+		Severity: configdomain.Error,
+		Message:  fmt.Sprintf("persisted Antigravity model tiers for %s cannot be represented in the exported document; reconfigure them through gentle-ai's model picker", strings.Join(roles, ", ")),
 	}}
 }
 
