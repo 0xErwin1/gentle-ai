@@ -75,6 +75,11 @@ var selectionParity = map[string]parityDisposition{
 	// picker) recorded in state so sync preserves it, but the declarative
 	// contract cannot carry it yet.
 	"CodexServiceTier": gap("CodexServiceTier"),
+	// Antigravity's model tiers are a user-settable choice (the agy model
+	// picker) whose declarative field does not exist yet: the contract names a
+	// model vocabulary for OpenCode, Claude, Kiro and Codex only. Export
+	// reports the loss instead of dropping the choice.
+	"AntigravityModelAssignments": gap("AntigravityModelAssignments"),
 	// The managed tier is not a choice at all: restoreCodexServiceTier derives
 	// it from the tier persisted state records as written.
 	"CodexManagedServiceTier": exempt("readback of the tier state records as managed; derived from persisted state during restore, never a user choice"),
@@ -109,7 +114,10 @@ var installStateParity = map[string]parityDisposition{
 	// user choice model.Selection.CodexServiceTier carries; the contract gap
 	// is the one declared above.
 	"CodexServiceTier": gap("CodexServiceTier"),
-	"RDDMode":          represented("RDDMode"),
+	// The same user choice the selection carries, recorded in state so sync
+	// preserves it; the contract gap is the one declared above.
+	"AntigravityModelAssignments": gap("AntigravityModelAssignments"),
+	"RDDMode":                     represented("RDDMode"),
 
 	"InstalledBinaryVersion":   exempt(observedState),
 	"ManagedAssetDigest":       exempt(observedState),
