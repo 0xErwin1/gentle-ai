@@ -144,6 +144,10 @@ var installFlagsParity = map[string]parityDisposition{
 	"OpenCodeBackgroundSubagents": represented("Providers"),
 	"PiBackgroundSubagents":       represented("Providers"),
 
+	// Reinstalling a community tool at its latest release is an install-time
+	// choice: what is installed is recorded in the tool ledger, and a later
+	// sync continues from it without the flag.
+	"ForceCommunityTools":            exempt("install-time reinstall of community tools at their latest release; the tool ledger carries what is installed and sync continues from it without the flag"),
 	"Config":                         exempt("selects the declarative document itself"),
 	"DryRun":                         exempt(operationalFlag),
 	"OpenCodeBackgroundSubagentsSet": exempt("flag-presence companion to OpenCodeBackgroundSubagents"),
