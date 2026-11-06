@@ -97,7 +97,12 @@ func Inject(homeDir string, adapter agents.Adapter) (InjectionResult, error) {
 	// the failure and falling back. Pi's theme belongs to Pi's own packages,
 	// the same way its persona and models do.
 	if adapter.Agent() == model.AgentPi {
-		return InjectionResult{}, nil
+		// The file itself is still created when it is missing: sync
+		// verification requires an adapter's settings file to exist after a
+		// sync, and an empty document is what Pi's own settings start from.
+		// Nothing is merged into it, and an existing file is left byte for byte
+		// untouched, so the theme stays Pi's to choose.
+		return ensureSettingsFile(agents.JSONSettingsPath(homeDir, adapter))
 	}
 
 	// The overlay selects the "gentleman" theme by name, so it only belongs on
