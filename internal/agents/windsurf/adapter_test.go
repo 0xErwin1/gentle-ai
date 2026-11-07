@@ -256,6 +256,11 @@ func TestSettingsPathMultiplatform(t *testing.T) {
 
 // TestUserDirPerGOOS pins the injectable resolver behind SettingsPath, which
 // backup.WithConfigRoots reuses to admit a redirected %APPDATA%\Windsurf\User.
+//
+// A caller-supplied root is never redirected by ambient environment: containment
+// wins, so a staged render or a sandboxed install cannot be steered into the
+// live config directory. The environment steers resolution only for the real
+// user home, which the last case pins.
 func TestUserDirPerGOOS(t *testing.T) {
 	home := t.TempDir()
 	appData := filepath.Join(t.TempDir(), "Roaming")
@@ -267,10 +272,10 @@ func TestUserDirPerGOOS(t *testing.T) {
 		xdg     string
 		want    string
 	}{
-		{name: "windows APPDATA", goos: "windows", appData: appData, want: filepath.Join(appData, "Windsurf", "User")},
+		{name: "windows APPDATA stays contained", goos: "windows", appData: appData, want: filepath.Join(home, "AppData", "Roaming", "Windsurf", "User")},
 		{name: "windows unset APPDATA", goos: "windows", want: filepath.Join(home, "AppData", "Roaming", "Windsurf", "User")},
 		{name: "darwin", goos: "darwin", appData: appData, xdg: xdg, want: filepath.Join(home, "Library", "Application Support", "Windsurf", "User")},
-		{name: "linux XDG_CONFIG_HOME", goos: "linux", appData: appData, xdg: xdg, want: filepath.Join(xdg, "Windsurf", "User")},
+		{name: "linux XDG_CONFIG_HOME stays contained", goos: "linux", appData: appData, xdg: xdg, want: filepath.Join(home, ".config", "Windsurf", "User")},
 		{name: "linux unset XDG_CONFIG_HOME", goos: "linux", appData: appData, want: filepath.Join(home, ".config", "Windsurf", "User")},
 	}
 	for _, tt := range tests {
@@ -282,6 +287,29 @@ func TestUserDirPerGOOS(t *testing.T) {
 			}
 		})
 	}
+	t.Run("the real user home honors the environment", func(t *testing.T) {
+		realHome, err := os.UserHomeDir()
+		if err != nil {
+			t.Skipf("UserHomeDir() error = %v", err)
+		}
+		t.Setenv("APPDATA", appData)
+		t.Setenv("XDG_CONFIG_HOME", xdg)
+
+		switch runtime.GOOS {
+		case "windows":
+			if got, want := UserDir(realHome, "windows"), filepath.Join(appData, "Windsurf", "User"); got != want {
+				t.Fatalf("UserDir(windows, real home) = %q, want %q", got, want)
+			}
+		case "darwin":
+			if got, want := UserDir(realHome, "darwin"), filepath.Join(realHome, "Library", "Application Support", "Windsurf", "User"); got != want {
+				t.Fatalf("UserDir(darwin, real home) = %q, want %q", got, want)
+			}
+		default:
+			if got, want := UserDir(realHome, "linux"), filepath.Join(xdg, "Windsurf", "User"); got != want {
+				t.Fatalf("UserDir(linux, real home) = %q, want %q", got, want)
+			}
+		}
+	})
 	t.Run("SettingsPath uses the host GOOS", func(t *testing.T) {
 		t.Setenv("APPDATA", appData)
 		t.Setenv("XDG_CONFIG_HOME", xdg)
