@@ -7,18 +7,18 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/desiredstate"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/system"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/desiredstate"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/system"
 	"io"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 
-	configdomain "github.com/gentleman-programming/gentle-ai/v4/internal/config"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/render"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/state"
+	configdomain "github.com/gentleman-programming/gentle-ai/v5/internal/config"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/render"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/state"
 )
 
 var writeConfigState = desiredstate.WriteDesiredAndManifest

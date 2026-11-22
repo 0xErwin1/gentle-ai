@@ -3,7 +3,7 @@ package render
 import (
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/v4/internal/config"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/config"
 )
 
 // A second adapter owns its own paths. The renderer must attribute the

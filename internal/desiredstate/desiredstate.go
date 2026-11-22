@@ -12,9 +12,9 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/gentleman-programming/gentle-ai/v4/internal/components/filemerge"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/config"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/render"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/components/filemerge"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/config"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/render"
 )
 
 // stateDir mirrors the home-relative directory name internal/state keeps

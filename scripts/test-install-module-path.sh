@@ -112,12 +112,12 @@ test_stable_v3_current() {
 # Current v4 release fixture: the resolved tag's go.mod declares /v4.
 test_stable_v4_regression() {
     reset_mocks; EXPECTED_TAG="v4.0.0"
-    GOMOD_MODULE="github.com/gentleman-programming/gentle-ai/v4"
+    GOMOD_MODULE="github.com/gentleman-programming/gentle-ai/v5"
     curl() { mock_curl "$@"; }; go() { mock_go "$@"; }
     CHANNEL="stable"; LATEST_VERSION=""
     install_go
     assert_eq "install target follows the new /v4 path" \
-        "github.com/gentleman-programming/gentle-ai/v4/cmd/gentle-ai@v4.0.0" \
+        "github.com/gentleman-programming/gentle-ai/v5/cmd/gentle-ai@v4.0.0" \
         "${INSTALL_LOG}"
 }
 

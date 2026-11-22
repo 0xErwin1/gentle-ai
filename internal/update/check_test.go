@@ -268,7 +268,7 @@ func TestBetaTargetBindsModuleAndFullCommit(t *testing.T) {
 			}
 			json.NewEncoder(w).Encode(githubCommit{SHA: next})
 		case "/Gentleman-Programming/gentle-ai/" + sha + "/go.mod":
-			fmt.Fprint(w, "module github.com/gentleman-programming/gentle-ai/v4\n")
+			fmt.Fprint(w, "module github.com/gentleman-programming/gentle-ai/v5\n")
 		default:
 			http.NotFound(w, r)
 		}
@@ -277,8 +277,8 @@ func TestBetaTargetBindsModuleAndFullCommit(t *testing.T) {
 	httpClient = server.Client()
 	httpClient.Transport = &testTransport{server: server, forwardRaw: true}
 	result := checkSingleTool(context.Background(), Tools[0], "3.0.0-0.20260614151827-6eff4a1ba110", system.PlatformProfile{}, false)
-	want := "go install github.com/gentleman-programming/gentle-ai/v4/cmd/gentle-ai@" + sha
-	if result.Status != UpdateAvailable || result.UpdateHint != want || result.BetaCommit != sha || result.BetaModulePath != "github.com/gentleman-programming/gentle-ai/v4" {
+	want := "go install github.com/gentleman-programming/gentle-ai/v5/cmd/gentle-ai@" + sha
+	if result.Status != UpdateAvailable || result.UpdateHint != want || result.BetaCommit != sha || result.BetaModulePath != "github.com/gentleman-programming/gentle-ai/v5" {
 		t.Fatalf("beta result = %+v; want %s", result, want)
 	}
 	moved, err := fetchMainCommit(context.Background(), "Gentleman-Programming", "gentle-ai")
@@ -301,8 +301,8 @@ func TestBetaCheckRejectsUntrustedMetadata(t *testing.T) {
 		{name: "wrong repository", sha: sha, module: "github.com/other/gentle-ai/v4"},
 		{name: "invalid semantic major", sha: sha, module: "github.com/gentleman-programming/gentle-ai/v1"},
 		{name: "malformed major", sha: sha, module: "github.com/gentleman-programming/gentle-ai/v04"},
-		{name: "malformed module directive", sha: sha, module: "github.com/gentleman-programming/gentle-ai/v4 extra"},
-		{name: "truncated commit", sha: "972997650b51", module: "github.com/gentleman-programming/gentle-ai/v4"},
+		{name: "malformed module directive", sha: sha, module: "github.com/gentleman-programming/gentle-ai/v5 extra"},
+		{name: "truncated commit", sha: "972997650b51", module: "github.com/gentleman-programming/gentle-ai/v5"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -1263,7 +1263,7 @@ func TestCheckFilteredWindowsGentleAIRequiresExactStableSourceTag(t *testing.T) 
 	}{
 		{
 			name: "before v5 publication", tag: "v4.6.0", wantLatest: "4.6.0",
-			wantCommand: "go install github.com/gentleman-programming/gentle-ai/v4/cmd/gentle-ai@v4.6.0",
+			wantCommand: "go install github.com/gentleman-programming/gentle-ai/v5/cmd/gentle-ai@v4.6.0",
 		},
 		{
 			name: "after v5 publication", tag: "v5.0.0", wantLatest: "5.0.0",

@@ -5,9 +5,9 @@ import (
 	"sort"
 	"testing"
 
-	configdomain "github.com/gentleman-programming/gentle-ai/v4/internal/config"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/state"
+	configdomain "github.com/gentleman-programming/gentle-ai/v5/internal/config"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/state"
 )
 
 // Every configuration choice a user can make imperatively must be expressible

@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	configdomain "github.com/gentleman-programming/gentle-ai/v4/internal/config"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/render"
+	configdomain "github.com/gentleman-programming/gentle-ai/v5/internal/config"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/render"
 )
 
 func TestConfigApplyRejectsInvalidInputAndRollsBackPersistenceFailure(t *testing.T) {

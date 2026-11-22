@@ -6,8 +6,8 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/gentleman-programming/gentle-ai/v4/internal/config"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/pipeline"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/config"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/pipeline"
 )
 
 type ApplyRequest struct {

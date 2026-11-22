@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/v4/internal/config"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/config"
 )
 
 func TestApplyRejectsUnsafeAdmission(t *testing.T) {

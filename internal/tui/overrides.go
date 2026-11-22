@@ -3,8 +3,8 @@ package tui
 import (
 	"fmt"
 
-	configdomain "github.com/gentleman-programming/gentle-ai/v4/internal/config"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
+	configdomain "github.com/gentleman-programming/gentle-ai/v5/internal/config"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/model"
 )
 
 // normalizeSyncOverrides routes what an interactive picker produced through the

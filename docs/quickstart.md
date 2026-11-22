@@ -68,7 +68,7 @@ go install github.com/gentleman-programming/gentle-ai/v5/cmd/gentle-ai@v5.0.0
 
 Go requires the major-version suffix in the module path for major version 2
 and above. The `/v4` module path stays on the v4 line. Until v5.0.0 is
-published, use `go install github.com/gentleman-programming/gentle-ai/v4/cmd/gentle-ai@v4.6.0`.
+published, use `go install github.com/gentleman-programming/gentle-ai/v5/cmd/gentle-ai@v4.6.0`.
 
 ## Version Policy
 

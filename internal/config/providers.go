@@ -7,7 +7,7 @@ import (
 	"io"
 	"sort"
 
-	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/model"
 )
 
 // ProviderSelection is the contract form of one provider's configuration

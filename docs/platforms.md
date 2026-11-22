@@ -80,7 +80,7 @@ Restart OpenCode after enabling managed activation. Start a new login shell so t
 
 - **Install from source** with Go 1.25.10+, pinned to v5.0.0:
   `go install github.com/gentleman-programming/gentle-ai/v5/cmd/gentle-ai@v5.0.0`.
-  Until v5.0.0 is published, use `go install github.com/gentleman-programming/gentle-ai/v4/cmd/gentle-ai@v4.6.0`.
+  Until v5.0.0 is published, use `go install github.com/gentleman-programming/gentle-ai/v5/cmd/gentle-ai@v4.6.0`.
 - **`gentle-ai upgrade` updates itself automatically on release channels when Go 1.25.10+ is on `PATH`.** It runs `go install …/cmd/gentle-ai@vX.Y.Z` pinned to the exact release tag. The module is verified against the Go checksum database (`sum.golang.org`) — a different trust anchor than the minisign signature used for the Linux/macOS release binaries, not a missing one.
   Because `go install` writes to `GOBIN` (or `GOPATH\bin`), which is not necessarily the directory your shell resolves, the upgrade checks the destination afterwards and warns — naming both full paths — if a different `gentle-ai.exe` earlier on `PATH` would keep running.
    On the beta/development channel, `$env:GENTLE_AI_CHANNEL="beta"; gentle-ai upgrade` advances the binary from `main` and refreshes managed tools. If a manual source install sees stale `main` commits, run `GOPROXY=direct go install github.com/gentleman-programming/gentle-ai/v5/cmd/gentle-ai@main` (PowerShell: `$env:GOPROXY="direct"; go install github.com/gentleman-programming/gentle-ai/v5/cmd/gentle-ai@main`).

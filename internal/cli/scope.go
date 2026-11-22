@@ -5,7 +5,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/model"
 )
 
 // InstallScope controls where agent-scoped config files (system prompts, skills/, agents/, etc.) are written.

@@ -286,7 +286,7 @@ curl -fsSL https://raw.githubusercontent.com/Gentleman-Programming/gentle-ai/mai
 go install github.com/gentleman-programming/gentle-ai/v5/cmd/gentle-ai@v5.0.0
 ```
 
-Until v5.0.0 is published, use `go install github.com/gentleman-programming/gentle-ai/v4/cmd/gentle-ai@v4.6.0`.
+Until v5.0.0 is published, use `go install github.com/gentleman-programming/gentle-ai/v5/cmd/gentle-ai@v4.6.0`.
 
 When the install directory is not on your `PATH` yet, `install.sh` adds one marked line (`# gentle-ai installer`) to the startup file your shell reads: `~/.zshrc` for zsh, `~/.bashrc` for bash on Linux, for bash on macOS the first existing of `~/.bash_profile`, `~/.bash_login`, or `~/.profile` (else `~/.bash_profile`), a `conf.d` file for fish, and `~/.profile` otherwise. `install.ps1` adds the directory to your user `Path`. Open a new terminal afterwards, or run the command the installer prints under `Current terminal:` to use `gentle-ai` in the current one. If the startup file is a symlink or cannot be edited, nothing is written and the installer prints the line to add yourself.
 

@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/v4/internal/opencode"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/opencode"
 )
 
 func TestConfigReadOnlyCommandsBypassSystemAndLeaveDestinationUntouched(t *testing.T) {

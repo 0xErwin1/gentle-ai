@@ -20,7 +20,7 @@ const (
 	betaReleaseVersion = "4.6.0"
 	betaReleaseCommit  = "0123456789abcdef0123456789abcdef01234567"
 	betaNextCommit     = "89abcdef0123456789abcdef0123456789abcdef"
-	betaReleaseModule  = "github.com/gentleman-programming/gentle-ai/v4"
+	betaReleaseModule  = "github.com/gentleman-programming/gentle-ai/v5"
 )
 
 func TestBetaReleaseUpgradeFollowsMainAfterTag(t *testing.T) {

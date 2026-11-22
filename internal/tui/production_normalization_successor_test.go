@@ -4,9 +4,9 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/planner"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/system"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/planner"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/system"
 )
 
 func TestTUIProductionNormalizePlannerCanonicalizesDuplicateAgents(t *testing.T) {

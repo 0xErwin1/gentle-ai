@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/pi"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/agents/pi"
 )
 
 // Pi resolves a theme by name against the themes its own packages ship, and no

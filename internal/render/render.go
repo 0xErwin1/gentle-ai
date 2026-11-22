@@ -8,7 +8,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/gentleman-programming/gentle-ai/v4/internal/config"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/config"
 )
 
 type Artifact struct {
